@@ -1,0 +1,4 @@
+# Append after sdkconfig.p4.defaults and use a separate SDKCONFIG/build path.
+# This keeps the USB screenshot protocol available for app debugging without
+# adding its task, LVGL snapshot code, and PNG encoder path to product images.
+CONFIG_MICROPIXEL_ENABLE_SCREEN_CAPTURE=y

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "device": "Metalio Claw4 built-in speaker",
+  "calibration": "uncalibrated-flat",
+  "notes": "Replace the flat points with microphone sweep measurements; the analyzer interpolates gain on a logarithmic frequency axis.",
+  "frequency_response_db": [
+    [20, 0.0],
+    [100, 0.0],
+    [250, 0.0],
+    [500, 0.0],
+    [1000, 0.0],
+    [2000, 0.0],
+    [4000, 0.0],
+    [8000, 0.0]
+  ]
+}

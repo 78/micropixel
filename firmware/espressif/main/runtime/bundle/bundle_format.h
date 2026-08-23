@@ -1,0 +1,69 @@
+#ifndef MICROPIXEL_RUNTIME_BUNDLE_BUNDLE_FORMAT_H
+#define MICROPIXEL_RUNTIME_BUNDLE_BUNDLE_FORMAT_H
+
+#include <stdint.h>
+
+#define MICROPIXEL_BUNDLE_VERSION 2U
+#define MICROPIXEL_BUNDLE_FRAMEWORK_ABI_VERSION 1U
+#define MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT (64U * 1024U)
+#define MICROPIXEL_BUNDLE_MAX_SECTIONS 128U
+#define MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH 64U
+
+static const uint8_t MICROPIXEL_BUNDLE_MAGIC[8] = {'M', 'P', 'X', 'B', 'N', 'D', 'L', '\0'};
+
+typedef enum micropixel_bundle_section_kind {
+    MICROPIXEL_BUNDLE_SECTION_AOT = 1,
+    MICROPIXEL_BUNDLE_SECTION_ASSET = 2,
+} micropixel_bundle_section_kind_t;
+
+typedef enum micropixel_bundle_section_format {
+    MICROPIXEL_BUNDLE_FORMAT_AOT_RELOCATABLE = 1,
+    MICROPIXEL_BUNDLE_FORMAT_RAW_RGB888 = 2,
+    MICROPIXEL_BUNDLE_FORMAT_JPEG = 3,
+    MICROPIXEL_BUNDLE_FORMAT_PNG = 4,
+    MICROPIXEL_BUNDLE_FORMAT_RAW_ARGB8888 = 5,
+} micropixel_bundle_section_format_t;
+
+typedef struct __attribute__((packed)) micropixel_bundle_header {
+    uint8_t magic[8];
+    uint32_t version;
+    uint32_t header_size;
+    uint32_t bundle_size;
+    uint32_t toc_offset;
+    uint8_t app_id[MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH];
+    uint32_t app_id_length;
+    uint32_t section_count;
+    uint32_t framework_abi_version;
+    uint32_t launch_asset_id;
+    uint32_t header_hash;
+    uint32_t reserved0;
+    uint32_t reserved1;
+    uint32_t reserved2;
+    uint32_t reserved3;
+    uint32_t reserved4;
+} micropixel_bundle_header_t;
+
+typedef struct __attribute__((packed)) micropixel_bundle_section {
+    uint32_t kind;
+    uint32_t id;
+    uint32_t offset;
+    uint32_t size;
+    uint32_t hash;
+    uint32_t format;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    uint32_t flags;
+    uint32_t reserved0;
+    uint32_t reserved1;
+} micropixel_bundle_section_t;
+
+#if defined(__cplusplus)
+static_assert(sizeof(micropixel_bundle_header_t) == 128U, "Bundle v2 header ABI size changed");
+static_assert(sizeof(micropixel_bundle_section_t) == 48U, "Bundle v2 section ABI size changed");
+#else
+_Static_assert(sizeof(micropixel_bundle_header_t) == 128U, "Bundle v2 header ABI size changed");
+_Static_assert(sizeof(micropixel_bundle_section_t) == 48U, "Bundle v2 section ABI size changed");
+#endif
+
+#endif

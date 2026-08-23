@@ -1,0 +1,4 @@
+[submodule "firmware/espressif/components/wasm-micro-runtime"]
+	path = firmware/espressif/components/wasm-micro-runtime
+	url = https://github.com/78/wasm-micro-runtime.git
+	branch = wamr-host/esp-idf-psram

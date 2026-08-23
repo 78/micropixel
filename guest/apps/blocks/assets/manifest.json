@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "name": "launch",
+      "format": "png_to_raw_rgb888",
+      "width": 360,
+      "height": 360,
+      "background": "#050505",
+      "path": "source/launch-transparent-360.png"
+    },
+    {
+      "name": "board",
+      "format": "png",
+      "path": "blocks_board_524x600.png"
+    },
+    {
+      "name": "button.start",
+      "format": "png",
+      "path": "blocks_button_start_220x72.png"
+    },
+    {
+      "name": "button.pause",
+      "format": "png",
+      "path": "blocks_button_pause_220x72.png"
+    },
+    {
+      "name": "button.restart",
+      "format": "png",
+      "path": "blocks_button_reboot_220x72.png"
+    }
+  ]
+}

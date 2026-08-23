@@ -1,0 +1,84 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4.csv"
+
+# Enable the 32 MiB DIO flash configuration used by the supported Metalio-Claw4 board.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
+
+# The attached ESP32-P4 has 16-line PSRAM. Keep standard malloc() internal;
+# WAMR linear memory and the Host comparison buffer request PSRAM explicitly.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+# Skip the destructive full-PSRAM sweep on every product boot. PSRAM remains
+# enabled and is still initialized normally before Host allocations use it.
+CONFIG_SPIRAM_MEMTEST=n
+
+# The attached device is P4 rev 1.3. ESP-IDF treats pre-v3 and v3+ P4 as
+# mutually incompatible targets; rev 1.x runs at 360 MHz.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+
+# Product firmware is performance-sensitive. Use ESP-IDF's supported release
+# optimization profile; sdkconfig.debug.defaults can be appended explicitly
+# when source-level debugging is required.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Keep both the mutable relocatable AOT input and executable text in PSRAM.
+# Internal SRAM remains available for Host/WAMR metadata, stacks, DMA and
+# latency-sensitive system work; product builds do not select placement by
+# module size.
+# CONFIG_ESP_SYSTEM_MEMPROT is not set
+
+CONFIG_WAMR_BUILD_RELEASE=y
+CONFIG_WAMR_ENABLE_AOT=y
+# CONFIG_WAMR_ENABLE_INTERP is not set
+CONFIG_WAMR_ENABLE_LIBC_BUILTIN=y
+# Keep the P4 Host aligned with the S3 performance baseline.
+CONFIG_WAMR_ENABLE_LIBC_WASI=n
+CONFIG_WAMR_ENABLE_MEMORY_PROFILING=y
+CONFIG_WAMR_ENABLE_DUMP_CALL_STACK=y
+CONFIG_WAMR_ENABLE_LIB_PTHREAD=y
+CONFIG_WAMR_ENABLE_SHARED_MEMORY=y
+CONFIG_WAMR_LINEAR_MEMORY_IN_PSRAM=y
+CONFIG_WAMR_AOT_CODE_IN_PSRAM=y
+CONFIG_MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM=y
+
+CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS=2
+CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS=1000
+CONFIG_MICROPIXEL_KV_MAX_BYTES=2048
+CONFIG_MICROPIXEL_KV_MAX_VALUE_BYTES=512
+CONFIG_MICROPIXEL_KV_MAX_KEYS=16
+CONFIG_MICROPIXEL_KV_WRITE_BURST=8
+CONFIG_MICROPIXEL_KV_WRITE_REFILL_MS=1000
+
+# Product images never inject synthetic input. The conformance overlay enables
+# its isolated test hooks explicitly.
+CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
+# Screen capture remains available as an opt-in debugging overlay, but the
+# product image does not reserve its task, LVGL snapshot code, or PNG path.
+CONFIG_MICROPIXEL_ENABLE_SCREEN_CAPTURE=n
+
+# ESP32-P4 product path: retained Guest objects, PPA-assisted image copies,
+# and bounded dirty-region coalescing.
+CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND=y
+CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=y
+CONFIG_MICROPIXEL_LVGL_PPA_ACCEL=y
+CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS=4096
+# The 720x120 RGB888 scratch buffer stays in internal SRAM. Hardware A/B
+# reduced full-scene shake to six tiles without the PSRAM render penalty.
+CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=120
+# CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM is not set
+CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES=12582912
+# Merge nearby retained-object invalidations to limit repeated LVGL tree walks.
+# Coalescing is always enabled; this bounds the extra overdraw per merge.
+CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS=8192
+CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION=y
+CONFIG_LV_COLOR_DEPTH_24=y
+CONFIG_LV_DEF_REFR_PERIOD=4
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_32=y

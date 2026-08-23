@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "name": "sprite.demo",
+      "format": "png",
+      "path": "demo_sprite_sheet.png",
+      "atlas": {
+        "index": 0,
+        "canvas": [192, 192],
+        "frames": [
+          {"region": [158, 582, 40, 44], "canvas_position": [76, 76]},
+          {"region": [202, 458, 56, 60], "canvas_position": [68, 68]},
+          {"region": [86, 582, 68, 76], "canvas_position": [60, 60]},
+          {"region": [2, 582, 80, 96], "canvas_position": [56, 56]},
+          {"region": [106, 458, 92, 112], "canvas_position": [52, 52]},
+          {"region": [2, 458, 100, 120], "canvas_position": [48, 52]},
+          {"region": [138, 306, 108, 132], "canvas_position": [44, 48]},
+          {"region": [138, 154, 116, 144], "canvas_position": [40, 44]},
+          {"region": [138, 2, 124, 148], "canvas_position": [36, 44]},
+          {"region": [2, 2, 132, 148], "canvas_position": [32, 44]},
+          {"region": [2, 154, 132, 148], "canvas_position": [32, 44]},
+          {"region": [2, 306, 132, 148], "canvas_position": [32, 44]}
+        ]
+      }
+    }
+  ]
+}

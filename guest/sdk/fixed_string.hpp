@@ -1,0 +1,65 @@
+#ifndef MICROPIXEL_SDK_FIXED_STRING_HPP
+#define MICROPIXEL_SDK_FIXED_STRING_HPP
+
+#include <stdint.h>
+
+namespace micropixel {
+
+// Allocation-free string builder for short UI and log text in freestanding Guests.
+template <uint32_t Capacity>
+class FixedString final {
+   public:
+    static_assert(Capacity >= 2U, "FixedString needs space for content and NUL");
+
+    constexpr void Clear() {
+        size_ = 0U;
+        bytes_[0] = '\0';
+    }
+
+    void Append(const char* text) {
+        if (text == nullptr) {
+            return;
+        }
+        while (*text != '\0' && size_ + 1U < Capacity) {
+            bytes_[size_++] = *text++;
+        }
+        bytes_[size_] = '\0';
+    }
+
+    void AppendUint(uint64_t value) {
+        char reversed[20]{};
+        uint32_t count = 0U;
+        do {
+            reversed[count++] = static_cast<char>('0' + value % 10U);
+            value /= 10U;
+        } while (value != 0U && count < sizeof(reversed));
+        while (count != 0U && size_ + 1U < Capacity) {
+            bytes_[size_++] = reversed[--count];
+        }
+        bytes_[size_] = '\0';
+    }
+
+    void AppendPadded4(uint32_t value) {
+        uint32_t digits = 1U;
+        for (uint32_t remaining = value; remaining >= 10U; remaining /= 10U) {
+            ++digits;
+        }
+        while (digits < 4U && size_ + 1U < Capacity) {
+            bytes_[size_++] = '0';
+            ++digits;
+        }
+        AppendUint(value);
+    }
+
+    [[nodiscard]] constexpr const char* c_str() const { return bytes_; }
+    [[nodiscard]] constexpr uint32_t size() const { return size_; }
+    [[nodiscard]] constexpr bool empty() const { return size_ == 0U; }
+
+   private:
+    char bytes_[Capacity]{};
+    uint32_t size_{};
+};
+
+}  // namespace micropixel
+
+#endif

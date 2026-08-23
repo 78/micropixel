@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.demo",
+  "display_name": "MicroPixel SDK Demo",
+  "source": "main.cpp",
+  "sources": [
+    "main.cpp",
+    "demo_app.cpp",
+    "pages/timer_demo.cpp",
+    "pages/input_demo.cpp",
+    "pages/storage_demo.cpp",
+    "pages/resource_atlas_demo.cpp",
+    "pages/audio_demo.cpp"
+  ],
+  "asset_manifest": "assets/manifest.json"
+}

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "name": "launch",
+      "format": "png_to_raw_rgb888",
+      "width": 360,
+      "height": 360,
+      "background": "#08111f",
+      "path": "source/launch-transparent-360.png"
+    },
+    {
+      "name": "board",
+      "format": "png",
+      "path": "snake_board_625x625.png"
+    },
+    {
+      "name": "button.start",
+      "format": "png",
+      "path": "snake_button_start_220x72.png"
+    },
+    {
+      "name": "button.pause",
+      "format": "png",
+      "path": "snake_button_pause_220x72.png"
+    },
+    {
+      "name": "button.restart",
+      "format": "png",
+      "path": "snake_button_reboot_220x72.png"
+    },
+    {
+      "name": "burst.normal",
+      "format": "png",
+      "path": "snake_burst_normal_sheet.png",
+      "atlas": {
+        "index": 0,
+        "canvas": [192, 192],
+        "frames": [
+          {"region": [158, 582, 40, 44], "canvas_position": [76, 76]},
+          {"region": [202, 458, 56, 60], "canvas_position": [68, 68]},
+          {"region": [86, 582, 68, 76], "canvas_position": [60, 60]},
+          {"region": [2, 582, 80, 96], "canvas_position": [56, 56]},
+          {"region": [106, 458, 92, 112], "canvas_position": [52, 52]},
+          {"region": [2, 458, 100, 120], "canvas_position": [48, 52]},
+          {"region": [138, 306, 108, 132], "canvas_position": [44, 48]},
+          {"region": [138, 154, 116, 144], "canvas_position": [40, 44]},
+          {"region": [138, 2, 124, 148], "canvas_position": [36, 44]},
+          {"region": [2, 2, 132, 148], "canvas_position": [32, 44]},
+          {"region": [2, 154, 132, 148], "canvas_position": [32, 44]},
+          {"region": [2, 306, 132, 148], "canvas_position": [32, 44]}
+        ]
+      }
+    },
+    {
+      "name": "burst.golden",
+      "format": "png",
+      "path": "snake_burst_golden_sheet.png",
+      "atlas": {
+        "index": 1,
+        "canvas": [192, 192],
+        "frames": [
+          {"region": [158, 562, 44, 48], "canvas_position": [72, 72]},
+          {"region": [90, 562, 64, 68], "canvas_position": [64, 60]},
+          {"region": [2, 562, 84, 96], "canvas_position": [56, 48]},
+          {"region": [342, 2, 100, 120], "canvas_position": [48, 40]},
+          {"region": [330, 190, 108, 140], "canvas_position": [44, 36]},
+          {"region": [302, 378, 124, 164], "canvas_position": [40, 24]},
+          {"region": [158, 378, 140, 176], "canvas_position": [32, 16]},
+          {"region": [2, 378, 152, 180], "canvas_position": [24, 12]},
+          {"region": [170, 190, 156, 180], "canvas_position": [24, 12]},
+          {"region": [174, 2, 164, 184], "canvas_position": [20, 8]},
+          {"region": [2, 190, 164, 184], "canvas_position": [20, 8]},
+          {"region": [2, 2, 168, 184], "canvas_position": [16, 8]}
+        ]
+      }
+    },
+    {
+      "name": "burst.poison",
+      "format": "png",
+      "path": "snake_burst_poison_sheet.png",
+      "atlas": {
+        "index": 2,
+        "canvas": [192, 192],
+        "frames": [
+          {"region": [154, 602, 44, 44], "canvas_position": [72, 76]},
+          {"region": [90, 602, 60, 60], "canvas_position": [64, 68]},
+          {"region": [214, 470, 72, 76], "canvas_position": [60, 60]},
+          {"region": [2, 602, 84, 96], "canvas_position": [52, 56]},
+          {"region": [114, 470, 96, 112], "canvas_position": [48, 52]},
+          {"region": [2, 470, 108, 128], "canvas_position": [44, 48]},
+          {"region": [126, 314, 116, 140], "canvas_position": [40, 44]},
+          {"region": [2, 314, 120, 152], "canvas_position": [36, 40]},
+          {"region": [2, 158, 132, 152], "canvas_position": [32, 40]},
+          {"region": [138, 158, 132, 152], "canvas_position": [32, 40]},
+          {"region": [2, 2, 140, 152], "canvas_position": [28, 40]},
+          {"region": [146, 2, 140, 152], "canvas_position": [28, 40]}
+        ]
+      }
+    },
+    {
+      "name": "burst.speed",
+      "format": "png",
+      "path": "snake_burst_speed_sheet.png",
+      "atlas": {
+        "index": 3,
+        "canvas": [192, 192],
+        "frames": [
+          {"region": [358, 2, 44, 44], "canvas_position": [72, 76]},
+          {"region": [346, 174, 68, 68], "canvas_position": [60, 64]},
+          {"region": [258, 514, 84, 88], "canvas_position": [56, 56]},
+          {"region": [314, 346, 100, 116], "canvas_position": [48, 48]},
+          {"region": [138, 514, 116, 140], "canvas_position": [40, 40]},
+          {"region": [2, 514, 132, 156], "canvas_position": [36, 36]},
+          {"region": [162, 346, 148, 160], "canvas_position": [28, 32]},
+          {"region": [2, 346, 156, 164], "canvas_position": [24, 28]},
+          {"region": [178, 174, 164, 168], "canvas_position": [20, 24]},
+          {"region": [182, 2, 172, 168], "canvas_position": [16, 24]},
+          {"region": [2, 174, 172, 168], "canvas_position": [16, 24]},
+          {"region": [2, 2, 176, 168], "canvas_position": [12, 24]}
+        ]
+      }
+    },
+    {
+      "name": "food.normal",
+      "format": "png",
+      "path": "snake_food_normal_sheet.png"
+    },
+    {
+      "name": "food.golden",
+      "format": "png",
+      "path": "snake_food_golden_sheet.png"
+    },
+    {
+      "name": "food.poison",
+      "format": "png",
+      "path": "snake_food_poison_sheet.png"
+    },
+    {
+      "name": "food.speed",
+      "format": "png",
+      "path": "snake_food_speed_sheet.png"
+    }
+  ]
+}

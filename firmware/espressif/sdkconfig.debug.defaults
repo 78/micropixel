@@ -1,0 +1,3 @@
+# Explicit developer override for source-level debugging. Append this file
+# after the target defaults and use a separate SDKCONFIG path.
+CONFIG_COMPILER_OPTIMIZATION_DEBUG=y

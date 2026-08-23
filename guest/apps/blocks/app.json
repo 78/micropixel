@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.blocks",
+  "display_name": "Juicy Blocks",
+  "source": "main.cpp",
+  "sources": [
+    "main.cpp",
+    "blocks_app.cpp",
+    "blocks_model.cpp",
+    "blocks_game.cpp",
+    "blocks_renderer.cpp",
+    "blocks_audio.cpp"
+  ],
+  "asset_manifest": "assets/manifest.json",
+  "launch_asset": "launch"
+}

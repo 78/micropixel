@@ -1,0 +1,40 @@
+#ifndef MICROPIXEL_PLATFORM_METALIO_CLAW4_BOARD_HARDWARE_HPP
+#define MICROPIXEL_PLATFORM_METALIO_CLAW4_BOARD_HARDWARE_HPP
+
+#include <cstdint>
+
+#include "driver/i2c_master.h"
+#include "esp_err.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_ldo_regulator.h"
+
+namespace micropixel::platform::metalio_claw4 {
+
+class BoardHardware final {
+   public:
+    BoardHardware(int32_t display_width, int32_t display_height);
+
+    [[nodiscard]] esp_err_t Initialize();
+    [[nodiscard]] esp_err_t SetBacklight(bool enabled);
+
+    [[nodiscard]] i2c_master_bus_handle_t I2cBus() const { return i2c_bus_; }
+    [[nodiscard]] esp_lcd_panel_handle_t Panel() const { return panel_; }
+    [[nodiscard]] esp_lcd_panel_io_handle_t PanelIo() const { return panel_io_; }
+
+   private:
+    [[nodiscard]] esp_err_t InitializeI2c();
+    [[nodiscard]] esp_err_t InitializeLcd();
+
+    int32_t display_width_{};
+    int32_t display_height_{};
+    i2c_master_bus_handle_t i2c_bus_{};
+    esp_lcd_panel_handle_t panel_{};
+    esp_lcd_panel_io_handle_t panel_io_{};
+    esp_ldo_channel_handle_t dsi_ldo_{};
+    bool backlight_configured_{};
+};
+
+}  // namespace micropixel::platform::metalio_claw4
+
+#endif
