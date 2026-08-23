@@ -23,15 +23,32 @@ typedef struct {
 } micropixel_aot_package_t;
 
 typedef struct {
+    uint32_t store_offset;
+    uint32_t bundle_size;
+    uint8_t app_id[MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U];
+    uint8_t display_name[MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH + 1U];
+} micropixel_bundle_metadata_t;
+
+typedef struct {
     const uint8_t* data;
     uint32_t size;
     uint32_t format;
     uint32_t width;
     uint32_t height;
     uint32_t stride;
+    uint32_t content_hash;
 } micropixel_bundle_asset_view_t;
 
-bool micropixel_open_aot_package(micropixel_aot_package_t* package_out);
+typedef struct {
+    micropixel_bundle_asset_view_t asset;
+    const uint8_t* mapping;
+    uint32_t mapping_handle;
+} micropixel_bundle_asset_mapping_t;
+
+bool micropixel_scan_app_store(micropixel_bundle_metadata_t* apps_out, uint32_t capacity, uint32_t* count_out);
+bool micropixel_open_launch_asset(uint32_t store_offset, micropixel_bundle_asset_mapping_t* mapping_out);
+void micropixel_close_asset_mapping(micropixel_bundle_asset_mapping_t* mapping);
+bool micropixel_open_aot_package(uint32_t store_offset, micropixel_aot_package_t* package_out);
 void micropixel_close_aot_package(micropixel_aot_package_t* package);
 bool micropixel_bundle_find_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
                                   micropixel_bundle_asset_view_t* view_out);

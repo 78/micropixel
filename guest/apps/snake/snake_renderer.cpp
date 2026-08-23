@@ -140,12 +140,13 @@ void SnakeGame::set_board(micropixel::Bitmap bitmap) {
     board_bitmap_ = static_cast<micropixel::Bitmap&&>(bitmap);
 }
 
-void SnakeGame::set_button_bitmaps(micropixel::Bitmap start, micropixel::Bitmap pause, micropixel::Bitmap restart) {
-    micropixel::AssertThat(start.width() == 220U && start.height() == 72U && pause.width() == 220U &&
-                               pause.height() == 72U && restart.width() == 220U && restart.height() == 72U,
+void SnakeGame::set_button_bitmaps(micropixel::Bitmap start, micropixel::Bitmap restart) {
+    micropixel::AssertThat(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                               start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
+                               restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                               restart.height() == static_cast<uint32_t>(kActionButtonHeight),
                            "snake: button bitmap dimensions invalid");
     start_button_bitmap_ = static_cast<micropixel::Bitmap&&>(start);
-    pause_button_bitmap_ = static_cast<micropixel::Bitmap&&>(pause);
     restart_button_bitmap_ = static_cast<micropixel::Bitmap&&>(restart);
 }
 
@@ -227,8 +228,8 @@ void SnakeGame::RenderComboBar(micropixel::CommandBuffer& commands) const {
         return;
     }
     if (screen_ == Screen::kPaused) {
-        micropixel::AssertThat(pause_button_bitmap_.valid(), "snake: pause button bitmap missing");
-        micropixel::ui::DrawBitmapButton(commands, screen_button_, pause_button_bitmap_);
+        micropixel::AssertThat(start_button_bitmap_.valid(), "snake: continue button bitmap missing");
+        micropixel::ui::DrawBitmapButton(commands, screen_button_, start_button_bitmap_);
         return;
     }
     if (screen_ == Screen::kGameOver) {
@@ -486,14 +487,9 @@ void SnakeGame::RenderOverlayRect(micropixel::CommandBuffer& commands, int32_t b
                                   const Theme& theme) const {
     constexpr int32_t kBoardSize = static_cast<int32_t>(kColumns) * kCellPitch;
     micropixel::Color color = micropixel::Color::Black();
-    uint8_t opacity = 0U;
-    if (screen_ == Screen::kMenu) {
-        opacity = 153U;
-    } else if (screen_ == Screen::kPaused) {
-        opacity = 102U;
-    } else if (screen_ == Screen::kGameOver) {
+    const uint8_t opacity = screen_ == Screen::kPlaying ? 0U : kOverlayOpacity;
+    if (screen_ == Screen::kGameOver) {
         color = micropixel::Color::Rgb(69U, 10U, 10U);
-        opacity = 204U;
     }
     (void)theme;
     commands.BlendRect(micropixel::Rect{board_x, board_y, kBoardSize, kBoardSize}, color, opacity);
@@ -505,12 +501,6 @@ void SnakeGame::RenderHeaderTexts(micropixel::CommandBuffer& commands, const The
     Line level;
     level.Append("LVL ");
     level.AppendUint(model_.level());
-    level.Append("  FPS ");
-    if (fps_display_ == 0U) {
-        level.Append("--");
-    } else {
-        level.AppendUint(fps_display_);
-    }
     commands.DrawText(172, 47, level.c_str(), AsColor(theme.text), 14U);
     commands.DrawText(545, 12, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
     Line score;
@@ -570,14 +560,13 @@ void SnakeGame::RenderPopups(micropixel::CommandBuffer& commands, int32_t board_
 void SnakeGame::RenderOverlayTexts(micropixel::CommandBuffer& commands, const Theme& theme) const {
     uint32_t used = 0U;
     if (screen_ == Screen::kMenu) {
-        commands.DrawTextCentered(360, 341, "START GAME", micropixel::Color::Black(), 18U);
-        commands.DrawTextCentered(360, 405, "PRESS BUTTON TO START", micropixel::Color::Rgb(163U, 163U, 163U), 14U);
-        used = 2U;
+        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect), "START GAME", micropixel::Color::Black(),
+                                  kActionButtonFontSize);
+        used = 1U;
     } else if (screen_ == Screen::kPaused) {
-        commands.DrawTextCentered(360, 290, "SYSTEM PAUSED", AsColor(theme.text), 24U);
-        commands.DrawTextCentered(360, 367, "RESUME", AsColor(theme.text), 18U);
-        commands.DrawTextCentered(360, 426, "PRESS BUTTON TO RESUME", micropixel::Color::Rgb(163U, 163U, 163U), 14U);
-        used = 3U;
+        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect), "CONTINUE", micropixel::Color::Black(),
+                                  kActionButtonFontSize);
+        used = 1U;
     } else if (screen_ == Screen::kGameOver) {
         commands.DrawTextCentered(360, 268, "CRITICAL FAILURE", micropixel::Color::Rgb(244U, 63U, 94U), 32U);
         Line score;
@@ -600,7 +589,8 @@ void SnakeGame::RenderOverlayTexts(micropixel::CommandBuffer& commands, const Th
         Line level;
         level.AppendUint(model_.level());
         commands.DrawTextCentered(kLevelCenter, 382, level.c_str(), micropixel::Color::White(), 18U);
-        commands.DrawTextCentered(360, 445, "RESTART", micropixel::Color::Rgb(69U, 10U, 10U), 18U);
+        commands.DrawTextCentered(360, ActionButtonTextY(kRestartButtonRect), "RESTART",
+                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFontSize);
         used = 9U;
     } else if (level_banner_us_ != 0U) {
         commands.DrawTextCentered(360, 315, "SYSTEM UPGRADE", AsColor(theme.text), 24U);

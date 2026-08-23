@@ -1,6 +1,7 @@
 #ifndef MICROPIXEL_RUNTIME_SERVICES_TIMER_SERVICE_HPP
 #define MICROPIXEL_RUNTIME_SERVICES_TIMER_SERVICE_HPP
 
+#include <atomic>
 #include <cstdint>
 
 #include "abi/micropixel_abi.h"
@@ -30,6 +31,8 @@ class TimerService final {
                                             uint64_t period_us);
     [[nodiscard]] ServiceResult<void> Cancel(micropixel_timer_handle_t handle);
     [[nodiscard]] ServiceResult<void> Release(micropixel_timer_handle_t handle);
+    [[nodiscard]] bool Suspend();
+    [[nodiscard]] bool Resume();
 
    private:
     struct Slot {
@@ -43,8 +46,10 @@ class TimerService final {
         uint32_t sequence{};
         uint32_t coalesced{};
         uint32_t dropped{};
+        uint64_t resume_delay_us{};
         bool active{};
         bool periodic{};
+        bool resume_active{};
     };
 
     static void OnExpired(void* argument);
@@ -55,6 +60,9 @@ class TimerService final {
 
     EventQueue& events_;
     int64_t clock_origin_us_{};
+    std::atomic<int64_t> suspended_at_us_{};
+    std::atomic<int64_t> suspended_total_us_{};
+    std::atomic<bool> suspended_{};
     SemaphoreHandle_t mutex_{};
     portMUX_TYPE state_lock_ = portMUX_INITIALIZER_UNLOCKED;
     Slot slots_[limits::kMaxTimers]{};

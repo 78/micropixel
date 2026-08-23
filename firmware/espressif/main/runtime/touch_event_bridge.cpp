@@ -108,6 +108,22 @@ void TouchEventBridge::NoteGraphicsSubmitComplete(uint64_t touch_sample_global_u
     }
 }
 
+void TouchEventBridge::Suspend() {
+    if (!bound_) {
+        return;
+    }
+    input_.UnbindTouchSink(this);
+    bound_ = false;
+}
+
+void TouchEventBridge::Resume() {
+    if (bound_) {
+        return;
+    }
+    input_.BindTouchSink(Deliver, this);
+    bound_ = true;
+}
+
 void TouchEventBridge::Shutdown() {
     if (!bound_) {
         return;

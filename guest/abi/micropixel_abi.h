@@ -412,6 +412,8 @@ typedef struct micropixel_input_info {
 
 typedef enum micropixel_core_event_id {
     MICROPIXEL_CORE_EVENT_HOST_WAKE = 1,
+    MICROPIXEL_CORE_EVENT_RESUME = 2,
+    MICROPIXEL_CORE_EVENT_STOP = 3,
 } micropixel_core_event_id_t;
 
 typedef enum micropixel_timer_event_id {

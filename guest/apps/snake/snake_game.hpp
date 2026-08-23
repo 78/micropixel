@@ -17,7 +17,7 @@ class SnakeGame final {
 
     void set_board(micropixel::Bitmap bitmap);
 
-    void set_button_bitmaps(micropixel::Bitmap start, micropixel::Bitmap pause, micropixel::Bitmap restart);
+    void set_button_bitmaps(micropixel::Bitmap start, micropixel::Bitmap restart);
 
     void set_burst_sheet(FoodType type, micropixel::Bitmap bitmap);
 
@@ -144,15 +144,12 @@ class SnakeGame final {
 
     void ResetGameModel();
 
-    void SampleFps(uint64_t delta_us);
-
     micropixel::Application& app_;
     micropixel::Graphics graphics_;
     micropixel::GraphicsInfo graphics_info_;
     micropixel::Audio audio_;
     micropixel::Bitmap board_bitmap_{};
     micropixel::Bitmap start_button_bitmap_{};
-    micropixel::Bitmap pause_button_bitmap_{};
     micropixel::Bitmap restart_button_bitmap_{};
     micropixel::Bitmap burst_sheets_[4U]{};
     micropixel::Bitmap food_sheets_[4U]{};
@@ -166,9 +163,6 @@ class SnakeGame final {
     ScheduledTone scheduled_tones_[12]{};
     uint64_t accumulated_us_{};
     uint64_t animation_time_us_{};
-    uint64_t fps_window_elapsed_us_{};
-    uint32_t fps_window_frames_{};
-    uint32_t fps_display_{};
     uint32_t best_score_{};
     uint64_t level_banner_us_{};
     uint64_t flash_remaining_us_{};

@@ -2,6 +2,7 @@
 
 #include "device/graphics.hpp"
 #include "device/input.hpp"
+#include "host_ui/system_ui.hpp"
 #include "platform/audio_backend.hpp"
 #include "platform/configured_backends.hpp"
 #include "platform/platform.hpp"
@@ -109,6 +110,45 @@ class NullInputBackend final : public device::InputBackend {
     void UnbindTouchSink(void* context) override { (void)context; }
 };
 
+class NullSystemUiBackend final : public host_ui::SystemUiBackend {
+   public:
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowHall(const host_ui::HallModel& model,
+                                                                       host_ui::SystemUiActionSink action_sink,
+                                                                       void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void LeaveHall() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override { return {}; }
+    void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override {
+        (void)action_sink;
+        (void)action_context;
+    }
+    void StopWatchingGuestActions(void* action_context) override { (void)action_context; }
+    [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame() override {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    void ReleaseGuestSnapshot() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowStatusLayer(const host_ui::StatusLayerModel& model,
+                                                                              host_ui::SystemUiActionSink action_sink,
+                                                                              void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void UpdateStatusLayer(const host_ui::StatusLayerModel& model) override { (void)model; }
+    void LeaveStatusLayer() override {}
+    void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) override {
+        (void)enabled;
+        (void)cpu_percent;
+    }
+    void ApplyBrightness(uint8_t percent) override { (void)percent; }
+    void ApplyVolume(uint8_t percent) override { (void)percent; }
+};
+
 class NullPlatform final : public Platform {
    public:
     [[nodiscard]] esp_err_t Initialize() override { return ESP_OK; }
@@ -116,10 +156,12 @@ class NullPlatform final : public Platform {
     [[nodiscard]] device::InputBackend& input() override { return input_; }
     [[nodiscard]] device::AudioBackend& audio() override { return ConfiguredAudioBackend(); }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
+    [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
 
    private:
     NullGraphicsBackend graphics_{};
     NullInputBackend input_{};
+    NullSystemUiBackend system_ui_{};
 };
 
 }  // namespace

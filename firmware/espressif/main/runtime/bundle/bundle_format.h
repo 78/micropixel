@@ -3,17 +3,19 @@
 
 #include <stdint.h>
 
-#define MICROPIXEL_BUNDLE_VERSION 2U
+#define MICROPIXEL_BUNDLE_VERSION 1U
 #define MICROPIXEL_BUNDLE_FRAMEWORK_ABI_VERSION 1U
 #define MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT (64U * 1024U)
 #define MICROPIXEL_BUNDLE_MAX_SECTIONS 128U
 #define MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH 64U
+#define MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH 64U
 
 static const uint8_t MICROPIXEL_BUNDLE_MAGIC[8] = {'M', 'P', 'X', 'B', 'N', 'D', 'L', '\0'};
 
 typedef enum micropixel_bundle_section_kind {
     MICROPIXEL_BUNDLE_SECTION_AOT = 1,
     MICROPIXEL_BUNDLE_SECTION_ASSET = 2,
+    MICROPIXEL_BUNDLE_SECTION_APP_METADATA = 3,
 } micropixel_bundle_section_kind_t;
 
 typedef enum micropixel_bundle_section_format {
@@ -22,6 +24,7 @@ typedef enum micropixel_bundle_section_format {
     MICROPIXEL_BUNDLE_FORMAT_JPEG = 3,
     MICROPIXEL_BUNDLE_FORMAT_PNG = 4,
     MICROPIXEL_BUNDLE_FORMAT_RAW_ARGB8888 = 5,
+    MICROPIXEL_BUNDLE_FORMAT_UTF8 = 6,
 } micropixel_bundle_section_format_t;
 
 typedef struct __attribute__((packed)) micropixel_bundle_header {
@@ -59,11 +62,11 @@ typedef struct __attribute__((packed)) micropixel_bundle_section {
 } micropixel_bundle_section_t;
 
 #if defined(__cplusplus)
-static_assert(sizeof(micropixel_bundle_header_t) == 128U, "Bundle v2 header ABI size changed");
-static_assert(sizeof(micropixel_bundle_section_t) == 48U, "Bundle v2 section ABI size changed");
+static_assert(sizeof(micropixel_bundle_header_t) == 128U, "Bundle header ABI size changed");
+static_assert(sizeof(micropixel_bundle_section_t) == 48U, "Bundle section ABI size changed");
 #else
-_Static_assert(sizeof(micropixel_bundle_header_t) == 128U, "Bundle v2 header ABI size changed");
-_Static_assert(sizeof(micropixel_bundle_section_t) == 48U, "Bundle v2 section ABI size changed");
+_Static_assert(sizeof(micropixel_bundle_header_t) == 128U, "Bundle header ABI size changed");
+_Static_assert(sizeof(micropixel_bundle_section_t) == 48U, "Bundle section ABI size changed");
 #endif
 
 #endif

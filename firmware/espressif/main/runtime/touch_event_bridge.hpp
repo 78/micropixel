@@ -28,6 +28,8 @@ class TouchEventBridge final {
     void NoteDelivered(const micropixel_event_t& event);
     [[nodiscard]] uint64_t TakeSampleForGraphics();
     void NoteGraphicsSubmitComplete(uint64_t touch_sample_global_us);
+    void Suspend();
+    void Resume();
     void Shutdown();
 
    private:

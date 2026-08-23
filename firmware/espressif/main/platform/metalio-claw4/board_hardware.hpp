@@ -17,6 +17,7 @@ class BoardHardware final {
 
     [[nodiscard]] esp_err_t Initialize();
     [[nodiscard]] esp_err_t SetBacklight(bool enabled);
+    [[nodiscard]] esp_err_t SetBacklightBrightness(uint8_t percent);
 
     [[nodiscard]] i2c_master_bus_handle_t I2cBus() const { return i2c_bus_; }
     [[nodiscard]] i2c_master_dev_handle_t IoExpander() const { return io_expander_; }
@@ -35,7 +36,7 @@ class BoardHardware final {
     esp_lcd_panel_handle_t panel_{};
     esp_lcd_panel_io_handle_t panel_io_{};
     esp_ldo_channel_handle_t dsi_ldo_{};
-    bool backlight_configured_{};
+    bool backlight_pwm_configured_{};
 };
 
 }  // namespace micropixel::platform::metalio_claw4

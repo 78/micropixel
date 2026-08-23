@@ -1,12 +1,13 @@
 # AI 原生嵌入式 Application Framework 架构总结
 
-**版本：v0.4**  
+**版本：V1**  
 **定位：面向 AI 生成应用的、语言无关、跨芯片、跨设备的嵌入式 Application Framework**  
 **首版目标平台：ESP32-P4 / Metalio-Claw4，后续平台另行评估**
 
-> **实施说明（2026-08-20）：** 本文档保留长期架构讨论和当时的设计假设，不代表当前开发顺序。
-> 当前以 ESP32-P4 真机、WAMR AOT 和单 Guest Runtime 为主；首版交付 Host、Demo 与 Snake。
-> Guest Lifecycle、多应用包和游戏大厅只在产品确定需要多个可切换 App 时启动。最新执行范围见
+> **实施说明（2026-08-23）：** 产品已进入多 App/System Shell 阶段，但设备仍严格限制为最多一个
+> Guest `AppSession` 存在。第一版已落地长驻 Host、可复用 WAMR、单 Session 完整销毁、双 Bundle 目录、
+> Flash 封面、挂起截图、恢复/切换、上下边缘系统手势、状态层与性能蒙层；在线安装、网络服务和真机交互回归
+> 继续按里程碑推进。最新执行范围见
 > [MicroPixel Application Runtime 开发里程碑](../roadmap/development-milestones.zh-CN.md)。
 > 当前 Guest C++ Public API 已进一步确定为“`Application` capability façade → copyable Service
 > View → move-only Resource”；本文中的 Module/Service 长期讨论不得覆盖该运行时对象分类。
@@ -346,20 +347,21 @@ MMU 不再是 Framework 的必要条件。
 
 AI 生成代码编译为 Wasm，WAMR 提供 App sandbox。
 
-### 4.1 每 App 的基本执行单位
+### 4.1 当前产品的执行单位
 
-不是“每 App 一份完整 WAMR”。
+不是“每 App 一份完整 WAMR”，也不是让多个 Guest 同时驻留。当前产品约束为：
 
-更合理的是：
+- 可安装 Bundle 数量为 N；
+- WAMR VMcore 全局只有一份；
+- 任意时刻 `AppSession` 数量只能是 0 或 1；
+- 启动另一个 App 前，必须先完整销毁现有 Session。
 
 ```text
-WAMR VMcore                 × 1
-App module instance         × N
-exec_env                    × N
-linear memory               × N
-capability table            × N
-resource table              × N
-event queue                 × N
+WAMR VMcore                 × 1（Host 生命周期）
+Installed Bundle            × N（Flash）
+Loaded module               × 0..1（AppSession）
+Module instance / exec_env  × 0..1（AppSession）
+GuestContext / resource     × 0..1（AppSession）
 ```
 
 结构：
@@ -367,42 +369,31 @@ event queue                 × N
 ```text
 Application Runtime Host
 │
-├── WAMR Core
-│
-├── AppInstance A
-│    ├ Wasm Module
-│    ├ Module Instance
-│    ├ Exec Env
-│    ├ Linear Memory
-│    ├ Capability Table
-│    ├ Resource Table
-│    └ Event Queue
-│
-├── AppInstance B
-│
-├── Scheduler
-├── Quota Manager
-├── Trap Handler
-└── IDL Host Bindings
+├── WAMR Core（长驻、可复用）
+├── AppSession（最多一个）
+│    ├── Bundle mapping / Wasm Module
+│    ├── Module Instance / Exec Env / Linear Memory
+│    ├── GuestContext / Capability / Resource / Event Queue
+│    └── Trap / watchdog / teardown boundary
+└── Host System Shell（不属于 Guest）
+     ├── App Hall
+     ├── Status Layer
+     └── System Gesture Router
 ```
 
 ### 4.2 ESP-IDF
 
-推荐：
+当前 ESP32-P4 产品路径：
 
 ```text
 一个 Framework Firmware
 │
-├── ui_server task
-├── audio task
-├── cloud task
-├── resource task
-│
-└── WAMR Core
-     ├ App A FreeRTOS Task → AppInstance A
-     ├ App B FreeRTOS Task → AppInstance B
-     └ App C FreeRTOS Task → AppInstance C
+├── Host System Shell / Device services
+├── WAMR Core（一次初始化）
+└── 最多一个 WAMR App task → AppSession
 ```
+
+Framework 内部的音频、资源等服务仍可使用自己的有界 worker；“服务并发”不等于“多个 Guest 并发”。
 
 ### 4.3 NuttX
 
@@ -1451,35 +1442,39 @@ ESP32-S31 类：
 
 ## 22. App Lifecycle
 
-> **当前实施顺序：** 在没有系统大厅的单 Guest 阶段，不向 Guest 暴露 Lifecycle Event。
-> `Suspend / Resume / Stop` 只在产品确定需要系统大厅或多个可切换 App 时实现，不是完整 Snake
-> 之后的默认工作。单 App 崩溃、升级和重启直接使用 Host 强制销毁与资源回收流程。以下状态机
-> 仅保留为未来系统大厅的目标模型。
+当前产品只保留实际需要的三个状态，不设置 `Background`，也不引入一组暂时没有消费者的 Guest callback：
 
 ```text
-CREATED
- ↓
-FOREGROUND
- ↓
-BACKGROUND
- ↓
-SUSPENDED
- ↓
-TERMINATED
+NotRunning ── start ──> Foreground
+     ▲                     │  ▲
+     │                     │  │
+     └────── stop ─────────┘  │
+                           suspend
+                              │
+                              ▼
+                          Suspended
+                              │
+                            resume
+                              │
+                              └──────> Foreground
 ```
 
-App callback：
+语义：
 
-```cpp
-on_start()
-on_foreground()
-on_background()
-on_suspend()
-on_resume()
-on_stop()
-```
+- `start`：创建唯一 AppSession，Guest 的 `main()` / `__micropixel_start` 就是启动入口；
+- `suspend`：暂停 Guest task 和 Guest 输入/帧提交，Session 与资源仍保留；
+- `resume`：Host 直接恢复暂停前 retained Guest view，再向事件队列最前面投递 typed Resume event；恢复同一个
+  Session，不重新调用启动入口，Guest 可据此完整重画；
+- `stop`：Host 先把 typed Stop event 放到事件队列最前面；Guest 正常返回后销毁 GuestContext、exec-env、
+  instance、module 与 Bundle mapping，500ms 内不响应才强制 terminate；
+- Guest 正常退出、Trap 或 watchdog 超时都归一为 `stop → NotRunning → App Hall`。
 
-Background 不代表无限运行。
+当前不定义 `on_start`、`on_foreground`、`on_background`、`on_suspend`、`on_resume` 或 `on_stop` callback。
+已经出现的重画与安全切换需求只增加 `EventType::kResume` / `EventType::kStop`，不扩展成暂时没有消费者的
+一整套 lifecycle callback。
+
+第一版已经完成 `Foreground ↔ Suspended` 与 `Foreground → NotRunning`。挂起只保留唯一 Session；切换
+App 时仍必须先 stop 旧 Session，不能用“多个 Guest 同时运行”替代。
 
 ---
 
@@ -1534,20 +1529,18 @@ scheduler.schedule_periodic(...)
 
 ## 25. System Shell
 
-`system_shell` 不属于 `ui_server`。
-
-它是 privileged App。
+`SystemShell` 是 Firmware 内的 Host 原生系统组件，不是另一个 WAMR Guest，也不写入内核。这样它能在
+Guest 不存在、崩溃或被暂停时继续绘制 UI、接管手势和回收资源，同时不占用第二份 Guest Runtime。
 
 包含：
 
-- Home
-- Status Bar
-- Notification Center
-- App Switcher
-- Quick Settings
-- Permission Dialog
-- Power Menu
-- Settings UI
+- App Hall：列出 Flash 中的 Bundle；未运行 App 使用封面，挂起 App 使用 Host 捕获的最后一帧并显示运行标志；
+- 全屏 Status Layer：Wi-Fi/4G/电池/内存/Flash、亮度和音量滑杆及常用开关；
+- System Gesture Router 和单 App 切换流程；安装/卸载与网络配置继续作为大厅管理能力实现；
+- Host 性能蒙层：打开 FPS 后，在最终前台画面叠加实际呈现 FPS 与整机聚合 CPU 使用率。
+
+Status Layer 打开时 Guest 已暂停，因此其中不显示 CPU 使用率。系统 UI 优先使用 LVGL primitive、小型
+Flash 常驻 glyph 和纯色/半透明图层，不加载大块背景贴图，也不做高成本实时模糊。
 
 ---
 
@@ -1562,11 +1555,14 @@ System Gesture Recognizer
 典型：
 
 ```text
-顶部下拉 → Status / Notification
-底部上拉 → App Switcher
+最顶部下滑命中 → 自动完整展开全屏 Status Layer，并暂停 Guest
+最底部上滑命中 → 暂停 Guest、捕获最后一帧并缩回 App Hall 卡片
 边缘手势 → Back/System
 普通触摸 → 当前 App
 ```
+
+系统手势优先于 Guest 输入；没有“拉到一半”的抽屉状态。点击大厅中唯一的运行卡片时反向展开并恢复原
+Session；点击另一个 App 时，先 stop 当前 Session，再 start 新 App。
 
 ---
 
@@ -2312,7 +2308,7 @@ framework/
 
 ## 46. 建议 V1 实施顺序
 
-> 本节是 v0.4 形成时的宽范围建议，已由更细化的
+> 本节是 V1 形成时的宽范围建议，已由更细化的
 > [当前开发里程碑](../roadmap/development-milestones.zh-CN.md) 取代，不作为当前排期。
 
 ### Milestone 1 — Runtime

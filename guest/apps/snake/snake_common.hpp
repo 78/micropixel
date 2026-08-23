@@ -46,10 +46,20 @@ constexpr int32_t kBoardY = 76;
 constexpr int32_t kCellPitch = 25;
 constexpr int32_t kScreenWidth = 720;
 constexpr int32_t kScreenHeight = 720;
-constexpr micropixel::Rect kStartButtonRect{250, 316, 220, 72};
-constexpr micropixel::Rect kPauseButtonRect{250, 342, 220, 72};
-constexpr micropixel::Rect kRestartButtonRect{250, 420, 220, 72};
+constexpr int32_t kActionButtonWidth = 280;
+constexpr int32_t kActionButtonHeight = 96;
+constexpr int32_t kActionButtonX = (kScreenWidth - kActionButtonWidth) / 2;
+constexpr uint16_t kActionButtonFontSize = 24U;
+constexpr int32_t kActionButtonTextOpticalOffsetY = -2;
+constexpr uint8_t kOverlayOpacity = 216U;
+constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
+constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButtonWidth, kActionButtonHeight};
 constexpr micropixel::Rect kPauseTouchRect{0, 0, 180, kBoardY};
+
+[[nodiscard]] constexpr int32_t ActionButtonTextY(micropixel::Rect bounds) {
+    return bounds.y + (bounds.height - static_cast<int32_t>(kActionButtonFontSize)) / 2 +
+           kActionButtonTextOpticalOffsetY;
+}
 
 static_assert(kBurstFrameCount == snake_assets::burst_atlas_frame_count);
 static_assert(snake_assets::burst_atlas_count == 4U);

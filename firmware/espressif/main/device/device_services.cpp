@@ -26,9 +26,7 @@ DeviceResult<micropixel_graphics_info_t> GraphicsService::GetInfo() const {
     return info;
 }
 
-DeviceResult<void> GraphicsService::BeginFrame() const {
-    return StatusResult(backend_.BeginFrame());
-}
+DeviceResult<void> GraphicsService::BeginFrame() const { return StatusResult(backend_.BeginFrame()); }
 
 DeviceResult<void> GraphicsService::Submit(const uint8_t* bytes, uint32_t length, BitmapResolver resolver,
                                            void* resolver_context) const {
@@ -87,6 +85,10 @@ DeviceResult<void> AudioService::PlayTone(const micropixel_audio_tone_t& tone) c
 }
 
 DeviceResult<void> AudioService::StopAll() const { return StatusResult(backend_.StopAll()); }
+
+DeviceResult<void> AudioService::SuspendAll() const { return StatusResult(backend_.SuspendAll()); }
+
+DeviceResult<void> AudioService::ResumeAll() const { return StatusResult(backend_.ResumeAll()); }
 
 DeviceResult<uint32_t> RandomService::U32() const {
     uint32_t value = 0U;

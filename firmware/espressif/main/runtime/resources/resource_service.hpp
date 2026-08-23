@@ -53,7 +53,9 @@ class ResourceService final {
     void ClearRequestLocked(uint32_t request);
     void PostCompletion(uint32_t request, uint32_t bitmap, int32_t status);
 
-    const micropixel_aot_package_t& package_;
+    // Non-owning descriptor copy. AotPackage remains the mapping owner for the
+    // complete AppSession, while this value remains stable if that owner moves.
+    micropixel_aot_package_t package_{};
     EventQueue& events_;
     int64_t clock_origin_us_{};
     QueueHandle_t work_queue_{};

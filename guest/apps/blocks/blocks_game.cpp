@@ -15,17 +15,17 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Graphics graphi
     model_.Reset(kDefaultRandomSeed);
 }
 
-void BlocksGame::set_bitmaps(micropixel::Bitmap board, micropixel::Bitmap start, micropixel::Bitmap pause,
-                             micropixel::Bitmap restart) {
+void BlocksGame::set_bitmaps(micropixel::Bitmap board, micropixel::Bitmap start, micropixel::Bitmap restart) {
     micropixel::AssertThat(board.width() == static_cast<uint32_t>(kBoardAssetWidth) &&
                                board.height() == static_cast<uint32_t>(kBoardAssetHeight),
                            "blocks: board bitmap dimensions invalid");
-    micropixel::AssertThat(start.width() == 220U && start.height() == 72U && pause.width() == 220U &&
-                               pause.height() == 72U && restart.width() == 220U && restart.height() == 72U,
+    micropixel::AssertThat(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                               start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
+                               restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                               restart.height() == static_cast<uint32_t>(kActionButtonHeight),
                            "blocks: button bitmap dimensions invalid");
     board_bitmap_ = static_cast<micropixel::Bitmap&&>(board);
     start_button_bitmap_ = static_cast<micropixel::Bitmap&&>(start);
-    pause_button_bitmap_ = static_cast<micropixel::Bitmap&&>(pause);
     restart_button_bitmap_ = static_cast<micropixel::Bitmap&&>(restart);
     InitializePlayfieldSurfaces();
 }
@@ -46,7 +46,7 @@ void BlocksGame::StartNewGame() {
 
 void BlocksGame::EnterPause() {
     screen_ = Screen::kPaused;
-    screen_button_.SetBounds(kPauseButtonRect);
+    screen_button_.SetBounds(kStartButtonRect);
     screen_button_.Reset();
     ResetGesture();
     Render();

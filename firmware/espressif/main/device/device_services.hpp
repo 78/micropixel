@@ -60,6 +60,8 @@ class AudioService final {
     [[nodiscard]] DeviceResult<micropixel_audio_info_t> GetInfo() const;
     [[nodiscard]] DeviceResult<void> PlayTone(const micropixel_audio_tone_t& tone) const;
     [[nodiscard]] DeviceResult<void> StopAll() const;
+    [[nodiscard]] DeviceResult<void> SuspendAll() const;
+    [[nodiscard]] DeviceResult<void> ResumeAll() const;
 
    private:
     AudioBackend& backend_;

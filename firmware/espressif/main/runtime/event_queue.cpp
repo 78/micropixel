@@ -45,12 +45,21 @@ bool IsTouchMove(const micropixel_event_t& event) {
 
 }  // namespace
 
-EventQueue::EventQueue() : queue_(xQueueCreate(limits::kEventQueueCapacity, sizeof(micropixel_event_t))) {}
+EventQueue::EventQueue()
+    : queue_(xQueueCreate(limits::kEventQueueCapacity, sizeof(micropixel_event_t))),
+      pause_acknowledged_(xSemaphoreCreateBinary()),
+      resume_signal_(xSemaphoreCreateBinary()) {}
 
 EventQueue::~EventQueue() {
     Close();
     if (queue_ != nullptr) {
         vQueueDelete(queue_);
+    }
+    if (pause_acknowledged_ != nullptr) {
+        vSemaphoreDelete(pause_acknowledged_);
+    }
+    if (resume_signal_ != nullptr) {
+        vSemaphoreDelete(resume_signal_);
     }
 }
 
@@ -59,9 +68,28 @@ EventWaitResult EventQueue::Wait(micropixel_event_t& event, uint64_t timeout_us)
         return EventWaitResult::kClosed;
     }
 
-    ESP_LOGD(kTag, "Guest blocked: event queue empty or awaiting next event");
-    if (xQueueReceive(queue_, &event, TimeoutTicks(timeout_us)) != pdTRUE) {
-        return accepting_.load(std::memory_order_acquire) ? EventWaitResult::kTimeout : EventWaitResult::kClosed;
+    for (;;) {
+        if (TakeStop(event)) {
+            break;
+        }
+        ESP_LOGD(kTag, "Guest blocked: event queue empty or awaiting next event");
+        if (xQueueReceive(queue_, &event, TimeoutTicks(timeout_us)) != pdTRUE) {
+            return accepting_.load(std::memory_order_acquire) ? EventWaitResult::kTimeout : EventWaitResult::kClosed;
+        }
+        if (!IsControl(event)) {
+            break;
+        }
+        if (!accepting_.load(std::memory_order_acquire)) {
+            return EventWaitResult::kClosed;
+        }
+        if (!pause_requested_.load(std::memory_order_acquire)) {
+            continue;
+        }
+        (void)xSemaphoreGive(pause_acknowledged_);
+        (void)xSemaphoreTake(resume_signal_, portMAX_DELAY);
+        if (!accepting_.load(std::memory_order_acquire)) {
+            return EventWaitResult::kClosed;
+        }
     }
     if (event.service_id == MICROPIXEL_SERVICE_TIMER && event.event_id == MICROPIXEL_TIMER_EVENT_EXPIRED) {
         uint32_t encoded_index = event.source & 0xffU;
@@ -84,6 +112,58 @@ EventWaitResult EventQueue::Wait(micropixel_event_t& event, uint64_t timeout_us)
     ESP_LOGD(kTag, "Guest woke: service=%" PRIu32 " event=%u sequence=%" PRIu32, event.service_id,
              static_cast<unsigned>(event.event_id), event.sequence);
     return EventWaitResult::kReceived;
+}
+
+bool EventQueue::Suspend(TickType_t timeout) {
+    if (!valid() || !accepting_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    while (xSemaphoreTake(pause_acknowledged_, 0U) == pdTRUE) {
+    }
+    while (xSemaphoreTake(resume_signal_, 0U) == pdTRUE) {
+    }
+    pause_requested_.store(true, std::memory_order_release);
+    if (!PushControl(timeout) || xSemaphoreTake(pause_acknowledged_, timeout) != pdTRUE) {
+        Resume();
+        return false;
+    }
+    return true;
+}
+
+bool EventQueue::PrepareResume(const micropixel_event_t& event) {
+    if (queue_ == nullptr || !accepting_.load(std::memory_order_acquire) ||
+        !pause_requested_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    // Suspend's control record has already been consumed at the acknowledged
+    // WaitEvent safe point, leaving room for this required event. Put it at
+    // the front so Guest code observes Resume before any queued Timer/Input
+    // work that survived the transition.
+    return xQueueSendToFront(queue_, &event, 0U) == pdTRUE;
+}
+
+bool EventQueue::RequestStop(const micropixel_event_t& event) {
+    if (queue_ == nullptr || !accepting_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    stop_event_ = event;
+    stop_requested_.store(true, std::memory_order_release);
+    pause_requested_.store(false, std::memory_order_release);
+    // Wake either xQueueReceive or the suspended WaitEvent safe point. A full
+    // queue does not lose Stop: TakeStop observes the atomic request before
+    // the Guest receives its next queued event.
+    (void)PushControl(0U);
+    if (resume_signal_ != nullptr) {
+        (void)xSemaphoreGive(resume_signal_);
+    }
+    return true;
+}
+
+void EventQueue::Resume() {
+    pause_requested_.store(false, std::memory_order_release);
+    if (resume_signal_ != nullptr) {
+        (void)xSemaphoreGive(resume_signal_);
+    }
 }
 
 bool EventQueue::PushRequired(const micropixel_event_t& event) {
@@ -157,6 +237,34 @@ TouchPushResult EventQueue::PushTouchMove(const micropixel_event_t& event) {
     return TouchPushResult::kFailed;
 }
 
-void EventQueue::Close() { accepting_.store(false, std::memory_order_release); }
+bool EventQueue::PushControl(TickType_t timeout) {
+    if (queue_ == nullptr) {
+        return false;
+    }
+    micropixel_event_t control{};
+    return xQueueSendToFront(queue_, &control, timeout) == pdTRUE;
+}
+
+bool EventQueue::TakeStop(micropixel_event_t& event) {
+    if (!stop_requested_.exchange(false, std::memory_order_acq_rel)) {
+        return false;
+    }
+    event = stop_event_;
+    return true;
+}
+
+bool EventQueue::IsControl(const micropixel_event_t& event) {
+    return event.size == 0U && event.service_id == 0U && event.event_id == 0U;
+}
+
+void EventQueue::Close() {
+    accepting_.store(false, std::memory_order_release);
+    pause_requested_.store(false, std::memory_order_release);
+    stop_requested_.store(false, std::memory_order_release);
+    (void)PushControl(0U);
+    if (resume_signal_ != nullptr) {
+        (void)xSemaphoreGive(resume_signal_);
+    }
+}
 
 }  // namespace micropixel::runtime

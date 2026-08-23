@@ -1,7 +1,11 @@
 #include "runtime/wamr/wamr_runtime.hpp"
 
+#include <algorithm>
 #include <cinttypes>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <limits>
 #include <utility>
 
 #include "bh_platform.h"
@@ -15,8 +19,82 @@ namespace {
 
 constexpr uint32_t kExecStackSize = 8U * 1024U;
 constexpr uint32_t kGuestAppHeapSize = 8U * 1024U;
+constexpr unsigned kPsramAllocationThreshold = 32U * 1024U;
+constexpr uintptr_t kWamrAllocationAlignment = 8U;
 constexpr char kTag[] = "micropixel_wamr";
 bool guest_memory_placement_logged;
+
+struct WamrAllocationHeader {
+    void* origin;
+    unsigned size;
+};
+
+void LogAllocationFailure(const char* operation, unsigned size) {
+    ESP_LOGE(kTag,
+             "WAMR %s failed: requested=%u internal-free=%zu internal-largest=%zu "
+             "psram-free=%zu psram-largest=%zu",
+             operation, size, heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM), heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
+
+void WamrFree(void* memory);
+
+void* WamrMalloc(unsigned size) {
+    constexpr size_t kOverhead = sizeof(WamrAllocationHeader) + kWamrAllocationAlignment - 1U;
+    if (size > std::numeric_limits<size_t>::max() - kOverhead) {
+        LogAllocationFailure("malloc", size);
+        return nullptr;
+    }
+
+    const uint32_t caps =
+        size >= kPsramAllocationThreshold ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT : MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    void* origin = heap_caps_malloc(static_cast<size_t>(size) + kOverhead, caps);
+    if (origin == nullptr) {
+        LogAllocationFailure("malloc", size);
+        return nullptr;
+    }
+
+    const uintptr_t aligned =
+        (reinterpret_cast<uintptr_t>(origin) + sizeof(WamrAllocationHeader) + kWamrAllocationAlignment - 1U) &
+        ~(kWamrAllocationAlignment - 1U);
+    auto* header = reinterpret_cast<WamrAllocationHeader*>(aligned) - 1;
+    header->origin = origin;
+    header->size = size;
+
+    if (size >= kPsramAllocationThreshold) {
+        ESP_LOGI(kTag, "WAMR large allocation: requested=%u ptr=%p region=PSRAM", size,
+                 reinterpret_cast<void*>(aligned));
+    }
+    return reinterpret_cast<void*>(aligned);
+}
+
+void* WamrRealloc(void* memory, unsigned size) {
+    if (memory == nullptr) {
+        return WamrMalloc(size);
+    }
+    if (size == 0U) {
+        WamrFree(memory);
+        return nullptr;
+    }
+
+    const auto* old_header = reinterpret_cast<const WamrAllocationHeader*>(memory) - 1;
+    const unsigned old_size = old_header->size;
+    void* resized = WamrMalloc(size);
+    if (resized == nullptr) {
+        return nullptr;
+    }
+    std::memcpy(resized, memory, std::min(old_size, size));
+    WamrFree(memory);
+    return resized;
+}
+
+void WamrFree(void* memory) {
+    if (memory != nullptr) {
+        const auto* header = reinterpret_cast<const WamrAllocationHeader*>(memory) - 1;
+        heap_caps_free(header->origin);
+    }
+}
 
 WamrFailure MakeFailure(WamrError code, const char* message) {
     WamrFailure failure{.code = code};
@@ -80,9 +158,9 @@ WamrRuntime::~WamrRuntime() { Reset(); }
 std::expected<WamrRuntime, WamrFailure> WamrRuntime::Initialize() {
     RuntimeInitArgs args{};
     args.mem_alloc_type = Alloc_With_Allocator;
-    args.mem_alloc_option.allocator.malloc_func = reinterpret_cast<void*>(os_malloc);
-    args.mem_alloc_option.allocator.realloc_func = reinterpret_cast<void*>(os_realloc);
-    args.mem_alloc_option.allocator.free_func = reinterpret_cast<void*>(os_free);
+    args.mem_alloc_option.allocator.malloc_func = reinterpret_cast<void*>(WamrMalloc);
+    args.mem_alloc_option.allocator.realloc_func = reinterpret_cast<void*>(WamrRealloc);
+    args.mem_alloc_option.allocator.free_func = reinterpret_cast<void*>(WamrFree);
     args.max_thread_num = CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS;
 
     WamrRuntime runtime;

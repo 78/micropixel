@@ -3,15 +3,16 @@
 
 #include <expected>
 
+#include "runtime/app_runtime.hpp"
+
 namespace micropixel::platform {
 class Platform;
 }
 
 namespace micropixel::firmware {
 
-// Composition root for platform initialization and one Guest runtime session.
-// app_main() deliberately owns only this object so ESP-IDF entry-point details
-// do not leak into Runtime or device services.
+// Composition root for the long-lived Host, its reusable AppRuntime, and the
+// App Hall driven Guest sessions.
 class FirmwareApp final {
    public:
     explicit FirmwareApp(platform::Platform& platform) : platform_(platform) {}
@@ -24,15 +25,9 @@ class FirmwareApp final {
     enum class StartupError {
         kNvsInitialization,
         kPlatformInitialization,
-        kPthreadConfiguration,
-        kPthreadAttributes,
-        kThreadCreation,
-        kThreadJoin,
     };
 
     [[nodiscard]] std::expected<void, StartupError> InitializePlatform();
-    [[nodiscard]] std::expected<void, StartupError> RunGuest();
-    [[noreturn]] static void RestartAfterGuest();
 
     platform::Platform& platform_;
 };

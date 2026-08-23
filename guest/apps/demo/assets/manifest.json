@@ -2,6 +2,11 @@
   "schema_version": 1,
   "assets": [
     {
+      "name": "launch",
+      "format": "png",
+      "path": "source/launch-sdk-demo.png"
+    },
+    {
       "name": "sprite.demo",
       "format": "png",
       "path": "demo_sprite_sheet.png",

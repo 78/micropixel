@@ -327,10 +327,9 @@ bool RetainedSurface::Update(const micropixel_graphics_begin_surface_command_t* 
         status = esp_lcd_dpi_panel_get_frame_buffer(panel_, kFramebufferCount, &panel_frame_buffers[0],
                                                     &panel_frame_buffers[1]);
         auto* initial_frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
-        auto* displayed_frame_buffer =
-            initial_frame_buffer == panel_frame_buffers[0]
-                ? static_cast<uint8_t*>(panel_frame_buffers[1])
-                : static_cast<uint8_t*>(panel_frame_buffers[0]);
+        auto* displayed_frame_buffer = initial_frame_buffer == panel_frame_buffers[0]
+                                           ? static_cast<uint8_t*>(panel_frame_buffers[1])
+                                           : static_cast<uint8_t*>(panel_frame_buffers[0]);
         if (status != ESP_OK || initial_frame_buffer == nullptr ||
             (initial_frame_buffer != panel_frame_buffers[0] && initial_frame_buffer != panel_frame_buffers[1])) {
             (void)esp_lv_adapter_set_dummy_draw(display_, false);

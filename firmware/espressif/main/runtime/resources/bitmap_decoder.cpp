@@ -1,14 +1,45 @@
 #include "runtime/resources/bitmap_decoder.hpp"
 
-#include <cstdlib>
+#include <cinttypes>
+#include <cstring>
 
 #include "esp_heap_caps.h"
 #include "esp_jpeg_dec.h"
+#include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "png.h"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
 namespace {
+
+constexpr char kTag[] = "micropixel_bitmap";
+
+struct PngMemoryReader final {
+    const uint8_t* data{};
+    size_t size{};
+    size_t offset{};
+};
+
+void ReadPngBytes(png_structp png, png_bytep output, png_size_t size) {
+    auto* reader = static_cast<PngMemoryReader*>(png_get_io_ptr(png));
+    if (reader == nullptr || reader->offset > reader->size || size > reader->size - reader->offset) {
+        png_error(png, "truncated PNG bitmap");
+        return;
+    }
+    std::memcpy(output, reader->data + reader->offset, size);
+    reader->offset += size;
+}
+
+void PngError(png_structp png, png_const_charp) { png_longjmp(png, 1); }
+
+void PngWarning(png_structp, png_const_charp) {}
+
+png_voidp PngPsramAlloc(png_structp, png_alloc_size_t size) {
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
+void PngPsramFree(png_structp, png_voidp memory) { heap_caps_free(memory); }
 
 bool ValidDecodedSize(uint32_t width, uint32_t height, uint32_t bytes_per_pixel, size_t size) {
     return width > 0U && height > 0U && width <= 720U && height <= 720U &&
@@ -23,6 +54,24 @@ void RgbToLvRgb888(uint8_t* data, uint32_t size) {
         data[offset] = data[offset + 2U];
         data[offset + 2U] = red;
     }
+}
+
+uint32_t ReadBigEndian32(const uint8_t* value) {
+    return (static_cast<uint32_t>(value[0]) << 24U) | (static_cast<uint32_t>(value[1]) << 16U) |
+           (static_cast<uint32_t>(value[2]) << 8U) | static_cast<uint32_t>(value[3]);
+}
+
+bool PreflightPng(const micropixel_bundle_asset_view_t& asset, uint32_t& width, uint32_t& height) {
+    constexpr uint8_t kSignature[] = {0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU};
+    constexpr uint8_t kIhdr[] = {'I', 'H', 'D', 'R'};
+    if (asset.data == nullptr || asset.size < 24U || std::memcmp(asset.data, kSignature, sizeof(kSignature)) != 0 ||
+        std::memcmp(asset.data + 12U, kIhdr, sizeof(kIhdr)) != 0) {
+        return false;
+    }
+    width = ReadBigEndian32(asset.data + 16U);
+    height = ReadBigEndian32(asset.data + 20U);
+    const size_t output_size = static_cast<size_t>(width) * height * 4U;
+    return ValidDecodedSize(width, height, 4U, output_size);
 }
 
 bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, device::BitmapView& view) {
@@ -52,7 +101,7 @@ bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, device::BitmapView&
                     succeeded = true;
                 }
                 if (!succeeded) {
-                    std::free(output);
+                    heap_caps_free(output);
                 }
             }
         }
@@ -62,46 +111,94 @@ bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, device::BitmapView&
 }
 
 bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& view) {
-    png_image image{};
-    image.version = PNG_IMAGE_VERSION;
-    if (!png_image_begin_read_from_memory(&image, asset.data, asset.size)) {
+    uint32_t expected_width = 0U;
+    uint32_t expected_height = 0U;
+    if (!PreflightPng(asset, expected_width, expected_height)) {
+        ESP_LOGE(kTag, "PNG rejected before decode: bytes=%u", asset.size);
         return false;
     }
-    const bool has_alpha = (image.format & PNG_FORMAT_FLAG_ALPHA) != 0U;
-    image.format = has_alpha ? PNG_FORMAT_BGRA : PNG_FORMAT_RGB;
-    const uint32_t bytes_per_pixel = has_alpha ? 4U : 3U;
-    size_t output_size = PNG_IMAGE_SIZE(image);
-    if (!ValidDecodedSize(image.width, image.height, bytes_per_pixel, output_size)) {
-        png_image_free(&image);
+
+    png_structp png = png_create_read_struct_2(PNG_LIBPNG_VER_STRING, nullptr, PngError, PngWarning, nullptr,
+                                               PngPsramAlloc, PngPsramFree);
+    if (png == nullptr) {
         return false;
     }
-    auto* output =
-        static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (output == nullptr) {
-        png_image_free(&image);
+    png_infop info = png_create_info_struct(png);
+    if (info == nullptr) {
+        png_destroy_read_struct(&png, nullptr, nullptr);
         return false;
     }
-    bool succeeded = png_image_finish_read(&image, nullptr, output, 0, nullptr) != 0;
-    if (succeeded) {
-        if (!has_alpha) {
-            RgbToLvRgb888(output, static_cast<uint32_t>(output_size));
-        }
-        view = {output,
-                static_cast<uint32_t>(output_size),
-                image.width,
-                image.height,
-                image.width * bytes_per_pixel,
-                has_alpha ? MICROPIXEL_PIXEL_FORMAT_ARGB8888 : MICROPIXEL_PIXEL_FORMAT_RGB888};
-    } else {
-        std::free(output);
+
+    volatile uint8_t* decoded = nullptr;
+    if (setjmp(png_jmpbuf(png)) != 0) {
+        heap_caps_free(const_cast<uint8_t*>(decoded));
+        png_destroy_read_struct(&png, &info, nullptr);
+        ESP_LOGE(kTag, "streaming libpng decode failed: bytes=%u", asset.size);
+        return false;
     }
-    png_image_free(&image);
-    return succeeded;
+
+    PngMemoryReader reader{asset.data, asset.size, 0U};
+    png_set_read_fn(png, &reader, ReadPngBytes);
+    png_set_user_limits(png, 720U, 720U);
+    png_read_info(png, info);
+
+    const uint32_t width = png_get_image_width(png, info);
+    const uint32_t height = png_get_image_height(png, info);
+    int color_type = png_get_color_type(png, info);
+    const int bit_depth = png_get_bit_depth(png, info);
+    if (width != expected_width || height != expected_height ||
+        png_get_interlace_type(png, info) != PNG_INTERLACE_NONE) {
+        png_error(png, "unsupported PNG bitmap dimensions or interlace");
+    }
+    if (bit_depth == 16) {
+        png_set_strip_16(png);
+    }
+    if (color_type == PNG_COLOR_TYPE_PALETTE) {
+        png_set_palette_to_rgb(png);
+    }
+    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+        png_set_expand_gray_1_2_4_to_8(png);
+    }
+    const bool has_transparency = png_get_valid(png, info, PNG_INFO_tRNS) != 0U;
+    if (has_transparency) {
+        png_set_tRNS_to_alpha(png);
+    }
+    if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png);
+    }
+    if ((color_type & PNG_COLOR_MASK_ALPHA) == 0 && !has_transparency) {
+        png_set_add_alpha(png, UINT8_MAX, PNG_FILLER_AFTER);
+    }
+    // LVGL's ARGB8888 byte layout on this little-endian target is BGRA.
+    png_set_bgr(png);
+    png_read_update_info(png, info);
+
+    const size_t output_size = static_cast<size_t>(width) * height * 4U;
+    if (!ValidDecodedSize(width, height, 4U, output_size) || png_get_channels(png, info) != 4U ||
+        png_get_rowbytes(png, info) != static_cast<size_t>(width) * 4U) {
+        png_error(png, "unsupported PNG bitmap pixel layout");
+    }
+    decoded = static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (decoded == nullptr) {
+        png_error(png, "PNG bitmap output allocation failed");
+    }
+
+    for (uint32_t row = 0U; row < height; ++row) {
+        png_read_row(png, const_cast<uint8_t*>(decoded) + static_cast<size_t>(row) * width * 4U, nullptr);
+    }
+    png_read_end(png, info);
+    png_destroy_read_struct(&png, &info, nullptr);
+
+    auto* pixels = const_cast<uint8_t*>(decoded);
+    view = {pixels, static_cast<uint32_t>(output_size), width, height, width * 4U, MICROPIXEL_PIXEL_FORMAT_ARGB8888};
+    ESP_LOGI(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu output=%p", width, height, output_size,
+             pixels);
+    return true;
 }
 
 }  // namespace
 
-DecodedBitmap::~DecodedBitmap() { std::free(const_cast<uint8_t*>(view_.data)); }
+DecodedBitmap::~DecodedBitmap() { heap_caps_free(const_cast<uint8_t*>(view_.data)); }
 
 void DecodedBitmap::ReleaseOwnership() { view_.data = nullptr; }
 

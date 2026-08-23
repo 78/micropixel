@@ -1,6 +1,11 @@
 set(micropixel_sources
+    "app_controller.cpp"
     "app_main.cpp"
     "firmware_app.cpp"
+    "host_controller.cpp"
+    "host_ui/system_gesture_router.cpp"
+    "host_ui/system_settings_store.cpp"
+    "host_ui/system_shell.cpp"
 )
 set(micropixel_requires nvs_flash pthread)
 

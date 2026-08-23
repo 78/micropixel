@@ -8,13 +8,13 @@
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
+#include "task_policy.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_touch";
 constexpr int kI2cSpeedHz = 400000;
-constexpr int kTaskPriority = 5;
 constexpr uint32_t kTaskStackSize = 4096;
 constexpr BaseType_t kTaskCore = 1;
 
@@ -75,8 +75,8 @@ esp_err_t Gt911Input::Start(lv_display_t* display) {
     }
     display_ = display;
     active_instance = this;
-    BaseType_t task_status =
-        xTaskCreatePinnedToCore(TaskEntry, "micropixel_touch", kTaskStackSize, this, kTaskPriority, &task_, kTaskCore);
+    BaseType_t task_status = xTaskCreatePinnedToCore(TaskEntry, "micropixel_touch", kTaskStackSize, this,
+                                                     task_policy::kTouchPriority, &task_, kTaskCore);
     if (task_status != pdPASS) {
         active_instance = nullptr;
         return ESP_ERR_NO_MEM;
@@ -136,9 +136,7 @@ void Gt911Input::ClearSmokeUi() {
     smoke_status_ = nullptr;
 }
 
-#if CONFIG_MICROPIXEL_ENABLE_SCREEN_CAPTURE
 void Gt911Input::InjectTouchForCapture(const device::TouchSample& sample) { Emit(sample); }
-#endif
 
 void Gt911Input::Emit(const device::TouchSample& sample) {
     device::TouchSink sink = nullptr;

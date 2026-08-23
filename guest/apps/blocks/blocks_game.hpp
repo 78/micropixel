@@ -18,8 +18,7 @@ class BlocksGame final {
     BlocksGame(micropixel::Application& app, micropixel::Graphics graphics, micropixel::GraphicsInfo graphics_info,
                micropixel::Audio audio, bool audio_available, uint32_t best_score);
 
-    void set_bitmaps(micropixel::Bitmap board, micropixel::Bitmap start, micropixel::Bitmap pause,
-                     micropixel::Bitmap restart);
+    void set_bitmaps(micropixel::Bitmap board, micropixel::Bitmap start, micropixel::Bitmap restart);
     void OnTimer(const micropixel::TimerEvent& tick);
     void OnTouch(const micropixel::TouchEvent& touch);
     void Render();
@@ -42,7 +41,7 @@ class BlocksGame final {
     void RenderHeader(micropixel::CommandBuffer& commands, const Theme& theme) const;
     void RenderSidebar(micropixel::CommandBuffer& commands, const Theme& theme) const;
     void RenderStatusEffect(micropixel::CommandBuffer& commands, const Theme& theme) const;
-    void RenderOverlay(micropixel::CommandBuffer& commands, const Theme& theme) const;
+    void RenderOverlay(micropixel::CommandBuffer& commands) const;
 
     [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
                                              uint16_t volume_per_mille, uint16_t attack_ms = 4U,
@@ -67,7 +66,6 @@ class BlocksGame final {
     BlocksModel model_{};
     micropixel::Bitmap board_bitmap_{};
     micropixel::Bitmap start_button_bitmap_{};
-    micropixel::Bitmap pause_button_bitmap_{};
     micropixel::Bitmap restart_button_bitmap_{};
     micropixel::OffscreenSurface playfield_surfaces_[4U]{};
     micropixel::ui::Button screen_button_{};

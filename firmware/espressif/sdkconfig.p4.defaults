@@ -22,6 +22,11 @@ CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 
+# System Shell snapshots synchronously render the retained Guest tree on the
+# Host main task. Match LVGL's own 8 KiB task stack so the software image path
+# cannot overflow ESP-IDF's 3584-byte default during bottom-swipe capture.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
 # Product firmware is performance-sensitive. Use ESP-IDF's supported release
 # optimization profile; sdkconfig.debug.defaults can be appended explicitly
 # when source-level debugging is required.
@@ -58,16 +63,17 @@ CONFIG_MICROPIXEL_KV_WRITE_REFILL_MS=1000
 # Product images never inject synthetic input. The conformance overlay enables
 # its isolated test hooks explicitly.
 CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
-# Screen capture remains available as an opt-in debugging overlay, but the
-# product image does not reserve its task, LVGL snapshot code, or PNG path.
-CONFIG_MICROPIXEL_ENABLE_SCREEN_CAPTURE=n
-
 # ESP32-P4 product path: retained Guest objects, PPA-assisted image copies,
 # and bounded dirty-region coalescing.
 CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND=y
 CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=y
 CONFIG_MICROPIXEL_LVGL_PPA_ACCEL=y
 CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS=4096
+CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT=y
+# The V1 status panel always offers the Host FPS/aggregate-CPU control. Keep
+# run-time accounting available; drawing and sampling remain off until enabled.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
 # The 720x120 RGB888 scratch buffer stays in internal SRAM. Hardware A/B
 # reduced full-scene shake to six tiles without the PSRAM render penalty.
 CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=120
@@ -78,6 +84,7 @@ CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES=12582912
 CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS=8192
 CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION=y
 CONFIG_LV_COLOR_DEPTH_24=y
+# CONFIG_LV_USE_LODEPNG is not set
 CONFIG_LV_DEF_REFR_PERIOD=4
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_24=y

@@ -27,6 +27,8 @@ legacy_files=(
     "$source_root/runtime/abi_adapter.cpp"
     "$source_root/runtime/native_api.c"
     "$source_root/runtime/service_handler.hpp"
+    "$source_root/runtime/engine.cpp"
+    "$source_root/runtime/engine.hpp"
     "$source_root/platform/graphics_backend.hpp"
     "$source_root/platform/random_backend.hpp"
 )
@@ -36,6 +38,11 @@ for legacy_file in "${legacy_files[@]}"; do
         exit 1
     fi
 done
+
+if rg -n '\besp_restart[[:space:]]*\(' "$source_root/firmware_app.cpp"; then
+    echo "Guest completion must return to the Host System Shell, not restart the device." >&2
+    exit 1
+fi
 
 abi_file_count="$(find "$source_root/runtime/abi" -maxdepth 1 -type f | wc -l | tr -d ' ')"
 if [[ "$abi_file_count" != "7" ]]; then

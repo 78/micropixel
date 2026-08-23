@@ -45,13 +45,20 @@ else
     exit 2
 fi
 
-wamrc="${WAMRC:-$workspace_root/build/tools/wamrc-2.4.5-riscv32-ilp32f}"
+wamrc="${WAMRC:-$workspace_root/build/tools/wamrc-2.4.3-riscv32-ilp32f}"
+if [[ -z "${WAMRC:-}" && ! -x "$wamrc" && -x "$workspace_root/build/tools/wamrc-host-build-llvm19/wamrc" ]]; then
+    wamrc="$workspace_root/build/tools/wamrc-host-build-llvm19/wamrc"
+fi
 if [[ ! -x "$wasm_clangxx" ]]; then
     echo "WASI Clang++ is not executable: $wasm_clangxx" >&2
     exit 2
 fi
 if [[ ! -x "$wamrc" ]]; then
-    echo "Set WAMRC to a WAMR 2.4.5 compiler built for RISCV32_ILP32F." >&2
+    echo "Set WAMRC to a WAMR 2.4.3 compiler built for RISCV32_ILP32F." >&2
+    exit 2
+fi
+if [[ "$("$wamrc" --version 2>&1)" != "wamrc 2.4.3" ]]; then
+    echo "WAMRC must match the checked-in WAMR 2.4.3 runtime: $wamrc" >&2
     exit 2
 fi
 

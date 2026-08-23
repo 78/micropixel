@@ -48,7 +48,9 @@ TimerService::~TimerService() {
 }
 
 micropixel_app_time_t TimerService::Now() const {
-    int64_t elapsed = esp_timer_get_time() - clock_origin_us_;
+    const int64_t suspended_at = suspended_at_us_.load(std::memory_order_acquire);
+    const int64_t now = suspended_.load(std::memory_order_acquire) ? suspended_at : esp_timer_get_time();
+    int64_t elapsed = now - clock_origin_us_ - suspended_total_us_.load(std::memory_order_acquire);
     return elapsed > 0 ? static_cast<micropixel_app_time_t>(elapsed) : 0U;
 }
 
@@ -102,8 +104,10 @@ ServiceResult<micropixel_timer_handle_t> TimerService::Create() {
         slot.sequence = 0U;
         slot.coalesced = 0U;
         slot.dropped = 0U;
+        slot.resume_delay_us = 0U;
         slot.active = false;
         slot.periodic = false;
+        slot.resume_active = false;
         created_handle = slot.handle;
         portEXIT_CRITICAL(&state_lock_);
 
@@ -155,8 +159,14 @@ ServiceResult<void> TimerService::Start(micropixel_timer_handle_t handle, uint64
     slot->last_event_us = Now();
     slot->sequence = 0U;
     slot->active = true;
+    slot->resume_active = suspended_.load(std::memory_order_acquire);
+    slot->resume_delay_us = initial_delay_us;
     portEXIT_CRITICAL(&state_lock_);
 
+    if (suspended_.load(std::memory_order_acquire)) {
+        GiveLock();
+        return {};
+    }
     esp_err_t start_status =
         period_us == 0U ? esp_timer_start_once(native, initial_delay_us) : esp_timer_start_periodic(native, period_us);
     if (start_status != ESP_OK) {
@@ -184,6 +194,7 @@ ServiceResult<void> TimerService::Cancel(micropixel_timer_handle_t handle) {
 
     portENTER_CRITICAL(&state_lock_);
     slot->active = false;
+    slot->resume_active = false;
     esp_timer_handle_t native = slot->native;
     portEXIT_CRITICAL(&state_lock_);
     esp_err_t status = esp_timer_stop(native);
@@ -195,6 +206,7 @@ ServiceResult<void> TimerService::Cancel(micropixel_timer_handle_t handle) {
 void TimerService::ReleaseSlot(Slot& slot) {
     portENTER_CRITICAL(&state_lock_);
     slot.active = false;
+    slot.resume_active = false;
     esp_timer_handle_t native = slot.native;
     portEXIT_CRITICAL(&state_lock_);
 
@@ -213,6 +225,8 @@ void TimerService::ReleaseSlot(Slot& slot) {
     slot.active = false;
     slot.periodic = false;
     slot.period_us = 0U;
+    slot.resume_delay_us = 0U;
+    slot.resume_active = false;
     portEXIT_CRITICAL(&state_lock_);
     ++released_;
     --live_;
@@ -238,7 +252,7 @@ void TimerService::OnExpired(void* argument) {
     uint64_t timestamp = service.Now();
 
     portENTER_CRITICAL(&service.state_lock_);
-    if (!slot.active || slot.native == nullptr) {
+    if (!slot.active || slot.native == nullptr || service.suspended_.load(std::memory_order_acquire)) {
         portEXIT_CRITICAL(&service.state_lock_);
         return;
     }
@@ -293,6 +307,90 @@ void TimerService::OnExpired(void* argument) {
         }
     }
     portEXIT_CRITICAL(&service.state_lock_);
+}
+
+bool TimerService::Suspend() {
+    if (!TakeLock()) {
+        return false;
+    }
+    if (suspended_.load(std::memory_order_acquire)) {
+        GiveLock();
+        return true;
+    }
+
+    const int64_t now_global_us = esp_timer_get_time();
+    suspended_at_us_.store(now_global_us, std::memory_order_release);
+    suspended_.store(true, std::memory_order_release);
+    const uint64_t now_app_us = Now();
+    bool succeeded = true;
+    for (auto& slot : slots_) {
+        if (slot.native == nullptr || !slot.active) {
+            continue;
+        }
+        uint64_t remaining_us = 1U;
+        if (slot.periodic && slot.period_us > 0U) {
+            const uint64_t elapsed_us = now_app_us >= slot.last_event_us ? now_app_us - slot.last_event_us : 0U;
+            remaining_us = elapsed_us < slot.period_us ? slot.period_us - elapsed_us : 1U;
+        } else {
+            uint64_t expiry_us = 0U;
+            if (esp_timer_get_expiry_time(slot.native, &expiry_us) == ESP_OK && expiry_us > (uint64_t)now_global_us) {
+                remaining_us = expiry_us - (uint64_t)now_global_us;
+            }
+        }
+        portENTER_CRITICAL(&state_lock_);
+        slot.resume_active = true;
+        slot.resume_delay_us = remaining_us;
+        portEXIT_CRITICAL(&state_lock_);
+        const esp_err_t status = esp_timer_stop(slot.native);
+        if (status != ESP_OK && status != ESP_ERR_INVALID_STATE) {
+            succeeded = false;
+            ESP_LOGW(kTag, "timer stop during suspend failed: %s", esp_err_to_name(status));
+        }
+    }
+    GiveLock();
+    return succeeded;
+}
+
+bool TimerService::Resume() {
+    if (!TakeLock()) {
+        return false;
+    }
+    if (!suspended_.load(std::memory_order_acquire)) {
+        GiveLock();
+        return true;
+    }
+
+    const int64_t now_us = esp_timer_get_time();
+    const int64_t suspended_at = suspended_at_us_.load(std::memory_order_acquire);
+    if (now_us > suspended_at) {
+        suspended_total_us_.fetch_add(now_us - suspended_at, std::memory_order_acq_rel);
+    }
+    suspended_.store(false, std::memory_order_release);
+    suspended_at_us_.store(0, std::memory_order_release);
+
+    bool succeeded = true;
+    for (auto& slot : slots_) {
+        if (slot.native == nullptr || !slot.active || !slot.resume_active) {
+            continue;
+        }
+        const uint64_t delay_us = slot.resume_delay_us > 0U ? slot.resume_delay_us : 1U;
+        portENTER_CRITICAL(&state_lock_);
+        slot.resume_active = false;
+        slot.resume_delay_us = 0U;
+        portEXIT_CRITICAL(&state_lock_);
+        const esp_err_t status = slot.periodic ? esp_timer_start_periodic_at(slot.native, slot.period_us,
+                                                                             static_cast<uint64_t>(now_us) + delay_us)
+                                               : esp_timer_start_once(slot.native, delay_us);
+        if (status != ESP_OK) {
+            portENTER_CRITICAL(&state_lock_);
+            slot.active = false;
+            portEXIT_CRITICAL(&state_lock_);
+            succeeded = false;
+            ESP_LOGW(kTag, "timer restart after resume failed: %s", esp_err_to_name(status));
+        }
+    }
+    GiveLock();
+    return succeeded;
 }
 
 }  // namespace micropixel::runtime

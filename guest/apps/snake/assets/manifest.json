@@ -3,10 +3,7 @@
   "assets": [
     {
       "name": "launch",
-      "format": "png_to_raw_rgb888",
-      "width": 360,
-      "height": 360,
-      "background": "#08111f",
+      "format": "png",
       "path": "source/launch-transparent-360.png"
     },
     {
@@ -17,17 +14,12 @@
     {
       "name": "button.start",
       "format": "png",
-      "path": "snake_button_start_220x72.png"
-    },
-    {
-      "name": "button.pause",
-      "format": "png",
-      "path": "snake_button_pause_220x72.png"
+      "path": "snake_button_start_280x96.png"
     },
     {
       "name": "button.restart",
       "format": "png",
-      "path": "snake_button_reboot_220x72.png"
+      "path": "snake_button_restart_280x96.png"
     },
     {
       "name": "burst.normal",

@@ -20,13 +20,13 @@
 #include "platform/metalio-claw4/input/gt911_input.hpp"
 #include "png.h"
 #include "src/draw/snapshot/lv_snapshot.h"
+#include "task_policy.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_capture";
 constexpr uint32_t kTaskStackSize = 16U * 1024U;
-constexpr UBaseType_t kTaskPriority = 1U;
 constexpr BaseType_t kTaskCore = 0;
 constexpr char kCaptureCommand[] = "MICROPIXEL_CAPTURE";
 constexpr char kTouchCommand[] = "MICROPIXEL_TOUCH";
@@ -153,8 +153,8 @@ class ScreenCapture final {
                 return status;
             }
         }
-        if (xTaskCreatePinnedToCore(TaskEntry, "micropixel_capture", kTaskStackSize, this, kTaskPriority, &task_,
-                                    kTaskCore) != pdPASS) {
+        if (xTaskCreatePinnedToCore(TaskEntry, "micropixel_capture", kTaskStackSize, this,
+                                    task_policy::kCapturePriority, &task_, kTaskCore) != pdPASS) {
             return ESP_ERR_NO_MEM;
         }
         return ESP_OK;

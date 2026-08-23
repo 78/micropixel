@@ -5,12 +5,11 @@
 ## 依赖方向
 
 ```text
-                         ┌─ owns/initializes ─ Platform
-FirmwareApp (组合根) ────┤                       │ implements
-                         └─ creates ─ DeviceServices ── uses ── Device contracts
-                                              ▲                    ▲
-                                              │ uses               │
-                                           Runtime                 └─ Platform
+                         ┌─ owns/initializes ─ Platform ─ implements ─ Device/System UI contracts
+FirmwareApp (组合根) ────┼─ creates ─ DeviceServices ── injects ─ AppRuntime
+                         └─ creates ─ SystemShell ─────── HostController
+                                                        │
+                                               owns 0..1 AppSession
 ```
 
 `device/` 和 `platform/` 在文件系统中同层，但职责不是平行重复：
@@ -18,7 +17,9 @@ FirmwareApp (组合根) ────┤                       │ implements
 - `device/` 定义与硬件无关的 Graphics、Input、Audio、Random 能力契约和 Runtime 使用的 façade；
 - `platform/` 实现这些契约，并持有开发板、驱动、LVGL 与外设生命周期；
 - `runtime/` 只依赖 `device/`，不得 include `platform/`；
-- `FirmwareApp` 是唯一知道具体 `Platform` 并把 backend 注入 `DeviceServices` 的组合根。
+- `host_ui/` 定义 Host 原生 System Shell 与平台无关的 System UI model；
+- `FirmwareApp` 是唯一知道具体 `Platform` 并把 backend 注入 `DeviceServices` 的组合根；`HostController` 管理
+  Hall / Foreground 状态和 App 生命周期转移。
 
 `conformance/` 是配置开启后才编译的 Host 合成事件钩子，不属于产品 Runtime。
 
@@ -33,8 +34,20 @@ main/
 ├── Kconfig.projbuild
 ├── idf_component.yml
 ├── app_main.cpp
+├── app_controller.cpp
+├── app_controller.hpp
 ├── firmware_app.cpp
 ├── firmware_app.hpp
+├── host_controller.cpp
+├── host_controller.hpp
+├── host_ui/
+│   ├── system_shell.cpp
+│   ├── system_shell.hpp
+│   ├── system_gesture_router.cpp
+│   ├── system_gesture_router.hpp
+│   ├── system_settings_store.cpp
+│   ├── system_settings_store.hpp
+│   └── system_ui.hpp
 ├── conformance/
 │   ├── CMakeLists.txt
 │   ├── guest_test_hooks.cpp
@@ -58,6 +71,10 @@ main/
 │   │   └── command_stream.hpp
 │   ├── metalio-claw4/
 │   │   ├── platform.cpp
+│   │   ├── graphics_adapter.cpp
+│   │   ├── graphics_adapter.hpp
+│   │   ├── system_ui_adapter.cpp
+│   │   ├── system_ui_adapter.hpp
 │   │   ├── board_hardware.cpp
 │   │   ├── board_hardware.hpp
 │   │   ├── audio/
@@ -70,6 +87,8 @@ main/
 │   │       ├── dirty_region_coalescer.hpp
 │   │       ├── esp_lcd_nv3051f.c
 │   │       ├── esp_lcd_nv3051f.h
+│   │       ├── png_cover_decoder.cpp
+│   │       ├── png_cover_decoder.hpp
 │   │       ├── retained_scene.cpp
 │   │       ├── retained_scene.hpp
 │   │       ├── retained_surface.cpp
@@ -81,8 +100,10 @@ main/
 │       └── graphics_backend.cpp
 └── runtime/
     ├── CMakeLists.txt
-    ├── engine.cpp
-    ├── engine.hpp
+    ├── app_runtime.cpp
+    ├── app_runtime.hpp
+    ├── app_session.cpp
+    ├── app_session.hpp
     ├── event_queue.cpp
     ├── event_queue.hpp
     ├── guest_context.cpp
@@ -129,11 +150,24 @@ main/
 ## 子目录职责
 
 - `runtime/abi/` 固定为 7 个文件。它包含 C ABI 声明、WAMR native symbol 表、参数适配、固定容量服务注册表和各服务 Endpoint；`ServiceHandler` 与注册表放在一起，避免为一个小抽象再增加文件。
-- `runtime/bundle/` 负责 Bundle v2 格式、只读映射、校验和 AOT payload 所有权。v2 使用显式长度的 64 字节 AppId，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h` 固定，目录调整不改变磁盘 ABI。
-- `runtime/resources/` 负责异步资源请求、图片解码和 Bitmap handle/PSRAM 配额。
+- `runtime/bundle/` 负责 Bundle v1 格式、只读映射、校验和 AOT payload 所有权。v1 使用显式长度的 64 字节 AppId、必需的 UTF-8 App 标题元数据，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h` 固定，目录调整不改变磁盘 ABI。
+- `runtime/resources/` 负责异步资源请求、图片解码和 Bitmap handle/PSRAM 配额。Guest PNG 由 libpng
+  逐行直接写入最终 ARGB8888 PSRAM buffer，避免整图 inflate 临时副本和第二遍整图颜色转换干扰显示
+  framebuffer scanout。
 - `runtime/services/` 放 Runtime 自己提供的 Timer、Storage 业务；它们不是物理设备 backend。
 - `runtime/wamr/` 负责 WAMR 初始化、module/instance/exec-env RAII、watchdog 和运行期诊断。
+- `runtime/app_runtime.*` 持有长驻 WAMR，并同步创建最多一个 `AppSession`；`runtime/app_session.*` 持有一次
+  Guest 的 Bundle、module、instance、exec-env 与 `GuestContext` 销毁边界。
+- `host_ui/` 是 Host 原生 App Hall/状态层的控制边界；具体绘制仍由所选 Platform 的 `SystemUiBackend` 完成，FPS 开关、亮度与音量保存到独立的 `sys_store` NVS。
+- `app_controller.*` 在单独 pthread 上运行唯一 Guest，并把 `NotRunning / Starting / Foreground / Suspending /
+  Suspended / Resuming / Stopping` 内部状态收敛为同步 Host 命令；Guest SDK 不暴露暂时无用的 lifecycle callback。
+- Resume/Stop 通过两个 typed Core Event 暴露给 Guest；正常切换先协作 Stop，500ms 超时才强制 terminate，
+  真实 trap 的 WAMR 调用栈诊断保持开启。
+- App Hall 只 mmap 每个 Bundle 的压缩 PNG 封面，并逐行解码、等比裁切到当前卡片尺寸；无论作者提供
+  多大的源图，Host 都只缓存一份 218x218 RGB888 thumbnail。唯一挂起 App 的卡片改用窗口截图。状态层使用
+  LVGL primitive 和单次半透明合成；亮度、主音量及 FPS/聚合 CPU 小蒙层均由 Host 控制。
 - `platform/graphics/` 是跨板级图形协议校验；`platform/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`。
 - `platform/null/` 提供没有真实板级设备时的构建实现。
 
-只在 `device/`、`runtime/`、`platform/`、`conformance/` 这四个真实子系统设置 CMake 清单；不为 `abi/` 等叶子目录继续增加小型 CMake 文件。
+只在 `device/`、`runtime/`、`platform/`、`conformance/` 这些已有子系统设置独立 CMake 清单；当前很小的
+`host_ui/` 由顶层清单直接收录，不为 `abi/` 等叶子目录继续增加小型 CMake 文件。

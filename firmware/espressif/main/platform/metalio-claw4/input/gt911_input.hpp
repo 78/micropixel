@@ -28,9 +28,7 @@ class Gt911Input final : public device::InputBackend {
     void UnbindTouchSink(void* context) override;
     void BindSmokeUi(lv_obj_t* root, lv_obj_t* marker, lv_obj_t* status);
     void ClearSmokeUi();
-#if CONFIG_MICROPIXEL_ENABLE_SCREEN_CAPTURE
     void InjectTouchForCapture(const device::TouchSample& sample);
-#endif
 
    private:
     struct ActiveTouch final {

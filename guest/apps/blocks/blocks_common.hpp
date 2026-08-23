@@ -27,14 +27,24 @@ constexpr int32_t kScreenCenterX = static_cast<int32_t>(kScreenWidth) / 2;
 constexpr uint64_t kRenderTargetPeriodUs = 16667U;
 constexpr uint32_t kDefaultRandomSeed = 0x4b10c5e7U;
 
-constexpr micropixel::Rect kStartButtonRect{kScreenCenterX - 110, 316, 220, 72};
-constexpr micropixel::Rect kPauseButtonRect{kScreenCenterX - 110, 342, 220, 72};
-constexpr micropixel::Rect kRestartButtonRect{kScreenCenterX - 110, 420, 220, 72};
+constexpr int32_t kActionButtonWidth = 280;
+constexpr int32_t kActionButtonHeight = 96;
+constexpr int32_t kActionButtonX = kScreenCenterX - kActionButtonWidth / 2;
+constexpr uint16_t kActionButtonFontSize = 24U;
+constexpr int32_t kActionButtonTextOpticalOffsetY = -2;
+constexpr uint8_t kOverlayOpacity = 216U;
+constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
+constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButtonWidth, kActionButtonHeight};
 constexpr micropixel::Rect kGameOverOverlayRect{60, kBoardY, 600, kBoardAssetHeight};
 constexpr micropixel::Rect kPauseTouchRect{0, 0, 180, kBoardY};
 constexpr micropixel::Rect kHoldTouchRect{kBoardX + kSidebarX, kBoardY, kSidebarWidth, 126};
 constexpr micropixel::Rect kPlayTouchRect{0, 0, static_cast<int32_t>(kScreenWidth),
                                           static_cast<int32_t>(kScreenHeight)};
+
+[[nodiscard]] constexpr int32_t ActionButtonTextY(micropixel::Rect bounds) {
+    return bounds.y + (bounds.height - static_cast<int32_t>(kActionButtonFontSize)) / 2 +
+           kActionButtonTextOpticalOffsetY;
+}
 
 enum class Tetromino : uint8_t { kI, kJ, kL, kO, kS, kT, kZ };
 enum class Screen : uint8_t { kMenu, kPlaying, kPaused, kGameOver };

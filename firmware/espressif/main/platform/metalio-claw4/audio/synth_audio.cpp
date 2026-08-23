@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "platform/audio_backend.hpp"
+#include "task_policy.hpp"
 
 namespace micropixel::platform {
 namespace {
@@ -25,7 +26,6 @@ constexpr uint8_t kPaEnableMask = 1U << 0U;
 constexpr uint32_t kFramesPerChunk = 128U;
 constexpr uint32_t kSineTableSize = 256U;
 constexpr uint32_t kAudioTaskStackSize = 6144U;
-constexpr UBaseType_t kAudioTaskPriority = 4U;
 constexpr BaseType_t kAudioTaskCore = 0;
 constexpr uint32_t kMetalioClaw4AudioSampleRate = 16000U;
 
@@ -55,6 +55,8 @@ constexpr uint32_t kMaxVoices = 8U;
 
 struct AudioBackendState final {
     std::atomic<BackendState> backend_state{BackendState::kStopped};
+    std::atomic<bool> suspended{};
+    std::atomic<uint16_t> master_volume_per_mille{700U};
     SemaphoreHandle_t voices_mutex{};
     Voice voices[kMaxVoices]{};
     int16_t sine_table[kSineTableSize]{};
@@ -185,11 +187,15 @@ void FillAudioChunk(int32_t* frames) {
     }
     for (uint32_t frame = 0U; frame < kFramesPerChunk; ++frame) {
         int32_t mixed = 0;
-        for (Voice& voice : State().voices) {
-            if (voice.active) {
-                mixed += NextVoiceSample(voice);
+        if (!State().suspended.load(std::memory_order_acquire)) {
+            for (Voice& voice : State().voices) {
+                if (voice.active) {
+                    mixed += NextVoiceSample(voice);
+                }
             }
         }
+        mixed = static_cast<int32_t>(static_cast<int64_t>(mixed) *
+                                     State().master_volume_per_mille.load(std::memory_order_relaxed) / 1000);
         if (mixed > 32767) {
             mixed = 32767;
         } else if (mixed < -32768) {
@@ -283,9 +289,12 @@ bool ValidTone(const micropixel_audio_tone_t& tone) {
 class MetalioClaw4AudioBackend final : public InitializableAudioBackend {
    public:
     [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander) override;
+    void SetMasterVolumePercent(uint8_t percent) override;
     [[nodiscard]] int32_t GetInfo(micropixel_audio_info_t& info) override;
     [[nodiscard]] int32_t PlayTone(const micropixel_audio_tone_t& tone) override;
     [[nodiscard]] int32_t StopAll() override;
+    [[nodiscard]] int32_t SuspendAll() override;
+    [[nodiscard]] int32_t ResumeAll() override;
 };
 
 esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expander) {
@@ -302,14 +311,19 @@ esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expand
             static_cast<int16_t>(std::sin(kTau * static_cast<double>(index) / kSineTableSize) * 32767.0);
     }
     State().backend_state.store(BackendState::kInitializing, std::memory_order_release);
-    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, io_expander, kAudioTaskPriority,
-                                nullptr, kAudioTaskCore) != pdPASS) {
+    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, io_expander,
+                                task_policy::kAudioPriority, nullptr, kAudioTaskCore) != pdPASS) {
         State().backend_state.store(BackendState::kStopped, std::memory_order_release);
         vSemaphoreDelete(State().voices_mutex);
         State().voices_mutex = nullptr;
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+void MetalioClaw4AudioBackend::SetMasterVolumePercent(uint8_t percent) {
+    const uint16_t clamped_percent = percent <= 100U ? percent : 100U;
+    State().master_volume_per_mille.store(static_cast<uint16_t>(clamped_percent * 10U), std::memory_order_relaxed);
 }
 
 int32_t MetalioClaw4AudioBackend::GetInfo(micropixel_audio_info_t& info) {
@@ -389,6 +403,30 @@ int32_t MetalioClaw4AudioBackend::StopAll() {
         voice.active = false;
     }
     (void)xSemaphoreGive(State().voices_mutex);
+    return MICROPIXEL_STATUS_OK;
+}
+
+int32_t MetalioClaw4AudioBackend::SuspendAll() {
+    const BackendState state = State().backend_state.load(std::memory_order_acquire);
+    if (state == BackendState::kStopped) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    if (state == BackendState::kFailed) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+    State().suspended.store(true, std::memory_order_release);
+    return MICROPIXEL_STATUS_OK;
+}
+
+int32_t MetalioClaw4AudioBackend::ResumeAll() {
+    const BackendState state = State().backend_state.load(std::memory_order_acquire);
+    if (state == BackendState::kStopped) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    if (state == BackendState::kFailed) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+    State().suspended.store(false, std::memory_order_release);
     return MICROPIXEL_STATUS_OK;
 }
 

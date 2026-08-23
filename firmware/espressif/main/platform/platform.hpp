@@ -6,6 +6,7 @@
 #include "device/input.hpp"
 #include "device/random.hpp"
 #include "esp_err.h"
+#include "host_ui/system_ui.hpp"
 
 namespace micropixel::platform {
 
@@ -18,10 +19,11 @@ class Platform {
     Platform& operator=(const Platform&) = delete;
 
     [[nodiscard]] virtual esp_err_t Initialize() = 0;
-    [[nodiscard]] virtual device::GraphicsBackend& graphics() = 0;  // NOLINT(readability-identifier-naming)
-    [[nodiscard]] virtual device::InputBackend& input() = 0;        // NOLINT(readability-identifier-naming)
-    [[nodiscard]] virtual device::AudioBackend& audio() = 0;        // NOLINT(readability-identifier-naming)
-    [[nodiscard]] virtual device::RandomBackend& random() = 0;      // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::GraphicsBackend& graphics() = 0;    // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::InputBackend& input() = 0;          // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::AudioBackend& audio() = 0;          // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::RandomBackend& random() = 0;        // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual host_ui::SystemUiBackend& system_ui() = 0;  // NOLINT(readability-identifier-naming)
 
    protected:
     Platform() = default;

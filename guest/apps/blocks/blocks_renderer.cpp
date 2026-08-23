@@ -287,22 +287,17 @@ void BlocksGame::RenderStatusEffect(micropixel::CommandBuffer& commands, const T
     }
 }
 
-void BlocksGame::RenderOverlay(micropixel::CommandBuffer& commands, const Theme& theme) const {
+void BlocksGame::RenderOverlay(micropixel::CommandBuffer& commands) const {
     if (screen_ == Screen::kPlaying) {
         return;
     }
     micropixel::Color overlay = micropixel::Color::Black();
-    uint8_t opacity = 153U;
+    uint8_t opacity = kOverlayOpacity;
     const micropixel::Bitmap* button_bitmap = &start_button_bitmap_;
     micropixel::Rect button_bounds = kStartButtonRect;
     micropixel::Rect overlay_bounds{kBoardX, kBoardY, kBoardAssetWidth, kBoardAssetHeight};
-    if (screen_ == Screen::kPaused) {
-        opacity = 120U;
-        button_bitmap = &pause_button_bitmap_;
-        button_bounds = kPauseButtonRect;
-    } else if (screen_ == Screen::kGameOver) {
+    if (screen_ == Screen::kGameOver) {
         overlay = micropixel::Color::Rgb(69U, 10U, 10U);
-        opacity = 204U;
         button_bitmap = &restart_button_bitmap_;
         button_bounds = kRestartButtonRect;
         overlay_bounds = kGameOverOverlayRect;
@@ -311,14 +306,11 @@ void BlocksGame::RenderOverlay(micropixel::CommandBuffer& commands, const Theme&
     commands.BlendBitmap(button_bounds.x, button_bounds.y, *button_bitmap, screen_button_.pressed() ? 160U : 255U);
 
     if (screen_ == Screen::kMenu) {
-        commands.DrawTextCentered(kScreenCenterX, 341, "START GAME", micropixel::Color::Black(), 18U);
-        commands.DrawTextCentered(kScreenCenterX, 405, "TAP, STACK, CLEAR", micropixel::Color::Rgb(163U, 163U, 163U),
-                                  14U);
+        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "START GAME",
+                                  micropixel::Color::Black(), kActionButtonFontSize);
     } else if (screen_ == Screen::kPaused) {
-        commands.DrawTextCentered(kScreenCenterX, 290, "SYSTEM PAUSED", AsColor(theme.text), 24U);
-        commands.DrawTextCentered(kScreenCenterX, 367, "RESUME", AsColor(theme.text), 18U);
-        commands.DrawTextCentered(kScreenCenterX, 426, "PRESS TO RESUME", micropixel::Color::Rgb(163U, 163U, 163U),
-                                  14U);
+        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "CONTINUE",
+                                  micropixel::Color::Black(), kActionButtonFontSize);
     } else {
         commands.DrawTextCentered(kScreenCenterX, 260, "STACK OVERFLOW", micropixel::Color::Rgb(244U, 63U, 94U), 24U);
         Line score;
@@ -332,7 +324,8 @@ void BlocksGame::RenderOverlay(micropixel::CommandBuffer& commands, const Theme&
         Line level;
         level.AppendUint(model_.level());
         commands.DrawTextCentered(kScreenCenterX + 55, 382, level.c_str(), micropixel::Color::White(), 18U);
-        commands.DrawTextCentered(kScreenCenterX, 445, "RESTART", micropixel::Color::Rgb(69U, 10U, 10U), 18U);
+        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kRestartButtonRect), "RESTART",
+                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFontSize);
     }
 }
 
@@ -356,7 +349,7 @@ void BlocksGame::Render() {
     RenderMiniPiece(commands, model_.held(), sidebar_center, kBoardY + 54, !model_.hold_available(), model_.has_hold());
     RenderMiniPiece(commands, model_.next(), sidebar_center, kBoardY + 196, false, true);
     RenderStatusEffect(commands, theme);
-    RenderOverlay(commands, theme);
+    RenderOverlay(commands);
     commands.Submit();
 }
 

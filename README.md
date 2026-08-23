@@ -5,7 +5,7 @@
 
 当前支持范围是 ESP32-P4 + [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4)。Host 使用
 ESP-IDF 6.1 和固定 commit 的 [WAMR fork](https://github.com/78/wasm-micro-runtime)，Guest 使用受限的
-C++23 API，并由 WAMR 2.4.5 `wamrc` 编译为 RISC-V 32-bit AOT。项目正式名称为 MicroPixel，ABI
+C++23 API，并由与 Host 匹配的 WAMR 2.4.3 `wamrc` 编译为 RISC-V 32-bit AOT。项目正式名称为 MicroPixel，ABI
 目前仍在演进中。
 
 ## 目录
@@ -34,7 +34,8 @@ git submodule update --init --recursive
 - ESP-IDF 6.1，并已通过其 `export.sh` 设置 `IDF_PATH`；本次清理验证使用 commit
   `6a9c44fe7e725af45cb99293ae38afd7d481f1e3`；
 - 带 wasm32 backend 的 Clang（设置 `WASI_CLANG`，或设置 `WASI_SDK_PATH`）；
-- WAMR 2.4.5 的 `wamrc`，目标为 `RISCV32_ILP32F`（设置 `WAMRC`）；
+- WAMR 2.4.3 的 `wamrc`，目标为 `RISCV32_ILP32F`（设置 `WAMRC`）；构建脚本会拒绝与当前 Host
+  Runtime 版本不一致的编译器；
 - Python 3；烧录和串口工具的 Python 依赖见 `requirements-dev.txt`。
 
 ```sh
@@ -50,24 +51,28 @@ python3 -m pip install -r requirements-dev.txt
 # 构建 Host，以及当前仍维护的 ABI/SDK conformance Guests
 bash tools/build_p4_baseline.sh
 
-# 分别构建两个示例 App Bundle
-bash tools/build_demo_bundle.sh
-bash tools/build_snake_bundle.sh
+# 先运行生命周期、手势、Bundle 与架构回归，再构建 System Shell 首版所需的 Host、Blocks、Snake、Demo 和三包 App Store 镜像
+bash tools/build_system_shell_p4.sh
 
 # 只检查 Firmware 格式；完整 clang-tidy 首次需要 --configure
 bash tools/check_firmware_style.sh --format-only
 ```
 
+设备连接后可用一个入口烧录 Host 与三 App Store：
+
+```sh
+bash tools/flash_system_shell_p4.sh /dev/cu.usbmodemXXXX
+```
+
 `guest/tests/conformance/` 是仍在构建链路中的回归用例，应予保留。需要合成 Host 事件的两项板端用例
 使用 `firmware/espressif/sdkconfig.p4-conformance.defaults`；产品 defaults 默认关闭这些 test hooks。
-用于调试 App 的 USB 屏幕抓取也保留在独立的、默认关闭的
-`firmware/espressif/sdkconfig.p4-screen-capture.defaults` overlay 中。
+用于 App 开发调试的 USB 屏幕抓取与触摸注入通道直接包含在 P4 产品固件中，不增加 Guest ABI。
 构建、烧录和监视的详细入口见 [Firmware README](firmware/espressif/README.md)，Guest API 与 Bundle
 入口见 [Guest README](guest/README.md)。
 
 ## 设计文档
 
-- [应用框架 v0.4 讨论稿](docs/design/application-framework-v0.4.zh-CN.md)
+- [应用框架 V1 设计稿](docs/design/application-framework-v1.zh-CN.md)
 - [Firmware 架构](docs/design/firmware-architecture.zh-CN.md)
 - [Guest–Host Service ABI](docs/design/guest-host-service-abi.zh-CN.md)
 - [C/C++ 代码风格](docs/development/code-style.zh-CN.md)

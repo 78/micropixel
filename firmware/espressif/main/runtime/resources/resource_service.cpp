@@ -6,13 +6,13 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "runtime/resources/bitmap_decoder.hpp"
+#include "task_policy.hpp"
 
 namespace micropixel::runtime {
 namespace {
 
 constexpr char kTag[] = "micropixel_resource";
 constexpr uint32_t kWorkerStackBytes = 12U * 1024U;
-constexpr UBaseType_t kWorkerPriority = 3U;
 constexpr BaseType_t kWorkerCore = 0;
 
 }  // namespace
@@ -26,8 +26,8 @@ ResourceService::ResourceService(const micropixel_aot_package_t& package, EventQ
     if (work_queue_ == nullptr || worker_stopped_ == nullptr) {
         return;
     }
-    if (xTaskCreatePinnedToCore(WorkerEntry, "micropixel_assets", kWorkerStackBytes, this, kWorkerPriority, &worker_,
-                                kWorkerCore) != pdPASS) {
+    if (xTaskCreatePinnedToCore(WorkerEntry, "micropixel_assets", kWorkerStackBytes, this,
+                                task_policy::kAssetWorkerPriority, &worker_, kWorkerCore) != pdPASS) {
         worker_ = nullptr;
     }
 }

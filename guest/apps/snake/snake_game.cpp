@@ -37,7 +37,6 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
         }
         return;
     }
-    SampleFps(delta_us);
     animation_time_us_ += delta_us;
     // Golden bursts cover several cells around the head. Treat them like the
     // full-board upgrade shake: keep accepting queued turns, but do not move
@@ -175,7 +174,7 @@ void SnakeGame::OnTouch(const micropixel::TouchEvent& touch) {
 void SnakeGame::TogglePause() {
     if (screen_ == Screen::kPlaying) {
         screen_ = Screen::kPaused;
-        screen_button_.SetBounds(kPauseButtonRect);
+        screen_button_.SetBounds(kStartButtonRect);
         screen_button_.Reset();
         pause_touch_button_.Reset();
         StopAudio();
@@ -222,9 +221,6 @@ void SnakeGame::StartGame() {
     ResetEffects();
     accumulated_us_ = 0U;
     animation_time_us_ = 0U;
-    fps_window_elapsed_us_ = 0U;
-    fps_window_frames_ = 0U;
-    fps_display_ = 0U;
     level_banner_us_ = 0U;
     record_broken_ = false;
     logic_debt_logged_ = false;
@@ -243,18 +239,6 @@ void SnakeGame::ResetGameModel() {
     const uint32_t seed = app_.random().U32();
     model_.Reset(seed);
     effect_random_ = seed ^ 0xa5a5a5a5U;
-}
-
-void SnakeGame::SampleFps(uint64_t delta_us) {
-    fps_window_elapsed_us_ += delta_us;
-    ++fps_window_frames_;
-    if (fps_window_elapsed_us_ < 500000U) {
-        return;
-    }
-    fps_display_ = static_cast<uint32_t>(
-        (static_cast<uint64_t>(fps_window_frames_) * 1000000U + fps_window_elapsed_us_ / 2U) / fps_window_elapsed_us_);
-    fps_window_elapsed_us_ = 0U;
-    fps_window_frames_ = 0U;
 }
 
 }  // namespace snake

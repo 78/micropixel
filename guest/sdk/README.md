@@ -277,6 +277,16 @@ Host 捕获 trap、Wasm 调用栈和这些结构化字段，清理 Guest 资源�
 业务分支；未来还包括网络失败、权限被拒绝或异步操作取消。Core Timer/Graphics 等不可恢复
 Runtime 错误仍在发生点 panic。
 
+## Resume 与 Stop 事件
+
+Host 从 App Hall 或状态层恢复同一个 AppSession 时，`WaitEvent()` 首先返回
+`EventType::kResume`。暂停期间 App Clock、Timer、输入和音频都被冻结；恢复不会重新进入 `main()`。
+Host 会先直接显示暂停前保留的 Guest 画面，所以画面恢复不依赖 Guest 及时提交新帧；需要重建动态内容的
+App 可以在收到 `kResume` 后主动完整重画。
+
+切换或关闭 AppSession 时，`WaitEvent()` 返回 `EventType::kStop`。长期运行的 App 应结束事件循环并从
+`main()` 返回；Host 在 500ms 后仍未完成时才会强制终止，以保证单 App 约束和系统大厅始终可响应。
+
 `Result<T>` 是 freestanding Guest 对 `std::expected<T, Error>` 的兼容子集。应用使用
 `has_value()`/`operator bool()`、`operator*`、`operator->`、`value()`、`error()` 和 `value_or()`；
 失败值可由 `unexpected(Error{...})` 构造。Guest 关闭异常，因此错误状态读取 value 或成功状态

@@ -9,6 +9,7 @@ class NullAudioBackend final : public InitializableAudioBackend {
         (void)io_expander;
         return ESP_OK;
     }
+    void SetMasterVolumePercent(uint8_t percent) override { (void)percent; }
 
     [[nodiscard]] int32_t GetInfo(micropixel_audio_info_t& info) override {
         info = {};
@@ -21,6 +22,8 @@ class NullAudioBackend final : public InitializableAudioBackend {
     }
 
     [[nodiscard]] int32_t StopAll() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t SuspendAll() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t ResumeAll() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
 };
 
 }  // namespace

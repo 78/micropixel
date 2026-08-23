@@ -1047,6 +1047,13 @@ Event Application::WaitEvent() const {
     }
 
     TimePoint timestamp{raw.timestamp_us};
+    if (raw.service_id == 0U && raw.event_id == MICROPIXEL_CORE_EVENT_RESUME) {
+        return Event{EventType::kResume, timestamp};
+    }
+    if (raw.service_id == 0U && raw.event_id == MICROPIXEL_CORE_EVENT_STOP) {
+        return Event{EventType::kStop, timestamp};
+    }
+
     if (raw.service_id == MICROPIXEL_SERVICE_TIMER && raw.event_id == MICROPIXEL_TIMER_EVENT_EXPIRED) {
         micropixel_timer_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));

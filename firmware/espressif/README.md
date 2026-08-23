@@ -23,7 +23,6 @@ Host 输出到 `build/host-esp32p4/`，conformance Guest 输出到 `build/guest-
 - `sdkconfig.p4.defaults`：产品 defaults，使用固定 task core、dirty-region coalescing，并关闭测试钩子；
 - `sdkconfig.p4-conformance.defaults`：仅为 `event_wait` 和 `touch_pressure` 加入合成 Host 事件；
 - `sdkconfig.p4-null.defaults`：覆盖产品 defaults，编译 Null Platform 以检查 Runtime/Device 的硬件无关路径；
-- `sdkconfig.p4-screen-capture.defaults`：按需启用 USB Serial/JTAG 屏幕抓取；
 - `sdkconfig.debug.defaults`：显式追加时启用的调试配置。
 
 需要专用 conformance 固件时，可把两个 defaults 一起传给现有构建脚本：
@@ -33,19 +32,13 @@ P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmwa
     bash tools/build_p4_baseline.sh
 ```
 
-旧的逐帧 timing/heap/percentile 实验采集已删除。屏幕抓取作为独立、默认关闭的调试功能保留；启用并
-烧录专用固件后，可从 USB Serial/JTAG 获取最终的 720x720 LVGL 合成画面：
+P4 产品固件常驻 USB Serial/JTAG 开发通道，可以直接获取最终的 720x720 LVGL 合成画面：
 
 ```sh
-P4_HOST_BUILD_DIR="$PWD/build/host-esp32p4-screen-capture" \
-P4_SDKCONFIG="$PWD/build/host-esp32p4-screen-capture/sdkconfig" \
-P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.p4-screen-capture.defaults" \
-    bash tools/build_p4_baseline.sh
-
 python3 tools/capture_p4_screen.py /dev/cu.usbmodemPORT build/captures/current.png
 ```
 
-屏幕抓取不增加 Guest ABI；dirty-region coalescing 仍是正常产品实现，不属于测试探针。
+屏幕抓取和 USB 触摸注入不增加 Guest ABI；它们用于 App 作者调试 Host 最终合成结果。
 
 ## 源码边界
 

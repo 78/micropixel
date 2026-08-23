@@ -275,8 +275,8 @@ ServiceDescriptor GraphicsServiceEndpoint::Describe() const {
     };
 }
 
-int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
-                                      uint32_t response_capacity, uint32_t& response_size_out) {
+int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size,
+                                      uint8_t* response, uint32_t response_capacity, uint32_t& response_size_out) {
     if (method_id == MICROPIXEL_GRAPHICS_METHOD_GET_INFO) {
         if (!EmptyRequest(request_size)) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;

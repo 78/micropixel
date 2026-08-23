@@ -13,6 +13,7 @@ namespace micropixel::platform {
 class InitializableAudioBackend : public device::AudioBackend {
    public:
     [[nodiscard]] virtual esp_err_t Initialize(i2c_master_dev_handle_t io_expander) = 0;
+    virtual void SetMasterVolumePercent(uint8_t percent) = 0;
 };
 
 [[nodiscard]] InitializableAudioBackend& ConfiguredAudioBackend();

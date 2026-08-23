@@ -13,6 +13,8 @@ class Timer;
 
 enum class EventType : uint16_t {
     kUnknown,
+    kResume,
+    kStop,
     kTimer,
     kTouch,
     kResourceReady,
@@ -94,6 +96,8 @@ class Event final {
     [[nodiscard]] constexpr const TimerEvent* timer() const { return type_ == EventType::kTimer ? &timer_ : nullptr; }
 
     explicit constexpr Event(TimePoint timestamp) : type_(EventType::kUnknown), timestamp_(timestamp) {}
+
+    constexpr Event(EventType type, TimePoint timestamp) : type_(type), timestamp_(timestamp) {}
 
     explicit constexpr Event(TimerEvent timer)
         : type_(EventType::kTimer), timestamp_(timer.timestamp()), timer_(timer) {}

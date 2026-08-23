@@ -20,6 +20,11 @@ class GuestContext final {
     GuestContext& operator=(const GuestContext&) = delete;
     ~GuestContext();
 
+    [[nodiscard]] bool Suspend(TickType_t timeout);
+    [[nodiscard]] bool Resume();
+    [[nodiscard]] bool RequestStop();
+    void ForceStop();
+
     [[nodiscard]] bool valid() const {  // NOLINT(readability-identifier-naming)
         return events_.valid() && timers_.valid() && resources_.valid() && storage_.valid();
     }
@@ -131,6 +136,8 @@ class GuestContext final {
     InputServiceEndpoint input_endpoint_;
     AudioServiceEndpoint audio_endpoint_;
     ServiceRegistry service_registry_;
+    uint32_t core_sequence_{};
+    bool suspended_{};
 };
 
 }  // namespace micropixel::runtime

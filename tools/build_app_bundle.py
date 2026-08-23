@@ -16,10 +16,11 @@ from pathlib import Path
 
 
 MAGIC = b"MPXBNDL\0"
-VERSION = 2
+VERSION = 1
 FRAMEWORK_ABI_VERSION = 1
 EXTENT_ALIGNMENT = 64 * 1024
 APP_ID_MAX_LENGTH = 64
+DISPLAY_NAME_MAX_LENGTH = 64
 HEADER = struct.Struct("<8sIIII64sIIIIIIIIII")
 SECTION = struct.Struct("<IIIIIIIIIIII")
 RESOURCE_PACK_MAGIC = b"MPXRPAK\0"
@@ -28,6 +29,8 @@ RESOURCE_PACK_HEADER = struct.Struct("<8sIIIIII32s")
 RESOURCE_PACK_ALIGNMENT = 64
 KIND_AOT = 1
 KIND_ASSET = 2
+KIND_APP_METADATA = 3
+FORMAT_UTF8 = 6
 FORMATS = {
     "aot": 1,
     "raw_rgb888": 2,
@@ -37,6 +40,7 @@ FORMATS = {
 }
 ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"]}
 PNG_TO_RAW_RGB888 = "png_to_raw_rgb888"
+LAUNCH_FORMATS = frozenset({FORMATS["raw_rgb888"], FORMATS["png"]})
 CPP_KEYWORDS = frozenset({
     "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel",
     "atomic_commit", "atomic_noexcept", "auto", "bitand", "bitor", "bool",
@@ -449,17 +453,32 @@ def load_asset_manifest(path: Path) -> list[InputSection]:
     return sections
 
 
-def load_app_manifest(path: Path) -> tuple[str, str]:
+def validate_display_name(value: object) -> str:
+    if not isinstance(value, str) or not value or value.startswith(" ") or value.endswith(" "):
+        raise ValueError("display_name must be a non-empty string without surrounding whitespace")
+    encoded = value.encode("utf-8")
+    if len(encoded) > DISPLAY_NAME_MAX_LENGTH:
+        raise ValueError(f"display_name must be at most {DISPLAY_NAME_MAX_LENGTH} UTF-8 bytes")
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("display_name must not contain control characters")
+    return value
+
+
+def load_app_manifest(path: Path) -> tuple[str, str, str]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema_version") != 1:
         raise ValueError("app manifest must use schema_version 1")
     try:
+        app_id = value["app_id"]
+        if not isinstance(app_id, str):
+            raise TypeError
+        display_name = validate_display_name(value["display_name"])
         launch_asset = str(value.get("launch_asset", ""))
         if launch_asset:
             validate_asset_name(launch_asset, 0)
-        return str(value["app_id"]), launch_asset
+        return app_id, display_name, launch_asset
     except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("app manifest requires app_id and a valid launch_asset name") from error
+        raise ValueError("app manifest requires app_id, display_name and a valid launch_asset name") from error
 
 
 def resource_pack_digest(sections: list[InputSection], launch_asset_id: int) -> bytes:
@@ -487,8 +506,8 @@ def build_resource_pack(sections: list[InputSection], launch_asset: str) -> Reso
     launch_asset_id = names_to_ids.get(launch_asset, 0)
     if launch_asset_id:
         launch_section = next(section for section in sections if section.section_id == launch_asset_id)
-        if launch_section.format != FORMATS["raw_rgb888"]:
-            raise ValueError("launch_asset must build to opaque raw_rgb888")
+        if launch_section.format not in LAUNCH_FORMATS:
+            raise ValueError("launch_asset must be raw_rgb888 or PNG")
     digest = resource_pack_digest(sections, launch_asset_id)
     return ResourcePack(sections, launch_asset_id, digest)
 
@@ -580,8 +599,8 @@ def load_resource_pack(path: Path) -> ResourcePack:
         launch_sections = [section for section in sections if section.section_id == launch_asset_id]
         if not launch_sections:
             raise ValueError("resource pack launch asset is missing")
-        if launch_sections[0].format != FORMATS["raw_rgb888"]:
-            raise ValueError("resource pack launch asset must be opaque raw_rgb888")
+        if launch_sections[0].format not in LAUNCH_FORMATS:
+            raise ValueError("resource pack launch asset must be raw_rgb888 or PNG")
     actual_digest = resource_pack_digest(sections, launch_asset_id)
     if actual_digest != expected_digest:
         raise ValueError("resource pack catalog digest failed")
@@ -823,11 +842,12 @@ def main() -> None:
         raise SystemExit("use either --app-id or --app-manifest, not both")
     if args.app_manifest is not None:
         try:
-            app_id_text, manifest_launch_asset = load_app_manifest(args.app_manifest)
+            app_id_text, display_name_text, manifest_launch_asset = load_app_manifest(args.app_manifest)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
     else:
         app_id_text = args.app_id or ""
+        display_name_text = app_id_text
         manifest_launch_asset = ""
     launch_asset = (
         args.launch_asset if args.launch_asset is not None else manifest_launch_asset
@@ -892,11 +912,18 @@ def main() -> None:
         raise SystemExit(
             f"--app-id must be 1..{APP_ID_MAX_LENGTH} ASCII letters, digits, '.', '_' or '-'"
         )
+    try:
+        display_name = validate_display_name(display_name_text).encode("utf-8")
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     aot = args.aot.read_bytes()
     if not aot:
         raise SystemExit("AOT input is empty")
 
-    sections = [InputSection(KIND_AOT, 0, FORMATS["aot"], 0, 0, 0, aot)]
+    sections = [
+        InputSection(KIND_AOT, 0, FORMATS["aot"], 0, 0, 0, aot),
+        InputSection(KIND_APP_METADATA, 0, FORMAT_UTF8, 0, 0, 0, display_name),
+    ]
     launch_asset_id = 0
     resource_digest = bytes(32)
     if args.resource_pack is not None:
@@ -949,9 +976,9 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(image)
     print(
-        f"Bundle v{VERSION}: app={app_id_text} sections={len(sections)} "
+        f"Bundle v{VERSION}: app={app_id_text} title={display_name_text!r} sections={len(sections)} "
         f"content={cursor} extent={bundle_size} launch={launch_asset}({launch_asset_id}) "
-        f"resources={len(sections) - 1} digest={resource_digest.hex()} "
+        f"resources={len(sections) - 2} digest={resource_digest.hex()} "
         f"-> {args.output}"
     )
 

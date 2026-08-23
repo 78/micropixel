@@ -9,7 +9,7 @@ list(APPEND micropixel_requires esp_hw_support)
 # so declare the union of P4 platform dependencies here. The source list below
 # still selects exactly one implementation per backend.
 list(APPEND micropixel_requires
-    esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s
+    esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ledc
     esp_driver_ppa esp_driver_uart esp_driver_usb_serial_jtag
     button esp_lcd esp_lvgl_adapter esp_lcd_touch_gt911 esp_timer lvgl__lvgl
 )
@@ -19,7 +19,11 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
         "platform/metalio-claw4/board_hardware.cpp"
         "platform/metalio-claw4/display/esp_lcd_nv3051f.c"
         "platform/metalio-claw4/display/dirty_region_coalescer.cpp"
+        "platform/metalio-claw4/display/png_cover_decoder.cpp"
+        "platform/metalio-claw4/display/screen_capture.cpp"
+        "platform/metalio-claw4/graphics_adapter.cpp"
         "platform/metalio-claw4/platform.cpp"
+        "platform/metalio-claw4/system_ui_adapter.cpp"
         "platform/metalio-claw4/display/retained_scene.cpp"
         "platform/metalio-claw4/input/gt911_input.cpp"
         "platform/metalio-claw4/input/tca9555_power_key.cpp"
@@ -27,9 +31,6 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
     )
     if(CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION)
         list(APPEND micropixel_sources "platform/metalio-claw4/display/retained_surface.cpp")
-    endif()
-    if(CONFIG_MICROPIXEL_ENABLE_SCREEN_CAPTURE)
-        list(APPEND micropixel_sources "platform/metalio-claw4/display/screen_capture.cpp")
     endif()
     if(CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO)
         list(APPEND micropixel_sources "platform/metalio-claw4/audio/synth_audio.cpp")

@@ -1,6 +1,7 @@
 #include "platform/metalio-claw4/board_hardware.hpp"
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "platform/metalio-claw4/display/esp_lcd_nv3051f.h"
 
@@ -11,21 +12,16 @@ constexpr gpio_num_t kLcdReset = GPIO_NUM_3;
 constexpr gpio_num_t kI2cSda = GPIO_NUM_7;
 constexpr gpio_num_t kI2cScl = GPIO_NUM_8;
 constexpr gpio_num_t kLcdBacklight = GPIO_NUM_52;
+constexpr ledc_mode_t kBacklightSpeedMode = LEDC_LOW_SPEED_MODE;
+constexpr ledc_timer_t kBacklightTimer = LEDC_TIMER_0;
+constexpr ledc_channel_t kBacklightChannel = LEDC_CHANNEL_0;
+constexpr ledc_timer_bit_t kBacklightResolution = LEDC_TIMER_10_BIT;
+constexpr uint32_t kBacklightPwmFrequencyHz = 20000U;
+constexpr uint32_t kBacklightMaxDuty = (1U << 10U) - 1U;
 constexpr uint8_t kTca9555Address = 0x20U;
 constexpr int kDsiLdoChannel = 3;
 constexpr int kDsiLdoMillivolts = 2500;
 constexpr uint32_t kDisplayFramebufferCount = 2U;
-
-esp_err_t ConfigureOutput(gpio_num_t pin, int initial_level) {
-    gpio_config_t config{};
-    config.pin_bit_mask = 1ULL << pin;
-    config.mode = GPIO_MODE_OUTPUT;
-    config.pull_up_en = GPIO_PULLUP_DISABLE;
-    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    config.intr_type = GPIO_INTR_DISABLE;
-    esp_err_t status = gpio_config(&config);
-    return status == ESP_OK ? gpio_set_level(pin, initial_level) : status;
-}
 
 }  // namespace
 
@@ -46,16 +42,39 @@ esp_err_t BoardHardware::Initialize() {
     return status;
 }
 
-esp_err_t BoardHardware::SetBacklight(bool enabled) {
-    if (!backlight_configured_) {
-        esp_err_t status = ConfigureOutput(kLcdBacklight, enabled ? 1 : 0);
+esp_err_t BoardHardware::SetBacklight(bool enabled) { return SetBacklightBrightness(enabled ? 100U : 0U); }
+
+esp_err_t BoardHardware::SetBacklightBrightness(uint8_t percent) {
+    const uint32_t clamped_percent = percent <= 100U ? percent : 100U;
+    const uint32_t duty = (kBacklightMaxDuty * clamped_percent + 50U) / 100U;
+    if (!backlight_pwm_configured_) {
+        ledc_timer_config_t timer_config{};
+        timer_config.speed_mode = kBacklightSpeedMode;
+        timer_config.duty_resolution = kBacklightResolution;
+        timer_config.timer_num = kBacklightTimer;
+        timer_config.freq_hz = kBacklightPwmFrequencyHz;
+        timer_config.clk_cfg = LEDC_AUTO_CLK;
+        esp_err_t status = ledc_timer_config(&timer_config);
         if (status != ESP_OK) {
             return status;
         }
-        backlight_configured_ = true;
-        return ESP_OK;
+
+        ledc_channel_config_t channel_config{};
+        channel_config.gpio_num = kLcdBacklight;
+        channel_config.speed_mode = kBacklightSpeedMode;
+        channel_config.channel = kBacklightChannel;
+        channel_config.timer_sel = kBacklightTimer;
+        channel_config.duty = duty;
+        channel_config.hpoint = 0U;
+        status = ledc_channel_config(&channel_config);
+        if (status != ESP_OK) {
+            return status;
+        }
+        backlight_pwm_configured_ = true;
+        return status;
     }
-    return gpio_set_level(kLcdBacklight, enabled ? 1 : 0);
+    esp_err_t status = ledc_set_duty(kBacklightSpeedMode, kBacklightChannel, duty);
+    return status == ESP_OK ? ledc_update_duty(kBacklightSpeedMode, kBacklightChannel) : status;
 }
 
 esp_err_t BoardHardware::InitializeI2c() {
