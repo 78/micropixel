@@ -15,7 +15,6 @@ namespace micropixel::platform {
 namespace {
 
 constexpr char kTag[] = "micropixel_audio";
-constexpr uint8_t kTca9555Address = 0x20U;
 constexpr uint8_t kOutputPort0 = 0x02U;
 constexpr uint8_t kOutputPort1 = 0x03U;
 constexpr uint8_t kConfigPort0 = 0x06U;
@@ -204,16 +203,8 @@ void FillAudioChunk(int32_t* frames) {
 }
 
 void AudioTask(void* argument) {
-    auto bus = static_cast<i2c_master_bus_handle_t>(argument);
-    i2c_device_config_t device_config{};
-    device_config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    device_config.device_address = kTca9555Address;
-    device_config.scl_speed_hz = 400000U;
-    i2c_master_dev_handle_t expander = nullptr;
-    esp_err_t status = i2c_master_bus_add_device(bus, &device_config, &expander);
-    if (status == ESP_OK) {
-        status = ConfigureAudioRails(expander);
-    }
+    auto expander = static_cast<i2c_master_dev_handle_t>(argument);
+    esp_err_t status = ConfigureAudioRails(expander);
     if (status == ESP_OK) {
         status = InitializeBtAudioMode();
     }
@@ -249,9 +240,6 @@ void AudioTask(void* argument) {
         if (tx != nullptr) {
             (void)i2s_del_channel(tx);
         }
-        if (expander != nullptr) {
-            (void)i2c_master_bus_rm_device(expander);
-        }
         (void)uart_driver_delete(UART_NUM_2);
         vTaskDelete(nullptr);
         return;
@@ -276,7 +264,6 @@ void AudioTask(void* argument) {
     (void)i2s_channel_disable(tx);
     (void)i2s_del_channel(tx);
     (void)uart_driver_delete(UART_NUM_2);
-    (void)i2c_master_bus_rm_device(expander);
     vTaskDelete(nullptr);
 }
 
@@ -295,14 +282,14 @@ bool ValidTone(const micropixel_audio_tone_t& tone) {
 
 class MetalioClaw4AudioBackend final : public InitializableAudioBackend {
    public:
-    [[nodiscard]] esp_err_t Initialize(i2c_master_bus_handle_t i2c_bus) override;
+    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander) override;
     [[nodiscard]] int32_t GetInfo(micropixel_audio_info_t& info) override;
     [[nodiscard]] int32_t PlayTone(const micropixel_audio_tone_t& tone) override;
     [[nodiscard]] int32_t StopAll() override;
 };
 
-esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_bus_handle_t i2c_bus) {
-    if (i2c_bus == nullptr || State().backend_state.load(std::memory_order_acquire) != BackendState::kStopped) {
+esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expander) {
+    if (io_expander == nullptr || State().backend_state.load(std::memory_order_acquire) != BackendState::kStopped) {
         return ESP_ERR_INVALID_STATE;
     }
     State().voices_mutex = xSemaphoreCreateMutex();
@@ -315,7 +302,7 @@ esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_bus_handle_t i2c_bus) 
             static_cast<int16_t>(std::sin(kTau * static_cast<double>(index) / kSineTableSize) * 32767.0);
     }
     State().backend_state.store(BackendState::kInitializing, std::memory_order_release);
-    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, i2c_bus, kAudioTaskPriority,
+    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, io_expander, kAudioTaskPriority,
                                 nullptr, kAudioTaskCore) != pdPASS) {
         State().backend_state.store(BackendState::kStopped, std::memory_order_release);
         vSemaphoreDelete(State().voices_mutex);

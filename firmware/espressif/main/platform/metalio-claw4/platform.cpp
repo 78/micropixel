@@ -22,6 +22,7 @@
 #endif
 #include "platform/graphics/command_stream.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
+#include "platform/metalio-claw4/input/tca9555_power_key.hpp"
 #include "platform/platform.hpp"
 
 namespace micropixel::platform {
@@ -81,6 +82,7 @@ struct MetalioClaw4PlatformState final {
     lv_image_dsc_t launch_image_descriptor{};
     metalio_claw4::DirtyRegionCoalescer dirty_region_coalescer{};
     metalio_claw4::RetainedScene retained_scene{kWidth, kHeight};
+    metalio_claw4::Tca9555PowerKey power_key{};
     metalio_claw4::Gt911Input touch_input{kWidth, kHeight, kTouchInterrupt};
     BitmapDamage bitmap_damage[kBitmapDamageCapacity]{};
     uint64_t bitmap_frame_started_us{};
@@ -200,11 +202,10 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     display_config.profile.hor_res = kWidth;
     display_config.profile.ver_res = kHeight;
     display_config.profile.buffer_height = CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT;
-    display_config.profile.use_psram = true;
 #ifdef CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM
-    display_config.profile.partial_buffer_in_psram = true;
+    display_config.profile.use_psram = true;
 #else
-    display_config.profile.partial_buffer_in_psram = false;
+    display_config.profile.use_psram = false;
 #endif
     display_config.profile.enable_ppa_accel = kEnablePpaAccel;
     display_config.profile.require_double_buffer = true;
@@ -243,6 +244,9 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
     ESP_LOGI(kTag, "initializing Metalio-Claw4 LVGL backend");
     esp_err_t status = state.hardware.Initialize();
     if (status == ESP_OK) {
+        status = state.power_key.Initialize(state.hardware.IoExpander());
+    }
+    if (status == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(100));
         status = state.touch_input.Initialize(state.hardware.I2cBus());
     }
@@ -253,7 +257,7 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
         status = state.hardware.SetBacklight(true);
     }
     if (status == ESP_OK) {
-        status = ConfiguredAudioBackend().Initialize(state.hardware.I2cBus());
+        status = ConfiguredAudioBackend().Initialize(state.hardware.IoExpander());
     }
     if (status != ESP_OK) {
         ESP_LOGE(kTag, "Metalio-Claw4 LVGL backend failed: %s", esp_err_to_name(status));
@@ -262,7 +266,7 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
 
     ESP_LOGI(kTag,
              "Metalio-Claw4 LVGL backend ready: %dx%d RGB888, %s, %lu ms idle refresh, "
-             "GT911 IRQ GPIO%d, graphics=%s, ppa=%s, lvgl-core=1 priority=3",
+             "GT911 IRQ GPIO%d, power-key=TCA9555-P0.5/IRQ-GPIO2, graphics=%s, ppa=%s, lvgl-core=1 priority=3",
              kWidth, kHeight, kTearAvoidModeName, static_cast<unsigned long>(kRefreshPeriodMs),
              static_cast<int>(kTouchInterrupt), GraphicsBackendName(), kEnablePpaAccel ? "on" : "off");
     return ESP_OK;

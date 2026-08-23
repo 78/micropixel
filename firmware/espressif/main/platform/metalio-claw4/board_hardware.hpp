@@ -19,16 +19,19 @@ class BoardHardware final {
     [[nodiscard]] esp_err_t SetBacklight(bool enabled);
 
     [[nodiscard]] i2c_master_bus_handle_t I2cBus() const { return i2c_bus_; }
+    [[nodiscard]] i2c_master_dev_handle_t IoExpander() const { return io_expander_; }
     [[nodiscard]] esp_lcd_panel_handle_t Panel() const { return panel_; }
     [[nodiscard]] esp_lcd_panel_io_handle_t PanelIo() const { return panel_io_; }
 
    private:
     [[nodiscard]] esp_err_t InitializeI2c();
+    [[nodiscard]] esp_err_t InitializeIoExpander();
     [[nodiscard]] esp_err_t InitializeLcd();
 
     int32_t display_width_{};
     int32_t display_height_{};
     i2c_master_bus_handle_t i2c_bus_{};
+    i2c_master_dev_handle_t io_expander_{};
     esp_lcd_panel_handle_t panel_{};
     esp_lcd_panel_io_handle_t panel_io_{};
     esp_ldo_channel_handle_t dsi_ldo_{};

@@ -10,7 +10,7 @@ dependencies:
       require: private
       version: '>=4.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 4.2.0
   espressif/cmake_utilities:
@@ -30,7 +30,7 @@ dependencies:
       require: private
       version: '>=4.4.2'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.2.1
   espressif/esp_lcd_touch_gt911:
@@ -66,7 +66,7 @@ dependencies:
       require: private
       version: '>=8,<10'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     targets:
     - esp32
@@ -100,46 +100,36 @@ dependencies:
       require: private
       version: '>=8,<10'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.0.1
   espressif/esp_lvgl_adapter:
-    component_hash: 74ad06b34ee7aec3f2a4f4fd8ed20852527a780d35d0154488624383d9e72972
     dependencies:
-    - name: espressif/button
-      registry_url: https://components.espressif.com
-      require: public
-      version: 4.*
-    - name: espressif/esp_lcd_touch
-      registry_url: https://components.espressif.com
-      require: public
-      version: 1.*
-    - name: espressif/esp_lv_decoder
-      registry_url: https://components.espressif.com
-      require: public
-      version: 0.*
-    - name: espressif/esp_lv_fs
-      registry_url: https://components.espressif.com
-      require: public
-      version: 1.*
-    - name: espressif/freetype
-      registry_url: https://components.espressif.com
-      require: public
-      version: 2.*
-    - name: espressif/knob
-      registry_url: https://components.espressif.com
-      require: public
-      version: 1.*
     - name: idf
-      require: private
       version: '>=5.5'
     - name: lvgl/lvgl
-      registry_url: https://components.espressif.com
-      require: private
       version: '>=8,<10'
+    - name: espressif/esp_lv_decoder
+      public: true
+      version: 0.*
+    - name: espressif/esp_lv_fs
+      public: true
+      version: 1.*
+    - name: espressif/freetype
+      public: true
+      version: 2.*
+    - name: espressif/esp_lcd_touch
+      public: true
+      version: 1.*
+    - name: espressif/button
+      public: true
+      version: 4.*
+    - name: espressif/knob
+      public: true
+      version: 1.*
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: components/esp-iot-solution/components/display/tools/esp_lvgl_adapter
+      type: local
     version: 0.6.3
   espressif/esp_mmap_assets:
     component_hash: b7c559238d9f4c11048b1d7302f5474e4f4f590902433efd792bd0cbf5324f2a
@@ -152,7 +142,7 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 2.0.0
   espressif/esp_new_jpeg:
@@ -181,7 +171,7 @@ dependencies:
       require: private
       version: '>=5.1'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 2.14.3~1
   espressif/knob:
@@ -195,7 +185,7 @@ dependencies:
       require: private
       version: '>=4.4.1'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.1.0
   espressif/libpng:
@@ -234,12 +224,14 @@ dependencies:
       type: service
     version: 9.5.0
 direct_dependencies:
+- espressif/button
 - espressif/esp_lcd_touch_gt911
 - espressif/esp_lvgl_adapter
+- espressif/esp_mmap_assets
 - espressif/esp_new_jpeg
 - espressif/libpng
 - idf
 - lvgl/lvgl
-manifest_hash: 05981ada67750359ed499332a6fc65f953f897b058cd4f64f21b93d53de145a6
+manifest_hash: 364b92660aae09be387a3d2b70e936a61aba08fe96d112267e3dcfa7c5f32f74
 target: esp32p4
 version: 3.0.0

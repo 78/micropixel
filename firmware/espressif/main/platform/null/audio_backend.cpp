@@ -5,8 +5,8 @@ namespace {
 
 class NullAudioBackend final : public InitializableAudioBackend {
    public:
-    [[nodiscard]] esp_err_t Initialize(i2c_master_bus_handle_t i2c_bus) override {
-        (void)i2c_bus;
+    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander) override {
+        (void)io_expander;
         return ESP_OK;
     }
 

@@ -2,3 +2,7 @@
 	path = firmware/espressif/components/wasm-micro-runtime
 	url = https://github.com/78/wasm-micro-runtime.git
 	branch = wamr-host/esp-idf-psram
+[submodule "firmware/espressif/components/esp-iot-solution"]
+	path = firmware/espressif/components/esp-iot-solution
+	url = https://github.com/78/esp-iot-solution.git
+	branch = metalio/retained-surface-preserve-0.6.3

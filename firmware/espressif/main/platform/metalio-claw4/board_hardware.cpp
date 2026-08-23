@@ -11,6 +11,7 @@ constexpr gpio_num_t kLcdReset = GPIO_NUM_3;
 constexpr gpio_num_t kI2cSda = GPIO_NUM_7;
 constexpr gpio_num_t kI2cScl = GPIO_NUM_8;
 constexpr gpio_num_t kLcdBacklight = GPIO_NUM_52;
+constexpr uint8_t kTca9555Address = 0x20U;
 constexpr int kDsiLdoChannel = 3;
 constexpr int kDsiLdoMillivolts = 2500;
 constexpr uint32_t kDisplayFramebufferCount = 2U;
@@ -35,6 +36,9 @@ esp_err_t BoardHardware::Initialize() {
     esp_err_t status = SetBacklight(false);
     if (status == ESP_OK) {
         status = InitializeI2c();
+    }
+    if (status == ESP_OK) {
+        status = InitializeIoExpander();
     }
     if (status == ESP_OK) {
         status = InitializeLcd();
@@ -65,6 +69,14 @@ esp_err_t BoardHardware::InitializeI2c() {
     config.trans_queue_depth = 0;
     config.flags.enable_internal_pullup = true;
     return i2c_new_master_bus(&config, &i2c_bus_);
+}
+
+esp_err_t BoardHardware::InitializeIoExpander() {
+    i2c_device_config_t config{};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = kTca9555Address;
+    config.scl_speed_hz = 400000U;
+    return i2c_master_bus_add_device(i2c_bus_, &config, &io_expander_);
 }
 
 esp_err_t BoardHardware::InitializeLcd() {
