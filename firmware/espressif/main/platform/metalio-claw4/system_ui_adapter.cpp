@@ -40,6 +40,21 @@ std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemMenu(cons
 
 void SystemUiAdapter::LeaveSystemMenu() { operations_.leave_system_menu(operations_.context); }
 
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemInformation(
+    const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink, void* action_context) {
+    return operations_.show_system_information(operations_.context, model, action_sink, action_context);
+}
+
+void SystemUiAdapter::LeaveSystemInformation() { operations_.leave_system_information(operations_.context); }
+
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowAppManagement(const host_ui::AppManagementModel& model,
+                                                                               host_ui::SystemUiActionSink action_sink,
+                                                                               void* action_context) {
+    return operations_.show_app_management(operations_.context, model, action_sink, action_context);
+}
+
+void SystemUiAdapter::LeaveAppManagement() { operations_.leave_app_management(operations_.context); }
+
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowWifiSettings(const host_ui::WifiSettingsModel& model,
                                                                               host_ui::SystemUiActionSink action_sink,
                                                                               void* action_context) {

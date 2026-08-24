@@ -1,7 +1,9 @@
 #include "host_controller.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -9,9 +11,13 @@
 #include "app_controller.hpp"
 #include "device/device_services.hpp"
 #include "device/wifi.hpp"
+#include "esp_app_desc.h"
+#include "esp_chip_info.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
@@ -291,6 +297,137 @@ host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& st
     };
 }
 
+template <size_t Capacity>
+void CopySystemInformationText(std::array<char, Capacity>& destination, const char* source) {
+    destination.fill('\0');
+    if (source != nullptr) {
+        std::snprintf(destination.data(), destination.size(), "%s", source);
+    }
+}
+
+host_ui::MemoryStatisticsModel ReadMemoryStatistics(uint32_t capabilities) {
+    return host_ui::MemoryStatisticsModel{
+        .total_kib = static_cast<uint32_t>(heap_caps_get_total_size(capabilities) / 1024U),
+        .free_kib = static_cast<uint32_t>(heap_caps_get_free_size(capabilities) / 1024U),
+        .minimum_free_kib = static_cast<uint32_t>(heap_caps_get_minimum_free_size(capabilities) / 1024U),
+        .largest_free_block_kib = static_cast<uint32_t>(heap_caps_get_largest_free_block(capabilities) / 1024U),
+    };
+}
+
+const char* ResetReasonText(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:
+            return "Power on";
+        case ESP_RST_EXT:
+            return "External reset";
+        case ESP_RST_SW:
+            return "Software reset";
+        case ESP_RST_PANIC:
+            return "Panic";
+        case ESP_RST_INT_WDT:
+            return "Interrupt watchdog";
+        case ESP_RST_TASK_WDT:
+            return "Task watchdog";
+        case ESP_RST_WDT:
+            return "Watchdog";
+        case ESP_RST_DEEPSLEEP:
+            return "Deep sleep wake";
+        case ESP_RST_BROWNOUT:
+            return "Brownout";
+        case ESP_RST_SDIO:
+            return "SDIO reset";
+        case ESP_RST_USB:
+            return "USB reset";
+        case ESP_RST_JTAG:
+            return "JTAG reset";
+        case ESP_RST_EFUSE:
+            return "eFuse error";
+        case ESP_RST_PWR_GLITCH:
+            return "Power glitch";
+        case ESP_RST_CPU_LOCKUP:
+            return "CPU lockup";
+        case ESP_RST_UNKNOWN:
+        default:
+            return "Unknown";
+    }
+}
+
+host_ui::SystemInformationModel MakeSystemInformationModel() {
+    host_ui::SystemInformationModel model{};
+    const esp_app_desc_t* description = esp_app_get_description();
+    if (description != nullptr) {
+        CopySystemInformationText(model.firmware_version, description->version);
+        CopySystemInformationText(model.build_date, description->date);
+        CopySystemInformationText(model.build_time, description->time);
+        CopySystemInformationText(model.idf_version, description->idf_ver);
+    }
+    char elf_sha[65]{};
+    (void)esp_app_get_elf_sha256(elf_sha, sizeof(elf_sha));
+    std::snprintf(model.build_id.data(), model.build_id.size(), "%.8s", elf_sha);
+
+    esp_chip_info_t chip{};
+    esp_chip_info(&chip);
+    std::snprintf(model.host_chip.data(), model.host_chip.size(), "ESP32-P4 Rev %u.%u",
+                  static_cast<unsigned>(chip.revision / 100U), static_cast<unsigned>(chip.revision % 100U));
+    std::snprintf(model.cpu.data(), model.cpu.size(), "%u Core%s / %u MHz", static_cast<unsigned>(chip.cores),
+                  chip.cores == 1U ? "" : "s", static_cast<unsigned>(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
+    CopySystemInformationText(model.wifi_coprocessor, "ESP32-C5");
+
+    uint32_t flash_bytes = 0U;
+    if (esp_flash_get_size(nullptr, &flash_bytes) == ESP_OK) {
+        std::snprintf(model.flash_capacity.data(), model.flash_capacity.size(), "%" PRIu32 " MB",
+                      flash_bytes / (1024U * 1024U));
+    } else {
+        CopySystemInformationText(model.flash_capacity, "Unknown");
+    }
+
+    CopySystemInformationText(model.panel, "NV3051F");
+    CopySystemInformationText(model.display_interface, "MIPI-DSI / 2 lanes");
+    CopySystemInformationText(model.resolution, "720 x 720 / RGB888");
+    CopySystemInformationText(model.touch_controller, "GT911");
+    CopySystemInformationText(model.last_reset, ResetReasonText(esp_reset_reason()));
+
+    const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time()) / 1000000U;
+    const uint64_t days = uptime_seconds / 86400U;
+    const uint64_t hours = (uptime_seconds / 3600U) % 24U;
+    const uint64_t minutes = (uptime_seconds / 60U) % 60U;
+    if (days != 0U) {
+        std::snprintf(model.uptime.data(), model.uptime.size(), "%" PRIu64 "d %" PRIu64 "h %" PRIu64 "m", days, hours,
+                      minutes);
+    } else {
+        std::snprintf(model.uptime.data(), model.uptime.size(), "%" PRIu64 "h %" PRIu64 "m", hours, minutes);
+    }
+
+    constexpr uint32_t kInternalSramCapabilities = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    constexpr uint32_t kPsramCapabilities = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    model.internal_sram = ReadMemoryStatistics(kInternalSramCapabilities);
+    model.psram = ReadMemoryStatistics(kPsramCapabilities);
+    return model;
+}
+
+host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCatalog& catalog, bool launch_available) {
+    host_ui::AppManagementModel model{.app_count = catalog.count, .launch_available = launch_available};
+    const esp_partition_t* app_store =
+        esp_partition_find_first(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, "app_store");
+    model.storage_total_kib = app_store != nullptr ? app_store->size / 1024U : 0U;
+    uint32_t used_bytes = 0U;
+    for (uint32_t index = 0U; index < catalog.count; ++index) {
+        const runtime::InstalledApp& source = catalog.apps[index];
+        model.apps[index] = host_ui::ManagedAppModel{
+            .app_id = source.app_id.data(),
+            .display_name = source.display_name.data(),
+            .bundle_size_kib = source.bundle_size / 1024U,
+        };
+        used_bytes = std::max(used_bytes, source.store_offset + source.bundle_size);
+    }
+    model.storage_used_kib = used_bytes / 1024U;
+    // The current App Store partition is deliberately read-only. The UI shows
+    // why uninstall is unavailable instead of pretending that an NVS
+    // tombstone reclaimed Flash space.
+    model.uninstall_available = false;
+    return model;
+}
+
 bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, host_ui::StatusLayerModel& model,
                     const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store) {
     if (controller != nullptr) {
@@ -465,8 +602,60 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, hos
     }
 }
 
+bool RunSystemInformation(host_ui::SystemShell& shell) {
+    const auto show_result = shell.ShowSystemInformation(MakeSystemInformationModel());
+    if (!show_result) {
+        ESP_LOGE(kTag, "failed to show System Information: error=%u", static_cast<unsigned>(show_result.error()));
+        return false;
+    }
+    for (;;) {
+        const auto action = shell.PollAction(portMAX_DELAY);
+        if (!action.has_value()) {
+            continue;
+        }
+        if (action->type == host_ui::SystemUiActionType::kCloseSystemInformation ||
+            action->type == host_ui::SystemUiActionType::kSuspendToHall) {
+            shell.LeaveSystemInformation();
+            return true;
+        }
+        ESP_LOGW(kTag, "ignored action=%u while System Information is visible", static_cast<unsigned>(action->type));
+    }
+}
+
+bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCatalog& catalog, bool launch_available,
+                      std::optional<uint32_t>& launch_request) {
+    const auto show_result = shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available));
+    if (!show_result) {
+        ESP_LOGE(kTag, "failed to show App Management: error=%u", static_cast<unsigned>(show_result.error()));
+        return false;
+    }
+    for (;;) {
+        const auto action = shell.PollAction(portMAX_DELAY);
+        if (!action.has_value()) {
+            continue;
+        }
+        if (action->type == host_ui::SystemUiActionType::kCloseAppManagement ||
+            action->type == host_ui::SystemUiActionType::kSuspendToHall) {
+            shell.LeaveAppManagement();
+            return true;
+        }
+        if (action->type == host_ui::SystemUiActionType::kLaunchManagedApp && launch_available &&
+            action->app_index < catalog.count) {
+            launch_request = action->app_index;
+            shell.LeaveAppManagement();
+            return true;
+        }
+        if (action->type == host_ui::SystemUiActionType::kUninstallManagedApp) {
+            ESP_LOGW(kTag, "ignored uninstall request while App Store is read-only: index=%" PRIu32, action->app_index);
+            continue;
+        }
+        ESP_LOGW(kTag, "ignored action=%u while App Management is visible", static_cast<unsigned>(action->type));
+    }
+}
+
 bool RunSystemMenu(host_ui::SystemShell& shell, device::WifiBackend& wifi, host_ui::StatusLayerModel& status_model,
-                   const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store) {
+                   const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store,
+                   bool launch_available, std::optional<uint32_t>& launch_request) {
     RefreshWifiStatus(status_model, wifi.Snapshot());
     auto show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
     if (!show_result) {
@@ -503,6 +692,31 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::WifiBackend& wifi, host_
                     show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Wi-Fi: error=%u",
+                                 static_cast<unsigned>(show_result.error()));
+                        return false;
+                    }
+                } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kSystemInformation)) {
+                    shell.LeaveSystemMenu();
+                    if (!RunSystemInformation(shell)) {
+                        return false;
+                    }
+                    show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
+                    if (!show_result) {
+                        ESP_LOGE(kTag, "failed to restore System Settings after System Information: error=%u",
+                                 static_cast<unsigned>(show_result.error()));
+                        return false;
+                    }
+                } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kManageApps)) {
+                    shell.LeaveSystemMenu();
+                    if (!RunAppManagement(shell, catalog, launch_available, launch_request)) {
+                        return false;
+                    }
+                    if (launch_request.has_value()) {
+                        return true;
+                    }
+                    show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
+                    if (!show_result) {
+                        ESP_LOGE(kTag, "failed to restore System Settings after App Management: error=%u",
                                  static_cast<unsigned>(show_result.error()));
                         return false;
                     }
@@ -577,7 +791,8 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::WifiBackend& wifi,
                 break;
             }
             if (action->type == host_ui::SystemUiActionType::kOpenSystemMenu) {
-                (void)RunSystemMenu(shell, wifi, status_model, catalog, settings_store);
+                std::optional<uint32_t> launch_request;
+                (void)RunSystemMenu(shell, wifi, status_model, catalog, settings_store, false, launch_request);
                 cpu_sampler.Reset();
                 (void)cpu_sampler.Sample();
                 next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
@@ -727,11 +942,17 @@ class ActiveHost final {
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kOpenSystemMenu) {
-                if (!RunSystemMenu(shell_, wifi_, status_model_, catalog_, settings_store_)) {
+                std::optional<uint32_t> launch_request;
+                if (!RunSystemMenu(shell_, wifi_, status_model_, catalog_, settings_store_, CanLaunch(),
+                                   launch_request)) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
                 if (!ShowCurrentHall(covers)) {
                     return false;
+                }
+                if (launch_request.has_value() && *launch_request < catalog_.count && CanLaunch()) {
+                    ActivateSelectedApp(*launch_request);
+                    return true;
                 }
                 cpu_sampler.Reset();
                 (void)cpu_sampler.Sample();

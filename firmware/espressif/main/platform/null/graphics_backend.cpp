@@ -174,6 +174,24 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         return {};
     }
     void LeaveSystemMenu() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformation(
+        const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void LeaveSystemInformation() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowAppManagement(
+        const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void LeaveAppManagement() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowWifiSettings(const host_ui::WifiSettingsModel& model,
                                                                                host_ui::SystemUiActionSink action_sink,
                                                                                void* action_context) override {

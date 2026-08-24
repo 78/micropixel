@@ -6,9 +6,11 @@
 
 namespace {
 
+using micropixel::host_ui::AppManagementModel;
 using micropixel::host_ui::HallCoverModel;
 using micropixel::host_ui::HallModel;
 using micropixel::host_ui::StatusLayerModel;
+using micropixel::host_ui::SystemInformationModel;
 using micropixel::host_ui::SystemMenuModel;
 using micropixel::host_ui::SystemShell;
 using micropixel::host_ui::SystemUiAction;
@@ -63,6 +65,24 @@ class FakeSystemUi final : public SystemUiBackend {
 
     void LeaveSystemMenu() override { ++leave_system_menu_calls; }
 
+    std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel&, SystemUiActionSink sink,
+                                                             void* context) override {
+        sink_ = sink;
+        context_ = context;
+        return {};
+    }
+
+    void LeaveSystemInformation() override { ++leave_system_information_calls; }
+
+    std::expected<void, SystemUiError> ShowAppManagement(const AppManagementModel&, SystemUiActionSink sink,
+                                                         void* context) override {
+        sink_ = sink;
+        context_ = context;
+        return {};
+    }
+
+    void LeaveAppManagement() override { ++leave_app_management_calls; }
+
     std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel&, SystemUiActionSink sink,
                                                         void* context) override {
         sink_ = sink;
@@ -97,6 +117,8 @@ class FakeSystemUi final : public SystemUiBackend {
     uint32_t stop_watching_calls{};
     uint32_t update_hall_wifi_calls{};
     uint32_t leave_system_menu_calls{};
+    uint32_t leave_system_information_calls{};
+    uint32_t leave_app_management_calls{};
     uint32_t update_wifi_settings_calls{};
     uint32_t leave_wifi_settings_calls{};
     uint32_t leave_status_calls{};
@@ -140,6 +162,8 @@ void DestructorUnbindsCallbacks() {
     Check(ui.stop_watching_calls == 1U, "shell destructor should stop guest action watching");
     Check(ui.leave_status_calls == 1U, "shell destructor should leave status layer");
     Check(ui.leave_system_menu_calls == 1U, "shell destructor should leave system menu");
+    Check(ui.leave_system_information_calls == 1U, "shell destructor should leave system information");
+    Check(ui.leave_app_management_calls == 1U, "shell destructor should leave App Management");
     Check(ui.leave_wifi_settings_calls == 1U, "shell destructor should leave Wi-Fi settings");
     Check(ui.leave_hall_calls == 1U, "shell destructor should leave hall");
 }
@@ -180,6 +204,22 @@ void WifiActionsReachTheShell() {
     Check(ui.update_wifi_settings_calls == 1U, "Wi-Fi updates should reach the backend");
 }
 
+void DetailScreenActionsReachTheShell() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowSystemInformation(SystemInformationModel{}).has_value(), "system information should render");
+    ui.Emit({.type = SystemUiActionType::kCloseSystemInformation});
+    const auto close_info = shell.PollAction(0U);
+    Check(close_info.has_value() && close_info->type == SystemUiActionType::kCloseSystemInformation,
+          "system information close should be retained");
+
+    Check(shell.ShowAppManagement(AppManagementModel{}).has_value(), "App Management should render");
+    ui.Emit({.type = SystemUiActionType::kLaunchManagedApp, .app_index = 1U});
+    const auto launch = shell.PollAction(0U);
+    Check(launch.has_value() && launch->type == SystemUiActionType::kLaunchManagedApp && launch->app_index == 1U,
+          "managed App launch should be retained");
+}
+
 }  // namespace
 
 int main() {
@@ -187,6 +227,7 @@ int main() {
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
     WifiActionsReachTheShell();
-    std::cout << "system_shell tests passed: 4 cases\n";
+    DetailScreenActionsReachTheShell();
+    std::cout << "system_shell tests passed: 5 cases\n";
     return 0;
 }

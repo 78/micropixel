@@ -232,6 +232,14 @@ enum class SystemMenuTouchTarget : uint8_t {
     kManageApps,
 };
 
+enum class AppManagementOverlay : uint8_t {
+    kNone,
+    kActions,
+    kInformation,
+    kUninstallConfirmation,
+    kUninstallUnavailable,
+};
+
 // All board-owned display/input state is stored inside the selected Platform
 // object. Callbacks receive this state explicitly instead of reaching through
 // file-level aliases.
@@ -242,6 +250,9 @@ struct MetalioClaw4PlatformState final {
     lv_obj_t* guest_frame{};
     lv_obj_t* hall_settings_press_overlay{};
     lv_obj_t* system_menu_press_overlays[5]{};
+    lv_obj_t* system_information_scroll_content{};
+    lv_obj_t* app_management_scroll_content{};
+    lv_obj_t* app_management_rows[host_ui::kMaxHallApps]{};
     lv_obj_t* wifi_scroll_content{};
     lv_obj_t* wifi_password_textarea{};
     lv_obj_t* wifi_keyboard{};
@@ -307,6 +318,10 @@ struct MetalioClaw4PlatformState final {
     void* hall_action_context{};
     host_ui::SystemUiActionSink system_menu_action_sink{};
     void* system_menu_action_context{};
+    host_ui::SystemUiActionSink system_information_action_sink{};
+    void* system_information_action_context{};
+    host_ui::SystemUiActionSink app_management_action_sink{};
+    void* app_management_action_context{};
     host_ui::SystemUiActionSink wifi_action_sink{};
     void* wifi_action_context{};
     host_ui::SystemUiActionSink status_action_sink{};
@@ -326,9 +341,11 @@ struct MetalioClaw4PlatformState final {
     int32_t system_menu_touch_down_y{};
     uint64_t system_menu_touch_down_us{};
     host_ui::WifiSettingsModel wifi_model{};
+    host_ui::AppManagementModel app_management_model{};
     host_ui::WifiNetworkModel wifi_password_network{};
     host_ui::WifiConnectionState wifi_password_connection_state{host_ui::WifiConnectionState::kDisconnected};
     uint32_t wifi_selected_index{};
+    uint32_t app_management_selected_index{};
     int32_t wifi_scroll_offset{};
     std::array<char, host_ui::kMaxWifiPasswordLength + 1U> wifi_password{};
     uint32_t status_touch_id{};
@@ -343,6 +360,7 @@ struct MetalioClaw4PlatformState final {
     bool system_menu_touch_active{};
     bool system_menu_button_pressed{};
     bool wifi_action_sheet_visible{};
+    AppManagementOverlay app_management_overlay{AppManagementOverlay::kNone};
     bool wifi_password_visible{};
     bool wifi_password_attempt_active{};
     bool wifi_render_pending{};
@@ -1547,9 +1565,9 @@ HallCardBounds SystemMenuTargetBounds(SystemMenuTouchTarget target) {
         case SystemMenuTouchTarget::kWifi:
             return {.x = 32, .y = 140, .width = 656, .height = 120};
         case SystemMenuTouchTarget::kLanguage:
-            return {.x = 32, .y = 260, .width = 656, .height = 120};
-        case SystemMenuTouchTarget::kSystemInformation:
             return {.x = 32, .y = 380, .width = 656, .height = 120};
+        case SystemMenuTouchTarget::kSystemInformation:
+            return {.x = 32, .y = 260, .width = 656, .height = 120};
         case SystemMenuTouchTarget::kManageApps:
             return {.x = 32, .y = 500, .width = 656, .height = 120};
         case SystemMenuTouchTarget::kNone:
@@ -1812,10 +1830,10 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
                                                      : "Off";
     DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", wifi_detail,
                       0x69a7ffU);
-    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kLanguage, "A", "Language",
-                      model.language != nullptr ? model.language : "English", 0x4dd6a4U);
     DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kSystemInformation, "i", "System Information",
                       "Device and software", 0x69a7ffU);
+    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kLanguage, "A", "Language",
+                      model.language != nullptr ? model.language : "English", 0x4dd6a4U);
     DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kManageApps, LV_SYMBOL_LIST, "Manage Apps",
                       model.installed_app_count == 1U ? "1 installed app" : "Installed apps", 0xff9f43U);
 
@@ -2077,10 +2095,591 @@ lv_obj_t* DrawWifiButton(lv_obj_t* parent, const HallCardBounds& bounds, const c
     lv_obj_set_style_bg_color(button, lv_color_hex(0x0b1726U), kPressed);
     lv_obj_t* label = lv_label_create(button);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_center(label);
     return button;
+}
+
+void FormatInformationSize(uint32_t kib, char* buffer, size_t capacity) {
+    if (buffer == nullptr || capacity == 0U) {
+        return;
+    }
+    if (kib >= 1024U) {
+        const uint32_t tenths = static_cast<uint32_t>((static_cast<uint64_t>(kib) * 10U + 512U) / 1024U);
+        std::snprintf(buffer, capacity, "%" PRIu32 ".%" PRIu32 " MB", tenths / 10U, tenths % 10U);
+    } else {
+        std::snprintf(buffer, capacity, "%" PRIu32 " KB", kib);
+    }
+}
+
+void DetailScrollEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state != nullptr && state->display != nullptr) {
+        lv_timer_ready(lv_display_get_refr_timer(state->display));
+    }
+}
+
+lv_obj_t* CreateDetailScrollContent(MetalioClaw4PlatformState& state, lv_obj_t* parent, int32_t content_height) {
+    lv_obj_t* scroll = lv_obj_create(parent);
+    lv_obj_set_pos(scroll, 0, 108);
+    lv_obj_set_size(scroll, kWidth, kHeight - 108);
+    lv_obj_set_style_pad_all(scroll, 0, 0);
+    lv_obj_set_style_border_width(scroll, 0, 0);
+    lv_obj_set_style_bg_opa(scroll, LV_OPA_TRANSP, 0);
+    lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(scroll, LV_SCROLLBAR_MODE_AUTO);
+    constexpr lv_obj_flag_t kScrollFlags = static_cast<lv_obj_flag_t>(
+        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
+        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
+    lv_obj_add_flag(scroll, kScrollFlags);
+    lv_obj_add_event_cb(scroll, DetailScrollEvent, LV_EVENT_SCROLL, &state);
+    lv_obj_add_event_cb(scroll, DetailScrollEvent, LV_EVENT_SCROLL_END, &state);
+    lv_obj_set_style_width(scroll, 5, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(scroll, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(scroll, lv_color_hex(0x42607fU), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(scroll, LV_OPA_COVER, LV_PART_SCROLLBAR);
+
+    lv_obj_t* bottom_spacer = lv_obj_create(scroll);
+    lv_obj_set_pos(bottom_spacer, 0, content_height - 1);
+    lv_obj_set_size(bottom_spacer, 1, 1);
+    lv_obj_set_style_border_width(bottom_spacer, 0, 0);
+    lv_obj_set_style_bg_opa(bottom_spacer, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_CLICKABLE);
+    return scroll;
+}
+
+lv_obj_t* DrawDetailHeader(MetalioClaw4PlatformState& state, const char* title, const char* subtitle,
+                           lv_event_cb_t back_callback, void* user_data) {
+    lv_obj_t* back = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 40, .y = 32, .width = 56, .height = 56},
+                                     0x0d1929U, 0x42607fU, 18);
+    lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(back, lv_color_hex(0x081321U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+    lv_obj_add_event_cb(back, back_callback, LV_EVENT_SHORT_CLICKED, user_data);
+    lv_obj_t* back_icon = lv_label_create(back);
+    lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
+    lv_obj_center(back_icon);
+    (void)CreateHallLabel(state.host_smoke, title, &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
+    if (subtitle != nullptr && subtitle[0] != '\0') {
+        (void)CreateHallLabel(state.host_smoke, subtitle, &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
+    }
+    return back;
+}
+
+void DrawInformationSectionLabel(lv_obj_t* parent, const char* text, int32_t y) {
+    (void)CreateHallLabel(parent, text, &lv_font_montserrat_18, 0x748aa5U, 42, y);
+}
+
+void DrawInformationRow(lv_obj_t* panel, int32_t y, const char* label, const char* value) {
+    if (y > 0) {
+        lv_obj_t* divider =
+            CreateWifiPanel(panel, HallCardBounds{.x = 20, .y = y, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
+        (void)divider;
+    }
+    (void)CreateHallLabel(panel, label, &lv_font_montserrat_18, 0x91a4bdU, 22, y + 18);
+    lv_obj_t* value_label = CreateHallLabel(panel, value, &lv_font_montserrat_18, 0xf2f7ffU, 260, y + 18);
+    lv_obj_set_width(value_label, 356);
+    lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(value_label, LV_LABEL_LONG_DOT);
+}
+
+void DrawMemoryMetric(lv_obj_t* panel, int32_t x, int32_t y, const char* name, uint32_t kib, uint32_t color) {
+    char value[24]{};
+    FormatInformationSize(kib, value, sizeof(value));
+    (void)CreateHallLabel(panel, name, &lv_font_montserrat_18, 0x748aa5U, x, y);
+    lv_obj_t* label = CreateHallLabel(panel, value, &lv_font_montserrat_18, color, x, y + 30);
+    lv_obj_set_width(label, 106);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+}
+
+void DrawMemoryStatisticsRow(lv_obj_t* panel, int32_t y, const char* name,
+                             const host_ui::MemoryStatisticsModel& memory) {
+    if (y > 0) {
+        (void)CreateWifiPanel(panel, HallCardBounds{.x = 20, .y = y, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
+    }
+    (void)CreateHallLabel(panel, name, &lv_font_montserrat_18, 0xf2f7ffU, 22, y + 35);
+    DrawMemoryMetric(panel, 176, y + 17, "TOTAL", memory.total_kib, 0xf2f7ffU);
+    DrawMemoryMetric(panel, 288, y + 17, "FREE", memory.free_kib, 0xf2f7ffU);
+    DrawMemoryMetric(panel, 400, y + 17, "MINIMUM", memory.minimum_free_kib, 0x69a7ffU);
+    DrawMemoryMetric(panel, 512, y + 17, "LARGEST", memory.largest_free_block_kib, 0xf2f7ffU);
+}
+
+void SystemInformationBackEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state != nullptr && state->system_information_action_sink != nullptr) {
+        state->system_information_action_sink(
+            state->system_information_action_context,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseSystemInformation});
+    }
+}
+
+std::expected<void, host_ui::SystemUiError> ShowSystemInformationImpl(MetalioClaw4PlatformState& state,
+                                                                      const host_ui::SystemInformationModel& model,
+                                                                      host_ui::SystemUiActionSink action_sink,
+                                                                      void* action_context) {
+    if (state.display == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
+    state.system_menu_action_sink = nullptr;
+    state.system_menu_action_context = nullptr;
+    state.system_information_action_sink = action_sink;
+    state.system_information_action_context = action_context;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        state.system_information_action_sink = nullptr;
+        state.system_information_action_context = nullptr;
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    if (state.host_smoke == nullptr) {
+        state.host_smoke = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(state.host_smoke, 0x08111fU);
+    }
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    ResetSystemMenuObjectPointers(state);
+    ResetWifiUiObjectPointers(state);
+    state.hall_settings_press_overlay = nullptr;
+    state.system_information_scroll_content = nullptr;
+    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
+    (void)DrawDetailHeader(state, "System Information", "Device and software", SystemInformationBackEvent, &state);
+
+    constexpr int32_t kContentHeight = 1300;
+    state.system_information_scroll_content = CreateDetailScrollContent(state, state.host_smoke, kContentHeight);
+    lv_obj_t* firmware =
+        CreateWifiPanel(state.system_information_scroll_content,
+                        HallCardBounds{.x = 40, .y = 14, .width = 640, .height = 128}, 0x111f32U, 0x2e4562U, 22);
+    (void)CreateHallLabel(firmware, "MicroPixel Firmware", &lv_font_montserrat_18, 0x91a4bdU, 24, 18);
+    char version[96]{};
+    std::snprintf(version, sizeof(version), "Version %s", model.firmware_version.data());
+    (void)CreateHallLabel(firmware, version, &lv_font_montserrat_24, 0xf2f7ffU, 24, 49);
+    char build[224]{};
+    std::snprintf(build, sizeof(build), "Build %s   %s %s", model.build_id.data(), model.build_date.data(),
+                  model.build_time.data());
+    lv_obj_t* build_label = CreateHallLabel(firmware, build, &lv_font_montserrat_18, 0x69a7ffU, 24, 88);
+    lv_obj_set_width(build_label, 592);
+    lv_label_set_long_mode(build_label, LV_LABEL_LONG_DOT);
+
+    DrawInformationSectionLabel(state.system_information_scroll_content, "MEMORY", 166);
+    lv_obj_t* memory =
+        CreateWifiPanel(state.system_information_scroll_content,
+                        HallCardBounds{.x = 40, .y = 198, .width = 640, .height = 194}, 0x111f32U, 0x2e4562U, 22);
+    DrawMemoryStatisticsRow(memory, 0, "SRAM", model.internal_sram);
+    DrawMemoryStatisticsRow(memory, 97, "PSRAM", model.psram);
+
+    DrawInformationSectionLabel(state.system_information_scroll_content, "HARDWARE", 420);
+    lv_obj_t* hardware =
+        CreateWifiPanel(state.system_information_scroll_content,
+                        HallCardBounds{.x = 40, .y = 452, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+    DrawInformationRow(hardware, 0, "Host Chip", model.host_chip.data());
+    DrawInformationRow(hardware, 58, "CPU", model.cpu.data());
+    DrawInformationRow(hardware, 116, "Wi-Fi Coprocessor", model.wifi_coprocessor.data());
+    DrawInformationRow(hardware, 174, "Flash", model.flash_capacity.data());
+
+    DrawInformationSectionLabel(state.system_information_scroll_content, "DISPLAY", 712);
+    lv_obj_t* display =
+        CreateWifiPanel(state.system_information_scroll_content,
+                        HallCardBounds{.x = 40, .y = 744, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+    DrawInformationRow(display, 0, "Panel", model.panel.data());
+    DrawInformationRow(display, 58, "Interface", model.display_interface.data());
+    DrawInformationRow(display, 116, "Resolution", model.resolution.data());
+    DrawInformationRow(display, 174, "Touch", model.touch_controller.data());
+
+    DrawInformationSectionLabel(state.system_information_scroll_content, "SOFTWARE", 1004);
+    lv_obj_t* software =
+        CreateWifiPanel(state.system_information_scroll_content,
+                        HallCardBounds{.x = 40, .y = 1036, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+    DrawInformationRow(software, 0, "ESP-IDF", model.idf_version.data());
+    DrawInformationRow(software, 58, "Uptime", model.uptime.data());
+    DrawInformationRow(software, 116, "Last Reset", model.last_reset.data());
+    DrawInformationRow(software, 174, "Build Date", model.build_date.data());
+
+    lv_obj_update_layout(state.system_information_scroll_content);
+    lv_obj_move_foreground(state.host_smoke);
+    SetHostPointerEnabledLocked(state, true);
+    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    esp_lv_adapter_unlock();
+    state.input_router.BindTouchSink(HostPointerTouchSink, &state);
+    state.input_router.BindSystemActionSink(action_sink, action_context);
+    ESP_LOGI(kTag, "System Information visible: chip=%s firmware=%s", model.host_chip.data(),
+             model.firmware_version.data());
+    return {};
+}
+
+void LeaveSystemInformationImpl(MetalioClaw4PlatformState& state) {
+    if (state.system_information_action_sink == nullptr && state.system_information_action_context == nullptr) {
+        return;
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.system_information_action_context);
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        SetHostPointerEnabledLocked(state, false);
+        esp_lv_adapter_unlock();
+    }
+    state.system_information_action_sink = nullptr;
+    state.system_information_action_context = nullptr;
+    state.system_information_scroll_content = nullptr;
+}
+
+void ResetAppManagementObjectPointers(MetalioClaw4PlatformState& state) {
+    state.app_management_scroll_content = nullptr;
+    for (lv_obj_t*& row : state.app_management_rows) {
+        row = nullptr;
+    }
+}
+
+void DrawAppMoreIndicator(lv_obj_t* parent) {
+    for (int32_t index = 0; index < 3; ++index) {
+        lv_obj_t* dot = CreateWifiPanel(parent, HallCardBounds{.x = 594, .y = 35 + index * 13, .width = 7, .height = 7},
+                                        0xa9bdd5U, 0U, LV_RADIUS_CIRCLE);
+        (void)dot;
+    }
+}
+
+uint32_t FindAppManagementRowIndex(const MetalioClaw4PlatformState& state, lv_obj_t* row) {
+    for (uint32_t index = 0U; index < state.app_management_model.app_count; ++index) {
+        if (state.app_management_rows[index] == row) {
+            return index;
+        }
+    }
+    return state.app_management_model.app_count;
+}
+
+void RenderAppManagementLocked(MetalioClaw4PlatformState& state);
+
+void AppManagementRenderAsync(void* context) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
+    if (state != nullptr && state->app_management_action_sink != nullptr) {
+        RenderAppManagementLocked(*state);
+    }
+}
+
+void QueueAppManagementRender(MetalioClaw4PlatformState& state) {
+    (void)lv_async_call(AppManagementRenderAsync, &state);
+}
+
+void AppManagementBackEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state != nullptr && state->app_management_action_sink != nullptr) {
+        state->app_management_action_sink(
+            state->app_management_action_context,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseAppManagement});
+    }
+}
+
+void AppManagementRowEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr) {
+        return;
+    }
+    const uint32_t index = FindAppManagementRowIndex(*state, lv_event_get_current_target_obj(event));
+    if (index >= state->app_management_model.app_count) {
+        return;
+    }
+    state->app_management_selected_index = index;
+    state->app_management_overlay = AppManagementOverlay::kActions;
+    QueueAppManagementRender(*state);
+}
+
+void AppManagementCancelEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr) {
+        return;
+    }
+    state->app_management_overlay = AppManagementOverlay::kNone;
+    QueueAppManagementRender(*state);
+}
+
+void AppManagementOpenEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->app_management_action_sink == nullptr ||
+        state->app_management_selected_index >= state->app_management_model.app_count) {
+        return;
+    }
+    state->app_management_action_sink(state->app_management_action_context,
+                                      host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchManagedApp,
+                                                              .app_index = state->app_management_selected_index});
+}
+
+void AppManagementInformationEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr) {
+        return;
+    }
+    state->app_management_overlay = AppManagementOverlay::kInformation;
+    QueueAppManagementRender(*state);
+}
+
+void AppManagementUninstallEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr) {
+        return;
+    }
+    state->app_management_overlay = state->app_management_model.uninstall_available
+                                        ? AppManagementOverlay::kUninstallConfirmation
+                                        : AppManagementOverlay::kUninstallUnavailable;
+    QueueAppManagementRender(*state);
+}
+
+void AppManagementConfirmUninstallEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->app_management_action_sink == nullptr ||
+        !state->app_management_model.uninstall_available ||
+        state->app_management_selected_index >= state->app_management_model.app_count) {
+        return;
+    }
+    state->app_management_action_sink(state->app_management_action_context,
+                                      host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUninstallManagedApp,
+                                                              .app_index = state->app_management_selected_index});
+}
+
+void DrawAppManagementActionsLocked(MetalioClaw4PlatformState& state) {
+    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
+    lv_obj_t* scrim = CreateWifiPanel(
+        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 330, .width = 664, .height = 362},
+                                      0x101c2cU, 0x42607fU, 24);
+    lv_obj_t* title = CreateHallLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    lv_obj_set_width(title, 616);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    lv_obj_t* open = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 72, .width = 624, .height = 58},
+                                    state.app_management_model.launch_available ? "Open" : "Open unavailable",
+                                    state.app_management_model.launch_available ? 0xf2f7ffU : 0x708198U);
+    if (state.app_management_model.launch_available) {
+        lv_obj_add_event_cb(open, AppManagementOpenEvent, LV_EVENT_SHORT_CLICKED, &state);
+    } else {
+        lv_obj_remove_flag(open, LV_OBJ_FLAG_CLICKABLE);
+    }
+    lv_obj_t* information = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 140, .width = 624, .height = 58},
+                                           "App Information", 0xf2f7ffU);
+    lv_obj_add_event_cb(information, AppManagementInformationEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* uninstall = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 208, .width = 624, .height = 58},
+                                         "Uninstall", 0xff6b74U, 0x653c48U);
+    lv_obj_add_event_cb(uninstall, AppManagementUninstallEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* cancel =
+        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 286, .width = 624, .height = 54}, "Cancel", 0xf2f7ffU);
+    lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+}
+
+void DrawAppManagementInformationLocked(MetalioClaw4PlatformState& state) {
+    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
+    lv_obj_t* scrim = CreateWifiPanel(
+        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 352, .width = 664, .height = 340},
+                                      0x101c2cU, 0x42607fU, 24);
+    lv_obj_t* title = CreateHallLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    lv_obj_set_width(title, 616);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    lv_obj_t* details =
+        CreateWifiPanel(sheet, HallCardBounds{.x = 20, .y = 66, .width = 624, .height = 174}, 0x111f32U, 0x2e4562U, 18);
+    DrawInformationRow(details, 0, "App ID", app.app_id != nullptr ? app.app_id : "Unknown");
+    char size[24]{};
+    FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
+    DrawInformationRow(details, 58, "Bundle Size", size);
+    DrawInformationRow(details, 116, "Runtime", "WebAssembly AOT");
+    lv_obj_t* done =
+        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 264, .width = 624, .height = 54}, "Done", 0xf2f7ffU);
+    lv_obj_add_event_cb(done, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+}
+
+void DrawAppManagementUninstallUnavailableLocked(MetalioClaw4PlatformState& state) {
+    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
+    lv_obj_t* scrim = CreateWifiPanel(
+        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 420, .width = 664, .height = 272},
+                                      0x101c2cU, 0x42607fU, 24);
+    (void)CreateHallLabel(sheet, "Uninstall unavailable", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    char message[160]{};
+    std::snprintf(message, sizeof(message), "%s is stored in the read-only App Store. Storage migration is required.",
+                  app.display_name != nullptr ? app.display_name : "This App");
+    lv_obj_t* detail = CreateHallLabel(sheet, message, &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
+    lv_obj_set_size(detail, 616, 92);
+    lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+    lv_obj_t* done =
+        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 196, .width = 624, .height = 54}, "Done", 0xf2f7ffU);
+    lv_obj_add_event_cb(done, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+}
+
+void DrawAppManagementUninstallConfirmationLocked(MetalioClaw4PlatformState& state) {
+    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
+    lv_obj_t* scrim = CreateWifiPanel(
+        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 390, .width = 664, .height = 302},
+                                      0x101c2cU, 0x653c48U, 24);
+    (void)CreateHallLabel(sheet, "Uninstall App?", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    lv_obj_t* name = CreateHallLabel(sheet, app.display_name, &lv_font_montserrat_18, 0x91a4bdU, 24, 61);
+    lv_obj_set_width(name, 616);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_t* uninstall = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 112, .width = 624, .height = 58},
+                                         "Uninstall", 0xff6b74U, 0x653c48U);
+    lv_obj_add_event_cb(uninstall, AppManagementConfirmUninstallEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* cancel =
+        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 190, .width = 624, .height = 58}, "Cancel", 0xf2f7ffU);
+    lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+}
+
+void RenderAppManagementLocked(MetalioClaw4PlatformState& state) {
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    ResetSystemMenuObjectPointers(state);
+    ResetWifiUiObjectPointers(state);
+    ResetAppManagementObjectPointers(state);
+    state.hall_settings_press_overlay = nullptr;
+    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
+    (void)DrawDetailHeader(state, "App Management", "Installed applications", AppManagementBackEvent, &state);
+
+    const int32_t content_height = std::max<int32_t>(
+        kHeight - 108,
+        106 + static_cast<int32_t>(std::max<uint32_t>(1U, state.app_management_model.app_count)) * 116 + 30);
+    state.app_management_scroll_content = CreateDetailScrollContent(state, state.host_smoke, content_height);
+    char count[48]{};
+    if (state.app_management_model.app_count == 1U) {
+        std::snprintf(count, sizeof(count), "1 App");
+    } else {
+        std::snprintf(count, sizeof(count), "%" PRIu32 " Apps", state.app_management_model.app_count);
+    }
+    (void)CreateHallLabel(state.app_management_scroll_content, count, &lv_font_montserrat_24, 0xf2f7ffU, 42, 14);
+    (void)CreateHallLabel(state.app_management_scroll_content, "Installed on this device", &lv_font_montserrat_18,
+                          0x91a4bdU, 42, 49);
+    char used[24]{};
+    char total[24]{};
+    char storage[56]{};
+    FormatInformationSize(state.app_management_model.storage_used_kib, used, sizeof(used));
+    FormatInformationSize(state.app_management_model.storage_total_kib, total, sizeof(total));
+    if (state.app_management_model.storage_total_kib != 0U) {
+        std::snprintf(storage, sizeof(storage), "%s / %s", used, total);
+    } else {
+        std::snprintf(storage, sizeof(storage), "%s used", used);
+    }
+    lv_obj_t* used_label =
+        CreateHallLabel(state.app_management_scroll_content, storage, &lv_font_montserrat_18, 0x91a4bdU, 448, 27);
+    lv_obj_set_width(used_label, 230);
+    lv_obj_set_style_text_align(used_label, LV_TEXT_ALIGN_RIGHT, 0);
+
+    constexpr uint32_t kAppIconColors[] = {0x2c7867U, 0x305f9eU, 0x76539bU};
+    if (state.app_management_model.app_count == 0U) {
+        lv_obj_t* empty =
+            CreateWifiPanel(state.app_management_scroll_content,
+                            HallCardBounds{.x = 40, .y = 90, .width = 640, .height = 104}, 0x111f32U, 0x2e4562U, 22);
+        (void)CreateHallLabel(empty, "No installed Apps", &lv_font_montserrat_18, 0x91a4bdU, 22, 39);
+    } else {
+        for (uint32_t index = 0U; index < state.app_management_model.app_count; ++index) {
+            const auto& app = state.app_management_model.apps[index];
+            const int32_t y = 90 + static_cast<int32_t>(index) * 116;
+            lv_obj_t* row =
+                CreateWifiPanel(state.app_management_scroll_content,
+                                HallCardBounds{.x = 40, .y = y, .width = 640, .height = 104}, 0x111f32U, 0x2e4562U, 22);
+            state.app_management_rows[index] = row;
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+            lv_obj_add_event_cb(row, AppManagementRowEvent, LV_EVENT_SHORT_CLICKED, &state);
+            lv_obj_t* icon = CreateWifiPanel(row, HallCardBounds{.x = 16, .y = 20, .width = 64, .height = 64},
+                                             kAppIconColors[index % std::size(kAppIconColors)], 0U, 17);
+            char initial[2]{'?', '\0'};
+            if (app.display_name != nullptr && app.display_name[0] != '\0') {
+                initial[0] = app.display_name[0];
+            }
+            lv_obj_t* initial_label = lv_label_create(icon);
+            lv_label_set_text(initial_label, initial);
+            lv_obj_set_style_text_font(initial_label, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_color(initial_label, lv_color_white(), 0);
+            lv_obj_center(initial_label);
+            lv_obj_t* name = CreateHallLabel(row, app.display_name != nullptr ? app.display_name : "Unknown App",
+                                             &lv_font_montserrat_24, 0xf2f7ffU, 98, 20);
+            lv_obj_set_width(name, 438);
+            lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+            char metadata[128]{};
+            char size[24]{};
+            FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
+            std::snprintf(metadata, sizeof(metadata), "%s   %s", app.app_id != nullptr ? app.app_id : "Unknown", size);
+            lv_obj_t* metadata_label = CreateHallLabel(row, metadata, &lv_font_montserrat_18, 0x91a4bdU, 98, 59);
+            lv_obj_set_width(metadata_label, 438);
+            lv_label_set_long_mode(metadata_label, LV_LABEL_LONG_DOT);
+            DrawAppMoreIndicator(row);
+        }
+    }
+    lv_obj_update_layout(state.app_management_scroll_content);
+    switch (state.app_management_overlay) {
+        case AppManagementOverlay::kActions:
+            DrawAppManagementActionsLocked(state);
+            break;
+        case AppManagementOverlay::kInformation:
+            DrawAppManagementInformationLocked(state);
+            break;
+        case AppManagementOverlay::kUninstallConfirmation:
+            DrawAppManagementUninstallConfirmationLocked(state);
+            break;
+        case AppManagementOverlay::kUninstallUnavailable:
+            DrawAppManagementUninstallUnavailableLocked(state);
+            break;
+        case AppManagementOverlay::kNone:
+        default:
+            break;
+    }
+    lv_obj_move_foreground(state.host_smoke);
+    lv_timer_ready(lv_display_get_refr_timer(state.display));
+}
+
+std::expected<void, host_ui::SystemUiError> ShowAppManagementImpl(MetalioClaw4PlatformState& state,
+                                                                  const host_ui::AppManagementModel& model,
+                                                                  host_ui::SystemUiActionSink action_sink,
+                                                                  void* action_context) {
+    if (state.display == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
+    state.system_menu_action_sink = nullptr;
+    state.system_menu_action_context = nullptr;
+    state.app_management_action_sink = action_sink;
+    state.app_management_action_context = action_context;
+    state.app_management_model = model;
+    state.app_management_selected_index = 0U;
+    state.app_management_overlay = AppManagementOverlay::kNone;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        state.app_management_action_sink = nullptr;
+        state.app_management_action_context = nullptr;
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    if (state.host_smoke == nullptr) {
+        state.host_smoke = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(state.host_smoke, 0x08111fU);
+    }
+    RenderAppManagementLocked(state);
+    SetHostPointerEnabledLocked(state, true);
+    esp_lv_adapter_unlock();
+    state.input_router.BindTouchSink(HostPointerTouchSink, &state);
+    state.input_router.BindSystemActionSink(action_sink, action_context);
+    ESP_LOGI(kTag, "App Management visible: apps=%" PRIu32, model.app_count);
+    return {};
+}
+
+void LeaveAppManagementImpl(MetalioClaw4PlatformState& state) {
+    if (state.app_management_action_sink == nullptr && state.app_management_action_context == nullptr) {
+        return;
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.app_management_action_context);
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        SetHostPointerEnabledLocked(state, false);
+        esp_lv_adapter_unlock();
+    }
+    state.app_management_action_sink = nullptr;
+    state.app_management_action_context = nullptr;
+    state.app_management_overlay = AppManagementOverlay::kNone;
+    state.app_management_model = {};
+    ResetAppManagementObjectPointers(state);
 }
 
 constexpr const char* kWifiKeyboardLowerMap[] = {
@@ -2402,21 +3001,21 @@ void DrawWifiActionSheetLocked(MetalioClaw4PlatformState& state) {
     lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
     lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(scrim, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 392, .width = 664, .height = 300},
+    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 304, .width = 664, .height = 388},
                                       0x101c2cU, 0x42607fU, 24);
     (void)CreateHallLabel(sheet, "SAVED NETWORK", &lv_font_montserrat_18, 0x91a4bdU, 24, 20);
     const auto& network = state.wifi_model.saved_networks[state.wifi_selected_index];
     lv_obj_t* ssid = CreateHallLabel(sheet, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 24, 48);
     lv_obj_set_width(ssid, 616);
     lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
-    lv_obj_t* connect = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 90, .width = 624, .height = 58},
+    lv_obj_t* connect = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 102, .width = 624, .height = 72},
                                        network.connected ? "Disconnect" : "Connect", 0xf2f7ffU);
     lv_obj_add_event_cb(connect, WifiSheetConnectEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* forget = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 158, .width = 624, .height = 58},
+    lv_obj_t* forget = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 188, .width = 624, .height = 72},
                                       "Forget Network", 0xff6b74U, 0x653c48U);
     lv_obj_add_event_cb(forget, WifiSheetForgetEvent, LV_EVENT_SHORT_CLICKED, &state);
     lv_obj_t* cancel =
-        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 226, .width = 624, .height = 54}, "Cancel", 0xf2f7ffU);
+        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 286, .width = 624, .height = 72}, "Cancel", 0xf2f7ffU);
     lv_obj_add_event_cb(cancel, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
 }
 
@@ -2494,7 +3093,6 @@ void RenderWifiSettingsLocked(MetalioClaw4PlatformState& state) {
                 state.wifi_scroll_content, state.wifi_model.saved_networks[index],
                 layout.saved_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), true);
             lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_SHORT_CLICKED, &state);
-            lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_LONG_PRESSED, &state);
         }
     }
 
@@ -3906,6 +4504,22 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
             },
         .leave_system_menu =
             [](void* context) { LeaveSystemMenuImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+        .show_system_information =
+            [](void* context, const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,
+               void* action_context) {
+                return ShowSystemInformationImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
+                                                 action_context);
+            },
+        .leave_system_information =
+            [](void* context) { LeaveSystemInformationImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+        .show_app_management =
+            [](void* context, const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
+               void* action_context) {
+                return ShowAppManagementImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
+                                             action_context);
+            },
+        .leave_app_management =
+            [](void* context) { LeaveAppManagementImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .show_wifi_settings =
             [](void* context, const host_ui::WifiSettingsModel& model, host_ui::SystemUiActionSink action_sink,
                void* action_context) {

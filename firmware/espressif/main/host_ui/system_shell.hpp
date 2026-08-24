@@ -30,6 +30,10 @@ class SystemShell final {
     void ReleaseGuestSnapshot();
     [[nodiscard]] std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model);
     void LeaveSystemMenu();
+    [[nodiscard]] std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel& model);
+    void LeaveSystemInformation();
+    [[nodiscard]] std::expected<void, SystemUiError> ShowAppManagement(const AppManagementModel& model);
+    void LeaveAppManagement();
     [[nodiscard]] std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel& model);
     void UpdateWifiSettings(const WifiSettingsModel& model);
     void LeaveWifiSettings();

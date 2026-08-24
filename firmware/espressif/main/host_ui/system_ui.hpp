@@ -98,6 +98,50 @@ struct SystemMenuModel final {
     bool wifi_connected{};
 };
 
+constexpr uint32_t kSystemInformationTextCapacity = 64U;
+
+struct MemoryStatisticsModel final {
+    uint32_t total_kib{};
+    uint32_t free_kib{};
+    uint32_t minimum_free_kib{};
+    uint32_t largest_free_block_kib{};
+};
+
+struct SystemInformationModel final {
+    std::array<char, kSystemInformationTextCapacity> firmware_version{};
+    std::array<char, kSystemInformationTextCapacity> build_date{};
+    std::array<char, kSystemInformationTextCapacity> build_time{};
+    std::array<char, kSystemInformationTextCapacity> build_id{};
+    std::array<char, kSystemInformationTextCapacity> idf_version{};
+    std::array<char, kSystemInformationTextCapacity> host_chip{};
+    std::array<char, kSystemInformationTextCapacity> cpu{};
+    std::array<char, kSystemInformationTextCapacity> wifi_coprocessor{};
+    std::array<char, kSystemInformationTextCapacity> flash_capacity{};
+    std::array<char, kSystemInformationTextCapacity> panel{};
+    std::array<char, kSystemInformationTextCapacity> display_interface{};
+    std::array<char, kSystemInformationTextCapacity> resolution{};
+    std::array<char, kSystemInformationTextCapacity> touch_controller{};
+    std::array<char, kSystemInformationTextCapacity> uptime{};
+    std::array<char, kSystemInformationTextCapacity> last_reset{};
+    MemoryStatisticsModel internal_sram{};
+    MemoryStatisticsModel psram{};
+};
+
+struct ManagedAppModel final {
+    const char* app_id{};
+    const char* display_name{};
+    uint32_t bundle_size_kib{};
+};
+
+struct AppManagementModel final {
+    std::array<ManagedAppModel, kMaxHallApps> apps{};
+    uint32_t app_count{};
+    uint32_t storage_used_kib{};
+    uint32_t storage_total_kib{};
+    bool launch_available{};
+    bool uninstall_available{};
+};
+
 enum class WifiBand : uint8_t {
     kUnknown,
     k2_4Ghz,
@@ -144,6 +188,10 @@ enum class SystemUiActionType {
     kOpenSystemMenu,
     kCloseSystemMenu,
     kSelectSystemMenuItem,
+    kCloseSystemInformation,
+    kCloseAppManagement,
+    kLaunchManagedApp,
+    kUninstallManagedApp,
     kCloseWifiSettings,
     kSetWifiEnabled,
     kConnectSavedWifi,
@@ -192,6 +240,14 @@ class SystemUiBackend {
                                                                             SystemUiActionSink action_sink,
                                                                             void* action_context) = 0;
     virtual void LeaveSystemMenu() = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel& model,
+                                                                                   SystemUiActionSink action_sink,
+                                                                                   void* action_context) = 0;
+    virtual void LeaveSystemInformation() = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowAppManagement(const AppManagementModel& model,
+                                                                               SystemUiActionSink action_sink,
+                                                                               void* action_context) = 0;
+    virtual void LeaveAppManagement() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel& model,
                                                                               SystemUiActionSink action_sink,
                                                                               void* action_context) = 0;

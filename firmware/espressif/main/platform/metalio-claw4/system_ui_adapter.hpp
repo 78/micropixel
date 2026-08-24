@@ -22,6 +22,13 @@ struct SystemUiOperations final {
     std::expected<void, host_ui::SystemUiError> (*show_system_menu)(void*, const host_ui::SystemMenuModel&,
                                                                     host_ui::SystemUiActionSink, void*){};
     void (*leave_system_menu)(void*){};
+    std::expected<void, host_ui::SystemUiError> (*show_system_information)(void*,
+                                                                           const host_ui::SystemInformationModel&,
+                                                                           host_ui::SystemUiActionSink, void*){};
+    void (*leave_system_information)(void*){};
+    std::expected<void, host_ui::SystemUiError> (*show_app_management)(void*, const host_ui::AppManagementModel&,
+                                                                       host_ui::SystemUiActionSink, void*){};
+    void (*leave_app_management)(void*){};
     std::expected<void, host_ui::SystemUiError> (*show_wifi_settings)(void*, const host_ui::WifiSettingsModel&,
                                                                       host_ui::SystemUiActionSink, void*){};
     void (*update_wifi_settings)(void*, const host_ui::WifiSettingsModel&){};
@@ -53,6 +60,14 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
                                                                              host_ui::SystemUiActionSink action_sink,
                                                                              void* action_context) override;
     void LeaveSystemMenu() override;
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformation(
+        const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context) override;
+    void LeaveSystemInformation() override;
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowAppManagement(
+        const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context) override;
+    void LeaveAppManagement() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowWifiSettings(const host_ui::WifiSettingsModel& model,
                                                                                host_ui::SystemUiActionSink action_sink,
                                                                                void* action_context) override;

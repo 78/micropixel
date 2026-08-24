@@ -19,6 +19,8 @@ SystemShell::~SystemShell() {
     ui_.StopWatchingGuestActions(this);
     ui_.LeaveStatusLayer();
     ui_.LeaveWifiSettings();
+    ui_.LeaveAppManagement();
+    ui_.LeaveSystemInformation();
     ui_.LeaveSystemMenu();
     ui_.LeaveHall();
 }
@@ -68,6 +70,26 @@ std::expected<void, SystemUiError> SystemShell::ShowSystemMenu(const SystemMenuM
 }
 
 void SystemShell::LeaveSystemMenu() { ui_.LeaveSystemMenu(); }
+
+std::expected<void, SystemUiError> SystemShell::ShowSystemInformation(const SystemInformationModel& model) {
+    if (action_queue_ == nullptr) {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
+    (void)xQueueReset(action_queue_);
+    return ui_.ShowSystemInformation(model, ReceiveAction, this);
+}
+
+void SystemShell::LeaveSystemInformation() { ui_.LeaveSystemInformation(); }
+
+std::expected<void, SystemUiError> SystemShell::ShowAppManagement(const AppManagementModel& model) {
+    if (action_queue_ == nullptr) {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
+    (void)xQueueReset(action_queue_);
+    return ui_.ShowAppManagement(model, ReceiveAction, this);
+}
+
+void SystemShell::LeaveAppManagement() { ui_.LeaveAppManagement(); }
 
 std::expected<void, SystemUiError> SystemShell::ShowWifiSettings(const WifiSettingsModel& model) {
     if (action_queue_ == nullptr) {

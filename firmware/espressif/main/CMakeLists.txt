@@ -7,7 +7,7 @@ set(micropixel_sources
     "host_ui/system_settings_store.cpp"
     "host_ui/system_shell.cpp"
 )
-set(micropixel_requires nvs_flash pthread)
+set(micropixel_requires esp_app_format nvs_flash pthread)
 
 include("${CMAKE_CURRENT_LIST_DIR}/device/CMakeLists.txt")
 include("${CMAKE_CURRENT_LIST_DIR}/runtime/CMakeLists.txt")
