@@ -29,7 +29,7 @@ std::expected<void, SystemUiError> SystemShell::ShowHall(const HallModel& model)
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     return ui_.ShowHall(model, ReceiveAction, this);
 }
 
@@ -40,6 +40,11 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
     if (action_queue_ == nullptr || xQueueReceive(action_queue_, &action, timeout) != pdTRUE) {
         return std::nullopt;
     }
+    if (action.type == SystemUiActionType::kWifiStateChanged) {
+        wifi_state_change_pending_.store(false, std::memory_order_release);
+        wifi_state_change_queued_.store(false, std::memory_order_release);
+    }
+    QueuePendingWifiStateChange();
     return action;
 }
 
@@ -51,7 +56,7 @@ void SystemShell::WatchGuestActions() {
     if (action_queue_ == nullptr) {
         return;
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     ui_.WatchGuestActions(ReceiveAction, this);
 }
 
@@ -65,9 +70,11 @@ std::expected<void, SystemUiError> SystemShell::ShowSystemMenu(const SystemMenuM
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     return ui_.ShowSystemMenu(model, ReceiveAction, this);
 }
+
+void SystemShell::UpdateSystemMenu(const SystemMenuModel& model) { ui_.UpdateSystemMenu(model); }
 
 void SystemShell::LeaveSystemMenu() { ui_.LeaveSystemMenu(); }
 
@@ -75,7 +82,7 @@ std::expected<void, SystemUiError> SystemShell::ShowSystemInformation(const Syst
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     return ui_.ShowSystemInformation(model, ReceiveAction, this);
 }
 
@@ -85,7 +92,7 @@ std::expected<void, SystemUiError> SystemShell::ShowAppManagement(const AppManag
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     return ui_.ShowAppManagement(model, ReceiveAction, this);
 }
 
@@ -95,7 +102,7 @@ std::expected<void, SystemUiError> SystemShell::ShowWifiSettings(const WifiSetti
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     return ui_.ShowWifiSettings(model, ReceiveAction, this);
 }
 
@@ -107,7 +114,7 @@ std::expected<void, SystemUiError> SystemShell::ShowStatusLayer(const StatusLaye
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
-    (void)xQueueReset(action_queue_);
+    ResetActionQueue();
     return ui_.ShowStatusLayer(model, ReceiveAction, this);
 }
 
@@ -122,6 +129,34 @@ void SystemShell::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) {
 void SystemShell::ApplyBrightness(uint8_t percent) { ui_.ApplyBrightness(percent); }
 
 void SystemShell::ApplyVolume(uint8_t percent) { ui_.ApplyVolume(percent); }
+
+void SystemShell::NotifyWifiStateChanged() {
+    if (action_queue_ == nullptr) {
+        return;
+    }
+    wifi_state_change_pending_.store(true, std::memory_order_release);
+    QueuePendingWifiStateChange();
+}
+
+void SystemShell::QueuePendingWifiStateChange() {
+    if (action_queue_ == nullptr || !wifi_state_change_pending_.load(std::memory_order_acquire) ||
+        wifi_state_change_queued_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const SystemUiAction action{.type = SystemUiActionType::kWifiStateChanged};
+    if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
+        wifi_state_change_queued_.store(false, std::memory_order_release);
+    }
+}
+
+void SystemShell::ResetActionQueue() {
+    if (action_queue_ == nullptr) {
+        return;
+    }
+    (void)xQueueReset(action_queue_);
+    wifi_state_change_queued_.store(false, std::memory_order_release);
+    QueuePendingWifiStateChange();
+}
 
 void SystemShell::ReceiveAction(void* context, const SystemUiAction& action) {
     auto* shell = static_cast<SystemShell*>(context);

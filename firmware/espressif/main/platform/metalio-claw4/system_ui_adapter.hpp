@@ -21,6 +21,7 @@ struct SystemUiOperations final {
     void (*release_guest_snapshot)(void*){};
     std::expected<void, host_ui::SystemUiError> (*show_system_menu)(void*, const host_ui::SystemMenuModel&,
                                                                     host_ui::SystemUiActionSink, void*){};
+    void (*update_system_menu)(void*, const host_ui::SystemMenuModel&){};
     void (*leave_system_menu)(void*){};
     std::expected<void, host_ui::SystemUiError> (*show_system_information)(void*,
                                                                            const host_ui::SystemInformationModel&,
@@ -59,6 +60,7 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemMenu(const host_ui::SystemMenuModel& model,
                                                                              host_ui::SystemUiActionSink action_sink,
                                                                              void* action_context) override;
+    void UpdateSystemMenu(const host_ui::SystemMenuModel& model) override;
     void LeaveSystemMenu() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformation(
         const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,

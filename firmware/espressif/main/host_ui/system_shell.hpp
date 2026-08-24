@@ -2,6 +2,7 @@
 #define MICROPIXEL_HOST_UI_SYSTEM_SHELL_HPP
 
 #include <array>
+#include <atomic>
 #include <expected>
 #include <optional>
 
@@ -29,6 +30,7 @@ class SystemShell final {
     [[nodiscard]] std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame();
     void ReleaseGuestSnapshot();
     [[nodiscard]] std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model);
+    void UpdateSystemMenu(const SystemMenuModel& model);
     void LeaveSystemMenu();
     [[nodiscard]] std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel& model);
     void LeaveSystemInformation();
@@ -43,16 +45,21 @@ class SystemShell final {
     void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent);
     void ApplyBrightness(uint8_t percent);
     void ApplyVolume(uint8_t percent);
+    void NotifyWifiStateChanged();
 
    private:
     static constexpr UBaseType_t kActionQueueCapacity = 8U;
 
     static void ReceiveAction(void* context, const SystemUiAction& action);
+    void QueuePendingWifiStateChange();
+    void ResetActionQueue();
 
     SystemUiBackend& ui_;
     StaticQueue_t action_queue_storage_{};
     std::array<uint8_t, sizeof(SystemUiAction) * kActionQueueCapacity> action_queue_bytes_{};
     QueueHandle_t action_queue_{};
+    std::atomic_bool wifi_state_change_pending_{};
+    std::atomic_bool wifi_state_change_queued_{};
 };
 
 }  // namespace micropixel::host_ui

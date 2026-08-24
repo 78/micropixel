@@ -16,6 +16,7 @@ list(APPEND micropixel_requires
 
 if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
     list(APPEND micropixel_sources
+        "platform/metalio-claw4/battery_backend.cpp"
         "platform/metalio-claw4/board_hardware.cpp"
         "platform/metalio-claw4/display/esp_lcd_nv3051f.c"
         "platform/metalio-claw4/display/dirty_region_coalescer.cpp"

@@ -65,6 +65,10 @@ enum class WifiError : uint8_t {
     kOperationFailed,
 };
 
+// Invoked from the backend's event context after its snapshot changes. The
+// sink must be non-blocking and must not call back into WifiBackend.
+using WifiStateChangeSink = void (*)(void* context);
+
 class WifiBackend {
    public:
     virtual ~WifiBackend() = default;
@@ -73,6 +77,7 @@ class WifiBackend {
 
     [[nodiscard]] virtual std::expected<void, WifiError> Initialize() = 0;
     [[nodiscard]] virtual WifiSnapshot Snapshot() const = 0;
+    virtual void SetStateChangeSink(WifiStateChangeSink sink, void* context) = 0;
     [[nodiscard]] virtual std::expected<void, WifiError> SetEnabled(bool enabled) = 0;
     [[nodiscard]] virtual std::expected<void, WifiError> RequestScan() = 0;
     [[nodiscard]] virtual std::expected<void, WifiError> ConnectSaved(std::string_view ssid) = 0;

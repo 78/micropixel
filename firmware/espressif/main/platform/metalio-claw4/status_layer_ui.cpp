@@ -88,6 +88,7 @@ bool StatusLayerUi::PointInside(const Bounds& bounds, int32_t x, int32_t y) {
 
 StatusLayerUi::TouchTarget StatusLayerUi::FindTouchTarget(int32_t x, int32_t y) {
     constexpr TouchTarget kTargets[] = {
+        TouchTarget::kWifi,
         TouchTarget::kPerformance,
         TouchTarget::kBrightness,
         TouchTarget::kVolume,
@@ -136,9 +137,10 @@ void StatusLayerUi::EmitAction(host_ui::SystemUiActionType type, uint32_t value)
 void StatusLayerUi::EmitTarget(TouchTarget target, int32_t x) {
     switch (target) {
         case TouchTarget::kWifi:
+            EmitAction(host_ui::SystemUiActionType::kOpenWifiSettings);
+            break;
         case TouchTarget::kCellular:
-            // Connectivity is read-only until a real network service owns
-            // these controls; do not emit a pretend toggle action.
+            // Cellular stays read-only until a real network service owns it.
             break;
         case TouchTarget::kPerformance:
             EmitAction(host_ui::SystemUiActionType::kTogglePerformanceOverlay);
@@ -495,9 +497,11 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
 }
 
 void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model) {
-    const char* wifi_detail = !model.wifi_available
-                                  ? "UNAVAILABLE"
-                                  : (model.wifi_connected ? "CONNECTED" : (model.wifi_enabled ? "ON" : "OFF"));
+    const char* wifi_detail = !model.wifi_available ? "UNAVAILABLE"
+                                                    : (model.wifi_connected    ? "CONNECTED"
+                                                       : model.wifi_connecting ? "CONNECTING"
+                                                       : model.wifi_enabled    ? "ON"
+                                                                               : "OFF");
     const char* cellular_detail =
         !model.cellular_available ? "UNAVAILABLE"
                                   : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
@@ -527,9 +531,11 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     lv_obj_set_style_border_width(status_dialog_, 2, 0);
     lv_obj_set_style_border_color(status_dialog_, lv_color_hex(0x496786U), 0);
 
-    const char* wifi_detail = !model.wifi_available
-                                  ? "UNAVAILABLE"
-                                  : (model.wifi_connected ? "CONNECTED" : (model.wifi_enabled ? "ON" : "OFF"));
+    const char* wifi_detail = !model.wifi_available ? "UNAVAILABLE"
+                                                    : (model.wifi_connected    ? "CONNECTED"
+                                                       : model.wifi_connecting ? "CONNECTING"
+                                                       : model.wifi_enabled    ? "ON"
+                                                                               : "OFF");
     const char* cellular_detail =
         !model.cellular_available ? "UNAVAILABLE"
                                   : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));

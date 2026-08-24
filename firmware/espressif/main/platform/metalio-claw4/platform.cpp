@@ -26,6 +26,7 @@
 #endif
 #include "platform/audio_backend.hpp"
 #include "platform/configured_backends.hpp"
+#include "platform/metalio-claw4/battery_backend.hpp"
 #include "platform/metalio-claw4/board_hardware.hpp"
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
@@ -209,6 +210,7 @@ struct HallCoverCacheEntry final {
 // file-level aliases.
 struct MetalioClaw4PlatformState final {
     metalio_claw4::BoardHardware hardware{kWidth, kHeight};
+    metalio_claw4::BatteryBackend battery{};
     lv_display_t* display{};
     lv_obj_t* host_smoke{};
     metalio_claw4::GuestGraphicsEngine guest_graphics{kWidth, kHeight};
@@ -446,6 +448,7 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
     ESP_LOGI(kTag, "initializing Metalio-Claw4 LVGL backend");
     esp_err_t status = state.hardware.Initialize();
     if (status == ESP_OK) {
+        state.battery.Initialize(state.hardware.I2cBus());
         status = state.power_key.Initialize(state.hardware.IoExpander());
     }
     if (status == ESP_OK) {
@@ -1319,6 +1322,10 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
     return {};
 }
 
+void UpdateSystemMenuImpl(MetalioClaw4PlatformState& state, const host_ui::SystemMenuModel& model) {
+    state.system_menu_ui.Update(model);
+}
+
 void LeaveSystemMenuImpl(MetalioClaw4PlatformState& state) {
     if (!state.system_menu_ui.Active()) {
         return;
@@ -1609,6 +1616,10 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
                 return ShowSystemMenuImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
                                           action_context);
             },
+        .update_system_menu =
+            [](void* context, const host_ui::SystemMenuModel& model) {
+                UpdateSystemMenuImpl(*static_cast<MetalioClaw4PlatformState*>(context), model);
+            },
         .leave_system_menu =
             [](void* context) { LeaveSystemMenuImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .show_system_information =
@@ -1695,6 +1706,7 @@ class MetalioClaw4Platform final : public Platform {
     [[nodiscard]] device::GraphicsBackend& graphics() override { return graphics_; }
     [[nodiscard]] device::InputBackend& input() override { return state_.input_router; }
     [[nodiscard]] device::AudioBackend& audio() override { return ConfiguredAudioBackend(); }
+    [[nodiscard]] device::BatteryBackend& battery() override { return state_.battery; }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }

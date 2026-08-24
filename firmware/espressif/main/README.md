@@ -14,7 +14,7 @@ FirmwareApp (组合根) ────┼─ creates ─ DeviceServices ── inj
 
 `device/` 和 `platform/` 在文件系统中同层，但职责不是平行重复：
 
-- `device/` 定义与硬件无关的 Graphics、Input、Audio、Random 能力契约和 Runtime 使用的 façade；
+- `device/` 定义与硬件无关的 Graphics、Input、Audio、Random、Battery 能力契约和 Runtime 使用的 façade；
 - `platform/` 实现这些契约，并持有开发板、驱动、LVGL 与外设生命周期；
 - `runtime/` 只依赖 `device/`，不得 include `platform/`；
 - `host_ui/` 定义 Host 原生 System Shell 与平台无关的 System UI model；
@@ -55,6 +55,7 @@ main/
 ├── device/
 │   ├── CMakeLists.txt
 │   ├── audio.hpp
+│   ├── battery.hpp
 │   ├── graphics.hpp
 │   ├── input.hpp
 │   ├── random.hpp
@@ -70,6 +71,8 @@ main/
 │   │   ├── command_stream.cpp
 │   │   └── command_stream.hpp
 │   ├── metalio-claw4/
+│   │   ├── battery_backend.cpp
+│   │   ├── battery_backend.hpp
 │   │   ├── platform.cpp
 │   │   ├── graphics_adapter.cpp
 │   │   ├── graphics_adapter.hpp
@@ -166,7 +169,14 @@ main/
 - App Hall 只 mmap 每个 Bundle 的压缩 PNG 封面，并逐行解码、等比裁切到当前卡片尺寸；无论作者提供
   多大的源图，Host 都只缓存一份 218x218 RGB888 thumbnail。唯一挂起 App 的卡片改用窗口截图。状态层使用
   LVGL primitive 和单次半透明合成；亮度、主音量及 FPS/聚合 CPU 小蒙层均由 Host 控制。
-- `platform/graphics/` 是跨板级图形协议校验；`platform/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`。
+- Wi-Fi 冷启动和掉线发现使用被动扫描，只按已保存网络的信道去重后逐个检查，并优先检查上次连接网络的
+  信道；发现候选后才连接。已连接链路掉线后只做一次快速重连，失败后立即进入被动发现，未发现候选时按
+  1、2、5、15 分钟退避。Wi-Fi 首页只管理开关和已保存网络；“Connect to New Wi-Fi”子页才执行主动全信道
+  扫描，而用户在已保存网络菜单中明确选择“Connect”时也不锁定旧信道、BSSID 或频段。每轮 `SCAN_DONE`
+  后等待 10 秒再开始下一轮，已连接时使用驱动的 background scan。后端状态变化
+  通过非阻塞、可合并的 Host 事件主动更新 App Hall、系统菜单、Status Layer 和 Wi-Fi 页面；只有扫描间隔
+  与性能采样等真正的周期任务使用定时等待。
+- `platform/graphics/` 是跨板级图形协议校验；`platform/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；Battery backend 复用板级 I²C 总线读取 BQ27220。
 - `platform/null/` 提供没有真实板级设备时的构建实现。
 
 只在 `device/`、`runtime/`、`platform/`、`conformance/` 这些已有子系统设置独立 CMake 清单；当前很小的

@@ -76,6 +76,7 @@ struct StatusLayerModel final {
     bool wifi_available{};
     bool wifi_enabled{};
     bool wifi_connected{};
+    bool wifi_connecting{};
     bool cellular_available{};
     bool cellular_enabled{};
     bool cellular_connected{};
@@ -96,6 +97,7 @@ struct SystemMenuModel final {
     bool wifi_available{};
     bool wifi_enabled{};
     bool wifi_connected{};
+    bool wifi_connecting{};
 };
 
 constexpr uint32_t kSystemInformationTextCapacity = 64U;
@@ -165,6 +167,7 @@ struct WifiNetworkModel final {
     uint8_t channel{};
     WifiBand band{WifiBand::kUnknown};
     bool secured{true};
+    bool saved{};
     bool connected{};
 };
 
@@ -193,6 +196,8 @@ enum class SystemUiActionType {
     kLaunchManagedApp,
     kUninstallManagedApp,
     kCloseWifiSettings,
+    kOpenWifiNetworkScan,
+    kCloseWifiNetworkScan,
     kSetWifiEnabled,
     kConnectSavedWifi,
     kConnectNewWifi,
@@ -203,6 +208,9 @@ enum class SystemUiActionType {
     kSetBrightness,
     kSetVolume,
     kTogglePerformanceOverlay,
+    // Internal Host wake-up signal. SystemUiBackend implementations never emit
+    // this action directly.
+    kWifiStateChanged,
 };
 
 struct SystemUiAction final {
@@ -239,6 +247,7 @@ class SystemUiBackend {
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model,
                                                                             SystemUiActionSink action_sink,
                                                                             void* action_context) = 0;
+    virtual void UpdateSystemMenu(const SystemMenuModel& model) = 0;
     virtual void LeaveSystemMenu() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel& model,
                                                                                    SystemUiActionSink action_sink,

@@ -52,6 +52,7 @@ struct WifiSettingsUiAccess final {
     static void QueueWifiSettingsRender(WifiSettingsUi& state);
     static void WifiScrollEvent(lv_event_t* event);
     static void WifiBackEvent(lv_event_t* event);
+    static void WifiOpenScanEvent(lv_event_t* event);
     static void WifiSwitchEvent(lv_event_t* event);
     static void WifiSavedNetworkEvent(lv_event_t* event);
     static void WifiAvailableNetworkEvent(lv_event_t* event);
@@ -72,7 +73,7 @@ constexpr int32_t kWifiContentLeft = 40;
 constexpr int32_t kWifiContentWidth = 640;
 constexpr int32_t kWifiRowHeight = 76;
 constexpr int32_t kWifiRowGap = 10;
-constexpr int32_t kWifiSavedStartY = 264;
+constexpr int32_t kWifiSavedStartY = 364;
 
 struct WifiListLayout final {
     int32_t saved_start{};
@@ -81,22 +82,26 @@ struct WifiListLayout final {
     int32_t content_height{};
 };
 
-WifiListLayout GetWifiListLayout(const host_ui::WifiSettingsModel& model) {
+WifiListLayout GetWifiListLayout(const host_ui::WifiSettingsModel& model, bool scan_view) {
+    if (scan_view) {
+        const int32_t available_heading = 118;
+        const int32_t available_start = available_heading + 36;
+        const uint32_t available_rows = model.available_network_count == 0U ? 1U : model.available_network_count;
+        const int32_t content_height =
+            available_start + static_cast<int32_t>(available_rows) * (kWifiRowHeight + kWifiRowGap) + 30;
+        return WifiListLayout{.available_heading = available_heading,
+                              .available_start = available_start,
+                              .content_height = content_height};
+    }
     const uint32_t saved_rows = model.saved_network_count == 0U ? 1U : model.saved_network_count;
-    const int32_t available_heading =
-        kWifiSavedStartY + static_cast<int32_t>(saved_rows) * (kWifiRowHeight + kWifiRowGap) + 18;
-    const int32_t available_start = available_heading + 36;
-    const uint32_t available_rows = model.available_network_count == 0U ? 1U : model.available_network_count;
     const int32_t content_height =
-        available_start + static_cast<int32_t>(available_rows) * (kWifiRowHeight + kWifiRowGap) + 30;
-    return WifiListLayout{.saved_start = kWifiSavedStartY,
-                          .available_heading = available_heading,
-                          .available_start = available_start,
-                          .content_height = content_height};
+        kWifiSavedStartY + static_cast<int32_t>(saved_rows) * (kWifiRowHeight + kWifiRowGap) + 30;
+    return WifiListLayout{.saved_start = kWifiSavedStartY, .content_height = content_height};
 }
 
 void WifiSettingsUiAccess::ResetObjectPointers(WifiSettingsUi& state) {
     state.wifi_scroll_content = nullptr;
+    state.wifi_open_scan_row = nullptr;
     state.wifi_password_textarea = nullptr;
     state.wifi_keyboard = nullptr;
     for (auto& row : state.wifi_saved_rows) {
@@ -254,6 +259,9 @@ lv_obj_t* DrawWifiNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& 
     if (saved) {
         std::snprintf(detail, sizeof(detail), "%s   %s   Channel %u", WifiBandText(network.band),
                       network.secured ? "Secured" : "Open", network.channel);
+    } else if (network.saved) {
+        std::snprintf(detail, sizeof(detail), "%s   Saved   %d dBm", WifiBandText(network.band),
+                      static_cast<int>(network.rssi));
     } else {
         std::snprintf(detail, sizeof(detail), "%s   %s   %d dBm", WifiBandText(network.band),
                       network.secured ? "Secured" : "Open", static_cast<int>(network.rssi));
@@ -614,7 +622,7 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
     ResetObjectPointers(state);
     lv_obj_set_style_bg_color(state.root, lv_color_hex(0x08111fU), 0);
 
-    const WifiListLayout layout = GetWifiListLayout(state.wifi_model);
+    const WifiListLayout layout = GetWifiListLayout(state.wifi_model, state.wifi_scan_view);
     state.wifi_scroll_offset =
         std::clamp(state.wifi_scroll_offset, int32_t{0}, std::max<int32_t>(0, layout.content_height - kHeight));
     state.wifi_scroll_content = lv_obj_create(state.root);
@@ -646,61 +654,86 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
     lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_center(back_icon);
-    (void)CreateWifiLabel(state.wifi_scroll_content, "Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
-    (void)CreateWifiLabel(state.wifi_scroll_content, "Manage connections", &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
-
-    lv_obj_t* toggle = CreateWifiPanel(
-        state.wifi_scroll_content, WifiBounds{.x = 40, .y = 116, .width = 640, .height = 86}, 0x111f32U, 0x365472U, 20);
-    lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(toggle, lv_color_hex(0x0a1726U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-    lv_obj_add_event_cb(toggle, WifiSwitchEvent, LV_EVENT_SHORT_CLICKED, &state);
-    (void)CreateWifiLabel(toggle, "Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU, 20, 14);
-    const char* connection_detail = WifiConnectionDetail(state.wifi_model);
-    (void)CreateWifiLabel(toggle, connection_detail, &lv_font_montserrat_18, 0x91a4bdU, 20, 48);
-    lv_obj_t* switch_track = CreateWifiPanel(toggle, WifiBounds{.x = 532, .y = 19, .width = 84, .height = 48},
-                                             state.wifi_model.enabled ? kThemeAccentColor : 0x31506bU, 0U, 24);
-    lv_obj_t* switch_knob = CreateWifiPanel(
-        switch_track, WifiBounds{.x = state.wifi_model.enabled ? 40 : 4, .y = 4, .width = 40, .height = 40}, 0xf7fbffU,
-        0U, 20);
-    (void)switch_knob;
-
-    (void)CreateWifiLabel(state.wifi_scroll_content, "SAVED NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42, 226);
-    if (state.wifi_model.saved_network_count == 0U) {
-        lv_obj_t* empty = CreateWifiPanel(
-            state.wifi_scroll_content,
-            WifiBounds{
-                .x = kWifiContentLeft, .y = layout.saved_start, .width = kWifiContentWidth, .height = kWifiRowHeight},
-            0x111f32U, 0x2e4562U, 20);
-        (void)CreateWifiLabel(empty, "No saved networks", &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
-    } else {
-        for (uint32_t index = 0U; index < state.wifi_model.saved_network_count; ++index) {
-            state.wifi_saved_rows[index] = DrawWifiNetworkRow(
-                state.wifi_scroll_content, state.wifi_model.saved_networks[index],
-                layout.saved_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), true);
-            lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_SHORT_CLICKED, &state);
+    if (state.wifi_scan_view) {
+        (void)CreateWifiLabel(state.wifi_scroll_content, "Connect to New Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116,
+                              28);
+        (void)CreateWifiLabel(state.wifi_scroll_content,
+                              state.wifi_model.scanning ? "Scanning nearby networks..." : "Nearby networks",
+                              &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "AVAILABLE NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42,
+                              layout.available_heading);
+        if (!state.wifi_model.enabled || state.wifi_model.available_network_count == 0U) {
+            lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
+                                              WifiBounds{.x = kWifiContentLeft,
+                                                         .y = layout.available_start,
+                                                         .width = kWifiContentWidth,
+                                                         .height = kWifiRowHeight},
+                                              0x111f32U, 0x2e4562U, 20);
+            const char* message = !state.wifi_model.enabled   ? "Turn on Wi-Fi to see networks"
+                                  : state.wifi_model.scanning ? "Looking for nearby networks..."
+                                                              : "No nearby networks found";
+            (void)CreateWifiLabel(empty, message, &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
+        } else {
+            for (uint32_t index = 0U; index < state.wifi_model.available_network_count; ++index) {
+                state.wifi_available_rows[index] = DrawWifiNetworkRow(
+                    state.wifi_scroll_content, state.wifi_model.available_networks[index],
+                    layout.available_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), false);
+                lv_obj_add_event_cb(state.wifi_available_rows[index], WifiAvailableNetworkEvent, LV_EVENT_SHORT_CLICKED,
+                                    &state);
+            }
         }
-    }
-
-    (void)CreateWifiLabel(state.wifi_scroll_content, "AVAILABLE NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42,
-                          layout.available_heading);
-    if (!state.wifi_model.enabled || state.wifi_model.available_network_count == 0U) {
-        lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
-                                          WifiBounds{.x = kWifiContentLeft,
-                                                     .y = layout.available_start,
-                                                     .width = kWifiContentWidth,
-                                                     .height = kWifiRowHeight},
-                                          0x111f32U, 0x2e4562U, 20);
-        const char* message = !state.wifi_model.enabled   ? "Turn on Wi-Fi to see networks"
-                              : state.wifi_model.scanning ? "Looking for nearby networks..."
-                                                          : "No nearby networks found";
-        (void)CreateWifiLabel(empty, message, &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
     } else {
-        for (uint32_t index = 0U; index < state.wifi_model.available_network_count; ++index) {
-            state.wifi_available_rows[index] = DrawWifiNetworkRow(
-                state.wifi_scroll_content, state.wifi_model.available_networks[index],
-                layout.available_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), false);
-            lv_obj_add_event_cb(state.wifi_available_rows[index], WifiAvailableNetworkEvent, LV_EVENT_SHORT_CLICKED,
-                                &state);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "Manage connections", &lv_font_montserrat_18, 0x91a4bdU, 116,
+                              70);
+
+        lv_obj_t* toggle =
+            CreateWifiPanel(state.wifi_scroll_content, WifiBounds{.x = 40, .y = 116, .width = 640, .height = 86},
+                            0x111f32U, 0x365472U, 20);
+        lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(toggle, lv_color_hex(0x0a1726U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+        lv_obj_add_event_cb(toggle, WifiSwitchEvent, LV_EVENT_SHORT_CLICKED, &state);
+        (void)CreateWifiLabel(toggle, "Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU, 20, 14);
+        (void)CreateWifiLabel(toggle, WifiConnectionDetail(state.wifi_model), &lv_font_montserrat_18, 0x91a4bdU, 20,
+                              48);
+        lv_obj_t* switch_track = CreateWifiPanel(toggle, WifiBounds{.x = 532, .y = 19, .width = 84, .height = 48},
+                                                 state.wifi_model.enabled ? kThemeAccentColor : 0x31506bU, 0U, 24);
+        (void)CreateWifiPanel(switch_track,
+                              WifiBounds{.x = state.wifi_model.enabled ? 40 : 4, .y = 4, .width = 40, .height = 40},
+                              0xf7fbffU, 0U, 20);
+
+        if (state.wifi_model.enabled) {
+            state.wifi_open_scan_row =
+                CreateWifiPanel(state.wifi_scroll_content,
+                                WifiBounds{.x = kWifiContentLeft, .y = 226, .width = kWifiContentWidth, .height = 76},
+                                0x111f32U, 0x2e4562U, 20);
+            lv_obj_add_flag(state.wifi_open_scan_row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_style_bg_color(state.wifi_open_scan_row, lv_color_hex(0x091522U),
+                                      static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+            lv_obj_add_event_cb(state.wifi_open_scan_row, WifiOpenScanEvent, LV_EVENT_SHORT_CLICKED, &state);
+            (void)CreateWifiLabel(state.wifi_open_scan_row, "Connect to New Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU,
+                                  20, 24);
+            (void)CreateWifiLabel(state.wifi_open_scan_row, LV_SYMBOL_RIGHT, &lv_font_montserrat_24, 0x91a4bdU, 592,
+                                  24);
+        }
+
+        (void)CreateWifiLabel(state.wifi_scroll_content, "SAVED NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42, 326);
+        if (state.wifi_model.saved_network_count == 0U) {
+            lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
+                                              WifiBounds{.x = kWifiContentLeft,
+                                                         .y = layout.saved_start,
+                                                         .width = kWifiContentWidth,
+                                                         .height = kWifiRowHeight},
+                                              0x111f32U, 0x2e4562U, 20);
+            (void)CreateWifiLabel(empty, "No saved networks", &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
+        } else {
+            for (uint32_t index = 0U; index < state.wifi_model.saved_network_count; ++index) {
+                state.wifi_saved_rows[index] = DrawWifiNetworkRow(
+                    state.wifi_scroll_content, state.wifi_model.saved_networks[index],
+                    layout.saved_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), true);
+                lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_SHORT_CLICKED,
+                                    &state);
+            }
         }
     }
 
@@ -794,9 +827,34 @@ uint32_t FindWifiRowIndex(lv_obj_t* target, lv_obj_t* const* rows, uint32_t coun
 void WifiSettingsUiAccess::WifiBackEvent(lv_event_t* event) {
     auto* state = static_cast<WifiSettingsUi*>(lv_event_get_user_data(event));
     if (state != nullptr && state->wifi_action_sink != nullptr) {
+        if (state->wifi_scan_view) {
+            state->wifi_scan_view = false;
+            state->wifi_scroll_offset = 0;
+            state->wifi_user_scrolled = false;
+            state->wifi_password_visible = false;
+            state->wifi_password_attempt_active = false;
+            state->wifi_action_sink(
+                state->wifi_action_context,
+                host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseWifiNetworkScan});
+            QueueWifiSettingsRender(*state);
+            return;
+        }
         state->wifi_action_sink(state->wifi_action_context,
                                 host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseWifiSettings});
     }
+}
+
+void WifiSettingsUiAccess::WifiOpenScanEvent(lv_event_t* event) {
+    auto* state = static_cast<WifiSettingsUi*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->wifi_action_sink == nullptr || !state->wifi_model.enabled) {
+        return;
+    }
+    state->wifi_scan_view = true;
+    state->wifi_scroll_offset = 0;
+    state->wifi_user_scrolled = false;
+    state->wifi_action_sink(state->wifi_action_context,
+                            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kOpenWifiNetworkScan});
+    QueueWifiSettingsRender(*state);
 }
 
 void WifiSettingsUiAccess::WifiSwitchEvent(lv_event_t* event) {
@@ -836,6 +894,13 @@ void WifiSettingsUiAccess::WifiAvailableNetworkEvent(lv_event_t* event) {
     }
     state->wifi_selected_index = index;
     const auto& network = state->wifi_model.available_networks[index];
+    if (network.connected) {
+        return;
+    }
+    if (network.saved) {
+        EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kConnectSavedWifi, network);
+        return;
+    }
     state->wifi_password.fill('\0');
     if (!network.secured) {
         EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kConnectNewWifi, network);
@@ -917,6 +982,7 @@ std::expected<void, host_ui::SystemUiError> WifiSettingsUiAccess::ShowLocked(
     state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
     state.wifi_password_network = {};
     state.wifi_password.fill('\0');
+    state.wifi_scan_view = false;
     state.visible = true;
     RenderWifiSettingsLocked(state);
     ESP_LOGI(kTag, "Wi-Fi settings visible: enabled=%s saved=%" PRIu32 " available=%" PRIu32,
@@ -987,6 +1053,7 @@ void WifiSettingsUiAccess::Leave(WifiSettingsUi& state) {
     state.wifi_password_attempt_active = false;
     state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
     state.wifi_password_network = {};
+    state.wifi_scan_view = false;
     portENTER_CRITICAL(&state.render_lock);
     state.wifi_render_pending = false;
     state.wifi_user_scrolled = false;

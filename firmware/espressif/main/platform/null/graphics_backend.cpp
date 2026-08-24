@@ -1,5 +1,6 @@
 #include <cstring>
 
+#include "device/battery.hpp"
 #include "device/graphics.hpp"
 #include "device/input.hpp"
 #include "device/wifi.hpp"
@@ -117,12 +118,18 @@ class NullInputBackend final : public device::InputBackend {
     void UnbindTouchSink(void* context) override { (void)context; }
 };
 
+class NullBatteryBackend final : public device::BatteryBackend {
+   public:
+    [[nodiscard]] device::BatterySnapshot Snapshot() override { return {}; }
+};
+
 class NullWifiBackend final : public device::WifiBackend {
    public:
     [[nodiscard]] std::expected<void, device::WifiError> Initialize() override {
         return std::unexpected(device::WifiError::kUnavailable);
     }
     [[nodiscard]] device::WifiSnapshot Snapshot() const override { return {}; }
+    void SetStateChangeSink(device::WifiStateChangeSink, void*) override {}
     [[nodiscard]] std::expected<void, device::WifiError> SetEnabled(bool) override {
         return std::unexpected(device::WifiError::kUnavailable);
     }
@@ -173,6 +180,7 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         (void)action_context;
         return {};
     }
+    void UpdateSystemMenu(const host_ui::SystemMenuModel& model) override { (void)model; }
     void LeaveSystemMenu() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformation(
         const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,
@@ -226,6 +234,7 @@ class NullPlatform final : public Platform {
     [[nodiscard]] device::GraphicsBackend& graphics() override { return graphics_; }
     [[nodiscard]] device::InputBackend& input() override { return input_; }
     [[nodiscard]] device::AudioBackend& audio() override { return ConfiguredAudioBackend(); }
+    [[nodiscard]] device::BatteryBackend& battery() override { return battery_; }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
@@ -233,6 +242,7 @@ class NullPlatform final : public Platform {
    private:
     NullGraphicsBackend graphics_{};
     NullInputBackend input_{};
+    NullBatteryBackend battery_{};
     NullWifiBackend wifi_{};
     NullSystemUiBackend system_ui_{};
 };

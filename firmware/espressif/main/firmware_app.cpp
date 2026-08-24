@@ -27,7 +27,7 @@ void FirmwareApp::Run() {
 
     device::DeviceServices devices(platform_.graphics(), platform_.input(), platform_.audio(), platform_.random());
     host_ui::SystemShell shell(platform_.system_ui());
-    HostController(devices, platform_.wifi(), shell).Run();
+    HostController(devices, platform_.battery(), platform_.wifi(), shell).Run();
 }
 
 std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform() {

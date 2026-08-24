@@ -63,6 +63,7 @@ class FakeSystemUi final : public SystemUiBackend {
         return {};
     }
 
+    void UpdateSystemMenu(const SystemMenuModel&) override { ++update_system_menu_calls; }
     void LeaveSystemMenu() override { ++leave_system_menu_calls; }
 
     std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel&, SystemUiActionSink sink,
@@ -116,6 +117,7 @@ class FakeSystemUi final : public SystemUiBackend {
 
     uint32_t stop_watching_calls{};
     uint32_t update_hall_wifi_calls{};
+    uint32_t update_system_menu_calls{};
     uint32_t leave_system_menu_calls{};
     uint32_t leave_system_information_calls{};
     uint32_t leave_app_management_calls{};
@@ -184,6 +186,28 @@ void SystemMenuActionsReachTheShell() {
           "system menu selection should be retained");
     Check(closed.has_value() && closed->type == SystemUiActionType::kCloseSystemMenu,
           "system menu close should be retained");
+
+    shell.UpdateSystemMenu(SystemMenuModel{});
+    Check(ui.update_system_menu_calls == 1U, "system menu updates should reach the backend");
+}
+
+void WifiStateNotificationsAreCoalescedAndSurviveScreenChanges() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
+
+    shell.NotifyWifiStateChanged();
+    shell.NotifyWifiStateChanged();
+    const auto coalesced = shell.PollAction(0U);
+    Check(coalesced.has_value() && coalesced->type == SystemUiActionType::kWifiStateChanged,
+          "duplicate Wi-Fi state notifications should coalesce");
+    Check(!shell.PollAction(0U).has_value(), "coalesced Wi-Fi notification should only be queued once");
+
+    shell.NotifyWifiStateChanged();
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "system menu should render after Wi-Fi notification");
+    const auto preserved = shell.PollAction(0U);
+    Check(preserved.has_value() && preserved->type == SystemUiActionType::kWifiStateChanged,
+          "pending Wi-Fi notification should survive a screen queue reset");
 }
 
 void WifiActionsReachTheShell() {
@@ -226,8 +250,9 @@ int main() {
     DiscreteActionsRemainOrdered();
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
+    WifiStateNotificationsAreCoalescedAndSurviveScreenChanges();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 5 cases\n";
+    std::cout << "system_shell tests passed: 6 cases\n";
     return 0;
 }

@@ -46,6 +46,14 @@ lv_obj_t* CreatePressOverlay(lv_obj_t* parent, int32_t radius) {
     return overlay;
 }
 
+const char* WifiDetail(const host_ui::SystemMenuModel& model) {
+    return !model.wifi_available   ? "Not available"
+           : model.wifi_connected  ? "Connected"
+           : model.wifi_connecting ? "Connecting..."
+           : model.wifi_enabled    ? "Not connected"
+                                   : "Off";
+}
+
 }  // namespace
 
 struct SystemMenuUiAccess final {
@@ -140,7 +148,10 @@ struct SystemMenuUiAccess final {
         lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_pos(icon, 26, 32);
         (void)CreateLabel(panel, name, &lv_font_montserrat_24, 0xf2f7ffU, 104, 20);
-        (void)CreateLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 59);
+        lv_obj_t* detail_label = CreateLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 59);
+        if (target == TouchTarget::kWifi) {
+            state.wifi_detail_label_ = detail_label;
+        }
         lv_obj_t* chevron = lv_label_create(panel);
         lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_font(chevron, &lv_font_montserrat_24, 0);
@@ -155,9 +166,19 @@ struct SystemMenuUiAccess final {
 };
 
 void SystemMenuUi::ResetObjectPointers() {
+    wifi_detail_label_ = nullptr;
     for (lv_obj_t*& overlay : press_overlays_) {
         overlay = nullptr;
     }
+}
+
+void SystemMenuUi::Update(const host_ui::SystemMenuModel& model) {
+    if (wifi_detail_label_ == nullptr || display_ == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    lv_label_set_text(wifi_detail_label_, WifiDetail(model));
+    lv_timer_ready(lv_display_get_refr_timer(display_));
+    esp_lv_adapter_unlock();
 }
 
 void SystemMenuUi::SetTargetPressed(TouchTarget target, bool pressed) {
@@ -279,11 +300,7 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     (void)CreateLabel(root, "System Settings", &lv_font_montserrat_32, 0xf2f7ffU, 116, 36);
     (void)CreateLabel(root, "Configure this device", &lv_font_montserrat_18, 0x91a4bdU, 116, 78);
 
-    const char* wifi_detail = !model.wifi_available  ? "Not available"
-                              : model.wifi_connected ? "Connected"
-                              : model.wifi_enabled   ? "Not connected"
-                                                     : "Off";
-    SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", wifi_detail, 0x69a7ffU);
+    SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", WifiDetail(model), 0x69a7ffU);
     SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kSystemInformation, "i", "System Information",
                                 "Device and software", 0x69a7ffU);
     SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kLanguage, "A", "Language",

@@ -42,6 +42,7 @@ class WifiSettingsUi final {
     lv_obj_t* root{};
     lv_display_t* display{};
     lv_obj_t* wifi_scroll_content{};
+    lv_obj_t* wifi_open_scan_row{};  // NOLINT(readability-identifier-naming)
     lv_obj_t* wifi_password_textarea{};
     lv_obj_t* wifi_keyboard{};
     lv_obj_t* wifi_saved_rows[host_ui::kMaxSavedWifiNetworks]{};
@@ -63,6 +64,7 @@ class WifiSettingsUi final {
     bool wifi_render_pending{};
     bool wifi_user_scrolled{};
     bool wifi_scroll_gesture_active{};
+    bool wifi_scan_view{};  // NOLINT(readability-identifier-naming)
     bool visible{};
 };
 

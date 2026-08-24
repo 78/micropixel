@@ -38,6 +38,10 @@ std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemMenu(cons
     return operations_.show_system_menu(operations_.context, model, action_sink, action_context);
 }
 
+void SystemUiAdapter::UpdateSystemMenu(const host_ui::SystemMenuModel& model) {
+    operations_.update_system_menu(operations_.context, model);
+}
+
 void SystemUiAdapter::LeaveSystemMenu() { operations_.leave_system_menu(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemInformation(

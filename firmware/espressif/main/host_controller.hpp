@@ -2,6 +2,7 @@
 #define MICROPIXEL_FIRMWARE_HOST_CONTROLLER_HPP
 
 namespace micropixel::device {
+class BatteryBackend;
 class DeviceServices;
 class WifiBackend;
 }  // namespace micropixel::device
@@ -17,7 +18,9 @@ namespace micropixel::firmware {
 // transitions after the platform has initialized.
 class HostController final {
    public:
-    HostController(device::DeviceServices& devices, device::WifiBackend& wifi, host_ui::SystemShell& shell);
+    HostController(device::DeviceServices& devices, device::BatteryBackend& battery, device::WifiBackend& wifi,
+                   host_ui::SystemShell& shell);
+    ~HostController();
     HostController(const HostController&) = delete;
     HostController& operator=(const HostController&) = delete;
 
@@ -25,6 +28,7 @@ class HostController final {
 
    private:
     device::DeviceServices& devices_;
+    device::BatteryBackend& battery_;
     device::WifiBackend& wifi_;
     host_ui::SystemShell& shell_;
 };

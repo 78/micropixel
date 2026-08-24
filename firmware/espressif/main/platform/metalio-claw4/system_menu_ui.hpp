@@ -15,6 +15,7 @@ class SystemMenuUi final {
                                                                          const host_ui::SystemMenuModel& model,
                                                                          host_ui::SystemUiActionSink action_sink,
                                                                          void* action_context);
+    void Update(const host_ui::SystemMenuModel& model);
     void Deactivate();
 
     [[nodiscard]] void* ActionContext() const { return action_context_; }
@@ -38,6 +39,7 @@ class SystemMenuUi final {
     void ResetObjectPointers();
 
     lv_display_t* display_{};
+    lv_obj_t* wifi_detail_label_{};
     lv_obj_t* press_overlays_[5]{};
     host_ui::SystemUiActionSink action_sink_{};
     void* action_context_{};
