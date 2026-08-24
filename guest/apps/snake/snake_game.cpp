@@ -181,8 +181,9 @@ void SnakeGame::TogglePause() {
         screen_button_.Reset();
         pause_touch_button_.Reset();
         accumulated_us_ = 0U;
+        PlayStartSound();
         StartBgm();
-        app_.log().Info("snake: resumed without catch-up ticks");
+        app_.log().Info("snake: resumed with start cue and without catch-up ticks");
     }
     Render();
 }
