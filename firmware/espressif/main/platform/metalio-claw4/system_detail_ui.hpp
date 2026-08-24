@@ -1,0 +1,84 @@
+#ifndef MICROPIXEL_PLATFORM_METALIO_CLAW4_SYSTEM_DETAIL_UI_HPP
+#define MICROPIXEL_PLATFORM_METALIO_CLAW4_SYSTEM_DETAIL_UI_HPP
+
+#include <array>
+#include <cstdint>
+#include <expected>
+
+#include "host_ui/system_ui.hpp"
+#include "lvgl.h"
+
+namespace micropixel::platform::metalio_claw4 {
+
+// Owns the LVGL object references and interaction state for the two detail
+// screens reached from System Settings. The platform remains responsible for
+// display locking and for binding the shared Host pointer input device.
+class SystemDetailUi final {
+   public:
+    SystemDetailUi() = default;
+    SystemDetailUi(const SystemDetailUi&) = delete;
+    SystemDetailUi& operator=(const SystemDetailUi&) = delete;
+
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformationLocked(
+        lv_obj_t* root, const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context);
+    void LeaveSystemInformation();
+    [[nodiscard]] bool SystemInformationVisible() const;
+    [[nodiscard]] void* SystemInformationActionContext() const;
+
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowAppManagementLocked(
+        lv_obj_t* root, const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context);
+    void LeaveAppManagement();
+    [[nodiscard]] bool AppManagementVisible() const;
+    [[nodiscard]] void* AppManagementActionContext() const;
+
+   private:
+    enum class AppOverlay : uint8_t {
+        kNone,
+        kActions,
+        kInformation,
+        kUninstallConfirmation,
+        kUninstallUnavailable,
+    };
+
+    enum class Screen : uint8_t {
+        kNone,
+        kSystemInformation,
+        kAppManagement,
+    };
+
+    static void DetailScrollEvent(lv_event_t* event);
+    static void SystemInformationBackEvent(lv_event_t* event);
+    static void AppManagementRenderAsync(void* context);
+    static void AppManagementBackEvent(lv_event_t* event);
+    static void AppManagementRowEvent(lv_event_t* event);
+    static void AppManagementCancelEvent(lv_event_t* event);
+    static void AppManagementOpenEvent(lv_event_t* event);
+    static void AppManagementInformationEvent(lv_event_t* event);
+    static void AppManagementUninstallEvent(lv_event_t* event);
+    static void AppManagementConfirmUninstallEvent(lv_event_t* event);
+
+    void QueueAppManagementRender();
+    void RenderAppManagementLocked(bool clean_root);
+    void DrawAppManagementActionsLocked();
+    void DrawAppManagementInformationLocked();
+    void DrawAppManagementUninstallUnavailableLocked();
+    void DrawAppManagementUninstallConfirmationLocked();
+    [[nodiscard]] uint32_t FindAppManagementRowIndex(lv_obj_t* row) const;
+
+    lv_obj_t* root_{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> app_management_rows_{};
+    host_ui::SystemUiActionSink system_information_action_sink_{};
+    void* system_information_action_context_{};
+    host_ui::SystemUiActionSink app_management_action_sink_{};
+    void* app_management_action_context_{};
+    host_ui::AppManagementModel app_management_model_{};
+    uint32_t app_management_selected_index_{};
+    AppOverlay app_management_overlay_{AppOverlay::kNone};
+    Screen active_screen_{Screen::kNone};
+};
+
+}  // namespace micropixel::platform::metalio_claw4
+
+#endif

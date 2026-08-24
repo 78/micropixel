@@ -14,7 +14,6 @@
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "host_ui/system_gesture_router.hpp"
 #include "host_ui/system_ui.hpp"
@@ -27,18 +26,20 @@
 #endif
 #include "platform/audio_backend.hpp"
 #include "platform/configured_backends.hpp"
-#include "platform/graphics/command_stream.hpp"
 #include "platform/metalio-claw4/board_hardware.hpp"
-#include "platform/metalio-claw4/display/dirty_region_coalescer.hpp"
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
-#include "platform/metalio-claw4/display/retained_scene.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
 #include "platform/metalio-claw4/graphics_adapter.hpp"
+#include "platform/metalio-claw4/guest_graphics_engine.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
 #include "platform/metalio-claw4/input/tca9555_power_key.hpp"
 #include "platform/metalio-claw4/perceptual_control.hpp"
+#include "platform/metalio-claw4/status_layer_ui.hpp"
+#include "platform/metalio-claw4/system_detail_ui.hpp"
+#include "platform/metalio-claw4/system_menu_ui.hpp"
 #include "platform/metalio-claw4/system_ui_adapter.hpp"
 #include "platform/metalio-claw4/wifi_backend.hpp"
+#include "platform/metalio-claw4/wifi_settings_ui.hpp"
 #include "platform/platform.hpp"
 #include "task_policy.hpp"
 
@@ -51,9 +52,7 @@ constexpr int kHeight = 720;
 constexpr BaseType_t kLvglTaskCore = 1;
 constexpr uint32_t kRefreshPeriodMs = 1000;
 constexpr uint32_t kLvglTaskMinDelayMs = portTICK_PERIOD_MS;
-constexpr uint32_t kBitmapDamageCapacity = 16U;
 constexpr uint32_t kHostPointerQueueCapacity = 32U;
-constexpr uint32_t kMaxSceneTextures = MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS;
 constexpr uint32_t kThemeAccentColor = 0x287ee8U;
 constexpr int32_t kHallCardWidth = 202;
 constexpr int32_t kHallCardRadius = 22;
@@ -200,44 +199,9 @@ void ScaleRgb888Cover(const uint8_t* source, uint32_t source_width, uint32_t sou
     MaskHallCoverCorners(destination);
 }
 
-struct BitmapDamage final {
-    const uint8_t* data{};
-    uint32_t x{};
-    uint32_t y{};
-    uint32_t width{};
-    uint32_t height{};
-};
-
 struct HallCoverCacheEntry final {
     uint8_t* pixels{};
     uint64_t key{};
-};
-
-enum class StatusTouchTarget : uint8_t {
-    kNone,
-    kScrim,
-    kWifi,
-    kCellular,
-    kPerformance,
-    kBrightness,
-    kVolume,
-};
-
-enum class SystemMenuTouchTarget : uint8_t {
-    kNone,
-    kBack,
-    kWifi,
-    kLanguage,
-    kSystemInformation,
-    kManageApps,
-};
-
-enum class AppManagementOverlay : uint8_t {
-    kNone,
-    kActions,
-    kInformation,
-    kUninstallConfirmation,
-    kUninstallUnavailable,
 };
 
 // All board-owned display/input state is stored inside the selected Platform
@@ -247,37 +211,19 @@ struct MetalioClaw4PlatformState final {
     metalio_claw4::BoardHardware hardware{kWidth, kHeight};
     lv_display_t* display{};
     lv_obj_t* host_smoke{};
-    lv_obj_t* guest_frame{};
+    metalio_claw4::GuestGraphicsEngine guest_graphics{kWidth, kHeight};
     lv_obj_t* hall_settings_press_overlay{};
-    lv_obj_t* system_menu_press_overlays[5]{};
-    lv_obj_t* system_information_scroll_content{};
-    lv_obj_t* app_management_scroll_content{};
-    lv_obj_t* app_management_rows[host_ui::kMaxHallApps]{};
-    lv_obj_t* wifi_scroll_content{};
-    lv_obj_t* wifi_password_textarea{};
-    lv_obj_t* wifi_keyboard{};
-    lv_obj_t* wifi_saved_rows[host_ui::kMaxSavedWifiNetworks]{};
-    lv_obj_t* wifi_available_rows[host_ui::kMaxVisibleWifiNetworks]{};
-    lv_obj_t* status_layer{};
-    lv_obj_t* status_dialog{};
-    lv_obj_t* status_quick_panels[3]{};
-    lv_obj_t* status_quick_detail_labels[3]{};
-    lv_obj_t* status_quick_press_overlays[3]{};
-    lv_obj_t* status_slider_value_labels[2]{};
-    lv_obj_t* status_slider_fills[2]{};
-    lv_obj_t* status_slider_knobs[2]{};
-    lv_obj_t* performance_overlay{};
-    lv_obj_t* performance_cpu_label{};
-    lv_obj_t* performance_fps_label{};
     lv_image_dsc_t launch_image_descriptor{};
     lv_image_dsc_t hall_cover_descriptors[host_ui::kMaxHallApps]{};
     HallCoverCacheEntry hall_cover_cache[host_ui::kMaxHallApps]{};
     lv_obj_t* hall_card_press_overlays[host_ui::kMaxHallApps]{};
-    metalio_claw4::DirtyRegionCoalescer dirty_region_coalescer{};
-    metalio_claw4::RetainedScene retained_scene{kWidth, kHeight};
     metalio_claw4::Tca9555PowerKey power_key{};
     metalio_claw4::Gt911Input touch_input{kWidth, kHeight, kTouchInterrupt};
     host_ui::SystemGestureRouter input_router{touch_input, kWidth, kHeight};
+    metalio_claw4::SystemDetailUi system_detail_ui{};
+    metalio_claw4::SystemMenuUi system_menu_ui{};
+    metalio_claw4::StatusLayerUi status_layer_ui{};
+    metalio_claw4::WifiSettingsUi wifi_settings_ui{};
     lv_indev_t* host_pointer_indev{};
     portMUX_TYPE host_pointer_lock = portMUX_INITIALIZER_UNLOCKED;
     device::TouchSample host_pointer_queue[kHostPointerQueueCapacity]{};
@@ -290,42 +236,8 @@ struct MetalioClaw4PlatformState final {
     bool host_pointer_touch_active{};
     bool host_pointer_release_queued{};
     uint8_t* guest_snapshot_pixels{};
-    BitmapDamage bitmap_damage[kBitmapDamageCapacity]{};
-    uint64_t bitmap_frame_started_us{};
-    uint64_t bitmap_frame_bytes{};
-    uint32_t bitmap_frame_updates{};
-    uint32_t bitmap_frame_sequence{};
-    uint32_t bitmap_damage_count{};
-    uint8_t* graphics_frame_bytes{};
-    uint32_t graphics_frame_length{};
-    uint32_t graphics_frame_commands{};
-    micropixel_texture_handle_t graphics_frame_textures[kMaxSceneTextures]{};
-    uint32_t graphics_frame_texture_count{};
-    device::TextureAccess graphics_frame_texture_access{};
-    micropixel_texture_handle_t scene_textures[kMaxSceneTextures]{};
-    uint32_t scene_texture_count{};
-    device::TextureAccess scene_texture_access{};
-    uint32_t graphics_frame_sequence{};
-    uint32_t presented_guest_frame_sequence{};
-    uint32_t performance_last_frame_sequence{};
-    uint32_t performance_fps{};
-    int64_t performance_last_sample_us{};
-    uint32_t display_refresh_sequence{};
-    int64_t display_refresh_started_us{};
-    StaticSemaphore_t display_refresh_ready_storage{};
-    SemaphoreHandle_t display_refresh_ready{};
     host_ui::SystemUiActionSink hall_action_sink{};
     void* hall_action_context{};
-    host_ui::SystemUiActionSink system_menu_action_sink{};
-    void* system_menu_action_context{};
-    host_ui::SystemUiActionSink system_information_action_sink{};
-    void* system_information_action_context{};
-    host_ui::SystemUiActionSink app_management_action_sink{};
-    void* app_management_action_context{};
-    host_ui::SystemUiActionSink wifi_action_sink{};
-    void* wifi_action_context{};
-    host_ui::SystemUiActionSink status_action_sink{};
-    void* status_action_context{};
     uint32_t hall_app_count{};
     uint32_t hall_touch_id{};
     uint32_t hall_touch_card{host_ui::kMaxHallApps};
@@ -335,51 +247,15 @@ struct MetalioClaw4PlatformState final {
     bool hall_touch_close{};
     bool hall_touch_settings{};
     bool hall_app_running[host_ui::kMaxHallApps]{};
-    uint32_t system_menu_touch_id{};
-    SystemMenuTouchTarget system_menu_touch_target{SystemMenuTouchTarget::kNone};
-    int32_t system_menu_touch_down_x{};
-    int32_t system_menu_touch_down_y{};
-    uint64_t system_menu_touch_down_us{};
-    host_ui::WifiSettingsModel wifi_model{};
-    host_ui::AppManagementModel app_management_model{};
-    host_ui::WifiNetworkModel wifi_password_network{};
-    host_ui::WifiConnectionState wifi_password_connection_state{host_ui::WifiConnectionState::kDisconnected};
-    uint32_t wifi_selected_index{};
-    uint32_t app_management_selected_index{};
-    int32_t wifi_scroll_offset{};
-    std::array<char, host_ui::kMaxWifiPasswordLength + 1U> wifi_password{};
-    uint32_t status_touch_id{};
-    StatusTouchTarget status_touch_target{StatusTouchTarget::kNone};
-    int32_t status_touch_down_x{};
-    int32_t status_touch_down_y{};
-    uint64_t status_touch_down_us{};
-    uint64_t status_slider_last_emit_us{};
-    uint8_t status_slider_values[2]{};
-    uint8_t status_slider_last_emitted_values[2]{0xffU, 0xffU};
     bool hall_touch_active{};
-    bool system_menu_touch_active{};
-    bool system_menu_button_pressed{};
-    bool wifi_action_sheet_visible{};
-    AppManagementOverlay app_management_overlay{AppManagementOverlay::kNone};
-    bool wifi_password_visible{};
-    bool wifi_password_attempt_active{};
-    bool wifi_render_pending{};
-    bool wifi_user_scrolled{};
-    bool wifi_scroll_gesture_active{};
-    bool status_touch_active{};
-    bool status_button_pressed{};
-    bool bitmap_update_frame_active{};
-    bool graphics_frame_active{};
 };
-
-void QueueWifiSettingsRender(MetalioClaw4PlatformState& state);
 
 void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
     auto* state = static_cast<MetalioClaw4PlatformState*>(lv_indev_get_user_data(indev));
     if (state == nullptr || data == nullptr) {
         return;
     }
-    bool render_wifi_after_release = false;
+    bool pointer_released = false;
     bool pointer_sample_read = false;
     portENTER_CRITICAL(&state->host_pointer_lock);
     if (state->host_pointer_queue_tail != state->host_pointer_queue_head) {
@@ -393,10 +269,7 @@ void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
                 : LV_INDEV_STATE_RELEASED;
         if (sample.phase == device::TouchPhase::kUp || sample.phase == device::TouchPhase::kCancel) {
             state->host_pointer_release_queued = false;
-            if (state->wifi_render_pending && !state->wifi_scroll_gesture_active) {
-                state->wifi_render_pending = false;
-                render_wifi_after_release = true;
-            }
+            pointer_released = true;
         }
     }
     data->point = state->host_pointer_point;
@@ -406,8 +279,8 @@ void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
     if (pointer_sample_read && state->display != nullptr) {
         lv_timer_ready(lv_display_get_refr_timer(state->display));
     }
-    if (render_wifi_after_release) {
-        QueueWifiSettingsRender(*state);
+    if (pointer_released) {
+        state->wifi_settings_ui.PointerReleased();
     }
 }
 
@@ -458,104 +331,12 @@ void SetHostPointerEnabledLocked(MetalioClaw4PlatformState& state, bool enabled)
     }
 }
 
-bool SameTextureAccess(const device::TextureAccess& left, const device::TextureAccess& right) {
-    return left.context == right.context && left.resolve == right.resolve && left.retain == right.retain &&
-           left.release == right.release;
-}
-
-void ReleaseTextures(const device::TextureAccess& access, const micropixel_texture_handle_t* textures, uint32_t count) {
-    if (access.release == nullptr) {
-        return;
-    }
-    for (uint32_t index = 0U; index < count; ++index) {
-        access.release(access.context, textures[index]);
-    }
-}
-
-bool RetainTextures(const device::TextureAccess& access, const micropixel_texture_handle_t* textures, uint32_t count) {
-    if (count != 0U && (access.retain == nullptr || access.release == nullptr)) {
-        return false;
-    }
-    uint32_t retained = 0U;
-    for (; retained < count; ++retained) {
-        if (!access.retain(access.context, textures[retained])) {
-            break;
-        }
-    }
-    if (retained == count) {
-        return true;
-    }
-    ReleaseTextures(access, textures, retained);
-    return false;
-}
-
-void ClearPendingFrameTextures(MetalioClaw4PlatformState& state, bool release) {
-    if (release) {
-        ReleaseTextures(state.graphics_frame_texture_access, state.graphics_frame_textures,
-                        state.graphics_frame_texture_count);
-    }
-    state.graphics_frame_texture_count = 0U;
-    state.graphics_frame_texture_access = {};
-}
-
-bool AddPendingFrameTextures(MetalioClaw4PlatformState& state, const micropixel_texture_handle_t* textures,
-                             uint32_t count, const device::TextureAccess& access) {
-    if (state.graphics_frame_texture_count != 0U && !SameTextureAccess(state.graphics_frame_texture_access, access)) {
-        return false;
-    }
-    const uint32_t original_count = state.graphics_frame_texture_count;
-    for (uint32_t index = 0U; index < count; ++index) {
-        bool exists = false;
-        for (uint32_t current = 0U; current < state.graphics_frame_texture_count; ++current) {
-            if (state.graphics_frame_textures[current] == textures[index]) {
-                exists = true;
-                break;
-            }
-        }
-        if (exists) {
-            continue;
-        }
-        if (state.graphics_frame_texture_count >= kMaxSceneTextures || access.retain == nullptr ||
-            !access.retain(access.context, textures[index])) {
-            ReleaseTextures(access, state.graphics_frame_textures + original_count,
-                            state.graphics_frame_texture_count - original_count);
-            state.graphics_frame_texture_count = original_count;
-            return false;
-        }
-        state.graphics_frame_textures[state.graphics_frame_texture_count++] = textures[index];
-    }
-    if (original_count == 0U) {
-        state.graphics_frame_texture_access = access;
-    }
-    return true;
-}
-
-bool AccumulateDamage(BitmapDamage* damages, uint32_t& damage_count, const uint8_t* data, uint32_t x, uint32_t y,
-                      uint32_t width, uint32_t height) {
-    for (uint32_t index = 0U; index < damage_count; ++index) {
-        BitmapDamage& damage = damages[index];
-        if (damage.data != data) {
-            continue;
-        }
-        const uint32_t right = x + width;
-        const uint32_t bottom = y + height;
-        const uint32_t damage_right = damage.x + damage.width;
-        const uint32_t damage_bottom = damage.y + damage.height;
-        const uint32_t union_left = x < damage.x ? x : damage.x;
-        const uint32_t union_top = y < damage.y ? y : damage.y;
-        const uint32_t union_right = right > damage_right ? right : damage_right;
-        const uint32_t union_bottom = bottom > damage_bottom ? bottom : damage_bottom;
-        damage.x = union_left;
-        damage.y = union_top;
-        damage.width = union_right - union_left;
-        damage.height = union_bottom - union_top;
-        return true;
-    }
-    if (damage_count >= kBitmapDamageCapacity) {
-        return false;
-    }
-    damages[damage_count++] = BitmapDamage{data, x, y, width, height};
-    return true;
+bool HostPointerBusy(MetalioClaw4PlatformState& state) {
+    portENTER_CRITICAL(&state.host_pointer_lock);
+    const bool busy = state.host_pointer_touch_active || state.host_pointer_release_queued ||
+                      state.host_pointer_queue_head != state.host_pointer_queue_tail;
+    portEXIT_CRITICAL(&state.host_pointer_lock);
+    return busy;
 }
 
 void StyleFullscreenContainer(lv_obj_t* container, uint32_t background) {
@@ -571,32 +352,6 @@ void StyleFullscreenContainer(lv_obj_t* container, uint32_t background) {
 }
 
 constexpr const char* GraphicsBackendName() { return "retained-objects"; }
-
-void DisplayRefreshStartEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr) {
-        state->dirty_region_coalescer.Coalesce(state->display);
-        state->display_refresh_started_us = esp_timer_get_time();
-    }
-}
-
-void DisplayRefreshReadyEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr) {
-        if (state->display_refresh_started_us != 0) {
-            const uint32_t sequence = ++state->display_refresh_sequence;
-            const uint32_t duration_us =
-                static_cast<uint32_t>(esp_timer_get_time() - state->display_refresh_started_us);
-            state->display_refresh_started_us = 0;
-            if (sequence <= 4U || (sequence % 60U) == 0U) {
-                ESP_LOGI(kTag, "display refresh #%" PRIu32 ": total=%" PRIu32 " us", sequence, duration_us);
-            }
-        }
-        if (state->display_refresh_ready != nullptr) {
-            (void)xSemaphoreGive(state->display_refresh_ready);
-        }
-    }
-}
 
 void CreateStartingScreen(MetalioClaw4PlatformState& state) {
     lv_obj_t* screen = lv_screen_active();
@@ -614,10 +369,6 @@ void CreateStartingScreen(MetalioClaw4PlatformState& state) {
 }
 
 esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
-    state.display_refresh_ready = xSemaphoreCreateBinaryStatic(&state.display_refresh_ready_storage);
-    if (state.display_refresh_ready == nullptr) {
-        return ESP_ERR_NO_MEM;
-    }
     esp_lv_adapter_config_t adapter_config{};
     adapter_config.task_stack_size = ESP_LV_ADAPTER_DEFAULT_STACK_SIZE;
     adapter_config.stack_in_psram = false;
@@ -658,14 +409,10 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     if (state.display == nullptr) {
         return ESP_FAIL;
     }
-#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    state.retained_scene.BindSurface(state.display, state.hardware.Panel());
-#endif
-    if (!state.retained_scene.Initialize()) {
-        return ESP_ERR_NO_MEM;
+    status = state.guest_graphics.Initialize(state.display, state.hardware.Panel());
+    if (status != ESP_OK) {
+        return status;
     }
-    lv_display_add_event_cb(state.display, DisplayRefreshStartEvent, LV_EVENT_REFR_START, &state);
-    lv_display_add_event_cb(state.display, DisplayRefreshReadyEvent, LV_EVENT_REFR_READY, &state);
     lv_timer_set_period(lv_display_get_refr_timer(state.display), kRefreshPeriodMs);
 
     state.host_pointer_indev = lv_indev_create();
@@ -726,31 +473,6 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
              static_cast<int>(kTouchInterrupt), GraphicsBackendName(), kEnablePpaAccel ? "on" : "off", kLvglTaskCore,
              static_cast<unsigned>(task_policy::kDisplayPriority));
     return ESP_OK;
-}
-
-bool GraphicsBackendAvailableImpl() { return true; }
-
-int32_t GraphicsGetInfoImpl(const MetalioClaw4PlatformState& state, micropixel_graphics_info_t& info) {
-    if (state.display == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    info = {};
-    info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
-    info.width = kWidth;
-    info.height = kHeight;
-    info.pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888;
-    info.capabilities = 0U;
-#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    info.capabilities |= MICROPIXEL_GRAPHICS_CAP_RETAINED_TRANSLATION;
-#endif
-    info.capabilities |= MICROPIXEL_GRAPHICS_CAP_MULTI_SUBMIT_FRAME;
-    info.max_command_bytes = MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES;
-    info.max_commands = MICROPIXEL_GRAPHICS_MAX_COMMANDS;
-    info.max_draw_operations = MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS;
-    info.max_frame_commands = MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS;
-    return MICROPIXEL_STATUS_OK;
 }
 
 void ResetHallImageDescriptorsLocked(MetalioClaw4PlatformState& state) {
@@ -1003,10 +725,9 @@ bool HallTouchSink(void* context, const device::TouchSample& sample) {
     }
     if (sample.phase == device::TouchPhase::kMove) {
         const bool header_action = state->hall_touch_settings;
-        const bool inside_target = state->hall_touch_settings
-                                       ? PointInside(kHallSettingsButtonBounds, sample.x, sample.y)
-                                   : state->hall_touch_close
-                                       ? PointInside(HallCloseButton(state->hall_touch_card), sample.x, sample.y)
+        const bool inside_target =
+            state->hall_touch_settings ? PointInside(kHallSettingsButtonBounds, sample.x, sample.y)
+            : state->hall_touch_close  ? PointInside(HallCloseButton(state->hall_touch_card), sample.x, sample.y)
                                        : PointInside(HallCard(state->hall_touch_card), sample.x, sample.y);
         if (header_action) {
             SetHallSettingsPressed(*state, inside_target);
@@ -1286,7 +1007,8 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
 
 std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrameImpl(MetalioClaw4PlatformState& state) {
 #if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
-    if (state.display == nullptr || state.guest_frame == nullptr || state.guest_snapshot_pixels != nullptr) {
+    lv_obj_t* guest_frame = state.guest_graphics.FrameLocked();
+    if (state.display == nullptr || guest_frame == nullptr || state.guest_snapshot_pixels != nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     constexpr uint32_t kBytesPerPixel = 3U;
@@ -1303,7 +1025,7 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame
     bool captured = lv_draw_buf_init(&snapshot, kWidth, kHeight, LV_COLOR_FORMAT_RGB888, kSourceStride, pixels,
                                      kSourceBytes) == LV_RESULT_OK;
     if (captured && esp_lv_adapter_lock(-1) == ESP_OK) {
-        captured = lv_snapshot_take_to_draw_buf(state.guest_frame, LV_COLOR_FORMAT_RGB888, &snapshot) == LV_RESULT_OK;
+        captured = lv_snapshot_take_to_draw_buf(guest_frame, LV_COLOR_FORMAT_RGB888, &snapshot) == LV_RESULT_OK;
         esp_lv_adapter_unlock();
     } else {
         captured = false;
@@ -1459,11 +1181,11 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
         (void)CreateHallLabel(state.host_smoke, model.status_app_id, &lv_font_montserrat_18, 0x91a4bdU, 40, 638);
     }
     lv_obj_move_foreground(state.host_smoke);
-    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
+    if (state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
         // Rebinding the Hall after its status layer closes rebuilds this root.
         // Preserve the final-display HUD z-order in the same locked update so
         // the Hall cannot cover it for one refresh before the next sample.
-        lv_obj_move_foreground(state.performance_overlay);
+        state.status_layer_ui.RaisePerformanceOverlayLocked();
     }
     lv_timer_ready(lv_display_get_refr_timer(state.display));
     esp_lv_adapter_unlock();
@@ -1498,12 +1220,11 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     state.hall_touch_close = false;
     state.hall_touch_settings = false;
     state.hall_settings_press_overlay = nullptr;
-    if (state.display == nullptr || state.host_smoke == nullptr || state.display_refresh_ready == nullptr ||
-        esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (state.display == nullptr || state.host_smoke == nullptr ||
+        !state.guest_graphics.RefreshSynchronizationAvailable() || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    while (xSemaphoreTake(state.display_refresh_ready, 0U) == pdTRUE) {
-    }
+    state.guest_graphics.DrainRefreshReady();
     lv_obj_clean(state.host_smoke);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
@@ -1512,7 +1233,7 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
 
     // Retire the LVGL descriptors before FirmwareApp unmaps Flash covers. The
     // native PSRAM thumbnails remain cached for the next Hall visit.
-    (void)xSemaphoreTake(state.display_refresh_ready, portMAX_DELAY);
+    state.guest_graphics.WaitForRefreshReady();
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         ResetHallImageDescriptorsLocked(state);
         esp_lv_adapter_unlock();
@@ -1530,248 +1251,30 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
     state.hall_touch_close = false;
     state.hall_touch_settings = false;
     state.hall_settings_press_overlay = nullptr;
-    if (state.display == nullptr || state.host_smoke == nullptr || state.guest_frame == nullptr ||
-        state.display_refresh_ready == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+    lv_obj_t* guest_frame = state.guest_graphics.FrameLocked();
+    if (state.display == nullptr || state.host_smoke == nullptr || guest_frame == nullptr ||
+        !state.guest_graphics.RefreshSynchronizationAvailable() || esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
 
-    while (xSemaphoreTake(state.display_refresh_ready, 0U) == pdTRUE) {
-    }
+    state.guest_graphics.DrainRefreshReady();
     // Delete the Hall and reveal the retained Guest tree in one LVGL update.
     // Rendering an empty opaque Host container first caused a black interval
     // until an event-driven Guest happened to submit its next frame.
     lv_obj_delete(state.host_smoke);
     state.host_smoke = nullptr;
     state.launch_image_descriptor = {};
-    lv_obj_move_foreground(state.guest_frame);
+    lv_obj_move_foreground(guest_frame);
     lv_timer_ready(lv_display_get_refr_timer(state.display));
     esp_lv_adapter_unlock();
 
-    (void)xSemaphoreTake(state.display_refresh_ready, portMAX_DELAY);
+    state.guest_graphics.WaitForRefreshReady();
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         ResetHallImageDescriptorsLocked(state);
         esp_lv_adapter_unlock();
     }
     ESP_LOGI(kTag, "retained Guest view restored directly from App Hall");
     return {};
-}
-
-constexpr HallCardBounds kSystemMenuBackBounds{.x = 24, .y = 24, .width = 88, .height = 88};
-
-HallCardBounds SystemMenuTargetBounds(SystemMenuTouchTarget target) {
-    switch (target) {
-        case SystemMenuTouchTarget::kBack:
-            return kSystemMenuBackBounds;
-        case SystemMenuTouchTarget::kWifi:
-            return {.x = 32, .y = 140, .width = 656, .height = 120};
-        case SystemMenuTouchTarget::kLanguage:
-            return {.x = 32, .y = 380, .width = 656, .height = 120};
-        case SystemMenuTouchTarget::kSystemInformation:
-            return {.x = 32, .y = 260, .width = 656, .height = 120};
-        case SystemMenuTouchTarget::kManageApps:
-            return {.x = 32, .y = 500, .width = 656, .height = 120};
-        case SystemMenuTouchTarget::kNone:
-            break;
-    }
-    return {};
-}
-
-int32_t SystemMenuTargetIndex(SystemMenuTouchTarget target) {
-    switch (target) {
-        case SystemMenuTouchTarget::kBack:
-            return 0;
-        case SystemMenuTouchTarget::kWifi:
-            return 1;
-        case SystemMenuTouchTarget::kLanguage:
-            return 2;
-        case SystemMenuTouchTarget::kSystemInformation:
-            return 3;
-        case SystemMenuTouchTarget::kManageApps:
-            return 4;
-        case SystemMenuTouchTarget::kNone:
-            break;
-    }
-    return -1;
-}
-
-SystemMenuTouchTarget FindSystemMenuTouchTarget(int32_t x, int32_t y) {
-    constexpr SystemMenuTouchTarget kTargets[] = {
-        SystemMenuTouchTarget::kBack,       SystemMenuTouchTarget::kWifi,
-        SystemMenuTouchTarget::kLanguage,   SystemMenuTouchTarget::kSystemInformation,
-        SystemMenuTouchTarget::kManageApps,
-    };
-    for (SystemMenuTouchTarget target : kTargets) {
-        if (PointInside(SystemMenuTargetBounds(target), x, y)) {
-            return target;
-        }
-    }
-    return SystemMenuTouchTarget::kNone;
-}
-
-void ResetSystemMenuObjectPointers(MetalioClaw4PlatformState& state) {
-    for (lv_obj_t*& overlay : state.system_menu_press_overlays) {
-        overlay = nullptr;
-    }
-}
-
-void SetSystemMenuTargetPressed(MetalioClaw4PlatformState& state, SystemMenuTouchTarget target, bool pressed) {
-    const int32_t index = SystemMenuTargetIndex(target);
-    if (index < 0 || state.system_menu_press_overlays[index] == nullptr || state.display == nullptr ||
-        esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
-    lv_obj_t* overlay = state.system_menu_press_overlays[index];
-    const bool already_pressed = !lv_obj_has_flag(overlay, LV_OBJ_FLAG_HIDDEN);
-    if (already_pressed != pressed) {
-        if (pressed) {
-            lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_foreground(overlay);
-        } else {
-            lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
-        }
-        lv_timer_ready(lv_display_get_refr_timer(state.display));
-    }
-    esp_lv_adapter_unlock();
-}
-
-host_ui::SystemMenuItem SystemMenuItemForTarget(SystemMenuTouchTarget target) {
-    switch (target) {
-        case SystemMenuTouchTarget::kLanguage:
-            return host_ui::SystemMenuItem::kLanguage;
-        case SystemMenuTouchTarget::kSystemInformation:
-            return host_ui::SystemMenuItem::kSystemInformation;
-        case SystemMenuTouchTarget::kManageApps:
-            return host_ui::SystemMenuItem::kManageApps;
-        case SystemMenuTouchTarget::kWifi:
-        case SystemMenuTouchTarget::kBack:
-        case SystemMenuTouchTarget::kNone:
-            return host_ui::SystemMenuItem::kWifi;
-    }
-    return host_ui::SystemMenuItem::kWifi;
-}
-
-bool SystemMenuTouchSink(void* context, const device::TouchSample& sample) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
-    if (state == nullptr) {
-        return false;
-    }
-    if (sample.phase == device::TouchPhase::kDown) {
-        state->system_menu_touch_target = FindSystemMenuTouchTarget(sample.x, sample.y);
-        state->system_menu_touch_id = sample.id;
-        state->system_menu_touch_down_x = sample.x;
-        state->system_menu_touch_down_y = sample.y;
-        state->system_menu_touch_down_us = sample.timestamp_us;
-        state->system_menu_touch_active = state->system_menu_touch_target != SystemMenuTouchTarget::kNone;
-        state->system_menu_button_pressed = state->system_menu_touch_active;
-        if (state->system_menu_touch_active) {
-            SetSystemMenuTargetPressed(*state, state->system_menu_touch_target, true);
-        }
-        return true;
-    }
-    if (!state->system_menu_touch_active || state->system_menu_touch_id != sample.id) {
-        return true;
-    }
-
-    const SystemMenuTouchTarget target = state->system_menu_touch_target;
-    if (sample.phase == device::TouchPhase::kMove) {
-        const bool pressed = PointInside(SystemMenuTargetBounds(target), sample.x, sample.y);
-        if (pressed != state->system_menu_button_pressed) {
-            state->system_menu_button_pressed = pressed;
-            SetSystemMenuTargetPressed(*state, target, pressed);
-        }
-        return true;
-    }
-    if (sample.phase == device::TouchPhase::kCancel) {
-        SetSystemMenuTargetPressed(*state, target, false);
-        state->system_menu_touch_active = false;
-        state->system_menu_button_pressed = false;
-        state->system_menu_touch_target = SystemMenuTouchTarget::kNone;
-        return true;
-    }
-    if (sample.phase != device::TouchPhase::kUp) {
-        return true;
-    }
-
-    constexpr int32_t kTapSlop = 24;
-    constexpr uint64_t kTapTimeoutUs = 800000U;
-    const int32_t delta_x = sample.x - state->system_menu_touch_down_x;
-    const int32_t delta_y = sample.y - state->system_menu_touch_down_y;
-    const uint64_t elapsed_us = sample.timestamp_us >= state->system_menu_touch_down_us
-                                    ? sample.timestamp_us - state->system_menu_touch_down_us
-                                    : kTapTimeoutUs + 1U;
-    const bool accepted = state->system_menu_button_pressed &&
-                          PointInside(SystemMenuTargetBounds(target), sample.x, sample.y) &&
-                          std::abs(delta_x) <= kTapSlop && std::abs(delta_y) <= kTapSlop && elapsed_us <= kTapTimeoutUs;
-    SetSystemMenuTargetPressed(*state, target, false);
-    state->system_menu_touch_active = false;
-    state->system_menu_button_pressed = false;
-    state->system_menu_touch_target = SystemMenuTouchTarget::kNone;
-    if (!accepted || state->system_menu_action_sink == nullptr) {
-        return true;
-    }
-    if (target == SystemMenuTouchTarget::kBack) {
-        state->system_menu_action_sink(state->system_menu_action_context,
-                                       host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseSystemMenu});
-    } else {
-        state->system_menu_action_sink(
-            state->system_menu_action_context,
-            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSelectSystemMenuItem,
-                                    .value = static_cast<uint32_t>(SystemMenuItemForTarget(target))});
-    }
-    return true;
-}
-
-lv_obj_t* CreateSystemMenuPressOverlay(lv_obj_t* parent, int32_t radius) {
-    lv_obj_t* overlay = lv_obj_create(parent);
-    lv_obj_set_pos(overlay, 0, 0);
-    lv_obj_set_size(overlay, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_pad_all(overlay, 0, 0);
-    lv_obj_set_style_radius(overlay, radius, 0);
-    lv_obj_set_style_border_width(overlay, 0, 0);
-    lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(overlay, LV_OPA_40, 0);
-    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
-    return overlay;
-}
-
-void DrawSystemMenuRow(MetalioClaw4PlatformState& state, lv_obj_t* root, SystemMenuTouchTarget target,
-                       const char* icon_text, const char* name, const char* detail, uint32_t icon_color) {
-    const HallCardBounds target_bounds = SystemMenuTargetBounds(target);
-    const HallCardBounds bounds{.x = 40, .y = target_bounds.y + 8, .width = 640, .height = target_bounds.height - 16};
-    lv_obj_t* panel = lv_obj_create(root);
-    lv_obj_set_pos(panel, bounds.x, bounds.y);
-    lv_obj_set_size(panel, bounds.width, bounds.height);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_set_style_radius(panel, 22, 0);
-    lv_obj_set_style_border_width(panel, 1, 0);
-    lv_obj_set_style_border_color(panel, lv_color_hex(target == SystemMenuTouchTarget::kWifi ? 0x42607fU : 0x2e4562U),
-                                  0);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(0x111f32U), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* icon = lv_label_create(panel);
-    lv_label_set_text(icon, icon_text);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(icon, lv_color_hex(icon_color), 0);
-    lv_obj_set_size(icon, 56, 38);
-    lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(icon, 26, 32);
-    (void)CreateHallLabel(panel, name, &lv_font_montserrat_24, 0xf2f7ffU, 104, 20);
-    (void)CreateHallLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 59);
-    lv_obj_t* chevron = lv_label_create(panel);
-    lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(chevron, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(chevron, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_set_pos(chevron, bounds.width - 46, 38);
-
-    const int32_t index = SystemMenuTargetIndex(target);
-    if (index >= 0) {
-        state.system_menu_press_overlays[index] = CreateSystemMenuPressOverlay(panel, 22);
-    }
 }
 
 std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4PlatformState& state,
@@ -1799,421 +1302,31 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
     }
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
-    ResetSystemMenuObjectPointers(state);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
-
-    lv_obj_t* back = lv_obj_create(state.host_smoke);
-    lv_obj_set_pos(back, 40, 40);
-    lv_obj_set_size(back, 56, 56);
-    lv_obj_set_style_pad_all(back, 0, 0);
-    lv_obj_set_style_radius(back, 18, 0);
-    lv_obj_set_style_border_width(back, 1, 0);
-    lv_obj_set_style_border_color(back, lv_color_hex(0x42607fU), 0);
-    lv_obj_set_style_bg_color(back, lv_color_hex(0x0d1929U), 0);
-    lv_obj_set_style_bg_opa(back, LV_OPA_90, 0);
-    lv_obj_remove_flag(back, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(back, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* back_label = lv_label_create(back);
-    lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(back_label, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_center(back_label);
-    state.system_menu_press_overlays[0] = CreateSystemMenuPressOverlay(back, 18);
-
-    (void)CreateHallLabel(state.host_smoke, "System Settings", &lv_font_montserrat_32, 0xf2f7ffU, 116, 36);
-    (void)CreateHallLabel(state.host_smoke, "Configure this device", &lv_font_montserrat_18, 0x91a4bdU, 116, 78);
-
-    const char* wifi_detail = !model.wifi_available  ? "Not available"
-                              : model.wifi_connected ? "Connected"
-                              : model.wifi_enabled   ? "Not connected"
-                                                     : "Off";
-    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", wifi_detail,
-                      0x69a7ffU);
-    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kSystemInformation, "i", "System Information",
-                      "Device and software", 0x69a7ffU);
-    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kLanguage, "A", "Language",
-                      model.language != nullptr ? model.language : "English", 0x4dd6a4U);
-    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kManageApps, LV_SYMBOL_LIST, "Manage Apps",
-                      model.installed_app_count == 1U ? "1 installed app" : "Installed apps", 0xff9f43U);
-
-    lv_obj_move_foreground(state.host_smoke);
-    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_move_foreground(state.performance_overlay);
+    auto result = state.system_menu_ui.ShowLocked(state.host_smoke, state.display, model, action_sink, action_context);
+    if (result.has_value() && state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
+        state.status_layer_ui.RaisePerformanceOverlayLocked();
     }
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
     esp_lv_adapter_unlock();
+    if (!result.has_value()) {
+        state.system_menu_ui.Deactivate();
+        return result;
+    }
 
-    state.system_menu_action_sink = action_sink;
-    state.system_menu_action_context = action_context;
-    state.system_menu_touch_active = false;
-    state.system_menu_button_pressed = false;
-    state.system_menu_touch_target = SystemMenuTouchTarget::kNone;
-    state.input_router.BindTouchSink(SystemMenuTouchSink, &state);
+    state.input_router.BindTouchSink(metalio_claw4::SystemMenuUi::TouchSink, &state.system_menu_ui);
     state.input_router.BindSystemActionSink(action_sink, action_context);
-    ESP_LOGI(kTag, "System Settings visible: wifi=%s apps=%" PRIu32,
-             model.wifi_available ? (model.wifi_connected ? "connected" : "available") : "unavailable",
-             model.installed_app_count);
     return {};
 }
 
 void LeaveSystemMenuImpl(MetalioClaw4PlatformState& state) {
-    if (state.system_menu_action_sink == nullptr && state.system_menu_action_context == nullptr) {
+    if (!state.system_menu_ui.Active()) {
         return;
     }
-    state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
-    state.system_menu_action_sink = nullptr;
-    state.system_menu_action_context = nullptr;
-    state.system_menu_touch_active = false;
-    state.system_menu_button_pressed = false;
-    state.system_menu_touch_target = SystemMenuTouchTarget::kNone;
-    ResetSystemMenuObjectPointers(state);
-}
-
-constexpr int32_t kWifiContentLeft = 40;
-constexpr int32_t kWifiContentWidth = 640;
-constexpr int32_t kWifiRowHeight = 76;
-constexpr int32_t kWifiRowGap = 10;
-constexpr int32_t kWifiSavedStartY = 264;
-
-struct WifiListLayout final {
-    int32_t saved_start{};
-    int32_t available_heading{};
-    int32_t available_start{};
-    int32_t content_height{};
-};
-
-WifiListLayout GetWifiListLayout(const host_ui::WifiSettingsModel& model) {
-    const uint32_t saved_rows = model.saved_network_count == 0U ? 1U : model.saved_network_count;
-    const int32_t available_heading =
-        kWifiSavedStartY + static_cast<int32_t>(saved_rows) * (kWifiRowHeight + kWifiRowGap) + 18;
-    const int32_t available_start = available_heading + 36;
-    const uint32_t available_rows = model.available_network_count == 0U ? 1U : model.available_network_count;
-    const int32_t content_height =
-        available_start + static_cast<int32_t>(available_rows) * (kWifiRowHeight + kWifiRowGap) + 30;
-    return WifiListLayout{.saved_start = kWifiSavedStartY,
-                          .available_heading = available_heading,
-                          .available_start = available_start,
-                          .content_height = content_height};
-}
-
-void EmitWifiNetworkAction(MetalioClaw4PlatformState& state, host_ui::SystemUiActionType type,
-                           const host_ui::WifiNetworkModel& network);
-void WifiBackEvent(lv_event_t* event);
-void WifiSwitchEvent(lv_event_t* event);
-void WifiSavedNetworkEvent(lv_event_t* event);
-void WifiAvailableNetworkEvent(lv_event_t* event);
-void WifiSheetConnectEvent(lv_event_t* event);
-void WifiSheetForgetEvent(lv_event_t* event);
-void WifiSheetCancelEvent(lv_event_t* event);
-void WifiScrollEvent(lv_event_t* event);
-
-void ResetWifiUiObjectPointers(MetalioClaw4PlatformState& state) {
-    state.wifi_scroll_content = nullptr;
-    state.wifi_password_textarea = nullptr;
-    state.wifi_keyboard = nullptr;
-    for (auto& row : state.wifi_saved_rows) {
-        row = nullptr;
-    }
-    for (auto& row : state.wifi_available_rows) {
-        row = nullptr;
-    }
-}
-
-lv_obj_t* CreateWifiPanel(lv_obj_t* parent, const HallCardBounds& bounds, uint32_t background, uint32_t border,
-                          int32_t radius) {
-    lv_obj_t* panel = lv_obj_create(parent);
-    lv_obj_set_pos(panel, bounds.x, bounds.y);
-    lv_obj_set_size(panel, bounds.width, bounds.height);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_set_style_radius(panel, radius, 0);
-    lv_obj_set_style_border_width(panel, border == 0U ? 0 : 1, 0);
-    if (border != 0U) {
-        lv_obj_set_style_border_color(panel, lv_color_hex(border), 0);
-    }
-    lv_obj_set_style_bg_color(panel, lv_color_hex(background), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-    return panel;
-}
-
-const char* WifiBandText(host_ui::WifiBand band) {
-    switch (band) {
-        case host_ui::WifiBand::k2_4Ghz:
-            return "2.4 GHz";
-        case host_ui::WifiBand::k5Ghz:
-            return "5 GHz";
-        case host_ui::WifiBand::kUnknown:
-        default:
-            return "Wi-Fi";
-    }
-}
-
-const char* WifiConnectionDetail(const host_ui::WifiSettingsModel& model) {
-    if (!model.available) {
-        return "Not available";
-    }
-    if (!model.enabled) {
-        return "Off";
-    }
-    switch (model.connection_state) {
-        case host_ui::WifiConnectionState::kConnecting:
-            return "Connecting...";
-        case host_ui::WifiConnectionState::kConnected:
-            return "Connected";
-        case host_ui::WifiConnectionState::kAuthenticationFailed:
-        case host_ui::WifiConnectionState::kAuthenticationTimedOut:
-        case host_ui::WifiConnectionState::kHandshakeTimedOut:
-        case host_ui::WifiConnectionState::kNetworkNotFound:
-        case host_ui::WifiConnectionState::kFailed:
-        case host_ui::WifiConnectionState::kDisconnected:
-        default:
-            return model.scanning ? "Updating nearby networks" : "Not connected";
-    }
-}
-
-bool WifiModelShowsConnectedNetwork(const host_ui::WifiSettingsModel& model,
-                                    const host_ui::WifiNetworkModel& network) {
-    for (uint32_t index = 0U; index < model.saved_network_count; ++index) {
-        const host_ui::WifiNetworkModel& saved = model.saved_networks[index];
-        if (saved.connected && std::strcmp(saved.ssid.data(), network.ssid.data()) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-uint32_t WifiSignalLevel(int8_t rssi) {
-    if (rssi == 0) {
-        return 0U;
-    }
-    if (rssi >= -50) {
-        return 4U;
-    }
-    if (rssi >= -62) {
-        return 3U;
-    }
-    if (rssi >= -74) {
-        return 2U;
-    }
-    return 1U;
-}
-
-void DrawWifiSignal(lv_obj_t* parent, int8_t rssi) {
-    constexpr int32_t kBarHeights[] = {10, 18, 27, 36};
-    const uint32_t level = WifiSignalLevel(rssi);
-    for (uint32_t index = 0U; index < 4U; ++index) {
-        lv_obj_t* bar = lv_obj_create(parent);
-        lv_obj_set_pos(bar, 20 + static_cast<int32_t>(index) * 8, 56 - kBarHeights[index]);
-        lv_obj_set_size(bar, 5, kBarHeights[index]);
-        lv_obj_set_style_pad_all(bar, 0, 0);
-        lv_obj_set_style_radius(bar, 3, 0);
-        lv_obj_set_style_border_width(bar, 0, 0);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(0x69a7ffU), 0);
-        lv_obj_set_style_bg_opa(bar, index < level ? LV_OPA_COVER : LV_OPA_30, 0);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
-    }
-}
-
-void DrawWifiSecurityLock(lv_obj_t* parent) {
-    constexpr lv_border_side_t kShackleSides = static_cast<lv_border_side_t>(
-        static_cast<uint32_t>(LV_BORDER_SIDE_TOP) | static_cast<uint32_t>(LV_BORDER_SIDE_LEFT) |
-        static_cast<uint32_t>(LV_BORDER_SIDE_RIGHT));
-    lv_obj_t* shackle = lv_obj_create(parent);
-    lv_obj_set_pos(shackle, 582, 19);
-    lv_obj_set_size(shackle, 24, 24);
-    lv_obj_set_style_pad_all(shackle, 0, 0);
-    lv_obj_set_style_radius(shackle, 12, 0);
-    lv_obj_set_style_border_width(shackle, 3, 0);
-    lv_obj_set_style_border_side(shackle, kShackleSides, 0);
-    lv_obj_set_style_border_color(shackle, lv_color_hex(0x91a4bdU), 0);
-    lv_obj_set_style_bg_opa(shackle, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(shackle, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(shackle, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* body =
-        CreateWifiPanel(parent, HallCardBounds{.x = 578, .y = 34, .width = 32, .height = 24}, 0x91a4bdU, 0U, 6);
-    (void)CreateWifiPanel(body, HallCardBounds{.x = 14, .y = 8, .width = 4, .height = 8}, 0x111f32U, 0U, 2);
-}
-
-void DrawWifiMoreIndicator(lv_obj_t* parent) {
-    for (int32_t index = 0; index < 3; ++index) {
-        lv_obj_t* dot = lv_obj_create(parent);
-        lv_obj_set_pos(dot, 594, 22 + index * 13);
-        lv_obj_set_size(dot, 7, 7);
-        lv_obj_set_style_pad_all(dot, 0, 0);
-        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(dot, 0, 0);
-        lv_obj_set_style_bg_color(dot, lv_color_hex(0xa9bdd5U), 0);
-        lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-    }
-}
-
-lv_obj_t* DrawWifiNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& network, int32_t y, bool saved) {
-    constexpr lv_style_selector_t kPressed = static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
-    lv_obj_t* row = CreateWifiPanel(
-        parent, HallCardBounds{.x = kWifiContentLeft, .y = y, .width = kWifiContentWidth, .height = kWifiRowHeight},
-        0x111f32U, 0x2e4562U, 20);
-    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), kPressed);
-    DrawWifiSignal(row, network.rssi);
-    lv_obj_t* name = CreateHallLabel(row, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 70, 13);
-    lv_obj_set_width(name, network.connected ? 350 : 430);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-
-    char detail[96]{};
-    if (saved) {
-        std::snprintf(detail, sizeof(detail), "%s   %s   Channel %u", WifiBandText(network.band),
-                      network.secured ? "Secured" : "Open", network.channel);
-    } else {
-        std::snprintf(detail, sizeof(detail), "%s   %s   %d dBm", WifiBandText(network.band),
-                      network.secured ? "Secured" : "Open", static_cast<int>(network.rssi));
-    }
-    lv_obj_t* metadata = CreateHallLabel(row, detail, &lv_font_montserrat_18, 0x91a4bdU, 70, 44);
-    lv_obj_set_width(metadata, 450);
-    lv_label_set_long_mode(metadata, LV_LABEL_LONG_DOT);
-    if (network.connected) {
-        (void)CreateHallLabel(row, "Connected", &lv_font_montserrat_18, 0x4dd6a4U, 454, 27);
-    }
-    if (saved) {
-        DrawWifiMoreIndicator(row);
-    } else if (network.secured) {
-        DrawWifiSecurityLock(row);
-    }
-    return row;
-}
-
-lv_obj_t* DrawWifiButton(lv_obj_t* parent, const HallCardBounds& bounds, const char* text, uint32_t color,
-                         uint32_t border = 0x365472U) {
-    constexpr lv_style_selector_t kPressed = static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
-    lv_obj_t* button = CreateWifiPanel(parent, bounds, 0x16263aU, border, 16);
-    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(button, lv_color_hex(0x0b1726U), kPressed);
-    lv_obj_t* label = lv_label_create(button);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
-    lv_obj_center(label);
-    return button;
-}
-
-void FormatInformationSize(uint32_t kib, char* buffer, size_t capacity) {
-    if (buffer == nullptr || capacity == 0U) {
-        return;
-    }
-    if (kib >= 1024U) {
-        const uint32_t tenths = static_cast<uint32_t>((static_cast<uint64_t>(kib) * 10U + 512U) / 1024U);
-        std::snprintf(buffer, capacity, "%" PRIu32 ".%" PRIu32 " MB", tenths / 10U, tenths % 10U);
-    } else {
-        std::snprintf(buffer, capacity, "%" PRIu32 " KB", kib);
-    }
-}
-
-void DetailScrollEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr && state->display != nullptr) {
-        lv_timer_ready(lv_display_get_refr_timer(state->display));
-    }
-}
-
-lv_obj_t* CreateDetailScrollContent(MetalioClaw4PlatformState& state, lv_obj_t* parent, int32_t content_height) {
-    lv_obj_t* scroll = lv_obj_create(parent);
-    lv_obj_set_pos(scroll, 0, 108);
-    lv_obj_set_size(scroll, kWidth, kHeight - 108);
-    lv_obj_set_style_pad_all(scroll, 0, 0);
-    lv_obj_set_style_border_width(scroll, 0, 0);
-    lv_obj_set_style_bg_opa(scroll, LV_OPA_TRANSP, 0);
-    lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(scroll, LV_SCROLLBAR_MODE_AUTO);
-    constexpr lv_obj_flag_t kScrollFlags = static_cast<lv_obj_flag_t>(
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
-    lv_obj_add_flag(scroll, kScrollFlags);
-    lv_obj_add_event_cb(scroll, DetailScrollEvent, LV_EVENT_SCROLL, &state);
-    lv_obj_add_event_cb(scroll, DetailScrollEvent, LV_EVENT_SCROLL_END, &state);
-    lv_obj_set_style_width(scroll, 5, LV_PART_SCROLLBAR);
-    lv_obj_set_style_radius(scroll, 3, LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_color(scroll, lv_color_hex(0x42607fU), LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_opa(scroll, LV_OPA_COVER, LV_PART_SCROLLBAR);
-
-    lv_obj_t* bottom_spacer = lv_obj_create(scroll);
-    lv_obj_set_pos(bottom_spacer, 0, content_height - 1);
-    lv_obj_set_size(bottom_spacer, 1, 1);
-    lv_obj_set_style_border_width(bottom_spacer, 0, 0);
-    lv_obj_set_style_bg_opa(bottom_spacer, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_CLICKABLE);
-    return scroll;
-}
-
-lv_obj_t* DrawDetailHeader(MetalioClaw4PlatformState& state, const char* title, const char* subtitle,
-                           lv_event_cb_t back_callback, void* user_data) {
-    lv_obj_t* back = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 40, .y = 32, .width = 56, .height = 56},
-                                     0x0d1929U, 0x42607fU, 18);
-    lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(back, lv_color_hex(0x081321U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-    lv_obj_add_event_cb(back, back_callback, LV_EVENT_SHORT_CLICKED, user_data);
-    lv_obj_t* back_icon = lv_label_create(back);
-    lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_center(back_icon);
-    (void)CreateHallLabel(state.host_smoke, title, &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
-    if (subtitle != nullptr && subtitle[0] != '\0') {
-        (void)CreateHallLabel(state.host_smoke, subtitle, &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
-    }
-    return back;
-}
-
-void DrawInformationSectionLabel(lv_obj_t* parent, const char* text, int32_t y) {
-    (void)CreateHallLabel(parent, text, &lv_font_montserrat_18, 0x748aa5U, 42, y);
-}
-
-void DrawInformationRow(lv_obj_t* panel, int32_t y, const char* label, const char* value) {
-    if (y > 0) {
-        lv_obj_t* divider =
-            CreateWifiPanel(panel, HallCardBounds{.x = 20, .y = y, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
-        (void)divider;
-    }
-    (void)CreateHallLabel(panel, label, &lv_font_montserrat_18, 0x91a4bdU, 22, y + 18);
-    lv_obj_t* value_label = CreateHallLabel(panel, value, &lv_font_montserrat_18, 0xf2f7ffU, 260, y + 18);
-    lv_obj_set_width(value_label, 356);
-    lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_long_mode(value_label, LV_LABEL_LONG_DOT);
-}
-
-void DrawMemoryMetric(lv_obj_t* panel, int32_t x, int32_t y, const char* name, uint32_t kib, uint32_t color) {
-    char value[24]{};
-    FormatInformationSize(kib, value, sizeof(value));
-    (void)CreateHallLabel(panel, name, &lv_font_montserrat_18, 0x748aa5U, x, y);
-    lv_obj_t* label = CreateHallLabel(panel, value, &lv_font_montserrat_18, color, x, y + 30);
-    lv_obj_set_width(label, 106);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-}
-
-void DrawMemoryStatisticsRow(lv_obj_t* panel, int32_t y, const char* name,
-                             const host_ui::MemoryStatisticsModel& memory) {
-    if (y > 0) {
-        (void)CreateWifiPanel(panel, HallCardBounds{.x = 20, .y = y, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
-    }
-    (void)CreateHallLabel(panel, name, &lv_font_montserrat_18, 0xf2f7ffU, 22, y + 35);
-    DrawMemoryMetric(panel, 176, y + 17, "TOTAL", memory.total_kib, 0xf2f7ffU);
-    DrawMemoryMetric(panel, 288, y + 17, "FREE", memory.free_kib, 0xf2f7ffU);
-    DrawMemoryMetric(panel, 400, y + 17, "MINIMUM", memory.minimum_free_kib, 0x69a7ffU);
-    DrawMemoryMetric(panel, 512, y + 17, "LARGEST", memory.largest_free_block_kib, 0xf2f7ffU);
-}
-
-void SystemInformationBackEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr && state->system_information_action_sink != nullptr) {
-        state->system_information_action_sink(
-            state->system_information_action_context,
-            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseSystemInformation});
-    }
+    void* action_context = state.system_menu_ui.ActionContext();
+    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.ClearSystemActionSink(action_context);
+    state.system_menu_ui.Deactivate();
 }
 
 std::expected<void, host_ui::SystemUiError> ShowSystemInformationImpl(MetalioClaw4PlatformState& state,
@@ -2223,15 +1336,11 @@ std::expected<void, host_ui::SystemUiError> ShowSystemInformationImpl(MetalioCla
     if (state.display == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
-    state.system_menu_action_sink = nullptr;
-    state.system_menu_action_context = nullptr;
-    state.system_information_action_sink = action_sink;
-    state.system_information_action_context = action_context;
+    void* menu_action_context = state.system_menu_ui.ActionContext();
+    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.ClearSystemActionSink(menu_action_context);
+    state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        state.system_information_action_sink = nullptr;
-        state.system_information_action_context = nullptr;
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
     if (state.host_smoke == nullptr) {
@@ -2240,395 +1349,33 @@ std::expected<void, host_ui::SystemUiError> ShowSystemInformationImpl(MetalioCla
     }
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
-    ResetSystemMenuObjectPointers(state);
-    ResetWifiUiObjectPointers(state);
     state.hall_settings_press_overlay = nullptr;
-    state.system_information_scroll_content = nullptr;
-    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
-    (void)DrawDetailHeader(state, "System Information", "Device and software", SystemInformationBackEvent, &state);
-
-    constexpr int32_t kContentHeight = 1300;
-    state.system_information_scroll_content = CreateDetailScrollContent(state, state.host_smoke, kContentHeight);
-    lv_obj_t* firmware =
-        CreateWifiPanel(state.system_information_scroll_content,
-                        HallCardBounds{.x = 40, .y = 14, .width = 640, .height = 128}, 0x111f32U, 0x2e4562U, 22);
-    (void)CreateHallLabel(firmware, "MicroPixel Firmware", &lv_font_montserrat_18, 0x91a4bdU, 24, 18);
-    char version[96]{};
-    std::snprintf(version, sizeof(version), "Version %s", model.firmware_version.data());
-    (void)CreateHallLabel(firmware, version, &lv_font_montserrat_24, 0xf2f7ffU, 24, 49);
-    char build[224]{};
-    std::snprintf(build, sizeof(build), "Build %s   %s %s", model.build_id.data(), model.build_date.data(),
-                  model.build_time.data());
-    lv_obj_t* build_label = CreateHallLabel(firmware, build, &lv_font_montserrat_18, 0x69a7ffU, 24, 88);
-    lv_obj_set_width(build_label, 592);
-    lv_label_set_long_mode(build_label, LV_LABEL_LONG_DOT);
-
-    DrawInformationSectionLabel(state.system_information_scroll_content, "MEMORY", 166);
-    lv_obj_t* memory =
-        CreateWifiPanel(state.system_information_scroll_content,
-                        HallCardBounds{.x = 40, .y = 198, .width = 640, .height = 194}, 0x111f32U, 0x2e4562U, 22);
-    DrawMemoryStatisticsRow(memory, 0, "SRAM", model.internal_sram);
-    DrawMemoryStatisticsRow(memory, 97, "PSRAM", model.psram);
-
-    DrawInformationSectionLabel(state.system_information_scroll_content, "HARDWARE", 420);
-    lv_obj_t* hardware =
-        CreateWifiPanel(state.system_information_scroll_content,
-                        HallCardBounds{.x = 40, .y = 452, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
-    DrawInformationRow(hardware, 0, "Host Chip", model.host_chip.data());
-    DrawInformationRow(hardware, 58, "CPU", model.cpu.data());
-    DrawInformationRow(hardware, 116, "Wi-Fi Coprocessor", model.wifi_coprocessor.data());
-    DrawInformationRow(hardware, 174, "Flash", model.flash_capacity.data());
-
-    DrawInformationSectionLabel(state.system_information_scroll_content, "DISPLAY", 712);
-    lv_obj_t* display =
-        CreateWifiPanel(state.system_information_scroll_content,
-                        HallCardBounds{.x = 40, .y = 744, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
-    DrawInformationRow(display, 0, "Panel", model.panel.data());
-    DrawInformationRow(display, 58, "Interface", model.display_interface.data());
-    DrawInformationRow(display, 116, "Resolution", model.resolution.data());
-    DrawInformationRow(display, 174, "Touch", model.touch_controller.data());
-
-    DrawInformationSectionLabel(state.system_information_scroll_content, "SOFTWARE", 1004);
-    lv_obj_t* software =
-        CreateWifiPanel(state.system_information_scroll_content,
-                        HallCardBounds{.x = 40, .y = 1036, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
-    DrawInformationRow(software, 0, "ESP-IDF", model.idf_version.data());
-    DrawInformationRow(software, 58, "Uptime", model.uptime.data());
-    DrawInformationRow(software, 116, "Last Reset", model.last_reset.data());
-    DrawInformationRow(software, 174, "Build Date", model.build_date.data());
-
-    lv_obj_update_layout(state.system_information_scroll_content);
-    lv_obj_move_foreground(state.host_smoke);
+    auto result =
+        state.system_detail_ui.ShowSystemInformationLocked(state.host_smoke, model, action_sink, action_context);
+    if (!result.has_value()) {
+        state.system_detail_ui.LeaveSystemInformation();
+        esp_lv_adapter_unlock();
+        return result;
+    }
     SetHostPointerEnabledLocked(state, true);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
     esp_lv_adapter_unlock();
     state.input_router.BindTouchSink(HostPointerTouchSink, &state);
     state.input_router.BindSystemActionSink(action_sink, action_context);
-    ESP_LOGI(kTag, "System Information visible: chip=%s firmware=%s", model.host_chip.data(),
-             model.firmware_version.data());
     return {};
 }
 
 void LeaveSystemInformationImpl(MetalioClaw4PlatformState& state) {
-    if (state.system_information_action_sink == nullptr && state.system_information_action_context == nullptr) {
+    if (!state.system_detail_ui.SystemInformationVisible()) {
         return;
     }
+    void* action_context = state.system_detail_ui.SystemInformationActionContext();
     state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.system_information_action_context);
+    state.input_router.ClearSystemActionSink(action_context);
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         SetHostPointerEnabledLocked(state, false);
         esp_lv_adapter_unlock();
     }
-    state.system_information_action_sink = nullptr;
-    state.system_information_action_context = nullptr;
-    state.system_information_scroll_content = nullptr;
-}
-
-void ResetAppManagementObjectPointers(MetalioClaw4PlatformState& state) {
-    state.app_management_scroll_content = nullptr;
-    for (lv_obj_t*& row : state.app_management_rows) {
-        row = nullptr;
-    }
-}
-
-void DrawAppMoreIndicator(lv_obj_t* parent) {
-    for (int32_t index = 0; index < 3; ++index) {
-        lv_obj_t* dot = CreateWifiPanel(parent, HallCardBounds{.x = 594, .y = 35 + index * 13, .width = 7, .height = 7},
-                                        0xa9bdd5U, 0U, LV_RADIUS_CIRCLE);
-        (void)dot;
-    }
-}
-
-uint32_t FindAppManagementRowIndex(const MetalioClaw4PlatformState& state, lv_obj_t* row) {
-    for (uint32_t index = 0U; index < state.app_management_model.app_count; ++index) {
-        if (state.app_management_rows[index] == row) {
-            return index;
-        }
-    }
-    return state.app_management_model.app_count;
-}
-
-void RenderAppManagementLocked(MetalioClaw4PlatformState& state);
-
-void AppManagementRenderAsync(void* context) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
-    if (state != nullptr && state->app_management_action_sink != nullptr) {
-        RenderAppManagementLocked(*state);
-    }
-}
-
-void QueueAppManagementRender(MetalioClaw4PlatformState& state) {
-    (void)lv_async_call(AppManagementRenderAsync, &state);
-}
-
-void AppManagementBackEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr && state->app_management_action_sink != nullptr) {
-        state->app_management_action_sink(
-            state->app_management_action_context,
-            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseAppManagement});
-    }
-}
-
-void AppManagementRowEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr) {
-        return;
-    }
-    const uint32_t index = FindAppManagementRowIndex(*state, lv_event_get_current_target_obj(event));
-    if (index >= state->app_management_model.app_count) {
-        return;
-    }
-    state->app_management_selected_index = index;
-    state->app_management_overlay = AppManagementOverlay::kActions;
-    QueueAppManagementRender(*state);
-}
-
-void AppManagementCancelEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr) {
-        return;
-    }
-    state->app_management_overlay = AppManagementOverlay::kNone;
-    QueueAppManagementRender(*state);
-}
-
-void AppManagementOpenEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr || state->app_management_action_sink == nullptr ||
-        state->app_management_selected_index >= state->app_management_model.app_count) {
-        return;
-    }
-    state->app_management_action_sink(state->app_management_action_context,
-                                      host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchManagedApp,
-                                                              .app_index = state->app_management_selected_index});
-}
-
-void AppManagementInformationEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr) {
-        return;
-    }
-    state->app_management_overlay = AppManagementOverlay::kInformation;
-    QueueAppManagementRender(*state);
-}
-
-void AppManagementUninstallEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr) {
-        return;
-    }
-    state->app_management_overlay = state->app_management_model.uninstall_available
-                                        ? AppManagementOverlay::kUninstallConfirmation
-                                        : AppManagementOverlay::kUninstallUnavailable;
-    QueueAppManagementRender(*state);
-}
-
-void AppManagementConfirmUninstallEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr || state->app_management_action_sink == nullptr ||
-        !state->app_management_model.uninstall_available ||
-        state->app_management_selected_index >= state->app_management_model.app_count) {
-        return;
-    }
-    state->app_management_action_sink(state->app_management_action_context,
-                                      host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUninstallManagedApp,
-                                                              .app_index = state->app_management_selected_index});
-}
-
-void DrawAppManagementActionsLocked(MetalioClaw4PlatformState& state) {
-    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
-    lv_obj_t* scrim = CreateWifiPanel(
-        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 330, .width = 664, .height = 362},
-                                      0x101c2cU, 0x42607fU, 24);
-    lv_obj_t* title = CreateHallLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
-    lv_obj_set_width(title, 616);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_t* open = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 72, .width = 624, .height = 58},
-                                    state.app_management_model.launch_available ? "Open" : "Open unavailable",
-                                    state.app_management_model.launch_available ? 0xf2f7ffU : 0x708198U);
-    if (state.app_management_model.launch_available) {
-        lv_obj_add_event_cb(open, AppManagementOpenEvent, LV_EVENT_SHORT_CLICKED, &state);
-    } else {
-        lv_obj_remove_flag(open, LV_OBJ_FLAG_CLICKABLE);
-    }
-    lv_obj_t* information = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 140, .width = 624, .height = 58},
-                                           "App Information", 0xf2f7ffU);
-    lv_obj_add_event_cb(information, AppManagementInformationEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* uninstall = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 208, .width = 624, .height = 58},
-                                         "Uninstall", 0xff6b74U, 0x653c48U);
-    lv_obj_add_event_cb(uninstall, AppManagementUninstallEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* cancel =
-        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 286, .width = 624, .height = 54}, "Cancel", 0xf2f7ffU);
-    lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-}
-
-void DrawAppManagementInformationLocked(MetalioClaw4PlatformState& state) {
-    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
-    lv_obj_t* scrim = CreateWifiPanel(
-        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 352, .width = 664, .height = 340},
-                                      0x101c2cU, 0x42607fU, 24);
-    lv_obj_t* title = CreateHallLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
-    lv_obj_set_width(title, 616);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_t* details =
-        CreateWifiPanel(sheet, HallCardBounds{.x = 20, .y = 66, .width = 624, .height = 174}, 0x111f32U, 0x2e4562U, 18);
-    DrawInformationRow(details, 0, "App ID", app.app_id != nullptr ? app.app_id : "Unknown");
-    char size[24]{};
-    FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
-    DrawInformationRow(details, 58, "Bundle Size", size);
-    DrawInformationRow(details, 116, "Runtime", "WebAssembly AOT");
-    lv_obj_t* done =
-        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 264, .width = 624, .height = 54}, "Done", 0xf2f7ffU);
-    lv_obj_add_event_cb(done, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-}
-
-void DrawAppManagementUninstallUnavailableLocked(MetalioClaw4PlatformState& state) {
-    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
-    lv_obj_t* scrim = CreateWifiPanel(
-        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 420, .width = 664, .height = 272},
-                                      0x101c2cU, 0x42607fU, 24);
-    (void)CreateHallLabel(sheet, "Uninstall unavailable", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
-    char message[160]{};
-    std::snprintf(message, sizeof(message), "%s is stored in the read-only App Store. Storage migration is required.",
-                  app.display_name != nullptr ? app.display_name : "This App");
-    lv_obj_t* detail = CreateHallLabel(sheet, message, &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
-    lv_obj_set_size(detail, 616, 92);
-    lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
-    lv_obj_t* done =
-        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 196, .width = 624, .height = 54}, "Done", 0xf2f7ffU);
-    lv_obj_add_event_cb(done, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-}
-
-void DrawAppManagementUninstallConfirmationLocked(MetalioClaw4PlatformState& state) {
-    const auto& app = state.app_management_model.apps[state.app_management_selected_index];
-    lv_obj_t* scrim = CreateWifiPanel(
-        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 390, .width = 664, .height = 302},
-                                      0x101c2cU, 0x653c48U, 24);
-    (void)CreateHallLabel(sheet, "Uninstall App?", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
-    lv_obj_t* name = CreateHallLabel(sheet, app.display_name, &lv_font_montserrat_18, 0x91a4bdU, 24, 61);
-    lv_obj_set_width(name, 616);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_t* uninstall = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 112, .width = 624, .height = 58},
-                                         "Uninstall", 0xff6b74U, 0x653c48U);
-    lv_obj_add_event_cb(uninstall, AppManagementConfirmUninstallEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* cancel =
-        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 190, .width = 624, .height = 58}, "Cancel", 0xf2f7ffU);
-    lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-}
-
-void RenderAppManagementLocked(MetalioClaw4PlatformState& state) {
-    lv_obj_clean(state.host_smoke);
-    ResetHallImageDescriptorsLocked(state);
-    ResetSystemMenuObjectPointers(state);
-    ResetWifiUiObjectPointers(state);
-    ResetAppManagementObjectPointers(state);
-    state.hall_settings_press_overlay = nullptr;
-    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
-    (void)DrawDetailHeader(state, "App Management", "Installed applications", AppManagementBackEvent, &state);
-
-    const int32_t content_height = std::max<int32_t>(
-        kHeight - 108,
-        106 + static_cast<int32_t>(std::max<uint32_t>(1U, state.app_management_model.app_count)) * 116 + 30);
-    state.app_management_scroll_content = CreateDetailScrollContent(state, state.host_smoke, content_height);
-    char count[48]{};
-    if (state.app_management_model.app_count == 1U) {
-        std::snprintf(count, sizeof(count), "1 App");
-    } else {
-        std::snprintf(count, sizeof(count), "%" PRIu32 " Apps", state.app_management_model.app_count);
-    }
-    (void)CreateHallLabel(state.app_management_scroll_content, count, &lv_font_montserrat_24, 0xf2f7ffU, 42, 14);
-    (void)CreateHallLabel(state.app_management_scroll_content, "Installed on this device", &lv_font_montserrat_18,
-                          0x91a4bdU, 42, 49);
-    char used[24]{};
-    char total[24]{};
-    char storage[56]{};
-    FormatInformationSize(state.app_management_model.storage_used_kib, used, sizeof(used));
-    FormatInformationSize(state.app_management_model.storage_total_kib, total, sizeof(total));
-    if (state.app_management_model.storage_total_kib != 0U) {
-        std::snprintf(storage, sizeof(storage), "%s / %s", used, total);
-    } else {
-        std::snprintf(storage, sizeof(storage), "%s used", used);
-    }
-    lv_obj_t* used_label =
-        CreateHallLabel(state.app_management_scroll_content, storage, &lv_font_montserrat_18, 0x91a4bdU, 448, 27);
-    lv_obj_set_width(used_label, 230);
-    lv_obj_set_style_text_align(used_label, LV_TEXT_ALIGN_RIGHT, 0);
-
-    constexpr uint32_t kAppIconColors[] = {0x2c7867U, 0x305f9eU, 0x76539bU};
-    if (state.app_management_model.app_count == 0U) {
-        lv_obj_t* empty =
-            CreateWifiPanel(state.app_management_scroll_content,
-                            HallCardBounds{.x = 40, .y = 90, .width = 640, .height = 104}, 0x111f32U, 0x2e4562U, 22);
-        (void)CreateHallLabel(empty, "No installed Apps", &lv_font_montserrat_18, 0x91a4bdU, 22, 39);
-    } else {
-        for (uint32_t index = 0U; index < state.app_management_model.app_count; ++index) {
-            const auto& app = state.app_management_model.apps[index];
-            const int32_t y = 90 + static_cast<int32_t>(index) * 116;
-            lv_obj_t* row =
-                CreateWifiPanel(state.app_management_scroll_content,
-                                HallCardBounds{.x = 40, .y = y, .width = 640, .height = 104}, 0x111f32U, 0x2e4562U, 22);
-            state.app_management_rows[index] = row;
-            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-            lv_obj_add_event_cb(row, AppManagementRowEvent, LV_EVENT_SHORT_CLICKED, &state);
-            lv_obj_t* icon = CreateWifiPanel(row, HallCardBounds{.x = 16, .y = 20, .width = 64, .height = 64},
-                                             kAppIconColors[index % std::size(kAppIconColors)], 0U, 17);
-            char initial[2]{'?', '\0'};
-            if (app.display_name != nullptr && app.display_name[0] != '\0') {
-                initial[0] = app.display_name[0];
-            }
-            lv_obj_t* initial_label = lv_label_create(icon);
-            lv_label_set_text(initial_label, initial);
-            lv_obj_set_style_text_font(initial_label, &lv_font_montserrat_24, 0);
-            lv_obj_set_style_text_color(initial_label, lv_color_white(), 0);
-            lv_obj_center(initial_label);
-            lv_obj_t* name = CreateHallLabel(row, app.display_name != nullptr ? app.display_name : "Unknown App",
-                                             &lv_font_montserrat_24, 0xf2f7ffU, 98, 20);
-            lv_obj_set_width(name, 438);
-            lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-            char metadata[128]{};
-            char size[24]{};
-            FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
-            std::snprintf(metadata, sizeof(metadata), "%s   %s", app.app_id != nullptr ? app.app_id : "Unknown", size);
-            lv_obj_t* metadata_label = CreateHallLabel(row, metadata, &lv_font_montserrat_18, 0x91a4bdU, 98, 59);
-            lv_obj_set_width(metadata_label, 438);
-            lv_label_set_long_mode(metadata_label, LV_LABEL_LONG_DOT);
-            DrawAppMoreIndicator(row);
-        }
-    }
-    lv_obj_update_layout(state.app_management_scroll_content);
-    switch (state.app_management_overlay) {
-        case AppManagementOverlay::kActions:
-            DrawAppManagementActionsLocked(state);
-            break;
-        case AppManagementOverlay::kInformation:
-            DrawAppManagementInformationLocked(state);
-            break;
-        case AppManagementOverlay::kUninstallConfirmation:
-            DrawAppManagementUninstallConfirmationLocked(state);
-            break;
-        case AppManagementOverlay::kUninstallUnavailable:
-            DrawAppManagementUninstallUnavailableLocked(state);
-            break;
-        case AppManagementOverlay::kNone:
-        default:
-            break;
-    }
-    lv_obj_move_foreground(state.host_smoke);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    state.system_detail_ui.LeaveSystemInformation();
 }
 
 std::expected<void, host_ui::SystemUiError> ShowAppManagementImpl(MetalioClaw4PlatformState& state,
@@ -2638,671 +1385,45 @@ std::expected<void, host_ui::SystemUiError> ShowAppManagementImpl(MetalioClaw4Pl
     if (state.display == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
-    state.system_menu_action_sink = nullptr;
-    state.system_menu_action_context = nullptr;
-    state.app_management_action_sink = action_sink;
-    state.app_management_action_context = action_context;
-    state.app_management_model = model;
-    state.app_management_selected_index = 0U;
-    state.app_management_overlay = AppManagementOverlay::kNone;
+    void* menu_action_context = state.system_menu_ui.ActionContext();
+    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.ClearSystemActionSink(menu_action_context);
+    state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        state.app_management_action_sink = nullptr;
-        state.app_management_action_context = nullptr;
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
     if (state.host_smoke == nullptr) {
         state.host_smoke = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(state.host_smoke, 0x08111fU);
     }
-    RenderAppManagementLocked(state);
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    state.hall_settings_press_overlay = nullptr;
+    auto result = state.system_detail_ui.ShowAppManagementLocked(state.host_smoke, model, action_sink, action_context);
+    if (!result.has_value()) {
+        state.system_detail_ui.LeaveAppManagement();
+        esp_lv_adapter_unlock();
+        return result;
+    }
     SetHostPointerEnabledLocked(state, true);
     esp_lv_adapter_unlock();
     state.input_router.BindTouchSink(HostPointerTouchSink, &state);
     state.input_router.BindSystemActionSink(action_sink, action_context);
-    ESP_LOGI(kTag, "App Management visible: apps=%" PRIu32, model.app_count);
     return {};
 }
 
 void LeaveAppManagementImpl(MetalioClaw4PlatformState& state) {
-    if (state.app_management_action_sink == nullptr && state.app_management_action_context == nullptr) {
+    if (!state.system_detail_ui.AppManagementVisible()) {
         return;
     }
+    void* action_context = state.system_detail_ui.AppManagementActionContext();
     state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.app_management_action_context);
+    state.input_router.ClearSystemActionSink(action_context);
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         SetHostPointerEnabledLocked(state, false);
         esp_lv_adapter_unlock();
     }
-    state.app_management_action_sink = nullptr;
-    state.app_management_action_context = nullptr;
-    state.app_management_overlay = AppManagementOverlay::kNone;
-    state.app_management_model = {};
-    ResetAppManagementObjectPointers(state);
-}
-
-constexpr const char* kWifiKeyboardLowerMap[] = {
-    "q",  "w",   "e",     "r",  "t",      "y",       "u",     "i", "o", "p", "\n", "a", "s", "d", "f",
-    "g",  "h",   "j",     "k",  "l",      "\n",      "Shift", "z", "x", "c", "v",  "b", "n", "m", LV_SYMBOL_BACKSPACE,
-    "\n", "123", "Space", "\n", "Cancel", "Connect", "",
-};
-
-constexpr const char* kWifiKeyboardUpperMap[] = {
-    "Q",  "W",   "E",     "R",  "T",      "Y",       "U",     "I", "O", "P", "\n", "A", "S", "D", "F",
-    "G",  "H",   "J",     "K",  "L",      "\n",      "Shift", "Z", "X", "C", "V",  "B", "N", "M", LV_SYMBOL_BACKSPACE,
-    "\n", "123", "Space", "\n", "Cancel", "Connect", "",
-};
-
-constexpr const char* kWifiKeyboardNumericMap[] = {
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "0",
-    "\n",
-    "!",
-    "@",
-    "#",
-    "$",
-    "%",
-    "^",
-    "&",
-    "*",
-    "(",
-    ")",
-    "\n",
-    "-",
-    "_",
-    "=",
-    "+",
-    "[",
-    "]",
-    "{",
-    "}",
-    LV_SYMBOL_BACKSPACE,
-    "\n",
-    "ABC",
-    "Space",
-    "\n",
-    "Cancel",
-    "Connect",
-    "",
-};
-
-constexpr std::array<lv_buttonmatrix_ctrl_t, 32U> MakeWifiKeyboardTextControls() {
-    std::array<lv_buttonmatrix_ctrl_t, 32U> controls{};
-    constexpr auto kReleaseKey = static_cast<lv_buttonmatrix_ctrl_t>(
-        LV_BUTTONMATRIX_CTRL_WIDTH_1 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls.fill(kReleaseKey);
-    controls[19] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_2 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[27] = controls[19];
-    controls[28] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_3 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[29] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_9 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[30] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_5 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[31] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_7 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    return controls;
-}
-
-constexpr std::array<lv_buttonmatrix_ctrl_t, 33U> MakeWifiKeyboardNumericControls() {
-    std::array<lv_buttonmatrix_ctrl_t, 33U> controls{};
-    constexpr auto kReleaseKey = static_cast<lv_buttonmatrix_ctrl_t>(
-        LV_BUTTONMATRIX_CTRL_WIDTH_1 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls.fill(kReleaseKey);
-    controls[28] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_2 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[29] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_3 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[30] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_9 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[31] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_5 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    controls[32] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_7 |
-                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-    return controls;
-}
-
-constexpr auto kWifiKeyboardTextControls = MakeWifiKeyboardTextControls();
-constexpr auto kWifiKeyboardNumericControls = MakeWifiKeyboardNumericControls();
-
-uint32_t WifiKeyboardButtonAtPoint(lv_obj_t* keyboard, const lv_point_t& point) {
-    auto* matrix = reinterpret_cast<lv_buttonmatrix_t*>(keyboard);
-    lv_area_t keyboard_area{};
-    lv_obj_get_coords(keyboard, &keyboard_area);
-    const int32_t width = lv_obj_get_width(keyboard);
-    const int32_t height = lv_obj_get_height(keyboard);
-    const int32_t left_padding = lv_obj_get_style_pad_left(keyboard, LV_PART_MAIN);
-    const int32_t right_padding = lv_obj_get_style_pad_right(keyboard, LV_PART_MAIN);
-    const int32_t top_padding = lv_obj_get_style_pad_top(keyboard, LV_PART_MAIN);
-    const int32_t bottom_padding = lv_obj_get_style_pad_bottom(keyboard, LV_PART_MAIN);
-    constexpr int32_t kMaxExtra = LV_DPI_DEF / 10;
-    const int32_t row_padding = lv_obj_get_style_pad_row(keyboard, LV_PART_MAIN);
-    const int32_t column_padding = lv_obj_get_style_pad_column(keyboard, LV_PART_MAIN);
-    const int32_t row_extra = std::min((row_padding / 2) + 1 + (row_padding & 1), kMaxExtra);
-    const int32_t column_extra = std::min((column_padding / 2) + 1 + (column_padding & 1), kMaxExtra);
-
-    for (uint32_t button = 0U; button < matrix->btn_cnt; ++button) {
-        lv_area_t area = matrix->button_areas[button];
-        area.x1 += keyboard_area.x1 -
-                   (area.x1 <= left_padding ? std::min(left_padding, kMaxExtra) : column_extra);
-        area.y1 += keyboard_area.y1 -
-                   (area.y1 <= top_padding ? std::min(top_padding, kMaxExtra) : row_extra);
-        area.x2 += keyboard_area.x1 +
-                   (area.x2 >= width - right_padding - 2 ? std::min(right_padding, kMaxExtra) : column_extra);
-        area.y2 += keyboard_area.y1 +
-                   (area.y2 >= height - bottom_padding - 2 ? std::min(bottom_padding, kMaxExtra) : row_extra);
-        if (point.x >= area.x1 && point.x <= area.x2 && point.y >= area.y1 && point.y <= area.y2) {
-            return button;
-        }
-    }
-    return LV_BUTTONMATRIX_BUTTON_NONE;
-}
-
-void WifiKeyboardTrackPointerEvent(lv_event_t* event) {
-    lv_obj_t* keyboard = lv_event_get_current_target_obj(event);
-    lv_indev_t* indev = lv_event_get_indev(event);
-    if (keyboard == nullptr || indev == nullptr) {
-        return;
-    }
-    lv_point_t point{};
-    lv_indev_get_point(indev, &point);
-    lv_buttonmatrix_set_selected_button(keyboard, WifiKeyboardButtonAtPoint(keyboard, point));
-}
-
-void WifiKeyboardEvent(lv_event_t* event) {
-    if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    lv_obj_t* keyboard = lv_event_get_current_target_obj(event);
-    if (state == nullptr || keyboard == nullptr || state->wifi_password_textarea == nullptr) {
-        return;
-    }
-    const uint32_t button = lv_keyboard_get_selected_button(keyboard);
-    const char* text = lv_keyboard_get_button_text(keyboard, button);
-    if (text == nullptr) {
-        return;
-    }
-    if (std::strcmp(text, "123") == 0) {
-        lv_keyboard_set_mode(keyboard, LV_KEYBOARD_MODE_SPECIAL);
-    } else if (std::strcmp(text, "ABC") == 0) {
-        lv_keyboard_set_mode(keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
-    } else if (std::strcmp(text, "Shift") == 0) {
-        const lv_keyboard_mode_t mode = lv_keyboard_get_mode(keyboard);
-        lv_keyboard_set_mode(
-            keyboard, mode == LV_KEYBOARD_MODE_TEXT_UPPER ? LV_KEYBOARD_MODE_TEXT_LOWER : LV_KEYBOARD_MODE_TEXT_UPPER);
-    } else if (std::strcmp(text, LV_SYMBOL_BACKSPACE) == 0) {
-        lv_textarea_delete_char(state->wifi_password_textarea);
-    } else if (std::strcmp(text, "Space") == 0) {
-        lv_textarea_add_char(state->wifi_password_textarea, ' ');
-    } else if (std::strcmp(text, "Cancel") == 0) {
-        lv_indev_t* indev = lv_event_get_indev(event);
-        if (indev != nullptr && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
-            return;
-        }
-        state->wifi_password_visible = false;
-        state->wifi_password_attempt_active = false;
-        state->wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
-        state->wifi_password_network = {};
-        QueueWifiSettingsRender(*state);
-    } else if (std::strcmp(text, "Connect") == 0) {
-        lv_indev_t* indev = lv_event_get_indev(event);
-        if (indev != nullptr && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
-            return;
-        }
-        const char* password = lv_textarea_get_text(state->wifi_password_textarea);
-        if (password != nullptr && password[0] != '\0' &&
-            state->wifi_password_network.ssid[0] != '\0') {
-            std::snprintf(state->wifi_password.data(), state->wifi_password.size(), "%s", password);
-            state->wifi_password_attempt_active = true;
-            state->wifi_password_connection_state = host_ui::WifiConnectionState::kConnecting;
-            EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kConnectNewWifi,
-                                  state->wifi_password_network);
-            QueueWifiSettingsRender(*state);
-        }
-    } else {
-        lv_textarea_add_text(state->wifi_password_textarea, text);
-    }
-}
-
-void DrawWifiKeyboard(MetalioClaw4PlatformState& state, lv_obj_t* parent) {
-    constexpr lv_style_selector_t kPressedItem =
-        static_cast<lv_style_selector_t>(LV_PART_ITEMS) | static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
-    state.wifi_keyboard = lv_keyboard_create(parent);
-    lv_obj_remove_event_cb(state.wifi_keyboard, lv_keyboard_def_event_cb);
-    lv_keyboard_set_map(state.wifi_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER, kWifiKeyboardLowerMap,
-                        kWifiKeyboardTextControls.data());
-    lv_keyboard_set_map(state.wifi_keyboard, LV_KEYBOARD_MODE_TEXT_UPPER, kWifiKeyboardUpperMap,
-                        kWifiKeyboardTextControls.data());
-    lv_keyboard_set_map(state.wifi_keyboard, LV_KEYBOARD_MODE_SPECIAL, kWifiKeyboardNumericMap,
-                        kWifiKeyboardNumericControls.data());
-    lv_keyboard_set_mode(state.wifi_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_keyboard_set_textarea(state.wifi_keyboard, state.wifi_password_textarea);
-    lv_keyboard_set_popovers(state.wifi_keyboard, false);
-    lv_obj_add_event_cb(state.wifi_keyboard, WifiKeyboardTrackPointerEvent, LV_EVENT_PRESSING, nullptr);
-    lv_obj_add_event_cb(state.wifi_keyboard, WifiKeyboardEvent, LV_EVENT_VALUE_CHANGED, &state);
-    lv_obj_align(state.wifi_keyboard, LV_ALIGN_TOP_LEFT, 26, 196);
-    lv_obj_set_size(state.wifi_keyboard, 620, 436);
-    lv_obj_set_style_pad_all(state.wifi_keyboard, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(state.wifi_keyboard, 8, LV_PART_MAIN);
-    lv_obj_set_style_pad_column(state.wifi_keyboard, 6, LV_PART_MAIN);
-    lv_obj_set_style_radius(state.wifi_keyboard, 18, LV_PART_MAIN);
-    lv_obj_set_style_border_width(state.wifi_keyboard, 0, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x0b1625U), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(state.wifi_keyboard, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_text_font(state.wifi_keyboard, &lv_font_montserrat_18, LV_PART_ITEMS);
-    lv_obj_set_style_text_color(state.wifi_keyboard, lv_color_hex(0xf2f7ffU), LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x16263aU), LV_PART_ITEMS);
-    lv_obj_set_style_bg_opa(state.wifi_keyboard, LV_OPA_COVER, LV_PART_ITEMS);
-    lv_obj_set_style_border_width(state.wifi_keyboard, 1, LV_PART_ITEMS);
-    lv_obj_set_style_border_color(state.wifi_keyboard, lv_color_hex(0x365472U), LV_PART_ITEMS);
-    lv_obj_set_style_radius(state.wifi_keyboard, 14, LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x2f6da9U), kPressedItem);
-    lv_obj_set_style_border_color(state.wifi_keyboard, lv_color_hex(0x69a7ffU), kPressedItem);
-}
-
-void DrawWifiPasswordOverlayLocked(MetalioClaw4PlatformState& state) {
-    lv_obj_t* scrim = CreateWifiPanel(
-        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* dialog = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 24, .y = 52, .width = 672, .height = 648},
-                                       0x101c2cU, 0x42607fU, 24);
-    const auto& network = state.wifi_password_network;
-    const char* heading = "Join network";
-    uint32_t heading_color = 0xf2f7ffU;
-    switch (state.wifi_password_connection_state) {
-        case host_ui::WifiConnectionState::kConnecting:
-            heading = "Connecting...";
-            heading_color = 0x69a7ffU;
-            break;
-        case host_ui::WifiConnectionState::kAuthenticationFailed:
-            heading = "Incorrect password. Try again.";
-            heading_color = 0xff737dU;
-            break;
-        case host_ui::WifiConnectionState::kAuthenticationTimedOut:
-            heading = "Authentication timed out. Try again.";
-            heading_color = 0xffb45eU;
-            break;
-        case host_ui::WifiConnectionState::kHandshakeTimedOut:
-            heading = "Security handshake timed out. Try again.";
-            heading_color = 0xffb45eU;
-            break;
-        case host_ui::WifiConnectionState::kNetworkNotFound:
-            heading = "Network not found. Try again.";
-            heading_color = 0xffb45eU;
-            break;
-        case host_ui::WifiConnectionState::kFailed:
-            heading = "Connection failed. Try again.";
-            heading_color = 0xffb45eU;
-            break;
-        default:
-            break;
-    }
-    (void)CreateHallLabel(dialog, heading, &lv_font_montserrat_24, heading_color, 26, 22);
-    lv_obj_t* ssid = CreateHallLabel(dialog, network.ssid.data(), &lv_font_montserrat_32, 0xf2f7ffU, 26, 58);
-    lv_obj_set_width(ssid, 620);
-    lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
-
-    state.wifi_password_textarea = lv_textarea_create(dialog);
-    lv_obj_set_pos(state.wifi_password_textarea, 26, 108);
-    lv_obj_set_size(state.wifi_password_textarea, 620, 64);
-    lv_textarea_set_one_line(state.wifi_password_textarea, true);
-    lv_textarea_set_password_mode(state.wifi_password_textarea, false);
-    lv_textarea_set_max_length(state.wifi_password_textarea, host_ui::kMaxWifiPasswordLength);
-    lv_textarea_set_placeholder_text(state.wifi_password_textarea, "Password");
-    if (state.wifi_password[0] != '\0') {
-        lv_textarea_set_text(state.wifi_password_textarea, state.wifi_password.data());
-    }
-    lv_obj_set_style_pad_left(state.wifi_password_textarea, 20, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(state.wifi_password_textarea, 20, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(state.wifi_password_textarea, 15, LV_PART_MAIN);
-    lv_obj_set_style_text_font(state.wifi_password_textarea, &lv_font_montserrat_24, LV_PART_MAIN);
-    lv_obj_set_style_text_color(state.wifi_password_textarea, lv_color_hex(0xf2f7ffU), LV_PART_MAIN);
-    lv_obj_set_style_text_color(state.wifi_password_textarea, lv_color_hex(0x6f849fU), LV_PART_TEXTAREA_PLACEHOLDER);
-    lv_obj_set_style_bg_color(state.wifi_password_textarea, lv_color_hex(0x08111fU), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(state.wifi_password_textarea, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(state.wifi_password_textarea, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(state.wifi_password_textarea, lv_color_hex(0x42607fU), LV_PART_MAIN);
-    lv_obj_set_style_radius(state.wifi_password_textarea, 14, LV_PART_MAIN);
-    lv_obj_remove_flag(state.wifi_password_textarea, LV_OBJ_FLAG_CLICKABLE);
-    DrawWifiKeyboard(state, dialog);
-    if (state.wifi_password_connection_state == host_ui::WifiConnectionState::kConnecting) {
-        lv_buttonmatrix_set_button_ctrl_all(state.wifi_keyboard, LV_BUTTONMATRIX_CTRL_DISABLED);
-        const uint32_t cancel_button =
-            lv_keyboard_get_mode(state.wifi_keyboard) == LV_KEYBOARD_MODE_SPECIAL ? 31U : 30U;
-        lv_buttonmatrix_clear_button_ctrl(state.wifi_keyboard, cancel_button, LV_BUTTONMATRIX_CTRL_DISABLED);
-    }
-}
-
-void DrawWifiActionSheetLocked(MetalioClaw4PlatformState& state) {
-    lv_obj_t* scrim = CreateWifiPanel(
-        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(scrim, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 304, .width = 664, .height = 388},
-                                      0x101c2cU, 0x42607fU, 24);
-    (void)CreateHallLabel(sheet, "SAVED NETWORK", &lv_font_montserrat_18, 0x91a4bdU, 24, 20);
-    const auto& network = state.wifi_model.saved_networks[state.wifi_selected_index];
-    lv_obj_t* ssid = CreateHallLabel(sheet, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 24, 48);
-    lv_obj_set_width(ssid, 616);
-    lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
-    lv_obj_t* connect = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 102, .width = 624, .height = 72},
-                                       network.connected ? "Disconnect" : "Connect", 0xf2f7ffU);
-    lv_obj_add_event_cb(connect, WifiSheetConnectEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* forget = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 188, .width = 624, .height = 72},
-                                      "Forget Network", 0xff6b74U, 0x653c48U);
-    lv_obj_add_event_cb(forget, WifiSheetForgetEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* cancel =
-        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 286, .width = 624, .height = 72}, "Cancel", 0xf2f7ffU);
-    lv_obj_add_event_cb(cancel, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
-}
-
-void RenderWifiSettingsLocked(MetalioClaw4PlatformState& state) {
-    lv_obj_clean(state.host_smoke);
-    ResetHallImageDescriptorsLocked(state);
-    ResetSystemMenuObjectPointers(state);
-    ResetWifiUiObjectPointers(state);
-    state.hall_settings_press_overlay = nullptr;
-    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
-
-    const WifiListLayout layout = GetWifiListLayout(state.wifi_model);
-    state.wifi_scroll_offset =
-        std::clamp(state.wifi_scroll_offset, int32_t{0}, std::max<int32_t>(0, layout.content_height - kHeight));
-    state.wifi_scroll_content = lv_obj_create(state.host_smoke);
-    lv_obj_set_pos(state.wifi_scroll_content, 0, 0);
-    lv_obj_set_size(state.wifi_scroll_content, kWidth, kHeight);
-    lv_obj_set_style_pad_all(state.wifi_scroll_content, 0, 0);
-    lv_obj_set_style_border_width(state.wifi_scroll_content, 0, 0);
-    lv_obj_set_style_bg_opa(state.wifi_scroll_content, LV_OPA_TRANSP, 0);
-    lv_obj_set_scroll_dir(state.wifi_scroll_content, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(state.wifi_scroll_content, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_add_event_cb(state.wifi_scroll_content, WifiScrollEvent, LV_EVENT_SCROLL, &state);
-    lv_obj_add_event_cb(state.wifi_scroll_content, WifiScrollEvent, LV_EVENT_SCROLL_END, &state);
-    constexpr lv_obj_flag_t kWifiScrollFlags = static_cast<lv_obj_flag_t>(
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
-    lv_obj_add_flag(state.wifi_scroll_content, kWifiScrollFlags);
-    lv_obj_set_style_width(state.wifi_scroll_content, 5, LV_PART_SCROLLBAR);
-    lv_obj_set_style_radius(state.wifi_scroll_content, 3, LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_color(state.wifi_scroll_content, lv_color_hex(0x42607fU), LV_PART_SCROLLBAR);
-    lv_obj_set_style_bg_opa(state.wifi_scroll_content, LV_OPA_COVER, LV_PART_SCROLLBAR);
-
-    lv_obj_t* back =
-        CreateWifiPanel(state.wifi_scroll_content, HallCardBounds{.x = 40, .y = 32, .width = 56, .height = 56},
-                        0x0d1929U, 0x42607fU, 18);
-    lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(back, lv_color_hex(0x081321U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-    lv_obj_add_event_cb(back, WifiBackEvent, LV_EVENT_SHORT_CLICKED, &state);
-    lv_obj_t* back_icon = lv_label_create(back);
-    lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_center(back_icon);
-    (void)CreateHallLabel(state.wifi_scroll_content, "Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
-    (void)CreateHallLabel(state.wifi_scroll_content, "Manage connections", &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
-
-    lv_obj_t* toggle =
-        CreateWifiPanel(state.wifi_scroll_content, HallCardBounds{.x = 40, .y = 116, .width = 640, .height = 86},
-                        0x111f32U, 0x365472U, 20);
-    lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(toggle, lv_color_hex(0x0a1726U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-    lv_obj_add_event_cb(toggle, WifiSwitchEvent, LV_EVENT_SHORT_CLICKED, &state);
-    (void)CreateHallLabel(toggle, "Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU, 20, 14);
-    const char* connection_detail = WifiConnectionDetail(state.wifi_model);
-    (void)CreateHallLabel(toggle, connection_detail, &lv_font_montserrat_18, 0x91a4bdU, 20, 48);
-    lv_obj_t* switch_track = CreateWifiPanel(toggle, HallCardBounds{.x = 532, .y = 19, .width = 84, .height = 48},
-                                             state.wifi_model.enabled ? kThemeAccentColor : 0x31506bU, 0U, 24);
-    lv_obj_t* switch_knob = CreateWifiPanel(
-        switch_track, HallCardBounds{.x = state.wifi_model.enabled ? 40 : 4, .y = 4, .width = 40, .height = 40},
-        0xf7fbffU, 0U, 20);
-    (void)switch_knob;
-
-    (void)CreateHallLabel(state.wifi_scroll_content, "SAVED NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42, 226);
-    if (state.wifi_model.saved_network_count == 0U) {
-        lv_obj_t* empty = CreateWifiPanel(
-            state.wifi_scroll_content,
-            HallCardBounds{
-                .x = kWifiContentLeft, .y = layout.saved_start, .width = kWifiContentWidth, .height = kWifiRowHeight},
-            0x111f32U, 0x2e4562U, 20);
-        (void)CreateHallLabel(empty, "No saved networks", &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
-    } else {
-        for (uint32_t index = 0U; index < state.wifi_model.saved_network_count; ++index) {
-            state.wifi_saved_rows[index] = DrawWifiNetworkRow(
-                state.wifi_scroll_content, state.wifi_model.saved_networks[index],
-                layout.saved_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), true);
-            lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_SHORT_CLICKED, &state);
-        }
-    }
-
-    (void)CreateHallLabel(state.wifi_scroll_content, "AVAILABLE NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42,
-                          layout.available_heading);
-    if (!state.wifi_model.enabled || state.wifi_model.available_network_count == 0U) {
-        lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
-                                          HallCardBounds{.x = kWifiContentLeft,
-                                                         .y = layout.available_start,
-                                                         .width = kWifiContentWidth,
-                                                         .height = kWifiRowHeight},
-                                          0x111f32U, 0x2e4562U, 20);
-        const char* message = !state.wifi_model.enabled   ? "Turn on Wi-Fi to see networks"
-                              : state.wifi_model.scanning ? "Looking for nearby networks..."
-                                                          : "No nearby networks found";
-        (void)CreateHallLabel(empty, message, &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
-    } else {
-        for (uint32_t index = 0U; index < state.wifi_model.available_network_count; ++index) {
-            state.wifi_available_rows[index] = DrawWifiNetworkRow(
-                state.wifi_scroll_content, state.wifi_model.available_networks[index],
-                layout.available_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), false);
-            lv_obj_add_event_cb(state.wifi_available_rows[index], WifiAvailableNetworkEvent, LV_EVENT_SHORT_CLICKED,
-                                &state);
-        }
-    }
-
-    lv_obj_t* bottom_spacer = lv_obj_create(state.wifi_scroll_content);
-    lv_obj_set_pos(bottom_spacer, 0, layout.content_height - 1);
-    lv_obj_set_size(bottom_spacer, 1, 1);
-    lv_obj_set_style_border_width(bottom_spacer, 0, 0);
-    lv_obj_set_style_bg_opa(bottom_spacer, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_update_layout(state.wifi_scroll_content);
-    lv_obj_scroll_to_y(state.wifi_scroll_content, state.wifi_scroll_offset, LV_ANIM_OFF);
-    if (state.wifi_action_sheet_visible) {
-        DrawWifiActionSheetLocked(state);
-    } else if (state.wifi_password_visible) {
-        DrawWifiPasswordOverlayLocked(state);
-    }
-    lv_obj_move_foreground(state.host_smoke);
-    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_move_foreground(state.performance_overlay);
-    }
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
-}
-
-void EmitWifiNetworkAction(MetalioClaw4PlatformState& state, host_ui::SystemUiActionType type,
-                           const host_ui::WifiNetworkModel& network) {
-    if (state.wifi_action_sink == nullptr) {
-        return;
-    }
-    host_ui::SystemUiAction action{.type = type};
-    action.text = network.ssid;
-    if (type == host_ui::SystemUiActionType::kConnectNewWifi) {
-        action.secret = state.wifi_password;
-    }
-    state.wifi_action_sink(state.wifi_action_context, action);
-}
-
-void WifiSettingsRenderAsync(void* context) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
-    if (state != nullptr && state->wifi_action_sink != nullptr) {
-        RenderWifiSettingsLocked(*state);
-    }
-}
-
-void QueueWifiSettingsRender(MetalioClaw4PlatformState& state) { (void)lv_async_call(WifiSettingsRenderAsync, &state); }
-
-void WifiScrollEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    lv_obj_t* scroll_content = lv_event_get_current_target_obj(event);
-    if (state == nullptr || scroll_content == nullptr) {
-        return;
-    }
-    bool render_after_scroll = false;
-    if (lv_event_get_code(event) == LV_EVENT_SCROLL_END) {
-        portENTER_CRITICAL(&state->host_pointer_lock);
-        state->wifi_scroll_gesture_active = false;
-        if (state->wifi_render_pending) {
-            state->wifi_render_pending = false;
-            render_after_scroll = true;
-        }
-        portEXIT_CRITICAL(&state->host_pointer_lock);
-    } else {
-        lv_indev_t* indev = lv_indev_active();
-        if (indev != nullptr && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
-            portENTER_CRITICAL(&state->host_pointer_lock);
-            state->wifi_user_scrolled = true;
-            state->wifi_scroll_gesture_active = true;
-            portEXIT_CRITICAL(&state->host_pointer_lock);
-        }
-    }
-    if (state->wifi_user_scrolled) {
-        state->wifi_scroll_offset = std::max<int32_t>(0, lv_obj_get_scroll_y(scroll_content));
-    }
-    if (render_after_scroll) {
-        QueueWifiSettingsRender(*state);
-    }
-    if (state->display != nullptr) {
-        lv_timer_ready(lv_display_get_refr_timer(state->display));
-    }
-}
-
-uint32_t FindWifiRowIndex(lv_obj_t* target, lv_obj_t* const* rows, uint32_t count) {
-    for (uint32_t index = 0U; index < count; ++index) {
-        if (rows[index] == target) {
-            return index;
-        }
-    }
-    return count;
-}
-
-void WifiBackEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr && state->wifi_action_sink != nullptr) {
-        state->wifi_action_sink(state->wifi_action_context,
-                                host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseWifiSettings});
-    }
-}
-
-void WifiSwitchEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state != nullptr && state->wifi_action_sink != nullptr) {
-        state->wifi_action_sink(state->wifi_action_context,
-                                host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSetWifiEnabled,
-                                                        .value = state->wifi_model.enabled ? 0U : 1U});
-    }
-}
-
-void WifiSavedNetworkEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr || state->wifi_action_sink == nullptr) {
-        return;
-    }
-    const uint32_t index = FindWifiRowIndex(lv_event_get_current_target_obj(event), state->wifi_saved_rows,
-                                            state->wifi_model.saved_network_count);
-    if (index >= state->wifi_model.saved_network_count) {
-        return;
-    }
-    state->wifi_selected_index = index;
-    state->wifi_action_sheet_visible = true;
-    DrawWifiActionSheetLocked(*state);
-    if (state->performance_overlay != nullptr) {
-        lv_obj_move_foreground(state->performance_overlay);
-    }
-}
-
-void WifiAvailableNetworkEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr || state->wifi_action_sink == nullptr) {
-        return;
-    }
-    const uint32_t index = FindWifiRowIndex(lv_event_get_current_target_obj(event), state->wifi_available_rows,
-                                            state->wifi_model.available_network_count);
-    if (index >= state->wifi_model.available_network_count) {
-        return;
-    }
-    state->wifi_selected_index = index;
-    const auto& network = state->wifi_model.available_networks[index];
-    state->wifi_password.fill('\0');
-    if (!network.secured) {
-        EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kConnectNewWifi, network);
-        return;
-    }
-    state->wifi_password_network = network;
-    state->wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
-    state->wifi_password_attempt_active = false;
-    state->wifi_password_visible = true;
-    DrawWifiPasswordOverlayLocked(*state);
-    if (state->performance_overlay != nullptr) {
-        lv_obj_move_foreground(state->performance_overlay);
-    }
-}
-
-void WifiSheetConnectEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr || state->wifi_selected_index >= state->wifi_model.saved_network_count) {
-        return;
-    }
-    const auto& network = state->wifi_model.saved_networks[state->wifi_selected_index];
-    EmitWifiNetworkAction(*state, network.connected ? host_ui::SystemUiActionType::kDisconnectWifi
-                                                    : host_ui::SystemUiActionType::kConnectSavedWifi,
-                          network);
-    state->wifi_action_sheet_visible = false;
-    QueueWifiSettingsRender(*state);
-}
-
-void WifiSheetForgetEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr || state->wifi_selected_index >= state->wifi_model.saved_network_count) {
-        return;
-    }
-    EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kForgetWifi,
-                          state->wifi_model.saved_networks[state->wifi_selected_index]);
-    state->wifi_action_sheet_visible = false;
-    QueueWifiSettingsRender(*state);
-}
-
-void WifiSheetCancelEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    if (state == nullptr) {
-        return;
-    }
-    state->wifi_action_sheet_visible = false;
-    state->wifi_password_visible = false;
-    state->wifi_password_attempt_active = false;
-    state->wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
-    state->wifi_password_network = {};
-    QueueWifiSettingsRender(*state);
+    state.system_detail_ui.LeaveAppManagement();
 }
 
 std::expected<void, host_ui::SystemUiError> ShowWifiSettingsImpl(MetalioClaw4PlatformState& state,
@@ -3312,657 +1433,51 @@ std::expected<void, host_ui::SystemUiError> ShowWifiSettingsImpl(MetalioClaw4Pla
     if (state.display == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
-    state.system_menu_action_sink = nullptr;
-    state.system_menu_action_context = nullptr;
-    state.wifi_action_sink = action_sink;
-    state.wifi_action_context = action_context;
+    void* menu_action_context = state.system_menu_ui.ActionContext();
+    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.ClearSystemActionSink(menu_action_context);
+    state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        state.wifi_action_sink = nullptr;
-        state.wifi_action_context = nullptr;
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
     if (state.host_smoke == nullptr) {
         state.host_smoke = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(state.host_smoke, 0x08111fU);
     }
-    state.wifi_model = model;
-    state.wifi_scroll_offset = 0;
-    state.wifi_user_scrolled = false;
-    state.wifi_scroll_gesture_active = false;
-    state.wifi_render_pending = false;
-    state.wifi_action_sheet_visible = false;
-    state.wifi_password_visible = false;
-    state.wifi_password_attempt_active = false;
-    state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
-    state.wifi_password_network = {};
-    state.wifi_password.fill('\0');
-    RenderWifiSettingsLocked(state);
+    ResetHallImageDescriptorsLocked(state);
+    state.hall_settings_press_overlay = nullptr;
+    auto result = state.wifi_settings_ui.ShowLocked(
+        state.host_smoke, state.display, model, action_sink, action_context,
+        [](void* context) { static_cast<metalio_claw4::StatusLayerUi*>(context)->RaisePerformanceOverlayLocked(); },
+        &state.status_layer_ui);
+    if (!result.has_value()) {
+        esp_lv_adapter_unlock();
+        return result;
+    }
     SetHostPointerEnabledLocked(state, true);
     esp_lv_adapter_unlock();
 
     state.input_router.BindTouchSink(HostPointerTouchSink, &state);
     state.input_router.BindSystemActionSink(action_sink, action_context);
-    ESP_LOGI(kTag, "Wi-Fi settings visible: enabled=%s saved=%" PRIu32 " available=%" PRIu32,
-             model.enabled ? "yes" : "no", model.saved_network_count, model.available_network_count);
     return {};
 }
 
 void UpdateWifiSettingsImpl(MetalioClaw4PlatformState& state, const host_ui::WifiSettingsModel& model) {
-    state.wifi_model = model;
-    if (state.display == nullptr || state.wifi_action_sink == nullptr || state.wifi_action_sheet_visible) {
-        return;
-    }
-    if (state.wifi_password_visible) {
-        if (state.wifi_password_attempt_active &&
-            WifiModelShowsConnectedNetwork(model, state.wifi_password_network)) {
-            state.wifi_password_visible = false;
-            state.wifi_password_attempt_active = false;
-            state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
-            state.wifi_password_network = {};
-            state.wifi_password.fill('\0');
-        } else if (!state.wifi_password_attempt_active) {
-            return;
-        } else {
-            host_ui::WifiConnectionState next_dialog_state = state.wifi_password_connection_state;
-            switch (model.connection_state) {
-                case host_ui::WifiConnectionState::kConnecting:
-                case host_ui::WifiConnectionState::kAuthenticationFailed:
-                case host_ui::WifiConnectionState::kAuthenticationTimedOut:
-                case host_ui::WifiConnectionState::kHandshakeTimedOut:
-                case host_ui::WifiConnectionState::kNetworkNotFound:
-                case host_ui::WifiConnectionState::kFailed:
-                    next_dialog_state = model.connection_state;
-                    break;
-                case host_ui::WifiConnectionState::kDisconnected:
-                case host_ui::WifiConnectionState::kConnected:
-                default:
-                    break;
-            }
-            if (next_dialog_state == state.wifi_password_connection_state) {
-                return;
-            }
-            state.wifi_password_connection_state = next_dialog_state;
-        }
-    }
-    bool defer_render = false;
-    portENTER_CRITICAL(&state.host_pointer_lock);
-    if (state.host_pointer_touch_active || state.host_pointer_release_queued || state.wifi_scroll_gesture_active ||
-        state.host_pointer_queue_head != state.host_pointer_queue_tail) {
-        state.wifi_render_pending = true;
-        defer_render = true;
-    }
-    portEXIT_CRITICAL(&state.host_pointer_lock);
-    if (defer_render || esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
-    RenderWifiSettingsLocked(state);
-    portENTER_CRITICAL(&state.host_pointer_lock);
-    state.wifi_render_pending = false;
-    portEXIT_CRITICAL(&state.host_pointer_lock);
-    esp_lv_adapter_unlock();
+    state.wifi_settings_ui.Update(model, HostPointerBusy(state));
 }
 
 void LeaveWifiSettingsImpl(MetalioClaw4PlatformState& state) {
-    if (state.wifi_action_sink == nullptr && state.wifi_action_context == nullptr) {
+    if (!state.wifi_settings_ui.Visible()) {
         return;
     }
+    void* action_context = state.wifi_settings_ui.ActionContext();
     state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.wifi_action_context);
+    state.input_router.ClearSystemActionSink(action_context);
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         SetHostPointerEnabledLocked(state, false);
         esp_lv_adapter_unlock();
     }
-    state.wifi_action_sink = nullptr;
-    state.wifi_action_context = nullptr;
-    state.wifi_action_sheet_visible = false;
-    state.wifi_password_visible = false;
-    state.wifi_password_attempt_active = false;
-    state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
-    state.wifi_password_network = {};
-    state.wifi_render_pending = false;
-    state.wifi_user_scrolled = false;
-    state.wifi_scroll_gesture_active = false;
-    ResetWifiUiObjectPointers(state);
-}
-
-constexpr HallCardBounds kStatusDialogBounds{.x = 24, .y = 36, .width = 672, .height = 508};
-constexpr uint32_t kStatusControlColor = 0x68a7ffU;
-
-HallCardBounds StatusTargetBounds(StatusTouchTarget target) {
-    switch (target) {
-        case StatusTouchTarget::kWifi:
-            return {.x = 48, .y = 52, .width = 196, .height = 108};
-        case StatusTouchTarget::kCellular:
-            return {.x = 262, .y = 52, .width = 196, .height = 108};
-        case StatusTouchTarget::kPerformance:
-            return {.x = 476, .y = 52, .width = 196, .height = 108};
-        case StatusTouchTarget::kBrightness:
-            return {.x = 48, .y = 184, .width = 624, .height = 80};
-        case StatusTouchTarget::kVolume:
-            return {.x = 48, .y = 284, .width = 624, .height = 80};
-        case StatusTouchTarget::kScrim:
-        case StatusTouchTarget::kNone:
-            break;
-    }
-    return {};
-}
-
-HallCardBounds StatusDialogRelative(const HallCardBounds& bounds) {
-    return {.x = bounds.x - kStatusDialogBounds.x,
-            .y = bounds.y - kStatusDialogBounds.y,
-            .width = bounds.width,
-            .height = bounds.height};
-}
-
-int32_t StatusQuickIndex(StatusTouchTarget target) {
-    switch (target) {
-        case StatusTouchTarget::kWifi:
-            return 0;
-        case StatusTouchTarget::kCellular:
-            return 1;
-        case StatusTouchTarget::kPerformance:
-            return 2;
-        default:
-            return -1;
-    }
-}
-
-int32_t StatusSliderIndex(StatusTouchTarget target) {
-    switch (target) {
-        case StatusTouchTarget::kBrightness:
-            return 0;
-        case StatusTouchTarget::kVolume:
-            return 1;
-        default:
-            return -1;
-    }
-}
-
-StatusTouchTarget FindStatusTouchTarget(uint16_t x, uint16_t y) {
-    constexpr StatusTouchTarget kTargets[] = {
-        StatusTouchTarget::kPerformance,
-        StatusTouchTarget::kBrightness,
-        StatusTouchTarget::kVolume,
-    };
-    for (StatusTouchTarget target : kTargets) {
-        if (PointInside(StatusTargetBounds(target), x, y)) {
-            return target;
-        }
-    }
-    return PointInside(kStatusDialogBounds, x, y) ? StatusTouchTarget::kNone : StatusTouchTarget::kScrim;
-}
-
-void EmitStatusAction(MetalioClaw4PlatformState& state, host_ui::SystemUiActionType type, uint32_t value = 0U) {
-    if (state.status_action_sink != nullptr) {
-        state.status_action_sink(state.status_action_context, host_ui::SystemUiAction{.type = type, .value = value});
-    }
-}
-
-uint8_t StatusSliderMinimum(StatusTouchTarget target) {
-    return target == StatusTouchTarget::kBrightness ? host_ui::kMinimumBrightnessPercent : 0U;
-}
-
-uint8_t ClampStatusSliderValue(StatusTouchTarget target, uint8_t percent) {
-    const uint8_t minimum = StatusSliderMinimum(target);
-    const uint8_t maximum_clamped = percent <= 100U ? percent : 100U;
-    return maximum_clamped >= minimum ? maximum_clamped : minimum;
-}
-
-uint32_t StatusSliderPositionPercent(StatusTouchTarget target, uint8_t percent) {
-    const uint32_t minimum = StatusSliderMinimum(target);
-    const uint32_t clamped = ClampStatusSliderValue(target, percent);
-    return (clamped - minimum) * 100U / (100U - minimum);
-}
-
-uint32_t StatusSliderValue(StatusTouchTarget target, uint16_t x) {
-    constexpr uint32_t kSliderLeft = 68U;
-    constexpr uint32_t kSliderWidth = 584U;
-    const uint32_t clamped_x =
-        x < kSliderLeft ? kSliderLeft : (x > kSliderLeft + kSliderWidth ? kSliderLeft + kSliderWidth : x);
-    const uint32_t position_percent = (clamped_x - kSliderLeft) * 100U / kSliderWidth;
-    const uint32_t minimum = StatusSliderMinimum(target);
-    return minimum + position_percent * (100U - minimum) / 100U;
-}
-
-void EmitStatusTarget(MetalioClaw4PlatformState& state, StatusTouchTarget target, uint16_t x) {
-    switch (target) {
-        case StatusTouchTarget::kWifi:
-        case StatusTouchTarget::kCellular:
-            // Connectivity is read-only until a real network service owns
-            // these controls; do not emit a pretend toggle action.
-            break;
-        case StatusTouchTarget::kPerformance:
-            EmitStatusAction(state, host_ui::SystemUiActionType::kTogglePerformanceOverlay);
-            break;
-        case StatusTouchTarget::kBrightness:
-            EmitStatusAction(state, host_ui::SystemUiActionType::kSetBrightness, StatusSliderValue(target, x));
-            break;
-        case StatusTouchTarget::kVolume:
-            EmitStatusAction(state, host_ui::SystemUiActionType::kSetVolume, StatusSliderValue(target, x));
-            break;
-        case StatusTouchTarget::kScrim:
-            EmitStatusAction(state, host_ui::SystemUiActionType::kCloseStatusLayer);
-            break;
-        case StatusTouchTarget::kNone:
-            break;
-    }
-}
-
-void SetStatusButtonPressedLocked(MetalioClaw4PlatformState& state, StatusTouchTarget target, bool pressed) {
-    const int32_t index = StatusQuickIndex(target);
-    if (index < 0 || state.status_quick_press_overlays[index] == nullptr) {
-        return;
-    }
-    if (pressed) {
-        lv_obj_remove_flag(state.status_quick_press_overlays[index], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(state.status_quick_press_overlays[index]);
-    } else {
-        lv_obj_add_flag(state.status_quick_press_overlays[index], LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-void SetStatusButtonPressed(MetalioClaw4PlatformState& state, StatusTouchTarget target, bool pressed) {
-    if (StatusQuickIndex(target) < 0 || state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
-    SetStatusButtonPressedLocked(state, target, pressed);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
-    esp_lv_adapter_unlock();
-}
-
-void UpdateStatusSliderLocked(MetalioClaw4PlatformState& state, StatusTouchTarget target, uint8_t percent,
-                              bool pressed) {
-    constexpr int32_t kTrackWidth = 584;
-    const int32_t index = StatusSliderIndex(target);
-    if (index < 0 || state.status_slider_value_labels[index] == nullptr ||
-        state.status_slider_fills[index] == nullptr || state.status_slider_knobs[index] == nullptr) {
-        return;
-    }
-    const uint8_t clamped_percent = ClampStatusSliderValue(target, percent);
-    char value[8]{};
-    (void)std::snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(clamped_percent));
-    lv_label_set_text(state.status_slider_value_labels[index], value);
-    const int32_t fill_width =
-        static_cast<int32_t>(StatusSliderPositionPercent(target, clamped_percent)) * kTrackWidth / 100;
-    lv_obj_set_width(state.status_slider_fills[index], fill_width > 0 ? fill_width : 1);
-    const HallCardBounds bounds = StatusDialogRelative(StatusTargetBounds(target));
-    lv_obj_set_x(state.status_slider_knobs[index], bounds.x + 20 + fill_width - 14);
-    (void)pressed;
-    lv_obj_set_style_border_width(state.status_slider_knobs[index], 3, 0);
-    state.status_slider_values[index] = clamped_percent;
-}
-
-void UpdateStatusSlider(MetalioClaw4PlatformState& state, StatusTouchTarget target, uint8_t percent, bool pressed) {
-    if (StatusSliderIndex(target) < 0 || state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
-    UpdateStatusSliderLocked(state, target, percent, pressed);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
-    esp_lv_adapter_unlock();
-}
-
-void EmitStatusSliderValue(MetalioClaw4PlatformState& state, StatusTouchTarget target, uint8_t percent,
-                           uint64_t timestamp_us, bool force) {
-    constexpr uint64_t kHardwareUpdatePeriodUs = 50000U;
-    const int32_t index = StatusSliderIndex(target);
-    if (index < 0) {
-        return;
-    }
-    const uint64_t now_us = timestamp_us != 0U ? timestamp_us : static_cast<uint64_t>(esp_timer_get_time());
-    const bool changed = state.status_slider_last_emitted_values[index] != percent;
-    const bool period_elapsed = now_us < state.status_slider_last_emit_us ||
-                                now_us - state.status_slider_last_emit_us >= kHardwareUpdatePeriodUs;
-    if (!force && (!changed || !period_elapsed)) {
-        return;
-    }
-    state.status_slider_last_emitted_values[index] = percent;
-    state.status_slider_last_emit_us = now_us;
-    EmitStatusAction(state,
-                     target == StatusTouchTarget::kBrightness ? host_ui::SystemUiActionType::kSetBrightness
-                                                              : host_ui::SystemUiActionType::kSetVolume,
-                     percent);
-}
-
-bool StatusTouchSink(void* context, const device::TouchSample& sample) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
-    if (state == nullptr) {
-        return false;
-    }
-    if (sample.phase == device::TouchPhase::kDown) {
-        state->status_touch_target = FindStatusTouchTarget(sample.x, sample.y);
-        state->status_touch_id = sample.id;
-        state->status_touch_down_x = sample.x;
-        state->status_touch_down_y = sample.y;
-        state->status_touch_down_us = sample.timestamp_us;
-        state->status_touch_active = true;
-        state->status_button_pressed = StatusQuickIndex(state->status_touch_target) >= 0;
-        if (state->status_button_pressed) {
-            SetStatusButtonPressed(*state, state->status_touch_target, true);
-        }
-        const int32_t slider_index = StatusSliderIndex(state->status_touch_target);
-        if (slider_index >= 0) {
-            const uint8_t percent = static_cast<uint8_t>(StatusSliderValue(state->status_touch_target, sample.x));
-            UpdateStatusSlider(*state, state->status_touch_target, percent, true);
-            EmitStatusSliderValue(*state, state->status_touch_target, percent, sample.timestamp_us, true);
-        }
-        return true;
-    }
-    if (!state->status_touch_active || state->status_touch_id != sample.id) {
-        return true;
-    }
-
-    const StatusTouchTarget target = state->status_touch_target;
-    const int32_t delta_x = static_cast<int32_t>(sample.x) - state->status_touch_down_x;
-    const int32_t delta_y = static_cast<int32_t>(sample.y) - state->status_touch_down_y;
-    if (sample.phase == device::TouchPhase::kCancel) {
-        if (state->status_button_pressed) {
-            SetStatusButtonPressed(*state, target, false);
-        }
-        const int32_t slider_index = StatusSliderIndex(target);
-        if (slider_index >= 0) {
-            UpdateStatusSlider(*state, target, state->status_slider_values[slider_index], false);
-            EmitStatusSliderValue(*state, target, state->status_slider_values[slider_index], sample.timestamp_us, true);
-        }
-        state->status_touch_active = false;
-        state->status_button_pressed = false;
-        state->status_touch_target = StatusTouchTarget::kNone;
-        return true;
-    }
-    if (sample.phase == device::TouchPhase::kMove) {
-        const int32_t quick_index = StatusQuickIndex(target);
-        if (quick_index >= 0) {
-            const bool pressed = PointInside(StatusTargetBounds(target), sample.x, sample.y);
-            if (pressed != state->status_button_pressed) {
-                state->status_button_pressed = pressed;
-                SetStatusButtonPressed(*state, target, pressed);
-            }
-        }
-        const int32_t slider_index = StatusSliderIndex(target);
-        if (slider_index >= 0) {
-            const uint8_t percent = static_cast<uint8_t>(StatusSliderValue(target, sample.x));
-            if (state->status_slider_values[slider_index] != percent) {
-                UpdateStatusSlider(*state, target, percent, true);
-            }
-            EmitStatusSliderValue(*state, target, percent, sample.timestamp_us, false);
-        }
-        return true;
-    }
-    if (sample.phase != device::TouchPhase::kUp) {
-        return true;
-    }
-
-    constexpr int32_t kTapSlop = 24;
-    constexpr int32_t kSwipeDistance = 56;
-    constexpr int32_t kSwipeDirectionSlop = 80;
-    constexpr uint64_t kGestureTimeoutUs = 800000U;
-    const uint64_t elapsed_us = sample.timestamp_us >= state->status_touch_down_us
-                                    ? sample.timestamp_us - state->status_touch_down_us
-                                    : kGestureTimeoutUs + 1U;
-    const bool swipe_up =
-        delta_y <= -kSwipeDistance && std::abs(delta_x) <= kSwipeDirectionSlop && elapsed_us <= kGestureTimeoutUs;
-    if (state->status_button_pressed || StatusQuickIndex(target) >= 0) {
-        SetStatusButtonPressed(*state, target, false);
-    }
-    state->status_touch_active = false;
-    state->status_button_pressed = false;
-    state->status_touch_target = StatusTouchTarget::kNone;
-    if (swipe_up) {
-        EmitStatusAction(*state, host_ui::SystemUiActionType::kCloseStatusLayer);
-        return true;
-    }
-
-    const int32_t slider_index = StatusSliderIndex(target);
-    if (slider_index >= 0) {
-        const uint8_t percent = static_cast<uint8_t>(StatusSliderValue(target, sample.x));
-        UpdateStatusSlider(*state, target, percent, false);
-        EmitStatusSliderValue(*state, target, percent, sample.timestamp_us, true);
-    } else if (target == StatusTouchTarget::kScrim && !PointInside(kStatusDialogBounds, sample.x, sample.y) &&
-               std::abs(delta_x) <= kTapSlop && std::abs(delta_y) <= kTapSlop && elapsed_us <= kGestureTimeoutUs) {
-        EmitStatusTarget(*state, target, sample.x);
-    } else if (StatusQuickIndex(target) >= 0 && PointInside(StatusTargetBounds(target), sample.x, sample.y) &&
-               std::abs(delta_x) <= kTapSlop && std::abs(delta_y) <= kTapSlop && elapsed_us <= kGestureTimeoutUs) {
-        EmitStatusTarget(*state, target, sample.x);
-    }
-    return true;
-}
-
-lv_obj_t* CreateStatusPanel(lv_obj_t* parent, const HallCardBounds& bounds, uint32_t color) {
-    lv_obj_t* panel = lv_obj_create(parent);
-    lv_obj_set_pos(panel, bounds.x, bounds.y);
-    lv_obj_set_size(panel, bounds.width, bounds.height);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_set_style_radius(panel, 24, 0);
-    lv_obj_set_style_border_width(panel, 1, 0);
-    lv_obj_set_style_border_color(panel, lv_color_hex(0x42607fU), 0);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-    return panel;
-}
-
-void DrawStatusQuickCard(MetalioClaw4PlatformState& state, lv_obj_t* root, StatusTouchTarget target, const char* name,
-                         const char* detail, bool active, bool available) {
-    const uint32_t color = !available ? 0x182331U : (active ? kThemeAccentColor : 0x26384dU);
-    const int32_t index = StatusQuickIndex(target);
-    lv_obj_t* panel = CreateStatusPanel(root, StatusDialogRelative(StatusTargetBounds(target)), color);
-    lv_obj_set_style_bg_opa(panel, available && !active ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
-    (void)CreateHallLabel(panel, name, &lv_font_montserrat_24, available ? 0xf4f8ffU : 0x708198U, 18, 20);
-    lv_obj_t* detail_label =
-        CreateHallLabel(panel, detail, &lv_font_montserrat_18, active && available ? 0xf4f8ffU : 0x91a4bdU, 18, 67);
-    if (index >= 0) {
-        lv_obj_t* press_overlay = lv_obj_create(panel);
-        lv_obj_set_pos(press_overlay, 0, 0);
-        lv_obj_set_size(press_overlay, LV_PCT(100), LV_PCT(100));
-        lv_obj_set_style_pad_all(press_overlay, 0, 0);
-        lv_obj_set_style_radius(press_overlay, 24, 0);
-        lv_obj_set_style_border_width(press_overlay, 0, 0);
-        lv_obj_set_style_bg_color(press_overlay, lv_color_hex(0x000000U), 0);
-        lv_obj_set_style_bg_opa(press_overlay, 92, 0);
-        lv_obj_remove_flag(press_overlay, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(press_overlay, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(press_overlay, LV_OBJ_FLAG_HIDDEN);
-        state.status_quick_panels[index] = panel;
-        state.status_quick_detail_labels[index] = detail_label;
-        state.status_quick_press_overlays[index] = press_overlay;
-    }
-}
-
-void DrawStatusSlider(MetalioClaw4PlatformState& state, lv_obj_t* root, StatusTouchTarget target, const char* name,
-                      uint8_t percent, uint32_t color) {
-    const HallCardBounds bounds = StatusDialogRelative(StatusTargetBounds(target));
-    const int32_t index = StatusSliderIndex(target);
-    const uint8_t clamped_percent = ClampStatusSliderValue(target, percent);
-    (void)CreateHallLabel(root, name, &lv_font_montserrat_18, 0xf4f8ffU, bounds.x + 20, bounds.y + 4);
-    char value[8]{};
-    (void)std::snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(clamped_percent));
-    lv_obj_t* value_label =
-        CreateHallLabel(root, value, &lv_font_montserrat_18, 0x91a4bdU, bounds.x + bounds.width - 62, bounds.y + 4);
-
-    constexpr int32_t kTrackLeftInset = 20;
-    constexpr int32_t kTrackWidth = 584;
-    constexpr int32_t kTrackHeight = 14;
-    const int32_t track_y = bounds.y + 47;
-    lv_obj_t* track = lv_obj_create(root);
-    lv_obj_set_pos(track, bounds.x + kTrackLeftInset, track_y);
-    lv_obj_set_size(track, kTrackWidth, kTrackHeight);
-    lv_obj_set_style_pad_all(track, 0, 0);
-    lv_obj_set_style_border_width(track, 0, 0);
-    lv_obj_set_style_radius(track, 7, 0);
-    lv_obj_set_style_bg_color(track, lv_color_hex(0x31445bU), 0);
-    lv_obj_remove_flag(track, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(track, LV_OBJ_FLAG_CLICKABLE);
-
-    const int32_t fill_width =
-        static_cast<int32_t>(StatusSliderPositionPercent(target, clamped_percent)) * kTrackWidth / 100;
-    lv_obj_t* fill = lv_obj_create(track);
-    lv_obj_set_pos(fill, 0, 0);
-    lv_obj_set_size(fill, fill_width > 0 ? fill_width : 1, kTrackHeight);
-    lv_obj_set_style_pad_all(fill, 0, 0);
-    lv_obj_set_style_border_width(fill, 0, 0);
-    lv_obj_set_style_radius(fill, 7, 0);
-    lv_obj_set_style_bg_color(fill, lv_color_hex(color), 0);
-    lv_obj_remove_flag(fill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(fill, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* knob = lv_obj_create(root);
-    lv_obj_set_pos(knob, bounds.x + kTrackLeftInset + fill_width - 12, track_y - 7);
-    lv_obj_set_size(knob, 28, 28);
-    lv_obj_set_style_pad_all(knob, 0, 0);
-    lv_obj_set_style_border_width(knob, 3, 0);
-    lv_obj_set_style_border_color(knob, lv_color_hex(0xf4f8ffU), 0);
-    lv_obj_set_style_radius(knob, 14, 0);
-    lv_obj_set_style_bg_color(knob, lv_color_hex(color), 0);
-    lv_obj_remove_flag(knob, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(knob, LV_OBJ_FLAG_CLICKABLE);
-    if (index >= 0) {
-        state.status_slider_value_labels[index] = value_label;
-        state.status_slider_fills[index] = fill;
-        state.status_slider_knobs[index] = knob;
-        state.status_slider_values[index] = clamped_percent;
-        state.status_slider_last_emitted_values[index] = clamped_percent;
-    }
-}
-
-void DrawStatusMetric(lv_obj_t* root, int32_t x, const char* name, const char* value, uint8_t percent, uint32_t color) {
-    const HallCardBounds bounds{
-        .x = x - kStatusDialogBounds.x, .y = 390 - kStatusDialogBounds.y, .width = 192, .height = 124};
-    lv_obj_t* panel = CreateStatusPanel(root, bounds, 0x142235U);
-    (void)CreateHallLabel(panel, name, &lv_font_montserrat_18, 0x91a4bdU, 16, 15);
-    (void)CreateHallLabel(panel, value, &lv_font_montserrat_18, 0xf4f8ffU, 16, 47);
-    lv_obj_t* track = lv_obj_create(panel);
-    lv_obj_set_pos(track, 16, 90);
-    lv_obj_set_size(track, 160, 10);
-    lv_obj_set_style_pad_all(track, 0, 0);
-    lv_obj_set_style_border_width(track, 0, 0);
-    lv_obj_set_style_radius(track, 5, 0);
-    lv_obj_set_style_bg_color(track, lv_color_hex(0x31445bU), 0);
-    lv_obj_remove_flag(track, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(track, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_t* fill = lv_obj_create(track);
-    lv_obj_set_pos(fill, 0, 0);
-    lv_obj_set_size(fill, percent > 0U ? static_cast<int32_t>(percent) * 160 / 100 : 1, 10);
-    lv_obj_set_style_pad_all(fill, 0, 0);
-    lv_obj_set_style_border_width(fill, 0, 0);
-    lv_obj_set_style_radius(fill, 5, 0);
-    lv_obj_set_style_bg_color(fill, lv_color_hex(color), 0);
-    lv_obj_remove_flag(fill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(fill, LV_OBJ_FLAG_CLICKABLE);
-}
-
-void ResetStatusObjectPointers(MetalioClaw4PlatformState& state) {
-    state.status_dialog = nullptr;
-    for (uint32_t index = 0U; index < 3U; ++index) {
-        state.status_quick_panels[index] = nullptr;
-        state.status_quick_detail_labels[index] = nullptr;
-        state.status_quick_press_overlays[index] = nullptr;
-    }
-    for (uint32_t index = 0U; index < 2U; ++index) {
-        state.status_slider_value_labels[index] = nullptr;
-        state.status_slider_fills[index] = nullptr;
-        state.status_slider_knobs[index] = nullptr;
-    }
-}
-
-void UpdateStatusQuickCardLocked(MetalioClaw4PlatformState& state, StatusTouchTarget target, const char* detail,
-                                 bool active, bool available) {
-    const int32_t index = StatusQuickIndex(target);
-    if (index < 0 || state.status_quick_panels[index] == nullptr ||
-        state.status_quick_detail_labels[index] == nullptr) {
-        return;
-    }
-    const uint32_t color = !available ? 0x182331U : (active ? kThemeAccentColor : 0x26384dU);
-    lv_obj_set_style_bg_color(state.status_quick_panels[index], lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(state.status_quick_panels[index], available && !active ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
-    lv_label_set_text(state.status_quick_detail_labels[index], detail);
-    lv_obj_set_style_text_color(state.status_quick_detail_labels[index],
-                                lv_color_hex(active && available ? 0xf4f8ffU : 0x91a4bdU), 0);
-}
-
-void UpdateStatusControlsLocked(MetalioClaw4PlatformState& state, const host_ui::StatusLayerModel& model) {
-    const char* wifi_detail = !model.wifi_available
-                                  ? "UNAVAILABLE"
-                                  : (model.wifi_connected ? "CONNECTED" : (model.wifi_enabled ? "ON" : "OFF"));
-    const char* cellular_detail =
-        !model.cellular_available ? "UNAVAILABLE"
-                                  : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
-    UpdateStatusQuickCardLocked(state, StatusTouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
-    UpdateStatusQuickCardLocked(state, StatusTouchTarget::kCellular, cellular_detail, model.cellular_enabled,
-                                model.cellular_available);
-    UpdateStatusQuickCardLocked(state, StatusTouchTarget::kPerformance,
-                                model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF",
-                                model.performance_overlay_enabled, true);
-    UpdateStatusSliderLocked(state, StatusTouchTarget::kBrightness, model.brightness_percent, false);
-    UpdateStatusSliderLocked(state, StatusTouchTarget::kVolume, model.volume_percent, false);
-}
-
-void DrawStatusLayerLocked(MetalioClaw4PlatformState& state, const host_ui::StatusLayerModel& model) {
-    if (state.status_layer == nullptr) {
-        state.status_layer = lv_obj_create(lv_screen_active());
-        StyleFullscreenContainer(state.status_layer, 0x06101cU);
-    }
-    ResetStatusObjectPointers(state);
-    lv_obj_clean(state.status_layer);
-    lv_obj_remove_flag(state.status_layer, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(state.status_layer, lv_color_hex(0x02060cU), 0);
-    lv_obj_set_style_bg_opa(state.status_layer, 190, 0);
-
-    state.status_dialog = CreateStatusPanel(state.status_layer, kStatusDialogBounds, 0x0d1b2cU);
-    lv_obj_set_style_radius(state.status_dialog, 30, 0);
-    lv_obj_set_style_border_width(state.status_dialog, 2, 0);
-    lv_obj_set_style_border_color(state.status_dialog, lv_color_hex(0x496786U), 0);
-
-    const char* wifi_detail = !model.wifi_available
-                                  ? "UNAVAILABLE"
-                                  : (model.wifi_connected ? "CONNECTED" : (model.wifi_enabled ? "ON" : "OFF"));
-    const char* cellular_detail =
-        !model.cellular_available ? "UNAVAILABLE"
-                                  : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
-    DrawStatusQuickCard(state, state.status_dialog, StatusTouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled,
-                        model.wifi_available);
-    DrawStatusQuickCard(state, state.status_dialog, StatusTouchTarget::kCellular, "4G", cellular_detail,
-                        model.cellular_enabled, model.cellular_available);
-    DrawStatusQuickCard(state, state.status_dialog, StatusTouchTarget::kPerformance, "FPS",
-                        model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF",
-                        model.performance_overlay_enabled, true);
-
-    DrawStatusSlider(state, state.status_dialog, StatusTouchTarget::kBrightness, "BRIGHTNESS", model.brightness_percent,
-                     kStatusControlColor);
-    DrawStatusSlider(state, state.status_dialog, StatusTouchTarget::kVolume, "VOLUME", model.volume_percent,
-                     kStatusControlColor);
-
-    char memory[24]{};
-    char storage[24]{};
-    char battery[16]{};
-    (void)std::snprintf(memory, sizeof(memory), "%" PRIu32 " / %" PRIu32 " MB", model.memory_used_kib / 1024U,
-                        model.memory_total_kib / 1024U);
-    const uint32_t storage_used_tenths = (model.storage_used_kib * 10U + 512U) / 1024U;
-    (void)std::snprintf(storage, sizeof(storage), "%" PRIu32 ".%" PRIu32 " / %" PRIu32 " MB", storage_used_tenths / 10U,
-                        storage_used_tenths % 10U, model.storage_total_kib / 1024U);
-    if (model.battery_available) {
-        (void)std::snprintf(battery, sizeof(battery), "%u%%", static_cast<unsigned>(model.battery_percent));
-    } else {
-        (void)std::snprintf(battery, sizeof(battery), "UNAVAILABLE");
-    }
-    const uint8_t memory_percent =
-        model.memory_total_kib > 0U ? static_cast<uint8_t>(model.memory_used_kib * 100U / model.memory_total_kib) : 0U;
-    const uint8_t storage_percent = model.storage_total_kib > 0U
-                                        ? static_cast<uint8_t>(model.storage_used_kib * 100U / model.storage_total_kib)
-                                        : 0U;
-    DrawStatusMetric(state.status_dialog, 48, "MEMORY", memory, memory_percent, kStatusControlColor);
-    DrawStatusMetric(state.status_dialog, 264, "STORAGE", storage, storage_percent, kStatusControlColor);
-    DrawStatusMetric(state.status_dialog, 480, "BATTERY", battery, model.battery_available ? model.battery_percent : 0U,
-                     kStatusControlColor);
-
-    lv_obj_move_foreground(state.status_layer);
-    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
-        // The Host performance HUD is a final-display overlay. Keep it above
-        // the status scrim as well; the dialog begins below its bottom edge.
-        lv_obj_move_foreground(state.performance_overlay);
-    }
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    state.wifi_settings_ui.Leave();
 }
 
 std::expected<void, host_ui::SystemUiError> ShowStatusLayerImpl(MetalioClaw4PlatformState& state,
@@ -3972,489 +1487,81 @@ std::expected<void, host_ui::SystemUiError> ShowStatusLayerImpl(MetalioClaw4Plat
     if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    DrawStatusLayerLocked(state, model);
+    auto result = state.status_layer_ui.ShowLocked(model, action_sink, action_context);
     esp_lv_adapter_unlock();
-    state.status_action_sink = action_sink;
-    state.status_action_context = action_context;
-    state.status_touch_active = false;
-    state.status_button_pressed = false;
-    state.status_touch_target = StatusTouchTarget::kNone;
-    state.input_router.BindTouchSink(StatusTouchSink, &state);
+    if (!result.has_value()) {
+        return result;
+    }
+    state.input_router.BindTouchSink(metalio_claw4::StatusLayerUi::TouchSink, &state.status_layer_ui);
     state.input_router.BindSystemActionSink(action_sink, action_context);
-    ESP_LOGI(kTag, "status layer visible");
     return {};
 }
 
 void UpdateStatusLayerImpl(MetalioClaw4PlatformState& state, const host_ui::StatusLayerModel& model) {
-    if (state.display == nullptr || state.status_layer == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    UpdateStatusControlsLocked(state, model);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    state.status_layer_ui.UpdateLocked(model);
     esp_lv_adapter_unlock();
 }
 
 void LeaveStatusLayerImpl(MetalioClaw4PlatformState& state) {
-    state.input_router.UnbindTouchSink(&state);
-    state.input_router.ClearSystemActionSink(state.status_action_context);
-    state.status_action_sink = nullptr;
-    state.status_action_context = nullptr;
-    state.status_touch_active = false;
-    state.status_button_pressed = false;
-    state.status_touch_target = StatusTouchTarget::kNone;
-    if (state.display == nullptr || state.status_layer == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+    void* action_context = state.status_layer_ui.ActionContext();
+    state.input_router.UnbindTouchSink(&state.status_layer_ui);
+    state.input_router.ClearSystemActionSink(action_context);
+    state.status_layer_ui.Deactivate();
+    if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    lv_obj_clean(state.status_layer);
-    ResetStatusObjectPointers(state);
-    lv_obj_add_flag(state.status_layer, LV_OBJ_FLAG_HIDDEN);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    state.status_layer_ui.LeaveLocked();
     esp_lv_adapter_unlock();
-    ESP_LOGI(kTag, "status layer hidden");
-}
-
-void RaisePerformanceOverlayLocked(MetalioClaw4PlatformState& state) {
-    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_move_foreground(state.performance_overlay);
-    }
-}
-
-bool PerformanceOverlayVisibleLocked(const MetalioClaw4PlatformState& state) {
-    return state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
 void UpdatePerformanceOverlayImpl(MetalioClaw4PlatformState& state, bool enabled, uint8_t cpu_percent) {
     if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    if (!enabled) {
-        if (state.performance_overlay != nullptr) {
-            lv_obj_add_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN);
-            lv_timer_ready(lv_display_get_refr_timer(state.display));
-        }
-        state.performance_last_frame_sequence = state.display_refresh_sequence;
-        state.performance_last_sample_us = 0;
-        state.performance_fps = 0U;
-        esp_lv_adapter_unlock();
-        return;
-    }
-
-    const bool create_overlay = state.performance_overlay == nullptr;
-    if (create_overlay) {
-        state.performance_overlay = lv_obj_create(lv_screen_active());
-        lv_obj_set_pos(state.performance_overlay, 566, 4);
-        lv_obj_set_size(state.performance_overlay, 150, 30);
-        lv_obj_set_style_pad_all(state.performance_overlay, 0, 0);
-        lv_obj_set_style_radius(state.performance_overlay, 6, 0);
-        lv_obj_set_style_border_width(state.performance_overlay, 0, 0);
-        lv_obj_set_style_bg_color(state.performance_overlay, lv_color_hex(0x07111eU), 0);
-        // This HUD is only 150x30 pixels, so its requested translucent backing
-        // remains a small, PPA-eligible blend instead of a full-screen cost.
-        lv_obj_set_style_bg_opa(state.performance_overlay, 176, 0);
-        lv_obj_remove_flag(state.performance_overlay, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(state.performance_overlay, LV_OBJ_FLAG_CLICKABLE);
-        state.performance_cpu_label =
-            CreateHallLabel(state.performance_overlay, "", &lv_font_montserrat_14, 0xf4f8ffU, 7, 7);
-        state.performance_fps_label =
-            CreateHallLabel(state.performance_overlay, "", &lv_font_montserrat_14, 0xf4f8ffU, 76, 7);
-        lv_obj_set_width(state.performance_fps_label, 67);
-        lv_obj_set_style_text_align(state.performance_fps_label, LV_TEXT_ALIGN_RIGHT, 0);
-    }
-    lv_obj_remove_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN);
-
-    const int64_t now_us = esp_timer_get_time();
-    if (state.performance_last_sample_us != 0 && now_us > state.performance_last_sample_us) {
-        const uint32_t frames = state.display_refresh_sequence - state.performance_last_frame_sequence;
-        const uint64_t elapsed_us = static_cast<uint64_t>(now_us - state.performance_last_sample_us);
-        state.performance_fps =
-            static_cast<uint32_t>((static_cast<uint64_t>(frames) * 1000000U + elapsed_us / 2U) / elapsed_us);
-    }
-    state.performance_last_frame_sequence = state.display_refresh_sequence;
-    state.performance_last_sample_us = now_us;
-    char cpu_text[16]{};
-    char fps_text[16]{};
-    (void)std::snprintf(cpu_text, sizeof(cpu_text), "CPU %u%%", static_cast<unsigned>(cpu_percent));
-    (void)std::snprintf(fps_text, sizeof(fps_text), "FPS %" PRIu32, state.performance_fps);
-    lv_label_set_text(state.performance_cpu_label, cpu_text);
-    lv_label_set_text(state.performance_fps_label, fps_text);
-    // Hall, Guest and the status layer are sibling roots. Any one of them may
-    // have moved itself to the foreground since the previous sample, so the
-    // enabled Host HUD must reclaim the final-display layer on every update.
-    RaisePerformanceOverlayLocked(state);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    state.status_layer_ui.UpdatePerformanceOverlayLocked(enabled, cpu_percent,
+                                                         state.guest_graphics.DisplayRefreshSequence());
     esp_lv_adapter_unlock();
-}
-
-// Caller owns the LVGL adapter mutex, so all retained-object mutations remain
-// serialized with LVGL refreshes.
-int32_t ApplyGraphicsFrameLocked(MetalioClaw4PlatformState& state, const uint8_t* bytes, uint32_t length,
-                                 const device::TextureAccess& textures,
-                                 const micropixel_texture_handle_t* retained_textures, uint32_t retained_count) {
-    if (!state.retained_scene.Initialize()) {
-        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-    }
-    const bool created_guest_frame = state.guest_frame == nullptr;
-    if (state.guest_frame == nullptr) {
-        state.guest_frame = lv_obj_create(lv_screen_active());
-        StyleFullscreenContainer(state.guest_frame, 0x000000U);
-    }
-    const metalio_claw4::RetainedFrameResult result =
-        state.retained_scene.Execute(bytes, length, state.guest_frame, textures.resolve, textures.context);
-    if (result.status != MICROPIXEL_STATUS_OK) {
-        ESP_LOGE(kTag, "retained-object command execution failed");
-        return result.status;
-    }
-    bool needs_present = created_guest_frame || result.visual_changed;
-    /* A successful direct-compositor flush is already the physical
-     * presentation for this Guest frame. Do not wake LVGL for a redundant
-     * private-buffer refresh while dummy draw owns the panel framebuffers.
-     * Object mutations continue accumulating and are fully redrawn when the
-     * translation ends. */
-    if (result.surface_active) {
-        needs_present = false;
-    }
-    // Do not bounce the Guest and Host HUD past each other in z-order on every
-    // frame. Each move invalidates their overlapping areas and used to make
-    // the main task wait behind continuous LVGL redraws, delaying system
-    // gestures for tens of seconds. The HUD is raised once when enabled (or
-    // when a new Guest tree is first created) and then both siblings stay put.
-    const bool overlay_visible = PerformanceOverlayVisibleLocked(state);
-    if (overlay_visible) {
-        if (created_guest_frame) {
-            RaisePerformanceOverlayLocked(state);
-        }
-    } else if (created_guest_frame || state.host_smoke != nullptr) {
-        lv_obj_move_foreground(state.guest_frame);
-    }
-    if (DismissHostSmokeLocked(state)) {
-        needs_present = true;
-    }
-    if (!needs_present) {
-        ReleaseTextures(state.scene_texture_access, state.scene_textures, state.scene_texture_count);
-        std::memcpy(state.scene_textures, retained_textures, retained_count * sizeof(retained_textures[0]));
-        state.scene_texture_count = retained_count;
-        state.scene_texture_access = retained_count == 0U ? device::TextureAccess{} : textures;
-        return MICROPIXEL_STATUS_OK;
-    }
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
-    ReleaseTextures(state.scene_texture_access, state.scene_textures, state.scene_texture_count);
-    std::memcpy(state.scene_textures, retained_textures, retained_count * sizeof(retained_textures[0]));
-    state.scene_texture_count = retained_count;
-    state.scene_texture_access = retained_count == 0U ? device::TextureAccess{} : textures;
-    return MICROPIXEL_STATUS_OK;
-}
-
-void ReleaseGuestGraphicsImpl(MetalioClaw4PlatformState& state) {
-    if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
-    if (state.guest_frame != nullptr) {
-        state.retained_scene.ForgetObjects();
-        lv_obj_delete(state.guest_frame);
-        state.guest_frame = nullptr;
-        lv_timer_ready(lv_display_get_refr_timer(state.display));
-        ESP_LOGI(kTag, "Guest graphics tree released before Bitmap teardown");
-    }
-    ReleaseTextures(state.scene_texture_access, state.scene_textures, state.scene_texture_count);
-    state.scene_texture_count = 0U;
-    state.scene_texture_access = {};
-    ClearPendingFrameTextures(state, true);
-    state.bitmap_update_frame_active = false;
-    state.bitmap_damage_count = 0U;
-    state.bitmap_frame_updates = 0U;
-    state.bitmap_frame_bytes = 0U;
-    state.graphics_frame_active = false;
-    state.graphics_frame_length = 0U;
-    state.graphics_frame_commands = 0U;
-    heap_caps_free(state.graphics_frame_bytes);
-    state.graphics_frame_bytes = nullptr;
-    state.retained_scene.Release();
-    esp_lv_adapter_unlock();
-}
-
-int32_t GraphicsBeginFrameImpl(MetalioClaw4PlatformState& state) {
-    if (state.display == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (state.graphics_frame_active || state.bitmap_update_frame_active) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    if (state.graphics_frame_bytes == nullptr) {
-        state.graphics_frame_bytes = static_cast<uint8_t*>(heap_caps_aligned_alloc(
-            4U, MICROPIXEL_GRAPHICS_MAX_FRAME_COMMAND_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (state.graphics_frame_bytes == nullptr) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-    }
-    std::memset(state.graphics_frame_bytes, 0, sizeof(micropixel_graphics_command_header_t));
-    state.graphics_frame_length = sizeof(micropixel_graphics_command_header_t);
-    state.graphics_frame_commands = 0U;
-    ClearPendingFrameTextures(state, true);
-    state.graphics_frame_active = true;
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GraphicsSubmitImpl(MetalioClaw4PlatformState& state, const uint8_t* bytes, uint32_t length,
-                           const device::TextureAccess& textures) {
-    if (state.display == nullptr || bytes == nullptr || textures.resolve == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-
-    const bool frame_active = state.graphics_frame_active;
-    const bool lvgl_locked = !frame_active;
-    if (lvgl_locked) {
-        if (esp_lv_adapter_lock(-1) != ESP_OK) {
-            return MICROPIXEL_STATUS_INTERNAL;
-        }
-    }
-    const int32_t validation_status =
-        graphics::ValidateCommandStream(bytes, length, kWidth, kHeight, textures.resolve, textures.context);
-    if (validation_status != MICROPIXEL_STATUS_OK) {
-        if (lvgl_locked) {
-            esp_lv_adapter_unlock();
-        }
-        ESP_LOGW(kTag, "rejected graphics batch: status=%" PRId32 " bytes=%" PRIu32, validation_status, length);
-        return validation_status;
-    }
-    micropixel_texture_handle_t frame_textures[kMaxSceneTextures]{};
-    uint32_t frame_texture_count = 0U;
-    if (!graphics::CollectTextureHandles(bytes, length, frame_textures, kMaxSceneTextures, frame_texture_count)) {
-        if (lvgl_locked) {
-            esp_lv_adapter_unlock();
-        }
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    if (state.graphics_frame_active) {
-        micropixel_graphics_command_header_t batch_header{};
-        std::memcpy(&batch_header, bytes, sizeof(batch_header));
-        const uint32_t record_bytes = length - sizeof(batch_header);
-        if (state.graphics_frame_bytes == nullptr ||
-            batch_header.command_count > MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS - state.graphics_frame_commands ||
-            record_bytes > MICROPIXEL_GRAPHICS_MAX_FRAME_COMMAND_BYTES - state.graphics_frame_length) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-        if (!AddPendingFrameTextures(state, frame_textures, frame_texture_count, textures)) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-        std::memcpy(state.graphics_frame_bytes + state.graphics_frame_length, bytes + sizeof(batch_header),
-                    record_bytes);
-        state.graphics_frame_length += record_bytes;
-        state.graphics_frame_commands += batch_header.command_count;
-        return MICROPIXEL_STATUS_OK;
-    }
-    if (!RetainTextures(textures, frame_textures, frame_texture_count)) {
-        esp_lv_adapter_unlock();
-        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-    }
-    const int32_t execution_status =
-        ApplyGraphicsFrameLocked(state, bytes, length, textures, frame_textures, frame_texture_count);
-    if (execution_status != MICROPIXEL_STATUS_OK) {
-        ReleaseTextures(textures, frame_textures, frame_texture_count);
-    }
-    if (lvgl_locked) {
-        esp_lv_adapter_unlock();
-    }
-    if (execution_status != MICROPIXEL_STATUS_OK) {
-        return execution_status;
-    }
-
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GraphicsCommitFrameImpl(MetalioClaw4PlatformState& state, const device::TextureAccess& textures) {
-    if (state.display == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (!state.graphics_frame_active || state.graphics_frame_bytes == nullptr || state.graphics_frame_commands == 0U) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    micropixel_graphics_command_header_t header{};
-    header.magic = MICROPIXEL_GRAPHICS_COMMAND_MAGIC;
-    header.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    header.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
-    header.total_size = state.graphics_frame_length;
-    header.command_count = state.graphics_frame_commands;
-    std::memcpy(state.graphics_frame_bytes, &header, sizeof(header));
-
-    const uint32_t frame_commands = state.graphics_frame_commands;
-    const uint32_t frame_bytes = state.graphics_frame_length;
-    state.graphics_frame_active = false;
-    state.graphics_frame_length = 0U;
-    state.graphics_frame_commands = 0U;
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        ClearPendingFrameTextures(state, true);
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    const device::TextureAccess retained_access =
-        state.graphics_frame_texture_count == 0U ? textures : state.graphics_frame_texture_access;
-    const int32_t status = ApplyGraphicsFrameLocked(state, state.graphics_frame_bytes, frame_bytes, retained_access,
-                                                    state.graphics_frame_textures, state.graphics_frame_texture_count);
-    const uint32_t sequence = status == MICROPIXEL_STATUS_OK ? ++state.graphics_frame_sequence : 0U;
-    if (status == MICROPIXEL_STATUS_OK) {
-        ++state.presented_guest_frame_sequence;
-        ClearPendingFrameTextures(state, false);
-    } else {
-        ClearPendingFrameTextures(state, true);
-    }
-    esp_lv_adapter_unlock();
-    if (status == MICROPIXEL_STATUS_OK && (sequence <= 8U || (sequence % 120U) == 0U)) {
-        ESP_LOGI(kTag, "graphics frame #%" PRIu32 ": commands=%" PRIu32 " bytes=%" PRIu32, sequence, frame_commands,
-                 frame_bytes);
-    }
-    return status;
-}
-
-int32_t GraphicsCancelFrameImpl(MetalioClaw4PlatformState& state) {
-    if (!state.graphics_frame_active) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    state.graphics_frame_active = false;
-    state.graphics_frame_length = 0U;
-    state.graphics_frame_commands = 0U;
-    ClearPendingFrameTextures(state, true);
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GraphicsBeginBitmapUpdateFrameImpl(MetalioClaw4PlatformState& state) {
-    if (state.display == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (state.bitmap_update_frame_active || state.graphics_frame_active) {
-        esp_lv_adapter_unlock();
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    state.bitmap_update_frame_active = true;
-    state.bitmap_damage_count = 0U;
-    state.bitmap_frame_updates = 0U;
-    state.bitmap_frame_bytes = 0U;
-    state.bitmap_frame_started_us = static_cast<uint64_t>(esp_timer_get_time());
-    esp_lv_adapter_unlock();
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GraphicsUpdateBitmapImpl(MetalioClaw4PlatformState& state, const device::BitmapView& bitmap, uint32_t x,
-                                 uint32_t y, uint32_t width, uint32_t height, const uint8_t* pixels, uint32_t stride) {
-    const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-                                         ? 3U
-                                         : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
-    if (state.display == nullptr || bitmap.data == nullptr || pixels == nullptr || bytes_per_pixel == 0U ||
-        (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || width == 0U || height == 0U ||
-        static_cast<uint64_t>(x) + width > bitmap.width || static_cast<uint64_t>(y) + height > bitmap.height ||
-        stride != width * bytes_per_pixel || bitmap.stride != bitmap.width * bytes_per_pixel ||
-        bitmap.size != bitmap.stride * bitmap.height) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    auto* destination = const_cast<uint8_t*>(bitmap.data) + y * bitmap.stride + x * bytes_per_pixel;
-    for (uint32_t row = 0U; row < height; ++row) {
-        std::memcpy(destination + row * bitmap.stride, pixels + row * stride, stride);
-    }
-    if (state.bitmap_update_frame_active) {
-        if (!AccumulateDamage(state.bitmap_damage, state.bitmap_damage_count, bitmap.data, x, y, width, height)) {
-            esp_lv_adapter_unlock();
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-        ++state.bitmap_frame_updates;
-        state.bitmap_frame_bytes += static_cast<uint64_t>(stride) * height;
-    } else {
-        const bool invalidated = state.retained_scene.InvalidateBitmap(bitmap.data, x, y, width, height);
-        if (invalidated) {
-            lv_timer_ready(lv_display_get_refr_timer(state.display));
-        }
-    }
-    esp_lv_adapter_unlock();
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GraphicsCommitBitmapUpdateFrameImpl(MetalioClaw4PlatformState& state) {
-    if (state.display == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (!state.bitmap_update_frame_active) {
-        esp_lv_adapter_unlock();
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-
-    bool invalidated = false;
-    uint32_t ppa_eligible_damage = 0U;
-    for (uint32_t index = 0U; index < state.bitmap_damage_count; ++index) {
-        const BitmapDamage& damage = state.bitmap_damage[index];
-        invalidated =
-            state.retained_scene.InvalidateBitmap(damage.data, damage.x, damage.y, damage.width, damage.height) ||
-            invalidated;
-        if (static_cast<uint64_t>(damage.width) * damage.height > CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS) {
-            ++ppa_eligible_damage;
-        }
-    }
-    if (invalidated) {
-        lv_timer_ready(lv_display_get_refr_timer(state.display));
-    }
-
-    const uint32_t updates = state.bitmap_frame_updates;
-    const uint64_t bytes = state.bitmap_frame_bytes;
-    const uint32_t damage_count = state.bitmap_damage_count;
-    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-    const uint64_t elapsed_us = now_us >= state.bitmap_frame_started_us ? now_us - state.bitmap_frame_started_us : 0U;
-    const uint32_t sequence = updates == 0U ? state.bitmap_frame_sequence : ++state.bitmap_frame_sequence;
-    if (updates != 0U && invalidated) {
-        ++state.presented_guest_frame_sequence;
-    }
-    state.bitmap_update_frame_active = false;
-    state.bitmap_damage_count = 0U;
-    state.bitmap_frame_updates = 0U;
-    state.bitmap_frame_bytes = 0U;
-    esp_lv_adapter_unlock();
-
-    if (updates != 0U && (sequence <= 8U || (sequence % 120U) == 0U)) {
-        ESP_LOGI(kTag,
-                 "offscreen frame #%" PRIu32 ": updates=%" PRIu32 " bytes=%" PRIu64 " unions=%" PRIu32
-                 " ppa-eligible=%" PRIu32 " stage=%" PRIu64 " us present=%s",
-                 sequence, updates, bytes, damage_count, ppa_eligible_damage, elapsed_us, invalidated ? "yes" : "no");
-    }
-    return MICROPIXEL_STATUS_OK;
 }
 
 metalio_claw4::GraphicsOperations MakeGraphicsOperations(MetalioClaw4PlatformState& state) {
     return {
         .context = &state,
-        .available = [](void*) { return GraphicsBackendAvailableImpl(); },
+        .available =
+            [](void* context) { return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.Available(); },
         .get_info =
             [](void* context, micropixel_graphics_info_t& info) {
-                return GraphicsGetInfoImpl(*static_cast<MetalioClaw4PlatformState*>(context), info);
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.GetInfo(info);
             },
         .begin_frame =
-            [](void* context) { return GraphicsBeginFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+            [](void* context) { return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.BeginFrame(); },
         .submit =
             [](void* context, const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) {
-                return GraphicsSubmitImpl(*static_cast<MetalioClaw4PlatformState*>(context), bytes, length, textures);
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.Submit(bytes, length, textures);
             },
         .commit_frame =
             [](void* context, const device::TextureAccess& textures) {
-                return GraphicsCommitFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context), textures);
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.CommitFrame(textures);
             },
         .cancel_frame =
-            [](void* context) { return GraphicsCancelFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+            [](void* context) {
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.CancelFrame();
+            },
         .begin_bitmap_update_frame =
             [](void* context) {
-                return GraphicsBeginBitmapUpdateFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context));
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.BeginBitmapUpdateFrame();
             },
         .update_bitmap =
             [](void* context, const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
                const uint8_t* pixels, uint32_t stride) {
-                return GraphicsUpdateBitmapImpl(*static_cast<MetalioClaw4PlatformState*>(context), bitmap, x, y, width,
-                                                height, pixels, stride);
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.UpdateBitmap(
+                    bitmap, x, y, width, height, pixels, stride);
             },
         .commit_bitmap_update_frame =
             [](void* context) {
-                return GraphicsCommitBitmapUpdateFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context));
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.CommitBitmapUpdateFrame();
             },
         .show_launch_bitmap =
             [](void* context, const device::BitmapView& bitmap) {
@@ -4463,7 +1570,7 @@ metalio_claw4::GraphicsOperations MakeGraphicsOperations(MetalioClaw4PlatformSta
         .dismiss_launch_bitmap =
             [](void* context) { DismissLaunchBitmapImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .release_guest_resources =
-            [](void* context) { ReleaseGuestGraphicsImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+            [](void* context) { static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.Release(); },
     };
 }
 
@@ -4564,7 +1671,25 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
 
 class MetalioClaw4Platform final : public Platform {
    public:
-    MetalioClaw4Platform() : graphics_(MakeGraphicsOperations(state_)), system_ui_(MakeSystemUiOperations(state_)) {}
+    MetalioClaw4Platform() : graphics_(MakeGraphicsOperations(state_)), system_ui_(MakeSystemUiOperations(state_)) {
+        state_.guest_graphics.SetPresentationHooks({
+            .context = &state_,
+            .prepare_frame_locked =
+                [](void* context, lv_obj_t* guest_frame, bool created_guest_frame, bool& needs_present) {
+                    auto& state = *static_cast<MetalioClaw4PlatformState*>(context);
+                    if (state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
+                        if (created_guest_frame) {
+                            state.status_layer_ui.RaisePerformanceOverlayLocked();
+                        }
+                    } else if (created_guest_frame || state.host_smoke != nullptr) {
+                        lv_obj_move_foreground(guest_frame);
+                    }
+                    if (DismissHostSmokeLocked(state)) {
+                        needs_present = true;
+                    }
+                },
+        });
+    }
 
     [[nodiscard]] esp_err_t Initialize() override { return InitializePlatformImpl(state_); }
     [[nodiscard]] device::GraphicsBackend& graphics() override { return graphics_; }
