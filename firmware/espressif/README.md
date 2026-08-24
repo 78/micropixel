@@ -4,6 +4,8 @@
 Metalio-Claw4 板级 backend。先按仓库根目录 README 初始化 submodule，并设置 `IDF_PATH`、WASI
 Clang 和 `WAMRC`。
 
+新设备、System Shell 和仅更新 Guest 的完整步骤见 [ESP32-P4 烧录指南](../../docs/development/flashing.zh-CN.md)。
+
 ```sh
 bash tools/build_p4_baseline.sh
 bash tools/flash_p4_baseline.sh /dev/cu.usbmodemPORT

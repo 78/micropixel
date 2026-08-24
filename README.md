@@ -58,7 +58,8 @@ bash tools/build_system_shell_p4.sh
 bash tools/check_firmware_style.sh --format-only
 ```
 
-设备连接后可用一个入口烧录 Host 与三 App Store：
+设备连接后可用一个入口烧录 Host 与三 App Store。环境准备、端口/MAC 识别、仅更新 Guest
+和烧录后验收见 [ESP32-P4 烧录指南](docs/development/flashing.zh-CN.md)：
 
 ```sh
 bash tools/flash_system_shell_p4.sh /dev/cu.usbmodemXXXX
@@ -76,6 +77,7 @@ bash tools/flash_system_shell_p4.sh /dev/cu.usbmodemXXXX
 - [Guest C++ SDK](guest/sdk/README.md)
 - [Guest–Host ABI](guest/abi/README.md)
 - [C/C++ 代码风格](docs/development/code-style.zh-CN.md)
+- [ESP32-P4 烧录指南](docs/development/flashing.zh-CN.md)
 
 文档索引、维护规则和硬件官方来源见 [Documentation](docs/README.md)。
 
