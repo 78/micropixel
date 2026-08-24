@@ -35,10 +35,12 @@ bool VolumeCurveHasExpectedAnchors() {
                  "out-of-range input must clamp to full output");
 }
 
-bool BrightnessZeroUsesThePanelFloor() {
+bool BrightnessZeroUsesTheSafePanelFloor() {
     return Check(PerceptualBrightnessOutputPerTenThousand(0U) == kBrightnessOutputFloor,
-                 "zero percent brightness must map to fifteen percent panel output") &&
-           Check(PerceptualBrightnessOutputPerTenThousand(10U) == 1968U,
+                 "zero percent brightness must retain a visible panel output") &&
+           Check(PerceptualBrightnessOutputPerTenThousand(1U) > kBrightnessOutputFloor,
+                 "the first active brightness setting must clear the panel dead zone") &&
+           Check(PerceptualBrightnessOutputPerTenThousand(10U) == 834U,
                  "brightness must rise smoothly above its output floor") &&
            Check(PerceptualBrightnessOutputPerTenThousand(100U) == kPerceptualControlScale,
                  "one hundred percent brightness must remain full output");
@@ -53,7 +55,8 @@ bool LaterSliderStepsHaveMoreOutputRange() {
 }  // namespace
 
 int main() {
-    return VolumeCurveHasExpectedAnchors() && BrightnessZeroUsesThePanelFloor() && LaterSliderStepsHaveMoreOutputRange()
+    return VolumeCurveHasExpectedAnchors() && BrightnessZeroUsesTheSafePanelFloor() &&
+                   LaterSliderStepsHaveMoreOutputRange()
                ? 0
                : 1;
 }

@@ -6,7 +6,7 @@
 namespace micropixel::platform::metalio_claw4 {
 
 constexpr uint32_t kPerceptualControlScale = 10000U;
-constexpr uint32_t kBrightnessOutputFloor = 1500U;
+constexpr uint32_t kBrightnessOutputFloor = 300U;
 constexpr uint32_t kVolumeOutputFloor = 300U;
 
 constexpr uint32_t BlendedControlOutputPerTenThousand(uint8_t percent) {
@@ -22,8 +22,8 @@ constexpr uint32_t OutputAboveFloorPerTenThousand(uint8_t percent, uint32_t floo
                        kPerceptualControlScale;
 }
 
-// Brightness 0% is the dimmest usable setting, not panel power-off. The
-// physical backlight switch still bypasses this mapping when it needs true off.
+// UI brightness never turns the panel off: 0% is the dimmest usable hardware
+// output. The physical backlight switch bypasses this mapping for true off.
 constexpr uint32_t PerceptualBrightnessOutputPerTenThousand(uint8_t percent) {
     return OutputAboveFloorPerTenThousand(percent, kBrightnessOutputFloor);
 }
