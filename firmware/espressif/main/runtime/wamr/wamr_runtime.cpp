@@ -19,7 +19,10 @@ namespace {
 
 constexpr uint32_t kExecStackSize = 8U * 1024U;
 constexpr uint32_t kGuestAppHeapSize = 8U * 1024U;
-constexpr unsigned kPsramAllocationThreshold = 32U * 1024U;
+// Keep small, latency-sensitive WAMR metadata in internal SRAM.  Module-load
+// buffers are larger and must not depend on finding a contiguous internal
+// block after the Host UI and a previous Guest have fragmented that heap.
+constexpr unsigned kPsramAllocationThreshold = 16U * 1024U;
 constexpr uintptr_t kWamrAllocationAlignment = 8U;
 constexpr char kTag[] = "micropixel_wamr";
 bool guest_memory_placement_logged;

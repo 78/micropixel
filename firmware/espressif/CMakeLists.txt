@@ -7,6 +7,16 @@ endif()
 idf_build_set_property(DEPENDENCIES_LOCK dependencies.lock.esp32p4)
 project(micropixel)
 
+# esp-hosted 2.x still starts its SDIO transport from a C constructor. With
+# ESP-IDF 6.1 that constructor runs before the P4 sleep-retention modules are
+# registered and crashes in sleep_retention.c. Remove only that auto-init
+# translation unit; the Wi-Fi backend starts esp-hosted explicitly from
+# app_main after IDF startup has completed.
+idf_component_get_property(esp_hosted_lib espressif__esp_hosted COMPONENT_LIB)
+get_target_property(esp_hosted_sources ${esp_hosted_lib} SOURCES)
+list(FILTER esp_hosted_sources EXCLUDE REGEX "port_esp_hosted_host_init\\.c$")
+set_property(TARGET ${esp_hosted_lib} PROPERTY SOURCES "${esp_hosted_sources}")
+
 # WAMR 2.4.x relies on sys/stat.h and stdio.h being included indirectly.
 # ESP-IDF 6.1 no longer provides those transitive declarations, so inject the
 # standard headers without modifying the WAMR submodule from this repository.

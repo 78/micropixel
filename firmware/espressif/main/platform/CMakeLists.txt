@@ -11,7 +11,7 @@ list(APPEND micropixel_requires esp_hw_support)
 list(APPEND micropixel_requires
     esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ledc
     esp_driver_ppa esp_driver_uart esp_driver_usb_serial_jtag
-    button esp_lcd esp_lvgl_adapter esp_lcd_touch_gt911 esp_timer lvgl__lvgl
+    button esp_event esp_lcd esp_lvgl_adapter esp_lcd_touch_gt911 esp_netif esp_timer esp_wifi lvgl__lvgl
 )
 
 if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
@@ -24,6 +24,7 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
         "platform/metalio-claw4/graphics_adapter.cpp"
         "platform/metalio-claw4/platform.cpp"
         "platform/metalio-claw4/system_ui_adapter.cpp"
+        "platform/metalio-claw4/wifi_backend.cpp"
         "platform/metalio-claw4/display/retained_scene.cpp"
         "platform/metalio-claw4/input/gt911_input.cpp"
         "platform/metalio-claw4/input/tca9555_power_key.cpp"

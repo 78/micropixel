@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +21,7 @@
 #include "lvgl.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include "src/misc/cache/instance/lv_image_header_cache.h"
+#include "src/widgets/buttonmatrix/lv_buttonmatrix_private.h"
 #if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
 #include "src/draw/snapshot/lv_snapshot.h"
 #endif
@@ -33,7 +36,9 @@
 #include "platform/metalio-claw4/graphics_adapter.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
 #include "platform/metalio-claw4/input/tca9555_power_key.hpp"
+#include "platform/metalio-claw4/perceptual_control.hpp"
 #include "platform/metalio-claw4/system_ui_adapter.hpp"
+#include "platform/metalio-claw4/wifi_backend.hpp"
 #include "platform/platform.hpp"
 #include "task_policy.hpp"
 
@@ -45,9 +50,12 @@ constexpr int kWidth = 720;
 constexpr int kHeight = 720;
 constexpr BaseType_t kLvglTaskCore = 1;
 constexpr uint32_t kRefreshPeriodMs = 1000;
+constexpr uint32_t kLvglTaskMinDelayMs = portTICK_PERIOD_MS;
 constexpr uint32_t kBitmapDamageCapacity = 16U;
+constexpr uint32_t kHostPointerQueueCapacity = 32U;
 constexpr uint32_t kMaxSceneTextures = MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS;
-constexpr int32_t kHallCardWidth = 218;
+constexpr uint32_t kThemeAccentColor = 0x287ee8U;
+constexpr int32_t kHallCardWidth = 202;
 constexpr int32_t kHallCardRadius = 22;
 constexpr int32_t kHallCardBorderWidth = 1;
 constexpr uint32_t kHallCoverBytesPerPixel = 3U;
@@ -215,6 +223,15 @@ enum class StatusTouchTarget : uint8_t {
     kVolume,
 };
 
+enum class SystemMenuTouchTarget : uint8_t {
+    kNone,
+    kBack,
+    kWifi,
+    kLanguage,
+    kSystemInformation,
+    kManageApps,
+};
+
 // All board-owned display/input state is stored inside the selected Platform
 // object. Callbacks receive this state explicitly instead of reaching through
 // file-level aliases.
@@ -223,6 +240,13 @@ struct MetalioClaw4PlatformState final {
     lv_display_t* display{};
     lv_obj_t* host_smoke{};
     lv_obj_t* guest_frame{};
+    lv_obj_t* hall_settings_press_overlay{};
+    lv_obj_t* system_menu_press_overlays[5]{};
+    lv_obj_t* wifi_scroll_content{};
+    lv_obj_t* wifi_password_textarea{};
+    lv_obj_t* wifi_keyboard{};
+    lv_obj_t* wifi_saved_rows[host_ui::kMaxSavedWifiNetworks]{};
+    lv_obj_t* wifi_available_rows[host_ui::kMaxVisibleWifiNetworks]{};
     lv_obj_t* status_layer{};
     lv_obj_t* status_dialog{};
     lv_obj_t* status_quick_panels[3]{};
@@ -243,6 +267,17 @@ struct MetalioClaw4PlatformState final {
     metalio_claw4::Tca9555PowerKey power_key{};
     metalio_claw4::Gt911Input touch_input{kWidth, kHeight, kTouchInterrupt};
     host_ui::SystemGestureRouter input_router{touch_input, kWidth, kHeight};
+    lv_indev_t* host_pointer_indev{};
+    portMUX_TYPE host_pointer_lock = portMUX_INITIALIZER_UNLOCKED;
+    device::TouchSample host_pointer_queue[kHostPointerQueueCapacity]{};
+    lv_point_t host_pointer_point{};
+    lv_indev_state_t host_pointer_state{LV_INDEV_STATE_RELEASED};
+    uint32_t host_pointer_touch_id{};
+    uint32_t host_pointer_queue_head{};
+    uint32_t host_pointer_queue_tail{};
+    bool host_pointer_enabled{};
+    bool host_pointer_touch_active{};
+    bool host_pointer_release_queued{};
     uint8_t* guest_snapshot_pixels{};
     BitmapDamage bitmap_damage[kBitmapDamageCapacity]{};
     uint64_t bitmap_frame_started_us{};
@@ -270,6 +305,10 @@ struct MetalioClaw4PlatformState final {
     SemaphoreHandle_t display_refresh_ready{};
     host_ui::SystemUiActionSink hall_action_sink{};
     void* hall_action_context{};
+    host_ui::SystemUiActionSink system_menu_action_sink{};
+    void* system_menu_action_context{};
+    host_ui::SystemUiActionSink wifi_action_sink{};
+    void* wifi_action_context{};
     host_ui::SystemUiActionSink status_action_sink{};
     void* status_action_context{};
     uint32_t hall_app_count{};
@@ -279,7 +318,19 @@ struct MetalioClaw4PlatformState final {
     int32_t hall_touch_down_y{};
     uint64_t hall_touch_down_us{};
     bool hall_touch_close{};
+    bool hall_touch_settings{};
     bool hall_app_running[host_ui::kMaxHallApps]{};
+    uint32_t system_menu_touch_id{};
+    SystemMenuTouchTarget system_menu_touch_target{SystemMenuTouchTarget::kNone};
+    int32_t system_menu_touch_down_x{};
+    int32_t system_menu_touch_down_y{};
+    uint64_t system_menu_touch_down_us{};
+    host_ui::WifiSettingsModel wifi_model{};
+    host_ui::WifiNetworkModel wifi_password_network{};
+    host_ui::WifiConnectionState wifi_password_connection_state{host_ui::WifiConnectionState::kDisconnected};
+    uint32_t wifi_selected_index{};
+    int32_t wifi_scroll_offset{};
+    std::array<char, host_ui::kMaxWifiPasswordLength + 1U> wifi_password{};
     uint32_t status_touch_id{};
     StatusTouchTarget status_touch_target{StatusTouchTarget::kNone};
     int32_t status_touch_down_x{};
@@ -289,11 +340,105 @@ struct MetalioClaw4PlatformState final {
     uint8_t status_slider_values[2]{};
     uint8_t status_slider_last_emitted_values[2]{0xffU, 0xffU};
     bool hall_touch_active{};
+    bool system_menu_touch_active{};
+    bool system_menu_button_pressed{};
+    bool wifi_action_sheet_visible{};
+    bool wifi_password_visible{};
+    bool wifi_password_attempt_active{};
+    bool wifi_render_pending{};
+    bool wifi_user_scrolled{};
+    bool wifi_scroll_gesture_active{};
     bool status_touch_active{};
     bool status_button_pressed{};
     bool bitmap_update_frame_active{};
     bool graphics_frame_active{};
 };
+
+void QueueWifiSettingsRender(MetalioClaw4PlatformState& state);
+
+void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_indev_get_user_data(indev));
+    if (state == nullptr || data == nullptr) {
+        return;
+    }
+    bool render_wifi_after_release = false;
+    bool pointer_sample_read = false;
+    portENTER_CRITICAL(&state->host_pointer_lock);
+    if (state->host_pointer_queue_tail != state->host_pointer_queue_head) {
+        const device::TouchSample& sample = state->host_pointer_queue[state->host_pointer_queue_tail];
+        pointer_sample_read = true;
+        state->host_pointer_queue_tail = (state->host_pointer_queue_tail + 1U) % kHostPointerQueueCapacity;
+        state->host_pointer_point = lv_point_t{.x = sample.x, .y = sample.y};
+        state->host_pointer_state =
+            sample.phase == device::TouchPhase::kDown || sample.phase == device::TouchPhase::kMove
+                ? LV_INDEV_STATE_PRESSED
+                : LV_INDEV_STATE_RELEASED;
+        if (sample.phase == device::TouchPhase::kUp || sample.phase == device::TouchPhase::kCancel) {
+            state->host_pointer_release_queued = false;
+            if (state->wifi_render_pending && !state->wifi_scroll_gesture_active) {
+                state->wifi_render_pending = false;
+                render_wifi_after_release = true;
+            }
+        }
+    }
+    data->point = state->host_pointer_point;
+    data->state = state->host_pointer_enabled ? state->host_pointer_state : LV_INDEV_STATE_RELEASED;
+    data->continue_reading = state->host_pointer_queue_tail != state->host_pointer_queue_head;
+    portEXIT_CRITICAL(&state->host_pointer_lock);
+    if (pointer_sample_read && state->display != nullptr) {
+        lv_timer_ready(lv_display_get_refr_timer(state->display));
+    }
+    if (render_wifi_after_release) {
+        QueueWifiSettingsRender(*state);
+    }
+}
+
+bool HostPointerTouchSink(void* context, const device::TouchSample& sample) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
+    if (state == nullptr) {
+        return true;
+    }
+    portENTER_CRITICAL(&state->host_pointer_lock);
+    if (!state->host_pointer_enabled) {
+        portEXIT_CRITICAL(&state->host_pointer_lock);
+        return true;
+    }
+    if (sample.phase == device::TouchPhase::kDown && !state->host_pointer_touch_active) {
+        state->host_pointer_touch_active = true;
+        state->host_pointer_touch_id = sample.id;
+    } else if (!state->host_pointer_touch_active || sample.id != state->host_pointer_touch_id) {
+        portEXIT_CRITICAL(&state->host_pointer_lock);
+        return true;
+    }
+    const uint32_t next_head = (state->host_pointer_queue_head + 1U) % kHostPointerQueueCapacity;
+    if (next_head == state->host_pointer_queue_tail) {
+        state->host_pointer_queue_tail = (state->host_pointer_queue_tail + 1U) % kHostPointerQueueCapacity;
+    }
+    state->host_pointer_queue[state->host_pointer_queue_head] = sample;
+    state->host_pointer_queue_head = next_head;
+    if (sample.phase == device::TouchPhase::kUp || sample.phase == device::TouchPhase::kCancel) {
+        state->host_pointer_touch_active = false;
+        state->host_pointer_release_queued = true;
+    }
+    portEXIT_CRITICAL(&state->host_pointer_lock);
+
+    return true;
+}
+
+void SetHostPointerEnabledLocked(MetalioClaw4PlatformState& state, bool enabled) {
+    portENTER_CRITICAL(&state.host_pointer_lock);
+    state.host_pointer_queue_head = 0U;
+    state.host_pointer_queue_tail = 0U;
+    state.host_pointer_state = LV_INDEV_STATE_RELEASED;
+    state.host_pointer_touch_active = false;
+    state.host_pointer_release_queued = false;
+    state.host_pointer_enabled = enabled;
+    portEXIT_CRITICAL(&state.host_pointer_lock);
+    if (state.host_pointer_indev != nullptr) {
+        lv_indev_enable(state.host_pointer_indev, enabled);
+        lv_indev_reset(state.host_pointer_indev, nullptr);
+    }
+}
 
 bool SameTextureAccess(const device::TextureAccess& left, const device::TextureAccess& right) {
     return left.context == right.context && left.resolve == right.resolve && left.retain == right.retain &&
@@ -461,7 +606,10 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     adapter_config.task_priority = task_policy::kDisplayPriority;
     adapter_config.task_core_id = kLvglTaskCore;
     adapter_config.tick_period_ms = ESP_LV_ADAPTER_DEFAULT_TICK_PERIOD_MS;
-    adapter_config.task_min_delay_ms = ESP_LV_ADAPTER_DEFAULT_TASK_MIN_DELAY_MS;
+    // A sub-tick timeout is rounded down to zero by pdMS_TO_TICKS().  LVGL's
+    // animation timer can then keep this high-priority task in a busy loop and
+    // starve IDLE1 until the task watchdog fires.
+    adapter_config.task_min_delay_ms = kLvglTaskMinDelayMs;
     adapter_config.task_max_delay_ms = ESP_LV_ADAPTER_DEFAULT_TASK_MAX_DELAY_MS;
     adapter_config.auto_sleep.enable = false;
     adapter_config.auto_sleep.mode = ESP_LV_ADAPTER_AUTO_SLEEP_MODE_DISABLED;
@@ -495,9 +643,22 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
     state.retained_scene.BindSurface(state.display, state.hardware.Panel());
 #endif
+    if (!state.retained_scene.Initialize()) {
+        return ESP_ERR_NO_MEM;
+    }
     lv_display_add_event_cb(state.display, DisplayRefreshStartEvent, LV_EVENT_REFR_START, &state);
     lv_display_add_event_cb(state.display, DisplayRefreshReadyEvent, LV_EVENT_REFR_READY, &state);
     lv_timer_set_period(lv_display_get_refr_timer(state.display), kRefreshPeriodMs);
+
+    state.host_pointer_indev = lv_indev_create();
+    if (state.host_pointer_indev == nullptr) {
+        return ESP_ERR_NO_MEM;
+    }
+    lv_indev_set_type(state.host_pointer_indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(state.host_pointer_indev, HostPointerRead);
+    lv_indev_set_user_data(state.host_pointer_indev, &state);
+    lv_indev_set_display(state.host_pointer_indev, state.display);
+    SetHostPointerEnabledLocked(state, false);
 
     status = state.touch_input.Start(state.display);
     if (status != ESP_OK) {
@@ -709,11 +870,13 @@ struct HallCardBounds final {
     int32_t height{};
 };
 
+constexpr HallCardBounds kHallSettingsButtonBounds{.x = 496, .y = 20, .width = 200, .height = 100};
+
 HallCardBounds HallCard(uint32_t index) {
-    constexpr int32_t kCardLeft = 17;
+    constexpr int32_t kCardLeft = 40;
     constexpr int32_t kCardTop = 164;
-    constexpr int32_t kCardHeight = 270;
-    constexpr int32_t kCardGap = 16;
+    constexpr int32_t kCardHeight = 254;
+    constexpr int32_t kCardGap = 17;
     return HallCardBounds{.x = kCardLeft + static_cast<int32_t>(index) * (kHallCardWidth + kCardGap),
                           .y = kCardTop,
                           .width = kHallCardWidth,
@@ -757,6 +920,24 @@ void SetHallCardPressed(MetalioClaw4PlatformState& state, uint32_t index, bool p
     esp_lv_adapter_unlock();
 }
 
+void SetHallSettingsPressed(MetalioClaw4PlatformState& state, bool pressed) {
+    lv_obj_t* overlay = state.hall_settings_press_overlay;
+    if (overlay == nullptr || state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    const bool already_pressed = !lv_obj_has_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+    if (already_pressed != pressed) {
+        if (pressed) {
+            lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(overlay);
+        } else {
+            lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_timer_ready(lv_display_get_refr_timer(state.display));
+    }
+    esp_lv_adapter_unlock();
+}
+
 bool HallTouchSink(void* context, const device::TouchSample& sample) {
     auto* state = static_cast<MetalioClaw4PlatformState*>(context);
     if (state == nullptr) {
@@ -764,23 +945,37 @@ bool HallTouchSink(void* context, const device::TouchSample& sample) {
     }
     if (sample.phase == device::TouchPhase::kDown) {
         if (state->hall_touch_active) {
-            SetHallCardPressed(*state, state->hall_touch_card, false);
+            if (state->hall_touch_settings) {
+                SetHallSettingsPressed(*state, false);
+            } else {
+                SetHallCardPressed(*state, state->hall_touch_card, false);
+            }
         }
         state->hall_touch_active = false;
         state->hall_touch_card = host_ui::kMaxHallApps;
         state->hall_touch_close = false;
-        for (uint32_t index = 0U; index < state->hall_app_count; ++index) {
-            if (PointInside(HallCard(index), sample.x, sample.y)) {
-                state->hall_touch_id = sample.id;
-                state->hall_touch_card = index;
-                state->hall_touch_down_x = sample.x;
-                state->hall_touch_down_y = sample.y;
-                state->hall_touch_down_us = sample.timestamp_us;
-                state->hall_touch_close =
-                    state->hall_app_running[index] && PointInside(HallCloseButton(index), sample.x, sample.y);
-                state->hall_touch_active = true;
-                SetHallCardPressed(*state, index, true);
-                break;
+        state->hall_touch_settings = PointInside(kHallSettingsButtonBounds, sample.x, sample.y);
+        if (state->hall_touch_settings) {
+            state->hall_touch_id = sample.id;
+            state->hall_touch_down_x = sample.x;
+            state->hall_touch_down_y = sample.y;
+            state->hall_touch_down_us = sample.timestamp_us;
+            state->hall_touch_active = true;
+            SetHallSettingsPressed(*state, true);
+        } else {
+            for (uint32_t index = 0U; index < state->hall_app_count; ++index) {
+                if (PointInside(HallCard(index), sample.x, sample.y)) {
+                    state->hall_touch_id = sample.id;
+                    state->hall_touch_card = index;
+                    state->hall_touch_down_x = sample.x;
+                    state->hall_touch_down_y = sample.y;
+                    state->hall_touch_down_us = sample.timestamp_us;
+                    state->hall_touch_close =
+                        state->hall_app_running[index] && PointInside(HallCloseButton(index), sample.x, sample.y);
+                    state->hall_touch_active = true;
+                    SetHallCardPressed(*state, index, true);
+                    break;
+                }
             }
         }
         return true;
@@ -789,17 +984,29 @@ bool HallTouchSink(void* context, const device::TouchSample& sample) {
         return true;
     }
     if (sample.phase == device::TouchPhase::kMove) {
-        const bool inside_target = state->hall_touch_close
+        const bool header_action = state->hall_touch_settings;
+        const bool inside_target = state->hall_touch_settings
+                                       ? PointInside(kHallSettingsButtonBounds, sample.x, sample.y)
+                                   : state->hall_touch_close
                                        ? PointInside(HallCloseButton(state->hall_touch_card), sample.x, sample.y)
                                        : PointInside(HallCard(state->hall_touch_card), sample.x, sample.y);
-        SetHallCardPressed(*state, state->hall_touch_card, inside_target);
+        if (header_action) {
+            SetHallSettingsPressed(*state, inside_target);
+        } else {
+            SetHallCardPressed(*state, state->hall_touch_card, inside_target);
+        }
         return true;
     }
     if (sample.phase == device::TouchPhase::kCancel) {
-        SetHallCardPressed(*state, state->hall_touch_card, false);
+        if (state->hall_touch_settings) {
+            SetHallSettingsPressed(*state, false);
+        } else {
+            SetHallCardPressed(*state, state->hall_touch_card, false);
+        }
         state->hall_touch_active = false;
         state->hall_touch_card = host_ui::kMaxHallApps;
         state->hall_touch_close = false;
+        state->hall_touch_settings = false;
         return true;
     }
     if (sample.phase != device::TouchPhase::kUp) {
@@ -809,17 +1016,33 @@ bool HallTouchSink(void* context, const device::TouchSample& sample) {
     constexpr uint64_t kTapTimeoutUs = 800000U;
     const uint32_t card = state->hall_touch_card;
     const bool close = state->hall_touch_close;
+    const bool settings = state->hall_touch_settings;
     const uint64_t elapsed_us = sample.timestamp_us >= state->hall_touch_down_us
                                     ? sample.timestamp_us - state->hall_touch_down_us
                                     : kTapTimeoutUs + 1U;
-    const bool inside_target = close ? PointInside(HallCloseButton(card), sample.x, sample.y)
-                                     : PointInside(HallCard(card), sample.x, sample.y);
-    const bool accepted = card < state->hall_app_count && inside_target && elapsed_us <= kTapTimeoutUs;
-    SetHallCardPressed(*state, card, false);
+    const bool header_action = settings;
+    const bool inside_target = settings ? PointInside(kHallSettingsButtonBounds, sample.x, sample.y)
+                               : close  ? PointInside(HallCloseButton(card), sample.x, sample.y)
+                                        : PointInside(HallCard(card), sample.x, sample.y);
+    const bool accepted =
+        (header_action || card < state->hall_app_count) && inside_target && elapsed_us <= kTapTimeoutUs;
+    if (header_action) {
+        SetHallSettingsPressed(*state, false);
+    } else {
+        SetHallCardPressed(*state, card, false);
+    }
     state->hall_touch_active = false;
     state->hall_touch_card = host_ui::kMaxHallApps;
     state->hall_touch_close = false;
+    state->hall_touch_settings = false;
     if (accepted && state->hall_action_sink != nullptr) {
+        if (header_action) {
+            ESP_LOGI(kTag, "App Hall accepted Settings tap: id=%" PRIu32 " elapsed=%" PRIu64 " us", sample.id,
+                     elapsed_us);
+            state->hall_action_sink(state->hall_action_context,
+                                    host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kOpenSystemMenu});
+            return true;
+        }
         ESP_LOGI(kTag,
                  "App Hall accepted %s: card=%" PRIu32 " id=%" PRIu32 " down=(%u,%u) up=(%u,%u) elapsed=%" PRIu64 " us",
                  close ? "close" : "tap", card, sample.id, state->hall_touch_down_x, state->hall_touch_down_y, sample.x,
@@ -994,9 +1217,9 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
 
     if (app.running) {
         lv_obj_t* running = lv_obj_create(card);
-        lv_obj_set_pos(running, 12, 12);
-        lv_obj_set_size(running, 132, 48);
-        lv_obj_set_style_radius(running, 24, 0);
+        lv_obj_set_pos(running, 10, 10);
+        lv_obj_set_size(running, 112, 44);
+        lv_obj_set_style_radius(running, 22, 0);
         lv_obj_set_style_border_width(running, 0, 0);
         lv_obj_set_style_bg_color(running, lv_color_hex(0x08111fU), 0);
         lv_obj_set_style_bg_opa(running, LV_OPA_90, 0);
@@ -1004,15 +1227,15 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
         lv_obj_remove_flag(running, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_t* running_label = lv_label_create(running);
         lv_label_set_text(running_label, "RUNNING");
-        lv_obj_set_style_text_font(running_label, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(running_label, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(running_label, lv_color_hex(0x4dd6a4U), 0);
         lv_obj_set_style_text_opa(running_label, LV_OPA_COVER, 0);
         lv_obj_center(running_label);
 
         lv_obj_t* close = lv_obj_create(card);
-        lv_obj_set_pos(close, bounds.width - 62, 12);
-        lv_obj_set_size(close, 50, 50);
-        lv_obj_set_style_radius(close, 25, 0);
+        lv_obj_set_pos(close, bounds.width - 56, 10);
+        lv_obj_set_size(close, 46, 46);
+        lv_obj_set_style_radius(close, 23, 0);
         lv_obj_set_style_border_width(close, 0, 0);
         lv_obj_set_style_bg_color(close, lv_color_hex(0x08111fU), 0);
         lv_obj_set_style_bg_opa(close, LV_OPA_90, 0);
@@ -1147,6 +1370,7 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
         state.host_smoke = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(state.host_smoke, 0x08111fU);
     }
+    state.hall_settings_press_overlay = nullptr;
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
@@ -1164,6 +1388,41 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     (void)CreateHallLabel(state.host_smoke, "App Hall", &lv_font_montserrat_32, 0xf2f7ffU, 76, 36);
     (void)CreateHallLabel(state.host_smoke, "Tap a card to launch", &lv_font_montserrat_18, 0x91a4bdU, 76, 78);
     (void)CreateHallLabel(state.host_smoke, "INSTALLED APPS", &lv_font_montserrat_18, 0x91a4bdU, 40, 128);
+
+    lv_obj_t* settings_button = lv_obj_create(state.host_smoke);
+    lv_obj_set_pos(settings_button, 504, 42);
+    lv_obj_set_size(settings_button, 176, 60);
+    lv_obj_set_style_pad_all(settings_button, 0, 0);
+    lv_obj_set_style_radius(settings_button, 20, 0);
+    lv_obj_set_style_border_width(settings_button, 1, 0);
+    lv_obj_set_style_border_color(settings_button, lv_color_hex(0x42607fU), 0);
+    lv_obj_set_style_bg_color(settings_button, lv_color_hex(0x111f32U), 0);
+    lv_obj_set_style_bg_opa(settings_button, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(settings_button, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(settings_button, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* settings_icon = lv_label_create(settings_button);
+    lv_label_set_text(settings_icon, LV_SYMBOL_SETTINGS);
+    lv_obj_set_style_text_font(settings_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(settings_icon, lv_color_hex(0xf2f7ffU), 0);
+    lv_obj_align(settings_icon, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_t* settings_label = lv_label_create(settings_button);
+    lv_label_set_text(settings_label, "Settings");
+    lv_obj_set_style_text_font(settings_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(settings_label, lv_color_hex(0xf2f7ffU), 0);
+    lv_obj_align(settings_label, LV_ALIGN_LEFT_MID, 52, 0);
+
+    state.hall_settings_press_overlay = lv_obj_create(settings_button);
+    lv_obj_set_pos(state.hall_settings_press_overlay, 0, 0);
+    lv_obj_set_size(state.hall_settings_press_overlay, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_all(state.hall_settings_press_overlay, 0, 0);
+    lv_obj_set_style_radius(state.hall_settings_press_overlay, 20, 0);
+    lv_obj_set_style_border_width(state.hall_settings_press_overlay, 0, 0);
+    lv_obj_set_style_bg_color(state.hall_settings_press_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(state.hall_settings_press_overlay, LV_OPA_40, 0);
+    lv_obj_remove_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_HIDDEN);
 
     const uint32_t visible_count = model.app_count < host_ui::kMaxHallApps ? model.app_count : host_ui::kMaxHallApps;
     for (uint32_t index = 0U; index < visible_count; ++index) {
@@ -1197,11 +1456,17 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     state.hall_touch_active = false;
     state.hall_touch_card = host_ui::kMaxHallApps;
     state.hall_touch_close = false;
+    state.hall_touch_settings = false;
     state.input_router.BindTouchSink(HallTouchSink, &state);
     state.input_router.BindSystemActionSink(action_sink, action_context);
     ESP_LOGI(kTag, "App Hall visible: apps=%" PRIu32 " status=%u detail=%" PRIu32, visible_count,
              static_cast<unsigned>(model.status), model.detail);
     return {};
+}
+
+void UpdateHallWifiImpl(MetalioClaw4PlatformState& state, const host_ui::HallWifiModel& model) {
+    (void)state;
+    (void)model;
 }
 
 void LeaveHallImpl(MetalioClaw4PlatformState& state) {
@@ -1213,6 +1478,8 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     state.hall_touch_active = false;
     state.hall_touch_card = host_ui::kMaxHallApps;
     state.hall_touch_close = false;
+    state.hall_touch_settings = false;
+    state.hall_settings_press_overlay = nullptr;
     if (state.display == nullptr || state.host_smoke == nullptr || state.display_refresh_ready == nullptr ||
         esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
@@ -1243,6 +1510,8 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
     state.hall_touch_active = false;
     state.hall_touch_card = host_ui::kMaxHallApps;
     state.hall_touch_close = false;
+    state.hall_touch_settings = false;
+    state.hall_settings_press_overlay = nullptr;
     if (state.display == nullptr || state.host_smoke == nullptr || state.guest_frame == nullptr ||
         state.display_refresh_ready == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
@@ -1267,6 +1536,1297 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
     }
     ESP_LOGI(kTag, "retained Guest view restored directly from App Hall");
     return {};
+}
+
+constexpr HallCardBounds kSystemMenuBackBounds{.x = 24, .y = 24, .width = 88, .height = 88};
+
+HallCardBounds SystemMenuTargetBounds(SystemMenuTouchTarget target) {
+    switch (target) {
+        case SystemMenuTouchTarget::kBack:
+            return kSystemMenuBackBounds;
+        case SystemMenuTouchTarget::kWifi:
+            return {.x = 32, .y = 140, .width = 656, .height = 120};
+        case SystemMenuTouchTarget::kLanguage:
+            return {.x = 32, .y = 260, .width = 656, .height = 120};
+        case SystemMenuTouchTarget::kSystemInformation:
+            return {.x = 32, .y = 380, .width = 656, .height = 120};
+        case SystemMenuTouchTarget::kManageApps:
+            return {.x = 32, .y = 500, .width = 656, .height = 120};
+        case SystemMenuTouchTarget::kNone:
+            break;
+    }
+    return {};
+}
+
+int32_t SystemMenuTargetIndex(SystemMenuTouchTarget target) {
+    switch (target) {
+        case SystemMenuTouchTarget::kBack:
+            return 0;
+        case SystemMenuTouchTarget::kWifi:
+            return 1;
+        case SystemMenuTouchTarget::kLanguage:
+            return 2;
+        case SystemMenuTouchTarget::kSystemInformation:
+            return 3;
+        case SystemMenuTouchTarget::kManageApps:
+            return 4;
+        case SystemMenuTouchTarget::kNone:
+            break;
+    }
+    return -1;
+}
+
+SystemMenuTouchTarget FindSystemMenuTouchTarget(int32_t x, int32_t y) {
+    constexpr SystemMenuTouchTarget kTargets[] = {
+        SystemMenuTouchTarget::kBack,       SystemMenuTouchTarget::kWifi,
+        SystemMenuTouchTarget::kLanguage,   SystemMenuTouchTarget::kSystemInformation,
+        SystemMenuTouchTarget::kManageApps,
+    };
+    for (SystemMenuTouchTarget target : kTargets) {
+        if (PointInside(SystemMenuTargetBounds(target), x, y)) {
+            return target;
+        }
+    }
+    return SystemMenuTouchTarget::kNone;
+}
+
+void ResetSystemMenuObjectPointers(MetalioClaw4PlatformState& state) {
+    for (lv_obj_t*& overlay : state.system_menu_press_overlays) {
+        overlay = nullptr;
+    }
+}
+
+void SetSystemMenuTargetPressed(MetalioClaw4PlatformState& state, SystemMenuTouchTarget target, bool pressed) {
+    const int32_t index = SystemMenuTargetIndex(target);
+    if (index < 0 || state.system_menu_press_overlays[index] == nullptr || state.display == nullptr ||
+        esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    lv_obj_t* overlay = state.system_menu_press_overlays[index];
+    const bool already_pressed = !lv_obj_has_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+    if (already_pressed != pressed) {
+        if (pressed) {
+            lv_obj_remove_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(overlay);
+        } else {
+            lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_timer_ready(lv_display_get_refr_timer(state.display));
+    }
+    esp_lv_adapter_unlock();
+}
+
+host_ui::SystemMenuItem SystemMenuItemForTarget(SystemMenuTouchTarget target) {
+    switch (target) {
+        case SystemMenuTouchTarget::kLanguage:
+            return host_ui::SystemMenuItem::kLanguage;
+        case SystemMenuTouchTarget::kSystemInformation:
+            return host_ui::SystemMenuItem::kSystemInformation;
+        case SystemMenuTouchTarget::kManageApps:
+            return host_ui::SystemMenuItem::kManageApps;
+        case SystemMenuTouchTarget::kWifi:
+        case SystemMenuTouchTarget::kBack:
+        case SystemMenuTouchTarget::kNone:
+            return host_ui::SystemMenuItem::kWifi;
+    }
+    return host_ui::SystemMenuItem::kWifi;
+}
+
+bool SystemMenuTouchSink(void* context, const device::TouchSample& sample) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
+    if (state == nullptr) {
+        return false;
+    }
+    if (sample.phase == device::TouchPhase::kDown) {
+        state->system_menu_touch_target = FindSystemMenuTouchTarget(sample.x, sample.y);
+        state->system_menu_touch_id = sample.id;
+        state->system_menu_touch_down_x = sample.x;
+        state->system_menu_touch_down_y = sample.y;
+        state->system_menu_touch_down_us = sample.timestamp_us;
+        state->system_menu_touch_active = state->system_menu_touch_target != SystemMenuTouchTarget::kNone;
+        state->system_menu_button_pressed = state->system_menu_touch_active;
+        if (state->system_menu_touch_active) {
+            SetSystemMenuTargetPressed(*state, state->system_menu_touch_target, true);
+        }
+        return true;
+    }
+    if (!state->system_menu_touch_active || state->system_menu_touch_id != sample.id) {
+        return true;
+    }
+
+    const SystemMenuTouchTarget target = state->system_menu_touch_target;
+    if (sample.phase == device::TouchPhase::kMove) {
+        const bool pressed = PointInside(SystemMenuTargetBounds(target), sample.x, sample.y);
+        if (pressed != state->system_menu_button_pressed) {
+            state->system_menu_button_pressed = pressed;
+            SetSystemMenuTargetPressed(*state, target, pressed);
+        }
+        return true;
+    }
+    if (sample.phase == device::TouchPhase::kCancel) {
+        SetSystemMenuTargetPressed(*state, target, false);
+        state->system_menu_touch_active = false;
+        state->system_menu_button_pressed = false;
+        state->system_menu_touch_target = SystemMenuTouchTarget::kNone;
+        return true;
+    }
+    if (sample.phase != device::TouchPhase::kUp) {
+        return true;
+    }
+
+    constexpr int32_t kTapSlop = 24;
+    constexpr uint64_t kTapTimeoutUs = 800000U;
+    const int32_t delta_x = sample.x - state->system_menu_touch_down_x;
+    const int32_t delta_y = sample.y - state->system_menu_touch_down_y;
+    const uint64_t elapsed_us = sample.timestamp_us >= state->system_menu_touch_down_us
+                                    ? sample.timestamp_us - state->system_menu_touch_down_us
+                                    : kTapTimeoutUs + 1U;
+    const bool accepted = state->system_menu_button_pressed &&
+                          PointInside(SystemMenuTargetBounds(target), sample.x, sample.y) &&
+                          std::abs(delta_x) <= kTapSlop && std::abs(delta_y) <= kTapSlop && elapsed_us <= kTapTimeoutUs;
+    SetSystemMenuTargetPressed(*state, target, false);
+    state->system_menu_touch_active = false;
+    state->system_menu_button_pressed = false;
+    state->system_menu_touch_target = SystemMenuTouchTarget::kNone;
+    if (!accepted || state->system_menu_action_sink == nullptr) {
+        return true;
+    }
+    if (target == SystemMenuTouchTarget::kBack) {
+        state->system_menu_action_sink(state->system_menu_action_context,
+                                       host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseSystemMenu});
+    } else {
+        state->system_menu_action_sink(
+            state->system_menu_action_context,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSelectSystemMenuItem,
+                                    .value = static_cast<uint32_t>(SystemMenuItemForTarget(target))});
+    }
+    return true;
+}
+
+lv_obj_t* CreateSystemMenuPressOverlay(lv_obj_t* parent, int32_t radius) {
+    lv_obj_t* overlay = lv_obj_create(parent);
+    lv_obj_set_pos(overlay, 0, 0);
+    lv_obj_set_size(overlay, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_all(overlay, 0, 0);
+    lv_obj_set_style_radius(overlay, radius, 0);
+    lv_obj_set_style_border_width(overlay, 0, 0);
+    lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_40, 0);
+    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_HIDDEN);
+    return overlay;
+}
+
+void DrawSystemMenuRow(MetalioClaw4PlatformState& state, lv_obj_t* root, SystemMenuTouchTarget target,
+                       const char* icon_text, const char* name, const char* detail, uint32_t icon_color) {
+    const HallCardBounds target_bounds = SystemMenuTargetBounds(target);
+    const HallCardBounds bounds{.x = 40, .y = target_bounds.y + 8, .width = 640, .height = target_bounds.height - 16};
+    lv_obj_t* panel = lv_obj_create(root);
+    lv_obj_set_pos(panel, bounds.x, bounds.y);
+    lv_obj_set_size(panel, bounds.width, bounds.height);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 22, 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(target == SystemMenuTouchTarget::kWifi ? 0x42607fU : 0x2e4562U),
+                                  0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x111f32U), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* icon = lv_label_create(panel);
+    lv_label_set_text(icon, icon_text);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(icon, lv_color_hex(icon_color), 0);
+    lv_obj_set_size(icon, 56, 38);
+    lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(icon, 26, 32);
+    (void)CreateHallLabel(panel, name, &lv_font_montserrat_24, 0xf2f7ffU, 104, 20);
+    (void)CreateHallLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 59);
+    lv_obj_t* chevron = lv_label_create(panel);
+    lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(chevron, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(chevron, lv_color_hex(0xf2f7ffU), 0);
+    lv_obj_set_pos(chevron, bounds.width - 46, 38);
+
+    const int32_t index = SystemMenuTargetIndex(target);
+    if (index >= 0) {
+        state.system_menu_press_overlays[index] = CreateSystemMenuPressOverlay(panel, 22);
+    }
+}
+
+std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4PlatformState& state,
+                                                               const host_ui::SystemMenuModel& model,
+                                                               host_ui::SystemUiActionSink action_sink,
+                                                               void* action_context) {
+    if (state.display == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.hall_action_context);
+    state.hall_action_sink = nullptr;
+    state.hall_action_context = nullptr;
+    state.hall_app_count = 0U;
+    state.hall_touch_active = false;
+    state.hall_touch_settings = false;
+    state.hall_settings_press_overlay = nullptr;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+
+    if (state.host_smoke == nullptr) {
+        state.host_smoke = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(state.host_smoke, 0x08111fU);
+    }
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    ResetSystemMenuObjectPointers(state);
+    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
+    state.launch_image_descriptor = {};
+
+    lv_obj_t* back = lv_obj_create(state.host_smoke);
+    lv_obj_set_pos(back, 40, 40);
+    lv_obj_set_size(back, 56, 56);
+    lv_obj_set_style_pad_all(back, 0, 0);
+    lv_obj_set_style_radius(back, 18, 0);
+    lv_obj_set_style_border_width(back, 1, 0);
+    lv_obj_set_style_border_color(back, lv_color_hex(0x42607fU), 0);
+    lv_obj_set_style_bg_color(back, lv_color_hex(0x0d1929U), 0);
+    lv_obj_set_style_bg_opa(back, LV_OPA_90, 0);
+    lv_obj_remove_flag(back, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(back, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* back_label = lv_label_create(back);
+    lv_label_set_text(back_label, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(back_label, lv_color_hex(0xf2f7ffU), 0);
+    lv_obj_center(back_label);
+    state.system_menu_press_overlays[0] = CreateSystemMenuPressOverlay(back, 18);
+
+    (void)CreateHallLabel(state.host_smoke, "System Settings", &lv_font_montserrat_32, 0xf2f7ffU, 116, 36);
+    (void)CreateHallLabel(state.host_smoke, "Configure this device", &lv_font_montserrat_18, 0x91a4bdU, 116, 78);
+
+    const char* wifi_detail = !model.wifi_available  ? "Not available"
+                              : model.wifi_connected ? "Connected"
+                              : model.wifi_enabled   ? "Not connected"
+                                                     : "Off";
+    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", wifi_detail,
+                      0x69a7ffU);
+    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kLanguage, "A", "Language",
+                      model.language != nullptr ? model.language : "English", 0x4dd6a4U);
+    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kSystemInformation, "i", "System Information",
+                      "Device and software", 0x69a7ffU);
+    DrawSystemMenuRow(state, state.host_smoke, SystemMenuTouchTarget::kManageApps, LV_SYMBOL_LIST, "Manage Apps",
+                      model.installed_app_count == 1U ? "1 installed app" : "Installed apps", 0xff9f43U);
+
+    lv_obj_move_foreground(state.host_smoke);
+    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(state.performance_overlay);
+    }
+    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    esp_lv_adapter_unlock();
+
+    state.system_menu_action_sink = action_sink;
+    state.system_menu_action_context = action_context;
+    state.system_menu_touch_active = false;
+    state.system_menu_button_pressed = false;
+    state.system_menu_touch_target = SystemMenuTouchTarget::kNone;
+    state.input_router.BindTouchSink(SystemMenuTouchSink, &state);
+    state.input_router.BindSystemActionSink(action_sink, action_context);
+    ESP_LOGI(kTag, "System Settings visible: wifi=%s apps=%" PRIu32,
+             model.wifi_available ? (model.wifi_connected ? "connected" : "available") : "unavailable",
+             model.installed_app_count);
+    return {};
+}
+
+void LeaveSystemMenuImpl(MetalioClaw4PlatformState& state) {
+    if (state.system_menu_action_sink == nullptr && state.system_menu_action_context == nullptr) {
+        return;
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
+    state.system_menu_action_sink = nullptr;
+    state.system_menu_action_context = nullptr;
+    state.system_menu_touch_active = false;
+    state.system_menu_button_pressed = false;
+    state.system_menu_touch_target = SystemMenuTouchTarget::kNone;
+    ResetSystemMenuObjectPointers(state);
+}
+
+constexpr int32_t kWifiContentLeft = 40;
+constexpr int32_t kWifiContentWidth = 640;
+constexpr int32_t kWifiRowHeight = 76;
+constexpr int32_t kWifiRowGap = 10;
+constexpr int32_t kWifiSavedStartY = 264;
+
+struct WifiListLayout final {
+    int32_t saved_start{};
+    int32_t available_heading{};
+    int32_t available_start{};
+    int32_t content_height{};
+};
+
+WifiListLayout GetWifiListLayout(const host_ui::WifiSettingsModel& model) {
+    const uint32_t saved_rows = model.saved_network_count == 0U ? 1U : model.saved_network_count;
+    const int32_t available_heading =
+        kWifiSavedStartY + static_cast<int32_t>(saved_rows) * (kWifiRowHeight + kWifiRowGap) + 18;
+    const int32_t available_start = available_heading + 36;
+    const uint32_t available_rows = model.available_network_count == 0U ? 1U : model.available_network_count;
+    const int32_t content_height =
+        available_start + static_cast<int32_t>(available_rows) * (kWifiRowHeight + kWifiRowGap) + 30;
+    return WifiListLayout{.saved_start = kWifiSavedStartY,
+                          .available_heading = available_heading,
+                          .available_start = available_start,
+                          .content_height = content_height};
+}
+
+void EmitWifiNetworkAction(MetalioClaw4PlatformState& state, host_ui::SystemUiActionType type,
+                           const host_ui::WifiNetworkModel& network);
+void WifiBackEvent(lv_event_t* event);
+void WifiSwitchEvent(lv_event_t* event);
+void WifiSavedNetworkEvent(lv_event_t* event);
+void WifiAvailableNetworkEvent(lv_event_t* event);
+void WifiSheetConnectEvent(lv_event_t* event);
+void WifiSheetForgetEvent(lv_event_t* event);
+void WifiSheetCancelEvent(lv_event_t* event);
+void WifiScrollEvent(lv_event_t* event);
+
+void ResetWifiUiObjectPointers(MetalioClaw4PlatformState& state) {
+    state.wifi_scroll_content = nullptr;
+    state.wifi_password_textarea = nullptr;
+    state.wifi_keyboard = nullptr;
+    for (auto& row : state.wifi_saved_rows) {
+        row = nullptr;
+    }
+    for (auto& row : state.wifi_available_rows) {
+        row = nullptr;
+    }
+}
+
+lv_obj_t* CreateWifiPanel(lv_obj_t* parent, const HallCardBounds& bounds, uint32_t background, uint32_t border,
+                          int32_t radius) {
+    lv_obj_t* panel = lv_obj_create(parent);
+    lv_obj_set_pos(panel, bounds.x, bounds.y);
+    lv_obj_set_size(panel, bounds.width, bounds.height);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, radius, 0);
+    lv_obj_set_style_border_width(panel, border == 0U ? 0 : 1, 0);
+    if (border != 0U) {
+        lv_obj_set_style_border_color(panel, lv_color_hex(border), 0);
+    }
+    lv_obj_set_style_bg_color(panel, lv_color_hex(background), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    return panel;
+}
+
+const char* WifiBandText(host_ui::WifiBand band) {
+    switch (band) {
+        case host_ui::WifiBand::k2_4Ghz:
+            return "2.4 GHz";
+        case host_ui::WifiBand::k5Ghz:
+            return "5 GHz";
+        case host_ui::WifiBand::kUnknown:
+        default:
+            return "Wi-Fi";
+    }
+}
+
+const char* WifiConnectionDetail(const host_ui::WifiSettingsModel& model) {
+    if (!model.available) {
+        return "Not available";
+    }
+    if (!model.enabled) {
+        return "Off";
+    }
+    switch (model.connection_state) {
+        case host_ui::WifiConnectionState::kConnecting:
+            return "Connecting...";
+        case host_ui::WifiConnectionState::kConnected:
+            return "Connected";
+        case host_ui::WifiConnectionState::kAuthenticationFailed:
+        case host_ui::WifiConnectionState::kAuthenticationTimedOut:
+        case host_ui::WifiConnectionState::kHandshakeTimedOut:
+        case host_ui::WifiConnectionState::kNetworkNotFound:
+        case host_ui::WifiConnectionState::kFailed:
+        case host_ui::WifiConnectionState::kDisconnected:
+        default:
+            return model.scanning ? "Updating nearby networks" : "Not connected";
+    }
+}
+
+bool WifiModelShowsConnectedNetwork(const host_ui::WifiSettingsModel& model,
+                                    const host_ui::WifiNetworkModel& network) {
+    for (uint32_t index = 0U; index < model.saved_network_count; ++index) {
+        const host_ui::WifiNetworkModel& saved = model.saved_networks[index];
+        if (saved.connected && std::strcmp(saved.ssid.data(), network.ssid.data()) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t WifiSignalLevel(int8_t rssi) {
+    if (rssi == 0) {
+        return 0U;
+    }
+    if (rssi >= -50) {
+        return 4U;
+    }
+    if (rssi >= -62) {
+        return 3U;
+    }
+    if (rssi >= -74) {
+        return 2U;
+    }
+    return 1U;
+}
+
+void DrawWifiSignal(lv_obj_t* parent, int8_t rssi) {
+    constexpr int32_t kBarHeights[] = {10, 18, 27, 36};
+    const uint32_t level = WifiSignalLevel(rssi);
+    for (uint32_t index = 0U; index < 4U; ++index) {
+        lv_obj_t* bar = lv_obj_create(parent);
+        lv_obj_set_pos(bar, 20 + static_cast<int32_t>(index) * 8, 56 - kBarHeights[index]);
+        lv_obj_set_size(bar, 5, kBarHeights[index]);
+        lv_obj_set_style_pad_all(bar, 0, 0);
+        lv_obj_set_style_radius(bar, 3, 0);
+        lv_obj_set_style_border_width(bar, 0, 0);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(0x69a7ffU), 0);
+        lv_obj_set_style_bg_opa(bar, index < level ? LV_OPA_COVER : LV_OPA_30, 0);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
+void DrawWifiSecurityLock(lv_obj_t* parent) {
+    constexpr lv_border_side_t kShackleSides = static_cast<lv_border_side_t>(
+        static_cast<uint32_t>(LV_BORDER_SIDE_TOP) | static_cast<uint32_t>(LV_BORDER_SIDE_LEFT) |
+        static_cast<uint32_t>(LV_BORDER_SIDE_RIGHT));
+    lv_obj_t* shackle = lv_obj_create(parent);
+    lv_obj_set_pos(shackle, 582, 19);
+    lv_obj_set_size(shackle, 24, 24);
+    lv_obj_set_style_pad_all(shackle, 0, 0);
+    lv_obj_set_style_radius(shackle, 12, 0);
+    lv_obj_set_style_border_width(shackle, 3, 0);
+    lv_obj_set_style_border_side(shackle, kShackleSides, 0);
+    lv_obj_set_style_border_color(shackle, lv_color_hex(0x91a4bdU), 0);
+    lv_obj_set_style_bg_opa(shackle, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(shackle, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(shackle, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t* body =
+        CreateWifiPanel(parent, HallCardBounds{.x = 578, .y = 34, .width = 32, .height = 24}, 0x91a4bdU, 0U, 6);
+    (void)CreateWifiPanel(body, HallCardBounds{.x = 14, .y = 8, .width = 4, .height = 8}, 0x111f32U, 0U, 2);
+}
+
+void DrawWifiMoreIndicator(lv_obj_t* parent) {
+    for (int32_t index = 0; index < 3; ++index) {
+        lv_obj_t* dot = lv_obj_create(parent);
+        lv_obj_set_pos(dot, 594, 22 + index * 13);
+        lv_obj_set_size(dot, 7, 7);
+        lv_obj_set_style_pad_all(dot, 0, 0);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(dot, 0, 0);
+        lv_obj_set_style_bg_color(dot, lv_color_hex(0xa9bdd5U), 0);
+        lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    }
+}
+
+lv_obj_t* DrawWifiNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& network, int32_t y, bool saved) {
+    constexpr lv_style_selector_t kPressed = static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
+    lv_obj_t* row = CreateWifiPanel(
+        parent, HallCardBounds{.x = kWifiContentLeft, .y = y, .width = kWifiContentWidth, .height = kWifiRowHeight},
+        0x111f32U, 0x2e4562U, 20);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), kPressed);
+    DrawWifiSignal(row, network.rssi);
+    lv_obj_t* name = CreateHallLabel(row, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 70, 13);
+    lv_obj_set_width(name, network.connected ? 350 : 430);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+
+    char detail[96]{};
+    if (saved) {
+        std::snprintf(detail, sizeof(detail), "%s   %s   Channel %u", WifiBandText(network.band),
+                      network.secured ? "Secured" : "Open", network.channel);
+    } else {
+        std::snprintf(detail, sizeof(detail), "%s   %s   %d dBm", WifiBandText(network.band),
+                      network.secured ? "Secured" : "Open", static_cast<int>(network.rssi));
+    }
+    lv_obj_t* metadata = CreateHallLabel(row, detail, &lv_font_montserrat_18, 0x91a4bdU, 70, 44);
+    lv_obj_set_width(metadata, 450);
+    lv_label_set_long_mode(metadata, LV_LABEL_LONG_DOT);
+    if (network.connected) {
+        (void)CreateHallLabel(row, "Connected", &lv_font_montserrat_18, 0x4dd6a4U, 454, 27);
+    }
+    if (saved) {
+        DrawWifiMoreIndicator(row);
+    } else if (network.secured) {
+        DrawWifiSecurityLock(row);
+    }
+    return row;
+}
+
+lv_obj_t* DrawWifiButton(lv_obj_t* parent, const HallCardBounds& bounds, const char* text, uint32_t color,
+                         uint32_t border = 0x365472U) {
+    constexpr lv_style_selector_t kPressed = static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
+    lv_obj_t* button = CreateWifiPanel(parent, bounds, 0x16263aU, border, 16);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(button, lv_color_hex(0x0b1726U), kPressed);
+    lv_obj_t* label = lv_label_create(button);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_center(label);
+    return button;
+}
+
+constexpr const char* kWifiKeyboardLowerMap[] = {
+    "q",  "w",   "e",     "r",  "t",      "y",       "u",     "i", "o", "p", "\n", "a", "s", "d", "f",
+    "g",  "h",   "j",     "k",  "l",      "\n",      "Shift", "z", "x", "c", "v",  "b", "n", "m", LV_SYMBOL_BACKSPACE,
+    "\n", "123", "Space", "\n", "Cancel", "Connect", "",
+};
+
+constexpr const char* kWifiKeyboardUpperMap[] = {
+    "Q",  "W",   "E",     "R",  "T",      "Y",       "U",     "I", "O", "P", "\n", "A", "S", "D", "F",
+    "G",  "H",   "J",     "K",  "L",      "\n",      "Shift", "Z", "X", "C", "V",  "B", "N", "M", LV_SYMBOL_BACKSPACE,
+    "\n", "123", "Space", "\n", "Cancel", "Connect", "",
+};
+
+constexpr const char* kWifiKeyboardNumericMap[] = {
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "0",
+    "\n",
+    "!",
+    "@",
+    "#",
+    "$",
+    "%",
+    "^",
+    "&",
+    "*",
+    "(",
+    ")",
+    "\n",
+    "-",
+    "_",
+    "=",
+    "+",
+    "[",
+    "]",
+    "{",
+    "}",
+    LV_SYMBOL_BACKSPACE,
+    "\n",
+    "ABC",
+    "Space",
+    "\n",
+    "Cancel",
+    "Connect",
+    "",
+};
+
+constexpr std::array<lv_buttonmatrix_ctrl_t, 32U> MakeWifiKeyboardTextControls() {
+    std::array<lv_buttonmatrix_ctrl_t, 32U> controls{};
+    constexpr auto kReleaseKey = static_cast<lv_buttonmatrix_ctrl_t>(
+        LV_BUTTONMATRIX_CTRL_WIDTH_1 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls.fill(kReleaseKey);
+    controls[19] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_2 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[27] = controls[19];
+    controls[28] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_3 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[29] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_9 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[30] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_5 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[31] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_7 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    return controls;
+}
+
+constexpr std::array<lv_buttonmatrix_ctrl_t, 33U> MakeWifiKeyboardNumericControls() {
+    std::array<lv_buttonmatrix_ctrl_t, 33U> controls{};
+    constexpr auto kReleaseKey = static_cast<lv_buttonmatrix_ctrl_t>(
+        LV_BUTTONMATRIX_CTRL_WIDTH_1 | LV_BUTTONMATRIX_CTRL_CLICK_TRIG | LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls.fill(kReleaseKey);
+    controls[28] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_2 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[29] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_3 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[30] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_9 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[31] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_5 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    controls[32] = static_cast<lv_buttonmatrix_ctrl_t>(LV_BUTTONMATRIX_CTRL_WIDTH_7 |
+                                                       LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+                                                       LV_BUTTONMATRIX_CTRL_NO_REPEAT);
+    return controls;
+}
+
+constexpr auto kWifiKeyboardTextControls = MakeWifiKeyboardTextControls();
+constexpr auto kWifiKeyboardNumericControls = MakeWifiKeyboardNumericControls();
+
+uint32_t WifiKeyboardButtonAtPoint(lv_obj_t* keyboard, const lv_point_t& point) {
+    auto* matrix = reinterpret_cast<lv_buttonmatrix_t*>(keyboard);
+    lv_area_t keyboard_area{};
+    lv_obj_get_coords(keyboard, &keyboard_area);
+    const int32_t width = lv_obj_get_width(keyboard);
+    const int32_t height = lv_obj_get_height(keyboard);
+    const int32_t left_padding = lv_obj_get_style_pad_left(keyboard, LV_PART_MAIN);
+    const int32_t right_padding = lv_obj_get_style_pad_right(keyboard, LV_PART_MAIN);
+    const int32_t top_padding = lv_obj_get_style_pad_top(keyboard, LV_PART_MAIN);
+    const int32_t bottom_padding = lv_obj_get_style_pad_bottom(keyboard, LV_PART_MAIN);
+    constexpr int32_t kMaxExtra = LV_DPI_DEF / 10;
+    const int32_t row_padding = lv_obj_get_style_pad_row(keyboard, LV_PART_MAIN);
+    const int32_t column_padding = lv_obj_get_style_pad_column(keyboard, LV_PART_MAIN);
+    const int32_t row_extra = std::min((row_padding / 2) + 1 + (row_padding & 1), kMaxExtra);
+    const int32_t column_extra = std::min((column_padding / 2) + 1 + (column_padding & 1), kMaxExtra);
+
+    for (uint32_t button = 0U; button < matrix->btn_cnt; ++button) {
+        lv_area_t area = matrix->button_areas[button];
+        area.x1 += keyboard_area.x1 -
+                   (area.x1 <= left_padding ? std::min(left_padding, kMaxExtra) : column_extra);
+        area.y1 += keyboard_area.y1 -
+                   (area.y1 <= top_padding ? std::min(top_padding, kMaxExtra) : row_extra);
+        area.x2 += keyboard_area.x1 +
+                   (area.x2 >= width - right_padding - 2 ? std::min(right_padding, kMaxExtra) : column_extra);
+        area.y2 += keyboard_area.y1 +
+                   (area.y2 >= height - bottom_padding - 2 ? std::min(bottom_padding, kMaxExtra) : row_extra);
+        if (point.x >= area.x1 && point.x <= area.x2 && point.y >= area.y1 && point.y <= area.y2) {
+            return button;
+        }
+    }
+    return LV_BUTTONMATRIX_BUTTON_NONE;
+}
+
+void WifiKeyboardTrackPointerEvent(lv_event_t* event) {
+    lv_obj_t* keyboard = lv_event_get_current_target_obj(event);
+    lv_indev_t* indev = lv_event_get_indev(event);
+    if (keyboard == nullptr || indev == nullptr) {
+        return;
+    }
+    lv_point_t point{};
+    lv_indev_get_point(indev, &point);
+    lv_buttonmatrix_set_selected_button(keyboard, WifiKeyboardButtonAtPoint(keyboard, point));
+}
+
+void WifiKeyboardEvent(lv_event_t* event) {
+    if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    lv_obj_t* keyboard = lv_event_get_current_target_obj(event);
+    if (state == nullptr || keyboard == nullptr || state->wifi_password_textarea == nullptr) {
+        return;
+    }
+    const uint32_t button = lv_keyboard_get_selected_button(keyboard);
+    const char* text = lv_keyboard_get_button_text(keyboard, button);
+    if (text == nullptr) {
+        return;
+    }
+    if (std::strcmp(text, "123") == 0) {
+        lv_keyboard_set_mode(keyboard, LV_KEYBOARD_MODE_SPECIAL);
+    } else if (std::strcmp(text, "ABC") == 0) {
+        lv_keyboard_set_mode(keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
+    } else if (std::strcmp(text, "Shift") == 0) {
+        const lv_keyboard_mode_t mode = lv_keyboard_get_mode(keyboard);
+        lv_keyboard_set_mode(
+            keyboard, mode == LV_KEYBOARD_MODE_TEXT_UPPER ? LV_KEYBOARD_MODE_TEXT_LOWER : LV_KEYBOARD_MODE_TEXT_UPPER);
+    } else if (std::strcmp(text, LV_SYMBOL_BACKSPACE) == 0) {
+        lv_textarea_delete_char(state->wifi_password_textarea);
+    } else if (std::strcmp(text, "Space") == 0) {
+        lv_textarea_add_char(state->wifi_password_textarea, ' ');
+    } else if (std::strcmp(text, "Cancel") == 0) {
+        lv_indev_t* indev = lv_event_get_indev(event);
+        if (indev != nullptr && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+            return;
+        }
+        state->wifi_password_visible = false;
+        state->wifi_password_attempt_active = false;
+        state->wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
+        state->wifi_password_network = {};
+        QueueWifiSettingsRender(*state);
+    } else if (std::strcmp(text, "Connect") == 0) {
+        lv_indev_t* indev = lv_event_get_indev(event);
+        if (indev != nullptr && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+            return;
+        }
+        const char* password = lv_textarea_get_text(state->wifi_password_textarea);
+        if (password != nullptr && password[0] != '\0' &&
+            state->wifi_password_network.ssid[0] != '\0') {
+            std::snprintf(state->wifi_password.data(), state->wifi_password.size(), "%s", password);
+            state->wifi_password_attempt_active = true;
+            state->wifi_password_connection_state = host_ui::WifiConnectionState::kConnecting;
+            EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kConnectNewWifi,
+                                  state->wifi_password_network);
+            QueueWifiSettingsRender(*state);
+        }
+    } else {
+        lv_textarea_add_text(state->wifi_password_textarea, text);
+    }
+}
+
+void DrawWifiKeyboard(MetalioClaw4PlatformState& state, lv_obj_t* parent) {
+    constexpr lv_style_selector_t kPressedItem =
+        static_cast<lv_style_selector_t>(LV_PART_ITEMS) | static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
+    state.wifi_keyboard = lv_keyboard_create(parent);
+    lv_obj_remove_event_cb(state.wifi_keyboard, lv_keyboard_def_event_cb);
+    lv_keyboard_set_map(state.wifi_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER, kWifiKeyboardLowerMap,
+                        kWifiKeyboardTextControls.data());
+    lv_keyboard_set_map(state.wifi_keyboard, LV_KEYBOARD_MODE_TEXT_UPPER, kWifiKeyboardUpperMap,
+                        kWifiKeyboardTextControls.data());
+    lv_keyboard_set_map(state.wifi_keyboard, LV_KEYBOARD_MODE_SPECIAL, kWifiKeyboardNumericMap,
+                        kWifiKeyboardNumericControls.data());
+    lv_keyboard_set_mode(state.wifi_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
+    lv_keyboard_set_textarea(state.wifi_keyboard, state.wifi_password_textarea);
+    lv_keyboard_set_popovers(state.wifi_keyboard, false);
+    lv_obj_add_event_cb(state.wifi_keyboard, WifiKeyboardTrackPointerEvent, LV_EVENT_PRESSING, nullptr);
+    lv_obj_add_event_cb(state.wifi_keyboard, WifiKeyboardEvent, LV_EVENT_VALUE_CHANGED, &state);
+    lv_obj_align(state.wifi_keyboard, LV_ALIGN_TOP_LEFT, 26, 196);
+    lv_obj_set_size(state.wifi_keyboard, 620, 436);
+    lv_obj_set_style_pad_all(state.wifi_keyboard, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(state.wifi_keyboard, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(state.wifi_keyboard, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(state.wifi_keyboard, 18, LV_PART_MAIN);
+    lv_obj_set_style_border_width(state.wifi_keyboard, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x0b1625U), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(state.wifi_keyboard, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_text_font(state.wifi_keyboard, &lv_font_montserrat_18, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(state.wifi_keyboard, lv_color_hex(0xf2f7ffU), LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x16263aU), LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(state.wifi_keyboard, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(state.wifi_keyboard, 1, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(state.wifi_keyboard, lv_color_hex(0x365472U), LV_PART_ITEMS);
+    lv_obj_set_style_radius(state.wifi_keyboard, 14, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x2f6da9U), kPressedItem);
+    lv_obj_set_style_border_color(state.wifi_keyboard, lv_color_hex(0x69a7ffU), kPressedItem);
+}
+
+void DrawWifiPasswordOverlayLocked(MetalioClaw4PlatformState& state) {
+    lv_obj_t* scrim = CreateWifiPanel(
+        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t* dialog = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 24, .y = 52, .width = 672, .height = 648},
+                                       0x101c2cU, 0x42607fU, 24);
+    const auto& network = state.wifi_password_network;
+    const char* heading = "Join network";
+    uint32_t heading_color = 0xf2f7ffU;
+    switch (state.wifi_password_connection_state) {
+        case host_ui::WifiConnectionState::kConnecting:
+            heading = "Connecting...";
+            heading_color = 0x69a7ffU;
+            break;
+        case host_ui::WifiConnectionState::kAuthenticationFailed:
+            heading = "Incorrect password. Try again.";
+            heading_color = 0xff737dU;
+            break;
+        case host_ui::WifiConnectionState::kAuthenticationTimedOut:
+            heading = "Authentication timed out. Try again.";
+            heading_color = 0xffb45eU;
+            break;
+        case host_ui::WifiConnectionState::kHandshakeTimedOut:
+            heading = "Security handshake timed out. Try again.";
+            heading_color = 0xffb45eU;
+            break;
+        case host_ui::WifiConnectionState::kNetworkNotFound:
+            heading = "Network not found. Try again.";
+            heading_color = 0xffb45eU;
+            break;
+        case host_ui::WifiConnectionState::kFailed:
+            heading = "Connection failed. Try again.";
+            heading_color = 0xffb45eU;
+            break;
+        default:
+            break;
+    }
+    (void)CreateHallLabel(dialog, heading, &lv_font_montserrat_24, heading_color, 26, 22);
+    lv_obj_t* ssid = CreateHallLabel(dialog, network.ssid.data(), &lv_font_montserrat_32, 0xf2f7ffU, 26, 58);
+    lv_obj_set_width(ssid, 620);
+    lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
+
+    state.wifi_password_textarea = lv_textarea_create(dialog);
+    lv_obj_set_pos(state.wifi_password_textarea, 26, 108);
+    lv_obj_set_size(state.wifi_password_textarea, 620, 64);
+    lv_textarea_set_one_line(state.wifi_password_textarea, true);
+    lv_textarea_set_password_mode(state.wifi_password_textarea, false);
+    lv_textarea_set_max_length(state.wifi_password_textarea, host_ui::kMaxWifiPasswordLength);
+    lv_textarea_set_placeholder_text(state.wifi_password_textarea, "Password");
+    if (state.wifi_password[0] != '\0') {
+        lv_textarea_set_text(state.wifi_password_textarea, state.wifi_password.data());
+    }
+    lv_obj_set_style_pad_left(state.wifi_password_textarea, 20, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(state.wifi_password_textarea, 20, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(state.wifi_password_textarea, 15, LV_PART_MAIN);
+    lv_obj_set_style_text_font(state.wifi_password_textarea, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_color(state.wifi_password_textarea, lv_color_hex(0xf2f7ffU), LV_PART_MAIN);
+    lv_obj_set_style_text_color(state.wifi_password_textarea, lv_color_hex(0x6f849fU), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_set_style_bg_color(state.wifi_password_textarea, lv_color_hex(0x08111fU), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(state.wifi_password_textarea, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(state.wifi_password_textarea, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(state.wifi_password_textarea, lv_color_hex(0x42607fU), LV_PART_MAIN);
+    lv_obj_set_style_radius(state.wifi_password_textarea, 14, LV_PART_MAIN);
+    lv_obj_remove_flag(state.wifi_password_textarea, LV_OBJ_FLAG_CLICKABLE);
+    DrawWifiKeyboard(state, dialog);
+    if (state.wifi_password_connection_state == host_ui::WifiConnectionState::kConnecting) {
+        lv_buttonmatrix_set_button_ctrl_all(state.wifi_keyboard, LV_BUTTONMATRIX_CTRL_DISABLED);
+        const uint32_t cancel_button =
+            lv_keyboard_get_mode(state.wifi_keyboard) == LV_KEYBOARD_MODE_SPECIAL ? 31U : 30U;
+        lv_buttonmatrix_clear_button_ctrl(state.wifi_keyboard, cancel_button, LV_BUTTONMATRIX_CTRL_DISABLED);
+    }
+}
+
+void DrawWifiActionSheetLocked(MetalioClaw4PlatformState& state) {
+    lv_obj_t* scrim = CreateWifiPanel(
+        state.host_smoke, HallCardBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(scrim, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* sheet = CreateWifiPanel(state.host_smoke, HallCardBounds{.x = 28, .y = 392, .width = 664, .height = 300},
+                                      0x101c2cU, 0x42607fU, 24);
+    (void)CreateHallLabel(sheet, "SAVED NETWORK", &lv_font_montserrat_18, 0x91a4bdU, 24, 20);
+    const auto& network = state.wifi_model.saved_networks[state.wifi_selected_index];
+    lv_obj_t* ssid = CreateHallLabel(sheet, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 24, 48);
+    lv_obj_set_width(ssid, 616);
+    lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
+    lv_obj_t* connect = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 90, .width = 624, .height = 58},
+                                       network.connected ? "Disconnect" : "Connect", 0xf2f7ffU);
+    lv_obj_add_event_cb(connect, WifiSheetConnectEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* forget = DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 158, .width = 624, .height = 58},
+                                      "Forget Network", 0xff6b74U, 0x653c48U);
+    lv_obj_add_event_cb(forget, WifiSheetForgetEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* cancel =
+        DrawWifiButton(sheet, HallCardBounds{.x = 20, .y = 226, .width = 624, .height = 54}, "Cancel", 0xf2f7ffU);
+    lv_obj_add_event_cb(cancel, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+}
+
+void RenderWifiSettingsLocked(MetalioClaw4PlatformState& state) {
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    ResetSystemMenuObjectPointers(state);
+    ResetWifiUiObjectPointers(state);
+    state.hall_settings_press_overlay = nullptr;
+    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
+
+    const WifiListLayout layout = GetWifiListLayout(state.wifi_model);
+    state.wifi_scroll_offset =
+        std::clamp(state.wifi_scroll_offset, int32_t{0}, std::max<int32_t>(0, layout.content_height - kHeight));
+    state.wifi_scroll_content = lv_obj_create(state.host_smoke);
+    lv_obj_set_pos(state.wifi_scroll_content, 0, 0);
+    lv_obj_set_size(state.wifi_scroll_content, kWidth, kHeight);
+    lv_obj_set_style_pad_all(state.wifi_scroll_content, 0, 0);
+    lv_obj_set_style_border_width(state.wifi_scroll_content, 0, 0);
+    lv_obj_set_style_bg_opa(state.wifi_scroll_content, LV_OPA_TRANSP, 0);
+    lv_obj_set_scroll_dir(state.wifi_scroll_content, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(state.wifi_scroll_content, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(state.wifi_scroll_content, WifiScrollEvent, LV_EVENT_SCROLL, &state);
+    lv_obj_add_event_cb(state.wifi_scroll_content, WifiScrollEvent, LV_EVENT_SCROLL_END, &state);
+    constexpr lv_obj_flag_t kWifiScrollFlags = static_cast<lv_obj_flag_t>(
+        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
+        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
+    lv_obj_add_flag(state.wifi_scroll_content, kWifiScrollFlags);
+    lv_obj_set_style_width(state.wifi_scroll_content, 5, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(state.wifi_scroll_content, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(state.wifi_scroll_content, lv_color_hex(0x42607fU), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(state.wifi_scroll_content, LV_OPA_COVER, LV_PART_SCROLLBAR);
+
+    lv_obj_t* back =
+        CreateWifiPanel(state.wifi_scroll_content, HallCardBounds{.x = 40, .y = 32, .width = 56, .height = 56},
+                        0x0d1929U, 0x42607fU, 18);
+    lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(back, lv_color_hex(0x081321U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+    lv_obj_add_event_cb(back, WifiBackEvent, LV_EVENT_SHORT_CLICKED, &state);
+    lv_obj_t* back_icon = lv_label_create(back);
+    lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
+    lv_obj_center(back_icon);
+    (void)CreateHallLabel(state.wifi_scroll_content, "Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
+    (void)CreateHallLabel(state.wifi_scroll_content, "Manage connections", &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
+
+    lv_obj_t* toggle =
+        CreateWifiPanel(state.wifi_scroll_content, HallCardBounds{.x = 40, .y = 116, .width = 640, .height = 86},
+                        0x111f32U, 0x365472U, 20);
+    lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(toggle, lv_color_hex(0x0a1726U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+    lv_obj_add_event_cb(toggle, WifiSwitchEvent, LV_EVENT_SHORT_CLICKED, &state);
+    (void)CreateHallLabel(toggle, "Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU, 20, 14);
+    const char* connection_detail = WifiConnectionDetail(state.wifi_model);
+    (void)CreateHallLabel(toggle, connection_detail, &lv_font_montserrat_18, 0x91a4bdU, 20, 48);
+    lv_obj_t* switch_track = CreateWifiPanel(toggle, HallCardBounds{.x = 532, .y = 19, .width = 84, .height = 48},
+                                             state.wifi_model.enabled ? kThemeAccentColor : 0x31506bU, 0U, 24);
+    lv_obj_t* switch_knob = CreateWifiPanel(
+        switch_track, HallCardBounds{.x = state.wifi_model.enabled ? 40 : 4, .y = 4, .width = 40, .height = 40},
+        0xf7fbffU, 0U, 20);
+    (void)switch_knob;
+
+    (void)CreateHallLabel(state.wifi_scroll_content, "SAVED NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42, 226);
+    if (state.wifi_model.saved_network_count == 0U) {
+        lv_obj_t* empty = CreateWifiPanel(
+            state.wifi_scroll_content,
+            HallCardBounds{
+                .x = kWifiContentLeft, .y = layout.saved_start, .width = kWifiContentWidth, .height = kWifiRowHeight},
+            0x111f32U, 0x2e4562U, 20);
+        (void)CreateHallLabel(empty, "No saved networks", &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
+    } else {
+        for (uint32_t index = 0U; index < state.wifi_model.saved_network_count; ++index) {
+            state.wifi_saved_rows[index] = DrawWifiNetworkRow(
+                state.wifi_scroll_content, state.wifi_model.saved_networks[index],
+                layout.saved_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), true);
+            lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_SHORT_CLICKED, &state);
+            lv_obj_add_event_cb(state.wifi_saved_rows[index], WifiSavedNetworkEvent, LV_EVENT_LONG_PRESSED, &state);
+        }
+    }
+
+    (void)CreateHallLabel(state.wifi_scroll_content, "AVAILABLE NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42,
+                          layout.available_heading);
+    if (!state.wifi_model.enabled || state.wifi_model.available_network_count == 0U) {
+        lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
+                                          HallCardBounds{.x = kWifiContentLeft,
+                                                         .y = layout.available_start,
+                                                         .width = kWifiContentWidth,
+                                                         .height = kWifiRowHeight},
+                                          0x111f32U, 0x2e4562U, 20);
+        const char* message = !state.wifi_model.enabled   ? "Turn on Wi-Fi to see networks"
+                              : state.wifi_model.scanning ? "Looking for nearby networks..."
+                                                          : "No nearby networks found";
+        (void)CreateHallLabel(empty, message, &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
+    } else {
+        for (uint32_t index = 0U; index < state.wifi_model.available_network_count; ++index) {
+            state.wifi_available_rows[index] = DrawWifiNetworkRow(
+                state.wifi_scroll_content, state.wifi_model.available_networks[index],
+                layout.available_start + static_cast<int32_t>(index) * (kWifiRowHeight + kWifiRowGap), false);
+            lv_obj_add_event_cb(state.wifi_available_rows[index], WifiAvailableNetworkEvent, LV_EVENT_SHORT_CLICKED,
+                                &state);
+        }
+    }
+
+    lv_obj_t* bottom_spacer = lv_obj_create(state.wifi_scroll_content);
+    lv_obj_set_pos(bottom_spacer, 0, layout.content_height - 1);
+    lv_obj_set_size(bottom_spacer, 1, 1);
+    lv_obj_set_style_border_width(bottom_spacer, 0, 0);
+    lv_obj_set_style_bg_opa(bottom_spacer, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(bottom_spacer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_update_layout(state.wifi_scroll_content);
+    lv_obj_scroll_to_y(state.wifi_scroll_content, state.wifi_scroll_offset, LV_ANIM_OFF);
+    if (state.wifi_action_sheet_visible) {
+        DrawWifiActionSheetLocked(state);
+    } else if (state.wifi_password_visible) {
+        DrawWifiPasswordOverlayLocked(state);
+    }
+    lv_obj_move_foreground(state.host_smoke);
+    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(state.performance_overlay);
+    }
+    lv_timer_ready(lv_display_get_refr_timer(state.display));
+}
+
+void EmitWifiNetworkAction(MetalioClaw4PlatformState& state, host_ui::SystemUiActionType type,
+                           const host_ui::WifiNetworkModel& network) {
+    if (state.wifi_action_sink == nullptr) {
+        return;
+    }
+    host_ui::SystemUiAction action{.type = type};
+    action.text = network.ssid;
+    if (type == host_ui::SystemUiActionType::kConnectNewWifi) {
+        action.secret = state.wifi_password;
+    }
+    state.wifi_action_sink(state.wifi_action_context, action);
+}
+
+void WifiSettingsRenderAsync(void* context) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(context);
+    if (state != nullptr && state->wifi_action_sink != nullptr) {
+        RenderWifiSettingsLocked(*state);
+    }
+}
+
+void QueueWifiSettingsRender(MetalioClaw4PlatformState& state) { (void)lv_async_call(WifiSettingsRenderAsync, &state); }
+
+void WifiScrollEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    lv_obj_t* scroll_content = lv_event_get_current_target_obj(event);
+    if (state == nullptr || scroll_content == nullptr) {
+        return;
+    }
+    bool render_after_scroll = false;
+    if (lv_event_get_code(event) == LV_EVENT_SCROLL_END) {
+        portENTER_CRITICAL(&state->host_pointer_lock);
+        state->wifi_scroll_gesture_active = false;
+        if (state->wifi_render_pending) {
+            state->wifi_render_pending = false;
+            render_after_scroll = true;
+        }
+        portEXIT_CRITICAL(&state->host_pointer_lock);
+    } else {
+        lv_indev_t* indev = lv_indev_active();
+        if (indev != nullptr && lv_indev_get_state(indev) == LV_INDEV_STATE_PRESSED) {
+            portENTER_CRITICAL(&state->host_pointer_lock);
+            state->wifi_user_scrolled = true;
+            state->wifi_scroll_gesture_active = true;
+            portEXIT_CRITICAL(&state->host_pointer_lock);
+        }
+    }
+    if (state->wifi_user_scrolled) {
+        state->wifi_scroll_offset = std::max<int32_t>(0, lv_obj_get_scroll_y(scroll_content));
+    }
+    if (render_after_scroll) {
+        QueueWifiSettingsRender(*state);
+    }
+    if (state->display != nullptr) {
+        lv_timer_ready(lv_display_get_refr_timer(state->display));
+    }
+}
+
+uint32_t FindWifiRowIndex(lv_obj_t* target, lv_obj_t* const* rows, uint32_t count) {
+    for (uint32_t index = 0U; index < count; ++index) {
+        if (rows[index] == target) {
+            return index;
+        }
+    }
+    return count;
+}
+
+void WifiBackEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state != nullptr && state->wifi_action_sink != nullptr) {
+        state->wifi_action_sink(state->wifi_action_context,
+                                host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseWifiSettings});
+    }
+}
+
+void WifiSwitchEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state != nullptr && state->wifi_action_sink != nullptr) {
+        state->wifi_action_sink(state->wifi_action_context,
+                                host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSetWifiEnabled,
+                                                        .value = state->wifi_model.enabled ? 0U : 1U});
+    }
+}
+
+void WifiSavedNetworkEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->wifi_action_sink == nullptr) {
+        return;
+    }
+    const uint32_t index = FindWifiRowIndex(lv_event_get_current_target_obj(event), state->wifi_saved_rows,
+                                            state->wifi_model.saved_network_count);
+    if (index >= state->wifi_model.saved_network_count) {
+        return;
+    }
+    state->wifi_selected_index = index;
+    state->wifi_action_sheet_visible = true;
+    DrawWifiActionSheetLocked(*state);
+    if (state->performance_overlay != nullptr) {
+        lv_obj_move_foreground(state->performance_overlay);
+    }
+}
+
+void WifiAvailableNetworkEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->wifi_action_sink == nullptr) {
+        return;
+    }
+    const uint32_t index = FindWifiRowIndex(lv_event_get_current_target_obj(event), state->wifi_available_rows,
+                                            state->wifi_model.available_network_count);
+    if (index >= state->wifi_model.available_network_count) {
+        return;
+    }
+    state->wifi_selected_index = index;
+    const auto& network = state->wifi_model.available_networks[index];
+    state->wifi_password.fill('\0');
+    if (!network.secured) {
+        EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kConnectNewWifi, network);
+        return;
+    }
+    state->wifi_password_network = network;
+    state->wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
+    state->wifi_password_attempt_active = false;
+    state->wifi_password_visible = true;
+    DrawWifiPasswordOverlayLocked(*state);
+    if (state->performance_overlay != nullptr) {
+        lv_obj_move_foreground(state->performance_overlay);
+    }
+}
+
+void WifiSheetConnectEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->wifi_selected_index >= state->wifi_model.saved_network_count) {
+        return;
+    }
+    const auto& network = state->wifi_model.saved_networks[state->wifi_selected_index];
+    EmitWifiNetworkAction(*state, network.connected ? host_ui::SystemUiActionType::kDisconnectWifi
+                                                    : host_ui::SystemUiActionType::kConnectSavedWifi,
+                          network);
+    state->wifi_action_sheet_visible = false;
+    QueueWifiSettingsRender(*state);
+}
+
+void WifiSheetForgetEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr || state->wifi_selected_index >= state->wifi_model.saved_network_count) {
+        return;
+    }
+    EmitWifiNetworkAction(*state, host_ui::SystemUiActionType::kForgetWifi,
+                          state->wifi_model.saved_networks[state->wifi_selected_index]);
+    state->wifi_action_sheet_visible = false;
+    QueueWifiSettingsRender(*state);
+}
+
+void WifiSheetCancelEvent(lv_event_t* event) {
+    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
+    if (state == nullptr) {
+        return;
+    }
+    state->wifi_action_sheet_visible = false;
+    state->wifi_password_visible = false;
+    state->wifi_password_attempt_active = false;
+    state->wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
+    state->wifi_password_network = {};
+    QueueWifiSettingsRender(*state);
+}
+
+std::expected<void, host_ui::SystemUiError> ShowWifiSettingsImpl(MetalioClaw4PlatformState& state,
+                                                                 const host_ui::WifiSettingsModel& model,
+                                                                 host_ui::SystemUiActionSink action_sink,
+                                                                 void* action_context) {
+    if (state.display == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.system_menu_action_context);
+    state.system_menu_action_sink = nullptr;
+    state.system_menu_action_context = nullptr;
+    state.wifi_action_sink = action_sink;
+    state.wifi_action_context = action_context;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        state.wifi_action_sink = nullptr;
+        state.wifi_action_context = nullptr;
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    if (state.host_smoke == nullptr) {
+        state.host_smoke = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(state.host_smoke, 0x08111fU);
+    }
+    state.wifi_model = model;
+    state.wifi_scroll_offset = 0;
+    state.wifi_user_scrolled = false;
+    state.wifi_scroll_gesture_active = false;
+    state.wifi_render_pending = false;
+    state.wifi_action_sheet_visible = false;
+    state.wifi_password_visible = false;
+    state.wifi_password_attempt_active = false;
+    state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
+    state.wifi_password_network = {};
+    state.wifi_password.fill('\0');
+    RenderWifiSettingsLocked(state);
+    SetHostPointerEnabledLocked(state, true);
+    esp_lv_adapter_unlock();
+
+    state.input_router.BindTouchSink(HostPointerTouchSink, &state);
+    state.input_router.BindSystemActionSink(action_sink, action_context);
+    ESP_LOGI(kTag, "Wi-Fi settings visible: enabled=%s saved=%" PRIu32 " available=%" PRIu32,
+             model.enabled ? "yes" : "no", model.saved_network_count, model.available_network_count);
+    return {};
+}
+
+void UpdateWifiSettingsImpl(MetalioClaw4PlatformState& state, const host_ui::WifiSettingsModel& model) {
+    state.wifi_model = model;
+    if (state.display == nullptr || state.wifi_action_sink == nullptr || state.wifi_action_sheet_visible) {
+        return;
+    }
+    if (state.wifi_password_visible) {
+        if (state.wifi_password_attempt_active &&
+            WifiModelShowsConnectedNetwork(model, state.wifi_password_network)) {
+            state.wifi_password_visible = false;
+            state.wifi_password_attempt_active = false;
+            state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
+            state.wifi_password_network = {};
+            state.wifi_password.fill('\0');
+        } else if (!state.wifi_password_attempt_active) {
+            return;
+        } else {
+            host_ui::WifiConnectionState next_dialog_state = state.wifi_password_connection_state;
+            switch (model.connection_state) {
+                case host_ui::WifiConnectionState::kConnecting:
+                case host_ui::WifiConnectionState::kAuthenticationFailed:
+                case host_ui::WifiConnectionState::kAuthenticationTimedOut:
+                case host_ui::WifiConnectionState::kHandshakeTimedOut:
+                case host_ui::WifiConnectionState::kNetworkNotFound:
+                case host_ui::WifiConnectionState::kFailed:
+                    next_dialog_state = model.connection_state;
+                    break;
+                case host_ui::WifiConnectionState::kDisconnected:
+                case host_ui::WifiConnectionState::kConnected:
+                default:
+                    break;
+            }
+            if (next_dialog_state == state.wifi_password_connection_state) {
+                return;
+            }
+            state.wifi_password_connection_state = next_dialog_state;
+        }
+    }
+    bool defer_render = false;
+    portENTER_CRITICAL(&state.host_pointer_lock);
+    if (state.host_pointer_touch_active || state.host_pointer_release_queued || state.wifi_scroll_gesture_active ||
+        state.host_pointer_queue_head != state.host_pointer_queue_tail) {
+        state.wifi_render_pending = true;
+        defer_render = true;
+    }
+    portEXIT_CRITICAL(&state.host_pointer_lock);
+    if (defer_render || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    RenderWifiSettingsLocked(state);
+    portENTER_CRITICAL(&state.host_pointer_lock);
+    state.wifi_render_pending = false;
+    portEXIT_CRITICAL(&state.host_pointer_lock);
+    esp_lv_adapter_unlock();
+}
+
+void LeaveWifiSettingsImpl(MetalioClaw4PlatformState& state) {
+    if (state.wifi_action_sink == nullptr && state.wifi_action_context == nullptr) {
+        return;
+    }
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(state.wifi_action_context);
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        SetHostPointerEnabledLocked(state, false);
+        esp_lv_adapter_unlock();
+    }
+    state.wifi_action_sink = nullptr;
+    state.wifi_action_context = nullptr;
+    state.wifi_action_sheet_visible = false;
+    state.wifi_password_visible = false;
+    state.wifi_password_attempt_active = false;
+    state.wifi_password_connection_state = host_ui::WifiConnectionState::kDisconnected;
+    state.wifi_password_network = {};
+    state.wifi_render_pending = false;
+    state.wifi_user_scrolled = false;
+    state.wifi_scroll_gesture_active = false;
+    ResetWifiUiObjectPointers(state);
 }
 
 constexpr HallCardBounds kStatusDialogBounds{.x = 24, .y = 36, .width = 672, .height = 508};
@@ -1587,13 +3147,13 @@ lv_obj_t* CreateStatusPanel(lv_obj_t* parent, const HallCardBounds& bounds, uint
 
 void DrawStatusQuickCard(MetalioClaw4PlatformState& state, lv_obj_t* root, StatusTouchTarget target, const char* name,
                          const char* detail, bool active, bool available) {
-    const uint32_t color = !available ? 0x182331U : (active ? 0x1b765fU : 0x26384dU);
+    const uint32_t color = !available ? 0x182331U : (active ? kThemeAccentColor : 0x26384dU);
     const int32_t index = StatusQuickIndex(target);
     lv_obj_t* panel = CreateStatusPanel(root, StatusDialogRelative(StatusTargetBounds(target)), color);
     lv_obj_set_style_bg_opa(panel, available && !active ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
     (void)CreateHallLabel(panel, name, &lv_font_montserrat_24, available ? 0xf4f8ffU : 0x708198U, 18, 20);
     lv_obj_t* detail_label =
-        CreateHallLabel(panel, detail, &lv_font_montserrat_18, active && available ? 0x8ff0cfU : 0x91a4bdU, 18, 67);
+        CreateHallLabel(panel, detail, &lv_font_montserrat_18, active && available ? 0xf4f8ffU : 0x91a4bdU, 18, 67);
     if (index >= 0) {
         lv_obj_t* press_overlay = lv_obj_create(panel);
         lv_obj_set_pos(press_overlay, 0, 0);
@@ -1715,12 +3275,12 @@ void UpdateStatusQuickCardLocked(MetalioClaw4PlatformState& state, StatusTouchTa
         state.status_quick_detail_labels[index] == nullptr) {
         return;
     }
-    const uint32_t color = !available ? 0x182331U : (active ? 0x1b765fU : 0x26384dU);
+    const uint32_t color = !available ? 0x182331U : (active ? kThemeAccentColor : 0x26384dU);
     lv_obj_set_style_bg_color(state.status_quick_panels[index], lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(state.status_quick_panels[index], available && !active ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
     lv_label_set_text(state.status_quick_detail_labels[index], detail);
     lv_obj_set_style_text_color(state.status_quick_detail_labels[index],
-                                lv_color_hex(active && available ? 0x8ff0cfU : 0x91a4bdU), 0);
+                                lv_color_hex(active && available ? 0xf4f8ffU : 0x91a4bdU), 0);
 }
 
 void UpdateStatusControlsLocked(MetalioClaw4PlatformState& state, const host_ui::StatusLayerModel& model) {
@@ -2318,6 +3878,10 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
                 return ShowHallImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
                                     action_context);
             },
+        .update_hall_wifi =
+            [](void* context, const host_ui::HallWifiModel& model) {
+                UpdateHallWifiImpl(*static_cast<MetalioClaw4PlatformState*>(context), model);
+            },
         .leave_hall = [](void* context) { LeaveHallImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .restore_guest_view =
             [](void* context) { return RestoreGuestViewImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
@@ -2334,6 +3898,26 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
             [](void* context) { return CaptureGuestFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .release_guest_snapshot =
             [](void* context) { ReleaseGuestSnapshotImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+        .show_system_menu =
+            [](void* context, const host_ui::SystemMenuModel& model, host_ui::SystemUiActionSink action_sink,
+               void* action_context) {
+                return ShowSystemMenuImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
+                                          action_context);
+            },
+        .leave_system_menu =
+            [](void* context) { LeaveSystemMenuImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+        .show_wifi_settings =
+            [](void* context, const host_ui::WifiSettingsModel& model, host_ui::SystemUiActionSink action_sink,
+               void* action_context) {
+                return ShowWifiSettingsImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
+                                            action_context);
+            },
+        .update_wifi_settings =
+            [](void* context, const host_ui::WifiSettingsModel& model) {
+                UpdateWifiSettingsImpl(*static_cast<MetalioClaw4PlatformState*>(context), model);
+            },
+        .leave_wifi_settings =
+            [](void* context) { LeaveWifiSettingsImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .show_status_layer =
             [](void* context, const host_ui::StatusLayerModel& model, host_ui::SystemUiActionSink action_sink,
                void* action_context) {
@@ -2352,11 +3936,10 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
             },
         .apply_brightness =
             [](void* context, uint8_t percent) {
-                const uint8_t safe_percent = percent < host_ui::kMinimumBrightnessPercent
-                                                 ? host_ui::kMinimumBrightnessPercent
-                                                 : (percent <= 100U ? percent : 100U);
+                const uint8_t safe_percent = percent <= 100U ? percent : 100U;
+                const uint32_t output = metalio_claw4::PerceptualBrightnessOutputPerTenThousand(safe_percent);
                 const esp_err_t status =
-                    static_cast<MetalioClaw4PlatformState*>(context)->hardware.SetBacklightBrightness(safe_percent);
+                    static_cast<MetalioClaw4PlatformState*>(context)->hardware.SetBacklightOutputPerTenThousand(output);
                 if (status != ESP_OK) {
                     ESP_LOGW(kTag, "could not set backlight brightness: %s", esp_err_to_name(status));
                 }
@@ -2374,11 +3957,13 @@ class MetalioClaw4Platform final : public Platform {
     [[nodiscard]] device::InputBackend& input() override { return state_.input_router; }
     [[nodiscard]] device::AudioBackend& audio() override { return ConfiguredAudioBackend(); }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
+    [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
 
    private:
     MetalioClaw4PlatformState state_{};
     metalio_claw4::GraphicsAdapter graphics_;
+    metalio_claw4::WifiBackend wifi_{};
     metalio_claw4::SystemUiAdapter system_ui_;
 };
 

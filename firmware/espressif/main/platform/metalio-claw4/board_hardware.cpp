@@ -4,6 +4,7 @@
 #include "driver/ledc.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "platform/metalio-claw4/display/esp_lcd_nv3051f.h"
+#include "platform/metalio-claw4/perceptual_control.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
@@ -42,11 +43,16 @@ esp_err_t BoardHardware::Initialize() {
     return status;
 }
 
-esp_err_t BoardHardware::SetBacklight(bool enabled) { return SetBacklightBrightness(enabled ? 100U : 0U); }
+esp_err_t BoardHardware::SetBacklight(bool enabled) {
+    return SetBacklightOutputPerTenThousand(enabled ? kPerceptualControlScale : 0U);
+}
 
-esp_err_t BoardHardware::SetBacklightBrightness(uint8_t percent) {
-    const uint32_t clamped_percent = percent <= 100U ? percent : 100U;
-    const uint32_t duty = (kBacklightMaxDuty * clamped_percent + 50U) / 100U;
+esp_err_t BoardHardware::SetBacklightOutputPerTenThousand(uint32_t output) {
+    const uint32_t clamped_output = output <= kPerceptualControlScale ? output : kPerceptualControlScale;
+    uint32_t duty = (kBacklightMaxDuty * clamped_output + kPerceptualControlScale / 2U) / kPerceptualControlScale;
+    if (clamped_output != 0U && duty == 0U) {
+        duty = 1U;
+    }
     if (!backlight_pwm_configured_) {
         ledc_timer_config_t timer_config{};
         timer_config.speed_mode = kBacklightSpeedMode;

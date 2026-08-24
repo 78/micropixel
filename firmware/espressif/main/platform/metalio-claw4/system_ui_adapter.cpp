@@ -8,6 +8,10 @@ std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowHall(const host
     return operations_.show_hall(operations_.context, model, action_sink, action_context);
 }
 
+void SystemUiAdapter::UpdateHallWifi(const host_ui::HallWifiModel& model) {
+    operations_.update_hall_wifi(operations_.context, model);
+}
+
 void SystemUiAdapter::LeaveHall() { operations_.leave_hall(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::RestoreGuestView() {
@@ -27,6 +31,26 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> SystemUiAdapter::
 }
 
 void SystemUiAdapter::ReleaseGuestSnapshot() { operations_.release_guest_snapshot(operations_.context); }
+
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemMenu(const host_ui::SystemMenuModel& model,
+                                                                            host_ui::SystemUiActionSink action_sink,
+                                                                            void* action_context) {
+    return operations_.show_system_menu(operations_.context, model, action_sink, action_context);
+}
+
+void SystemUiAdapter::LeaveSystemMenu() { operations_.leave_system_menu(operations_.context); }
+
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowWifiSettings(const host_ui::WifiSettingsModel& model,
+                                                                              host_ui::SystemUiActionSink action_sink,
+                                                                              void* action_context) {
+    return operations_.show_wifi_settings(operations_.context, model, action_sink, action_context);
+}
+
+void SystemUiAdapter::UpdateWifiSettings(const host_ui::WifiSettingsModel& model) {
+    operations_.update_wifi_settings(operations_.context, model);
+}
+
+void SystemUiAdapter::LeaveWifiSettings() { operations_.leave_wifi_settings(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowStatusLayer(const host_ui::StatusLayerModel& model,
                                                                              host_ui::SystemUiActionSink action_sink,

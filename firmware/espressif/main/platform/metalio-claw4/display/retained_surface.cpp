@@ -36,24 +36,70 @@ void RetainedSurface::Bind(lv_display_t* display, esp_lcd_panel_handle_t panel, 
     display_height_ = display_height;
 }
 
-void RetainedSurface::Release() {
+bool RetainedSurface::Initialize() {
+    if (dma2d_client_ != nullptr && fill_client_ != nullptr) {
+        return true;
+    }
+
+    async_color_convert_config_t dma2d_config{};
+    dma2d_config.backlog = 1U;
+    dma2d_config.dma_burst_size = 128U;
+    esp_err_t status = esp_async_color_convert_install_dma2d(&dma2d_config, &dma2d_client_);
+    if (status != ESP_OK) {
+        ESP_LOGE(kTag, "failed to reserve retained-surface DMA2D client: %s", esp_err_to_name(status));
+        return false;
+    }
+
+    ppa_client_config_t fill_config{};
+    fill_config.oper_type = PPA_OPERATION_FILL;
+    fill_config.max_pending_trans_num = 1U;
+    fill_config.data_burst_length = PPA_DATA_BURST_LENGTH_128;
+    status = ppa_register_client(&fill_config, &fill_client_);
+    if (status != ESP_OK) {
+        (void)esp_async_color_convert_uninstall(dma2d_client_);
+        dma2d_client_ = nullptr;
+        ESP_LOGE(kTag, "failed to reserve retained-surface PPA fill client: %s", esp_err_to_name(status));
+        return false;
+    }
+    ESP_LOGI(kTag, "retained-surface DMA2D/PPA clients reserved");
+    return true;
+}
+
+void RetainedSurface::Reset() {
     if (active_ && display_ != nullptr) {
         (void)esp_lv_adapter_set_dummy_draw(display_, false);
     }
+    heap_caps_free(pixels_);
+    frame_ = nullptr;
+    pixels_ = nullptr;
+    for (auto& state : frame_states_) {
+        state = {};
+    }
+    surface_bytes_ = 0U;
+    background_rgb888_ = 0U;
+    x_ = 0;
+    y_ = 0;
+    width_ = 0;
+    height_ = 0;
+    translate_x_ = 0;
+    translate_y_ = 0;
+    capture_count_ = 0U;
+    translate_count_ = 0U;
+    generation_ = 0U;
+    configured_ = false;
+    active_ = false;
+}
+
+void RetainedSurface::Release() {
+    Reset();
     if (dma2d_client_ != nullptr) {
         (void)esp_async_color_convert_uninstall(dma2d_client_);
+        dma2d_client_ = nullptr;
     }
     if (fill_client_ != nullptr) {
         (void)ppa_unregister_client(fill_client_);
+        fill_client_ = nullptr;
     }
-    heap_caps_free(pixels_);
-
-    lv_display_t* bound_display = display_;
-    esp_lcd_panel_handle_t bound_panel = panel_;
-    const uint32_t bound_width = display_width_;
-    const uint32_t bound_height = display_height_;
-    *this = {};
-    Bind(bound_display, bound_panel, bound_width, bound_height);
 }
 
 bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_push_state_command_t& command,
@@ -62,6 +108,9 @@ bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_push_s
         return x_ == command.clip_x && y_ == command.clip_y && width_ == command.width && height_ == command.height;
     }
     if (display_ == nullptr || panel_ == nullptr) {
+        return false;
+    }
+    if (!Initialize()) {
         return false;
     }
 
@@ -73,27 +122,8 @@ bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_push_s
     pixels_ = static_cast<uint8_t*>(
         heap_caps_aligned_alloc(kDmaAlignment, surface_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (pixels_ == nullptr) {
-        Release();
+        Reset();
         ESP_LOGE(kTag, "failed to allocate retained surface pixels");
-        return false;
-    }
-    async_color_convert_config_t dma2d_config{};
-    dma2d_config.backlog = 1U;
-    dma2d_config.dma_burst_size = 128U;
-    esp_err_t status = esp_async_color_convert_install_dma2d(&dma2d_config, &dma2d_client_);
-    if (status != ESP_OK) {
-        Release();
-        ESP_LOGE(kTag, "failed to install retained-surface DMA2D client: %s", esp_err_to_name(status));
-        return false;
-    }
-    ppa_client_config_t fill_config{};
-    fill_config.oper_type = PPA_OPERATION_FILL;
-    fill_config.max_pending_trans_num = 1U;
-    fill_config.data_burst_length = PPA_DATA_BURST_LENGTH_128;
-    status = ppa_register_client(&fill_config, &fill_client_);
-    if (status != ESP_OK) {
-        Release();
-        ESP_LOGE(kTag, "failed to install retained-surface PPA fill client: %s", esp_err_to_name(status));
         return false;
     }
 

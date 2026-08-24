@@ -14,10 +14,12 @@ namespace micropixel::platform::metalio_claw4 {
 class RetainedSurface final {
    public:
     void Bind(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t display_width, uint32_t display_height);
+    [[nodiscard]] bool Initialize();
     [[nodiscard]] bool Configure(lv_obj_t* root, const micropixel_graphics_push_state_command_t& command,
                                  bool background_valid, uint32_t background_rgb888);
     void SetBackground(uint32_t rgb888);
     [[nodiscard]] bool Update(const micropixel_graphics_push_state_command_t* request);
+    void Reset();
     void Release();
 
     [[nodiscard]] lv_obj_t* Frame() const { return frame_; }

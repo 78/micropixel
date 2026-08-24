@@ -8,6 +8,7 @@
 
 #include "app_controller.hpp"
 #include "device/device_services.hpp"
+#include "device/wifi.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_partition.h"
@@ -27,6 +28,8 @@ constexpr char kTag[] = "micropixel_host";
 constexpr TickType_t kCooperativeStopTimeout = pdMS_TO_TICKS(500);
 constexpr TickType_t kForcedStopTimeout = pdMS_TO_TICKS(2500);
 constexpr int64_t kPerformanceSamplePeriodUs = 500000;
+constexpr int64_t kHallWifiRefreshPeriodUs = 2000000;
+constexpr TickType_t kWifiScreenPollPeriod = pdMS_TO_TICKS(200);
 
 class CpuUsageSampler final {
    public:
@@ -80,16 +83,30 @@ class CpuUsageSampler final {
 
 using HallCoverMappings = std::array<runtime::LaunchAssetMapping, runtime::kMaxInstalledApps>;
 
-host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, host_ui::HallStatus status,
-                                 const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U,
-                                 bool launch_enabled = true, const HallCoverMappings* covers = nullptr,
+host_ui::HallWifiModel MakeHallWifiModel(const device::WifiSnapshot& wifi) {
+    host_ui::HallWifiModel model{.available = wifi.available, .enabled = wifi.enabled, .connected = wifi.connected};
+    for (uint32_t index = 0U; index < wifi.saved_network_count; ++index) {
+        if (wifi.saved_networks[index].connected) {
+            model.ssid = wifi.saved_networks[index].ssid;
+            model.rssi = wifi.saved_networks[index].rssi;
+            break;
+        }
+    }
+    return model;
+}
+
+host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, const device::WifiSnapshot& wifi,
+                                 host_ui::HallStatus status, const runtime::AppRunOutcome* outcome = nullptr,
+                                 uint32_t detail = 0U, bool launch_enabled = true,
+                                 const HallCoverMappings* covers = nullptr,
                                  const std::optional<uint32_t>& suspended_index = std::nullopt,
                                  const host_ui::HallCoverModel* suspended_snapshot = nullptr) {
     host_ui::HallModel model{.app_count = catalog.count,
                              .status_app_id = outcome != nullptr ? outcome->app_id.data() : nullptr,
                              .status = status,
                              .detail = detail,
-                             .launch_enabled = launch_enabled};
+                             .launch_enabled = launch_enabled,
+                             .wifi = MakeHallWifiModel(wifi)};
     for (uint32_t index = 0U; index < catalog.count && index < host_ui::kMaxHallApps; ++index) {
         model.apps[index].app_id = catalog.apps[index].app_id.data();
         model.apps[index].display_name = catalog.apps[index].display_name.data();
@@ -164,6 +181,116 @@ void RefreshStatusMetrics(host_ui::StatusLayerModel& model, const runtime::Insta
     model.storage_used_kib = used_bytes / 1024U;
 }
 
+void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::WifiSnapshot& snapshot) {
+    model.wifi_available = snapshot.available;
+    model.wifi_enabled = snapshot.enabled;
+    model.wifi_connected = snapshot.connected;
+}
+
+host_ui::WifiBand HostWifiBand(device::WifiBand band) {
+    switch (band) {
+        case device::WifiBand::k2_4Ghz:
+            return host_ui::WifiBand::k2_4Ghz;
+        case device::WifiBand::k5Ghz:
+            return host_ui::WifiBand::k5Ghz;
+        case device::WifiBand::kUnknown:
+        default:
+            return host_ui::WifiBand::kUnknown;
+    }
+}
+
+host_ui::WifiConnectionState HostWifiConnectionState(device::WifiConnectionState state) {
+    switch (state) {
+        case device::WifiConnectionState::kConnecting:
+            return host_ui::WifiConnectionState::kConnecting;
+        case device::WifiConnectionState::kConnected:
+            return host_ui::WifiConnectionState::kConnected;
+        case device::WifiConnectionState::kAuthenticationFailed:
+            return host_ui::WifiConnectionState::kAuthenticationFailed;
+        case device::WifiConnectionState::kAuthenticationTimedOut:
+            return host_ui::WifiConnectionState::kAuthenticationTimedOut;
+        case device::WifiConnectionState::kHandshakeTimedOut:
+            return host_ui::WifiConnectionState::kHandshakeTimedOut;
+        case device::WifiConnectionState::kNetworkNotFound:
+            return host_ui::WifiConnectionState::kNetworkNotFound;
+        case device::WifiConnectionState::kFailed:
+            return host_ui::WifiConnectionState::kFailed;
+        case device::WifiConnectionState::kDisconnected:
+        default:
+            return host_ui::WifiConnectionState::kDisconnected;
+    }
+}
+
+host_ui::WifiNetworkModel MakeWifiNetworkModel(const device::WifiNetwork& network) {
+    return host_ui::WifiNetworkModel{
+        .ssid = network.ssid,
+        .rssi = network.rssi,
+        .channel = network.channel,
+        .band = HostWifiBand(network.band),
+        .secured = network.security == device::WifiSecurity::kSecured,
+        .connected = network.connected,
+    };
+}
+
+host_ui::WifiSettingsModel MakeWifiSettingsModel(const device::WifiSnapshot& snapshot) {
+    host_ui::WifiSettingsModel model{
+        .saved_network_count = snapshot.saved_network_count,
+        .available_network_count = snapshot.available_network_count,
+        .available = snapshot.available,
+        .enabled = snapshot.enabled,
+        .connected = snapshot.connected,
+        .scanning = snapshot.scanning,
+        .connection_state = HostWifiConnectionState(snapshot.connection_state),
+    };
+    for (uint32_t index = 0U; index < snapshot.saved_network_count && index < model.saved_networks.size(); ++index) {
+        model.saved_networks[index] = MakeWifiNetworkModel(snapshot.saved_networks[index]);
+    }
+    for (uint32_t index = 0U; index < snapshot.available_network_count && index < model.available_networks.size();
+         ++index) {
+        model.available_networks[index] = MakeWifiNetworkModel(snapshot.available_networks[index]);
+    }
+    return model;
+}
+
+bool SameWifiNetwork(const device::WifiNetwork& left, const device::WifiNetwork& right) {
+    return left.ssid == right.ssid && left.rssi == right.rssi && left.channel == right.channel &&
+           left.band == right.band && left.security == right.security && left.saved == right.saved &&
+           left.connected == right.connected;
+}
+
+bool SameWifiSnapshot(const device::WifiSnapshot& left, const device::WifiSnapshot& right) {
+    if (left.saved_network_count != right.saved_network_count ||
+        left.available_network_count != right.available_network_count || left.available != right.available ||
+        left.enabled != right.enabled || left.connected != right.connected || left.scanning != right.scanning) {
+        return false;
+    }
+    if (left.connection_state != right.connection_state) {
+        return false;
+    }
+    for (uint32_t index = 0U; index < left.saved_network_count; ++index) {
+        if (!SameWifiNetwork(left.saved_networks[index], right.saved_networks[index])) {
+            return false;
+        }
+    }
+    for (uint32_t index = 0U; index < left.available_network_count; ++index) {
+        if (!SameWifiNetwork(left.available_networks[index], right.available_networks[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& status,
+                                             const runtime::InstalledAppCatalog& catalog) {
+    return host_ui::SystemMenuModel{
+        .language = "English",
+        .installed_app_count = catalog.count,
+        .wifi_available = status.wifi_available,
+        .wifi_enabled = status.wifi_enabled,
+        .wifi_connected = status.wifi_connected,
+    };
+}
+
 bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, host_ui::StatusLayerModel& model,
                     const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store) {
     if (controller != nullptr) {
@@ -212,10 +339,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, host
                 close = true;
                 break;
             case host_ui::SystemUiActionType::kSetBrightness: {
-                const uint8_t brightness_percent =
-                    static_cast<uint8_t>(action->value < host_ui::kMinimumBrightnessPercent
-                                             ? host_ui::kMinimumBrightnessPercent
-                                             : (action->value <= 100U ? action->value : 100U));
+                const uint8_t brightness_percent = static_cast<uint8_t>(action->value <= 100U ? action->value : 100U);
                 settings_changed = settings_changed || model.brightness_percent != brightness_percent;
                 model.brightness_percent = brightness_percent;
                 shell.ApplyBrightness(model.brightness_percent);
@@ -275,29 +399,190 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, host
     return true;
 }
 
-void RunUnavailableHall(host_ui::SystemShell& shell, const runtime::InstalledAppCatalog& catalog,
-                        host_ui::HallStatus status, uint32_t detail, host_ui::StatusLayerModel& status_model,
-                        host_ui::SystemSettingsStore& settings_store) {
-    HallCoverMappings covers = OpenHallCovers(catalog);
+bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, host_ui::StatusLayerModel& status_model) {
+    device::WifiSnapshot snapshot = wifi.Snapshot();
+    RefreshWifiStatus(status_model, snapshot);
+    auto show_result = shell.ShowWifiSettings(MakeWifiSettingsModel(snapshot));
+    if (!show_result) {
+        ESP_LOGE(kTag, "failed to show Wi-Fi settings: error=%u", static_cast<unsigned>(show_result.error()));
+        return false;
+    }
+
+    if (snapshot.available && snapshot.enabled && !snapshot.scanning) {
+        if (const auto scan_result = wifi.RequestScan(); !scan_result) {
+            ESP_LOGW(kTag, "initial Wi-Fi scan failed: error=%u", static_cast<unsigned>(scan_result.error()));
+        }
+    }
+    for (;;) {
+        const auto action = shell.PollAction(kWifiScreenPollPeriod);
+        if (action.has_value()) {
+            std::expected<void, device::WifiError> operation{};
+            switch (action->type) {
+                case host_ui::SystemUiActionType::kCloseWifiSettings:
+                case host_ui::SystemUiActionType::kSuspendToHall:
+                    snapshot = wifi.Snapshot();
+                    RefreshWifiStatus(status_model, snapshot);
+                    shell.LeaveWifiSettings();
+                    return true;
+                case host_ui::SystemUiActionType::kSetWifiEnabled:
+                    operation = wifi.SetEnabled(action->value != 0U);
+                    if (operation && action->value != 0U) {
+                        if (const auto scan_result = wifi.RequestScan(); !scan_result) {
+                            ESP_LOGW(kTag, "Wi-Fi scan after enabling failed: error=%u",
+                                     static_cast<unsigned>(scan_result.error()));
+                        }
+                    }
+                    break;
+                case host_ui::SystemUiActionType::kConnectSavedWifi:
+                    operation = wifi.ConnectSaved(action->text.data());
+                    break;
+                case host_ui::SystemUiActionType::kConnectNewWifi:
+                    operation = wifi.Connect(action->text.data(), action->secret.data());
+                    break;
+                case host_ui::SystemUiActionType::kDisconnectWifi:
+                    operation = wifi.Disconnect();
+                    break;
+                case host_ui::SystemUiActionType::kForgetWifi:
+                    operation = wifi.Forget(action->text.data());
+                    break;
+                default:
+                    ESP_LOGW(kTag, "ignored action=%u while Wi-Fi settings are visible",
+                             static_cast<unsigned>(action->type));
+                    break;
+            }
+            if (!operation) {
+                ESP_LOGW(kTag, "Wi-Fi action=%u failed: error=%u", static_cast<unsigned>(action->type),
+                         static_cast<unsigned>(operation.error()));
+            }
+        }
+
+        device::WifiSnapshot refreshed = wifi.Snapshot();
+        if (!SameWifiSnapshot(snapshot, refreshed)) {
+            snapshot = refreshed;
+            RefreshWifiStatus(status_model, snapshot);
+            shell.UpdateWifiSettings(MakeWifiSettingsModel(snapshot));
+        }
+    }
+}
+
+bool RunSystemMenu(host_ui::SystemShell& shell, device::WifiBackend& wifi, host_ui::StatusLayerModel& status_model,
+                   const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store) {
+    RefreshWifiStatus(status_model, wifi.Snapshot());
+    auto show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
+    if (!show_result) {
+        ESP_LOGE(kTag, "failed to show System Settings: error=%u", static_cast<unsigned>(show_result.error()));
+        return false;
+    }
+
     CpuUsageSampler cpu_sampler;
     cpu_sampler.Reset();
     (void)cpu_sampler.Sample();
     int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
     for (;;) {
-        if (!ShowHall(shell, MakeHallModel(catalog, status, nullptr, detail, false, &covers))) {
+        const TickType_t timeout = status_model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : portMAX_DELAY;
+        const auto action = shell.PollAction(timeout);
+        const int64_t now_us = esp_timer_get_time();
+        if (status_model.performance_overlay_enabled && now_us >= next_performance_sample_us) {
+            shell.UpdatePerformanceOverlay(true, cpu_sampler.Sample());
+            next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
+        }
+        if (!action.has_value()) {
+            continue;
+        }
+        switch (action->type) {
+            case host_ui::SystemUiActionType::kCloseSystemMenu:
+            case host_ui::SystemUiActionType::kSuspendToHall:
+                shell.LeaveSystemMenu();
+                return true;
+            case host_ui::SystemUiActionType::kSelectSystemMenuItem:
+                if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kWifi)) {
+                    shell.LeaveSystemMenu();
+                    if (!RunWifiSettings(shell, wifi, status_model)) {
+                        return false;
+                    }
+                    show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
+                    if (!show_result) {
+                        ESP_LOGE(kTag, "failed to restore System Settings after Wi-Fi: error=%u",
+                                 static_cast<unsigned>(show_result.error()));
+                        return false;
+                    }
+                } else {
+                    ESP_LOGI(kTag, "System Settings selected item=%" PRIu32 " (service not connected yet)",
+                             action->value);
+                }
+                break;
+            case host_ui::SystemUiActionType::kOpenStatusLayer:
+                shell.LeaveSystemMenu();
+                if (!RunStatusLayer(shell, nullptr, status_model, catalog, settings_store)) {
+                    return false;
+                }
+                show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog));
+                if (!show_result) {
+                    ESP_LOGE(kTag, "failed to restore System Settings after status layer: error=%u",
+                             static_cast<unsigned>(show_result.error()));
+                    return false;
+                }
+                cpu_sampler.Reset();
+                (void)cpu_sampler.Sample();
+                next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+                break;
+            default:
+                ESP_LOGW(kTag, "ignored action=%u while System Settings is visible",
+                         static_cast<unsigned>(action->type));
+                break;
+        }
+    }
+}
+
+void RunUnavailableHall(host_ui::SystemShell& shell, device::WifiBackend& wifi,
+                        const runtime::InstalledAppCatalog& catalog, host_ui::HallStatus status, uint32_t detail,
+                        host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store) {
+    HallCoverMappings covers = OpenHallCovers(catalog);
+    CpuUsageSampler cpu_sampler;
+    cpu_sampler.Reset();
+    (void)cpu_sampler.Sample();
+    int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+    int64_t next_wifi_refresh_us = esp_timer_get_time() + kHallWifiRefreshPeriodUs;
+    for (;;) {
+        const device::WifiSnapshot wifi_snapshot = wifi.Snapshot();
+        RefreshWifiStatus(status_model, wifi_snapshot);
+        if (!ShowHall(shell, MakeHallModel(catalog, wifi_snapshot, status, nullptr, detail, false, &covers))) {
             return;
         }
         shell.UpdatePerformanceOverlay(status_model.performance_overlay_enabled, 0U);
         for (;;) {
-            const TickType_t timeout = status_model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : portMAX_DELAY;
+            const TickType_t timeout =
+                status_model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
             const auto action = shell.PollAction(timeout);
             const int64_t now_us = esp_timer_get_time();
             if (status_model.performance_overlay_enabled && now_us >= next_performance_sample_us) {
                 shell.UpdatePerformanceOverlay(true, cpu_sampler.Sample());
                 next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
             }
+            if (now_us >= next_wifi_refresh_us) {
+                const device::WifiSnapshot wifi_snapshot = wifi.Snapshot();
+                RefreshWifiStatus(status_model, wifi_snapshot);
+                shell.UpdateHallWifi(MakeHallWifiModel(wifi_snapshot));
+                next_wifi_refresh_us = now_us + kHallWifiRefreshPeriodUs;
+            }
             if (!action.has_value()) {
                 continue;
+            }
+            if (action->type == host_ui::SystemUiActionType::kOpenWifiSettings) {
+                (void)RunWifiSettings(shell, wifi, status_model);
+                cpu_sampler.Reset();
+                (void)cpu_sampler.Sample();
+                next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+                next_wifi_refresh_us = esp_timer_get_time() + kHallWifiRefreshPeriodUs;
+                break;
+            }
+            if (action->type == host_ui::SystemUiActionType::kOpenSystemMenu) {
+                (void)RunSystemMenu(shell, wifi, status_model, catalog, settings_store);
+                cpu_sampler.Reset();
+                (void)cpu_sampler.Sample();
+                next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+                next_wifi_refresh_us = esp_timer_get_time() + kHallWifiRefreshPeriodUs;
+                break;
             }
             if (action->type != host_ui::SystemUiActionType::kOpenStatusLayer) {
                 ESP_LOGW(kTag, "ignored action=%u while App launch is unavailable",
@@ -316,10 +601,12 @@ void RunUnavailableHall(host_ui::SystemShell& shell, const runtime::InstalledApp
 class ActiveHost final {
    public:
     ActiveHost(runtime::InstalledAppCatalog catalog, runtime::AppRuntime& runtime, host_ui::SystemShell& shell,
-               host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store)
+               device::WifiBackend& wifi, host_ui::StatusLayerModel& status_model,
+               host_ui::SystemSettingsStore& settings_store)
         : catalog_(std::move(catalog)),
           app_controller_(runtime),
           shell_(shell),
+          wifi_(wifi),
           status_model_(status_model),
           settings_store_(settings_store),
           hall_status_(catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady) {}
@@ -351,8 +638,10 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool ShowCurrentHall(const HallCoverMappings& covers) {
-        if (!ShowHall(shell_, MakeHallModel(catalog_, hall_status_, outcome_, hall_detail_, CanLaunch(), &covers,
-                                            suspended_index_, &suspended_snapshot_))) {
+        const device::WifiSnapshot wifi_snapshot = wifi_.Snapshot();
+        RefreshWifiStatus(status_model_, wifi_snapshot);
+        if (!ShowHall(shell_, MakeHallModel(catalog_, wifi_snapshot, hall_status_, outcome_, hall_detail_, CanLaunch(),
+                                            &covers, suspended_index_, &suspended_snapshot_))) {
             return false;
         }
         shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, 0U);
@@ -377,13 +666,21 @@ class ActiveHost final {
         cpu_sampler.Reset();
         (void)cpu_sampler.Sample();
         int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+        int64_t next_wifi_refresh_us = esp_timer_get_time() + kHallWifiRefreshPeriodUs;
         for (;;) {
-            const TickType_t timeout = status_model_.performance_overlay_enabled ? pdMS_TO_TICKS(20) : portMAX_DELAY;
+            const TickType_t timeout =
+                status_model_.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
             const auto pending_action = shell_.PollAction(timeout);
             const int64_t now_us = esp_timer_get_time();
             if (status_model_.performance_overlay_enabled && now_us >= next_performance_sample_us) {
                 shell_.UpdatePerformanceOverlay(true, cpu_sampler.Sample());
                 next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
+            }
+            if (now_us >= next_wifi_refresh_us) {
+                const device::WifiSnapshot wifi_snapshot = wifi_.Snapshot();
+                RefreshWifiStatus(status_model_, wifi_snapshot);
+                shell_.UpdateHallWifi(MakeHallWifiModel(wifi_snapshot));
+                next_wifi_refresh_us = now_us + kHallWifiRefreshPeriodUs;
             }
             if (!pending_action.has_value()) {
                 continue;
@@ -407,6 +704,30 @@ class ActiveHost final {
             }
             if (action.type == host_ui::SystemUiActionType::kOpenStatusLayer) {
                 if (!RunStatusLayer(shell_, nullptr, status_model_, catalog_, settings_store_)) {
+                    RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
+                }
+                if (!ShowCurrentHall(covers)) {
+                    return false;
+                }
+                cpu_sampler.Reset();
+                (void)cpu_sampler.Sample();
+                next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+                continue;
+            }
+            if (action.type == host_ui::SystemUiActionType::kOpenWifiSettings) {
+                if (!RunWifiSettings(shell_, wifi_, status_model_)) {
+                    RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
+                }
+                if (!ShowCurrentHall(covers)) {
+                    return false;
+                }
+                cpu_sampler.Reset();
+                (void)cpu_sampler.Sample();
+                next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+                continue;
+            }
+            if (action.type == host_ui::SystemUiActionType::kOpenSystemMenu) {
+                if (!RunSystemMenu(shell_, wifi_, status_model_, catalog_, settings_store_)) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
                 if (!ShowCurrentHall(covers)) {
@@ -632,6 +953,7 @@ class ActiveHost final {
     runtime::InstalledAppCatalog catalog_;
     AppController app_controller_;
     host_ui::SystemShell& shell_;
+    device::WifiBackend& wifi_;
     host_ui::StatusLayerModel& status_model_;
     host_ui::SystemSettingsStore& settings_store_;
     State state_{State::kHall};
@@ -646,8 +968,8 @@ class ActiveHost final {
 
 }  // namespace
 
-HostController::HostController(device::DeviceServices& devices, host_ui::SystemShell& shell)
-    : devices_(devices), shell_(shell) {}
+HostController::HostController(device::DeviceServices& devices, device::WifiBackend& wifi, host_ui::SystemShell& shell)
+    : devices_(devices), wifi_(wifi), shell_(shell) {}
 
 void HostController::Run() {
     vTaskPrioritySet(nullptr, task_policy::kHostPriority);
@@ -661,6 +983,7 @@ void HostController::Run() {
     if (settings_store.ready() && !settings_store.Load(status_model)) {
         ESP_LOGW(kTag, "Host settings could not be restored; using safe defaults");
     }
+    RefreshWifiStatus(status_model, wifi_.Snapshot());
     shell_.ApplyBrightness(status_model.brightness_percent);
     shell_.ApplyVolume(status_model.volume_percent);
 
@@ -668,7 +991,7 @@ void HostController::Run() {
     if (!catalog_result) {
         ESP_LOGE(kTag, "App Store catalog scan failed");
         const runtime::InstalledAppCatalog empty_catalog{};
-        RunUnavailableHall(shell_, empty_catalog, host_ui::HallStatus::kNoApps,
+        RunUnavailableHall(shell_, wifi_, empty_catalog, host_ui::HallStatus::kNoApps,
                            static_cast<uint32_t>(catalog_result.error()), status_model, settings_store);
         return;
     }
@@ -677,16 +1000,16 @@ void HostController::Run() {
     auto runtime_result = runtime::AppRuntime::Initialize(devices_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
-        RunUnavailableHall(shell_, catalog, host_ui::HallStatus::kRuntimeUnavailable,
+        RunUnavailableHall(shell_, wifi_, catalog, host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(runtime_result.error()), status_model, settings_store);
         return;
     }
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
-    ActiveHost active_host(catalog, app_runtime, shell_, status_model, settings_store);
+    ActiveHost active_host(catalog, app_runtime, shell_, wifi_, status_model, settings_store);
     if (!active_host.Valid()) {
         ESP_LOGE(kTag, "AppController initialization failed");
-        RunUnavailableHall(shell_, catalog, host_ui::HallStatus::kRuntimeUnavailable,
+        RunUnavailableHall(shell_, wifi_, catalog, host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store);
         return;
     }

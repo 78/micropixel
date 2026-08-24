@@ -54,7 +54,14 @@ void CaptureSystem(void* context, const SystemUiAction& action) {
 }
 
 TouchSample Sample(TouchPhase phase, uint16_t x, uint16_t y, uint64_t timestamp_us, uint32_t id = 1U) {
-    return TouchSample{.timestamp_us = timestamp_us, .id = id, .x = x, .y = y, .pressure = 500U, .phase = phase};
+    return TouchSample{
+        .timestamp_us = timestamp_us,
+        .id = id,
+        .x = x,
+        .y = y,
+        .pressure_per_mille = 500U,
+        .phase = phase,
+    };
 }
 
 bool Check(bool condition, const char* message) {
@@ -122,8 +129,7 @@ bool BottomGestureRejectsIncidentalMovement() {
     (void)input.Emit(Sample(TouchPhase::kDown, 360U, 680U, 0U));
     (void)input.Emit(Sample(TouchPhase::kMove, 358U, 580U, 90000U));
     (void)input.Emit(Sample(TouchPhase::kUp, 358U, 580U, 110000U));
-    if (!Check(capture.guest_samples.size() == 3U,
-               "bottom swipe outside the reserved 32 rows must reach Guest") ||
+    if (!Check(capture.guest_samples.size() == 3U, "bottom swipe outside the reserved 32 rows must reach Guest") ||
         !Check(capture.system_actions.empty(), "bottom swipe outside reserved rows must not suspend")) {
         return false;
     }
@@ -171,8 +177,7 @@ bool RecognizedGestureQuarantinesReplacementTrack() {
     (void)input.Emit(Sample(TouchPhase::kUp, 180U, 420U, 520000U, 6U));
     return Check(hall_capture.guest_samples.size() == 2U,
                  "first independent touch after release must reach newly bound Hall") &&
-           Check(guest_capture.system_actions.size() == 1U,
-                 "replacement track must not emit another System action");
+           Check(guest_capture.system_actions.size() == 1U, "replacement track must not emit another System action");
 }
 
 bool RejectedEdgeGestureReplaysCompleteSequence() {
@@ -218,15 +223,12 @@ bool RejectedEdgeDragRetainsLatestMove() {
     (void)input.Emit(Sample(TouchPhase::kMove, 402U, 694U, 20000U));
     (void)input.Emit(Sample(TouchPhase::kMove, 404U, 680U, 40000U));
     (void)input.Emit(Sample(TouchPhase::kUp, 405U, 678U, 60000U));
-    return Check(capture.guest_samples.size() == 3U,
-                 "rejected edge drag must replay Down/latest Move/Up") &&
-           Check(capture.guest_samples[0].phase == TouchPhase::kDown,
-                 "rejected edge drag must begin with Down") &&
-           Check(capture.guest_samples[1].phase == TouchPhase::kMove &&
-                     capture.guest_samples[1].x == 404U && capture.guest_samples[1].y == 680U,
+    return Check(capture.guest_samples.size() == 3U, "rejected edge drag must replay Down/latest Move/Up") &&
+           Check(capture.guest_samples[0].phase == TouchPhase::kDown, "rejected edge drag must begin with Down") &&
+           Check(capture.guest_samples[1].phase == TouchPhase::kMove && capture.guest_samples[1].x == 404U &&
+                     capture.guest_samples[1].y == 680U,
                  "rejected edge drag must retain its latest pending Move") &&
-           Check(capture.guest_samples[2].phase == TouchPhase::kUp,
-                 "rejected edge drag must end with Up") &&
+           Check(capture.guest_samples[2].phase == TouchPhase::kUp, "rejected edge drag must end with Up") &&
            Check(capture.system_actions.empty(), "rejected edge drag must not emit a System action");
 }
 

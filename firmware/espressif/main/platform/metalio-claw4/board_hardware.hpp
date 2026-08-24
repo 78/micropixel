@@ -17,7 +17,7 @@ class BoardHardware final {
 
     [[nodiscard]] esp_err_t Initialize();
     [[nodiscard]] esp_err_t SetBacklight(bool enabled);
-    [[nodiscard]] esp_err_t SetBacklightBrightness(uint8_t percent);
+    [[nodiscard]] esp_err_t SetBacklightOutputPerTenThousand(uint32_t output);
 
     [[nodiscard]] i2c_master_bus_handle_t I2cBus() const { return i2c_bus_; }
     [[nodiscard]] i2c_master_dev_handle_t IoExpander() const { return io_expander_; }

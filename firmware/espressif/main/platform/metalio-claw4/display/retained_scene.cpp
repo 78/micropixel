@@ -59,23 +59,31 @@ void RetainedScene::BindSurface(lv_display_t* display, esp_lcd_panel_handle_t pa
 #endif
 
 bool RetainedScene::Initialize() {
-    if (objects_ != nullptr) {
-        return true;
-    }
-    objects_ = static_cast<RetainedObject*>(heap_caps_calloc(
-        MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS, sizeof(RetainedObject), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (objects_ == nullptr) {
-        ESP_LOGE(kTag, "failed to allocate retained-object pool in PSRAM");
+        objects_ = static_cast<RetainedObject*>(heap_caps_calloc(
+            MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS, sizeof(RetainedObject), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (objects_ == nullptr) {
+            ESP_LOGE(kTag, "failed to allocate retained-object pool in PSRAM");
+            return false;
+        }
+        ESP_LOGI(kTag, "retained-object pool: %zu bytes in PSRAM",
+                 sizeof(RetainedObject) * MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS);
+    }
+#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
+    if (!surface_.Initialize()) {
+        heap_caps_free(objects_);
+        objects_ = nullptr;
         return false;
     }
-    ESP_LOGI(kTag, "retained-object pool: %zu bytes in PSRAM",
-             sizeof(RetainedObject) * MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS);
+#endif
     return true;
 }
 
 void RetainedScene::Release() {
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    surface_.Release();
+    // The DMA2D/PPA clients own scarce internal DMA descriptors.  Keep those
+    // clients reserved across Guest sessions and release only per-App pixels.
+    surface_.Reset();
 #endif
     heap_caps_free(objects_);
     objects_ = nullptr;

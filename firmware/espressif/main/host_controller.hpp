@@ -3,7 +3,8 @@
 
 namespace micropixel::device {
 class DeviceServices;
-}
+class WifiBackend;
+}  // namespace micropixel::device
 
 namespace micropixel::host_ui {
 class SystemShell;
@@ -16,7 +17,7 @@ namespace micropixel::firmware {
 // transitions after the platform has initialized.
 class HostController final {
    public:
-    HostController(device::DeviceServices& devices, host_ui::SystemShell& shell);
+    HostController(device::DeviceServices& devices, device::WifiBackend& wifi, host_ui::SystemShell& shell);
     HostController(const HostController&) = delete;
     HostController& operator=(const HostController&) = delete;
 
@@ -24,6 +25,7 @@ class HostController final {
 
    private:
     device::DeviceServices& devices_;
+    device::WifiBackend& wifi_;
     host_ui::SystemShell& shell_;
 };
 

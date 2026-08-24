@@ -20,6 +20,7 @@ class SystemShell final {
     ~SystemShell();
 
     [[nodiscard]] std::expected<void, SystemUiError> ShowHall(const HallModel& model);
+    void UpdateHallWifi(const HallWifiModel& model);
     [[nodiscard]] std::optional<SystemUiAction> PollAction(TickType_t timeout);
     void LeaveHall();
     [[nodiscard]] std::expected<void, SystemUiError> RestoreGuestView();
@@ -27,6 +28,11 @@ class SystemShell final {
     void StopWatchingGuestActions();
     [[nodiscard]] std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame();
     void ReleaseGuestSnapshot();
+    [[nodiscard]] std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model);
+    void LeaveSystemMenu();
+    [[nodiscard]] std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel& model);
+    void UpdateWifiSettings(const WifiSettingsModel& model);
+    void LeaveWifiSettings();
     [[nodiscard]] std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel& model);
     void UpdateStatusLayer(const StatusLayerModel& model);
     void LeaveStatusLayer();

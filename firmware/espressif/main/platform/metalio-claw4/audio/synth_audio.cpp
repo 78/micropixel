@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "platform/audio_backend.hpp"
+#include "platform/metalio-claw4/perceptual_control.hpp"
 #include "task_policy.hpp"
 
 namespace micropixel::platform {
@@ -56,7 +57,7 @@ constexpr uint32_t kMaxVoices = 8U;
 struct AudioBackendState final {
     std::atomic<BackendState> backend_state{BackendState::kStopped};
     std::atomic<bool> suspended{};
-    std::atomic<uint16_t> master_volume_per_mille{700U};
+    std::atomic<uint16_t> master_volume_per_ten_thousand{4900U};
     SemaphoreHandle_t voices_mutex{};
     Voice voices[kMaxVoices]{};
     int16_t sine_table[kSineTableSize]{};
@@ -195,7 +196,8 @@ void FillAudioChunk(int32_t* frames) {
             }
         }
         mixed = static_cast<int32_t>(static_cast<int64_t>(mixed) *
-                                     State().master_volume_per_mille.load(std::memory_order_relaxed) / 1000);
+                                     State().master_volume_per_ten_thousand.load(std::memory_order_relaxed) /
+                                     metalio_claw4::kPerceptualControlScale);
         if (mixed > 32767) {
             mixed = 32767;
         } else if (mixed < -32768) {
@@ -322,8 +324,9 @@ esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expand
 }
 
 void MetalioClaw4AudioBackend::SetMasterVolumePercent(uint8_t percent) {
-    const uint16_t clamped_percent = percent <= 100U ? percent : 100U;
-    State().master_volume_per_mille.store(static_cast<uint16_t>(clamped_percent * 10U), std::memory_order_relaxed);
+    const uint16_t perceptual_output =
+        static_cast<uint16_t>(metalio_claw4::PerceptualVolumeOutputPerTenThousand(percent));
+    State().master_volume_per_ten_thousand.store(perceptual_output, std::memory_order_relaxed);
 }
 
 int32_t MetalioClaw4AudioBackend::GetInfo(micropixel_audio_info_t& info) {

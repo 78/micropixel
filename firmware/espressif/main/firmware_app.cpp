@@ -20,9 +20,14 @@ void FirmwareApp::Run() {
         return;
     }
 
+    auto wifi_result = platform_.wifi().Initialize();
+    if (!wifi_result) {
+        ESP_LOGW(kTag, "Wi-Fi is unavailable for this boot: error=%u", static_cast<unsigned>(wifi_result.error()));
+    }
+
     device::DeviceServices devices(platform_.graphics(), platform_.input(), platform_.audio(), platform_.random());
     host_ui::SystemShell shell(platform_.system_ui());
-    HostController(devices, shell).Run();
+    HostController(devices, platform_.wifi(), shell).Run();
 }
 
 std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform() {

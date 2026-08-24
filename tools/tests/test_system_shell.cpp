@@ -9,12 +9,14 @@ namespace {
 using micropixel::host_ui::HallCoverModel;
 using micropixel::host_ui::HallModel;
 using micropixel::host_ui::StatusLayerModel;
+using micropixel::host_ui::SystemMenuModel;
+using micropixel::host_ui::SystemShell;
 using micropixel::host_ui::SystemUiAction;
 using micropixel::host_ui::SystemUiActionSink;
 using micropixel::host_ui::SystemUiActionType;
 using micropixel::host_ui::SystemUiBackend;
 using micropixel::host_ui::SystemUiError;
-using micropixel::host_ui::SystemShell;
+using micropixel::host_ui::WifiSettingsModel;
 
 void Check(bool condition, const char* message) {
     if (!condition) {
@@ -25,12 +27,13 @@ void Check(bool condition, const char* message) {
 
 class FakeSystemUi final : public SystemUiBackend {
    public:
-    std::expected<void, SystemUiError> ShowHall(const HallModel&, SystemUiActionSink sink,
-                                                void* context) override {
+    std::expected<void, SystemUiError> ShowHall(const HallModel&, SystemUiActionSink sink, void* context) override {
         sink_ = sink;
         context_ = context;
         return {};
     }
+
+    void UpdateHallWifi(const micropixel::host_ui::HallWifiModel&) override { ++update_hall_wifi_calls; }
 
     void LeaveHall() override { ++leave_hall_calls; }
     std::expected<void, SystemUiError> RestoreGuestView() override { return {}; }
@@ -50,6 +53,25 @@ class FakeSystemUi final : public SystemUiBackend {
 
     std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame() override { return HallCoverModel{}; }
     void ReleaseGuestSnapshot() override {}
+
+    std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel&, SystemUiActionSink sink,
+                                                      void* context) override {
+        sink_ = sink;
+        context_ = context;
+        return {};
+    }
+
+    void LeaveSystemMenu() override { ++leave_system_menu_calls; }
+
+    std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel&, SystemUiActionSink sink,
+                                                        void* context) override {
+        sink_ = sink;
+        context_ = context;
+        return {};
+    }
+
+    void UpdateWifiSettings(const WifiSettingsModel&) override { ++update_wifi_settings_calls; }
+    void LeaveWifiSettings() override { ++leave_wifi_settings_calls; }
 
     std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel&, SystemUiActionSink sink,
                                                        void* context) override {
@@ -73,6 +95,10 @@ class FakeSystemUi final : public SystemUiBackend {
     [[nodiscard]] bool HasSink() const { return sink_ != nullptr || context_ != nullptr; }
 
     uint32_t stop_watching_calls{};
+    uint32_t update_hall_wifi_calls{};
+    uint32_t leave_system_menu_calls{};
+    uint32_t update_wifi_settings_calls{};
+    uint32_t leave_wifi_settings_calls{};
     uint32_t leave_status_calls{};
     uint32_t leave_hall_calls{};
 
@@ -113,7 +139,45 @@ void DestructorUnbindsCallbacks() {
     Check(!ui.HasSink(), "shell destructor should remove backend callback");
     Check(ui.stop_watching_calls == 1U, "shell destructor should stop guest action watching");
     Check(ui.leave_status_calls == 1U, "shell destructor should leave status layer");
+    Check(ui.leave_system_menu_calls == 1U, "shell destructor should leave system menu");
+    Check(ui.leave_wifi_settings_calls == 1U, "shell destructor should leave Wi-Fi settings");
     Check(ui.leave_hall_calls == 1U, "shell destructor should leave hall");
+}
+
+void SystemMenuActionsReachTheShell() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "system menu should render");
+
+    ui.Emit({.type = SystemUiActionType::kSelectSystemMenuItem,
+             .value = static_cast<uint32_t>(micropixel::host_ui::SystemMenuItem::kWifi)});
+    ui.Emit({.type = SystemUiActionType::kCloseSystemMenu});
+
+    const auto selected = shell.PollAction(0U);
+    const auto closed = shell.PollAction(0U);
+    Check(selected.has_value() && selected->type == SystemUiActionType::kSelectSystemMenuItem &&
+              selected->value == static_cast<uint32_t>(micropixel::host_ui::SystemMenuItem::kWifi),
+          "system menu selection should be retained");
+    Check(closed.has_value() && closed->type == SystemUiActionType::kCloseSystemMenu,
+          "system menu close should be retained");
+}
+
+void WifiActionsReachTheShell() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowWifiSettings(WifiSettingsModel{}).has_value(), "Wi-Fi settings should render");
+
+    SystemUiAction action{.type = SystemUiActionType::kConnectNewWifi};
+    action.text[0] = 'A';
+    action.secret[0] = 'B';
+    ui.Emit(action);
+    const auto received = shell.PollAction(0U);
+    Check(received.has_value() && received->type == SystemUiActionType::kConnectNewWifi && received->text[0] == 'A' &&
+              received->secret[0] == 'B',
+          "Wi-Fi credentials should be retained in the action queue");
+
+    shell.UpdateWifiSettings(WifiSettingsModel{});
+    Check(ui.update_wifi_settings_calls == 1U, "Wi-Fi updates should reach the backend");
 }
 
 }  // namespace
@@ -121,6 +185,8 @@ void DestructorUnbindsCallbacks() {
 int main() {
     DiscreteActionsRemainOrdered();
     DestructorUnbindsCallbacks();
-    std::cout << "system_shell tests passed: 2 cases\n";
+    SystemMenuActionsReachTheShell();
+    WifiActionsReachTheShell();
+    std::cout << "system_shell tests passed: 4 cases\n";
     return 0;
 }

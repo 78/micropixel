@@ -12,12 +12,20 @@ struct SystemUiOperations final {
     void* context{};
     std::expected<void, host_ui::SystemUiError> (*show_hall)(void*, const host_ui::HallModel&,
                                                              host_ui::SystemUiActionSink, void*){};
+    void (*update_hall_wifi)(void*, const host_ui::HallWifiModel&){};
     void (*leave_hall)(void*){};
     std::expected<void, host_ui::SystemUiError> (*restore_guest_view)(void*){};
     void (*watch_guest_actions)(void*, host_ui::SystemUiActionSink, void*){};
     void (*stop_watching_guest_actions)(void*, void*){};
     std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> (*capture_guest_frame)(void*){};
     void (*release_guest_snapshot)(void*){};
+    std::expected<void, host_ui::SystemUiError> (*show_system_menu)(void*, const host_ui::SystemMenuModel&,
+                                                                    host_ui::SystemUiActionSink, void*){};
+    void (*leave_system_menu)(void*){};
+    std::expected<void, host_ui::SystemUiError> (*show_wifi_settings)(void*, const host_ui::WifiSettingsModel&,
+                                                                      host_ui::SystemUiActionSink, void*){};
+    void (*update_wifi_settings)(void*, const host_ui::WifiSettingsModel&){};
+    void (*leave_wifi_settings)(void*){};
     std::expected<void, host_ui::SystemUiError> (*show_status_layer)(void*, const host_ui::StatusLayerModel&,
                                                                      host_ui::SystemUiActionSink, void*){};
     void (*update_status_layer)(void*, const host_ui::StatusLayerModel&){};
@@ -34,12 +42,22 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowHall(const host_ui::HallModel& model,
                                                                        host_ui::SystemUiActionSink action_sink,
                                                                        void* action_context) override;
+    void UpdateHallWifi(const host_ui::HallWifiModel& model) override;
     void LeaveHall() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override;
     void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override;
     void StopWatchingGuestActions(void* action_context) override;
     [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame() override;
     void ReleaseGuestSnapshot() override;
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemMenu(const host_ui::SystemMenuModel& model,
+                                                                             host_ui::SystemUiActionSink action_sink,
+                                                                             void* action_context) override;
+    void LeaveSystemMenu() override;
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowWifiSettings(const host_ui::WifiSettingsModel& model,
+                                                                               host_ui::SystemUiActionSink action_sink,
+                                                                               void* action_context) override;
+    void UpdateWifiSettings(const host_ui::WifiSettingsModel& model) override;
+    void LeaveWifiSettings() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowStatusLayer(const host_ui::StatusLayerModel& model,
                                                                               host_ui::SystemUiActionSink action_sink,
                                                                               void* action_context) override;

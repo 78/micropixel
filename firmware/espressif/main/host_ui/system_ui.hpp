@@ -17,7 +17,11 @@ enum class HallStatus {
 };
 
 constexpr uint32_t kMaxHallApps = 3U;
-constexpr uint8_t kMinimumBrightnessPercent = 2U;
+constexpr uint8_t kMinimumBrightnessPercent = 0U;
+constexpr uint32_t kMaxWifiSsidLength = 32U;
+constexpr uint32_t kMaxWifiPasswordLength = 64U;
+constexpr uint32_t kMaxSavedWifiNetworks = 8U;
+constexpr uint32_t kMaxVisibleWifiNetworks = 16U;
 
 enum class HallCoverFormat : uint8_t {
     kRgb888,
@@ -43,6 +47,14 @@ struct HallAppModel final {
     bool running{};
 };
 
+struct HallWifiModel final {
+    std::array<char, kMaxWifiSsidLength + 1U> ssid{};
+    int8_t rssi{};
+    bool available{};
+    bool enabled{};
+    bool connected{};
+};
+
 struct HallModel final {
     std::array<HallAppModel, kMaxHallApps> apps{};
     uint32_t app_count{};
@@ -50,6 +62,7 @@ struct HallModel final {
     HallStatus status{HallStatus::kReady};
     uint32_t detail{};
     bool launch_enabled{};
+    HallWifiModel wifi{};
 };
 
 struct StatusLayerModel final {
@@ -70,10 +83,73 @@ struct StatusLayerModel final {
     bool performance_overlay_enabled{};
 };
 
+enum class SystemMenuItem : uint32_t {
+    kWifi,
+    kLanguage,
+    kSystemInformation,
+    kManageApps,
+};
+
+struct SystemMenuModel final {
+    const char* language{"English"};
+    uint32_t installed_app_count{};
+    bool wifi_available{};
+    bool wifi_enabled{};
+    bool wifi_connected{};
+};
+
+enum class WifiBand : uint8_t {
+    kUnknown,
+    k2_4Ghz,
+    k5Ghz,
+};
+
+enum class WifiConnectionState : uint8_t {
+    kDisconnected,
+    kConnecting,
+    kConnected,
+    kAuthenticationFailed,
+    kAuthenticationTimedOut,
+    kHandshakeTimedOut,
+    kNetworkNotFound,
+    kFailed,
+};
+
+struct WifiNetworkModel final {
+    std::array<char, kMaxWifiSsidLength + 1U> ssid{};
+    int8_t rssi{};
+    uint8_t channel{};
+    WifiBand band{WifiBand::kUnknown};
+    bool secured{true};
+    bool connected{};
+};
+
+struct WifiSettingsModel final {
+    std::array<WifiNetworkModel, kMaxSavedWifiNetworks> saved_networks{};
+    std::array<WifiNetworkModel, kMaxVisibleWifiNetworks> available_networks{};
+    uint32_t saved_network_count{};
+    uint32_t available_network_count{};
+    bool available{};
+    bool enabled{};
+    bool connected{};
+    bool scanning{};
+    WifiConnectionState connection_state{WifiConnectionState::kDisconnected};
+};
+
 enum class SystemUiActionType {
     kLaunchApp,
     kStopApp,
     kSuspendToHall,
+    kOpenWifiSettings,
+    kOpenSystemMenu,
+    kCloseSystemMenu,
+    kSelectSystemMenuItem,
+    kCloseWifiSettings,
+    kSetWifiEnabled,
+    kConnectSavedWifi,
+    kConnectNewWifi,
+    kDisconnectWifi,
+    kForgetWifi,
     kOpenStatusLayer,
     kCloseStatusLayer,
     kSetBrightness,
@@ -85,6 +161,8 @@ struct SystemUiAction final {
     SystemUiActionType type{SystemUiActionType::kLaunchApp};
     uint32_t app_index{};
     uint32_t value{};
+    std::array<char, kMaxWifiSsidLength + 1U> text{};
+    std::array<char, kMaxWifiPasswordLength + 1U> secret{};
 };
 
 using SystemUiActionSink = void (*)(void* context, const SystemUiAction& action);
@@ -103,12 +181,22 @@ class SystemUiBackend {
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowHall(const HallModel& model,
                                                                       SystemUiActionSink action_sink,
                                                                       void* action_context) = 0;
+    virtual void UpdateHallWifi(const HallWifiModel& model) = 0;
     virtual void LeaveHall() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> RestoreGuestView() = 0;
     virtual void WatchGuestActions(SystemUiActionSink action_sink, void* action_context) = 0;
     virtual void StopWatchingGuestActions(void* action_context) = 0;
     [[nodiscard]] virtual std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame() = 0;
     virtual void ReleaseGuestSnapshot() = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model,
+                                                                            SystemUiActionSink action_sink,
+                                                                            void* action_context) = 0;
+    virtual void LeaveSystemMenu() = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel& model,
+                                                                              SystemUiActionSink action_sink,
+                                                                              void* action_context) = 0;
+    virtual void UpdateWifiSettings(const WifiSettingsModel& model) = 0;
+    virtual void LeaveWifiSettings() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel& model,
                                                                              SystemUiActionSink action_sink,
                                                                              void* action_context) = 0;

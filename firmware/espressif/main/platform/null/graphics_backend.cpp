@@ -2,6 +2,7 @@
 
 #include "device/graphics.hpp"
 #include "device/input.hpp"
+#include "device/wifi.hpp"
 #include "host_ui/system_ui.hpp"
 #include "platform/audio_backend.hpp"
 #include "platform/configured_backends.hpp"
@@ -116,6 +117,32 @@ class NullInputBackend final : public device::InputBackend {
     void UnbindTouchSink(void* context) override { (void)context; }
 };
 
+class NullWifiBackend final : public device::WifiBackend {
+   public:
+    [[nodiscard]] std::expected<void, device::WifiError> Initialize() override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+    [[nodiscard]] device::WifiSnapshot Snapshot() const override { return {}; }
+    [[nodiscard]] std::expected<void, device::WifiError> SetEnabled(bool) override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+    [[nodiscard]] std::expected<void, device::WifiError> RequestScan() override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+    [[nodiscard]] std::expected<void, device::WifiError> ConnectSaved(std::string_view) override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+    [[nodiscard]] std::expected<void, device::WifiError> Connect(std::string_view, std::string_view) override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+    [[nodiscard]] std::expected<void, device::WifiError> Disconnect() override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+    [[nodiscard]] std::expected<void, device::WifiError> Forget(std::string_view) override {
+        return std::unexpected(device::WifiError::kUnavailable);
+    }
+};
+
 class NullSystemUiBackend final : public host_ui::SystemUiBackend {
    public:
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowHall(const host_ui::HallModel& model,
@@ -126,6 +153,7 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         (void)action_context;
         return {};
     }
+    void UpdateHallWifi(const host_ui::HallWifiModel& model) override { (void)model; }
     void LeaveHall() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override { return {}; }
     void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override {
@@ -137,6 +165,25 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     void ReleaseGuestSnapshot() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemMenu(const host_ui::SystemMenuModel& model,
+                                                                             host_ui::SystemUiActionSink action_sink,
+                                                                             void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void LeaveSystemMenu() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowWifiSettings(const host_ui::WifiSettingsModel& model,
+                                                                               host_ui::SystemUiActionSink action_sink,
+                                                                               void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void UpdateWifiSettings(const host_ui::WifiSettingsModel& model) override { (void)model; }
+    void LeaveWifiSettings() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowStatusLayer(const host_ui::StatusLayerModel& model,
                                                                               host_ui::SystemUiActionSink action_sink,
                                                                               void* action_context) override {
@@ -162,11 +209,13 @@ class NullPlatform final : public Platform {
     [[nodiscard]] device::InputBackend& input() override { return input_; }
     [[nodiscard]] device::AudioBackend& audio() override { return ConfiguredAudioBackend(); }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
+    [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
 
    private:
     NullGraphicsBackend graphics_{};
     NullInputBackend input_{};
+    NullWifiBackend wifi_{};
     NullSystemUiBackend system_ui_{};
 };
 

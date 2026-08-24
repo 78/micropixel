@@ -22,10 +22,30 @@ CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 
-# System Shell snapshots synchronously render the retained Guest tree on the
-# Host main task. Match LVGL's own 8 KiB task stack so the software image path
-# cannot overflow ESP-IDF's 3584-byte default during bottom-swipe capture.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Metalio-Claw4 routes Wi-Fi through its ESP32-C5 coprocessor. The board does
+# not use the ESP32-P4 Function-EV default SDIO pins.
+CONFIG_SLAVE_IDF_TARGET_ESP32C5=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5=y
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_NONE=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+CONFIG_ESP_HOSTED_SDIO_PIN_CMD=50
+CONFIG_ESP_HOSTED_SDIO_PIN_CLK=51
+CONFIG_ESP_HOSTED_SDIO_PIN_D0=49
+CONFIG_ESP_HOSTED_SDIO_PIN_D1=34
+CONFIG_ESP_HOSTED_SDIO_PIN_D2=31
+CONFIG_ESP_HOSTED_SDIO_PIN_D3=53
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# System Shell screen transitions synchronously rebuild LVGL trees on the Host
+# main task. Wi-Fi adds two bounded network snapshots to that call chain, so
+# leave enough headroom for recursive LVGL object deletion and rendering.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
 
 # Product firmware is performance-sensitive. Use ESP-IDF's supported release
 # optimization profile; sdkconfig.debug.defaults can be appended explicitly
@@ -74,9 +94,10 @@ CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT=y
 # run-time accounting available; drawing and sampling remain off until enabled.
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
-# The 720x120 RGB888 scratch buffer stays in internal SRAM. Hardware A/B
-# reduced full-scene shake to six tiles without the PSRAM render penalty.
-CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=120
+# Keep the RGB888 scratch buffer in internal SRAM for render speed, but limit
+# it to 60 rows (129600 bytes). This returns another 129600 bytes of contiguous
+# internal SRAM compared with the previous 120-row buffer.
+CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=60
 # CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM is not set
 CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES=12582912
 # Merge nearby retained-object invalidations to limit repeated LVGL tree walks.

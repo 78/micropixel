@@ -18,6 +18,8 @@ SystemShell::SystemShell(SystemUiBackend& ui) : ui_(ui) {
 SystemShell::~SystemShell() {
     ui_.StopWatchingGuestActions(this);
     ui_.LeaveStatusLayer();
+    ui_.LeaveWifiSettings();
+    ui_.LeaveSystemMenu();
     ui_.LeaveHall();
 }
 
@@ -28,6 +30,8 @@ std::expected<void, SystemUiError> SystemShell::ShowHall(const HallModel& model)
     (void)xQueueReset(action_queue_);
     return ui_.ShowHall(model, ReceiveAction, this);
 }
+
+void SystemShell::UpdateHallWifi(const HallWifiModel& model) { ui_.UpdateHallWifi(model); }
 
 std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
     SystemUiAction action{};
@@ -54,6 +58,28 @@ void SystemShell::StopWatchingGuestActions() { ui_.StopWatchingGuestActions(this
 std::expected<HallCoverModel, SystemUiError> SystemShell::CaptureGuestFrame() { return ui_.CaptureGuestFrame(); }
 
 void SystemShell::ReleaseGuestSnapshot() { ui_.ReleaseGuestSnapshot(); }
+
+std::expected<void, SystemUiError> SystemShell::ShowSystemMenu(const SystemMenuModel& model) {
+    if (action_queue_ == nullptr) {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
+    (void)xQueueReset(action_queue_);
+    return ui_.ShowSystemMenu(model, ReceiveAction, this);
+}
+
+void SystemShell::LeaveSystemMenu() { ui_.LeaveSystemMenu(); }
+
+std::expected<void, SystemUiError> SystemShell::ShowWifiSettings(const WifiSettingsModel& model) {
+    if (action_queue_ == nullptr) {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
+    (void)xQueueReset(action_queue_);
+    return ui_.ShowWifiSettings(model, ReceiveAction, this);
+}
+
+void SystemShell::UpdateWifiSettings(const WifiSettingsModel& model) { ui_.UpdateWifiSettings(model); }
+
+void SystemShell::LeaveWifiSettings() { ui_.LeaveWifiSettings(); }
 
 std::expected<void, SystemUiError> SystemShell::ShowStatusLayer(const StatusLayerModel& model) {
     if (action_queue_ == nullptr) {

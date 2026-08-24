@@ -22,3 +22,11 @@ dependencies:
     version: "1.*"
   espressif/libpng:
     version: "1.*"
+  espressif/esp_wifi_remote:
+    version: ">=0.10,<2.0"
+    rules:
+      - if: "target == esp32p4"
+  espressif/esp_hosted:
+    version: "~2"
+    rules:
+      - if: "target == esp32p4"

@@ -55,12 +55,16 @@ read -r partition_offset partition_size < <(
         --partition-table-file "$partition_table" \
         get_partition_info --partition-name "$partition_name" --info offset size
 )
-bundle_size="$(wc -c < "$app_bundle" | tr -d ' ')"
-if (( bundle_size > partition_size )); then
-    echo "App Bundle is larger than $partition_name ($bundle_size > $partition_size)." >&2
+temporary_dir="$(mktemp -d)"
+trap 'rm -rf "$temporary_dir"' EXIT
+app_store_image="$temporary_dir/app-store.bin"
+python3 "$workspace_root/tools/build_app_store_image.py" --output "$app_store_image" "$app_bundle"
+image_size="$(wc -c < "$app_store_image" | tr -d ' ')"
+if (( image_size > partition_size )); then
+    echo "App Store image is larger than $partition_name ($image_size > $partition_size)." >&2
     exit 2
 fi
 python -m esptool --chip esp32p4 --port "$serial_port" --baud 460800 \
-    write-flash "$partition_offset" "$app_bundle"
+    write-flash "$partition_offset" "$app_store_image"
 
 echo "P4 firmware and App Bundle flashed to $serial_port"

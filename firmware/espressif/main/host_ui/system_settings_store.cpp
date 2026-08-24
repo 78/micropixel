@@ -28,8 +28,7 @@ struct SettingsRecord final {
 static_assert(sizeof(SettingsRecord) == 8U, "System settings v1 record size changed");
 
 bool ValidRecord(const SettingsRecord& record) {
-    if (record.version != kSettingsVersion || record.brightness_percent < kMinimumBrightnessPercent ||
-        record.brightness_percent > 100U || record.volume_percent > 100U ||
+    if (record.version != kSettingsVersion || record.brightness_percent > 100U || record.volume_percent > 100U ||
         (record.flags & ~kPerformanceOverlayFlag) != 0U) {
         return false;
     }
