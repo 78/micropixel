@@ -56,33 +56,38 @@ bash tools/build_<game>_bundle.sh
 以上的事件必须启用 `check_repetition_exposure`。
 
 每个游戏选择一个“主要操作或普通奖励确认声”作为 `reference_effect`，其
-`target_relative_db` 为 `0.0`。推荐的初始层级如下，最终值可按玩法微调：
+`target_relative_db` 为 `0.0`，并用 `reference_momentary_rms_dbfs` 声明统一的绝对数字电平；当前默认值
+为 `-14.0 dBFS`。分析器使用最响 50 ms 窗口的 RMS 检查该目标，避免所有效果以同样过低的电平通过相对评分。
+推荐的短时层级如下，最终值可按玩法微调：
 
 | 事件类别 | 相对参考声的建议范围 |
 |---|---:|
-| 高频移动、拖动或软降 tick | -20～-12 dB |
+| 高频移动、拖动或软降 tick | -16～-10 dB |
 | 普通操作/奖励确认 | 0 dB |
-| BGM 代表短句 | +3～+5 dB，且重复暴露应低于高频事件 |
-| 启动、状态切换、稀有奖励 | +4～+7 dB |
-| Game Over | +5～+7 dB |
-| 升级或极低频重大反馈 | +8～+10 dB |
+| BGM 单音/短时窗口 | -8～-4 dB，且检查重复暴露 |
+| 启动、状态切换、稀有奖励 | -4～0 dB |
+| Game Over | -3～0 dB |
+| 升级或极低频重大反馈 | -2～+1 dB |
 
-`event A` 衡量整段事件能量，因此较长的旋律即使单个音符很轻，也可能高于短促确认声。不能只比较
-`volume_per_mille`。相同硬件 profile 和系统音量下，不同游戏的同类事件原则上应控制在 ±3 dB 内；
-超过时必须在游戏的 `audio/README.md` 说明设计原因。
+`short` 衡量 50 ms 短时 RMS，是绝对数字电平与事件层级的主门禁；`event A` 衡量整段 A-weighted 能量，
+只用于累计暴露和辅助判断。长旋律不能再依靠多个很小的音符累计能量来通过响度门禁。相同系统音量下，
+不同游戏的参考效果原则上应控制在 ±1 dB 内；超过时必须在游戏的 `audio/README.md` 说明设计原因。
 
 Metalio-Claw4 上的 Guest 不得定义 App master，也不得对所有音效再做一层统一衰减。每个音效的
 相对响度由 `volume_per_mille` 表达；设备的整体音量由 Host 系统音量统一控制。
 
 ## 4. 舒适度约束
 
-默认 limits 使用模板中的当前项目基线：
+schema v2 的默认 limits 使用模板中的当前项目基线：
 
-- 数字峰值 `peak_dbfs_max: -12.0`，给同时播放和设备处理保留余量；
-- 高频事件重复暴露 `step_exposure_dbfs_max: -39.0`；
+- 数字峰值 `peak_dbfs_max: -3.0`，禁止单个事件占满输出，给同时播放保留余量；
+- 高频事件重复暴露 `repetition_exposure_dbfs_max: -18.0`；
 - 2 kHz 以上能量比例 `high_frequency_ratio_max: 0.10`；
-- 相邻采样跳变 `transient_delta_dbfs_max: -30.0`；
-- 相对层级允许误差 `relative_tolerance_db: 3.0`。
+- 相邻采样跳变相对于本事件峰值 `transient_delta_relative_db_max: -6.0`；
+- 50 ms 短时 RMS 目标允许误差 `momentary_tolerance_db: 1.0`。
+
+绝对的相邻采样差会随正常波形的音量和频率一起增大，不能作为 click 门禁，否则自动调音会错误地把所有
+声音压低。相对跳变用于捕获方波边沿等不连续信号，同时不惩罚正常提高振幅的 Sine/Triangle。
 
 频繁反馈优先使用 Sine 或 Triangle，并设置可感知但不过长的 Attack/Release。Square 和 Noise 不是禁止项，
 但不能用于频繁事件；一旦造成高频比例或瞬态越界，应先更换波形或放缓包络，而不是只降低 Master。
@@ -95,8 +100,8 @@ Metalio-Claw4 上的 Guest 不得定义 App master，也不得对所有音效再
 
 1. 使用真实事件清单和最大触发率建立 JSON，不先追求评分。
 2. 导出现状报告和 WAV，保存到 `build/` 作为本地基线。
-3. 先消除峰值、尖锐度、瞬态和重复暴露违规，再调整相对层级。
-4. 使用 `gain hint` 估算幅度变化；幅度翻倍约增加 6 dB，但修改后必须重新分析。
+3. 先让参考效果达到 `reference_momentary_rms_dbfs`，再调整其余效果的短时相对层级。
+4. 使用 `gain hint` 估算源振幅变化；幅度翻倍约增加 6 dB，但修改后必须重新检查峰值和重复暴露。
 5. 与至少一个现有游戏的同类事件比较 `event A`，避免切换游戏时整体突变。
 6. 构建正式 Bundle，烧录目标设备，连续触发高频事件并确认没有 audio command dropped。
 7. 在相同设备音量、握持方式和环境中 A/B 试听；至少检查安静环境、正常环境和连续操作三种场景。

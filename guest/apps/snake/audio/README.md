@@ -15,15 +15,17 @@ Guest 不再定义 App master，设备整体音量交由 Host 系统状态栏控
 
 报告中的主要指标为：
 
-- `event A`：经过 A-weighting 与设备频响后的整段事件能量；
-- `relative/target`：相对普通进食声的层级及目标；
+- `short/target`：最响 50 ms 窗口的 RMS 及绝对目标，防止整组源波形电平过低；
+- `relative`：短时 RMS 相对普通进食声的层级；
+- `event A`：经过 A-weighting 与设备频响后的整段累计能量；
 - `repeat A`：结合最大触发频率的一秒重复暴露；
-- `peak`、`HF ratio`、`transient`：分别约束峰值、尖锐度与突然跳变；
+- `peak`、`HF ratio`、`jump/peak`：分别约束峰值、尖锐度与相对跳变；
 - `score`：综合层级误差、重复暴露、尖锐度、峰值和瞬态后的 0–100 工程评分；
 - `gain hint`：达到目标相对层级的建议线性音量倍率。
 
-普通进食声是频繁事件和相对响度基准；启动、金色食物、升级和失败通过更长的旋律取得辨识度，
-而不是依赖更尖锐的波形。构建会生成 `build/apps/snake/sfx-report.json` 并在越界时失败：
+普通进食声是跨游戏参考音，50 ms RMS 固定为 `-14 dBFS`；BGM 单音窗口低 6 dB，确保可听且不会盖过操作音。
+启动、金色食物、升级和失败通过更长的旋律取得辨识度，而不是依赖更尖锐或更响的波形。构建会生成
+`build/apps/snake/sfx-report.json` 并在越界时失败：
 
 ```sh
 bash tools/build_snake_bundle.sh

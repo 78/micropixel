@@ -10,12 +10,13 @@ Guest 不再定义 App master，历史的 45% 统一衰减已移除；设备整�
 
 评估器输出以下工程指标：
 
-- `event A`：整段事件经过 A-weighting 和设备频响后的能量级，用于比较长短不同的提示音；
-- `relative/target`：相对快速落地音的层级及目标层级；
+- `short/target`：最响 50 ms 窗口的 RMS 及绝对目标，负责保证源波形充分使用数字动态范围；
+- `relative`：短时 RMS 相对快速落地音的层级；
+- `event A`：整段事件经过 A-weighting 和设备频响后的累计能量，用于暴露分析而非最低响度门禁；
 - `repeat A`：按该事件最大触发频率折算的一秒重复暴露，用于约束移动/软降疲劳；
 - `peak`：数字峰值，防止混音削波和过强瞬态；
 - `HF ratio`：2 kHz 以上能量占比，作为尖锐度代理；
-- `transient`：相邻采样最大跳变，捕获方波边沿和 click；
+- `jump/peak`：相邻采样跳变相对于事件峰值的比例，捕获方波边沿和 click；
 - `score`：将层级误差、尖锐度、峰值、瞬态和重复暴露合并后的 0–100 工程评分；
 - `gain hint`：达到目标层级所建议的线性音量倍率。
 
@@ -47,6 +48,6 @@ MICROPIXEL_SFX_DEVICE_PROFILE=/absolute/path/measured-speaker-response.json \
   bash tools/build_blocks_bundle.sh
 ```
 
-目标层级来自本机实际试听反馈：移动/软降比快速落地约低 18 dB，自然落地约低 15 dB；启动、消行和
-Game Over 因为是多音事件，允许具有更高的整段能量。评分用于稳定地权衡和防止回归，最终舒适度仍以
-同一台设备上的 A/B 试听为准。
+快速落地是跨游戏参考音，50 ms RMS 固定为 `-14 dBFS`；移动/软降短时层级低 14 dB，自然落地低 8 dB。
+启动、消行和 Game Over 依靠时长与旋律取得辨识度，不靠超高瞬时电平。评分用于稳定地权衡和防止回归，
+最终舒适度仍以同一台设备上的 A/B 试听为准。

@@ -57,7 +57,8 @@ constexpr uint32_t kMaxVoices = 8U;
 struct AudioBackendState final {
     std::atomic<BackendState> backend_state{BackendState::kStopped};
     std::atomic<bool> suspended{};
-    std::atomic<uint16_t> master_volume_per_ten_thousand{4900U};
+    std::atomic<uint16_t> master_volume_per_ten_thousand{
+        static_cast<uint16_t>(metalio_claw4::PerceptualVolumeOutputPerTenThousand(70U))};
     SemaphoreHandle_t voices_mutex{};
     Voice voices[kMaxVoices]{};
     int16_t sine_table[kSineTableSize]{};
@@ -195,14 +196,8 @@ void FillAudioChunk(int32_t* frames) {
                 }
             }
         }
-        mixed = static_cast<int32_t>(static_cast<int64_t>(mixed) *
-                                     State().master_volume_per_ten_thousand.load(std::memory_order_relaxed) /
-                                     metalio_claw4::kPerceptualControlScale);
-        if (mixed > 32767) {
-            mixed = 32767;
-        } else if (mixed < -32768) {
-            mixed = -32768;
-        }
+        mixed = metalio_claw4::ScaleAudioOutputSample(
+            mixed, State().master_volume_per_ten_thousand.load(std::memory_order_relaxed));
         const int32_t output = mixed * 65536;
         frames[frame * 2U] = output;
         frames[frame * 2U + 1U] = output;

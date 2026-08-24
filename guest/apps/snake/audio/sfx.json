@@ -1,48 +1,49 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "sample_rate_hz": 16000,
   "cpp_namespace": "snake_sfx",
   "header_guard": "MICROPIXEL_SNAKE_SFX_PROFILES_HPP",
   "reference_effect": "food_normal",
+  "reference_momentary_rms_dbfs": -14.0,
   "effects": {
     "start": {
       "max_rate_hz": 0.2,
-      "target_relative_db": 4.5,
+      "target_relative_db": -2.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 392, "duration_ms": 110, "volume_per_mille": 31, "attack_ms": 8, "release_ms": 42, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 110, "volume_per_mille": 31, "attack_ms": 8, "release_ms": 42, "delay_ms": 60},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 110, "volume_per_mille": 31, "attack_ms": 8, "release_ms": 42, "delay_ms": 120},
-        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 150, "volume_per_mille": 32, "attack_ms": 10, "release_ms": 65, "delay_ms": 180}
+        {"waveform": "sine", "frequency_hz": 392, "duration_ms": 110, "volume_per_mille": 192, "attack_ms": 8, "release_ms": 42, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 110, "volume_per_mille": 192, "attack_ms": 8, "release_ms": 42, "delay_ms": 60},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 110, "volume_per_mille": 192, "attack_ms": 8, "release_ms": 42, "delay_ms": 120},
+        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 150, "volume_per_mille": 198, "attack_ms": 10, "release_ms": 65, "delay_ms": 180}
       ]
     },
     "bgm_a": {
       "max_rate_hz": 0.3,
       "check_repetition_exposure": true,
-      "target_relative_db": 4.0,
+      "target_relative_db": -6.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
-        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
-        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
+        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
+        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
       ]
     },
     "bgm_b": {
       "max_rate_hz": 0.3,
       "check_repetition_exposure": true,
-      "target_relative_db": 4.0,
+      "target_relative_db": -6.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
-        {"waveform": "sine", "frequency_hz": 1047, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
-        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
-        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 17, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
+        {"waveform": "sine", "frequency_hz": 1047, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
+        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
+        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 141, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
       ]
     },
     "food_normal": {
@@ -50,64 +51,64 @@
       "check_repetition_exposure": true,
       "target_relative_db": 0.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 70, "volume_per_mille": 30, "attack_ms": 6, "release_ms": 28, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 75, "volume_per_mille": 29, "attack_ms": 6, "release_ms": 32, "delay_ms": 38}
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 70, "volume_per_mille": 261, "attack_ms": 6, "release_ms": 28, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 75, "volume_per_mille": 253, "attack_ms": 6, "release_ms": 32, "delay_ms": 38}
       ]
     },
     "food_golden": {
       "max_rate_hz": 0.5,
-      "target_relative_db": 7.0,
+      "target_relative_db": -1.0,
       "tones": [
-        {"waveform": "triangle", "frequency_hz": 523, "duration_ms": 130, "volume_per_mille": 39, "attack_ms": 8, "release_ms": 52, "delay_ms": 0},
-        {"waveform": "triangle", "frequency_hz": 659, "duration_ms": 130, "volume_per_mille": 39, "attack_ms": 8, "release_ms": 52, "delay_ms": 65},
-        {"waveform": "triangle", "frequency_hz": 784, "duration_ms": 130, "volume_per_mille": 39, "attack_ms": 8, "release_ms": 52, "delay_ms": 130},
-        {"waveform": "triangle", "frequency_hz": 1047, "duration_ms": 180, "volume_per_mille": 41, "attack_ms": 10, "release_ms": 80, "delay_ms": 195}
+        {"waveform": "triangle", "frequency_hz": 523, "duration_ms": 130, "volume_per_mille": 247, "attack_ms": 8, "release_ms": 52, "delay_ms": 0},
+        {"waveform": "triangle", "frequency_hz": 659, "duration_ms": 130, "volume_per_mille": 247, "attack_ms": 8, "release_ms": 52, "delay_ms": 65},
+        {"waveform": "triangle", "frequency_hz": 784, "duration_ms": 130, "volume_per_mille": 247, "attack_ms": 8, "release_ms": 52, "delay_ms": 130},
+        {"waveform": "triangle", "frequency_hz": 1047, "duration_ms": 180, "volume_per_mille": 260, "attack_ms": 10, "release_ms": 80, "delay_ms": 195}
       ]
     },
     "food_poison": {
       "max_rate_hz": 0.5,
-      "target_relative_db": 2.0,
+      "target_relative_db": -2.0,
       "tones": [
-        {"waveform": "triangle", "frequency_hz": 392, "duration_ms": 100, "volume_per_mille": 59, "attack_ms": 6, "release_ms": 44, "delay_ms": 0},
-        {"waveform": "triangle", "frequency_hz": 294, "duration_ms": 120, "volume_per_mille": 56, "attack_ms": 6, "release_ms": 55, "delay_ms": 55},
-        {"waveform": "triangle", "frequency_hz": 220, "duration_ms": 150, "volume_per_mille": 55, "attack_ms": 6, "release_ms": 75, "delay_ms": 110}
+        {"waveform": "triangle", "frequency_hz": 392, "duration_ms": 100, "volume_per_mille": 238, "attack_ms": 6, "release_ms": 44, "delay_ms": 0},
+        {"waveform": "triangle", "frequency_hz": 294, "duration_ms": 120, "volume_per_mille": 226, "attack_ms": 6, "release_ms": 55, "delay_ms": 55},
+        {"waveform": "triangle", "frequency_hz": 220, "duration_ms": 150, "volume_per_mille": 222, "attack_ms": 6, "release_ms": 75, "delay_ms": 110}
       ]
     },
     "food_speed": {
       "max_rate_hz": 0.5,
-      "target_relative_db": 4.0,
+      "target_relative_db": -2.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 75, "volume_per_mille": 36, "attack_ms": 5, "release_ms": 30, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 75, "volume_per_mille": 36, "attack_ms": 5, "release_ms": 30, "delay_ms": 35},
-        {"waveform": "sine", "frequency_hz": 1175, "duration_ms": 95, "volume_per_mille": 38, "attack_ms": 6, "release_ms": 42, "delay_ms": 70}
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 75, "volume_per_mille": 177, "attack_ms": 5, "release_ms": 30, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 75, "volume_per_mille": 177, "attack_ms": 5, "release_ms": 30, "delay_ms": 35},
+        {"waveform": "sine", "frequency_hz": 1175, "duration_ms": 95, "volume_per_mille": 187, "attack_ms": 6, "release_ms": 42, "delay_ms": 70}
       ]
     },
     "level_up": {
       "max_rate_hz": 0.02,
-      "target_relative_db": 9.0,
+      "target_relative_db": -1.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 392, "duration_ms": 170, "volume_per_mille": 39, "attack_ms": 10, "release_ms": 60, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 170, "volume_per_mille": 39, "attack_ms": 10, "release_ms": 60, "delay_ms": 100},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 170, "volume_per_mille": 39, "attack_ms": 10, "release_ms": 60, "delay_ms": 200},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 280, "volume_per_mille": 41, "attack_ms": 12, "release_ms": 120, "delay_ms": 300}
+        {"waveform": "sine", "frequency_hz": 392, "duration_ms": 170, "volume_per_mille": 204, "attack_ms": 10, "release_ms": 60, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 170, "volume_per_mille": 204, "attack_ms": 10, "release_ms": 60, "delay_ms": 100},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 170, "volume_per_mille": 204, "attack_ms": 10, "release_ms": 60, "delay_ms": 200},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 280, "volume_per_mille": 214, "attack_ms": 12, "release_ms": 120, "delay_ms": 300}
       ]
     },
     "game_over": {
       "max_rate_hz": 0.05,
-      "target_relative_db": 6.0,
+      "target_relative_db": -2.0,
       "tones": [
-        {"waveform": "triangle", "frequency_hz": 392, "duration_ms": 180, "volume_per_mille": 67, "attack_ms": 6, "release_ms": 70, "delay_ms": 0},
-        {"waveform": "triangle", "frequency_hz": 294, "duration_ms": 180, "volume_per_mille": 66, "attack_ms": 6, "release_ms": 70, "delay_ms": 110},
-        {"waveform": "triangle", "frequency_hz": 220, "duration_ms": 210, "volume_per_mille": 64, "attack_ms": 6, "release_ms": 90, "delay_ms": 220},
-        {"waveform": "triangle", "frequency_hz": 147, "duration_ms": 300, "volume_per_mille": 62, "attack_ms": 8, "release_ms": 140, "delay_ms": 350}
+        {"waveform": "triangle", "frequency_hz": 392, "duration_ms": 180, "volume_per_mille": 235, "attack_ms": 6, "release_ms": 70, "delay_ms": 0},
+        {"waveform": "triangle", "frequency_hz": 294, "duration_ms": 180, "volume_per_mille": 231, "attack_ms": 6, "release_ms": 70, "delay_ms": 110},
+        {"waveform": "triangle", "frequency_hz": 220, "duration_ms": 210, "volume_per_mille": 224, "attack_ms": 6, "release_ms": 90, "delay_ms": 220},
+        {"waveform": "triangle", "frequency_hz": 147, "duration_ms": 300, "volume_per_mille": 217, "attack_ms": 8, "release_ms": 140, "delay_ms": 350}
       ]
     }
   },
   "limits": {
-    "peak_dbfs_max": -12.0,
-    "step_exposure_dbfs_max": -39.0,
+    "peak_dbfs_max": -3.0,
+    "repetition_exposure_dbfs_max": -18.0,
     "high_frequency_ratio_max": 0.10,
-    "transient_delta_dbfs_max": -30.0,
-    "relative_tolerance_db": 3.0
+    "transient_delta_relative_db_max": -6.0,
+    "momentary_tolerance_db": 1.0
   }
 }

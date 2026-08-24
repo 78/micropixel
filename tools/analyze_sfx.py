@@ -37,7 +37,7 @@ def _require(condition: bool, message: str) -> None:
 
 def load_manifest(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    _require(data.get("schema_version") == 1, "SFX manifest schema_version must be 1")
+    _require(data.get("schema_version") == 2, "SFX manifest schema_version must be 2")
     sample_rate = data.get("sample_rate_hz")
     _require(isinstance(sample_rate, int) and 8000 <= sample_rate <= 48000, "invalid sample_rate_hz")
     _require("master_percent" not in data, "master_percent is obsolete; Host owns the device master volume")
@@ -49,6 +49,9 @@ def load_manifest(path: Path) -> dict[str, Any]:
     _require(isinstance(effects, dict) and effects, "effects must be a non-empty object")
     reference = data.get("reference_effect")
     _require(reference in effects, "reference_effect must name an effect")
+    reference_momentary = data.get("reference_momentary_rms_dbfs")
+    _require(isinstance(reference_momentary, (int, float)) and -60.0 <= reference_momentary <= -3.0,
+             "reference_momentary_rms_dbfs must be between -60 and -3 dBFS")
     for effect_name, effect in effects.items():
         _require(re.fullmatch(r"[a-z][a-z0-9_]*", effect_name) is not None, f"invalid effect name: {effect_name}")
         _require(isinstance(effect, dict), f"effect {effect_name} must be an object")
@@ -79,16 +82,27 @@ def load_manifest(path: Path) -> dict[str, Any]:
                 _require(isinstance(value, int) and minimum <= value <= maximum, f"{prefix} {field} invalid")
             _require(tone["attack_ms"] <= tone["duration_ms"], f"{prefix} attack exceeds duration")
             _require(tone["release_ms"] <= tone["duration_ms"], f"{prefix} release exceeds duration")
+    _require(float(effects[reference]["target_relative_db"]) == 0.0,
+             "reference_effect target_relative_db must be 0")
     limits = data.get("limits")
     _require(isinstance(limits, dict), "limits must be an object")
     for field in (
         "peak_dbfs_max",
-        "step_exposure_dbfs_max",
+        "repetition_exposure_dbfs_max",
         "high_frequency_ratio_max",
-        "transient_delta_dbfs_max",
-        "relative_tolerance_db",
+        "transient_delta_relative_db_max",
+        "momentary_tolerance_db",
     ):
         _require(isinstance(limits.get(field), (int, float)), f"limit {field} missing")
+    _require(-30.0 <= limits["peak_dbfs_max"] <= 0.0, "peak_dbfs_max must be between -30 and 0 dBFS")
+    _require(-80.0 <= limits["repetition_exposure_dbfs_max"] <= 0.0,
+             "repetition_exposure_dbfs_max must be between -80 and 0 dBFS")
+    _require(0.0 <= limits["high_frequency_ratio_max"] <= 1.0,
+             "high_frequency_ratio_max must be between 0 and 1")
+    _require(-60.0 <= limits["transient_delta_relative_db_max"] <= 12.0,
+             "transient_delta_relative_db_max must be between -60 and 12 dB")
+    _require(0.0 < limits["momentary_tolerance_db"] <= 6.0,
+             "momentary_tolerance_db must be between 0 and 6 dB")
     return data
 
 
@@ -222,6 +236,17 @@ def _db(value: float, power: bool = False) -> float:
     return (10.0 if power else 20.0) * math.log10(value)
 
 
+def _maximum_window_rms_dbfs(samples: list[float], sample_rate: int, window_ms: int = 50) -> float:
+    window_frames = min(len(samples), max(1, sample_rate * window_ms // 1000))
+    energy = sum(sample * sample for sample in samples[:window_frames])
+    maximum_energy = energy
+    for index in range(window_frames, len(samples)):
+        energy += samples[index] * samples[index]
+        energy -= samples[index - window_frames] * samples[index - window_frames]
+        maximum_energy = max(maximum_energy, energy)
+    return _db(math.sqrt(maximum_energy / window_frames))
+
+
 def analyze_samples(samples: list[float], sample_rate: int, profile: dict[str, Any], max_rate_hz: float) -> dict[str, float]:
     fft_size = 1
     while fft_size < len(samples):
@@ -254,8 +279,10 @@ def analyze_samples(samples: list[float], sample_rate: int, profile: dict[str, A
     return {
         "duration_ms": len(samples) * 1000.0 / sample_rate,
         "rms_dbfs": _db(rms),
+        "momentary_rms_dbfs": _maximum_window_rms_dbfs(samples, sample_rate),
         "peak_dbfs": _db(peak),
         "transient_delta_dbfs": _db(transient),
+        "transient_delta_relative_db": _db(transient / peak) if peak else -200.0,
         "a_weighted_event_dbfs_s": event_level,
         "repetition_exposure_dbfs": repetition_level,
         "spectral_centroid_hz": centroid,
@@ -272,16 +299,20 @@ def analyze_manifest(manifest: dict[str, Any], profile: dict[str, Any]) -> dict[
         rendered[name] = samples
         metrics = analyze_samples(samples, sample_rate, profile, float(effect["max_rate_hz"]))
         analyses[name] = {**metrics, "target_relative_db": float(effect["target_relative_db"])}
-    reference_level = analyses[manifest["reference_effect"]]["a_weighted_event_dbfs_s"]
+    reference_name = manifest["reference_effect"]
+    reference_momentary = analyses[reference_name]["momentary_rms_dbfs"]
+    target_reference_momentary = float(manifest["reference_momentary_rms_dbfs"])
     limits = manifest["limits"]
     violations: list[str] = []
     for name, metrics in analyses.items():
-        relative = metrics["a_weighted_event_dbfs_s"] - reference_level
-        relative_error = relative - metrics["target_relative_db"]
-        metrics["relative_to_reference_db"] = relative
-        metrics["relative_error_db"] = relative_error
-        metrics["recommended_volume_scale"] = 10.0 ** (-relative_error / 20.0)
-        penalties = abs(relative_error) * 1.5 + metrics["high_frequency_ratio"] * 30.0
+        momentary_relative = metrics["momentary_rms_dbfs"] - reference_momentary
+        target_momentary = target_reference_momentary + metrics["target_relative_db"]
+        momentary_error = metrics["momentary_rms_dbfs"] - target_momentary
+        metrics["momentary_relative_to_reference_db"] = momentary_relative
+        metrics["momentary_target_dbfs"] = target_momentary
+        metrics["momentary_error_db"] = momentary_error
+        metrics["recommended_volume_scale"] = 10.0 ** (-momentary_error / 20.0)
+        penalties = abs(momentary_error) * 1.5 + metrics["high_frequency_ratio"] * 30.0
         if metrics["peak_dbfs"] > limits["peak_dbfs_max"]:
             excess = metrics["peak_dbfs"] - limits["peak_dbfs_max"]
             penalties += excess * 4.0
@@ -290,24 +321,25 @@ def analyze_manifest(manifest: dict[str, Any], profile: dict[str, Any]) -> dict[
             excess = metrics["high_frequency_ratio"] - limits["high_frequency_ratio_max"]
             penalties += excess * 100.0
             violations.append(f"{name}: high-frequency ratio exceeds limit by {excess:.3f}")
-        if metrics["transient_delta_dbfs"] > limits["transient_delta_dbfs_max"]:
-            excess = metrics["transient_delta_dbfs"] - limits["transient_delta_dbfs_max"]
+        if metrics["transient_delta_relative_db"] > limits["transient_delta_relative_db_max"]:
+            excess = metrics["transient_delta_relative_db"] - limits["transient_delta_relative_db_max"]
             penalties += excess * 3.0
-            violations.append(f"{name}: transient exceeds limit by {excess:.1f} dB")
+            violations.append(f"{name}: relative transient exceeds limit by {excess:.1f} dB")
         if manifest["effects"][name].get("check_repetition_exposure", False) and metrics[
             "repetition_exposure_dbfs"
-        ] > limits["step_exposure_dbfs_max"]:
-            excess = metrics["repetition_exposure_dbfs"] - limits["step_exposure_dbfs_max"]
+        ] > limits["repetition_exposure_dbfs_max"]:
+            excess = metrics["repetition_exposure_dbfs"] - limits["repetition_exposure_dbfs_max"]
             penalties += excess * 4.0
             violations.append(f"{name}: repetition exposure exceeds limit by {excess:.1f} dB")
-        tolerance = limits["relative_tolerance_db"]
-        if abs(relative_error) > tolerance:
-            excess = abs(relative_error) - tolerance
+        tolerance = limits["momentary_tolerance_db"]
+        if abs(momentary_error) > tolerance:
+            excess = abs(momentary_error) - tolerance
             penalties += excess * 2.0
-            violations.append(f"{name}: hierarchy target missed by {abs(relative_error):.1f} dB")
+            direction = "quiet" if momentary_error < 0.0 else "loud"
+            violations.append(f"{name}: momentary level is {abs(momentary_error):.1f} dB too {direction}")
         metrics["comfort_score"] = max(0.0, 100.0 - penalties)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "sample_rate_hz": sample_rate,
         "reference_effect": manifest["reference_effect"],
         "device": profile.get("device", "unknown"),
@@ -379,14 +411,15 @@ def printable_report(report: dict[str, Any]) -> str:
     lines = [
         f"SFX perceptual report: {report['device']} ({report['calibration']}), "
         f"{report['sample_rate_hz']} Hz, Guest gain=unity",
-        "effect       score  event A   relative/target  repeat A  peak    HF ratio  transient  gain hint",
+        "effect       score  short/target  relative  event A  repeat A  peak    HF ratio  jump/peak  gain hint",
     ]
     for name, metrics in report["effects"].items():
         lines.append(
-            f"{name:11} {metrics['comfort_score']:5.1f}  {metrics['a_weighted_event_dbfs_s']:7.1f}  "
-            f"{metrics['relative_to_reference_db']:7.1f}/{metrics['target_relative_db']:5.1f}  "
-            f"{metrics['repetition_exposure_dbfs']:7.1f}  {metrics['peak_dbfs']:6.1f}  "
-            f"{metrics['high_frequency_ratio']:8.3f}  {metrics['transient_delta_dbfs']:9.1f}  "
+            f"{name:11} {metrics['comfort_score']:5.1f}  {metrics['momentary_rms_dbfs']:6.1f}/"
+            f"{metrics['momentary_target_dbfs']:5.1f}  {metrics['momentary_relative_to_reference_db']:7.1f}  "
+            f"{metrics['a_weighted_event_dbfs_s']:7.1f}  {metrics['repetition_exposure_dbfs']:7.1f}  "
+            f"{metrics['peak_dbfs']:6.1f}  {metrics['high_frequency_ratio']:8.3f}  "
+            f"{metrics['transient_delta_relative_db']:9.1f}  "
             f"x{metrics['recommended_volume_scale']:.2f}"
         )
     if report["violations"]:

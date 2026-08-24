@@ -55,6 +55,17 @@ class PerceptualAnalysisTest(unittest.TestCase):
         difference = loud["a_weighted_event_dbfs_s"] - quiet["a_weighted_event_dbfs_s"]
         self.assertAlmostEqual(difference, 20.0 * math.log10(2.0), delta=0.15)
 
+    def test_momentary_level_ignores_trailing_silence(self) -> None:
+        samples = SFX.synthesize_effect(effect("sine"), 16000)
+        original = SFX._maximum_window_rms_dbfs(samples, 16000)
+        padded = SFX._maximum_window_rms_dbfs(samples + [0.0] * 16000, 16000)
+        self.assertAlmostEqual(padded, original, delta=0.01)
+
+    def test_relative_transient_does_not_penalize_amplitude(self) -> None:
+        quiet = self.metrics(FLAT_PROFILE, volume=100)
+        loud = self.metrics(FLAT_PROFILE, volume=400)
+        self.assertAlmostEqual(quiet["transient_delta_relative_db"], loud["transient_delta_relative_db"], delta=0.1)
+
     def test_square_is_sharper_than_triangle(self) -> None:
         square = self.metrics(FLAT_PROFILE, waveform="square")
         triangle = self.metrics(FLAT_PROFILE, waveform="triangle")
@@ -130,6 +141,17 @@ class PerceptualAnalysisTest(unittest.TestCase):
             checked_games.append(game_directory.name)
         self.assertIn("blocks", checked_games)
         self.assertIn("snake", checked_games)
+
+    def test_uniformly_quiet_manifest_fails_absolute_level_gate(self) -> None:
+        source = WORKSPACE_ROOT / "guest" / "apps" / "blocks" / "audio" / "sfx.json"
+        manifest = SFX.load_manifest(source)
+        quiet = copy.deepcopy(manifest)
+        for effect_data in quiet["effects"].values():
+            for tone in effect_data["tones"]:
+                tone["volume_per_mille"] = max(1, tone["volume_per_mille"] // 4)
+        report = SFX.analyze_manifest(quiet, FLAT_PROFILE)
+        self.assertTrue(any("momentary level" in violation and "too quiet" in violation
+                            for violation in report["violations"]))
 
     def test_game_audio_template_passes_default_constraints(self) -> None:
         manifest = SFX.load_manifest(WORKSPACE_ROOT / "docs" / "development" / "game-sfx.template.json")
