@@ -6,6 +6,8 @@
 `sfx.json` 是 Blocks 音效的唯一参数源。构建脚本先按 ESP32-P4 Host 的真实规则合成 16 kHz PCM，
 执行感知评估，再生成 Guest 使用的 `blocks_sfx_profiles.hpp`。运行时代码与分析器不再各维护一份参数。
 
+Guest 不再定义 App master，历史的 45% 统一衰减已移除；设备整体音量由 Host 系统状态栏控制。
+
 评估器输出以下工程指标：
 
 - `event A`：整段事件经过 A-weighting 和设备频响后的能量级，用于比较长短不同的提示音；

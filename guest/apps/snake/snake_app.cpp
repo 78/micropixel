@@ -75,11 +75,6 @@ int SnakeAppMain() {
         audio_format.AppendUint(audio_info.value().sample_rate);
         audio_format.Append(" Hz");
         app.log().Info(audio_format.c_str());
-        Line audio_master;
-        audio_master.Append("snake: app audio master set to ");
-        audio_master.AppendUint(snake_sfx::kMasterPercent);
-        audio_master.Append(" percent");
-        app.log().Info(audio_master.c_str());
     }
 
     SnakeGame game{app, renderer, display, audio, audio_available, best_score};

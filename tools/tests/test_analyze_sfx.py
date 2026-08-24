@@ -46,7 +46,7 @@ def effect(waveform: str, volume: int = 100, frequency: int = 440) -> dict:
 
 class PerceptualAnalysisTest(unittest.TestCase):
     def metrics(self, profile: dict, waveform: str = "sine", volume: int = 100, frequency: int = 440) -> dict:
-        samples = SFX.synthesize_effect(effect(waveform, volume, frequency), 16000, 100)
+        samples = SFX.synthesize_effect(effect(waveform, volume, frequency), 16000)
         return SFX.analyze_samples(samples, 16000, profile, 1.0)
 
     def test_double_amplitude_is_six_db(self) -> None:
@@ -62,7 +62,7 @@ class PerceptualAnalysisTest(unittest.TestCase):
         self.assertGreater(square["spectral_centroid_hz"], triangle["spectral_centroid_hz"])
 
     def test_repetition_rate_uses_energy_sum(self) -> None:
-        samples = SFX.synthesize_effect(effect("triangle"), 16000, 100)
+        samples = SFX.synthesize_effect(effect("triangle"), 16000)
         once = SFX.analyze_samples(samples, 16000, FLAT_PROFILE, 1.0)
         four = SFX.analyze_samples(samples, 16000, FLAT_PROFILE, 4.0)
         self.assertAlmostEqual(four["repetition_exposure_dbfs"] - once["repetition_exposure_dbfs"],
@@ -87,7 +87,7 @@ class PerceptualAnalysisTest(unittest.TestCase):
         self.assertIn("kHardDrop", generated)
         self.assertIn("kLevelUp", generated)
         self.assertIn("kMoveCount", generated)
-        self.assertIn("kMasterPercent = 45U", generated)
+        self.assertNotIn("kMasterPercent", generated)
 
     def test_snake_manifest_generates_runtime_header(self) -> None:
         manifest = SFX.load_manifest(WORKSPACE_ROOT / "guest" / "apps" / "snake" / "audio" / "sfx.json")
@@ -98,7 +98,17 @@ class PerceptualAnalysisTest(unittest.TestCase):
         self.assertIn("kFoodNormal", generated)
         self.assertIn("kFoodPoison", generated)
         self.assertIn("kBgmBCount", generated)
-        self.assertIn("kMasterPercent = 45U", generated)
+        self.assertNotIn("kMasterPercent", generated)
+
+    def test_guest_master_attenuation_is_rejected(self) -> None:
+        source = WORKSPACE_ROOT / "guest" / "apps" / "blocks" / "audio" / "sfx.json"
+        manifest = json.loads(source.read_text(encoding="utf-8"))
+        manifest["master_percent"] = 45
+        with tempfile.TemporaryDirectory() as directory:
+            legacy = Path(directory) / "legacy-sfx.json"
+            legacy.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "master_percent is obsolete"):
+                SFX.load_manifest(legacy)
 
     def test_audio_games_have_valid_checked_manifests(self) -> None:
         device_profile = SFX.load_device_profile(

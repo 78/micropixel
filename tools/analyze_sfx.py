@@ -39,9 +39,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     _require(data.get("schema_version") == 1, "SFX manifest schema_version must be 1")
     sample_rate = data.get("sample_rate_hz")
-    master_percent = data.get("master_percent")
     _require(isinstance(sample_rate, int) and 8000 <= sample_rate <= 48000, "invalid sample_rate_hz")
-    _require(isinstance(master_percent, int) and 1 <= master_percent <= 100, "invalid master_percent")
+    _require("master_percent" not in data, "master_percent is obsolete; Host owns the device master volume")
     cpp_namespace = data.get("cpp_namespace", "sfx_profiles")
     header_guard = data.get("header_guard", "MICROPIXEL_SFX_PROFILES_HPP")
     _require(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", cpp_namespace) is not None, "invalid cpp_namespace")
@@ -130,7 +129,7 @@ def _wave_sample(waveform: str, phase: int, noise: int, sine_table: list[int]) -
     return sample, noise
 
 
-def synthesize_effect(effect: dict[str, Any], sample_rate: int, master_percent: int) -> list[float]:
+def synthesize_effect(effect: dict[str, Any], sample_rate: int) -> list[float]:
     total_ms = max(tone["delay_ms"] + tone["duration_ms"] for tone in effect["tones"])
     frame_count = max(1, total_ms * sample_rate // 1000)
     voices: list[list[int]] = [[0] * frame_count for _ in effect["tones"]]
@@ -140,7 +139,7 @@ def synthesize_effect(effect: dict[str, Any], sample_rate: int, master_percent: 
         duration = tone["duration_ms"] * sample_rate // 1000
         attack = tone["attack_ms"] * sample_rate // 1000
         release = tone["release_ms"] * sample_rate // 1000
-        volume = (tone["volume_per_mille"] * master_percent + 50) // 100
+        volume = tone["volume_per_mille"]
         phase = 0
         phase_step = tone["frequency_hz"] * (1 << 32) // sample_rate if tone["waveform"] != "noise" else 0
         noise = 0x51A9E21D ^ (tone["frequency_hz"] * 1000) ^ tone["duration_ms"]
@@ -266,11 +265,10 @@ def analyze_samples(samples: list[float], sample_rate: int, profile: dict[str, A
 
 def analyze_manifest(manifest: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     sample_rate = manifest["sample_rate_hz"]
-    master = manifest["master_percent"]
     analyses: dict[str, dict[str, Any]] = {}
     rendered: dict[str, list[float]] = {}
     for name, effect in manifest["effects"].items():
-        samples = synthesize_effect(effect, sample_rate, master)
+        samples = synthesize_effect(effect, sample_rate)
         rendered[name] = samples
         metrics = analyze_samples(samples, sample_rate, profile, float(effect["max_rate_hz"]))
         analyses[name] = {**metrics, "target_relative_db": float(effect["target_relative_db"])}
@@ -311,7 +309,6 @@ def analyze_manifest(manifest: dict[str, Any], profile: dict[str, Any]) -> dict[
     return {
         "schema_version": 1,
         "sample_rate_hz": sample_rate,
-        "master_percent": master,
         "reference_effect": manifest["reference_effect"],
         "device": profile.get("device", "unknown"),
         "calibration": profile.get("calibration", "unknown"),
@@ -348,8 +345,6 @@ def emit_cpp_header(manifest: dict[str, Any], path: Path) -> None:
         "    uint16_t delay_ms{};",
         "};",
         "",
-        f"inline constexpr uint32_t kMasterPercent = {manifest['master_percent']}U;",
-        "",
     ]
     for name, effect in manifest["effects"].items():
         identifier = _cpp_identifier(name)
@@ -383,7 +378,7 @@ def write_wavs(report: dict[str, Any], directory: Path) -> None:
 def printable_report(report: dict[str, Any]) -> str:
     lines = [
         f"SFX perceptual report: {report['device']} ({report['calibration']}), "
-        f"{report['sample_rate_hz']} Hz, master={report['master_percent']}%",
+        f"{report['sample_rate_hz']} Hz, Guest gain=unity",
         "effect       score  event A   relative/target  repeat A  peak    HF ratio  transient  gain hint",
     ]
     for name, metrics in report["effects"].items():

@@ -4,13 +4,11 @@ namespace snake {
 
 micropixel::Tone SnakeGame::SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
                                       uint16_t volume_per_mille, uint16_t attack_ms, uint16_t release_ms) {
-    const uint16_t scaled_volume =
-        static_cast<uint16_t>((static_cast<uint32_t>(volume_per_mille) * snake_sfx::kMasterPercent + 50U) / 100U);
     return micropixel::Tone{
         waveform,
         frequency_hz,
         micropixel::Duration::Milliseconds(duration_ms),
-        scaled_volume,
+        volume_per_mille,
         micropixel::Duration::Milliseconds(attack_ms),
         micropixel::Duration::Milliseconds(release_ms),
     };

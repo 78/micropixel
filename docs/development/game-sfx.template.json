@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "sample_rate_hz": 16000,
-  "master_percent": 45,
   "cpp_namespace": "game_sfx",
   "header_guard": "MICROPIXEL_GAME_SFX_PROFILES_HPP",
   "reference_effect": "confirm",
@@ -41,7 +40,7 @@
         {"waveform": "sine", "frequency_hz": 392, "duration_ms": 170, "volume_per_mille": 55, "attack_ms": 8, "release_ms": 55, "delay_ms": 0},
         {"waveform": "sine", "frequency_hz": 523, "duration_ms": 170, "volume_per_mille": 55, "attack_ms": 8, "release_ms": 55, "delay_ms": 100},
         {"waveform": "sine", "frequency_hz": 659, "duration_ms": 170, "volume_per_mille": 55, "attack_ms": 8, "release_ms": 55, "delay_ms": 200},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 260, "volume_per_mille": 60, "attack_ms": 10, "release_ms": 110, "delay_ms": 300}
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 260, "volume_per_mille": 59, "attack_ms": 10, "release_ms": 110, "delay_ms": 300}
       ]
     },
     "game_over": {

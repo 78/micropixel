@@ -39,8 +39,8 @@ python3 tools/analyze_sfx.py \
   --check
 ```
 
-`--check` 不得从发布构建中省略。运行时代码必须包含生成头文件并使用其中的 `kMasterPercent`；构建参数
-`MICROPIXEL_SFX_DEVICE_PROFILE` 可以替换设备频响，但不能绕过检查。
+`--check` 不得从发布构建中省略。运行时代码必须包含生成头文件，并将其中的 `volume_per_mille`
+原样传给 Host；构建参数 `MICROPIXEL_SFX_DEVICE_PROFILE` 可以替换设备频响，但不能绕过检查。
 
 每次修改分析器、JSON schema 或游戏音效，还必须运行：
 
@@ -68,11 +68,11 @@ bash tools/build_<game>_bundle.sh
 | 升级或极低频重大反馈 | +8～+10 dB |
 
 `event A` 衡量整段事件能量，因此较长的旋律即使单个音符很轻，也可能高于短促确认声。不能只比较
-`volume_per_mille`。相同硬件 profile 和 Master 下，不同游戏的同类事件原则上应控制在 ±3 dB 内；
+`volume_per_mille`。相同硬件 profile 和系统音量下，不同游戏的同类事件原则上应控制在 ±3 dB 内；
 超过时必须在游戏的 `audio/README.md` 说明设计原因。
 
-Metalio-Claw4 上的新游戏默认使用与现有游戏一致的 `master_percent: 45`。整体音量的调整应先通过
-设备/系统音量完成；只有游戏确有不同动态范围时才改变 Master，并记录跨游戏对比结果。
+Metalio-Claw4 上的 Guest 不得定义 App master，也不得对所有音效再做一层统一衰减。每个音效的
+相对响度由 `volume_per_mille` 表达；设备的整体音量由 Host 系统音量统一控制。
 
 ## 4. 舒适度约束
 
