@@ -9,7 +9,6 @@
 #include "sdk/log.hpp"
 #include "sdk/random.hpp"
 #include "sdk/resources.hpp"
-#include "sdk/schedule.hpp"
 #include "sdk/storage.hpp"
 #include "sdk/timer.hpp"
 #include "sdk/types.hpp"
@@ -30,42 +29,37 @@ class Application final {
     [[nodiscard]] constexpr Clock clock() const noexcept { return Clock{Clock::CapabilityToken{}}; }
     [[nodiscard]] constexpr Random random() const noexcept { return Random{Random::CapabilityToken{}}; }
     [[nodiscard]] constexpr Timers timers() const noexcept { return Timers{Timers::CapabilityToken{}}; }
-    [[nodiscard]] constexpr Graphics graphics() const noexcept { return Graphics{Graphics::CapabilityToken{}}; }
+    [[nodiscard]] constexpr Renderer renderer() const noexcept { return Renderer{Renderer::CapabilityToken{}}; }
     [[nodiscard]] constexpr Audio audio() const noexcept { return Audio{Audio::CapabilityToken{}}; }
     [[nodiscard]] constexpr Input input() const noexcept { return Input{Input::CapabilityToken{}}; }
     [[nodiscard]] constexpr Resources resources() const noexcept { return Resources{Resources::CapabilityToken{}}; }
     [[nodiscard]] constexpr KVStore storage() const noexcept { return KVStore{KVStore::CapabilityToken{}}; }
 
-    template <typename Callback>
-    [[nodiscard]] auto After(Duration delay, Callback callback) const {
-        using Schedule = detail::TimerSchedule<detail::ScheduleKind::kOnce, Callback>;
-        return Schedule{timers().After(delay), static_cast<Callback&&>(callback)};
-    }
-
-    template <typename Callback>
-    [[nodiscard]] auto Every(Duration period, Callback callback) const {
-        using Schedule = detail::TimerSchedule<detail::ScheduleKind::kRepeating, Callback>;
-        return Schedule{timers().Every(period), static_cast<Callback&&>(callback)};
-    }
-
-    template <typename... Schedules>
-    [[noreturn]] void Run(Schedules&&... schedules) const {
-        static_assert(sizeof...(Schedules) > 0U, "Application::Run requires at least one schedule");
-        constexpr bool kValidSchedules =
-            (requires(Schedules& schedule, const Event& event) { schedule.Dispatch(event); } && ...);
-        static_assert(kValidSchedules, "Application::Run accepts only tasks or subscriptions returned by the SDK");
-        if constexpr (kValidSchedules) {
+    template <typename Handler>
+    void Run(Handler&& handler) const {
+        constexpr bool kValidHandler = requires(Handler& candidate, const Event& event) { candidate(event); };
+        static_assert(kValidHandler, "Application::Run handler must accept const Event &");
+        if constexpr (kValidHandler) {
+            BeginRun();
             for (;;) {
                 Event event = WaitEvent();
-                (schedules.Dispatch(event), ...);
+                handler(event);
+                if (event.type() == EventType::kStop) {
+                    EndRun();
+                    return;
+                }
             }
-        } else {
-            __builtin_unreachable();
         }
     }
 
     // Advanced event access. Runtime/ABI failures Panic at the call site.
     [[nodiscard]] Event WaitEvent() const;
+
+   private:
+    void BeginRun() const;
+    void EndRun() const;
+
+    mutable bool running_{};
 };
 
 }  // namespace micropixel

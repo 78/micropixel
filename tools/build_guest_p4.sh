@@ -78,8 +78,8 @@ build_sdk_example graphics_protocol "$workspace_root/guest/tests/conformance/gra
 build_sdk_example graphics_invalid_pointer "$workspace_root/guest/tests/conformance/graphics_invalid_pointer.cpp"
 build_sdk_example touch_pressure "$workspace_root/guest/tests/conformance/touch_pressure.cpp"
 build_sdk_example timer_counter "$workspace_root/guest/tests/conformance/timer_counter.cpp"
-build_sdk_example schedule_after "$workspace_root/guest/tests/conformance/schedule_after.cpp"
-build_sdk_example schedule_multiple "$workspace_root/guest/tests/conformance/schedule_multiple.cpp"
+build_sdk_example run_handler_after "$workspace_root/guest/tests/conformance/run_handler_after.cpp"
+build_sdk_example run_handler_multiple "$workspace_root/guest/tests/conformance/run_handler_multiple.cpp"
 build_sdk_example main_failure "$workspace_root/guest/tests/conformance/main_failure.cpp"
 build_sdk_example watchdog_spin "$workspace_root/guest/tests/conformance/watchdog_spin.cpp"
 build_sdk_example sdk_panic "$workspace_root/guest/tests/conformance/sdk_panic.cpp"
@@ -90,7 +90,7 @@ build_sdk_example service_control "$workspace_root/guest/tests/conformance/servi
 built_guests=(
     bad_import sdk_hello event_wait graphics_protocol graphics_invalid_pointer
     touch_pressure timer_counter
-    schedule_after schedule_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth service_control
+    run_handler_after run_handler_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth service_control
 )
 for guest_name in "${built_guests[@]}"; do
     ls -lh "$output_dir/$guest_name".{wasm,aot}

@@ -10,18 +10,18 @@ namespace snake {
 
 class SnakeGame final {
    public:
-    SnakeGame(micropixel::Application& app, micropixel::Graphics graphics, micropixel::GraphicsInfo graphics_info,
+    SnakeGame(micropixel::Application& app, micropixel::Renderer renderer, micropixel::RendererInfo renderer_info,
               micropixel::Audio audio, bool audio_available, uint32_t best_score);
 
     void Render();
 
-    void set_board(micropixel::Bitmap bitmap);
+    void set_board(micropixel::Texture texture);
 
-    void set_button_bitmaps(micropixel::Bitmap start, micropixel::Bitmap restart);
+    void set_button_textures(micropixel::Texture start, micropixel::Texture restart);
 
-    void set_burst_sheet(FoodType type, micropixel::Bitmap bitmap);
+    void set_burst_sheet(FoodType type, micropixel::Texture texture);
 
-    void set_food_sheet(FoodType type, micropixel::Bitmap bitmap);
+    void set_food_sheet(FoodType type, micropixel::Texture texture);
 
     void OnTimer(const micropixel::TimerEvent& tick);
 
@@ -37,45 +37,43 @@ class SnakeGame final {
     micropixel::Rect InterpolatedSlotRect(uint32_t slot, uint32_t index, int32_t inset, int32_t board_x,
                                           int32_t board_y) const;
 
-    void AppendPlaceholderRect(micropixel::CommandBuffer& commands) const;
+    void AppendPlaceholderRect(micropixel::Frame& commands) const;
 
-    static void AppendPlaceholderText(micropixel::CommandBuffer& commands);
+    static void AppendPlaceholderText(micropixel::Frame& commands);
 
-    void FillClippedRect(micropixel::CommandBuffer& commands, micropixel::Rect rect, micropixel::Color color) const;
+    void FillClippedRect(micropixel::Frame& commands, micropixel::Rect rect, micropixel::Color color) const;
 
-    void RenderComboBar(micropixel::CommandBuffer& commands) const;
+    void RenderComboBar(micropixel::Frame& commands) const;
 
-    void RenderComboFlame(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderComboFlame(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                           uint32_t slots) const;
 
-    void RenderTrails(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderTrails(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                       uint32_t slots) const;
 
-    void RenderFood(micropixel::CommandBuffer& commands, const Food& food, int32_t board_x, int32_t board_y,
+    void RenderFood(micropixel::Frame& commands, const Food& food, int32_t board_x, int32_t board_y,
                     uint32_t detail_slots) const;
 
-    void RenderObstacles(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y,
-                         uint32_t detail_slots) const;
+    void RenderObstacles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, uint32_t detail_slots) const;
 
-    void RenderSnake(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                      uint32_t body_slots) const;
 
-    void RenderFoodBurst(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y) const;
+    void RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, int32_t board_y) const;
 
-    void RenderParticles(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderParticles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                          uint32_t slots) const;
 
-    void RenderFlash(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderFlash(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                      uint32_t slots) const;
 
-    void RenderOverlayRect(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y,
-                           const Theme& theme) const;
+    void RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
 
-    void RenderHeaderTexts(micropixel::CommandBuffer& commands, const Theme& theme) const;
+    void RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const;
 
-    void RenderPopups(micropixel::CommandBuffer& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
+    void RenderPopups(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
 
-    void RenderOverlayTexts(micropixel::CommandBuffer& commands, const Theme& theme) const;
+    void RenderOverlayTexts(micropixel::Frame& commands, const Theme& theme) const;
 
     void SnapshotBody();
 
@@ -145,14 +143,14 @@ class SnakeGame final {
     void ResetGameModel();
 
     micropixel::Application& app_;
-    micropixel::Graphics graphics_;
-    micropixel::GraphicsInfo graphics_info_;
+    micropixel::Renderer renderer_;
+    micropixel::RendererInfo renderer_info_;
     micropixel::Audio audio_;
-    micropixel::Bitmap board_bitmap_{};
-    micropixel::Bitmap start_button_bitmap_{};
-    micropixel::Bitmap restart_button_bitmap_{};
-    micropixel::Bitmap burst_sheets_[4U]{};
-    micropixel::Bitmap food_sheets_[4U]{};
+    micropixel::Texture board_texture_{};
+    micropixel::Texture start_button_texture_{};
+    micropixel::Texture restart_button_texture_{};
+    micropixel::Texture burst_sheets_[4U]{};
+    micropixel::Texture food_sheets_[4U]{};
     SnakeModel model_{};
     Cell burst_cell_{};
     Cell previous_body_[kMaxLength]{};
@@ -183,7 +181,6 @@ class SnakeGame final {
     bool record_broken_{};
     bool logic_debt_logged_{};
     bool shake_heavy_{};
-    bool surface_translation_available_{};
     bool audio_available_{};
     bool bgm_playing_{};
     bool audio_error_logged_{};

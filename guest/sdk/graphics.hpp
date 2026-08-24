@@ -3,12 +3,16 @@
 
 #include <stdint.h>
 
+#include "sdk/result.hpp"
+
 namespace micropixel {
 
 class Application;
-class Graphics;
-class GraphicsFrame;
-class Bitmap;
+class Renderer;
+class Frame;
+class Texture;
+class StreamingTexture;
+class TextureUpdateBatch;
 
 class Color final {
    public:
@@ -41,12 +45,19 @@ class Color final {
     explicit constexpr Color(uint32_t rgb888) : rgb888_(rgb888) {}
     uint32_t rgb888_{};
 
-    friend class CommandBuffer;
+    friend class Frame;
 };
 
 struct Point final {
     int32_t x{};
     int32_t y{};
+
+    friend constexpr bool operator==(Point, Point) = default;
+};
+
+struct Size final {
+    uint32_t width{};
+    uint32_t height{};
 };
 
 struct Rect final {
@@ -68,7 +79,12 @@ struct Rect final {
     [[nodiscard]] constexpr bool contains(Point point) const { return contains(point.x, point.y); }
 
     [[nodiscard]] constexpr Rect translated(int32_t delta_x, int32_t delta_y) const {
-        return Rect{x + delta_x, y + delta_y, width, height};
+        const int64_t translated_x = static_cast<int64_t>(x) + delta_x;
+        const int64_t translated_y = static_cast<int64_t>(y) + delta_y;
+        return translated_x >= INT32_MIN && translated_x <= INT32_MAX && translated_y >= INT32_MIN &&
+                       translated_y <= INT32_MAX
+                   ? Rect{static_cast<int32_t>(translated_x), static_cast<int32_t>(translated_y), width, height}
+                   : Rect{};
     }
 
     [[nodiscard]] constexpr Rect inset(int32_t amount) const {
@@ -88,141 +104,151 @@ struct Rect final {
                    ? Rect{left, top, static_cast<int32_t>(right - left), static_cast<int32_t>(bottom - top)}
                    : Rect{};
     }
+
+    friend constexpr bool operator==(Rect, Rect) = default;
 };
 
-class GraphicsInfo final {
+enum class PixelFormat : uint32_t {
+    // Canonical bytes in Guest memory: B, G, R.
+    kBgr888 = 1U,
+    // Canonical bytes in Guest memory: B, G, R, A.
+    kBgra8888 = 2U,
+};
+
+class RendererInfo final {
    public:
     [[nodiscard]] constexpr uint32_t width() const { return width_; }
     [[nodiscard]] constexpr uint32_t height() const { return height_; }
-    [[nodiscard]] constexpr uint32_t max_command_bytes() const { return max_command_bytes_; }
-    [[nodiscard]] constexpr uint16_t max_commands() const { return max_commands_; }
-    [[nodiscard]] constexpr uint16_t max_text_bytes() const { return max_text_bytes_; }
-    [[nodiscard]] constexpr bool supports_surface_translation() const {
-        return (capabilities_ & kSurfaceTranslationCapability) != 0U;
-    }
-    [[nodiscard]] constexpr bool supports_multi_submit_frames() const {
-        return (capabilities_ & kMultiSubmitFrameCapability) != 0U;
-    }
-    [[nodiscard]] constexpr uint16_t max_frame_commands() const {
-        return max_frame_commands_ == 0U ? max_commands_ : max_frame_commands_;
-    }
+    [[nodiscard]] constexpr uint16_t max_draw_operations() const { return max_draw_operations_; }
 
    private:
-    static constexpr uint32_t kSurfaceTranslationCapability = 1U << 0U;
-    static constexpr uint32_t kMultiSubmitFrameCapability = 1U << 1U;
-
-    constexpr GraphicsInfo(uint32_t width, uint32_t height, uint32_t capabilities, uint32_t max_command_bytes,
-                           uint16_t max_commands, uint16_t max_text_bytes, uint16_t max_frame_commands)
+    constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t capabilities, uint16_t max_batch_commands,
+                           uint16_t max_draw_operations, uint16_t max_frame_commands)
         : width_(width),
           height_(height),
-          max_command_bytes_(max_command_bytes),
           capabilities_(capabilities),
-          max_commands_(max_commands),
-          max_text_bytes_(max_text_bytes),
-          max_frame_commands_(max_frame_commands) {}
+          max_batch_commands_(max_batch_commands),
+          max_draw_operations_(max_draw_operations),
+          max_frame_commands_(max_frame_commands == 0U ? max_batch_commands : max_frame_commands) {}
+
+    [[nodiscard]] constexpr uint16_t max_batch_commands() const { return max_batch_commands_; }
+    [[nodiscard]] constexpr uint16_t max_frame_commands() const { return max_frame_commands_; }
+    [[nodiscard]] constexpr bool retained_translation_available() const { return (capabilities_ & (1U << 0U)) != 0U; }
+    [[nodiscard]] constexpr bool multi_submit_available() const { return (capabilities_ & (1U << 1U)) != 0U; }
 
     uint32_t width_{};
     uint32_t height_{};
-    uint32_t max_command_bytes_{};
     uint32_t capabilities_{};
-    uint16_t max_commands_{};
-    uint16_t max_text_bytes_{};
+    uint16_t max_batch_commands_{};
+    uint16_t max_draw_operations_{};
     uint16_t max_frame_commands_{};
 
-    friend class Graphics;
+    friend class Renderer;
+    friend class Frame;
 };
 
-class CommandBuffer final {
+// Records one atomic display update. Frame owns its bounded command storage;
+// transport batches and retained-translation acceleration are private details.
+class Frame final {
    public:
     static constexpr uint32_t kCapacityBytes = 4096U;
     static constexpr uint32_t kCapacityCommands = 128U;
+    static constexpr uint32_t kMaxStateDepth = 8U;
 
-    CommandBuffer(const CommandBuffer&) = delete;
-    CommandBuffer& operator=(const CommandBuffer&) = delete;
-    CommandBuffer(CommandBuffer&&) = default;
-    CommandBuffer& operator=(CommandBuffer&&) = default;
+    Frame(const Frame&) = delete;
+    Frame& operator=(const Frame&) = delete;
+    Frame(Frame&& other) noexcept;
+    Frame& operator=(Frame&&) = delete;
+    ~Frame();
 
-    void Reset();
     void Clear(Color color);
-    void FillRect(Rect rect, Color color);
-    void BlendRect(Rect rect, Color color, uint8_t opacity);
-    void DrawText(int32_t x, int32_t y, const char* text, Color color, uint16_t font_size_px = 24U);
+    void FillRect(Rect rect, Color color, uint8_t opacity = 255U);
+    void DrawText(Point position, const char* text, Color color, uint16_t font_size_px = 24U);
     void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, uint16_t font_size_px = 24U);
-    void DrawBitmap(int32_t x, int32_t y, const Bitmap& bitmap);
-    void DrawBitmapRegion(int32_t x, int32_t y, const Bitmap& bitmap, Rect source);
-    void BlendBitmap(int32_t x, int32_t y, const Bitmap& bitmap, uint8_t opacity);
-    void BlendBitmapRegion(int32_t x, int32_t y, const Bitmap& bitmap, Rect source, uint8_t opacity);
-    void BeginSurface(Rect bounds, Point translation, bool translation_active);
-    void EndSurface();
-    void Submit();
+    void DrawTexture(Point position, const Texture& texture, uint8_t opacity = 255U);
+    void DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity = 255U);
+    void DrawTexture(Rect destination, const Texture& texture, uint8_t opacity = 255U);
+    void DrawTexture(Rect destination, const Texture& texture, Rect source, uint8_t opacity = 255U);
+    void DrawTexture(Point position, const StreamingTexture& texture, uint8_t opacity = 255U);
+    void DrawTexture(Point position, const StreamingTexture& texture, Rect source, uint8_t opacity = 255U);
+    void DrawTexture(Rect destination, const StreamingTexture& texture, uint8_t opacity = 255U);
+    void DrawTexture(Rect destination, const StreamingTexture& texture, Rect source, uint8_t opacity = 255U);
 
-    [[nodiscard]] constexpr uint32_t size_bytes() const { return size_; }
-    [[nodiscard]] constexpr uint32_t command_count() const { return logical_command_count_; }
+    void Save();
+    void SetClipRect(Rect clip);
+    void Translate(Point offset);
+    void Restore();
+
+    [[nodiscard]] Result<void> Present();
+
+    [[nodiscard]] constexpr uint32_t draw_operation_count() const { return draw_operation_count_; }
 
    private:
     struct CapabilityToken {};
-    explicit CommandBuffer(CapabilityToken, uint32_t max_commands, uint32_t max_frame_commands, bool auto_submit)
-        : max_commands_(max_commands < kCapacityCommands ? max_commands : kCapacityCommands),
-          max_frame_commands_(max_frame_commands),
-          auto_submit_(auto_submit) {
-        Reset();
-    }
+    Frame(CapabilityToken, const RendererInfo& info);
 
     [[nodiscard]] uint8_t* Append(uint32_t bytes);
     [[nodiscard]] uint8_t* AppendUnchecked(uint32_t bytes);
-    void SubmitBatch();
+    [[nodiscard]] uint8_t* DiscardRecord(uint32_t bytes);
     void ResetBatch();
-    void ContinueSurfaceInNewBatch();
+    [[nodiscard]] bool SubmitBatch();
+    [[nodiscard]] bool StartHostFrame();
+    void Fail(int32_t status);
+    void Cancel();
+    void ContinueStateInNewBatch();
+    void EnsureStateEncoded();
+    void CloseEncodedState();
+    [[nodiscard]] Rect StateClip() const;
+    [[nodiscard]] Rect EffectiveClip() const;
+    [[nodiscard]] Point EffectiveTranslation() const;
+
+    struct State final {
+        Rect clip{};
+        Rect clip_limit{};
+        Point translation{};
+        bool draw_started{};
+    };
 
     alignas(4) uint8_t bytes_[kCapacityBytes]{};
     uint32_t size_{};
     uint32_t batch_command_count_{};
-    uint32_t logical_command_count_{};
+    uint32_t draw_operation_count_{};
     uint32_t frame_command_count_{};
-    uint32_t max_commands_{};
+    uint32_t max_batch_commands_{};
+    uint32_t max_draw_operations_{};
     uint32_t max_frame_commands_{};
-    Rect surface_bounds_{};
-    Point surface_translation_{};
-    bool surface_translation_active_{};
-    bool surface_active_{};
-    bool auto_submit_{};
-    bool submitted_{};
-    friend class Graphics;
-    friend class GraphicsFrame;
+    Rect display_bounds_{};
+    Rect retained_clip_{};
+    Point retained_translation_{};
+    State states_[kMaxStateDepth + 1U]{};
+    uint32_t state_depth_{};
+    uint32_t encoded_state_depth_{};
+    uint32_t retained_scope_count_{};
+    int32_t failure_status_{};
+    alignas(4) uint8_t discard_record_[160U]{};
+    bool retained_translation_available_{};
+    bool multi_submit_available_{};
+    bool retained_scope_selected_{};
+    bool state_encoded_{};
+    bool host_frame_active_{};
+    bool presented_{};
+
+    friend class Renderer;
 };
 
-class GraphicsFrame final {
+class Renderer final {
    public:
-    GraphicsFrame(const GraphicsFrame&) = delete;
-    GraphicsFrame& operator=(const GraphicsFrame&) = delete;
-    GraphicsFrame(GraphicsFrame&& other) noexcept;
-    GraphicsFrame& operator=(GraphicsFrame&&) = delete;
-    ~GraphicsFrame();
+    constexpr Renderer(const Renderer&) noexcept = default;
+    constexpr Renderer& operator=(const Renderer&) noexcept = default;
 
-    [[nodiscard]] CommandBuffer CreateCommandBuffer(const GraphicsInfo& graphics_info) const;
-    void Commit();
+    [[nodiscard]] RendererInfo info() const;
+    [[nodiscard]] Frame BeginFrame() const;
+    [[nodiscard]] Result<StreamingTexture> CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
+    [[nodiscard]] TextureUpdateBatch BeginTextureUpdateBatch() const;
 
    private:
     struct CapabilityToken {};
-    explicit constexpr GraphicsFrame(CapabilityToken) : active_(true) {}
-    bool active_{};
-
-    friend class Graphics;
-};
-
-class Graphics final {
-   public:
-    constexpr Graphics(const Graphics&) noexcept = default;
-    constexpr Graphics& operator=(const Graphics&) noexcept = default;
-
-    [[nodiscard]] GraphicsInfo info() const;
-    [[nodiscard]] CommandBuffer CreateCommandBuffer() const;
-    [[nodiscard]] CommandBuffer CreateCommandBuffer(const GraphicsInfo& info) const;
-    [[nodiscard]] GraphicsFrame BeginFrame() const;
-
-   private:
-    struct CapabilityToken {};
-    explicit constexpr Graphics(CapabilityToken) noexcept {}
+    explicit constexpr Renderer(CapabilityToken) noexcept {}
     friend class Application;
 };
 

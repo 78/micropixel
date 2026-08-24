@@ -76,7 +76,7 @@ class AudioPage final {
         return redraw;
     }
 
-    void Render(DemoContext& context, micropixel::CommandBuffer& commands) {
+    void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
         Line capability;
         capability.Append("Sample rate: ");
@@ -127,8 +127,6 @@ bool AudioDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event)
     return audio_page.OnTouch(context, event);
 }
 
-void AudioDemoRender(DemoContext& context, micropixel::CommandBuffer& commands) {
-    audio_page.Render(context, commands);
-}
+void AudioDemoRender(DemoContext& context, micropixel::Frame& commands) { audio_page.Render(context, commands); }
 
 }  // namespace demo

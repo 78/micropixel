@@ -9,7 +9,7 @@
 namespace micropixel::ui {
 
 // Button owns only touch interaction state. The app owns the action and chooses
-// a renderer, so text and bitmap buttons share capture/release semantics.
+// a renderer, so text and texture buttons share capture/release semantics.
 struct ButtonUpdate final {
     bool handled{};
     bool visual_changed{};
@@ -101,28 +101,28 @@ struct ButtonStyle final {
     int8_t pressed_text_offset_px{1};
 };
 
-inline void DrawTextButton(CommandBuffer& commands, const Button& button, const char* label, ButtonStyle style = {}) {
+inline void DrawTextButton(Frame& commands, const Button& button, const char* label, ButtonStyle style = {}) {
     const Rect bounds = button.bounds();
     commands.FillRect(bounds, style.background);
     const uint8_t feedback_opacity = !button.enabled()  ? style.disabled_opacity
                                      : button.pressed() ? style.pressed_opacity
                                                         : 0U;
-    // Keep the BlendRect record present even at zero opacity. Retained Hosts can
+    // Keep the translucent FillRect record present even at zero opacity. Retained Hosts can
     // then reuse the same command slot while the pressed state changes.
-    commands.BlendRect(bounds, style.feedback_overlay, feedback_opacity);
+    commands.FillRect(bounds, style.feedback_overlay, feedback_opacity);
     const int32_t text_offset = button.pressed() ? style.pressed_text_offset_px : 0;
     commands.DrawTextCentered(bounds.center_x(),
                               bounds.y + (bounds.height - static_cast<int32_t>(style.font_size_px)) / 2 + text_offset,
                               label, style.text, style.font_size_px);
 }
 
-inline void DrawBitmapButton(CommandBuffer& commands, const Button& button, const Bitmap& bitmap,
-                             uint8_t pressed_image_opacity = 160U) {
+inline void DrawTextureButton(Frame& commands, const Button& button, const Texture& texture,
+                              uint8_t pressed_image_opacity = 160U) {
     const Rect bounds = button.bounds();
-    commands.BlendBitmap(bounds.x, bounds.y, bitmap, button.pressed() ? pressed_image_opacity : 255U);
+    commands.DrawTexture(Point{bounds.x, bounds.y}, texture, button.pressed() ? pressed_image_opacity : 255U);
     // Keep the second record as a transparent placeholder so retained scenes
     // preserve the same command topology as text buttons and state changes.
-    commands.BlendRect(bounds, Color::Black(), 0U);
+    commands.FillRect(bounds, Color::Black(), 0U);
 }
 
 }  // namespace micropixel::ui

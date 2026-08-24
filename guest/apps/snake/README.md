@@ -32,7 +32,7 @@ bash tools/build_snake_bundle.sh
 ```
 
 `gamekit/` 仍是 Snake 内部实现；只有第二个游戏出现相同需求且语义稳定后，才移动到公共 SDK。
-通用的按钮、固定字符串和 Graphics command helper 已放在 `guest/sdk/`。
+通用的按钮、固定字符串和 Renderer/Frame helper 已放在 `guest/sdk/`。
 
 当前 P4 / Metalio-Claw4 Mode 1 音频硬件链路固定为 16 kHz；Snake 根据 `Audio::info()` 使用这一格式。
 音色参数只维护在 `audio/sfx.json`，构建时执行项目统一的感知门禁并生成 `snake_sfx_profiles.hpp`；通用规则

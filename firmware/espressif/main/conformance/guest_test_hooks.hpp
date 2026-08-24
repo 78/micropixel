@@ -28,6 +28,7 @@ class GuestTestHooks final {
     enum class Kind {
         kHostWake,
         kTouchPressure,
+        kRunHandlerStop,
     };
 
     runtime::GuestContext* context_{};

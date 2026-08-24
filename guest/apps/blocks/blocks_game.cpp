@@ -2,12 +2,12 @@
 
 namespace blocks {
 
-BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Graphics graphics,
-                       micropixel::GraphicsInfo graphics_info, micropixel::Audio audio, bool audio_available,
+BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer renderer,
+                       micropixel::RendererInfo renderer_info, micropixel::Audio audio, bool audio_available,
                        uint32_t best_score)
     : app_(app),
-      graphics_(graphics),
-      graphics_info_(graphics_info),
+      renderer_(renderer),
+      renderer_info_(renderer_info),
       audio_(audio),
       best_score_(best_score),
       audio_available_(audio_available) {
@@ -15,18 +15,18 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Graphics graphi
     model_.Reset(kDefaultRandomSeed);
 }
 
-void BlocksGame::set_bitmaps(micropixel::Bitmap board, micropixel::Bitmap start, micropixel::Bitmap restart) {
+void BlocksGame::set_textures(micropixel::Texture board, micropixel::Texture start, micropixel::Texture restart) {
     micropixel::AssertThat(board.width() == static_cast<uint32_t>(kBoardAssetWidth) &&
                                board.height() == static_cast<uint32_t>(kBoardAssetHeight),
-                           "blocks: board bitmap dimensions invalid");
+                           "blocks: board texture dimensions invalid");
     micropixel::AssertThat(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
                                start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
                                restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
                                restart.height() == static_cast<uint32_t>(kActionButtonHeight),
-                           "blocks: button bitmap dimensions invalid");
-    board_bitmap_ = static_cast<micropixel::Bitmap&&>(board);
-    start_button_bitmap_ = static_cast<micropixel::Bitmap&&>(start);
-    restart_button_bitmap_ = static_cast<micropixel::Bitmap&&>(restart);
+                           "blocks: button texture dimensions invalid");
+    board_texture_ = static_cast<micropixel::Texture&&>(board);
+    start_button_texture_ = static_cast<micropixel::Texture&&>(start);
+    restart_button_texture_ = static_cast<micropixel::Texture&&>(restart);
     InitializePlayfieldSurfaces();
 }
 

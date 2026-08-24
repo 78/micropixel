@@ -56,10 +56,10 @@ void RetainedSurface::Release() {
     Bind(bound_display, bound_panel, bound_width, bound_height);
 }
 
-bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_begin_surface_command_t& command,
+bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_push_state_command_t& command,
                                 bool background_valid, uint32_t background_rgb888) {
     if (configured_) {
-        return x_ == command.x && y_ == command.y && width_ == command.width && height_ == command.height;
+        return x_ == command.clip_x && y_ == command.clip_y && width_ == command.width && height_ == command.height;
     }
     if (display_ == nullptr || panel_ == nullptr) {
         return false;
@@ -99,7 +99,7 @@ bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_begin_
 
     background_rgb888_ = background_valid ? background_rgb888 : 0U;
     frame_ = lv_obj_create(root);
-    lv_obj_set_pos(frame_, command.x, command.y);
+    lv_obj_set_pos(frame_, command.clip_x, command.clip_y);
     lv_obj_set_size(frame_, command.width, command.height);
     lv_obj_set_style_pad_all(frame_, 0, 0);
     lv_obj_set_style_border_width(frame_, 0, 0);
@@ -110,8 +110,8 @@ bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_begin_
     lv_obj_remove_flag(frame_, LV_OBJ_FLAG_CLICKABLE);
 
     surface_bytes_ = static_cast<uint32_t>(surface_bytes);
-    x_ = command.x;
-    y_ = command.y;
+    x_ = command.clip_x;
+    y_ = command.clip_y;
     width_ = command.width;
     height_ = command.height;
     configured_ = true;
@@ -276,9 +276,9 @@ bool RetainedSurface::ComposeFrame(int32_t translate_x, int32_t translate_y, uin
     return true;
 }
 
-bool RetainedSurface::Update(const micropixel_graphics_begin_surface_command_t* request) {
+bool RetainedSurface::Update(const micropixel_graphics_push_state_command_t* request) {
     const bool requested_active =
-        request != nullptr && (request->flags & MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION_ACTIVE) != 0U;
+        request != nullptr && (request->flags & MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE) != 0U;
     if (!requested_active) {
         if (!active_) {
             return false;

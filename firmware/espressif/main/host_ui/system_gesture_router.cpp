@@ -79,7 +79,7 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
         return true;
     }
     if (sample.phase == device::TouchPhase::kDown && !candidate_.active) {
-        if (sample.x >= width_ || sample.y >= height_) {
+        if (sample.x < 0 || sample.y < 0 || sample.x >= width_ || sample.y >= height_) {
             return Forward(sample);
         }
         Edge edge = Edge::kNone;

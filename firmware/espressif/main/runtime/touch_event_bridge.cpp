@@ -35,7 +35,7 @@ bool TouchEventBridge::Push(const device::TouchSample& sample) {
     micropixel_touch_event_payload_t payload{};
     payload.x = sample.x;
     payload.y = sample.y;
-    payload.pressure = sample.pressure;
+    payload.pressure_per_mille = sample.pressure_per_mille;
     switch (sample.phase) {
         case device::TouchPhase::kDown:
             payload.phase = MICROPIXEL_TOUCH_DOWN;

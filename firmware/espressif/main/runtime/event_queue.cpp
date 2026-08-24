@@ -43,6 +43,29 @@ bool IsTouchMove(const micropixel_event_t& event) {
     return payload.phase == MICROPIXEL_TOUCH_MOVE;
 }
 
+uint64_t SaturatingAdd(uint64_t left, uint64_t right) { return right > UINT64_MAX - left ? UINT64_MAX : left + right; }
+
+uint32_t SaturatingAdd(uint32_t left, uint32_t right) { return right > UINT32_MAX - left ? UINT32_MAX : left + right; }
+
+void MergeTimerEvent(micropixel_event_t& aggregate, const micropixel_event_t& incoming, uint32_t additionally_missed) {
+    micropixel_timer_event_payload_t accumulated_payload{};
+    micropixel_timer_event_payload_t incoming_payload{};
+    std::memcpy(&accumulated_payload, aggregate.payload, sizeof(accumulated_payload));
+    std::memcpy(&incoming_payload, incoming.payload, sizeof(incoming_payload));
+    incoming_payload.elapsed_us = SaturatingAdd(accumulated_payload.elapsed_us, incoming_payload.elapsed_us);
+    incoming_payload.missed_count = SaturatingAdd(
+        SaturatingAdd(accumulated_payload.missed_count, incoming_payload.missed_count), additionally_missed);
+    aggregate = incoming;
+    std::memcpy(aggregate.payload, &incoming_payload, sizeof(incoming_payload));
+}
+
+void CountTimerEventAsMissed(micropixel_event_t& event) {
+    micropixel_timer_event_payload_t payload{};
+    std::memcpy(&payload, event.payload, sizeof(payload));
+    payload.missed_count = SaturatingAdd(payload.missed_count, 1U);
+    std::memcpy(event.payload, &payload, sizeof(payload));
+}
+
 }  // namespace
 
 EventQueue::EventQueue()
@@ -94,9 +117,14 @@ EventWaitResult EventQueue::Wait(micropixel_event_t& event, uint64_t timeout_us)
     if (event.service_id == MICROPIXEL_SERVICE_TIMER && event.event_id == MICROPIXEL_TIMER_EVENT_EXPIRED) {
         uint32_t encoded_index = event.source & 0xffU;
         if (encoded_index > 0U && encoded_index <= limits::kMaxTimers) {
-            uint32_t expected = event.source;
-            (void)periodic_pending_[encoded_index - 1U].compare_exchange_strong(expected, 0U,
-                                                                                std::memory_order_acq_rel);
+            const uint32_t slot = encoded_index - 1U;
+            portENTER_CRITICAL(&periodic_lock_);
+            if (periodic_pending_[slot] == event.source) {
+                event = periodic_latest_[slot];
+                periodic_pending_[slot] = 0U;
+                periodic_latest_[slot] = {};
+            }
+            portEXIT_CRITICAL(&periodic_lock_);
         }
     } else if (IsTouchMove(event)) {
         portENTER_CRITICAL(&touch_lock_);
@@ -185,15 +213,41 @@ PeriodicPushResult EventQueue::PushPeriodicCoalesced(const micropixel_event_t& e
         return PeriodicPushResult::kFailed;
     }
 
-    auto& pending = periodic_pending_[encoded_index - 1U];
-    uint32_t expected = 0U;
-    if (!pending.compare_exchange_strong(expected, event.source, std::memory_order_acq_rel)) {
+    const uint32_t slot = encoded_index - 1U;
+    portENTER_CRITICAL(&periodic_lock_);
+    if (periodic_pending_[slot] == event.source) {
+        MergeTimerEvent(periodic_latest_[slot], event, 1U);
+        portEXIT_CRITICAL(&periodic_lock_);
         return PeriodicPushResult::kCoalesced;
     }
+    if (periodic_pending_[slot] != 0U) {
+        portEXIT_CRITICAL(&periodic_lock_);
+        return xQueueSend(queue_, &event, 0U) == pdTRUE ? PeriodicPushResult::kEnqueued : PeriodicPushResult::kFailed;
+    }
+
+    periodic_latest_[slot] = event;
+    if (periodic_carry_valid_[slot]) {
+        if (periodic_carry_[slot].source == event.source) {
+            micropixel_event_t current = periodic_latest_[slot];
+            periodic_latest_[slot] = periodic_carry_[slot];
+            MergeTimerEvent(periodic_latest_[slot], current, 0U);
+        }
+        periodic_carry_[slot] = {};
+        periodic_carry_valid_[slot] = false;
+    }
+    periodic_pending_[slot] = event.source;
+    portEXIT_CRITICAL(&periodic_lock_);
 
     if (xQueueSend(queue_, &event, 0) != pdTRUE) {
-        expected = event.source;
-        (void)pending.compare_exchange_strong(expected, 0U, std::memory_order_acq_rel);
+        portENTER_CRITICAL(&periodic_lock_);
+        if (periodic_pending_[slot] == event.source) {
+            periodic_carry_[slot] = periodic_latest_[slot];
+            CountTimerEventAsMissed(periodic_carry_[slot]);
+            periodic_carry_valid_[slot] = true;
+            periodic_pending_[slot] = 0U;
+            periodic_latest_[slot] = {};
+        }
+        portEXIT_CRITICAL(&periodic_lock_);
         return PeriodicPushResult::kFailed;
     }
     return PeriodicPushResult::kEnqueued;

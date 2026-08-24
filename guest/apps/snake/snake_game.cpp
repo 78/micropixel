@@ -2,15 +2,14 @@
 
 namespace snake {
 
-SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Graphics graphics,
-                     micropixel::GraphicsInfo graphics_info, micropixel::Audio audio, bool audio_available,
+SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer,
+                     micropixel::RendererInfo renderer_info, micropixel::Audio audio, bool audio_available,
                      uint32_t best_score)
     : app_(app),
-      graphics_(graphics),
-      graphics_info_(graphics_info),
+      renderer_(renderer),
+      renderer_info_(renderer_info),
       audio_(audio),
       best_score_(best_score),
-      surface_translation_available_(graphics_info.supports_surface_translation()),
       audio_available_(audio_available) {
     screen_button_.SetBounds(kStartButtonRect);
     pause_touch_button_.SetBounds(kPauseTouchRect);
@@ -18,9 +17,7 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Graphics graphics
     SnapshotBody();
     ResetBodySlotMapping();
     app_.log().Info("snake: M18 menu ready");
-    app_.log().Info(surface_translation_available_
-                        ? "snake: compositor surface translation enabled"
-                        : "snake: compositor surface unavailable; using edge-impact fallback");
+    app_.log().Info("snake: renderer state translation enabled");
 }
 
 void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {

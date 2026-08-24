@@ -119,6 +119,8 @@ ServiceCache input_service;
 ServiceCache audio_service;
 micropixel_graphics_info_t cached_graphics_info{};
 bool graphics_info_loaded{};
+micropixel_input_info_t cached_input_info{};
+bool input_info_loaded{};
 
 int32_t OpenService(ServiceCache& cache, uint32_t service_id, uint16_t interface_major, uint16_t minimum_minor) {
     if (!cache.attempted) {
@@ -149,7 +151,36 @@ int32_t CallVoid(ServiceCache& cache, uint32_t method_id, const void* request, u
     return status == MICROPIXEL_STATUS_OK && response_size != 0U ? MICROPIXEL_STATUS_INTERNAL : status;
 }
 
-int32_t OpenOffscreenSurfaceService() {
+const micropixel_input_info_t& LoadInputInfo() {
+    if (!input_info_loaded) {
+        RequireOk(OpenService(input_service, MICROPIXEL_SERVICE_INPUT, 1U, 0U), "input.open");
+        uint32_t response_size = 0U;
+        RequireOk(CallService(input_service, MICROPIXEL_INPUT_METHOD_GET_INFO, nullptr, 0U, &cached_input_info,
+                              sizeof(cached_input_info), response_size),
+                  "input.info");
+        if (response_size < sizeof(cached_input_info) || cached_input_info.size < sizeof(cached_input_info) ||
+            cached_input_info.interface_major != 1U || cached_input_info.logical_width == 0U ||
+            cached_input_info.logical_height == 0U || cached_input_info.max_touch_points == 0U ||
+            cached_input_info.max_touch_points > MICROPIXEL_MAX_TOUCH_POINTS) {
+            micropixel::runtime::Panic("input.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
+        }
+        input_info_loaded = true;
+    }
+    return cached_input_info;
+}
+
+void WriteLog(uint32_t level, const char* message, const char* operation) {
+    if (message == nullptr) {
+        micropixel::runtime::Panic(operation, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    const uint32_t length = BoundedLength(message);
+    if (length == MICROPIXEL_ABI_MAX_LOG_BYTES) {
+        micropixel::runtime::Panic(operation, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    RequireOk(micropixel_log_write(level, reinterpret_cast<const uint8_t*>(message), length), operation);
+}
+
+int32_t OpenResourceService() {
     const int32_t status = OpenService(resource_service, MICROPIXEL_SERVICE_RESOURCE,
                                        MICROPIXEL_RESOURCE_INTERFACE_MAJOR, MICROPIXEL_RESOURCE_INTERFACE_MINOR);
     if (status != MICROPIXEL_STATUS_OK) {
@@ -237,9 +268,9 @@ namespace micropixel::runtime {
 
 namespace micropixel {
 
-static_assert(CommandBuffer::kCapacityBytes == MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES,
+static_assert(Frame::kCapacityBytes == MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES,
               "SDK/ABI graphics command byte capacity drifted");
-static_assert(CommandBuffer::kCapacityCommands == MICROPIXEL_GRAPHICS_MAX_COMMANDS,
+static_assert(Frame::kCapacityCommands == MICROPIXEL_GRAPHICS_MAX_COMMANDS,
               "SDK/ABI graphics command count capacity drifted");
 
 Result<uint32_t> KVStore::GetU32(const char* key) const {
@@ -329,16 +360,13 @@ Result<void> KVStore::Remove(const char* key) const {
     __builtin_trap();
 }
 
-void Log::Info(const char* message) const {
-    if (message == nullptr) {
-        runtime::Panic("log.info", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    uint32_t length = BoundedLength(message);
-    if (length == MICROPIXEL_ABI_MAX_LOG_BYTES) {
-        runtime::Panic("log.info", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    RequireOk(micropixel_log_write(MICROPIXEL_LOG_INFO, reinterpret_cast<const uint8_t*>(message), length), "log.info");
-}
+void Log::Debug(const char* message) const { WriteLog(MICROPIXEL_LOG_DEBUG, message, "log.debug"); }
+
+void Log::Info(const char* message) const { WriteLog(MICROPIXEL_LOG_INFO, message, "log.info"); }
+
+void Log::Warning(const char* message) const { WriteLog(MICROPIXEL_LOG_WARNING, message, "log.warning"); }
+
+void Log::Error(const char* message) const { WriteLog(MICROPIXEL_LOG_ERROR, message, "log.error"); }
 
 TimePoint Clock::Now() const { return TimePoint{micropixel_clock_now()}; }
 
@@ -425,7 +453,7 @@ Result<void> Audio::StopAll() const {
     return {};
 }
 
-Timer::~Timer() { Release(); }
+Timer::~Timer() { Reset(); }
 
 void Timer::Cancel() {
     micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
@@ -433,7 +461,7 @@ void Timer::Cancel() {
     RequireOk(CallVoid(timer_service, MICROPIXEL_TIMER_METHOD_CANCEL, &request, sizeof(request)), "timer.cancel");
 }
 
-void Timer::Release() {
+void Timer::Reset() {
     if (handle_ != 0U) {
         micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
         int32_t status = OpenService(timer_service, MICROPIXEL_SERVICE_TIMER, 1U, 0U);
@@ -441,7 +469,7 @@ void Timer::Release() {
             status = CallVoid(timer_service, MICROPIXEL_TIMER_METHOD_RELEASE, &request, sizeof(request));
         }
         handle_ = 0U;
-        RequireOk(status, "timer.release");
+        (void)status;
     }
 }
 
@@ -479,7 +507,7 @@ Timer Timers::Every(Duration period) const {
     return timer;
 }
 
-GraphicsInfo Graphics::info() const {
+RendererInfo Renderer::info() const {
     RequireOk(OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
                           MICROPIXEL_GRAPHICS_INTERFACE_MINOR),
               "graphics.open");
@@ -490,40 +518,62 @@ GraphicsInfo Graphics::info() const {
                   "graphics.info");
         if (response_size < sizeof(cached_graphics_info) || cached_graphics_info.size < sizeof(cached_graphics_info) ||
             cached_graphics_info.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
-            cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB888 ||
-            cached_graphics_info.max_command_bytes < CommandBuffer::kCapacityBytes ||
-            cached_graphics_info.max_commands == 0U) {
+            cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 || cached_graphics_info.width == 0U ||
+            cached_graphics_info.height == 0U || cached_graphics_info.max_command_bytes < Frame::kCapacityBytes ||
+            cached_graphics_info.max_commands == 0U || cached_graphics_info.max_draw_operations == 0U ||
+            cached_graphics_info.max_frame_commands < cached_graphics_info.max_draw_operations) {
             runtime::Panic("graphics.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         graphics_info_loaded = true;
     }
     const micropixel_graphics_info_t& raw = cached_graphics_info;
-    return GraphicsInfo{raw.width,        raw.height,         raw.capabilities,      raw.max_command_bytes,
-                        raw.max_commands, raw.max_text_bytes, raw.max_frame_commands};
+    return RendererInfo{
+        raw.width, raw.height, raw.capabilities, raw.max_commands, raw.max_draw_operations, raw.max_frame_commands};
 }
 
-CommandBuffer Graphics::CreateCommandBuffer() const {
-    const GraphicsInfo graphics_info = info();
-    return CreateCommandBuffer(graphics_info);
-}
-
-CommandBuffer Graphics::CreateCommandBuffer(const GraphicsInfo& graphics_info) const {
-    return CommandBuffer{CommandBuffer::CapabilityToken{}, graphics_info.max_commands(), graphics_info.max_commands(),
-                         false};
-}
-
-void CommandBuffer::Reset() {
-    if (frame_command_count_ != 0U && auto_submit_) {
-        runtime::Panic("graphics.frame_buffer.reset", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    logical_command_count_ = 0U;
-    frame_command_count_ = 0U;
-    surface_active_ = false;
-    submitted_ = false;
+Frame::Frame(CapabilityToken, const RendererInfo& info)
+    : max_batch_commands_(info.max_batch_commands() < kCapacityCommands ? info.max_batch_commands()
+                                                                        : kCapacityCommands),
+      max_draw_operations_(info.max_draw_operations()),
+      max_frame_commands_(info.max_frame_commands()),
+      display_bounds_{0, 0, static_cast<int32_t>(info.width()), static_cast<int32_t>(info.height())},
+      retained_translation_available_(info.retained_translation_available()),
+      multi_submit_available_(info.multi_submit_available()) {
+    states_[0].clip = display_bounds_;
+    states_[0].clip_limit = display_bounds_;
     ResetBatch();
 }
 
-void CommandBuffer::ResetBatch() {
+Frame::Frame(Frame&& other) noexcept
+    : size_(other.size_),
+      batch_command_count_(other.batch_command_count_),
+      draw_operation_count_(other.draw_operation_count_),
+      frame_command_count_(other.frame_command_count_),
+      max_batch_commands_(other.max_batch_commands_),
+      max_draw_operations_(other.max_draw_operations_),
+      max_frame_commands_(other.max_frame_commands_),
+      display_bounds_(other.display_bounds_),
+      retained_clip_(other.retained_clip_),
+      retained_translation_(other.retained_translation_),
+      state_depth_(other.state_depth_),
+      encoded_state_depth_(other.encoded_state_depth_),
+      retained_scope_count_(other.retained_scope_count_),
+      failure_status_(other.failure_status_),
+      retained_translation_available_(other.retained_translation_available_),
+      multi_submit_available_(other.multi_submit_available_),
+      retained_scope_selected_(other.retained_scope_selected_),
+      state_encoded_(other.state_encoded_),
+      host_frame_active_(other.host_frame_active_),
+      presented_(other.presented_) {
+    CopyBytes(bytes_, other.bytes_, sizeof(bytes_));
+    CopyBytes(states_, other.states_, sizeof(states_));
+    other.host_frame_active_ = false;
+    other.presented_ = true;
+}
+
+Frame::~Frame() { Cancel(); }
+
+void Frame::ResetBatch() {
     ClearBytes(bytes_, sizeof(micropixel_graphics_command_header_t));
     micropixel_graphics_command_header_t header{};
     header.magic = MICROPIXEL_GRAPHICS_COMMAND_MAGIC;
@@ -535,10 +585,14 @@ void CommandBuffer::ResetBatch() {
     batch_command_count_ = 0U;
 }
 
-uint8_t* CommandBuffer::AppendUnchecked(uint32_t bytes) {
-    if (bytes == 0U || bytes > kCapacityBytes - size_ || batch_command_count_ >= max_commands_ ||
+uint8_t* Frame::AppendUnchecked(uint32_t bytes) {
+    if (failure_status_ != MICROPIXEL_STATUS_OK) {
+        return DiscardRecord(bytes);
+    }
+    if (bytes == 0U || bytes > kCapacityBytes - size_ || batch_command_count_ >= max_batch_commands_ ||
         frame_command_count_ >= max_frame_commands_) {
-        runtime::Panic("graphics.command_buffer.capacity", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        return DiscardRecord(bytes);
     }
     uint8_t* record = bytes_ + size_;
     ClearBytes(record, bytes);
@@ -548,68 +602,141 @@ uint8_t* CommandBuffer::AppendUnchecked(uint32_t bytes) {
     return record;
 }
 
-void CommandBuffer::SubmitBatch() {
+uint8_t* Frame::DiscardRecord(uint32_t bytes) {
+    if (bytes == 0U || bytes > sizeof(discard_record_)) {
+        runtime::Panic("graphics.frame.record_size", MICROPIXEL_STATUS_INTERNAL);
+    }
+    ClearBytes(discard_record_, bytes);
+    return discard_record_;
+}
+
+void Frame::Fail(int32_t status) {
+    if (failure_status_ == MICROPIXEL_STATUS_OK) {
+        failure_status_ = status == MICROPIXEL_STATUS_OK ? MICROPIXEL_STATUS_INTERNAL : status;
+    }
+}
+
+bool Frame::StartHostFrame() {
+    if (host_frame_active_) {
+        return true;
+    }
+    if (!multi_submit_available_) {
+        Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        return false;
+    }
+    int32_t status = OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
+                                 MICROPIXEL_GRAPHICS_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_BEGIN, nullptr, 0U);
+    }
+    if (status != MICROPIXEL_STATUS_OK) {
+        Fail(status);
+        return false;
+    }
+    host_frame_active_ = true;
+    return true;
+}
+
+bool Frame::SubmitBatch() {
     if (batch_command_count_ == 0U) {
-        return;
+        return true;
     }
     micropixel_graphics_command_header_t header{};
     CopyBytes(&header, bytes_, sizeof(header));
     header.total_size = size_;
     header.command_count = batch_command_count_;
     CopyBytes(bytes_, &header, sizeof(header));
-    RequireOk(OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-                          MICROPIXEL_GRAPHICS_INTERFACE_MINOR),
-              "graphics.submit.open");
-    RequireOk(
-        micropixel_service_submit(graphics_service.info.handle, MICROPIXEL_GRAPHICS_CHANNEL_COMMANDS, bytes_, size_),
-        "graphics.submit");
+    int32_t status = OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
+                                 MICROPIXEL_GRAPHICS_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = micropixel_service_submit(graphics_service.info.handle, MICROPIXEL_GRAPHICS_CHANNEL_COMMANDS, bytes_,
+                                           size_);
+    }
+    if (status != MICROPIXEL_STATUS_OK) {
+        Fail(status);
+        return false;
+    }
+    return true;
 }
 
-void CommandBuffer::ContinueSurfaceInNewBatch() {
-    micropixel_graphics_end_surface_command_t end{};
-    end.record.opcode = MICROPIXEL_GRAPHICS_OP_END_SURFACE;
-    end.record.size = sizeof(end);
-    CopyBytes(AppendUnchecked(sizeof(end)), &end, sizeof(end));
-    SubmitBatch();
+void Frame::CloseEncodedState() {
+    micropixel_graphics_pop_state_command_t command{};
+    command.record.opcode = MICROPIXEL_GRAPHICS_OP_POP_STATE;
+    command.record.size = sizeof(command);
+    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
+    state_encoded_ = false;
+    encoded_state_depth_ = 0U;
+}
+
+void Frame::ContinueStateInNewBatch() {
+    const uint32_t continued_depth = encoded_state_depth_;
+    CloseEncodedState();
+    if (!SubmitBatch()) {
+        return;
+    }
     ResetBatch();
 
-    micropixel_graphics_begin_surface_command_t begin{};
-    begin.record.opcode = MICROPIXEL_GRAPHICS_OP_BEGIN_SURFACE;
-    begin.record.size = sizeof(begin);
-    begin.x = surface_bounds_.x;
-    begin.y = surface_bounds_.y;
-    begin.width = surface_bounds_.width;
-    begin.height = surface_bounds_.height;
-    begin.translate_x = surface_translation_.x;
-    begin.translate_y = surface_translation_.y;
-    begin.flags = surface_translation_active_ ? MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION_ACTIVE : 0U;
-    CopyBytes(AppendUnchecked(sizeof(begin)), &begin, sizeof(begin));
+    micropixel_graphics_push_state_command_t command{};
+    command.record.opcode = MICROPIXEL_GRAPHICS_OP_PUSH_STATE;
+    command.record.size = sizeof(command);
+    command.clip_x = retained_clip_.x;
+    command.clip_y = retained_clip_.y;
+    command.width = retained_clip_.width;
+    command.height = retained_clip_.height;
+    command.translate_x = retained_translation_.x;
+    command.translate_y = retained_translation_.y;
+    command.flags = (retained_translation_.x != 0 || retained_translation_.y != 0)
+                        ? MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE
+                        : 0U;
+    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
+    if (failure_status_ == MICROPIXEL_STATUS_OK) {
+        state_encoded_ = true;
+        encoded_state_depth_ = continued_depth;
+    }
 }
 
-uint8_t* CommandBuffer::Append(uint32_t bytes) {
-    if (submitted_ || bytes == 0U) {
-        runtime::Panic("graphics.command_buffer.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+uint8_t* Frame::Append(uint32_t bytes) {
+    if (presented_ || bytes == 0U) {
+        runtime::Panic("graphics.frame.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    const uint32_t reserved_commands = surface_active_ ? 1U : 0U;
-    const uint32_t reserved_bytes = surface_active_ ? sizeof(micropixel_graphics_end_surface_command_t) : 0U;
+    if (failure_status_ != MICROPIXEL_STATUS_OK) {
+        return DiscardRecord(bytes);
+    }
+    if (draw_operation_count_ >= max_draw_operations_) {
+        Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        return DiscardRecord(bytes);
+    }
+    const uint32_t reserved_commands = state_encoded_ ? 1U : 0U;
+    const uint32_t reserved_bytes = state_encoded_ ? sizeof(micropixel_graphics_pop_state_command_t) : 0U;
     if (bytes > kCapacityBytes - size_ - reserved_bytes ||
-        batch_command_count_ + 1U + reserved_commands > max_commands_) {
-        if (!auto_submit_ || batch_command_count_ == 0U) {
-            runtime::Panic("graphics.command_buffer.capacity", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        batch_command_count_ + 1U + reserved_commands > max_batch_commands_) {
+        if (batch_command_count_ == 0U) {
+            Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+            return DiscardRecord(bytes);
         }
-        if (surface_active_) {
-            ContinueSurfaceInNewBatch();
+        if (!StartHostFrame()) {
+            return DiscardRecord(bytes);
+        }
+        if (state_encoded_) {
+            ContinueStateInNewBatch();
         } else {
-            SubmitBatch();
+            if (!SubmitBatch()) {
+                return DiscardRecord(bytes);
+            }
             ResetBatch();
         }
     }
     uint8_t* record = AppendUnchecked(bytes);
-    ++logical_command_count_;
+    if (failure_status_ == MICROPIXEL_STATUS_OK) {
+        ++draw_operation_count_;
+    }
     return record;
 }
 
-void CommandBuffer::Clear(Color color) {
+void Frame::Clear(Color color) {
+    if (state_depth_ != 0U) {
+        runtime::Panic("graphics.clear.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
     micropixel_graphics_clear_command_t command{};
     command.record.opcode = MICROPIXEL_GRAPHICS_OP_CLEAR;
     command.record.size = sizeof(command);
@@ -617,40 +744,149 @@ void CommandBuffer::Clear(Color color) {
     CopyBytes(Append(sizeof(command)), &command, sizeof(command));
 }
 
-void CommandBuffer::FillRect(Rect rect, Color color) {
-    if (rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0) {
+void Frame::EnsureStateEncoded() {
+    constexpr uint32_t kMaxRetainedScopesPerFrame = 4U;
+    if (state_depth_ == 0U || state_encoded_ || failure_status_ != MICROPIXEL_STATUS_OK ||
+        retained_scope_count_ >= kMaxRetainedScopesPerFrame) {
+        return;
+    }
+    const State& state = states_[state_depth_];
+    const Rect state_clip = StateClip();
+    if (state_clip.empty()) {
+        return;
+    }
+    const Rect wire_clip = state_clip.translated(-state.translation.x, -state.translation.y);
+    const int64_t translated_left = static_cast<int64_t>(wire_clip.x) + state.translation.x;
+    const int64_t translated_top = static_cast<int64_t>(wire_clip.y) + state.translation.y;
+    const int64_t translated_right = translated_left + wire_clip.width;
+    const int64_t translated_bottom = translated_top + wire_clip.height;
+    bool use_retained_translation =
+        retained_translation_available_ && state.translation.x >= -32 && state.translation.x <= 32 &&
+        state.translation.y >= -32 && state.translation.y <= 32 && translated_left >= display_bounds_.x &&
+        translated_top >= display_bounds_.y &&
+        translated_right <= static_cast<int64_t>(display_bounds_.x) + display_bounds_.width &&
+        translated_bottom <= static_cast<int64_t>(display_bounds_.y) + display_bounds_.height;
+    if (use_retained_translation && retained_scope_selected_ &&
+        (wire_clip != retained_clip_ || state.translation != retained_translation_)) {
+        use_retained_translation = false;
+    }
+    if (!use_retained_translation) {
+        return;
+    }
+    if (!retained_scope_selected_) {
+        retained_scope_selected_ = true;
+        retained_clip_ = wire_clip;
+        retained_translation_ = state.translation;
+    }
+
+    micropixel_graphics_push_state_command_t command{};
+    command.record.opcode = MICROPIXEL_GRAPHICS_OP_PUSH_STATE;
+    command.record.size = sizeof(command);
+    command.clip_x = wire_clip.x;
+    command.clip_y = wire_clip.y;
+    command.width = wire_clip.width;
+    command.height = wire_clip.height;
+    command.translate_x = state.translation.x;
+    command.translate_y = state.translation.y;
+    command.flags = (state.translation.x != 0 || state.translation.y != 0)
+                        ? MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE
+                        : 0U;
+    const uint32_t pop_size = sizeof(micropixel_graphics_pop_state_command_t);
+    if (sizeof(command) > kCapacityBytes - size_ - pop_size || batch_command_count_ + 2U > max_batch_commands_) {
+        if (batch_command_count_ == 0U) {
+            Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+            return;
+        }
+        if (!StartHostFrame() || !SubmitBatch()) {
+            return;
+        }
+        ResetBatch();
+    }
+    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
+    if (failure_status_ == MICROPIXEL_STATUS_OK) {
+        state_encoded_ = true;
+        encoded_state_depth_ = state_depth_;
+        ++retained_scope_count_;
+    }
+}
+
+Rect Frame::StateClip() const {
+    if (state_depth_ == 0U) {
+        return display_bounds_;
+    }
+    const State& state = states_[state_depth_];
+    return state.clip.translated(state.translation.x, state.translation.y)
+        .intersection(state.clip_limit)
+        .intersection(display_bounds_);
+}
+
+Rect Frame::EffectiveClip() const {
+    const Rect clip = StateClip();
+    return state_encoded_
+               ? clip.translated(-retained_translation_.x, -retained_translation_.y).intersection(retained_clip_)
+               : clip;
+}
+
+Point Frame::EffectiveTranslation() const {
+    if (state_depth_ == 0U) {
+        return {};
+    }
+    const Point translation = states_[state_depth_].translation;
+    return state_encoded_ ? Point{translation.x - retained_translation_.x, translation.y - retained_translation_.y}
+                          : translation;
+}
+
+void Frame::FillRect(Rect rect, Color color, uint8_t opacity) {
+    if (rect.empty()) {
         runtime::Panic("graphics.fill_rect.rect", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    micropixel_graphics_fill_rect_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_FILL_RECT;
-    command.record.size = sizeof(command);
-    command.x = rect.x;
-    command.y = rect.y;
-    command.width = rect.width;
-    command.height = rect.height;
-    command.rgb888 = color.rgb888_;
-    CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-}
-
-void CommandBuffer::BlendRect(Rect rect, Color color, uint8_t opacity) {
-    if (rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0) {
-        runtime::Panic("graphics.blend_rect.rect", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    if (state_depth_ != 0U) {
+        states_[state_depth_].draw_started = true;
     }
-    micropixel_graphics_blend_rect_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_RECT;
-    command.record.size = sizeof(command);
-    command.x = rect.x;
-    command.y = rect.y;
-    command.width = rect.width;
-    command.height = rect.height;
-    command.rgb888 = color.rgb888_;
-    command.opacity = opacity;
-    CopyBytes(Append(sizeof(command)), &command, sizeof(command));
+    EnsureStateEncoded();
+    const Point translation = EffectiveTranslation();
+    rect = rect.translated(translation.x, translation.y).intersection(EffectiveClip());
+    if (rect.empty()) {
+        return;
+    }
+    if (opacity == 255U) {
+        micropixel_graphics_fill_rect_command_t command{};
+        command.record.opcode = MICROPIXEL_GRAPHICS_OP_FILL_RECT;
+        command.record.size = sizeof(command);
+        command.x = rect.x;
+        command.y = rect.y;
+        command.width = rect.width;
+        command.height = rect.height;
+        command.rgb888 = color.rgb888_;
+        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
+    } else {
+        micropixel_graphics_blend_rect_command_t command{};
+        command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_RECT;
+        command.record.size = sizeof(command);
+        command.x = rect.x;
+        command.y = rect.y;
+        command.width = rect.width;
+        command.height = rect.height;
+        command.rgb888 = color.rgb888_;
+        command.opacity = opacity;
+        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
+    }
 }
 
-void CommandBuffer::DrawText(int32_t x, int32_t y, const char* text, Color color, uint16_t font_size_px) {
-    if (x < 0 || y < 0 || text == nullptr || font_size_px < 8U || font_size_px > 48U) {
+void Frame::DrawText(Point position, const char* text, Color color, uint16_t font_size_px) {
+    if (text == nullptr || font_size_px < 8U || font_size_px > 48U) {
         runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    if (state_depth_ != 0U) {
+        states_[state_depth_].draw_started = true;
+    }
+    EnsureStateEncoded();
+    const Point translation = EffectiveTranslation();
+    position.x += translation.x;
+    position.y += translation.y;
+    const Rect text_clip = EffectiveClip();
+    if (!text_clip.contains(position)) {
+        return;
     }
     uint32_t text_length = 0U;
     while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
@@ -666,8 +902,8 @@ void CommandBuffer::DrawText(int32_t x, int32_t y, const char* text, Color color
     micropixel_graphics_draw_text_command_t command{};
     command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_TEXT;
     command.record.size = static_cast<uint16_t>(record_size);
-    command.x = x;
-    command.y = y;
+    command.x = position.x;
+    command.y = position.y;
     command.rgb888 = color.rgb888_;
     command.font_size_px = font_size_px;
     command.text_length = static_cast<uint16_t>(text_length);
@@ -675,10 +911,20 @@ void CommandBuffer::DrawText(int32_t x, int32_t y, const char* text, Color color
     CopyBytes(record + sizeof(command), text, text_length);
 }
 
-void CommandBuffer::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color,
-                                     uint16_t font_size_px) {
-    if (center_x < 0 || y < 0 || text == nullptr || font_size_px < 8U || font_size_px > 48U) {
+void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, uint16_t font_size_px) {
+    if (text == nullptr || font_size_px < 8U || font_size_px > 48U) {
         runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    if (state_depth_ != 0U) {
+        states_[state_depth_].draw_started = true;
+    }
+    EnsureStateEncoded();
+    const Point translation = EffectiveTranslation();
+    center_x += translation.x;
+    y += translation.y;
+    const Rect text_clip = EffectiveClip();
+    if (!text_clip.contains(center_x, y)) {
+        return;
     }
     uint32_t text_length = 0U;
     while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
@@ -703,158 +949,188 @@ void CommandBuffer::DrawTextCentered(int32_t center_x, int32_t y, const char* te
     CopyBytes(record + sizeof(command), text, text_length);
 }
 
-void CommandBuffer::DrawBitmap(int32_t x, int32_t y, const Bitmap& bitmap) {
-    DrawBitmapRegion(x, y, bitmap,
-                     Rect{0, 0, static_cast<int32_t>(bitmap.width()), static_cast<int32_t>(bitmap.height())});
+void Frame::DrawTexture(Point position, const Texture& texture, uint8_t opacity) {
+    const Rect source{0, 0, static_cast<int32_t>(texture.width()), static_cast<int32_t>(texture.height())};
+    DrawTexture(Rect{position.x, position.y, source.width, source.height}, texture, source, opacity);
 }
 
-void CommandBuffer::DrawBitmapRegion(int32_t x, int32_t y, const Bitmap& bitmap, Rect source) {
-    if (x < 0 || y < 0 || !bitmap.valid() || source.x < 0 || source.y < 0 || source.width <= 0 || source.height <= 0 ||
-        static_cast<uint64_t>(source.x) + static_cast<uint32_t>(source.width) > bitmap.width() ||
-        static_cast<uint64_t>(source.y) + static_cast<uint32_t>(source.height) > bitmap.height()) {
-        runtime::Panic("graphics.draw_bitmap.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+void Frame::DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity) {
+    DrawTexture(Rect{position.x, position.y, source.width, source.height}, texture, source, opacity);
+}
+
+void Frame::DrawTexture(Rect destination, const Texture& texture, uint8_t opacity) {
+    DrawTexture(destination, texture,
+                Rect{0, 0, static_cast<int32_t>(texture.width()), static_cast<int32_t>(texture.height())}, opacity);
+}
+
+void Frame::DrawTexture(Rect destination, const Texture& texture, Rect source, uint8_t opacity) {
+    if (!texture.valid() || destination.empty() || source.x < 0 || source.y < 0 || source.empty() ||
+        static_cast<uint64_t>(source.x) + static_cast<uint32_t>(source.width) > texture.width() ||
+        static_cast<uint64_t>(source.y) + static_cast<uint32_t>(source.height) > texture.height()) {
+        runtime::Panic("graphics.draw_texture.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    micropixel_graphics_draw_bitmap_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_BITMAP;
-    command.record.size = sizeof(command);
-    command.bitmap = bitmap.handle_;
-    command.x = x;
-    command.y = y;
-    command.source_x = source.x;
-    command.source_y = source.y;
-    command.width = source.width;
-    command.height = source.height;
-    CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-}
-
-void CommandBuffer::BlendBitmap(int32_t x, int32_t y, const Bitmap& bitmap, uint8_t opacity) {
-    BlendBitmapRegion(x, y, bitmap,
-                      Rect{0, 0, static_cast<int32_t>(bitmap.width()), static_cast<int32_t>(bitmap.height())}, opacity);
-}
-
-void CommandBuffer::BlendBitmapRegion(int32_t x, int32_t y, const Bitmap& bitmap, Rect source, uint8_t opacity) {
-    if (x < 0 || y < 0 || !bitmap.valid() || source.x < 0 || source.y < 0 || source.width <= 0 || source.height <= 0 ||
-        static_cast<uint64_t>(source.x) + static_cast<uint32_t>(source.width) > bitmap.width() ||
-        static_cast<uint64_t>(source.y) + static_cast<uint32_t>(source.height) > bitmap.height()) {
-        runtime::Panic("graphics.blend_bitmap.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    if (state_depth_ != 0U) {
+        states_[state_depth_].draw_started = true;
     }
-    micropixel_graphics_blend_bitmap_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_BITMAP;
-    command.record.size = sizeof(command);
-    command.bitmap = bitmap.handle_;
-    command.x = x;
-    command.y = y;
-    command.source_x = source.x;
-    command.source_y = source.y;
-    command.width = source.width;
-    command.height = source.height;
-    command.opacity = opacity;
-    CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-}
-
-void CommandBuffer::BeginSurface(Rect bounds, Point translation, bool translation_active) {
-    if (surface_active_ || bounds.x < 0 || bounds.y < 0 || bounds.width <= 0 || bounds.height <= 0 ||
-        translation.x < -32 || translation.x > 32 || translation.y < -32 || translation.y > 32) {
-        runtime::Panic("graphics.begin_surface.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    micropixel_graphics_begin_surface_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_BEGIN_SURFACE;
-    command.record.size = sizeof(command);
-    command.x = bounds.x;
-    command.y = bounds.y;
-    command.width = bounds.width;
-    command.height = bounds.height;
-    command.translate_x = translation.x;
-    command.translate_y = translation.y;
-    command.flags = translation_active ? MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION_ACTIVE : 0U;
-    CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-    surface_bounds_ = bounds;
-    surface_translation_ = translation;
-    surface_translation_active_ = translation_active;
-    surface_active_ = true;
-}
-
-void CommandBuffer::EndSurface() {
-    if (!surface_active_ || submitted_) {
-        runtime::Panic("graphics.end_surface.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    micropixel_graphics_end_surface_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_END_SURFACE;
-    command.record.size = sizeof(command);
-    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
-    ++logical_command_count_;
-    surface_active_ = false;
-}
-
-void CommandBuffer::Submit() {
-    if (submitted_ || surface_active_) {
-        runtime::Panic("graphics.submit.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    SubmitBatch();
-    submitted_ = true;
-}
-
-GraphicsFrame::GraphicsFrame(GraphicsFrame&& other) noexcept : active_(other.active_) {
-    other.active_ = false;
-}
-
-GraphicsFrame::~GraphicsFrame() {
-    if (active_) {
-        Commit();
-    }
-}
-
-CommandBuffer GraphicsFrame::CreateCommandBuffer(const GraphicsInfo& graphics_info) const {
-    if (!active_ || !graphics_info.supports_multi_submit_frames()) {
-        runtime::Panic("graphics.frame.buffer", MICROPIXEL_STATUS_UNSUPPORTED);
-    }
-    return CommandBuffer{CommandBuffer::CapabilityToken{}, graphics_info.max_commands(),
-                         graphics_info.max_frame_commands(), true};
-}
-
-void GraphicsFrame::Commit() {
-    if (!active_) {
+    EnsureStateEncoded();
+    const Point translation = EffectiveTranslation();
+    destination = destination.translated(translation.x, translation.y);
+    const Rect clipped = destination.intersection(EffectiveClip());
+    if (clipped.empty()) {
         return;
     }
-    active_ = false;
-    RequireOk(OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-                          MICROPIXEL_GRAPHICS_INTERFACE_MINOR),
-              "graphics.frame.commit.open");
-    RequireOk(CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_COMMIT, nullptr, 0U),
-              "graphics.frame.commit");
+    const int64_t left_offset = static_cast<int64_t>(clipped.x) - destination.x;
+    const int64_t top_offset = static_cast<int64_t>(clipped.y) - destination.y;
+    const int64_t right_offset = left_offset + clipped.width;
+    const int64_t bottom_offset = top_offset + clipped.height;
+    const int32_t source_left = source.x + static_cast<int32_t>(left_offset * source.width / destination.width);
+    const int32_t source_top = source.y + static_cast<int32_t>(top_offset * source.height / destination.height);
+    const int32_t source_right =
+        source.x + static_cast<int32_t>((right_offset * source.width + destination.width - 1) / destination.width);
+    const int32_t source_bottom =
+        source.y + static_cast<int32_t>((bottom_offset * source.height + destination.height - 1) / destination.height);
+    source = Rect{source_left, source_top, source_right - source_left, source_bottom - source_top};
+    if (opacity == 255U) {
+        micropixel_graphics_draw_texture_command_t command{};
+        command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE;
+        command.record.size = sizeof(command);
+        command.texture = texture.handle_;
+        command.x = clipped.x;
+        command.y = clipped.y;
+        command.width = clipped.width;
+        command.height = clipped.height;
+        command.source_x = source.x;
+        command.source_y = source.y;
+        command.source_width = source.width;
+        command.source_height = source.height;
+        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
+    } else {
+        micropixel_graphics_blend_texture_command_t command{};
+        command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE;
+        command.record.size = sizeof(command);
+        command.texture = texture.handle_;
+        command.x = clipped.x;
+        command.y = clipped.y;
+        command.width = clipped.width;
+        command.height = clipped.height;
+        command.source_x = source.x;
+        command.source_y = source.y;
+        command.source_width = source.width;
+        command.source_height = source.height;
+        command.opacity = opacity;
+        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
+    }
 }
 
-GraphicsFrame Graphics::BeginFrame() const {
-    const GraphicsInfo graphics_info = info();
-    if (!graphics_info.supports_multi_submit_frames()) {
-        runtime::Panic("graphics.frame.unsupported", MICROPIXEL_STATUS_UNSUPPORTED);
-    }
-    RequireOk(CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_BEGIN, nullptr, 0U),
-              "graphics.frame.begin");
-    return GraphicsFrame{GraphicsFrame::CapabilityToken{}};
+void Frame::DrawTexture(Point position, const StreamingTexture& texture, uint8_t opacity) {
+    DrawTexture(position, texture.texture_, opacity);
 }
+
+void Frame::DrawTexture(Point position, const StreamingTexture& texture, Rect source, uint8_t opacity) {
+    DrawTexture(position, texture.texture_, source, opacity);
+}
+
+void Frame::DrawTexture(Rect destination, const StreamingTexture& texture, uint8_t opacity) {
+    DrawTexture(destination, texture.texture_, opacity);
+}
+
+void Frame::DrawTexture(Rect destination, const StreamingTexture& texture, Rect source, uint8_t opacity) {
+    DrawTexture(destination, texture.texture_, source, opacity);
+}
+
+void Frame::Save() {
+    if (presented_ || state_depth_ >= kMaxStateDepth) {
+        runtime::Panic("graphics.save.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    states_[state_depth_ + 1U] = states_[state_depth_];
+    states_[state_depth_ + 1U].clip_limit = StateClip();
+    states_[state_depth_ + 1U].draw_started = false;
+    ++state_depth_;
+}
+
+void Frame::SetClipRect(Rect clip) {
+    if (state_depth_ == 0U || states_[state_depth_].draw_started || clip.empty()) {
+        runtime::Panic("graphics.clip.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    states_[state_depth_].clip = clip;
+}
+
+void Frame::Translate(Point offset) {
+    if (state_depth_ == 0U || states_[state_depth_].draw_started) {
+        runtime::Panic("graphics.translate.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    const int64_t x = static_cast<int64_t>(states_[state_depth_].translation.x) + offset.x;
+    const int64_t y = static_cast<int64_t>(states_[state_depth_].translation.y) + offset.y;
+    if (x <= INT32_MIN || x > INT32_MAX || y <= INT32_MIN || y > INT32_MAX) {
+        runtime::Panic("graphics.translate.range", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    states_[state_depth_].translation = Point{static_cast<int32_t>(x), static_cast<int32_t>(y)};
+}
+
+void Frame::Restore() {
+    if (state_depth_ == 0U || presented_) {
+        runtime::Panic("graphics.restore.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    if (state_encoded_ && encoded_state_depth_ == state_depth_) {
+        CloseEncodedState();
+    }
+    --state_depth_;
+}
+
+Result<void> Frame::Present() {
+    if (presented_ || state_depth_ != 0U) {
+        runtime::Panic("graphics.present.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    presented_ = true;
+    if (failure_status_ != MICROPIXEL_STATUS_OK) {
+        const int32_t status = failure_status_;
+        Cancel();
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (draw_operation_count_ == 0U) {
+        return {};
+    }
+    if (!SubmitBatch()) {
+        const int32_t status = failure_status_;
+        Cancel();
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (host_frame_active_) {
+        const int32_t status = CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_COMMIT, nullptr, 0U);
+        if (status != MICROPIXEL_STATUS_OK) {
+            Cancel();
+            return unexpected(ErrorFromStatus(status));
+        }
+        host_frame_active_ = false;
+    }
+    return {};
+}
+
+void Frame::Cancel() {
+    if (host_frame_active_) {
+        if (OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
+                        MICROPIXEL_GRAPHICS_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
+            (void)CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_CANCEL, nullptr, 0U);
+        }
+        host_frame_active_ = false;
+    }
+    presented_ = true;
+}
+
+Frame Renderer::BeginFrame() const { return Frame{Frame::CapabilityToken{}, info()}; }
 
 InputInfo Input::info() const {
-    micropixel_input_info_t raw{};
-    RequireOk(OpenService(input_service, MICROPIXEL_SERVICE_INPUT, 1U, 0U), "input.open");
-    uint32_t response_size = 0U;
-    RequireOk(
-        CallService(input_service, MICROPIXEL_INPUT_METHOD_GET_INFO, nullptr, 0U, &raw, sizeof(raw), response_size),
-        "input.info");
-    if (response_size < sizeof(raw) || raw.size < sizeof(raw) || raw.interface_major != 1U ||
-        raw.max_touch_points == 0U || raw.max_touch_points > MICROPIXEL_MAX_TOUCH_POINTS) {
-        runtime::Panic("input.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
-    }
-    return InputInfo{raw.logical_width, raw.logical_height, raw.max_touch_points};
+    const micropixel_input_info_t& raw = LoadInputInfo();
+    return InputInfo{raw.logical_width, raw.logical_height, raw.max_touch_points, raw.capabilities};
 }
 
-Bitmap::Bitmap(Bitmap&& other) noexcept : handle_(other.handle_), width_(other.width_), height_(other.height_) {
+Texture::Texture(Texture&& other) noexcept : handle_(other.handle_), width_(other.width_), height_(other.height_) {
     other.handle_ = 0U;
 }
 
-Bitmap& Bitmap::operator=(Bitmap&& other) noexcept {
+Texture& Texture::operator=(Texture&& other) noexcept {
     if (this != &other) {
-        Release();
+        Reset();
         handle_ = other.handle_;
         width_ = other.width_;
         height_ = other.height_;
@@ -863,13 +1139,13 @@ Bitmap& Bitmap::operator=(Bitmap&& other) noexcept {
     return *this;
 }
 
-Bitmap::~Bitmap() { Release(); }
+Texture::~Texture() { Reset(); }
 
-void Bitmap::Release() {
+void Texture::Reset() {
     if (handle_ != 0U) {
         micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
-        if (OpenService(resource_service, MICROPIXEL_SERVICE_RESOURCE, 1U, 0U) == MICROPIXEL_STATUS_OK) {
-            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_BITMAP_RELEASE, &request, sizeof(request));
+        if (OpenResourceService() == MICROPIXEL_STATUS_OK) {
+            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_RELEASE, &request, sizeof(request));
         }
         handle_ = 0U;
         width_ = 0U;
@@ -877,28 +1153,32 @@ void Bitmap::Release() {
     }
 }
 
-void OffscreenSurface::Update(Rect dirty, const uint8_t* pixels, uint32_t stride) {
+Result<void> StreamingTexture::Update(Rect dirty, const uint8_t* pixels, uint32_t byte_length, uint32_t pitch) {
     const uint32_t bytes_per_pixel =
-        pixel_format_ == SurfacePixelFormat::kRgb888 ? 3U : (pixel_format_ == SurfacePixelFormat::kArgb8888 ? 4U : 0U);
+        pixel_format_ == PixelFormat::kBgr888 ? 3U : (pixel_format_ == PixelFormat::kBgra8888 ? 4U : 0U);
     if (!valid() || dirty.x < 0 || dirty.y < 0 || dirty.width <= 0 || dirty.height <= 0 || pixels == nullptr ||
         bytes_per_pixel == 0U || static_cast<int64_t>(dirty.x) + dirty.width > static_cast<int64_t>(width()) ||
         static_cast<int64_t>(dirty.y) + dirty.height > static_cast<int64_t>(height())) {
-        runtime::Panic("surface.update.arguments", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
     const uint32_t row_bytes = static_cast<uint32_t>(dirty.width) * bytes_per_pixel;
-    if (stride < row_bytes) {
-        runtime::Panic("surface.update.stride", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    const uint64_t required_bytes = static_cast<uint64_t>(dirty.height - 1) * pitch + row_bytes;
+    if (pitch < row_bytes || required_bytes > byte_length) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
-    constexpr uint32_t kHeaderBytes = sizeof(micropixel_offscreen_surface_update_request_t);
-    static_assert(kHeaderBytes < MICROPIXEL_OFFSCREEN_SURFACE_MAX_UPDATE_BYTES,
-                  "offscreen surface update header exceeds ABI request");
-    const uint32_t rows_per_request = (MICROPIXEL_OFFSCREEN_SURFACE_MAX_UPDATE_BYTES - kHeaderBytes) / row_bytes;
+    constexpr uint32_t kHeaderBytes = sizeof(micropixel_streaming_texture_update_request_t);
+    static_assert(kHeaderBytes < MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES,
+                  "streaming texture update header exceeds ABI request");
+    const uint32_t rows_per_request = (MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES - kHeaderBytes) / row_bytes;
     if (rows_per_request == 0U) {
-        runtime::Panic("surface.update.row_too_wide", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
 
-    RequireOk(OpenOffscreenSurfaceService(), "surface.update.open");
-    alignas(4) uint8_t request[MICROPIXEL_OFFSCREEN_SURFACE_MAX_UPDATE_BYTES]{};
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    alignas(4) uint8_t request[MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES]{};
     uint32_t row = 0U;
     while (row < static_cast<uint32_t>(dirty.height)) {
         uint32_t row_count = static_cast<uint32_t>(dirty.height) - row;
@@ -907,137 +1187,120 @@ void OffscreenSurface::Update(Rect dirty, const uint8_t* pixels, uint32_t stride
         }
         const uint32_t pixel_bytes = row_count * row_bytes;
         const uint32_t request_size = kHeaderBytes + pixel_bytes;
-        micropixel_offscreen_surface_update_request_t header{};
+        micropixel_streaming_texture_update_request_t header{};
         header.size = static_cast<uint16_t>(request_size);
-        header.bitmap = bitmap_.handle_;
+        header.texture = texture_.handle_;
         header.x = static_cast<uint32_t>(dirty.x);
         header.y = static_cast<uint32_t>(dirty.y) + row;
         header.width = static_cast<uint32_t>(dirty.width);
         header.height = row_count;
-        header.stride = row_bytes;
+        header.pitch = row_bytes;
         CopyBytes(request, &header, sizeof(header));
         for (uint32_t source_row = 0U; source_row < row_count; ++source_row) {
-            CopyBytes(request + kHeaderBytes + source_row * row_bytes, pixels + (row + source_row) * stride, row_bytes);
+            CopyBytes(request + kHeaderBytes + source_row * row_bytes, pixels + (row + source_row) * pitch, row_bytes);
         }
-        RequireOk(
-            CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_SURFACE_UPDATE, request, request_size),
-            "surface.update");
+        status = CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_UPDATE, request, request_size);
+        if (status != MICROPIXEL_STATUS_OK) {
+            return unexpected(ErrorFromStatus(status));
+        }
         row += row_count;
     }
+    return {};
 }
 
-OffscreenUpdateFrame::OffscreenUpdateFrame(OffscreenUpdateFrame&& other) noexcept : active_(other.active_) {
+TextureUpdateBatch::TextureUpdateBatch(TextureUpdateBatch&& other) noexcept : active_(other.active_) {
     other.active_ = false;
 }
 
-OffscreenUpdateFrame::~OffscreenUpdateFrame() {
+TextureUpdateBatch::~TextureUpdateBatch() {
     if (active_) {
-        Commit();
+        (void)Finish();
     }
 }
 
-void OffscreenUpdateFrame::Commit() {
+Result<void> TextureUpdateBatch::Finish() {
     if (!active_) {
-        return;
+        return {};
     }
     active_ = false;
-    RequireOk(OpenOffscreenSurfaceService(), "surface.frame.commit.open");
-    RequireOk(CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_FRAME_COMMIT, nullptr, 0U),
-              "surface.frame.commit");
-}
-
-LoadRequest::LoadRequest(LoadRequest&& other) noexcept : handle_(other.handle_) { other.handle_ = 0U; }
-
-LoadRequest& LoadRequest::operator=(LoadRequest&& other) noexcept {
-    if (this != &other) {
-        Cancel();
-        handle_ = other.handle_;
-        other.handle_ = 0U;
+    int32_t status = OpenResourceService();
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_FINISH, nullptr, 0U);
     }
-    return *this;
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
 }
 
-LoadRequest::~LoadRequest() { Cancel(); }
-
-void LoadRequest::Cancel() {
-    if (handle_ != 0U) {
-        micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
-        if (OpenService(resource_service, MICROPIXEL_SERVICE_RESOURCE, 1U, 0U) == MICROPIXEL_STATUS_OK) {
-            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_CANCEL, &request, sizeof(request));
-        }
-        handle_ = 0U;
+Result<Texture> Resources::LoadTexture(ResourceRef resource) const {
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
     }
-}
-
-LoadRequest Resources::Load(ResourceRef resource) const {
-    RequireOk(OpenService(resource_service, MICROPIXEL_SERVICE_RESOURCE, 1U, 0U), "resources.open");
-    micropixel_resource_load_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, resource.asset().value()};
-    micropixel_handle_response_t response{};
+    micropixel_resource_load_texture_request_t request{static_cast<uint16_t>(sizeof(request)), 0U,
+                                                       resource.asset().value()};
+    micropixel_texture_info_t response{};
     uint32_t response_size = 0U;
-    RequireOk(CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD, &request, sizeof(request), &response,
-                          sizeof(response), response_size),
-              "resources.load");
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.handle == 0U) {
-        runtime::Panic("resources.load.handle", MICROPIXEL_STATUS_INTERNAL);
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_TEXTURE, &request, sizeof(request),
+                         &response, sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
     }
-    return LoadRequest{response.handle};
+    if (response_size < sizeof(response) || response.size < sizeof(response) ||
+        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
+        response.width == 0U || response.height == 0U ||
+        (response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
+         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888) ||
+        (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) != 0U) {
+        runtime::Panic("resources.load_texture.response", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return Texture{response.texture, response.width, response.height};
 }
 
-OffscreenSurface Resources::CreateOffscreenSurface(uint32_t width, uint32_t height,
-                                                   SurfacePixelFormat pixel_format) const {
-    RequireOk(OpenOffscreenSurfaceService(), "surface.create.open");
-    micropixel_offscreen_surface_create_request_t request{};
+Result<StreamingTexture> Renderer::CreateStreamingTexture(Size size, PixelFormat pixel_format) const {
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (size.width == 0U || size.height == 0U ||
+        (pixel_format != PixelFormat::kBgr888 && pixel_format != PixelFormat::kBgra8888)) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    micropixel_streaming_texture_create_request_t request{};
     request.size = sizeof(request);
-    request.width = width;
-    request.height = height;
+    request.width = size.width;
+    request.height = size.height;
     request.pixel_format = static_cast<uint32_t>(pixel_format);
-    micropixel_handle_response_t response{};
+    micropixel_texture_info_t response{};
     uint32_t response_size = 0U;
-    RequireOk(CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_SURFACE_CREATE, &request,
-                          sizeof(request), &response, sizeof(response), response_size),
-              "surface.create");
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.handle == 0U) {
-        runtime::Panic("surface.create.handle", MICROPIXEL_STATUS_INTERNAL);
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_CREATE, &request,
+                         sizeof(request), &response, sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
     }
-    return OffscreenSurface{Bitmap{response.handle, width, height}, pixel_format};
+    if (response_size < sizeof(response) || response.size < sizeof(response) ||
+        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
+        response.width != size.width || response.height != size.height ||
+        response.pixel_format != static_cast<uint32_t>(pixel_format) ||
+        (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U) {
+        runtime::Panic("texture.create.response", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return StreamingTexture{Texture{response.texture, response.width, response.height}, pixel_format};
 }
 
-OffscreenUpdateFrame Resources::BeginOffscreenUpdateFrame() const {
-    RequireOk(OpenOffscreenSurfaceService(), "surface.frame.begin.open");
-    RequireOk(CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_FRAME_BEGIN, nullptr, 0U),
-              "surface.frame.begin");
-    return OffscreenUpdateFrame{OffscreenUpdateFrame::CapabilityToken{}};
+TextureUpdateBatch Renderer::BeginTextureUpdateBatch() const {
+    RequireOk(OpenResourceService(), "texture.batch.begin.open");
+    RequireOk(CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_BEGIN, nullptr, 0U),
+              "texture.batch.begin");
+    return TextureUpdateBatch{TextureUpdateBatch::CapabilityToken{}};
 }
 
-Bitmap ResourceReadyEvent::TakeBitmap() {
-    if (!succeeded() || bitmap_ == 0U) {
-        runtime::Panic("resource_ready.take_bitmap", status_);
+void Application::BeginRun() const {
+    if (running_) {
+        runtime::Panic("application.run.reentrant", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    micropixel_bitmap_info_t info{};
-    RequireOk(OpenService(resource_service, MICROPIXEL_SERVICE_RESOURCE, 1U, 0U), "resource_ready.open");
-    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, bitmap_};
-    uint32_t response_size = 0U;
-    RequireOk(CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_BITMAP_GET_INFO, &request, sizeof(request),
-                          &info, sizeof(info), response_size),
-              "resource_ready.bitmap_info");
-    if (response_size < sizeof(info) || info.size < sizeof(info) || info.interface_major != 1U ||
-        (info.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB888 &&
-         info.pixel_format != MICROPIXEL_PIXEL_FORMAT_ARGB8888) ||
-        info.width == 0U || info.height == 0U) {
-        runtime::Panic("resource_ready.bitmap_info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
-    }
-    Bitmap bitmap{bitmap_, info.width, info.height};
-    bitmap_ = 0U;
-    return bitmap;
+    running_ = true;
 }
 
-ResourceReadyEvent* Event::ResourceFrom(LoadRequest& request) {
-    if (type_ != EventType::kResourceReady || request.handle_ == 0U || resource_.request_ != request.handle_) {
-        return nullptr;
-    }
-    request.MarkComplete();
-    return &resource_;
-}
+void Application::EndRun() const { running_ = false; }
 
 Event Application::WaitEvent() const {
     micropixel_event_t raw{};
@@ -1057,7 +1320,8 @@ Event Application::WaitEvent() const {
     if (raw.service_id == MICROPIXEL_SERVICE_TIMER && raw.event_id == MICROPIXEL_TIMER_EVENT_EXPIRED) {
         micropixel_timer_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        return Event{TimerEvent{timestamp, Duration::Microseconds(payload.elapsed_us), raw.source}};
+        return Event{TimerEvent{timestamp, Duration::Microseconds(payload.elapsed_us), payload.missed_count,
+                                raw.source}};
     }
 
     if (raw.service_id == MICROPIXEL_SERVICE_INPUT && raw.event_id == MICROPIXEL_INPUT_EVENT_TOUCH) {
@@ -1080,14 +1344,13 @@ Event Application::WaitEvent() const {
             default:
                 runtime::Panic("application.wait_event.touch_phase", MICROPIXEL_STATUS_INTERNAL);
         }
-        return Event{TouchEvent{timestamp, phase, raw.source, static_cast<uint16_t>(payload.x),
-                                static_cast<uint16_t>(payload.y), payload.pressure}};
-    }
-
-    if (raw.service_id == MICROPIXEL_SERVICE_RESOURCE && raw.event_id == MICROPIXEL_RESOURCE_EVENT_READY) {
-        micropixel_resource_event_payload_t payload{};
-        CopyBytes(&payload, raw.payload, sizeof(payload));
-        return Event{ResourceReadyEvent{raw.source, payload.bitmap, raw.status}};
+        const micropixel_input_info_t& input = LoadInputInfo();
+        const bool has_pressure = (input.capabilities & MICROPIXEL_INPUT_CAP_PRESSURE) != 0U;
+        if (has_pressure && payload.pressure_per_mille > 1000U) {
+            runtime::Panic("application.wait_event.touch_pressure", MICROPIXEL_STATUS_INTERNAL);
+        }
+        return Event{TouchEvent{timestamp, phase, raw.source, payload.x, payload.y, has_pressure,
+                                static_cast<uint16_t>(has_pressure ? payload.pressure_per_mille : 0U)}};
     }
 
     return Event{timestamp};

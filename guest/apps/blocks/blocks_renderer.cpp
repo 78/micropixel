@@ -66,8 +66,10 @@ constexpr Rgb kBestScoreColor{196U, 144U, 38U};
 void BlocksGame::InitializePlayfieldSurfaces() {
     static_assert(kBoardRows % kPlayfieldSurfaceCount == 0U, "playfield strips must divide the board rows");
     for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
-        playfield_surfaces_[index] = app_.resources().CreateOffscreenSurface(
-            static_cast<uint32_t>(kPlayfieldWidth), kSurfaceHeight, micropixel::SurfacePixelFormat::kRgb888);
+        auto result = renderer_.CreateStreamingTexture(
+            micropixel::Size{static_cast<uint32_t>(kPlayfieldWidth), kSurfaceHeight}, micropixel::PixelFormat::kBgr888);
+        micropixel::AssertThat(result.has_value(), "blocks: streaming texture allocation failed");
+        playfield_surfaces_[index] = static_cast<micropixel::StreamingTexture&&>(result.value());
     }
     visual_cache_valid_ = false;
     SyncPlayfield();
@@ -99,7 +101,7 @@ uint8_t BlocksGame::VisualCell(uint32_t column, uint32_t row) const {
 
 void BlocksGame::PutCellPixel(uint32_t x, uint32_t y, Rgb color) {
     const uint32_t offset = (y * static_cast<uint32_t>(kCellPitch) + x) * 3U;
-    // MICROPIXEL_PIXEL_FORMAT_RGB888 uses LVGL's little-endian B, G, R layout.
+    // MICROPIXEL_PIXEL_FORMAT_BGR888 uses LVGL's little-endian B, G, R layout.
     cell_pixels_[offset] = color.blue;
     cell_pixels_[offset + 1U] = color.green;
     cell_pixels_[offset + 2U] = color.red;
@@ -161,7 +163,7 @@ void BlocksGame::RasterizeCell(uint32_t column, uint32_t row, uint8_t visual) {
 }
 
 void BlocksGame::SyncPlayfield() {
-    micropixel::OffscreenUpdateFrame update_frame = app_.resources().BeginOffscreenUpdateFrame();
+    micropixel::TextureUpdateBatch update_batch = renderer_.BeginTextureUpdateBatch();
     for (uint32_t row = 0U; row < kBoardRows; ++row) {
         for (uint32_t column = 0U; column < kBoardColumns; ++column) {
             const uint32_t cache_index = row * kBoardColumns + column;
@@ -172,18 +174,22 @@ void BlocksGame::SyncPlayfield() {
             RasterizeCell(column, row, visual);
             const uint32_t surface_index = row / kRowsPerSurface;
             const int32_t local_y = static_cast<int32_t>(row % kRowsPerSurface) * kCellPitch;
-            playfield_surfaces_[surface_index].Update(
-                micropixel::Rect{static_cast<int32_t>(column) * kCellPitch, local_y, kCellPitch, kCellPitch},
-                cell_pixels_, static_cast<uint32_t>(kCellPitch) * 3U);
+            micropixel::AssertThat(
+                playfield_surfaces_[surface_index]
+                    .Update(
+                        micropixel::Rect{static_cast<int32_t>(column) * kCellPitch, local_y, kCellPitch, kCellPitch},
+                        cell_pixels_, sizeof(cell_pixels_), static_cast<uint32_t>(kCellPitch) * 3U)
+                    .has_value(),
+                "blocks: streaming texture update failed");
             visual_cells_[cache_index] = visual;
         }
     }
-    update_frame.Commit();
+    micropixel::AssertThat(update_batch.Finish().has_value(), "blocks: texture update batch failed");
     visual_cache_valid_ = true;
 }
 
-void BlocksGame::RenderMiniPiece(micropixel::CommandBuffer& commands, Tetromino type, int32_t center_x, int32_t top,
-                                 bool muted, bool visible) const {
+void BlocksGame::RenderMiniPiece(micropixel::Frame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
+                                 bool visible) const {
     if (!visible) {
         return;
     }
@@ -224,42 +230,42 @@ void BlocksGame::RenderMiniPiece(micropixel::CommandBuffer& commands, Tetromino 
     }
 }
 
-void BlocksGame::RenderHeader(micropixel::CommandBuffer& commands, const Theme& theme) const {
-    commands.DrawText(24, 8, "Juicy Blocks", AsColor(theme.text), 32U);
-    commands.DrawText(24, 47, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+void BlocksGame::RenderHeader(micropixel::Frame& commands, const Theme& theme) const {
+    commands.DrawText(micropixel::Point{24, 8}, "Juicy Blocks", AsColor(theme.text), 32U);
+    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
     Line status;
     status.Append("LVL ");
     status.AppendUint(model_.level());
-    commands.DrawText(172, 47, status.c_str(), AsColor(theme.text), 14U);
-    commands.DrawText(545, 12, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{172, 47}, status.c_str(), AsColor(theme.text), 14U);
+    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
     Line score;
     score.AppendPadded4(model_.score());
-    commands.DrawText(545, 33, score.c_str(), micropixel::Color::White(), 24U);
-    commands.DrawText(645, 12, "BEST", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(), 24U);
+    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
     Line best;
     best.AppendPadded4(best_score_ > model_.score() ? best_score_ : model_.score());
-    commands.DrawText(635, 33, best.c_str(), AsColor(kBestScoreColor), 24U);
+    commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(kBestScoreColor), 24U);
 }
 
-void BlocksGame::RenderSidebar(micropixel::CommandBuffer& commands, const Theme& theme) const {
+void BlocksGame::RenderSidebar(micropixel::Frame& commands, const Theme& theme) const {
     const int32_t sidebar_left = kBoardX + kSidebarX;
     const micropixel::Color muted = micropixel::Color::Rgb(115U, 115U, 115U);
-    commands.DrawText(sidebar_left + 18, kBoardY + 14, "HOLD", model_.hold_available() ? AsColor(theme.text) : muted,
-                      18U);
-    commands.DrawText(sidebar_left + 18, kBoardY + 156, "NEXT", AsColor(theme.text), 18U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 14}, "HOLD",
+                      model_.hold_available() ? AsColor(theme.text) : muted, 18U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 156}, "NEXT", AsColor(theme.text), 18U);
     Line level;
     level.Append("LEVEL ");
     level.AppendUint(model_.level());
-    commands.DrawText(sidebar_left + 18, kBoardY + 310, level.c_str(), AsColor(theme.text), 20U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 310}, level.c_str(), AsColor(theme.text), 20U);
     Line lines;
     lines.Append("LINES ");
     lines.AppendUint(model_.lines());
-    commands.DrawText(sidebar_left + 18, kBoardY + 426, lines.c_str(), AsColor(theme.text), 20U);
-    commands.DrawText(sidebar_left + 18, kBoardY + 548, "TAP TO ROTATE", muted, 14U);
-    commands.DrawText(sidebar_left + 18, kBoardY + 574, "SWIPE ANYWHERE", muted, 14U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 426}, lines.c_str(), AsColor(theme.text), 20U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 548}, "TAP TO ROTATE", muted, 14U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 574}, "SWIPE ANYWHERE", muted, 14U);
 }
 
-void BlocksGame::RenderStatusEffect(micropixel::CommandBuffer& commands, const Theme& theme) const {
+void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const {
     if (clear_effect_remaining_us_ != 0U) {
         int32_t first_row_y = kBoardY + kPlayfieldHeight / 2;
         for (uint32_t row = 0U; row < kBoardRows; ++row) {
@@ -287,23 +293,24 @@ void BlocksGame::RenderStatusEffect(micropixel::CommandBuffer& commands, const T
     }
 }
 
-void BlocksGame::RenderOverlay(micropixel::CommandBuffer& commands) const {
+void BlocksGame::RenderOverlay(micropixel::Frame& commands) const {
     if (screen_ == Screen::kPlaying) {
         return;
     }
     micropixel::Color overlay = micropixel::Color::Black();
     uint8_t opacity = kOverlayOpacity;
-    const micropixel::Bitmap* button_bitmap = &start_button_bitmap_;
+    const micropixel::Texture* button_texture = &start_button_texture_;
     micropixel::Rect button_bounds = kStartButtonRect;
     micropixel::Rect overlay_bounds{kBoardX, kBoardY, kBoardAssetWidth, kBoardAssetHeight};
     if (screen_ == Screen::kGameOver) {
         overlay = micropixel::Color::Rgb(69U, 10U, 10U);
-        button_bitmap = &restart_button_bitmap_;
+        button_texture = &restart_button_texture_;
         button_bounds = kRestartButtonRect;
         overlay_bounds = kGameOverOverlayRect;
     }
-    commands.BlendRect(overlay_bounds, overlay, opacity);
-    commands.BlendBitmap(button_bounds.x, button_bounds.y, *button_bitmap, screen_button_.pressed() ? 160U : 255U);
+    commands.FillRect(overlay_bounds, overlay, opacity);
+    commands.DrawTexture(micropixel::Point{button_bounds.x, button_bounds.y}, *button_texture,
+                         screen_button_.pressed() ? 160U : 255U);
 
     if (screen_ == Screen::kMenu) {
         commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "START GAME",
@@ -330,18 +337,18 @@ void BlocksGame::RenderOverlay(micropixel::CommandBuffer& commands) const {
 }
 
 void BlocksGame::Render() {
-    micropixel::AssertThat(board_bitmap_.valid(), "blocks: board bitmap missing");
+    micropixel::AssertThat(board_texture_.valid(), "blocks: board texture missing");
     for (const auto& surface : playfield_surfaces_) {
         micropixel::AssertThat(surface.valid(), "blocks: playfield surface missing");
     }
     SyncPlayfield();
     const Theme& theme = ThemeForLevel(model_.level());
-    micropixel::CommandBuffer commands = graphics_.CreateCommandBuffer(graphics_info_);
+    micropixel::Frame commands = renderer_.BeginFrame();
     commands.Clear(micropixel::Color::Rgb(5U, 5U, 5U));
-    commands.DrawBitmap(kBoardX, kBoardY, board_bitmap_);
+    commands.DrawTexture(micropixel::Point{kBoardX, kBoardY}, board_texture_);
     for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
-        commands.DrawBitmap(kBoardX, kBoardY + static_cast<int32_t>(index * kSurfaceHeight),
-                            playfield_surfaces_[index].bitmap());
+        commands.DrawTexture(micropixel::Point{kBoardX, kBoardY + static_cast<int32_t>(index * kSurfaceHeight)},
+                             playfield_surfaces_[index]);
     }
     RenderHeader(commands, theme);
     RenderSidebar(commands, theme);
@@ -350,7 +357,7 @@ void BlocksGame::Render() {
     RenderMiniPiece(commands, model_.next(), sidebar_center, kBoardY + 196, false, true);
     RenderStatusEffect(commands, theme);
     RenderOverlay(commands);
-    commands.Submit();
+    micropixel::AssertThat(commands.Present().has_value(), "blocks: frame present failed");
 }
 
 }  // namespace blocks

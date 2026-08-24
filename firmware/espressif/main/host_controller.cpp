@@ -188,11 +188,6 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, host
         }
         return resume_result.has_value();
     }
-    if (model.performance_overlay_enabled) {
-        shell.UpdatePerformanceOverlay(false, 0U);
-        shell.UpdatePerformanceOverlay(true, 0U);
-    }
-
     CpuUsageSampler paused_cpu_sampler;
     paused_cpu_sampler.Reset();
     (void)paused_cpu_sampler.Sample();
@@ -601,8 +596,6 @@ class ActiveHost final {
         }
         cpu_sampler.Reset();
         (void)cpu_sampler.Sample();
-        shell_.UpdatePerformanceOverlay(false, 0U);
-        shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, 0U);
         next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
     }
 

@@ -92,6 +92,8 @@ int32_t Gt911Input::GetInfo(micropixel_input_info_t& info) {
     info.size = sizeof(info);
     info.interface_major = 1U;
     info.interface_minor = 0U;
+    /* GT911 reports contact area/strength, not calibrated touch pressure. */
+    info.capabilities = 0U;
     info.logical_width = width_;
     info.logical_height = height_;
     info.max_touch_points = MICROPIXEL_MAX_TOUCH_POINTS;
@@ -233,7 +235,7 @@ void Gt911Input::Run() {
             sample.id = point.track_id;
             sample.x = point.x;
             sample.y = point.y;
-            sample.pressure = point.strength;
+            sample.pressure_per_mille = 0U;
             sample.phase = previous_index >= 0 ? device::TouchPhase::kMove : device::TouchPhase::kDown;
             Emit(sample);
         }

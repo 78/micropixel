@@ -11,4 +11,4 @@ firmware/
 映像时，才在厂商目录下增加映像层级。新增平台应复用 Guest ABI 和 Runtime service 边界，只在对应
 vendor 工程中实现启动、Device backend、board profile 与打包入口。
 
-具体边界见 [Firmware 架构](../docs/design/firmware-architecture.zh-CN.md)。
+具体边界见 [MicroPixel 架构与发布基线](../docs/design/architecture.zh-CN.md)。

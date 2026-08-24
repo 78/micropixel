@@ -29,20 +29,20 @@ int main() {
 
     uint8_t dummy = 0U;
     uint32_t response_size = 0U;
-    micropixel_graphics_info_t graphics{};
+    micropixel_graphics_info_t renderer{};
     if (micropixel_service_call(service.handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, &dummy, 1U,
-                                reinterpret_cast<uint8_t*>(&graphics), sizeof(graphics),
+                                reinterpret_cast<uint8_t*>(&renderer), sizeof(renderer),
                                 &response_size) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 123;
     }
-    if (micropixel_service_call(service.handle, 0xffffffffU, &dummy, 0U, reinterpret_cast<uint8_t*>(&graphics),
-                                sizeof(graphics), &response_size) != MICROPIXEL_STATUS_UNSUPPORTED) {
+    if (micropixel_service_call(service.handle, 0xffffffffU, &dummy, 0U, reinterpret_cast<uint8_t*>(&renderer),
+                                sizeof(renderer), &response_size) != MICROPIXEL_STATUS_UNSUPPORTED) {
         return 124;
     }
     if (micropixel_service_call(service.handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, &dummy, 0U,
-                                reinterpret_cast<uint8_t*>(&graphics), sizeof(graphics),
+                                reinterpret_cast<uint8_t*>(&renderer), sizeof(renderer),
                                 &response_size) != MICROPIXEL_STATUS_OK ||
-        response_size != sizeof(graphics) || graphics.size != sizeof(graphics)) {
+        response_size != sizeof(renderer) || renderer.size != sizeof(renderer)) {
         return 125;
     }
 
@@ -71,6 +71,6 @@ int main() {
 
     micropixel::Application app;
     (void)app.random().U32();
-    app.log().Info("service_control: open/call routing, graphics submit, and hardware random ready");
+    app.log().Info("service_control: open/call routing, renderer submit, and hardware random ready");
     return 0;
 }

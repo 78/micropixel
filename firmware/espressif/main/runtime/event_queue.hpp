@@ -68,7 +68,11 @@ class EventQueue final {
     std::atomic<bool> accepting_{true};
     std::atomic<bool> pause_requested_{};
     std::atomic<bool> stop_requested_{};
-    std::atomic<uint32_t> periodic_pending_[limits::kMaxTimers]{};
+    portMUX_TYPE periodic_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    uint32_t periodic_pending_[limits::kMaxTimers]{};
+    micropixel_event_t periodic_latest_[limits::kMaxTimers]{};
+    micropixel_event_t periodic_carry_[limits::kMaxTimers]{};
+    bool periodic_carry_valid_[limits::kMaxTimers]{};
     portMUX_TYPE touch_lock_ = portMUX_INITIALIZER_UNLOCKED;
     micropixel_event_t touch_latest_[MICROPIXEL_MAX_TOUCH_POINTS]{};
     micropixel_event_t stop_event_{};

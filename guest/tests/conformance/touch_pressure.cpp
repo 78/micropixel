@@ -7,13 +7,17 @@ extern "C" __attribute__((export_name("__micropixel_test_touch_pressure"))) void
 
 int main() {
     micropixel::Application app;
+    if (app.input().info().supports_pressure()) {
+        return 99;
+    }
     bool saw_down = false;
     uint32_t move_count = 0U;
 
     for (;;) {
         micropixel::Event event = app.WaitEvent();
         const micropixel::TouchEvent* touch = event.touch();
-        if (touch == nullptr || touch->id() != 7U || touch->x() >= 720U || touch->y() >= 720U) {
+        if (touch == nullptr || touch->id() != 7U || touch->x() < 0 || touch->x() >= 720 || touch->y() < 0 ||
+            touch->y() >= 720 || touch->has_pressure() || touch->pressure_per_mille() != 0U) {
             return 100;
         }
         if (touch->phase() == micropixel::TouchPhase::kDown) {

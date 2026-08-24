@@ -51,7 +51,7 @@ class InputPage final {
         return true;
     }
 
-    void Render(DemoContext& context, micropixel::CommandBuffer& commands) {
+    void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
         commands.DrawTextCentered(center_x, 116, "Touch and drag with one or more fingers.", MutedColor(), 18U);
         commands.FillRect(micropixel::Rect{28, 158, static_cast<int32_t>(context.display.width()) - 56,
@@ -129,8 +129,6 @@ bool InputDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event)
     return input_page.OnTouch(context, event);
 }
 
-void InputDemoRender(DemoContext& context, micropixel::CommandBuffer& commands) {
-    input_page.Render(context, commands);
-}
+void InputDemoRender(DemoContext& context, micropixel::Frame& commands) { input_page.Render(context, commands); }
 
 }  // namespace demo

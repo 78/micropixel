@@ -204,7 +204,7 @@ class ScreenCapture final {
         const int fields =
             std::sscanf(command_, "MICROPIXEL_TOUCH %7s %" SCNu32 " %" SCNu32 " %" SCNu32 " %" SCNu32 " %n", phase_name,
                         &id, &x, &y, &pressure, &consumed);
-        if (fields != 5 || command_[consumed] != '\0' || x >= width_ || y >= height_ || pressure > UINT16_MAX ||
+        if (fields != 5 || command_[consumed] != '\0' || x >= width_ || y >= height_ || pressure != 0U ||
             touch_input_ == nullptr) {
             ESP_LOGW(kTag, "invalid capture command: %s", command_);
             return;
@@ -227,9 +227,10 @@ class ScreenCapture final {
         device::TouchSample sample{};
         sample.timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
         sample.id = id;
-        sample.x = static_cast<uint16_t>(x);
-        sample.y = static_cast<uint16_t>(y);
-        sample.pressure = static_cast<uint16_t>(pressure);
+        sample.x = static_cast<int32_t>(x);
+        sample.y = static_cast<int32_t>(y);
+        /* Capture injection follows the selected GT911 backend capabilities. */
+        sample.pressure_per_mille = 0U;
         sample.phase = phase;
         touch_input_->InjectTouchForCapture(sample);
         ESP_LOGI(kTag, "injected touch phase=%s id=%" PRIu32 " x=%" PRIu32 " y=%" PRIu32, phase_name, id, x, y);

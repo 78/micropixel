@@ -27,23 +27,29 @@ class NullGraphicsBackend final : public device::GraphicsBackend {
         return MICROPIXEL_STATUS_OK;
     }
 
-    [[nodiscard]] int32_t Submit(const uint8_t* bytes, uint32_t length, device::BitmapResolver resolver,
-                                 void* resolver_context) override {
+    [[nodiscard]] int32_t Submit(const uint8_t* bytes, uint32_t length,
+                                 const device::TextureAccess& textures) override {
         (void)bytes;
         (void)length;
-        (void)resolver;
-        (void)resolver_context;
+        (void)textures;
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
 
-    [[nodiscard]] int32_t CommitFrame(device::BitmapResolver resolver, void* resolver_context) override {
-        (void)resolver;
-        (void)resolver_context;
+    [[nodiscard]] int32_t CommitFrame(const device::TextureAccess& textures) override {
+        (void)textures;
         if (!graphics_frame_active_) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         graphics_frame_active_ = false;
         return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+
+    [[nodiscard]] int32_t CancelFrame() override {
+        if (!graphics_frame_active_) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        graphics_frame_active_ = false;
+        return MICROPIXEL_STATUS_OK;
     }
 
     [[nodiscard]] int32_t BeginBitmapUpdateFrame() override {
@@ -56,11 +62,11 @@ class NullGraphicsBackend final : public device::GraphicsBackend {
 
     [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                        uint32_t height, const uint8_t* pixels, uint32_t stride) override {
-        const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB888
+        const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
                                              ? 3U
-                                             : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? 4U : 0U);
+                                             : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
         if (bitmap.data == nullptr || pixels == nullptr || width == 0U || height == 0U || bytes_per_pixel == 0U ||
-            (bitmap.flags & MICROPIXEL_BITMAP_FLAG_MUTABLE) == 0U || x + width > bitmap.width ||
+            (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || x + width > bitmap.width ||
             y + height > bitmap.height || stride != width * bytes_per_pixel) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }

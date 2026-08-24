@@ -18,23 +18,18 @@ uint32_t ReadBest(micropixel::KVStore storage) {
     return 0U;
 }
 
-micropixel::Bitmap LoadPackageBitmap(micropixel::Application& app, micropixel::AssetId asset) {
-    micropixel::LoadRequest request = app.resources().Load(micropixel::ResourceRef::Package(asset));
-    for (;;) {
-        micropixel::Event event = app.WaitEvent();
-        if (micropixel::ResourceReadyEvent* ready = event.ResourceFrom(request)) {
-            micropixel::AssertThat(ready->succeeded(), "blocks: critical bitmap resource failed");
-            return ready->TakeBitmap();
-        }
-    }
+micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
+    auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(asset));
+    micropixel::AssertThat(result.has_value(), "blocks: critical texture resource failed");
+    return static_cast<micropixel::Texture&&>(result.value());
 }
 
 }  // namespace
 
 int BlocksAppMain() {
     micropixel::Application app;
-    micropixel::Graphics graphics = app.graphics();
-    micropixel::GraphicsInfo display = graphics.info();
+    micropixel::Renderer renderer = app.renderer();
+    micropixel::RendererInfo display = renderer.info();
     micropixel::AssertThat(display.width() == kScreenWidth && display.height() == kScreenHeight,
                            "blocks: requires 720x720 display");
 
@@ -45,9 +40,9 @@ int BlocksAppMain() {
     app.log().Info(restored.c_str());
 
     app.log().Info("blocks: launch retained while UI resources decode");
-    micropixel::Bitmap board = LoadPackageBitmap(app, blocks_assets::board);
-    micropixel::Bitmap start = LoadPackageBitmap(app, blocks_assets::button_start);
-    micropixel::Bitmap restart = LoadPackageBitmap(app, blocks_assets::button_restart);
+    micropixel::Texture board = LoadPackageTexture(app, blocks_assets::board);
+    micropixel::Texture start = LoadPackageTexture(app, blocks_assets::button_start);
+    micropixel::Texture restart = LoadPackageTexture(app, blocks_assets::button_restart);
 
     micropixel::Audio audio = app.audio();
     const auto audio_info = audio.info();
@@ -55,25 +50,23 @@ int BlocksAppMain() {
     app.log().Info(audio_available ? "blocks: Audio ready; bounded SFX enabled"
                                    : "blocks: Audio unavailable; visual gameplay continues");
 
-    BlocksGame game{app, graphics, display, audio, audio_available, best_score};
-    game.set_bitmaps(static_cast<micropixel::Bitmap&&>(board), static_cast<micropixel::Bitmap&&>(start),
-                     static_cast<micropixel::Bitmap&&>(restart));
+    BlocksGame game{app, renderer, display, audio, audio_available, best_score};
+    game.set_textures(static_cast<micropixel::Texture&&>(board), static_cast<micropixel::Texture&&>(start),
+                      static_cast<micropixel::Texture&&>(restart));
     const micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
     game.Render();
     app.log().Info("blocks: ready; 4 offscreen playfield buffers with atomic dirty-cell commits");
 
-    for (;;) {
-        micropixel::Event event = app.WaitEvent();
+    app.Run([&](const micropixel::Event& event) {
         if (const micropixel::TimerEvent* tick = event.TimerFrom(ticker)) {
             game.OnTimer(*tick);
         } else if (const micropixel::TouchEvent* touch = event.touch()) {
             game.OnTouch(*touch);
         } else if (event.type() == micropixel::EventType::kResume) {
             game.Render();
-        } else if (event.type() == micropixel::EventType::kStop) {
-            return 0;
         }
-    }
+    });
+    return 0;
 }
 
 }  // namespace blocks

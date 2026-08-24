@@ -12,7 +12,10 @@ class Log final {
     constexpr Log(const Log&) noexcept = default;
     constexpr Log& operator=(const Log&) noexcept = default;
 
+    void Debug(const char* message) const;
     void Info(const char* message) const;
+    void Warning(const char* message) const;
+    void Error(const char* message) const;
 
    private:
     struct CapabilityToken {};

@@ -94,7 +94,7 @@ void ExitPage(PageId page, DemoContext& context) {
     __builtin_unreachable();
 }
 
-void RenderPageContent(PageId page, DemoContext& context, micropixel::CommandBuffer& commands) {
+void RenderPageContent(PageId page, DemoContext& context, micropixel::Frame& commands) {
     switch (page) {
         case PageId::kTimer:
             TimerDemoRender(context, commands);
@@ -130,7 +130,7 @@ void RenderPageContent(PageId page, DemoContext& context, micropixel::CommandBuf
 }
 
 void RenderHome(DemoContext& context, const micropixel::ui::Button (&menu_buttons)[kPageCount]) {
-    micropixel::CommandBuffer commands = context.graphics.CreateCommandBuffer(context.display);
+    micropixel::Frame commands = context.renderer.BeginFrame();
     commands.Clear(BackgroundColor());
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 34, "MICROPIXEL SDK DEMO",
                               micropixel::Color::White(), 32U);
@@ -141,38 +141,39 @@ void RenderHome(DemoContext& context, const micropixel::ui::Button (&menu_button
         const micropixel::Rect bounds = button.bounds();
         commands.FillRect(bounds, PanelColor());
         commands.FillRect(micropixel::Rect{bounds.x, bounds.y, 6, bounds.height}, AccentColor());
-        commands.BlendRect(bounds, micropixel::Color::Black(), button.pressed() ? 48U : 0U);
-        commands.DrawText(bounds.x + 30, bounds.y + (bounds.height - 24) / 2 + (button.pressed() ? 1 : 0),
-                          kPages[index].label, micropixel::Color::White(), 22U);
+        commands.FillRect(bounds, micropixel::Color::Black(), button.pressed() ? 48U : 0U);
+        commands.DrawText(
+            micropixel::Point{bounds.x + 30, bounds.y + (bounds.height - 24) / 2 + (button.pressed() ? 1 : 0)},
+            kPages[index].label, micropixel::Color::White(), 22U);
     }
-    commands.Submit();
+    micropixel::AssertThat(commands.Present().has_value(), "demo: frame present failed");
 }
 
 void RenderPage(DemoContext& context, PageId page, const micropixel::ui::Button& back_button) {
-    micropixel::CommandBuffer commands = context.graphics.CreateCommandBuffer(context.display);
+    micropixel::Frame commands = context.renderer.BeginFrame();
     commands.Clear(BackgroundColor());
     DrawButton(commands, back_button, "BACK", PanelColor());
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 31, PageTitle(page),
                               micropixel::Color::White(), 28U);
     commands.FillRect(micropixel::Rect{24, 92, static_cast<int32_t>(context.display.width()) - 48, 2}, AccentColor());
     RenderPageContent(page, context, commands);
-    commands.Submit();
+    micropixel::AssertThat(commands.Present().has_value(), "demo: frame present failed");
 }
 
 }  // namespace
 
 int DemoAppMain() {
     micropixel::Application app;
-    micropixel::Graphics graphics = app.graphics();
-    micropixel::GraphicsInfo display = graphics.info();
+    micropixel::Renderer renderer = app.renderer();
+    micropixel::RendererInfo display = renderer.info();
     micropixel::InputInfo input = app.input().info();
     micropixel::AssertThat(display.width() >= 320U && display.height() >= 480U,
                            "demo: display must be at least 320x480");
     micropixel::AssertThat(input.logical_width() == display.width() && input.logical_height() == display.height(),
                            "demo: input and display coordinates must match");
 
-    micropixel::Bitmap atlas_bitmap = LoadDemoAtlas(app);
-    DemoContext context{app, graphics, display, input, atlas_bitmap};
+    micropixel::Texture atlas_texture = LoadDemoAtlas(app);
+    DemoContext context{app, renderer, display, input, atlas_texture};
     micropixel::Timer ticker = CreateDemoTicker(app);
     PageId active_page = PageId::kHome;
     micropixel::ui::Button menu_buttons[kPageCount]{};
@@ -183,8 +184,11 @@ int DemoAppMain() {
     RenderHome(context, menu_buttons);
     app.log().Info("demo: ready; select a module on screen");
 
-    for (;;) {
-        micropixel::Event event = app.WaitEvent();
+    app.Run([&](const micropixel::Event& event) {
+        if (event.type() == micropixel::EventType::kStop) {
+            ExitPage(active_page, context);
+            return;
+        }
         bool redraw = false;
         if (const micropixel::TimerEvent* timer = event.TimerFrom(ticker)) {
             redraw = HandleTimer(active_page, context, *timer);
@@ -219,6 +223,8 @@ int DemoAppMain() {
                     }
                 }
             }
+        } else if (event.type() == micropixel::EventType::kResume) {
+            redraw = true;
         }
 
         if (redraw) {
@@ -228,7 +234,8 @@ int DemoAppMain() {
                 RenderPage(context, active_page, back_button);
             }
         }
-    }
+    });
+    return 0;
 }
 
 }  // namespace demo

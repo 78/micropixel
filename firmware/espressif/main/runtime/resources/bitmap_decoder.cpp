@@ -97,7 +97,7 @@ bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, device::BitmapView&
                 if (jpeg_dec_process(decoder, &io) == JPEG_ERR_OK) {
                     RgbToLvRgb888(output, static_cast<uint32_t>(output_size));
                     view = {output,        static_cast<uint32_t>(output_size),       header.width,
-                            header.height, static_cast<uint32_t>(header.width) * 3U, MICROPIXEL_PIXEL_FORMAT_RGB888};
+                            header.height, static_cast<uint32_t>(header.width) * 3U, MICROPIXEL_PIXEL_FORMAT_BGR888};
                     succeeded = true;
                 }
                 if (!succeeded) {
@@ -190,7 +190,7 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& 
     png_destroy_read_struct(&png, &info, nullptr);
 
     auto* pixels = const_cast<uint8_t*>(decoded);
-    view = {pixels, static_cast<uint32_t>(output_size), width, height, width * 4U, MICROPIXEL_PIXEL_FORMAT_ARGB8888};
+    view = {pixels, static_cast<uint32_t>(output_size), width, height, width * 4U, MICROPIXEL_PIXEL_FORMAT_BGRA8888};
     ESP_LOGI(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu output=%p", width, height, output_size,
              pixels);
     return true;

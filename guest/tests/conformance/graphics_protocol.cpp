@@ -28,6 +28,7 @@ int main() {
     }
     if ((info.capabilities & MICROPIXEL_GRAPHICS_CAP_MULTI_SUBMIT_FRAME) == 0U ||
         info.max_commands != MICROPIXEL_GRAPHICS_MAX_COMMANDS ||
+        info.max_draw_operations != MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS ||
         info.max_frame_commands < MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS) {
         return 78;
     }
@@ -89,21 +90,79 @@ int main() {
     }
 
     micropixel::Application app;
-    micropixel::Graphics graphics = app.graphics();
-    micropixel::GraphicsInfo graphics_info = graphics.info();
-    micropixel::GraphicsFrame frame = graphics.BeginFrame();
-    micropixel::CommandBuffer commands = frame.CreateCommandBuffer(graphics_info);
+    micropixel::Renderer renderer = app.renderer();
+    auto texture_result = renderer.CreateStreamingTexture(micropixel::Size{2U, 2U}, micropixel::PixelFormat::kBgr888);
+    if (!texture_result) {
+        return 80;
+    }
+    micropixel::StreamingTexture texture = static_cast<micropixel::StreamingTexture&&>(texture_result.value());
+    const uint8_t texture_pixels[]{0U, 0U, 255U, 0U, 255U, 0U, 255U, 0U, 0U, 255U, 255U, 255U};
+    if (!texture.Update(micropixel::Rect{0, 0, 2, 2}, texture_pixels, sizeof(texture_pixels), 6U)) {
+        return 81;
+    }
+    {
+        micropixel::Frame abandoned = renderer.BeginFrame();
+        abandoned.Clear(micropixel::Color::Black());
+        for (uint32_t index = 0U; index < 140U; ++index) {
+            abandoned.FillRect(micropixel::Rect{40 + static_cast<int32_t>(index % 20U) * 8,
+                                                140 + static_cast<int32_t>(index / 20U) * 8, 6, 6},
+                               micropixel::Color::Green());
+        }
+    }
+    {
+        micropixel::Frame exhausted = renderer.BeginFrame();
+        for (uint32_t index = 0U; index <= info.max_draw_operations; ++index) {
+            exhausted.FillRect(micropixel::Rect{8 + static_cast<int32_t>(index % 40U) * 4,
+                                                8 + static_cast<int32_t>(index / 40U) * 4, 2, 2},
+                               micropixel::Color::White());
+        }
+        auto exhausted_result = exhausted.Present();
+        if (exhausted_result || exhausted_result.error().code() != micropixel::ErrorCode::kResourceExhausted) {
+            return 82;
+        }
+    }
+    micropixel::Frame commands = renderer.BeginFrame();
     commands.Clear(micropixel::Color::Black());
     commands.FillRect(micropixel::Rect{40, 40, 360, 56}, micropixel::Color::Green());
-    commands.BlendRect(micropixel::Rect{40, 40, 360, 56}, micropixel::Color::Black(), 48U);
-    commands.DrawText(52, 56, "graphics_protocol: blend accepted", micropixel::Color::White(), 18U);
+    commands.FillRect(micropixel::Rect{40, 40, 360, 56}, micropixel::Color::Black(), 48U);
+    commands.DrawText(micropixel::Point{52, 56}, "graphics_protocol: blend accepted", micropixel::Color::White(), 18U);
+    commands.DrawTexture(micropixel::Rect{420, 40, 56, 56}, texture);
+    commands.DrawTexture(micropixel::Rect{488, 40, 28, 56}, texture, micropixel::Rect{1, 0, 1, 2}, 192U);
+    commands.Save();
+    commands.SetClipRect(micropixel::Rect{40, 112, 240, 28});
+    commands.Translate(micropixel::Point{4, 0});
+    commands.FillRect(micropixel::Rect{40, 112, 240, 28}, micropixel::Color::White(), 32U);
+    commands.Save();
+    commands.SetClipRect(micropixel::Rect{80, 112, 120, 28});
+    commands.Translate(micropixel::Point{4, 0});
+    commands.FillRect(micropixel::Rect{40, 112, 240, 28}, micropixel::Color::Green(), 96U);
+    commands.Restore();
+    commands.Restore();
     for (uint32_t index = 0U; index < 140U; ++index) {
         commands.FillRect(micropixel::Rect{40 + static_cast<int32_t>(index % 20U) * 8,
                                            140 + static_cast<int32_t>(index / 20U) * 8, 6, 6},
                           micropixel::Color::Green());
     }
-    commands.Submit();
-    frame.Commit();
-    app.log().Info("graphics_protocol: malformed batches rejected; 128+ command frame committed atomically");
+    if (!commands.Present()) {
+        return 79;
+    }
+    /* The retained scene must keep the Texture pixels alive after the Guest
+       drops its owning handle. Give LVGL time to redraw that scene, then
+       replace it so the Host also exercises the final scene unpin. */
+    texture.Reset();
+    micropixel::Timer redraw_guard = app.timers().After(micropixel::Duration::Milliseconds(50));
+    micropixel::Event redraw_event = app.WaitEvent();
+    if (redraw_event.TimerFrom(redraw_guard) == nullptr) {
+        return 83;
+    }
+    micropixel::Frame replacement = renderer.BeginFrame();
+    replacement.Clear(micropixel::Color::Black());
+    replacement.DrawText(micropixel::Point{52, 56}, "graphics_protocol: texture lifetime safe",
+                         micropixel::Color::White(), 18U);
+    if (!replacement.Present()) {
+        return 84;
+    }
+    app.log().Info(
+        "graphics_protocol: malformed batches rejected; texture scene pinning and 128+ frame accepted");
     return 0;
 }

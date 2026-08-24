@@ -16,10 +16,10 @@ inline constexpr micropixel::Color BlueColor() { return micropixel::Color::Rgb(6
 
 struct DemoContext final {
     micropixel::Application& app;
-    micropixel::Graphics graphics;
-    micropixel::GraphicsInfo display;
+    micropixel::Renderer renderer;
+    micropixel::RendererInfo display;
     micropixel::InputInfo input;
-    micropixel::Bitmap& atlas_bitmap;
+    micropixel::Texture& atlas_texture;
 };
 
 using Line = micropixel::FixedString<96U>;
@@ -38,7 +38,7 @@ using Line = micropixel::FixedString<96U>;
                             kHeight};
 }
 
-inline void DrawButton(micropixel::CommandBuffer& commands, const micropixel::ui::Button& button, const char* label,
+inline void DrawButton(micropixel::Frame& commands, const micropixel::ui::Button& button, const char* label,
                        micropixel::Color color = BlueColor()) {
     micropixel::ui::DrawTextButton(commands, button, label,
                                    micropixel::ui::ButtonStyle{.background = color,
@@ -60,30 +60,30 @@ enum class PageId : uint8_t {
 };
 
 [[nodiscard]] micropixel::Timer CreateDemoTicker(micropixel::Application& app);
-[[nodiscard]] micropixel::Bitmap LoadDemoAtlas(micropixel::Application& app);
+[[nodiscard]] micropixel::Texture LoadDemoAtlas(micropixel::Application& app);
 
 void TimerDemoEnter(DemoContext& context);
 [[nodiscard]] bool TimerDemoOnTimer(DemoContext& context, const micropixel::TimerEvent& event);
 [[nodiscard]] bool TimerDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
-void TimerDemoRender(DemoContext& context, micropixel::CommandBuffer& commands);
+void TimerDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 void InputDemoEnter(DemoContext& context);
 [[nodiscard]] bool InputDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
-void InputDemoRender(DemoContext& context, micropixel::CommandBuffer& commands);
+void InputDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 void StorageDemoEnter(DemoContext& context);
 [[nodiscard]] bool StorageDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
-void StorageDemoRender(DemoContext& context, micropixel::CommandBuffer& commands);
+void StorageDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 void ResourceAtlasDemoEnter(DemoContext& context);
 [[nodiscard]] bool ResourceAtlasDemoOnTimer(DemoContext& context, const micropixel::TimerEvent& event);
 [[nodiscard]] bool ResourceAtlasDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
-void ResourceAtlasDemoRender(DemoContext& context, micropixel::CommandBuffer& commands);
+void ResourceAtlasDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 void AudioDemoEnter(DemoContext& context);
 void AudioDemoExit(DemoContext& context);
 [[nodiscard]] bool AudioDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
-void AudioDemoRender(DemoContext& context, micropixel::CommandBuffer& commands);
+void AudioDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 }  // namespace demo
 

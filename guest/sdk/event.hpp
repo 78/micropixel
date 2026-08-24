@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 
-#include "sdk/resources.hpp"
 #include "sdk/types.hpp"
 
 namespace micropixel {
@@ -17,7 +16,6 @@ enum class EventType : uint16_t {
     kStop,
     kTimer,
     kTouch,
-    kResourceReady,
 };
 
 enum class TouchPhase : uint8_t {
@@ -35,20 +33,29 @@ class TouchEvent final {
     [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
     [[nodiscard]] constexpr TouchPhase phase() const { return phase_; }
     [[nodiscard]] constexpr uint32_t id() const { return id_; }
-    [[nodiscard]] constexpr uint16_t x() const { return x_; }
-    [[nodiscard]] constexpr uint16_t y() const { return y_; }
-    [[nodiscard]] constexpr uint16_t pressure() const { return pressure_; }
+    [[nodiscard]] constexpr int32_t x() const { return x_; }
+    [[nodiscard]] constexpr int32_t y() const { return y_; }
+    [[nodiscard]] constexpr bool has_pressure() const { return has_pressure_; }
+    [[nodiscard]] constexpr uint16_t pressure_per_mille() const { return pressure_per_mille_; }
 
    private:
-    constexpr TouchEvent(TimePoint timestamp, TouchPhase phase, uint32_t id, uint16_t x, uint16_t y, uint16_t pressure)
-        : timestamp_(timestamp), phase_(phase), id_(id), x_(x), y_(y), pressure_(pressure) {}
+    constexpr TouchEvent(TimePoint timestamp, TouchPhase phase, uint32_t id, int32_t x, int32_t y,
+                         bool has_pressure, uint16_t pressure_per_mille)
+        : timestamp_(timestamp),
+          phase_(phase),
+          id_(id),
+          x_(x),
+          y_(y),
+          has_pressure_(has_pressure),
+          pressure_per_mille_(pressure_per_mille) {}
 
     TimePoint timestamp_{};
     TouchPhase phase_{TouchPhase::kCancel};
     uint32_t id_{};
-    uint16_t x_{};
-    uint16_t y_{};
-    uint16_t pressure_{};
+    int32_t x_{};
+    int32_t y_{};
+    bool has_pressure_{};
+    uint16_t pressure_per_mille_{};
 
     friend class Application;
     friend class Event;
@@ -61,14 +68,16 @@ class TimerEvent final {
 
     [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
     [[nodiscard]] constexpr Duration delta() const { return delta_; }
+    [[nodiscard]] constexpr uint32_t missed_count() const { return missed_count_; }
 
    private:
     constexpr TimerEvent() = default;
-    constexpr TimerEvent(TimePoint timestamp, Duration delta, uint32_t source)
-        : timestamp_(timestamp), delta_(delta), source_(source) {}
+    constexpr TimerEvent(TimePoint timestamp, Duration delta, uint32_t missed_count, uint32_t source)
+        : timestamp_(timestamp), delta_(delta), missed_count_(missed_count), source_(source) {}
 
     TimePoint timestamp_{};
     Duration delta_{};
+    uint32_t missed_count_{};
     uint32_t source_{};
 
     friend class Application;
@@ -90,7 +99,6 @@ class Event final {
     // The pointer remains valid until this Event is destroyed or reassigned.
     [[nodiscard]] const TimerEvent* TimerFrom(const Timer& source) const;
     [[nodiscard]] constexpr const TouchEvent* touch() const { return type_ == EventType::kTouch ? &touch_ : nullptr; }
-    [[nodiscard]] ResourceReadyEvent* ResourceFrom(LoadRequest& request);
 
    private:
     [[nodiscard]] constexpr const TimerEvent* timer() const { return type_ == EventType::kTimer ? &timer_ : nullptr; }
@@ -105,14 +113,10 @@ class Event final {
     explicit constexpr Event(TouchEvent touch)
         : type_(EventType::kTouch), timestamp_(touch.timestamp()), touch_(touch) {}
 
-    explicit constexpr Event(ResourceReadyEvent resource) : type_(EventType::kResourceReady), resource_(resource) {}
-
     EventType type_{EventType::kUnknown};
     TimePoint timestamp_{};
     TimerEvent timer_{};
-    TouchEvent touch_{TimePoint{}, TouchPhase::kCancel, 0U, 0U, 0U, 0U};
-    ResourceReadyEvent resource_{0U, 0U, 0};
-
+    TouchEvent touch_{TimePoint{}, TouchPhase::kCancel, 0U, 0, 0, false, 0U};
     friend class Application;
 };
 

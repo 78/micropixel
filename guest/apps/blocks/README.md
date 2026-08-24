@@ -34,10 +34,10 @@ bash tools/build_blocks_bundle.sh
 
 渲染器把 10×20 棋盘按每 5 行拆为 4 个 `300×150 RGB888` offscreen surface。Guest 缓存 200 个
 visual-cell code，逻辑变化后重新合成活动块、Ghost 和落定棋盘，只对 code 改变的 `30×30` 格子调用
-`OffscreenSurface::Update()`。每次 `SyncPlayfield()` 用一个 `OffscreenUpdateFrame` 包住全部写入；Host
+`StreamingTexture::Update()`。每次 `SyncPlayfield()` 用一个 `TextureUpdateBatch` 包住全部写入；Host
 按 surface 合并脏格，commit 时统一 invalidate 并只唤醒一次 compositor。合并后的活动块区域通常超过
 4096 pixels，可进入 ESP32-P4 PPA RGB888 image SRM 路径，不再把逐格 CPU fallback 过程暴露到屏幕。
-普通横移/旋转不提交新的 CommandBuffer；HUD、Hold/Next 和 overlay 仅在状态变化时提交。
+普通横移/旋转不提交新的 `Frame`；HUD、Hold/Next 和 overlay 仅在状态变化时提交。
 离屏 buffer 数量和脏格统计只保留在 Host 诊断日志中，不占用发布版 HUD。
 
 音效参数只维护在 `audio/sfx.json`。`tools/analyze_sfx.py` 逐采样复现 Host 合成器，结合可替换的设备

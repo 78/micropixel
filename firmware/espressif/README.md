@@ -21,7 +21,7 @@ Host 输出到 `build/host-esp32p4/`，conformance Guest 输出到 `build/guest-
 ## 构建配置
 
 - `sdkconfig.p4.defaults`：产品 defaults，使用固定 task core、dirty-region coalescing，并关闭测试钩子；
-- `sdkconfig.p4-conformance.defaults`：仅为 `event_wait` 和 `touch_pressure` 加入合成 Host 事件；
+- `sdkconfig.p4-conformance.defaults`：仅为 `event_wait`、`touch_pressure` 和 `run_handler_*` 加入合成 Host 事件；
 - `sdkconfig.p4-null.defaults`：覆盖产品 defaults，编译 Null Platform 以检查 Runtime/Device 的硬件无关路径；
 - `sdkconfig.debug.defaults`：显式追加时启用的调试配置。
 

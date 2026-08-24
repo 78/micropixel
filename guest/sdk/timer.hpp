@@ -9,11 +9,6 @@
 namespace micropixel {
 
 class Application;
-namespace detail {
-enum class ScheduleKind;
-template <ScheduleKind Kind, typename Callback>
-class TimerSchedule;
-}  // namespace detail
 
 // Move-only resource proxy. Each live Timer owns one Host Timer handle.
 class Timer final {
@@ -25,7 +20,7 @@ class Timer final {
 
     Timer& operator=(Timer&& other) noexcept {
         if (this != &other) {
-            Release();
+            Reset();
             handle_ = other.handle_;
             other.handle_ = 0U;
         }
@@ -34,7 +29,10 @@ class Timer final {
 
     ~Timer();
 
+    [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
     void Cancel();
+    /* Best-effort cancel + release. Safe to call repeatedly and from the destructor. */
+    void Reset();
 
    private:
     explicit constexpr Timer(uint32_t handle) : handle_(handle) {}
@@ -43,13 +41,9 @@ class Timer final {
         return handle_ != 0U && event.source_ == handle_;
     }
 
-    void Release();
-
     uint32_t handle_{};
     friend class Event;
     friend class Timers;
-    template <detail::ScheduleKind Kind, typename Callback>
-    friend class detail::TimerSchedule;
 };
 
 // Lightweight view of the Timer service. Copies are equivalent; Timer objects

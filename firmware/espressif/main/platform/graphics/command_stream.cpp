@@ -77,24 +77,24 @@ bool ValidRect(const Command& command, int32_t logical_width, int32_t logical_he
 }
 
 uint32_t BitmapBytesPerPixel(uint32_t pixel_format) {
-    if (pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB888) {
+    if (pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888) {
         return 3U;
     }
-    return pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? 4U : 0U;
+    return pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U;
 }
 
 template <typename Command>
 bool ValidBitmapCommand(const Command& command, int32_t logical_width, int32_t logical_height,
                         device::BitmapResolver resolver, void* resolver_context) {
     device::BitmapView bitmap{};
-    return command.bitmap != 0U && command.x >= 0 && command.y >= 0 && command.source_x >= 0 && command.source_y >= 0 &&
-           command.width > 0 && command.height > 0 &&
-           static_cast<int64_t>(command.x) + command.width <= logical_width &&
+    return command.texture != 0U && command.x >= 0 && command.y >= 0 && command.source_x >= 0 &&
+           command.source_y >= 0 && command.width > 0 && command.height > 0 && command.source_width > 0 &&
+           command.source_height > 0 && static_cast<int64_t>(command.x) + command.width <= logical_width &&
            static_cast<int64_t>(command.y) + command.height <= logical_height && resolver != nullptr &&
-           resolver(resolver_context, command.bitmap, bitmap) && bitmap.data != nullptr &&
+           resolver(resolver_context, command.texture, bitmap) && bitmap.data != nullptr &&
            BitmapBytesPerPixel(bitmap.pixel_format) != 0U &&
-           static_cast<int64_t>(command.source_x) + command.width <= bitmap.width &&
-           static_cast<int64_t>(command.source_y) + command.height <= bitmap.height &&
+           static_cast<int64_t>(command.source_x) + command.source_width <= bitmap.width &&
+           static_cast<int64_t>(command.source_y) + command.source_height <= bitmap.height &&
            bitmap.stride == bitmap.width * BitmapBytesPerPixel(bitmap.pixel_format) &&
            bitmap.size == bitmap.stride * bitmap.height;
 }
@@ -120,7 +120,7 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
     uint32_t offset = sizeof(header);
     bool inside_surface = false;
     bool surface_seen = false;
-    micropixel_graphics_begin_surface_command_t first_surface{};
+    micropixel_graphics_push_state_command_t first_surface{};
     for (uint32_t index = 0U; index < header.command_count; ++index) {
         micropixel_graphics_record_header_t record{};
         if (!ReadStruct(bytes, length, offset, record) || record.size < sizeof(record) || (record.size & 3U) != 0U ||
@@ -128,25 +128,26 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
 
-        if (record.opcode == MICROPIXEL_GRAPHICS_OP_BEGIN_SURFACE) {
+        if (record.opcode == MICROPIXEL_GRAPHICS_OP_PUSH_STATE) {
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-            micropixel_graphics_begin_surface_command_t command{};
+            micropixel_graphics_push_state_command_t command{};
             if (inside_surface || record.size != sizeof(command) || !ReadStruct(bytes, length, offset, command) ||
-                command.x < 0 || command.y < 0 || command.width <= 0 || command.height <= 0 ||
-                static_cast<int64_t>(command.x) + command.width > logical_width ||
-                static_cast<int64_t>(command.y) + command.height > logical_height || command.translate_x < -32 ||
+                command.clip_x < 0 || command.clip_y < 0 || command.width <= 0 || command.height <= 0 ||
+                static_cast<int64_t>(command.clip_x) + command.width > logical_width ||
+                static_cast<int64_t>(command.clip_y) + command.height > logical_height || command.translate_x < -32 ||
                 command.translate_x > 32 || command.translate_y < -32 || command.translate_y > 32 ||
-                (command.flags & ~MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION_ACTIVE) != 0U ||
-                (((command.flags & MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION_ACTIVE) != 0U) &&
-                 (command.x + command.translate_x < 0 || command.y + command.translate_y < 0 ||
-                  static_cast<int64_t>(command.x) + command.translate_x + command.width > logical_width ||
-                  static_cast<int64_t>(command.y) + command.translate_y + command.height > logical_height))) {
+                (command.flags & ~MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE) != 0U ||
+                (((command.flags & MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE) != 0U) &&
+                 (command.clip_x + command.translate_x < 0 || command.clip_y + command.translate_y < 0 ||
+                  static_cast<int64_t>(command.clip_x) + command.translate_x + command.width > logical_width ||
+                  static_cast<int64_t>(command.clip_y) + command.translate_y + command.height > logical_height))) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
             if (surface_seen &&
-                (command.x != first_surface.x || command.y != first_surface.y || command.width != first_surface.width ||
-                 command.height != first_surface.height || command.translate_x != first_surface.translate_x ||
-                 command.translate_y != first_surface.translate_y || command.flags != first_surface.flags)) {
+                (command.clip_x != first_surface.clip_x || command.clip_y != first_surface.clip_y ||
+                 command.width != first_surface.width || command.height != first_surface.height ||
+                 command.translate_x != first_surface.translate_x || command.translate_y != first_surface.translate_y ||
+                 command.flags != first_surface.flags)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
             if (!surface_seen) {
@@ -157,9 +158,9 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
 #else
             return MICROPIXEL_STATUS_UNSUPPORTED;
 #endif
-        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_END_SURFACE) {
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_POP_STATE) {
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-            micropixel_graphics_end_surface_command_t command{};
+            micropixel_graphics_pop_state_command_t command{};
             if (!inside_surface || record.size != sizeof(command) || !ReadStruct(bytes, length, offset, command)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
@@ -204,14 +205,14 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
                     return MICROPIXEL_STATUS_INVALID_ARGUMENT;
                 }
             }
-        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_BITMAP) {
-            micropixel_graphics_draw_bitmap_command_t command{};
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE) {
+            micropixel_graphics_draw_texture_command_t command{};
             if (record.size != sizeof(command) || !ReadStruct(bytes, length, offset, command) ||
                 !ValidBitmapCommand(command, logical_width, logical_height, resolver, resolver_context)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
-        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_BITMAP) {
-            micropixel_graphics_blend_bitmap_command_t command{};
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE) {
+            micropixel_graphics_blend_texture_command_t command{};
             if (record.size != sizeof(command) || !ReadStruct(bytes, length, offset, command) ||
                 !ValidBitmapCommand(command, logical_width, logical_height, resolver, resolver_context) ||
                 command.reserved[0] != 0U || command.reserved[1] != 0U || command.reserved[2] != 0U) {
@@ -223,6 +224,54 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
         offset += record.size;
     }
     return offset == length && !inside_surface ? MICROPIXEL_STATUS_OK : MICROPIXEL_STATUS_INVALID_ARGUMENT;
+}
+
+bool CollectTextureHandles(const uint8_t* bytes, uint32_t length, micropixel_texture_handle_t* textures_out,
+                           uint32_t capacity, uint32_t& count_out) {
+    count_out = 0U;
+    micropixel_graphics_command_header_t header{};
+    if (textures_out == nullptr || !ReadStruct(bytes, length, 0U, header) || header.total_size != length) {
+        return false;
+    }
+    uint32_t offset = sizeof(header);
+    for (uint32_t index = 0U; index < header.command_count; ++index) {
+        micropixel_graphics_record_header_t record{};
+        if (!ReadStruct(bytes, length, offset, record) || record.size < sizeof(record) ||
+            record.size > length - offset) {
+            return false;
+        }
+        micropixel_texture_handle_t texture = 0U;
+        if (record.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE) {
+            micropixel_graphics_draw_texture_command_t command{};
+            if (!ReadStruct(bytes, length, offset, command)) {
+                return false;
+            }
+            texture = command.texture;
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE) {
+            micropixel_graphics_blend_texture_command_t command{};
+            if (!ReadStruct(bytes, length, offset, command)) {
+                return false;
+            }
+            texture = command.texture;
+        }
+        if (texture != 0U) {
+            bool exists = false;
+            for (uint32_t candidate = 0U; candidate < count_out; ++candidate) {
+                if (textures_out[candidate] == texture) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                if (count_out >= capacity) {
+                    return false;
+                }
+                textures_out[count_out++] = texture;
+            }
+        }
+        offset += record.size;
+    }
+    return offset == length;
 }
 
 }  // namespace micropixel::platform::graphics

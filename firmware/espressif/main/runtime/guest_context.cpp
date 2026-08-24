@@ -17,7 +17,7 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       clock_origin_us_(esp_timer_get_time()),
       events_{},
       timers_(events_, clock_origin_us_),
-      resources_(package, events_, clock_origin_us_),
+      resources_(package),
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),
       timer_endpoint_(*this),
@@ -112,14 +112,34 @@ void GuestContext::ForceStop() {
     events_.Close();
 }
 
-bool GuestContext::ResolveBitmapForGraphics(void* context, micropixel_bitmap_handle_t bitmap,
-                                            device::BitmapView& view_out) {
-    return context != nullptr && static_cast<GuestContext*>(context)->ResolveBitmap(bitmap, view_out);
+bool GuestContext::ResolveTextureForGraphics(void* context, micropixel_texture_handle_t texture,
+                                             device::BitmapView& view_out) {
+    return context != nullptr && static_cast<GuestContext*>(context)->ResolveTexture(texture, view_out);
+}
+
+bool GuestContext::RetainTextureForGraphics(void* context, micropixel_texture_handle_t texture) {
+    return context != nullptr && static_cast<GuestContext*>(context)->resources_.RetainSceneTexture(texture);
+}
+
+void GuestContext::ReleaseTextureForGraphics(void* context, micropixel_texture_handle_t texture) {
+    if (context != nullptr) {
+        static_cast<GuestContext*>(context)->resources_.ReleaseSceneTexture(texture);
+    }
+}
+
+device::TextureAccess GuestContext::GraphicsTextureAccess() {
+    return device::TextureAccess{
+        .context = this,
+        .resolve = ResolveTextureForGraphics,
+        .retain = RetainTextureForGraphics,
+        .release = ReleaseTextureForGraphics,
+    };
 }
 
 device::DeviceResult<void> GuestContext::GraphicsSubmit(const uint8_t* bytes, uint32_t length) {
     uint64_t touch_sample_us = touch_events_.TakeSampleForGraphics();
-    auto result = devices_.graphics().Submit(bytes, length, ResolveBitmapForGraphics, this);
+    const device::TextureAccess textures = GraphicsTextureAccess();
+    auto result = devices_.graphics().Submit(bytes, length, textures);
     if (result) {
         touch_events_.NoteGraphicsSubmitComplete(touch_sample_us);
     }
@@ -129,35 +149,38 @@ device::DeviceResult<void> GuestContext::GraphicsSubmit(const uint8_t* bytes, ui
 device::DeviceResult<void> GuestContext::GraphicsBeginFrame() { return devices_.graphics().BeginFrame(); }
 
 device::DeviceResult<void> GuestContext::GraphicsCommitFrame() {
-    return devices_.graphics().CommitFrame(ResolveBitmapForGraphics, this);
+    const device::TextureAccess textures = GraphicsTextureAccess();
+    return devices_.graphics().CommitFrame(textures);
 }
 
-ServiceResult<void> GuestContext::UpdateOffscreenSurface(const micropixel_offscreen_surface_update_request_t& update,
+device::DeviceResult<void> GuestContext::GraphicsCancelFrame() { return devices_.graphics().CancelFrame(); }
+
+ServiceResult<void> GuestContext::UpdateStreamingTexture(const micropixel_streaming_texture_update_request_t& update,
                                                          const uint8_t* pixels) {
-    auto bitmap = resources_.MutableBitmap(update.bitmap);
-    if (!bitmap) {
-        return FailService<void>(bitmap.error().status);
+    auto texture = resources_.MutableTexture(update.texture);
+    if (!texture) {
+        return FailService<void>(texture.error().status);
     }
-    const uint32_t bytes_per_pixel = bitmap->pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB888
+    const uint32_t bytes_per_pixel = texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
                                          ? 3U
-                                         : (bitmap->pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? 4U : 0U);
+                                         : (texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
     if (pixels == nullptr || update.width == 0U || update.height == 0U || bytes_per_pixel == 0U ||
-        static_cast<uint64_t>(update.x) + update.width > bitmap->width ||
-        static_cast<uint64_t>(update.y) + update.height > bitmap->height ||
-        update.stride != update.width * bytes_per_pixel) {
+        static_cast<uint64_t>(update.x) + update.width > texture->width ||
+        static_cast<uint64_t>(update.y) + update.height > texture->height ||
+        update.pitch != update.width * bytes_per_pixel) {
         return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    auto result = devices_.graphics().UpdateBitmap(*bitmap, update.x, update.y, update.width, update.height, pixels,
-                                                   update.stride);
+    auto result = devices_.graphics().UpdateBitmap(*texture, update.x, update.y, update.width, update.height, pixels,
+                                                   update.pitch);
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> GuestContext::BeginOffscreenUpdateFrame() {
+ServiceResult<void> GuestContext::BeginTextureUpdateBatch() {
     auto result = devices_.graphics().BeginBitmapUpdateFrame();
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> GuestContext::CommitOffscreenUpdateFrame() {
+ServiceResult<void> GuestContext::FinishTextureUpdateBatch() {
     auto result = devices_.graphics().CommitBitmapUpdateFrame();
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }

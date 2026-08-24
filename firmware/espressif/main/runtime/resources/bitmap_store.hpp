@@ -11,8 +11,9 @@
 
 namespace micropixel::runtime {
 
-// Owns Guest-visible Bitmap handles and the decoded-PSRAM quota. Asynchronous
-// request scheduling remains the sole responsibility of ResourceService.
+// Owns Guest-visible Texture handles and the decoded-PSRAM quota. BitmapView is
+// the internal pixel descriptor used by render backends; the resource identity
+// exposed across the ABI is always a Texture handle.
 class BitmapStore final {
    public:
     BitmapStore() = default;
@@ -20,21 +21,25 @@ class BitmapStore final {
     BitmapStore& operator=(const BitmapStore&) = delete;
     ~BitmapStore();
 
-    [[nodiscard]] micropixel_bitmap_handle_t Add(const device::BitmapView& view, bool owned,
-                                                 bool mutable_pixels = false);
-    [[nodiscard]] micropixel_bitmap_handle_t CreateOffscreenSurface(uint32_t width, uint32_t height,
-                                                                    uint32_t pixel_format);
-    [[nodiscard]] bool Resolve(micropixel_bitmap_handle_t bitmap, device::BitmapView& view_out) const;
-    [[nodiscard]] bool ResolveMutable(micropixel_bitmap_handle_t bitmap, device::BitmapView& view_out) const;
-    void Release(micropixel_bitmap_handle_t bitmap);
+    [[nodiscard]] micropixel_texture_handle_t Add(const device::BitmapView& view, bool owned,
+                                                  bool mutable_pixels = false);
+    [[nodiscard]] micropixel_texture_handle_t CreateOffscreenSurface(uint32_t width, uint32_t height,
+                                                                     uint32_t pixel_format);
+    [[nodiscard]] bool Resolve(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const;
+    [[nodiscard]] bool ResolveMutable(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const;
+    [[nodiscard]] bool RetainSceneReference(micropixel_texture_handle_t bitmap);
+    void ReleaseSceneReference(micropixel_texture_handle_t bitmap);
+    void Release(micropixel_texture_handle_t bitmap);
     void ReleaseAll();
 
    private:
     struct Slot final {
-        micropixel_bitmap_handle_t handle{};
+        micropixel_texture_handle_t handle{};
         device::BitmapView view{};
+        uint32_t scene_references{};
         bool owned{};
         bool mutable_pixels{};
+        bool guest_reference{};
     };
 
     mutable portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;

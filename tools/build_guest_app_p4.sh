@@ -109,6 +109,7 @@ fi
     -Wl,--export-if-defined=__wasm_call_ctors \
     -Wl,--export-if-defined=__micropixel_test_event_wait \
     -Wl,--export-if-defined=__micropixel_test_touch_pressure \
+    -Wl,--export-if-defined=__micropixel_test_run_handler \
     ${link_profile_flags[@]+"${link_profile_flags[@]}"} \
     "$workspace_root/guest/runtime/startup.cpp" \
     "$workspace_root/guest/runtime/sdk.cpp" \

@@ -15,8 +15,8 @@ enum class GestureKind : uint8_t {
 
 struct Gesture final {
     GestureKind kind{GestureKind::kNone};
-    uint16_t x{};
-    uint16_t y{};
+    int32_t x{};
+    int32_t y{};
     int32_t dx{};
     int32_t dy{};
 };
@@ -64,7 +64,7 @@ class SwipeGesture final {
 
     [[nodiscard]] static int32_t Absolute(int32_t value) { return value < 0 ? -value : value; }
 
-    [[nodiscard]] Gesture SwipeIfReady(uint16_t x, uint16_t y, int32_t dx, int32_t dy) {
+    [[nodiscard]] Gesture SwipeIfReady(int32_t x, int32_t y, int32_t dx, int32_t dy) {
         if (Absolute(dx) < kSwipeThresholdPx && Absolute(dy) < kSwipeThresholdPx) {
             return {};
         }

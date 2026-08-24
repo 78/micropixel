@@ -45,33 +45,43 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
 ## 控制面、提交面和事件面
 
 - Timer、Storage、Resource、Audio 控制以及各类 `get_info` 使用 `service_call`。
-- Graphics CommandBuffer 使用 `service_submit`，避免逐条绘图跨 ABI。
+- Renderer Frame command stream 使用 `service_submit`，避免逐条绘图跨 ABI。
 - 未来 Audio/Network 流量先使用 `service_submit` 的独立 channel；只有真机基准证明该传输
   无法满足背压或吞吐需求时，才讨论新增 Core import。
-- 异步完成统一通过 `micropixel_event_t` 返回。
+- Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
-当前 Graphics command protocol 直接包含可选 Surface translation、`BLEND_RECT` 和
-`BLEND_BITMAP`，不保留尚未发布过的中间 minor 版本。后者的 `opacity` 是当前 bitmap command 的统一
-alpha，和资源自身的逐像素 alpha 相乘，不是跨 command 保留的渲染状态。不透明 `DRAW_BITMAP` 走
-Host 的 copy 快速路径。
+当前 Graphics command protocol 包含 `PUSH_STATE` / `POP_STATE`、`BLEND_RECT`、`DRAW_TEXTURE` 和
+`BLEND_TEXTURE`。SDK 用前两者 lowering `Save`、clip、translation 和 `Restore`；capable Host 可把稳定
+scope 识别为 retained translation，但该优化不进入 Public C++ API。texture command 的 `opacity` 与
+资源自身逐像素 alpha 相乘；不透明 `DRAW_TEXTURE` 走 Host copy 快速路径。Texture wire command 分别携带
+destination rectangle 与 source rectangle，因此 1:1、裁剪、缩放及裁剪后缩放不需要新增 opcode。
+`max_draw_operations` 是 Public SDK 可见的稳定绘制预算，`max_frame_commands` 只用于 SDK/Host transport，
+自动生成的 state 与跨批续接记录不会改变应用预算。
 
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、
-Input touch、Resource ready 和 Core host wake。新增事件不会扩大 Core import 表。
+Input touch 和 Core host wake。新增事件不会扩大 Core import 表。
+
+- 周期 Timer 队列中同一 handle 最多保留一条记录。积压时 `elapsed_us` 累加，`missed_count` 统计未单独
+  投递的 tick；队列满导致的 tick 也结转到下一次成功事件。
+- Touch wire 坐标是 `int32_t`。`pressure_per_mille` 仅在 Input 宣告
+  `MICROPIXEL_INPUT_CAP_PRESSURE` 时有意义，范围固定为 0..1000。GT911 不宣告该能力并始终写 0。
 
 ## 稳定性与安全规则
 
 - 已发布的 Service、method、channel、event、field、capability 和 opcode ID 永不改义、永不复用。
 - Core ABI major 不兼容时拒绝加载；Service major 必须相同，Host minor 必须不低于 Guest 要求。
 - Host 在进入 Service Handler 前完成 Guest pointer/length 校验；Handler 仍验证 schema、上限和句柄。
-- Guest 不持有 Host 指针。Timer、LoadRequest、Bitmap 等资源使用 Guest-local generation handle，
+- Guest 不持有 Host 指针。Timer、Texture 等资源使用 Guest-local generation handle，
   由 SDK 的 move-only RAII 对象释放。
-- Resource 1.1 在既有 Bitmap handle 空间中追加 offscreen surface create/update；Resource 1.2 再追加
-  update-frame begin/commit，用于把多次局部写入组成一个原子显示事务。Surface 像素由 Host
-  PSRAM 持有并计入 Bitmap 配额；update request 由 32-byte header 和紧密排列的原生格式脏矩形组成，
-  总长度不超过 4096 bytes。Host 只允许修改带 `MICROPIXEL_BITMAP_FLAG_MUTABLE` 的句柄，并再次校验
-  bounds、stride、格式和精确 payload 长度。Frame 内的写入先按 backing Bitmap 合并 damage；commit
-  才在同一个显示锁临界区 invalidate 全部区域并唤醒一次 compositor。
+- Retained scene 持有独立 Texture 引用。Guest release 只撤销 Guest 引用；显示场景替换或 Session teardown
+  后才撤销 scene 引用，两个引用都归零时才释放像素内存。
+- Resource 1.0 提供同步 `LOAD_TEXTURE`、release、streaming texture create/update 和 update batch。
+  压缩图片仍由 Host worker 解码，但 `service_call` 等待 worker 完成并在等待期间暂停 Guest watchdog；
+  不分配 request handle，也不产生 Resource-ready event。StreamingTexture 像素由 Host PSRAM 持有并计入
+  Texture 配额；update request 由 32-byte header 和紧密排列的原生格式脏矩形组成，总长度不超过
+  4096 bytes。Host 只允许修改带 `MICROPIXEL_TEXTURE_FLAG_STREAMING` 的句柄，并再次校验 bounds、
+  pitch、格式和精确 payload 长度。Batch 内先合并 damage，finish 时统一 invalidate 并只唤醒一次 compositor。
 - 固定容量、配额、超时和背压属于 Host 策略；只有 wire-format 硬上限进入公共 ABI。
 - Public Guest 链接必须使用 allowlist，禁止用全局 `--allow-undefined` 掩盖拼写错误或未授权依赖。
 

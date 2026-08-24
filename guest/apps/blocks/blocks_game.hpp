@@ -15,10 +15,10 @@ struct ScheduledTone final {
 
 class BlocksGame final {
    public:
-    BlocksGame(micropixel::Application& app, micropixel::Graphics graphics, micropixel::GraphicsInfo graphics_info,
+    BlocksGame(micropixel::Application& app, micropixel::Renderer renderer, micropixel::RendererInfo renderer_info,
                micropixel::Audio audio, bool audio_available, uint32_t best_score);
 
-    void set_bitmaps(micropixel::Bitmap board, micropixel::Bitmap start, micropixel::Bitmap restart);
+    void set_textures(micropixel::Texture board, micropixel::Texture start, micropixel::Texture restart);
     void OnTimer(const micropixel::TimerEvent& tick);
     void OnTouch(const micropixel::TouchEvent& touch);
     void Render();
@@ -36,12 +36,12 @@ class BlocksGame final {
     void RasterizeCell(uint32_t column, uint32_t row, uint8_t visual);
     void PutCellPixel(uint32_t x, uint32_t y, Rgb color);
     [[nodiscard]] uint8_t VisualCell(uint32_t column, uint32_t row) const;
-    void RenderMiniPiece(micropixel::CommandBuffer& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
+    void RenderMiniPiece(micropixel::Frame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
                          bool visible) const;
-    void RenderHeader(micropixel::CommandBuffer& commands, const Theme& theme) const;
-    void RenderSidebar(micropixel::CommandBuffer& commands, const Theme& theme) const;
-    void RenderStatusEffect(micropixel::CommandBuffer& commands, const Theme& theme) const;
-    void RenderOverlay(micropixel::CommandBuffer& commands) const;
+    void RenderHeader(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderSidebar(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderOverlay(micropixel::Frame& commands) const;
 
     [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
                                              uint16_t volume_per_mille, uint16_t attack_ms = 4U,
@@ -60,14 +60,14 @@ class BlocksGame final {
     void PlayGameOverSound();
 
     micropixel::Application& app_;
-    micropixel::Graphics graphics_;
-    micropixel::GraphicsInfo graphics_info_;
+    micropixel::Renderer renderer_;
+    micropixel::RendererInfo renderer_info_;
     micropixel::Audio audio_;
     BlocksModel model_{};
-    micropixel::Bitmap board_bitmap_{};
-    micropixel::Bitmap start_button_bitmap_{};
-    micropixel::Bitmap restart_button_bitmap_{};
-    micropixel::OffscreenSurface playfield_surfaces_[4U]{};
+    micropixel::Texture board_texture_{};
+    micropixel::Texture start_button_texture_{};
+    micropixel::Texture restart_button_texture_{};
+    micropixel::StreamingTexture playfield_surfaces_[4U]{};
     micropixel::ui::Button screen_button_{};
     ScheduledTone scheduled_tones_[8U]{};
     Screen screen_{Screen::kMenu};

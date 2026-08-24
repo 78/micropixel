@@ -28,14 +28,15 @@ DeviceResult<micropixel_graphics_info_t> GraphicsService::GetInfo() const {
 
 DeviceResult<void> GraphicsService::BeginFrame() const { return StatusResult(backend_.BeginFrame()); }
 
-DeviceResult<void> GraphicsService::Submit(const uint8_t* bytes, uint32_t length, BitmapResolver resolver,
-                                           void* resolver_context) const {
-    return StatusResult(backend_.Submit(bytes, length, resolver, resolver_context));
+DeviceResult<void> GraphicsService::Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const {
+    return StatusResult(backend_.Submit(bytes, length, textures));
 }
 
-DeviceResult<void> GraphicsService::CommitFrame(BitmapResolver resolver, void* resolver_context) const {
-    return StatusResult(backend_.CommitFrame(resolver, resolver_context));
+DeviceResult<void> GraphicsService::CommitFrame(const TextureAccess& textures) const {
+    return StatusResult(backend_.CommitFrame(textures));
 }
+
+DeviceResult<void> GraphicsService::CancelFrame() const { return StatusResult(backend_.CancelFrame()); }
 
 DeviceResult<void> GraphicsService::BeginBitmapUpdateFrame() const {
     return StatusResult(backend_.BeginBitmapUpdateFrame());

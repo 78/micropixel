@@ -165,68 +165,62 @@ ServiceDescriptor ResourceServiceEndpoint::Describe() const {
         .service_id = MICROPIXEL_SERVICE_RESOURCE,
         .interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR,
         .interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR,
-        .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_EVENTS,
-        .max_request_bytes = MICROPIXEL_OFFSCREEN_SURFACE_MAX_UPDATE_BYTES,
-        .max_response_bytes = sizeof(micropixel_bitmap_info_t),
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL,
+        .max_request_bytes = MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES,
+        .max_response_bytes = sizeof(micropixel_texture_info_t),
     };
 }
 
 int32_t ResourceServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size,
                                       uint8_t* response, uint32_t response_capacity, uint32_t& response_size_out) {
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_LOAD) {
-        micropixel_resource_load_request_t wire{};
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_LOAD_TEXTURE) {
+        micropixel_resource_load_texture_request_t wire{};
         if (!ReadRequest(request, request_size, wire) || wire.asset_id == 0U) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        auto result = context_.AssetLoad(wire.asset_id);
-        return result ? WriteHandle(*result, response, response_capacity, response_size_out) : result.error().status;
+        return WriteResult<micropixel_texture_info_t>(context_.LoadTexture(wire.asset_id), response, response_capacity,
+                                                      response_size_out);
     }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_SURFACE_CREATE) {
-        micropixel_offscreen_surface_create_request_t wire{};
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_CREATE) {
+        micropixel_streaming_texture_create_request_t wire{};
         if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        auto result = context_.CreateOffscreenSurface(wire.width, wire.height, wire.pixel_format);
-        return result ? WriteHandle(*result, response, response_capacity, response_size_out) : result.error().status;
+        return WriteResult<micropixel_texture_info_t>(
+            context_.CreateStreamingTexture(wire.width, wire.height, wire.pixel_format), response, response_capacity,
+            response_size_out);
     }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_SURFACE_UPDATE) {
-        micropixel_offscreen_surface_update_request_t wire{};
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_UPDATE) {
+        micropixel_streaming_texture_update_request_t wire{};
         if (!ReadRequest(request, request_size, wire) || wire.size != request_size || wire.reserved0 != 0U ||
-            wire.reserved1 != 0U || wire.bitmap == 0U || wire.width == 0U || wire.height == 0U) {
+            wire.reserved1 != 0U || wire.texture == 0U || wire.width == 0U || wire.height == 0U) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        const uint64_t pixel_bytes = static_cast<uint64_t>(wire.stride) * wire.height;
+        const uint64_t pixel_bytes = static_cast<uint64_t>(wire.pitch) * wire.height;
         if (pixel_bytes > UINT32_MAX || sizeof(wire) + pixel_bytes != request_size) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        return ResultStatus(context_.UpdateOffscreenSurface(wire, request + sizeof(wire)));
+        return ResultStatus(context_.UpdateStreamingTexture(wire, request + sizeof(wire)));
     }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_FRAME_BEGIN) {
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_BEGIN) {
         if (!EmptyRequest(request_size)) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        return ResultStatus(context_.BeginOffscreenUpdateFrame());
+        return ResultStatus(context_.BeginTextureUpdateBatch());
     }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_OFFSCREEN_FRAME_COMMIT) {
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_FINISH) {
         if (!EmptyRequest(request_size)) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        return ResultStatus(context_.CommitOffscreenUpdateFrame());
+        return ResultStatus(context_.FinishTextureUpdateBatch());
     }
 
     uint32_t handle = 0U;
     if (!ReadHandle(request, request_size, handle)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_CANCEL) {
-        return ResultStatus(context_.AssetRequestCancel(handle));
-    }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_BITMAP_GET_INFO) {
-        return WriteResult<micropixel_bitmap_info_t>(context_.BitmapInfo(handle), response, response_capacity,
-                                                     response_size_out);
-    }
-    if (method_id == MICROPIXEL_RESOURCE_METHOD_BITMAP_RELEASE) {
-        return ResultStatus(context_.BitmapRelease(handle));
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_TEXTURE_RELEASE) {
+        return ResultStatus(context_.ReleaseTexture(handle));
     }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }
@@ -295,6 +289,12 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         return ResultStatus(context_.GraphicsCommitFrame());
+    }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_FRAME_CANCEL) {
+        if (!EmptyRequest(request_size)) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return ResultStatus(context_.GraphicsCancelFrame());
     }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }

@@ -53,18 +53,21 @@ int main() {
     micropixel::Timer coalescing = app.timers().Every(micropixel::Duration::Milliseconds(1));
     (void)WaitForTimer(app, coalescing);
 
-    /* Reuse Host slots repeatedly; move-only RAII must Release Every handle. */
+    /* Reuse Host slots repeatedly; move-only RAII must Reset every handle. */
     for (uint32_t iteration = 0; iteration < 256U; ++iteration) {
         micropixel::Timer temporary = app.timers().After(micropixel::Duration::Seconds(60));
         (void)temporary;
     }
-    (void)WaitForTimer(app, coalescing);
+    micropixel::TimerEvent coalesced = WaitForTimer(app, coalescing);
+    if (coalesced.missed_count() == 0U) {
+        return 45;
+    }
     coalescing.Cancel();
 
     micropixel::Duration elapsed = app.clock().Now() - run_started;
     if (!DurationBetween(elapsed, 350000U, 900000U)) {
         return 46;
     }
-    app.log().Info("timer_counter: one-shot, periodic, Cancel, Clock/TimePoint and RAII passed");
+    app.log().Info("timer_counter: one-shot, periodic, missed_count, Cancel, Clock/TimePoint and RAII passed");
     return 0;
 }

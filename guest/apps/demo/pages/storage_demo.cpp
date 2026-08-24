@@ -54,7 +54,7 @@ class StoragePage final {
         return redraw;
     }
 
-    void Render(DemoContext& context, micropixel::CommandBuffer& commands) {
+    void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
         commands.DrawTextCentered(center_x, 130, "The value survives app and device restarts.", MutedColor(), 18U);
         commands.FillRect(micropixel::Rect{56, 198, static_cast<int32_t>(context.display.width()) - 112, 260},
@@ -87,8 +87,6 @@ bool StorageDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& even
     return storage_page.OnTouch(context, event);
 }
 
-void StorageDemoRender(DemoContext& context, micropixel::CommandBuffer& commands) {
-    storage_page.Render(context, commands);
-}
+void StorageDemoRender(DemoContext& context, micropixel::Frame& commands) { storage_page.Render(context, commands); }
 
 }  // namespace demo

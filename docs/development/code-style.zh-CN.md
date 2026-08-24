@@ -84,7 +84,7 @@ MicroPixel 是项目正式名称，C++ namespace 统一使用 `micropixel`。板
 | --- | --- | --- |
 | namespace | `lower_snake_case` | `micropixel::runtime` |
 | 类型、enum class | `PascalCase` | `Application`, `ErrorCode` |
-| 普通函数、普通方法 | `PascalCase` | `WaitEvent`, `CommandBuffer::Submit` |
+| 普通函数、普通方法 | `PascalCase` | `WaitEvent`, `Frame::Present` |
 | property accessor/mutator | `snake_case` | `width()`, `set_board()` |
 | 变量、参数 | `snake_case` | `error_code`, `elapsed_us` |
 | 私有数据成员 | `snake_case_` | `handle_`, `initialized_` |
@@ -126,9 +126,9 @@ Host 可以使用目标工具链提供的 C++23 标准库子集；Guest SDK 必�
 `-std=c++23 -ffreestanding -nostdlib -fno-exceptions -fno-rtti` 下构建，不能假定 `<new>`、
 `<utility>`、`<type_traits>`、标准容器或异常运行时存在。
 
-Public SDK 可以使用一层模板把 callback 的类型安全地保存在 Guest 内，例如
-`app.Every(50_ms, callback)`；不得让应用显式填写模板参数，也不得把模板错误替代清晰的任务
-概念。常用路径应能从 `sdk/micropixel.hpp` 单头文件编译，业务型 `Result<T>` 则按需显式包含。
+Public SDK 可以使用一层模板检查 `Application::Run(handler)` 的 handler 签名；不得让应用显式填写
+模板参数，也不得把模板错误替代清晰的事件概念。常用路径应能从 `sdk/micropixel.hpp` 单头文件编译，
+业务型 `Result<T>` 则按需显式包含。
 
 ### 4.1 C++26 实验边界
 
@@ -146,9 +146,8 @@ Public 类型的名称、复制能力和所有权必须共同表达其类别：
 | 类别 | 规则 | 示例 |
 | --- | --- | --- |
 | Service View | 由 `app.xxx()` 按值返回，轻量且 copyable，没有独立资源身份 | `Log`、`Clock`、`Timers` |
-| Resource | 工厂创建，默认 move-only，拥有 typed Host handle | `Timer`、未来的 `Surface` |
+| Resource | 工厂创建，默认 move-only，拥有 typed Host handle | `Timer`、`Texture`、`StreamingTexture` |
 | Value | copyable，只包含自有数据，不在析构时调用 Host | `Duration`、`TimePoint`、typed event |
-| Task/Subscription | 默认 move-only，拥有 callback 或事件注册关系 | `TimerSchedule`、未来的 `TouchSubscription` |
 
 Module 是编译、链接或部署概念，不作为运行时对象类别。Service View 的 class 名不添加机械的
 `Service`、`Manager` 或 `View` 后缀；通过获取位置、copyability 和文档表达语义：
@@ -161,19 +160,20 @@ Timer timer = timers.After(100_ms);    // Resource
 ```
 
 强类型单位不得同时保留无单位整数构造。`Duration` 只能通过 `_us/_ms/_s` literal 或带单位 factory
-构造；`TimePoint` 的非零值只能来自 `Clock` 或 typed event。callback template 必须用
-`static_assert`/`requires` 给出任务层诊断，不能让错误签名最后表现为难以定位的模板展开失败。
+构造；`TimePoint` 的非零值只能来自 `Clock` 或 typed event。`Run(handler)` template 必须用
+`static_assert`/`requires` 给出事件层诊断，不能让错误签名最后表现为难以定位的模板展开失败。
 
-`Application` 是 capability façade。它可以公开 `graphics()`、`audio()`、`input()` 等稳定顶层
-能力入口以及 `After/Every/Run` 这类应用级编排快捷方式，但不能吸收 Service 或 Resource 的叶子
-操作。优先在 Input service 上增加普通方法，不新增 Application 的同类叶子操作；优先写
-`commands.FillRect(...)`，不新增 `app.DrawRect(...)`。
+`Application` 是 capability façade。它可以公开 `renderer()`、`audio()`、`input()` 等稳定顶层
+能力入口和唯一的 `Run(handler)` 事件编排入口，但不能吸收 Service 或 Resource 的叶子操作。
+Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service 上增加普通方法，
+不新增 Application 的同类叶子操作；优先写 `frame.FillRect(...)`，不新增
+`app.DrawRect(...)`。
 
 ## 5. 所有权和错误处理
 
 - Host 资源由 move-only SDK proxy 持有，析构自动 release；
 - 运行时集合默认使用编译期固定容量；容量来自产品或协议上限，不在实时路径隐式扩容；
-- Timer、Surface、Audio Voice、Guest Context 等高频创建且具有稳定身份的同构资源使用有界对象池；
+- Timer、Texture、Audio Voice、Guest Context 等具有稳定身份的同构资源使用有界对象池；
 - 普通 value type 直接按值存储，不为统一形式机械放入对象池；
 - 裸指针默认是 non-owning，必须从作用域和类型上看出其有效期；
 - 跨 ABI 的 pointer/length、handle、类型、generation 和所属 Guest 必须由 Host 验证；
@@ -196,7 +196,7 @@ Timer timer = timers.After(100_ms);    // Resource
 - ESP-IDF、WAMR、LVGL 和具体开发板类型不得出现在 Guest Public API。
 - 一个 Public C++ 方法不自动对应一个 Wasm import；低频能力优先 lower 到通用 Service 控制面，
   高频/大块数据只有在测量证明需要时才增加专用 transport。新增 import 必须遵守
-  [Guest–Host Service ABI 稳定与演进规范](../design/guest-host-service-abi.zh-CN.md)。
+  [Guest–Host ABI](../../guest/abi/README.md)。
 
 ## 7. C 代码
 

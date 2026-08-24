@@ -20,10 +20,10 @@ typedef enum micropixel_bundle_section_kind {
 
 typedef enum micropixel_bundle_section_format {
     MICROPIXEL_BUNDLE_FORMAT_AOT_RELOCATABLE = 1,
-    MICROPIXEL_BUNDLE_FORMAT_RAW_RGB888 = 2,
+    MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 = 2,
     MICROPIXEL_BUNDLE_FORMAT_JPEG = 3,
     MICROPIXEL_BUNDLE_FORMAT_PNG = 4,
-    MICROPIXEL_BUNDLE_FORMAT_RAW_ARGB8888 = 5,
+    MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 = 5,
     MICROPIXEL_BUNDLE_FORMAT_UTF8 = 6,
 } micropixel_bundle_section_format_t;
 

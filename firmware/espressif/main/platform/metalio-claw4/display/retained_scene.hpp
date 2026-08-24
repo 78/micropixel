@@ -38,7 +38,7 @@ class RetainedScene final {
         lv_obj_t* object{};
         lv_obj_t* parent{};
         uint16_t opcode{};
-        micropixel_bitmap_handle_t bitmap{};
+        micropixel_texture_handle_t texture{};
         lv_image_dsc_t image{};
         char text[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
         uint16_t text_length{};
@@ -46,8 +46,12 @@ class RetainedScene final {
         int32_t y{};
         int32_t source_x{};
         int32_t source_y{};
+        int32_t source_width{};
+        int32_t source_height{};
         int32_t width{};
         int32_t height{};
+        uint32_t scale_x{};
+        uint32_t scale_y{};
         uint32_t rgb888{};
         uint8_t opacity{};
         const lv_font_t* font{};

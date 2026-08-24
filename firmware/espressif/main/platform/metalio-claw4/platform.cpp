@@ -46,8 +46,12 @@ constexpr int kHeight = 720;
 constexpr BaseType_t kLvglTaskCore = 1;
 constexpr uint32_t kRefreshPeriodMs = 1000;
 constexpr uint32_t kBitmapDamageCapacity = 16U;
+constexpr uint32_t kMaxSceneTextures = MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS;
+constexpr int32_t kHallCardWidth = 218;
+constexpr int32_t kHallCardRadius = 22;
+constexpr int32_t kHallCardBorderWidth = 1;
 constexpr uint32_t kHallCoverBytesPerPixel = 3U;
-constexpr uint32_t kHallCoverNativeSize = 218U;
+constexpr uint32_t kHallCoverNativeSize = static_cast<uint32_t>(kHallCardWidth);
 constexpr uint32_t kHallCoverNativeStride = kHallCoverNativeSize * kHallCoverBytesPerPixel;
 constexpr uint32_t kHallCoverNativeBytes = kHallCoverNativeStride * kHallCoverNativeSize;
 #if CONFIG_MICROPIXEL_LVGL_PPA_ACCEL
@@ -137,7 +141,9 @@ void MaskHallCoverCorners(uint8_t* destination) {
     }
     // Bake the four small corner masks into the retained bitmap instead of
     // making LVGL allocate a card-sized rounded clipping layer on every redraw.
-    constexpr uint32_t kRadius = 26U;
+    // The cover is drawn full-bleed below the card's post-drawn border, so its
+    // baked corner mask must use the same outer radius as the card.
+    constexpr uint32_t kRadius = static_cast<uint32_t>(kHallCardRadius);
     constexpr int32_t kCenter = static_cast<int32_t>(kRadius - 1U);
     constexpr int32_t kRadiusSquared = kCenter * kCenter;
     const auto set_pixel = [destination](uint32_t x, uint32_t y, uint32_t rgb) {
@@ -247,6 +253,12 @@ struct MetalioClaw4PlatformState final {
     uint8_t* graphics_frame_bytes{};
     uint32_t graphics_frame_length{};
     uint32_t graphics_frame_commands{};
+    micropixel_texture_handle_t graphics_frame_textures[kMaxSceneTextures]{};
+    uint32_t graphics_frame_texture_count{};
+    device::TextureAccess graphics_frame_texture_access{};
+    micropixel_texture_handle_t scene_textures[kMaxSceneTextures]{};
+    uint32_t scene_texture_count{};
+    device::TextureAccess scene_texture_access{};
     uint32_t graphics_frame_sequence{};
     uint32_t presented_guest_frame_sequence{};
     uint32_t performance_last_frame_sequence{};
@@ -263,15 +275,15 @@ struct MetalioClaw4PlatformState final {
     uint32_t hall_app_count{};
     uint32_t hall_touch_id{};
     uint32_t hall_touch_card{host_ui::kMaxHallApps};
-    uint16_t hall_touch_down_x{};
-    uint16_t hall_touch_down_y{};
+    int32_t hall_touch_down_x{};
+    int32_t hall_touch_down_y{};
     uint64_t hall_touch_down_us{};
     bool hall_touch_close{};
     bool hall_app_running[host_ui::kMaxHallApps]{};
     uint32_t status_touch_id{};
     StatusTouchTarget status_touch_target{StatusTouchTarget::kNone};
-    uint16_t status_touch_down_x{};
-    uint16_t status_touch_down_y{};
+    int32_t status_touch_down_x{};
+    int32_t status_touch_down_y{};
     uint64_t status_touch_down_us{};
     uint64_t status_slider_last_emit_us{};
     uint8_t status_slider_values[2]{};
@@ -282,6 +294,78 @@ struct MetalioClaw4PlatformState final {
     bool bitmap_update_frame_active{};
     bool graphics_frame_active{};
 };
+
+bool SameTextureAccess(const device::TextureAccess& left, const device::TextureAccess& right) {
+    return left.context == right.context && left.resolve == right.resolve && left.retain == right.retain &&
+           left.release == right.release;
+}
+
+void ReleaseTextures(const device::TextureAccess& access, const micropixel_texture_handle_t* textures, uint32_t count) {
+    if (access.release == nullptr) {
+        return;
+    }
+    for (uint32_t index = 0U; index < count; ++index) {
+        access.release(access.context, textures[index]);
+    }
+}
+
+bool RetainTextures(const device::TextureAccess& access, const micropixel_texture_handle_t* textures, uint32_t count) {
+    if (count != 0U && (access.retain == nullptr || access.release == nullptr)) {
+        return false;
+    }
+    uint32_t retained = 0U;
+    for (; retained < count; ++retained) {
+        if (!access.retain(access.context, textures[retained])) {
+            break;
+        }
+    }
+    if (retained == count) {
+        return true;
+    }
+    ReleaseTextures(access, textures, retained);
+    return false;
+}
+
+void ClearPendingFrameTextures(MetalioClaw4PlatformState& state, bool release) {
+    if (release) {
+        ReleaseTextures(state.graphics_frame_texture_access, state.graphics_frame_textures,
+                        state.graphics_frame_texture_count);
+    }
+    state.graphics_frame_texture_count = 0U;
+    state.graphics_frame_texture_access = {};
+}
+
+bool AddPendingFrameTextures(MetalioClaw4PlatformState& state, const micropixel_texture_handle_t* textures,
+                             uint32_t count, const device::TextureAccess& access) {
+    if (state.graphics_frame_texture_count != 0U && !SameTextureAccess(state.graphics_frame_texture_access, access)) {
+        return false;
+    }
+    const uint32_t original_count = state.graphics_frame_texture_count;
+    for (uint32_t index = 0U; index < count; ++index) {
+        bool exists = false;
+        for (uint32_t current = 0U; current < state.graphics_frame_texture_count; ++current) {
+            if (state.graphics_frame_textures[current] == textures[index]) {
+                exists = true;
+                break;
+            }
+        }
+        if (exists) {
+            continue;
+        }
+        if (state.graphics_frame_texture_count >= kMaxSceneTextures || access.retain == nullptr ||
+            !access.retain(access.context, textures[index])) {
+            ReleaseTextures(access, state.graphics_frame_textures + original_count,
+                            state.graphics_frame_texture_count - original_count);
+            state.graphics_frame_texture_count = original_count;
+            return false;
+        }
+        state.graphics_frame_textures[state.graphics_frame_texture_count++] = textures[index];
+    }
+    if (original_count == 0U) {
+        state.graphics_frame_texture_access = access;
+    }
+    return true;
+}
 
 bool AccumulateDamage(BitmapDamage* damages, uint32_t& damage_count, const uint8_t* data, uint32_t x, uint32_t y,
                       uint32_t width, uint32_t height) {
@@ -477,15 +561,15 @@ int32_t GraphicsGetInfoImpl(const MetalioClaw4PlatformState& state, micropixel_g
     info.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
     info.width = kWidth;
     info.height = kHeight;
-    info.pixel_format = MICROPIXEL_PIXEL_FORMAT_RGB888;
+    info.pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888;
     info.capabilities = 0U;
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    info.capabilities |= MICROPIXEL_GRAPHICS_CAP_SURFACE_TRANSLATION;
+    info.capabilities |= MICROPIXEL_GRAPHICS_CAP_RETAINED_TRANSLATION;
 #endif
     info.capabilities |= MICROPIXEL_GRAPHICS_CAP_MULTI_SUBMIT_FRAME;
     info.max_command_bytes = MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES;
     info.max_commands = MICROPIXEL_GRAPHICS_MAX_COMMANDS;
-    info.max_text_bytes = MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES;
+    info.max_draw_operations = MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS;
     info.max_frame_commands = MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS;
     return MICROPIXEL_STATUS_OK;
 }
@@ -516,11 +600,11 @@ bool DismissHostSmokeLocked(MetalioClaw4PlatformState& state) {
 }
 
 int32_t ShowLaunchBitmapImpl(MetalioClaw4PlatformState& state, const device::BitmapView& bitmap) {
-    const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? 4U : 3U;
+    const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 3U;
     if (state.display == nullptr || state.host_smoke == nullptr || bitmap.data == nullptr ||
         (!esp_ptr_in_drom(bitmap.data) && !esp_ptr_external_ram(bitmap.data)) ||
-        (bitmap.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB888 &&
-         bitmap.pixel_format != MICROPIXEL_PIXEL_FORMAT_ARGB8888) ||
+        (bitmap.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
+         bitmap.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888) ||
         bitmap.width == 0U || bitmap.height == 0U || bitmap.width > static_cast<uint32_t>(kWidth) ||
         bitmap.height > static_cast<uint32_t>(kHeight) || bitmap.stride != bitmap.width * bytes_per_pixel ||
         bitmap.size != bitmap.stride * bitmap.height) {
@@ -529,7 +613,7 @@ int32_t ShowLaunchBitmapImpl(MetalioClaw4PlatformState& state, const device::Bit
     if (esp_ptr_external_ram(bitmap.data)) {
         lv_draw_buf_t draw_buf{};
         if (lv_draw_buf_init(&draw_buf, bitmap.width, bitmap.height,
-                             bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? LV_COLOR_FORMAT_ARGB8888
+                             bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888
                                                                                      : LV_COLOR_FORMAT_RGB888,
                              bitmap.stride, const_cast<uint8_t*>(bitmap.data), bitmap.size) != LV_RESULT_OK) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
@@ -543,12 +627,12 @@ int32_t ShowLaunchBitmapImpl(MetalioClaw4PlatformState& state, const device::Bit
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
     const uint32_t launch_background =
-        bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB888 ? LaunchBackgroundRgb888(bitmap) : 0x08111fU;
+        bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888 ? LaunchBackgroundRgb888(bitmap) : 0x08111fU;
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(launch_background), 0);
     state.launch_image_descriptor = {};
     state.launch_image_descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
     state.launch_image_descriptor.header.cf =
-        bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
+        bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
     state.launch_image_descriptor.header.w = bitmap.width;
     state.launch_image_descriptor.header.h = bitmap.height;
     state.launch_image_descriptor.header.stride = bitmap.stride;
@@ -566,7 +650,7 @@ int32_t ShowLaunchBitmapImpl(MetalioClaw4PlatformState& state, const device::Bit
     esp_lv_adapter_unlock();
     ESP_LOGI(kTag, "Bundle launch bitmap visible: %" PRIu32 "x%" PRIu32 " format=%s source=%s:%p bytes=%" PRIu32,
              bitmap.width, bitmap.height,
-             bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? "ARGB8888" : "RGB888",
+             bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? "ARGB8888" : "RGB888",
              esp_ptr_external_ram(bitmap.data) ? "psram" : "flash-mmap", bitmap.data, bitmap.size);
     return MICROPIXEL_STATUS_OK;
 }
@@ -628,12 +712,11 @@ struct HallCardBounds final {
 HallCardBounds HallCard(uint32_t index) {
     constexpr int32_t kCardLeft = 17;
     constexpr int32_t kCardTop = 164;
-    constexpr int32_t kCardWidth = 218;
     constexpr int32_t kCardHeight = 270;
     constexpr int32_t kCardGap = 16;
-    return HallCardBounds{.x = kCardLeft + static_cast<int32_t>(index) * (kCardWidth + kCardGap),
+    return HallCardBounds{.x = kCardLeft + static_cast<int32_t>(index) * (kHallCardWidth + kCardGap),
                           .y = kCardTop,
-                          .width = kCardWidth,
+                          .width = kHallCardWidth,
                           .height = kCardHeight};
 }
 
@@ -853,18 +936,21 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
     lv_obj_set_pos(card, bounds.x, bounds.y);
     lv_obj_set_size(card, bounds.width, bounds.height);
     lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_set_style_radius(card, 22, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_radius(card, kHallCardRadius, 0);
+    lv_obj_set_style_border_width(card, kHallCardBorderWidth, 0);
     lv_obj_set_style_border_color(card, lv_color_hex(0x2e4562U), 0);
+    lv_obj_set_style_border_post(card, true, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x111f32U), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_t* cover = lv_obj_create(card);
-    lv_obj_set_pos(cover, 0, 0);
+    // Child coordinates start inside the border. Offset by the border width so
+    // the cover and its baked mask share the card's outer bounds.
+    lv_obj_set_pos(cover, -kHallCardBorderWidth, -kHallCardBorderWidth);
     lv_obj_set_size(cover, bounds.width, bounds.width);
-    lv_obj_set_style_radius(cover, 0, 0);
+    lv_obj_set_style_radius(cover, kHallCardRadius, 0);
     lv_obj_set_style_border_width(cover, 0, 0);
     lv_obj_set_style_bg_color(cover, lv_color_hex(0x182d48U), 0);
     lv_obj_remove_flag(cover, LV_OBJ_FLAG_SCROLLABLE);
@@ -928,22 +1014,25 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
         lv_obj_set_size(close, 50, 50);
         lv_obj_set_style_radius(close, 25, 0);
         lv_obj_set_style_border_width(close, 0, 0);
-        lv_obj_set_style_bg_color(close, lv_color_hex(0xff9f43U), 0);
+        lv_obj_set_style_bg_color(close, lv_color_hex(0x08111fU), 0);
         lv_obj_set_style_bg_opa(close, LV_OPA_90, 0);
         lv_obj_remove_flag(close, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_remove_flag(close, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_t* close_label = lv_label_create(close);
-        lv_label_set_text(close_label, "X");
-        lv_obj_set_style_text_font(close_label, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(close_label, lv_color_hex(0x08111fU), 0);
-        lv_obj_set_style_text_opa(close_label, LV_OPA_COVER, 0);
-        lv_obj_center(close_label);
+        lv_obj_t* stop_icon = lv_obj_create(close);
+        lv_obj_set_size(stop_icon, 18, 18);
+        lv_obj_set_style_radius(stop_icon, 3, 0);
+        lv_obj_set_style_border_width(stop_icon, 0, 0);
+        lv_obj_set_style_bg_color(stop_icon, lv_color_hex(0xff5c5cU), 0);
+        lv_obj_set_style_bg_opa(stop_icon, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(stop_icon, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(stop_icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_center(stop_icon);
     }
 
     lv_obj_t* press_overlay = lv_obj_create(card);
-    lv_obj_set_pos(press_overlay, 0, 0);
+    lv_obj_set_pos(press_overlay, -kHallCardBorderWidth, -kHallCardBorderWidth);
     lv_obj_set_size(press_overlay, bounds.width, bounds.height);
-    lv_obj_set_style_radius(press_overlay, 22, 0);
+    lv_obj_set_style_radius(press_overlay, kHallCardRadius, 0);
     lv_obj_set_style_border_width(press_overlay, 0, 0);
     lv_obj_set_style_bg_color(press_overlay, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(press_overlay, LV_OPA_40, 0);
@@ -1093,6 +1182,12 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
         (void)CreateHallLabel(state.host_smoke, model.status_app_id, &lv_font_montserrat_18, 0x91a4bdU, 40, 638);
     }
     lv_obj_move_foreground(state.host_smoke);
+    if (state.performance_overlay != nullptr && !lv_obj_has_flag(state.performance_overlay, LV_OBJ_FLAG_HIDDEN)) {
+        // Rebinding the Hall after its status layer closes rebuilds this root.
+        // Preserve the final-display HUD z-order in the same locked update so
+        // the Hall cannot cover it for one refresh before the next sample.
+        lv_obj_move_foreground(state.performance_overlay);
+    }
     lv_timer_ready(lv_display_get_refr_timer(state.display));
     esp_lv_adapter_unlock();
 
@@ -1835,7 +1930,8 @@ void UpdatePerformanceOverlayImpl(MetalioClaw4PlatformState& state, bool enabled
 // Caller owns the LVGL adapter mutex, so all retained-object mutations remain
 // serialized with LVGL refreshes.
 int32_t ApplyGraphicsFrameLocked(MetalioClaw4PlatformState& state, const uint8_t* bytes, uint32_t length,
-                                 device::BitmapResolver resolver, void* resolver_context) {
+                                 const device::TextureAccess& textures,
+                                 const micropixel_texture_handle_t* retained_textures, uint32_t retained_count) {
     if (!state.retained_scene.Initialize()) {
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
@@ -1845,7 +1941,7 @@ int32_t ApplyGraphicsFrameLocked(MetalioClaw4PlatformState& state, const uint8_t
         StyleFullscreenContainer(state.guest_frame, 0x000000U);
     }
     const metalio_claw4::RetainedFrameResult result =
-        state.retained_scene.Execute(bytes, length, state.guest_frame, resolver, resolver_context);
+        state.retained_scene.Execute(bytes, length, state.guest_frame, textures.resolve, textures.context);
     if (result.status != MICROPIXEL_STATUS_OK) {
         ESP_LOGE(kTag, "retained-object command execution failed");
         return result.status;
@@ -1876,9 +1972,17 @@ int32_t ApplyGraphicsFrameLocked(MetalioClaw4PlatformState& state, const uint8_t
         needs_present = true;
     }
     if (!needs_present) {
+        ReleaseTextures(state.scene_texture_access, state.scene_textures, state.scene_texture_count);
+        std::memcpy(state.scene_textures, retained_textures, retained_count * sizeof(retained_textures[0]));
+        state.scene_texture_count = retained_count;
+        state.scene_texture_access = retained_count == 0U ? device::TextureAccess{} : textures;
         return MICROPIXEL_STATUS_OK;
     }
     lv_timer_ready(lv_display_get_refr_timer(state.display));
+    ReleaseTextures(state.scene_texture_access, state.scene_textures, state.scene_texture_count);
+    std::memcpy(state.scene_textures, retained_textures, retained_count * sizeof(retained_textures[0]));
+    state.scene_texture_count = retained_count;
+    state.scene_texture_access = retained_count == 0U ? device::TextureAccess{} : textures;
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -1893,6 +1997,10 @@ void ReleaseGuestGraphicsImpl(MetalioClaw4PlatformState& state) {
         lv_timer_ready(lv_display_get_refr_timer(state.display));
         ESP_LOGI(kTag, "Guest graphics tree released before Bitmap teardown");
     }
+    ReleaseTextures(state.scene_texture_access, state.scene_textures, state.scene_texture_count);
+    state.scene_texture_count = 0U;
+    state.scene_texture_access = {};
+    ClearPendingFrameTextures(state, true);
     state.bitmap_update_frame_active = false;
     state.bitmap_damage_count = 0U;
     state.bitmap_frame_updates = 0U;
@@ -1923,13 +2031,14 @@ int32_t GraphicsBeginFrameImpl(MetalioClaw4PlatformState& state) {
     std::memset(state.graphics_frame_bytes, 0, sizeof(micropixel_graphics_command_header_t));
     state.graphics_frame_length = sizeof(micropixel_graphics_command_header_t);
     state.graphics_frame_commands = 0U;
+    ClearPendingFrameTextures(state, true);
     state.graphics_frame_active = true;
     return MICROPIXEL_STATUS_OK;
 }
 
 int32_t GraphicsSubmitImpl(MetalioClaw4PlatformState& state, const uint8_t* bytes, uint32_t length,
-                           device::BitmapResolver resolver, void* resolver_context) {
-    if (state.display == nullptr || bytes == nullptr) {
+                           const device::TextureAccess& textures) {
+    if (state.display == nullptr || bytes == nullptr || textures.resolve == nullptr) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
 
@@ -1941,13 +2050,21 @@ int32_t GraphicsSubmitImpl(MetalioClaw4PlatformState& state, const uint8_t* byte
         }
     }
     const int32_t validation_status =
-        graphics::ValidateCommandStream(bytes, length, kWidth, kHeight, resolver, resolver_context);
+        graphics::ValidateCommandStream(bytes, length, kWidth, kHeight, textures.resolve, textures.context);
     if (validation_status != MICROPIXEL_STATUS_OK) {
         if (lvgl_locked) {
             esp_lv_adapter_unlock();
         }
         ESP_LOGW(kTag, "rejected graphics batch: status=%" PRId32 " bytes=%" PRIu32, validation_status, length);
         return validation_status;
+    }
+    micropixel_texture_handle_t frame_textures[kMaxSceneTextures]{};
+    uint32_t frame_texture_count = 0U;
+    if (!graphics::CollectTextureHandles(bytes, length, frame_textures, kMaxSceneTextures, frame_texture_count)) {
+        if (lvgl_locked) {
+            esp_lv_adapter_unlock();
+        }
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     if (state.graphics_frame_active) {
         micropixel_graphics_command_header_t batch_header{};
@@ -1958,13 +2075,24 @@ int32_t GraphicsSubmitImpl(MetalioClaw4PlatformState& state, const uint8_t* byte
             record_bytes > MICROPIXEL_GRAPHICS_MAX_FRAME_COMMAND_BYTES - state.graphics_frame_length) {
             return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
         }
+        if (!AddPendingFrameTextures(state, frame_textures, frame_texture_count, textures)) {
+            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+        }
         std::memcpy(state.graphics_frame_bytes + state.graphics_frame_length, bytes + sizeof(batch_header),
                     record_bytes);
         state.graphics_frame_length += record_bytes;
         state.graphics_frame_commands += batch_header.command_count;
         return MICROPIXEL_STATUS_OK;
     }
-    const int32_t execution_status = ApplyGraphicsFrameLocked(state, bytes, length, resolver, resolver_context);
+    if (!RetainTextures(textures, frame_textures, frame_texture_count)) {
+        esp_lv_adapter_unlock();
+        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+    }
+    const int32_t execution_status =
+        ApplyGraphicsFrameLocked(state, bytes, length, textures, frame_textures, frame_texture_count);
+    if (execution_status != MICROPIXEL_STATUS_OK) {
+        ReleaseTextures(textures, frame_textures, frame_texture_count);
+    }
     if (lvgl_locked) {
         esp_lv_adapter_unlock();
     }
@@ -1975,8 +2103,7 @@ int32_t GraphicsSubmitImpl(MetalioClaw4PlatformState& state, const uint8_t* byte
     return MICROPIXEL_STATUS_OK;
 }
 
-int32_t GraphicsCommitFrameImpl(MetalioClaw4PlatformState& state, device::BitmapResolver resolver,
-                                void* resolver_context) {
+int32_t GraphicsCommitFrameImpl(MetalioClaw4PlatformState& state, const device::TextureAccess& textures) {
     if (state.display == nullptr) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
@@ -1997,13 +2124,19 @@ int32_t GraphicsCommitFrameImpl(MetalioClaw4PlatformState& state, device::Bitmap
     state.graphics_frame_length = 0U;
     state.graphics_frame_commands = 0U;
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        ClearPendingFrameTextures(state, true);
         return MICROPIXEL_STATUS_INTERNAL;
     }
-    const int32_t status =
-        ApplyGraphicsFrameLocked(state, state.graphics_frame_bytes, frame_bytes, resolver, resolver_context);
+    const device::TextureAccess retained_access =
+        state.graphics_frame_texture_count == 0U ? textures : state.graphics_frame_texture_access;
+    const int32_t status = ApplyGraphicsFrameLocked(state, state.graphics_frame_bytes, frame_bytes, retained_access,
+                                                    state.graphics_frame_textures, state.graphics_frame_texture_count);
     const uint32_t sequence = status == MICROPIXEL_STATUS_OK ? ++state.graphics_frame_sequence : 0U;
     if (status == MICROPIXEL_STATUS_OK) {
         ++state.presented_guest_frame_sequence;
+        ClearPendingFrameTextures(state, false);
+    } else {
+        ClearPendingFrameTextures(state, true);
     }
     esp_lv_adapter_unlock();
     if (status == MICROPIXEL_STATUS_OK && (sequence <= 8U || (sequence % 120U) == 0U)) {
@@ -2011,6 +2144,17 @@ int32_t GraphicsCommitFrameImpl(MetalioClaw4PlatformState& state, device::Bitmap
                  frame_bytes);
     }
     return status;
+}
+
+int32_t GraphicsCancelFrameImpl(MetalioClaw4PlatformState& state) {
+    if (!state.graphics_frame_active) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    state.graphics_frame_active = false;
+    state.graphics_frame_length = 0U;
+    state.graphics_frame_commands = 0U;
+    ClearPendingFrameTextures(state, true);
+    return MICROPIXEL_STATUS_OK;
 }
 
 int32_t GraphicsBeginBitmapUpdateFrameImpl(MetalioClaw4PlatformState& state) {
@@ -2035,11 +2179,11 @@ int32_t GraphicsBeginBitmapUpdateFrameImpl(MetalioClaw4PlatformState& state) {
 
 int32_t GraphicsUpdateBitmapImpl(MetalioClaw4PlatformState& state, const device::BitmapView& bitmap, uint32_t x,
                                  uint32_t y, uint32_t width, uint32_t height, const uint8_t* pixels, uint32_t stride) {
-    const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB888
+    const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
                                          ? 3U
-                                         : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? 4U : 0U);
+                                         : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
     if (state.display == nullptr || bitmap.data == nullptr || pixels == nullptr || bytes_per_pixel == 0U ||
-        (bitmap.flags & MICROPIXEL_BITMAP_FLAG_MUTABLE) == 0U || width == 0U || height == 0U ||
+        (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || width == 0U || height == 0U ||
         static_cast<uint64_t>(x) + width > bitmap.width || static_cast<uint64_t>(y) + height > bitmap.height ||
         stride != width * bytes_per_pixel || bitmap.stride != bitmap.width * bytes_per_pixel ||
         bitmap.size != bitmap.stride * bitmap.height) {
@@ -2131,16 +2275,15 @@ metalio_claw4::GraphicsOperations MakeGraphicsOperations(MetalioClaw4PlatformSta
         .begin_frame =
             [](void* context) { return GraphicsBeginFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .submit =
-            [](void* context, const uint8_t* bytes, uint32_t length, device::BitmapResolver resolver,
-               void* resolver_context) {
-                return GraphicsSubmitImpl(*static_cast<MetalioClaw4PlatformState*>(context), bytes, length, resolver,
-                                          resolver_context);
+            [](void* context, const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) {
+                return GraphicsSubmitImpl(*static_cast<MetalioClaw4PlatformState*>(context), bytes, length, textures);
             },
         .commit_frame =
-            [](void* context, device::BitmapResolver resolver, void* resolver_context) {
-                return GraphicsCommitFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context), resolver,
-                                               resolver_context);
+            [](void* context, const device::TextureAccess& textures) {
+                return GraphicsCommitFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context), textures);
             },
+        .cancel_frame =
+            [](void* context) { return GraphicsCancelFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .begin_bitmap_update_frame =
             [](void* context) {
                 return GraphicsBeginBitmapUpdateFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context));

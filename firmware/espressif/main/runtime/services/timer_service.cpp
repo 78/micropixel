@@ -260,6 +260,8 @@ void TimerService::OnExpired(void* argument) {
     micropixel_timer_handle_t handle = slot.handle;
     uint64_t delta = timestamp - slot.last_event_us;
     uint32_t sequence = slot.sequence + 1U;
+    slot.last_event_us = timestamp;
+    slot.sequence = sequence;
     if (!periodic) {
         slot.active = false;
     }
@@ -288,20 +290,17 @@ void TimerService::OnExpired(void* argument) {
 
     portENTER_CRITICAL(&service.state_lock_);
     if (slot.handle == handle) {
-        if (delivered) {
-            slot.last_event_us = timestamp;
-            slot.sequence = sequence;
-            if (periodic && slot.period_us > 0U) {
-                uint64_t jitter = delta >= slot.period_us ? delta - slot.period_us : slot.period_us - delta;
-                ++service.timing_samples_;
-                service.jitter_total_us_ += jitter;
-                service.jitter_min_us_ = std::min(service.jitter_min_us_, jitter);
-                service.jitter_max_us_ = std::max(service.jitter_max_us_, jitter);
-            }
-        } else if (result == PeriodicPushResult::kCoalesced) {
+        if (periodic && slot.period_us > 0U) {
+            uint64_t jitter = delta >= slot.period_us ? delta - slot.period_us : slot.period_us - delta;
+            ++service.timing_samples_;
+            service.jitter_total_us_ += jitter;
+            service.jitter_min_us_ = std::min(service.jitter_min_us_, jitter);
+            service.jitter_max_us_ = std::max(service.jitter_max_us_, jitter);
+        }
+        if (!delivered && result == PeriodicPushResult::kCoalesced) {
             ++slot.coalesced;
             ++service.coalesced_total_;
-        } else {
+        } else if (!delivered) {
             ++slot.dropped;
             ++service.dropped_total_;
         }

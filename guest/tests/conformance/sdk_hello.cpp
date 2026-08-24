@@ -74,6 +74,9 @@ int main() {
 
     micropixel::Log log = app.log();
     micropixel::Log same_log = log;
+    same_log.Debug("sdk_hello: debug log available");
     same_log.Info("sdk_hello: startup ABI check, service views and SDK are ready");
+    same_log.Warning("sdk_hello: warning log available");
+    same_log.Error("sdk_hello: error log available");
     return 0;
 }

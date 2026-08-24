@@ -26,9 +26,9 @@ class GraphicsService final {
     [[nodiscard]] bool Available() const { return backend_.Available(); }
     [[nodiscard]] DeviceResult<micropixel_graphics_info_t> GetInfo() const;
     [[nodiscard]] DeviceResult<void> BeginFrame() const;
-    [[nodiscard]] DeviceResult<void> Submit(const uint8_t* bytes, uint32_t length, BitmapResolver resolver,
-                                            void* resolver_context) const;
-    [[nodiscard]] DeviceResult<void> CommitFrame(BitmapResolver resolver, void* resolver_context) const;
+    [[nodiscard]] DeviceResult<void> Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const;
+    [[nodiscard]] DeviceResult<void> CommitFrame(const TextureAccess& textures) const;
+    [[nodiscard]] DeviceResult<void> CancelFrame() const;
     [[nodiscard]] DeviceResult<void> BeginBitmapUpdateFrame() const;
     [[nodiscard]] DeviceResult<void> UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                                   uint32_t height, const uint8_t* pixels, uint32_t stride) const;

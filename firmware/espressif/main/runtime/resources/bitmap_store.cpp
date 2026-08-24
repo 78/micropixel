@@ -10,7 +10,7 @@ namespace micropixel::runtime {
 
 BitmapStore::~BitmapStore() { ReleaseAll(); }
 
-micropixel_bitmap_handle_t BitmapStore::Add(const device::BitmapView& view, bool owned, bool mutable_pixels) {
+micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, bool owned, bool mutable_pixels) {
     if (view.data == nullptr || view.size == 0U) {
         return 0U;
     }
@@ -28,7 +28,13 @@ micropixel_bitmap_handle_t BitmapStore::Add(const device::BitmapView& view, bool
         if (handle == 0U) {
             handle = next_handle_++;
         }
-        slot = {handle, view, owned, mutable_pixels};
+        slot = {
+            .handle = handle,
+            .view = view,
+            .owned = owned,
+            .mutable_pixels = mutable_pixels,
+            .guest_reference = true,
+        };
         if (owned) {
             owned_bytes_ += view.size;
         }
@@ -39,10 +45,11 @@ micropixel_bitmap_handle_t BitmapStore::Add(const device::BitmapView& view, bool
     return 0U;
 }
 
-micropixel_bitmap_handle_t BitmapStore::CreateOffscreenSurface(uint32_t width, uint32_t height, uint32_t pixel_format) {
-    const uint32_t bytes_per_pixel = pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB888
+micropixel_texture_handle_t BitmapStore::CreateOffscreenSurface(uint32_t width, uint32_t height,
+                                                                uint32_t pixel_format) {
+    const uint32_t bytes_per_pixel = pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
                                          ? 3U
-                                         : (pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? 4U : 0U);
+                                         : (pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
     const uint64_t stride = static_cast<uint64_t>(width) * bytes_per_pixel;
     const uint64_t size = stride * height;
     if (width == 0U || height == 0U || width > 720U || height > 720U || bytes_per_pixel == 0U || stride > UINT32_MAX ||
@@ -55,20 +62,21 @@ micropixel_bitmap_handle_t BitmapStore::CreateOffscreenSurface(uint32_t width, u
         return 0U;
     }
     std::memset(pixels, 0, static_cast<size_t>(size));
-    device::BitmapView view{pixels,       static_cast<uint32_t>(size),   width, height, static_cast<uint32_t>(stride),
-                            pixel_format, MICROPIXEL_BITMAP_FLAG_MUTABLE};
-    const micropixel_bitmap_handle_t handle = Add(view, true, true);
+    device::BitmapView view{
+        pixels,       static_cast<uint32_t>(size),      width, height, static_cast<uint32_t>(stride),
+        pixel_format, MICROPIXEL_TEXTURE_FLAG_STREAMING};
+    const micropixel_texture_handle_t handle = Add(view, true, true);
     if (handle == 0U) {
         std::free(pixels);
     }
     return handle;
 }
 
-bool BitmapStore::Resolve(micropixel_bitmap_handle_t bitmap, device::BitmapView& view_out) const {
+bool BitmapStore::Resolve(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const {
     bool found = false;
     portENTER_CRITICAL(&lock_);
     for (const auto& slot : slots_) {
-        if (slot.handle == bitmap) {
+        if (slot.handle == bitmap && slot.guest_reference) {
             view_out = slot.view;
             found = true;
             break;
@@ -78,11 +86,11 @@ bool BitmapStore::Resolve(micropixel_bitmap_handle_t bitmap, device::BitmapView&
     return found;
 }
 
-bool BitmapStore::ResolveMutable(micropixel_bitmap_handle_t bitmap, device::BitmapView& view_out) const {
+bool BitmapStore::ResolveMutable(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const {
     bool found = false;
     portENTER_CRITICAL(&lock_);
     for (const auto& slot : slots_) {
-        if (slot.handle == bitmap && slot.mutable_pixels) {
+        if (slot.handle == bitmap && slot.guest_reference && slot.mutable_pixels) {
             view_out = slot.view;
             found = true;
             break;
@@ -92,18 +100,56 @@ bool BitmapStore::ResolveMutable(micropixel_bitmap_handle_t bitmap, device::Bitm
     return found;
 }
 
-void BitmapStore::Release(micropixel_bitmap_handle_t bitmap) {
+bool BitmapStore::RetainSceneReference(micropixel_texture_handle_t bitmap) {
+    bool retained = false;
+    portENTER_CRITICAL(&lock_);
+    for (auto& slot : slots_) {
+        if (slot.handle == bitmap && slot.guest_reference && slot.scene_references != UINT32_MAX) {
+            ++slot.scene_references;
+            retained = true;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&lock_);
+    return retained;
+}
+
+void BitmapStore::ReleaseSceneReference(micropixel_texture_handle_t bitmap) {
+    const uint8_t* owned_data = nullptr;
+    portENTER_CRITICAL(&lock_);
+    for (auto& slot : slots_) {
+        if (slot.handle != bitmap || slot.scene_references == 0U) {
+            continue;
+        }
+        --slot.scene_references;
+        if (slot.scene_references == 0U && !slot.guest_reference) {
+            if (slot.owned) {
+                owned_bytes_ -= slot.view.size;
+                owned_data = slot.view.data;
+            }
+            slot = {};
+        }
+        break;
+    }
+    portEXIT_CRITICAL(&lock_);
+    std::free(const_cast<uint8_t*>(owned_data));
+}
+
+void BitmapStore::Release(micropixel_texture_handle_t bitmap) {
     const uint8_t* owned_data = nullptr;
     portENTER_CRITICAL(&lock_);
     for (auto& slot : slots_) {
         if (slot.handle != bitmap) {
             continue;
         }
-        if (slot.owned) {
-            owned_bytes_ -= slot.view.size;
-            owned_data = slot.view.data;
+        slot.guest_reference = false;
+        if (slot.scene_references == 0U) {
+            if (slot.owned) {
+                owned_bytes_ -= slot.view.size;
+                owned_data = slot.view.data;
+            }
+            slot = {};
         }
-        slot = {};
         break;
     }
     portEXIT_CRITICAL(&lock_);

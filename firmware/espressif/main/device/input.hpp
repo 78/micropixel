@@ -17,9 +17,9 @@ enum class TouchPhase : uint8_t {
 struct TouchSample final {
     uint64_t timestamp_us{};
     uint32_t id{};
-    uint16_t x{};
-    uint16_t y{};
-    uint16_t pressure{};
+    int32_t x{};
+    int32_t y{};
+    uint16_t pressure_per_mille{};
     TouchPhase phase{TouchPhase::kCancel};
 };
 

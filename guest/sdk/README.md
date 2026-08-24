@@ -1,9 +1,10 @@
 # Guest C++ SDK
 
-状态：**0.7，阶段 A Core Public API 已定稿。**
+状态：**0.7，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
+`app.timers().After/Every()` 创建。`WaitEvent()` 只用于需要有限等待或协议级控制的高级代码。
 
 MicroPixel 是项目正式名称。Public C++ API 使用 `micropixel` namespace 和 `sdk/micropixel.hpp`，
-C ABI 统一使用 `micropixel_` 前缀。ABI 与 Graphics、Input 等后续能力仍须按各自里程碑用真实任务
+C ABI 统一使用 `micropixel_` 前缀。ABI 与 Renderer、Input 等后续能力仍须按各自里程碑用真实任务
 验证后再冻结。
 
 ## AI-first 默认写法
@@ -17,40 +18,45 @@ using micropixel::literals::operator""_s;
 
 int main() {
     micropixel::Application app;
-    app.Run(app.Every(1_s, [&] {
-        app.log().Info("tick");
-    }));
+    micropixel::Timer timer = app.timers().Every(1_s);
+    app.Run([&](const micropixel::Event& event) {
+        if (const micropixel::TimerEvent* tick = event.TimerFrom(timer)) {
+            (void)tick->delta();
+            app.log().Info("tick");
+        }
+    });
+    return 0;
 }
 ```
 
-这条默认路径用任务语言表达意图：
+这条默认路径使用统一事件语言表达意图：
 
-- `app.Every(period, callback)` 创建并启动周期任务；一次性任务使用 `app.After(delay, callback)`；
-- `app.Run(...)` 是 Guest 自己的串行事件循环，不是 Host 回调，也不创建 Guest 线程；
-- 多个任务直接传给同一个 `Run()`，例如 `app.Run(app.Every(...), app.After(...))`；
-- callback 默认可以不接收参数；需要实际间隔时可接收 `const TimerEvent &` 并读取 `delta()`；
-- one-shot callback 触发前自动释放其 Host Timer；其他 move-only 资源仍由 RAII 管理；
+- `app.timers().Every(period)` 创建周期 Timer；一次性 Timer 使用 `app.timers().After(delay)`；
+- `app.Run(handler)` 是 Guest 自己的串行事件循环，不是 Host 回调，也不创建 Guest 线程；
+- Timer、Touch、Resume、Stop 和未来 Event 全部进入同一个 handler；
+- Timer 通过 `event.TimerFrom(timer)` 匹配，资源身份和 capture 生命周期在代码中可见；
+- `Stop` 会先交给 handler，handler 返回后 `Run()` 返回，应用随后从 `main()` 返回；
 - SDK/Runtime 失败在发生点 panic，普通应用不写 `try`、`if (!result)` 或 ABI status 样板。
 
 应用自身的前置条件或 invariant 使用带条件和原因的 `micropixel::AssertThat()`，不要返回无法从
 日志理解的数字：
 
 ```cpp
-micropixel::AssertThat(display.width() == 720U,
-                     "app: display width must be 720");
+micropixel::AssertThat(display.width() >= 320U && display.height() >= 320U,
+                     "app: requires at least a 320x320 logical display");
 ```
 
 不能自然写成条件的直接失败仍可使用 `micropixel::Panic(reason)`。不使用 `micropixel::assert` 作为函数名，
 是为了避免它被标准 C/C++ `assert` 宏展开。
 
-需要完全自定义事件分发时，可以使用高级接口 `timers().Every()`、`WaitEvent()` 和
-`event.TimerFrom(timer)`。可运行的 SDK 用法按能力拆在 `guest/apps/demo/pages/`，由同一个 Demo
-Bundle 导航和测试；详细协议验收位于 `guest/tests/conformance/`。
+需要在一个短函数中只等待某个结果时，可以使用高级接口 `WaitEvent()`；它不应成为长期 App 的第二套
+主循环模板。可运行的 SDK 用法按能力拆在 `guest/apps/demo/pages/`，由同一个 Demo Bundle 导航和测试；
+详细协议验收位于 `guest/tests/conformance/`。
 
 ## Application façade 与 Public 对象分类
 
 `Application` 是可通过自动补全逐层发现能力的 façade/capability root，不是实现所有能力的
-“上帝对象”。`app.clock()`、`app.random()`、`app.log()`、`app.timers()`、`app.graphics()`、`app.input()`、
+“上帝对象”。`app.clock()`、`app.random()`、`app.log()`、`app.timers()`、`app.renderer()`、`app.input()`、
 `app.resources()`、`app.storage()` 和 `app.audio()` 都按值返回轻量 **Service View**；它们不包含对应 Host Service 的
 实现和资源状态。同类 Service View 的多个副本访问同一个 Guest Service：
 
@@ -66,22 +72,26 @@ micropixel::TimePoint current = same_clock.Now();
 
 | 分类 | C++ 语义 | 示例 |
 | --- | --- | --- |
-| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Random`、`Timers`、`Graphics`、`KVStore`、`Audio` |
-| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`LoadRequest`、`Bitmap`、`OffscreenSurface` |
+| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Random`、`Timers`、`Renderer`、`Resources`、`KVStore`、`Audio` |
+| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`StreamingTexture`、`Frame`、`TextureUpdateBatch` |
 | Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`Duration`、`TimerEvent` |
-| Task/Subscription | 保存 callback 和事件来源关系，默认 move-only | `TimerSchedule`、未来的 `TouchSubscription` |
-| Module | 编译、链接或部署单元，不作为 `app.xxx()` 的返回对象 | Graphics SDK、Host Audio backend |
+| Module | 编译、链接或部署单元，不作为 `app.xxx()` 的返回对象 | Renderer SDK、Host Audio backend |
 
 `Application` 只公开生命周期、事件编排和稳定的顶层能力入口。具体动作必须留在对应 Service 或
 Resource 上：
 
 ```cpp
-auto surface = app.resources().CreateOffscreenSurface(300U, 150U,
-    micropixel::SurfacePixelFormat::kRgb888); // Host PSRAM 中的可写 Bitmap
-commands.FillRect(rect, color);        // 叶子操作
-commands.DrawBitmap(47, 76, surface.bitmap()); // surface 可直接参与普通合成
-commands.BlendBitmap(x, y, sprite, 160U); // 单次绘制的整体透明度
-app.input().OnTouch(callback);          // 属于 Input，不提升为 app.OnTouch()
+auto texture = app.renderer().CreateStreamingTexture(
+    micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
+micropixel::AssertThat(texture.has_value(), "texture allocation failed");
+
+auto frame = app.renderer().BeginFrame();
+frame.FillRect(rect, color);  // opacity 可省略，默认 255
+frame.DrawTexture(micropixel::Point{47, 76}, texture.value());
+frame.DrawTexture(micropixel::Point{x, y}, sprite, 160U);
+micropixel::AssertThat(frame.Present().has_value(), "frame present failed");
+micropixel::InputInfo input = app.input().info();
+bool pressure_available = input.supports_pressure();
 ```
 
 `app.audio()` 当前提供 Audio 1.0 的有界短音合成器。Guest 只提交 `Tone` 值；Host 在固定
@@ -97,11 +107,11 @@ audio.Play(micropixel::Tone{
 });
 ```
 
-`After/Every/Run` 保留为应用级高频任务语言；底层 Timer 操作仍归 `timers()`。新增 Camera、Storage
-等能力时可以增加同级 Service View accessor，但不得把 `DrawRect()`、`PlayPcm()`、
+`Run(handler)` 是 Application 唯一的事件编排入口；Timer 操作归 `timers()`。新增 Camera、Storage
+等能力时可以增加同级 Service View accessor 或 Event，但不得把 `DrawRect()`、`PlayPcm()`、
 `TouchPosition()` 等叶子操作堆到 `Application`。
 
-## 时间与 callback 类型安全
+## 时间与 Event 来源类型安全
 
 `Clock` 是随应用生命周期前进、未来在 Suspend 期间冻结的单调时钟；`TimePoint` 是该时间轴上的
 值，`Duration` 是两个时间点之间的间隔：
@@ -115,71 +125,125 @@ Public API 不允许 `Duration{1000}` 这种隐藏单位的构造。必须写成
 `Duration::Milliseconds(1)`。非零 `TimePoint` 只能由 Runtime 通过 `Clock::Now()` 或 typed event
 产生，应用不能用整数伪造另一个时间域的时间点。
 
-Timer callback 只接受两种形态，其他签名在编译期给出直接诊断：
+Timer 是显式资源，handler 通过来源匹配获得 typed event：
 
 ```cpp
-app.Every(50_ms, [&] { update(); });
-app.Every(50_ms, [&](const micropixel::TimerEvent& tick) { update(tick.delta()); });
+micropixel::Timer timer = app.timers().Every(50_ms);
+app.Run([&](const micropixel::Event& event) {
+    if (const micropixel::TimerEvent* tick = event.TimerFrom(timer)) {
+        update(tick->delta());
+    }
+});
 ```
+
+高级事件接口还提供 `TimerEvent::missed_count()`。周期 tick 合并时，`delta()` 累加真实经过时间，
+`missed_count()` 返回未单独投递的 tick 数。`Timer::Cancel()` 只停止后续触发；`Timer::Reset()`
+执行 best-effort cancel + release 并令对象失效，析构和 move assignment 也走 `Reset()`，不会 Panic。
+
+`TouchEvent::x()/y()` 为 `int32_t`。只有 `InputInfo::supports_pressure()` 为 true 时，
+`TouchEvent::has_pressure()` 才为 true，且 `pressure_per_mille()` 的范围为 0..1000；GT911 返回不支持和 0。
+日志完整支持 `Debug()`、`Info()`、`Warning()`、`Error()` 四个等级。
 
 ## Service 演进与 ABI 隔离
 
-Public C++ 方法不与 Wasm import 一一对应。新增 `Graphics::DrawText()`、`Audio::Pause()` 或
+Public C++ 方法不与 Wasm import 一一对应。新增 `Frame::DrawText()`、`Audio::Pause()` 或
 `Input` capability 时，优先增加版本化 service method、payload field、event 或 command opcode，
 不能机械增加同名 ABI 函数。
 
 ```text
 Typed C++ Service View
     → 小数据：通用 Service Control Plane
-    → 异步：Request Resource + typed Event
     → 高频/大块数据：service_submit 的独立 channel
 ```
 
 每个 Service 独立维护 major/minor 和 capability set，Host 在进入 `main()` 前校验 required
 capability。旧 Guest 必须能在兼容的新 Host 上继续运行；新 Guest 对旧 Host 的可选能力应 fallback，
 required 能力缺失则在启动前给出明确诊断。service/method ID、wire schema、resource handle 和
-command protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。
+command protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。首版资源加载只有同步
+`Resources::LoadTexture()`；未来如需异步加载，会增加独立的任务/请求对象，不改变现有同步方法的语义，
+也不会把完成事件塞回通用 `Event`。
 
-Graphics 的 Surface translation 是可选能力。应用先通过
-`graphics.info().supports_surface_translation()` 查询，再用 `BeginSurface()` / `EndSurface()`
-把一组绘制命令标记为可整体平移的图层；不支持时必须保留普通绘制路径。Surface 描述的是合成
-边界，不承诺 Host 使用哪一种 GPU、DMA2D 或缓存实现。
+## Renderer、Frame 与 Texture
 
-`OffscreenSurface` 是另一种、与 Surface translation 正交的资源：前者是 Guest 可局部写入的
-Host-owned Bitmap，后者只是 CommandBuffer 中一组对象的可平移合成边界。需要维护棋盘、画布或粒子层时，
-通过 Resource 1.2 创建 offscreen surface；创建时只分配一次 Host PSRAM，之后上传脏矩形。一个逻辑帧
-涉及多个区域时，用 `OffscreenUpdateFrame` 建立原子呈现边界：
+公开图形模型固定为五个对象：
+
+- `Renderer`：可复制的设备入口，只负责查询信息、开始帧和创建 streaming texture；
+- `Frame`：一次逻辑显示更新的命令记录器，必须显式 `Present()`；析构不会上屏；
+- `Texture`：同步加载的只读、move-only Host 资源；
+- `StreamingTexture`：可写脏矩形的 move-only Host 资源；
+- `TextureUpdateBatch`：把多次 streaming texture 更新合并成一次 compositor 唤醒。
+
+`RendererInfo::width()` / `height()` 是 Guest 逻辑坐标空间的唯一尺寸来源；SDK 不固定设备分辨率。
+当前 Metalio Claw4 Host 返回 720×720，Input 必须报告同一个逻辑坐标空间，物理屏幕映射由 Host 负责。
+应用不得把 720 写成跨设备常量。
+
+应用不接触 `Layer`、`Surface`、transport batch 或 retained-compositor capability。需要局部平移时使用
+普通渲染状态；SDK 会在支持的 Host 上自动使用 retained translation 快速路径，否则执行裁剪和平移降级：
 
 ```cpp
-auto board = app.resources().CreateOffscreenSurface(
-    300U, 150U, micropixel::SurfacePixelFormat::kRgb888);
-
-// RGB888 使用 LVGL little-endian 原生布局：每个像素 B, G, R。
-alignas(4) uint8_t cell[30U * 30U * 3U]{};
-auto frame = app.resources().BeginOffscreenUpdateFrame();
-board.Update(micropixel::Rect{60, 30, 30, 30}, cell, 30U * 3U);
-board.Update(micropixel::Rect{60, 60, 30, 30}, cell, 30U * 3U);
-frame.Commit();
-
-commands.DrawBitmap(47, 76, board.bitmap());
+auto frame = app.renderer().BeginFrame();
+frame.Clear(micropixel::Color::Black());
+frame.Save();
+frame.SetClipRect(board_bounds);
+frame.Translate(micropixel::Point{shake_x, shake_y});
+frame.DrawTexture(micropixel::Point{board_x, board_y}, board_texture);
+frame.Restore();
+micropixel::AssertThat(frame.Present().has_value(), "frame present failed");
 ```
 
-`Update()` 的输入 stride 至少覆盖一行；SDK 将较大的矩形自动切成不超过 4096 bytes 的有界
-Resource call。Host 校验 handle、格式、bounds 和精确 payload 长度，在显示互斥锁内逐行写入。Frame
-期间 Host 按 backing Bitmap 合并 damage；`Commit()` 在同一个显示锁临界区完成全部 invalidate 并只唤醒
-一次 compositor，防止逐矩形中间态上屏，也让相邻小区域合并后进入 PPA 门槛。静止画面不需要重复提交 CommandBuffer。
-每个 surface 计入该 Guest 现有 Bitmap PSRAM 配额，`OffscreenSurface` 保持 move-only RAII 语义。
+v1 的 `Save`/`Restore` 最多嵌套 8 层；子状态继承父状态，`Translate()` 采用累加语义，子 clip 不能扩大
+父 clip。每层的 clip 和 translation 必须在该层第一条绘制命令前设置。小帧直接一次 `service_submit`；超过 4096 bytes 时，SDK 才自动使用
+Host frame begin/commit 做多批原子提交。应用不能手动提交 transport batch。未 `Present()` 的跨批帧
+会在析构时 cancel，不会留下半帧状态。
 
-Graphics 直接提供 source-over 合成：`BlendRect(rect, color, opacity)` 绘制半透明纯色，
-`BlendBitmap(x, y, bitmap, opacity)` 和 `BlendBitmapRegion(...)` 为一次贴图绘制设置统一
-`opacity`。这里的 opacity 不是应用或 Surface 的全局状态；它只属于当前 command，并与图片自身的
-逐像素 alpha 相乘。`0` 完全透明，`255` 完全不透明。普通不透明贴图继续使用 `DrawBitmap()`；Host
-会为它保留 copy 快速路径。只有确实需要淡入、受伤闪烁、阴影或半透明贴图时才用 `BlendBitmap()`，
-Host 可在 PPA 上一次完成合成，不需要先生成一张临时图片再画第二遍。
+`FillRect(rect, color, opacity)` 和 `DrawTexture(..., opacity)` 统一处理不透明与半透明
+绘制。`opacity` 默认为 `255`；图片 opacity 与图片自身逐像素 alpha 相乘。不透明 texture 保留 Host copy
+快速路径，不需要另一组 `Blend*` API。
+
+Texture 有两组互补的绘制形式，宽高为 0 始终是非法空矩形，不承担“自动尺寸”语义：
+
+```cpp
+frame.DrawTexture(micropixel::Point{x, y}, texture);          // 原始尺寸
+frame.DrawTexture(micropixel::Point{x, y}, texture, source);  // source 原始尺寸
+frame.DrawTexture(destination, texture);                      // 整张纹理缩放到 destination
+frame.DrawTexture(destination, texture, source);              // 裁剪并缩放
+```
+
+`Frame::draw_operation_count()` 与 `RendererInfo::max_draw_operations()` 只统计应用绘制操作；SDK 自动生成的
+state、transport batch 和 retained acceleration 记录不计入预算，因此 Host 优化变化不会破坏应用的槽位计算。
+`Present()` 返回 `Result<void>`；参数和状态编程错误仍会 trap，提交失败、容量耗尽等运行时错误可由应用处理。
+
+需要维护棋盘、画布或其他动态像素时，创建 `StreamingTexture`。格式名直接描述 Guest 内存字节顺序：
+`kBgr888` 为 B/G/R，`kBgra8888` 为 B/G/R/A。
+
+```cpp
+auto board_result = app.renderer().CreateStreamingTexture(
+    micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
+micropixel::AssertThat(board_result.has_value(), "board texture allocation failed");
+auto board = static_cast<micropixel::StreamingTexture&&>(board_result.value());
+
+alignas(4) uint8_t cell[30U * 30U * 3U]{};
+auto batch = app.renderer().BeginTextureUpdateBatch();
+micropixel::AssertThat(
+    board.Update(micropixel::Rect{60, 30, 30, 30}, cell, sizeof(cell), 30U * 3U).has_value(),
+    "texture update failed");
+micropixel::AssertThat(
+    board.Update(micropixel::Rect{60, 60, 30, 30}, cell, sizeof(cell), 30U * 3U).has_value(),
+    "texture update failed");
+micropixel::AssertThat(batch.Finish().has_value(), "texture batch failed");
+
+auto frame = app.renderer().BeginFrame();
+frame.DrawTexture(micropixel::Point{47, 76}, board);
+micropixel::AssertThat(frame.Present().has_value(), "frame present failed");
+```
+
+`Update()` 同时接收可读 `byte_length` 和每行 `pitch`；SDK 校验输入范围，并把大矩形自动切成不超过
+4096 bytes 的有界 Resource call。Host 再校验 texture 类型、格式、bounds、pitch 和精确 payload 长度。
+每个 streaming texture 计入 Guest 的 PSRAM 配额。
 
 `sdk/ui/button.hpp` 提供无堆分配的 `ui::Button`。它捕获按下时的 touch id，手指移出时取消视觉
 按下态，回到按钮内会恢复，只有在按钮内松开才返回 `clicked`。动作仍由 App 处理，渲染可选
-`DrawTextButton()` 或 `DrawBitmapButton()`。文本按钮默认叠加同一矩形上的半透明黑色蒙版；位图按钮
+`DrawTextButton()` 或 `DrawTextureButton()`。文本按钮默认叠加同一矩形上的半透明黑色蒙版；贴图按钮
 按下时降低原图的 command opacity，并继续保留图片自身的逐像素 alpha，因此透明边缘和圆角不会被
 矩形反馈层覆盖：
 
@@ -196,8 +260,7 @@ micropixel::ui::DrawTextButton(commands, play_button, "START GAME");
 无需动态分配的短文本拼接统一使用 `FixedString<Capacity>`；Demo、Snake 和 conformance 日志共用
 这一实现，不在各 App 内复制字符串类。
 
-完整规则见
-[Guest–Host Service ABI 稳定与演进规范](../../docs/design/guest-host-service-abi.zh-CN.md)。
+完整规则见 [Guest–Host ABI](../abi/README.md)。
 
 Bundle 资源清单使用语义名称，不允许 App 手写 TOC 数字 ID。Bundle builder 对名称做唯一性、
 格式、动画序列连续性和 32 位 ID 冲突校验。prepare 阶段通过同一次清单解析原子生成包含
@@ -213,9 +276,9 @@ finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新�
 `png_to_raw_rgb888` 在构建期把 PNG 和显式 `background` 合成为 raw RGB888；Host 从 Bundle 的
 只读 Flash mapping 直接绘制，不进行运行时解码，也不保留封面 PSRAM 副本。
 
-多帧动画应优先打包为 sprite sheet/texture atlas。Guest 只加载一次 Bitmap，再通过
-`CommandBuffer::DrawBitmapRegion(x, y, bitmap, source_rect)` 选择帧；切帧只更新 command 中的
-source rect，不触发资源查找、图片解码或 Bitmap 分配。
+多帧动画应优先打包为 sprite sheet/texture atlas。Guest 只同步加载一次 `Texture`，再通过
+`Frame::DrawTexture(position, texture, source_rect)` 选择帧；切帧只更新 command 中的 source rect，
+不触发资源查找、图片解码或 Texture 分配。
 
 ```sh
 python3 tools/build_app_bundle.py \
@@ -273,19 +336,19 @@ Host 捕获 trap、Wasm 调用栈和这些结构化字段，清理 Guest 资源�
 带原因的 panic。成功的短任务返回 `0`，长期 App 通常停留在 `app.Run()`。
 
 `Result<T>` 与 `Error` 只由确实需要它们的 Service 头引入。只有“失败是正常业务结果且调用方
-能采取不同动作”的接口才返回它们。当前 `KVStore` 的 key 不存在、配额不足和写入限流属于这类
-业务分支；未来还包括网络失败、权限被拒绝或异步操作取消。Core Timer/Graphics 等不可恢复
+能采取不同动作”的接口才返回它们。当前 `KVStore` 的 key 不存在，以及 Texture 不存在、解码失败或
+配额不足属于这类业务分支；未来还包括网络失败、权限被拒绝或异步操作取消。Core Timer/Renderer 等不可恢复
 Runtime 错误仍在发生点 panic。
 
 ## Resume 与 Stop 事件
 
-Host 从 App Hall 或状态层恢复同一个 AppSession 时，`WaitEvent()` 首先返回
+Host 从 App Hall 或状态层恢复同一个 AppSession 时，`Run()` handler 首先收到
 `EventType::kResume`。暂停期间 App Clock、Timer、输入和音频都被冻结；恢复不会重新进入 `main()`。
 Host 会先直接显示暂停前保留的 Guest 画面，所以画面恢复不依赖 Guest 及时提交新帧；需要重建动态内容的
 App 可以在收到 `kResume` 后主动完整重画。
 
-切换或关闭 AppSession 时，`WaitEvent()` 返回 `EventType::kStop`。长期运行的 App 应结束事件循环并从
-`main()` 返回；Host 在 500ms 后仍未完成时才会强制终止，以保证单 App 约束和系统大厅始终可响应。
+切换或关闭 AppSession 时，handler 收到一次 `EventType::kStop`；handler 返回后 `Run()` 自动返回。
+Host 在 500ms 后仍未完成时才会强制终止，以保证单 App 约束和系统大厅始终可响应。
 
 `Result<T>` 是 freestanding Guest 对 `std::expected<T, Error>` 的兼容子集。应用使用
 `has_value()`/`operator bool()`、`operator*`、`operator->`、`value()`、`error()` 和 `value_or()`；
@@ -297,17 +360,17 @@ App 可以在收到 `kResume` 后主动完整重画。
 
 1 秒 watchdog 是“连续 Guest 计算预算”，不是 `main()` 的总寿命：
 
-- 阻塞在 `WaitEvent()` 时暂停；
+- 阻塞在 `Run()` 内部的事件等待或显式 `WaitEvent()` 时暂停；
 - 每次进入 Host ABI 时重新计时；
 - AOT 在循环回跳处检查异步终止标志，因此没有 Host 调用的死循环也能可靠停止；
 - timeout、trap 和非零退出都会由 Host 清理资源并报告 failure。
 
-因此正常事件应用可以永久运行，单次 callback 或两次 Host 调用之间的纯计算不能无限占用 CPU。
+因此正常事件应用可以永久运行，单次 handler 或两次 Host 调用之间的纯计算不能无限占用 CPU。
 
 ## 设计边界
 
-- `Application` 是可发现的 capability façade；高层提供 `After/Every/Run`，accessor 按值返回
-  copyable Service View，高级层提供阻塞事件读取；
+- `Application` 是可发现的 capability façade；高层只提供 `Run(handler)`，accessor 按值返回
+  copyable Service View，高级层保留阻塞事件读取；
 - Service View 没有独立资源身份；Service 创建的 Resource 才以 move-only RAII 表达 Host
   handle 所有权；
 - Public API 不把 C ABI 的失败模型逐行泄漏给普通应用；
@@ -318,14 +381,14 @@ App 可以在收到 `kResume` 后主动完整重画。
 - capability 不能只靠 C++ 构造权限保证安全，Host 仍须验证 handle、类型、generation 和所属
   Guest。
 
-高级接口的 `TimerFrom()`、`touch()` 和 `ResourceFrom()` 返回当前 `Event` 内 typed payload 的
+高级接口的 `TimerFrom()` 和 `touch()` 返回当前 `Event` 内 typed payload 的
 受限 view；指针不得保存到该 `Event` 生命周期之外。48-byte wire event 只在 Runtime 中按
 `service_id + event_id` 解码，不把 raw tag/payload 暴露给应用。
 
 ## Core 定稿边界
 
 v1 已确定 `Application` façade、typed Service View、move-only Resource、Value/Event 和
-`After/Every/Run` 控制流。底层收敛为七个 Core imports、按 Service 版本协商、48-byte Event、
+`Run(handler)` 控制流。底层收敛为七个 Core imports、按 Service 版本协商、48-byte Event、
 `service_call` 控制面和 `service_submit` 数据面。后续能力应沿用这些对象语义和错误策略，不能重新
 把叶子操作或 ABI 状态码堆回 `Application`。
 

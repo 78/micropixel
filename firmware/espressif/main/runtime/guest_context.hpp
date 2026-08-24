@@ -57,32 +57,27 @@ class GuestContext final {
     }
     [[nodiscard]] ServiceResult<void> TimerCancel(micropixel_timer_handle_t handle) { return timers_.Cancel(handle); }
     [[nodiscard]] ServiceResult<void> TimerRelease(micropixel_timer_handle_t handle) { return timers_.Release(handle); }
-    [[nodiscard]] ServiceResult<micropixel_load_request_handle_t> AssetLoad(uint32_t asset_id) {
-        return resources_.Load(asset_id);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id) {
+        return resources_.LoadTexture(asset_id);
     }
-    [[nodiscard]] ServiceResult<void> AssetRequestCancel(micropixel_load_request_handle_t request) {
-        return resources_.Cancel(request);
+    [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture) {
+        return resources_.ReleaseTexture(texture);
     }
-    [[nodiscard]] ServiceResult<micropixel_bitmap_info_t> BitmapInfo(micropixel_bitmap_handle_t bitmap) {
-        return resources_.BitmapInfo(bitmap);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateStreamingTexture(uint32_t width, uint32_t height,
+                                                                                  uint32_t pixel_format) {
+        return resources_.CreateStreamingTexture(width, height, pixel_format);
     }
-    [[nodiscard]] ServiceResult<void> BitmapRelease(micropixel_bitmap_handle_t bitmap) {
-        return resources_.BitmapRelease(bitmap);
-    }
-    [[nodiscard]] ServiceResult<micropixel_bitmap_handle_t> CreateOffscreenSurface(uint32_t width, uint32_t height,
-                                                                                   uint32_t pixel_format) {
-        return resources_.CreateOffscreenSurface(width, height, pixel_format);
-    }
-    [[nodiscard]] ServiceResult<void> UpdateOffscreenSurface(
-        const micropixel_offscreen_surface_update_request_t& update, const uint8_t* pixels);
-    [[nodiscard]] ServiceResult<void> BeginOffscreenUpdateFrame();
-    [[nodiscard]] ServiceResult<void> CommitOffscreenUpdateFrame();
-    [[nodiscard]] bool ResolveBitmap(micropixel_bitmap_handle_t bitmap, device::BitmapView& view_out) const {
-        return resources_.ResolveBitmap(bitmap, view_out);
+    [[nodiscard]] ServiceResult<void> UpdateStreamingTexture(
+        const micropixel_streaming_texture_update_request_t& update, const uint8_t* pixels);
+    [[nodiscard]] ServiceResult<void> BeginTextureUpdateBatch();
+    [[nodiscard]] ServiceResult<void> FinishTextureUpdateBatch();
+    [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture, device::BitmapView& view_out) const {
+        return resources_.ResolveTexture(texture, view_out);
     }
     [[nodiscard]] device::DeviceResult<void> GraphicsSubmit(const uint8_t* bytes, uint32_t length);
     [[nodiscard]] device::DeviceResult<void> GraphicsBeginFrame();
     [[nodiscard]] device::DeviceResult<void> GraphicsCommitFrame();
+    [[nodiscard]] device::DeviceResult<void> GraphicsCancelFrame();
     [[nodiscard]] device::DeviceResult<micropixel_graphics_info_t> GraphicsInfo() const {
         return devices_.graphics().GetInfo();
     }
@@ -118,8 +113,11 @@ class GuestContext final {
     }
 
    private:
-    static bool ResolveBitmapForGraphics(void* context, micropixel_bitmap_handle_t bitmap,
-                                         device::BitmapView& view_out);
+    static bool ResolveTextureForGraphics(void* context, micropixel_texture_handle_t texture,
+                                          device::BitmapView& view_out);
+    static bool RetainTextureForGraphics(void* context, micropixel_texture_handle_t texture);
+    static void ReleaseTextureForGraphics(void* context, micropixel_texture_handle_t texture);
+    [[nodiscard]] device::TextureAccess GraphicsTextureAccess();
 
     device::DeviceServices& devices_;
     int64_t clock_origin_us_{};

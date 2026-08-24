@@ -79,9 +79,14 @@ extern "C" int32_t micropixel_runtime_service_call(wasm_exec_env_t exec_env, mic
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     auto* context = GetContext(exec_env);
-    return context != nullptr ? context->ServiceCall(service, method_id, request, request_size, response,
-                                                     response_capacity, *response_size_out)
-                              : static_cast<int32_t>(MICROPIXEL_STATUS_INTERNAL);
+    if (context == nullptr) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+    micropixel_watchdog_pause();
+    const int32_t status = context->ServiceCall(service, method_id, request, request_size, response, response_capacity,
+                                                *response_size_out);
+    micropixel_watchdog_resume();
+    return status;
 }
 
 extern "C" int32_t micropixel_runtime_service_submit(wasm_exec_env_t exec_env, micropixel_service_handle_t service,

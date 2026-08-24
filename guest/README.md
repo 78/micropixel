@@ -19,10 +19,10 @@ guest/
 
 [`apps/demo/`](apps/demo/) 是 SDK 用法和真机手工检查的统一入口。它只生成一个 Bundle，运行后可从
 同一界面进入 Timer/Clock/Log、Input/Random、Storage、Resource/Atlas 和 Audio 页面。每项能力的
-实现位于命名明确的独立 CPP，AI 可以按功能直接定位；Graphics 由首页和所有页面共同使用，不再维护
+实现位于命名明确的独立 CPP，AI 可以按功能直接定位；Renderer 由首页和所有页面共同使用，不再维护
 单独的静态绘图程序。
 
-`tests/conformance/` 保留 Event、Timer/Clock、Graphics、退出语义、watchdog 和 Service 边界
+`tests/conformance/` 保留 Event、Timer/Clock、Renderer、退出语义、watchdog 和 Service 边界
 验收。历史 S3 Guest、独立 benchmark 和编译失败样例已经移除；需要这类测试时按当前接口重写。
 完整产品应用 [`apps/snake/`](apps/snake/) 与 Demo 独立构建。
 

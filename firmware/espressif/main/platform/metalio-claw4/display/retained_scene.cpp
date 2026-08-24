@@ -24,7 +24,7 @@ bool ReadStruct(const uint8_t* bytes, uint32_t length, uint32_t offset, T& value
 }
 
 lv_color_format_t BitmapLvColorFormat(uint32_t pixel_format) {
-    return pixel_format == MICROPIXEL_PIXEL_FORMAT_ARGB8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
+    return pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
 }
 
 const lv_font_t* FontForSize(uint16_t pixels) {
@@ -40,6 +40,16 @@ const lv_font_t* FontForSize(uint16_t pixels) {
     return &lv_font_montserrat_14;
 }
 
+uint16_t RetainedObjectOpcode(uint16_t opcode) {
+    if (opcode == MICROPIXEL_GRAPHICS_OP_BLEND_RECT) {
+        return MICROPIXEL_GRAPHICS_OP_FILL_RECT;
+    }
+    if (opcode == MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE) {
+        return MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE;
+    }
+    return opcode;
+}
+
 }  // namespace
 
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
@@ -53,13 +63,13 @@ bool RetainedScene::Initialize() {
         return true;
     }
     objects_ = static_cast<RetainedObject*>(heap_caps_calloc(
-        MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS, sizeof(RetainedObject), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS, sizeof(RetainedObject), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (objects_ == nullptr) {
         ESP_LOGE(kTag, "failed to allocate retained-object pool in PSRAM");
         return false;
     }
     ESP_LOGI(kTag, "retained-object pool: %zu bytes in PSRAM",
-             sizeof(RetainedObject) * MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS);
+             sizeof(RetainedObject) * MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS);
     return true;
 }
 
@@ -92,11 +102,11 @@ bool RetainedScene::TopologyChanged(const uint8_t* bytes, uint32_t length,
             return true;
         }
         const bool retained = record.opcode != MICROPIXEL_GRAPHICS_OP_CLEAR &&
-                              record.opcode != MICROPIXEL_GRAPHICS_OP_BEGIN_SURFACE &&
-                              record.opcode != MICROPIXEL_GRAPHICS_OP_END_SURFACE;
+                              record.opcode != MICROPIXEL_GRAPHICS_OP_PUSH_STATE &&
+                              record.opcode != MICROPIXEL_GRAPHICS_OP_POP_STATE;
         if (retained) {
             if (used >= last_used_ || used >= object_count_ || objects_[used].object == nullptr ||
-                objects_[used].opcode != record.opcode) {
+                objects_[used].opcode != RetainedObjectOpcode(record.opcode)) {
                 return true;
             }
             ++used;
@@ -107,7 +117,7 @@ bool RetainedScene::TopologyChanged(const uint8_t* bytes, uint32_t length,
 }
 
 void RetainedScene::DiscardObject(RetainedObject& slot) {
-    if ((slot.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_BITMAP || slot.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_BITMAP) &&
+    if ((slot.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE || slot.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE) &&
         slot.image.data != nullptr) {
         lv_image_cache_drop(&slot.image);
     }
@@ -123,7 +133,8 @@ void RetainedScene::ForgetObjects() {
     }
     for (uint32_t index = 0U; index < object_count_; ++index) {
         RetainedObject& slot = objects_[index];
-        if ((slot.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_BITMAP || slot.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_BITMAP) &&
+        if ((slot.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE ||
+             slot.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE) &&
             slot.image.data != nullptr) {
             lv_image_cache_drop(&slot.image);
         }
@@ -134,6 +145,7 @@ void RetainedScene::ForgetObjects() {
 
 RetainedScene::RetainedObject& RetainedScene::PrepareObject(uint32_t index, uint16_t opcode, lv_obj_t* frame,
                                                             int32_t frame_width, bool& changed, bool& order_dirty) {
+    opcode = RetainedObjectOpcode(opcode);
     RetainedObject& slot = objects_[index];
     if (slot.object != nullptr && slot.opcode != opcode) {
         DiscardObject(slot);
@@ -157,6 +169,8 @@ RetainedScene::RetainedObject& RetainedScene::PrepareObject(uint32_t index, uint
         } else {
             slot.object = lv_image_create(frame);
             lv_image_set_inner_align(slot.object, LV_IMAGE_ALIGN_TOP_LEFT);
+            lv_image_set_pivot(slot.object, 0, 0);
+            lv_image_set_antialias(slot.object, false);
             lv_obj_set_style_image_opa(slot.object, LV_OPA_COVER, 0);
         }
         lv_obj_remove_flag(slot.object, LV_OBJ_FLAG_SCROLLABLE);
@@ -199,13 +213,11 @@ void RetainedScene::SetObjectVisible(RetainedObject& slot, bool visible, bool& c
 }
 
 bool RetainedScene::IsFillPlaceholder(const micropixel_graphics_fill_rect_command_t& command) const {
-    return background_valid_ && command.x == 0 && command.y == logical_height_ - 1 && command.width == 1 &&
-           command.height == 1 && command.rgb888 == background_rgb888_;
+    return background_valid_ && command.width == 1 && command.height == 1 && command.rgb888 == background_rgb888_;
 }
 
 bool RetainedScene::IsTextPlaceholder(const micropixel_graphics_draw_text_command_t& command, const char* text) const {
-    return background_valid_ && command.x == 0 && command.y == 0 && command.text_length == 1U && text[0] == ' ' &&
-           command.rgb888 == background_rgb888_;
+    return command.text_length == 1U && text[0] == ' ';
 }
 
 RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length, lv_obj_t* frame,
@@ -224,7 +236,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
     int32_t target_origin_y = 0;
     int32_t target_width = logical_width_;
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    micropixel_graphics_begin_surface_command_t surface_request{};
+    micropixel_graphics_push_state_command_t surface_request{};
     bool surface_seen = false;
 #endif
 
@@ -232,9 +244,9 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
         micropixel_graphics_record_header_t record{};
         (void)ReadStruct(bytes, length, offset, record);
         bool changed = false;
-        if (record.opcode == MICROPIXEL_GRAPHICS_OP_BEGIN_SURFACE) {
+        if (record.opcode == MICROPIXEL_GRAPHICS_OP_PUSH_STATE) {
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-            micropixel_graphics_begin_surface_command_t command{};
+            micropixel_graphics_push_state_command_t command{};
             (void)ReadStruct(bytes, length, offset, command);
             if (!surface_.Configure(frame, command, background_valid_, background_rgb888_)) {
                 return {MICROPIXEL_STATUS_RESOURCE_EXHAUSTED, false, surface_.Active()};
@@ -242,13 +254,13 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
             surface_request = command;
             surface_seen = true;
             target_frame = surface_.Frame();
-            target_origin_x = command.x;
-            target_origin_y = command.y;
+            target_origin_x = command.clip_x;
+            target_origin_y = command.clip_y;
             target_width = command.width;
 #endif
             offset += record.size;
             continue;
-        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_END_SURFACE) {
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_OP_POP_STATE) {
             target_frame = frame;
             target_origin_x = 0;
             target_origin_y = 0;
@@ -367,32 +379,38 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                 SetObjectVisible(slot, true, changed);
             }
         } else {
-            micropixel_graphics_draw_bitmap_command_t draw_command{};
-            micropixel_graphics_blend_bitmap_command_t blend_command{};
-            micropixel_bitmap_handle_t bitmap_handle = 0U;
+            micropixel_graphics_draw_texture_command_t draw_command{};
+            micropixel_graphics_blend_texture_command_t blend_command{};
+            micropixel_texture_handle_t bitmap_handle = 0U;
             int32_t x = 0;
             int32_t y = 0;
             int32_t source_x = 0;
             int32_t source_y = 0;
+            int32_t source_width = 0;
+            int32_t source_height = 0;
             int32_t width = 0;
             int32_t height = 0;
             uint8_t opacity = LV_OPA_COVER;
-            if (record.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_BITMAP) {
+            if (record.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE) {
                 (void)ReadStruct(bytes, length, offset, draw_command);
-                bitmap_handle = draw_command.bitmap;
+                bitmap_handle = draw_command.texture;
                 x = draw_command.x;
                 y = draw_command.y;
                 source_x = draw_command.source_x;
                 source_y = draw_command.source_y;
+                source_width = draw_command.source_width;
+                source_height = draw_command.source_height;
                 width = draw_command.width;
                 height = draw_command.height;
             } else {
                 (void)ReadStruct(bytes, length, offset, blend_command);
-                bitmap_handle = blend_command.bitmap;
+                bitmap_handle = blend_command.texture;
                 x = blend_command.x;
                 y = blend_command.y;
                 source_x = blend_command.source_x;
                 source_y = blend_command.source_y;
+                source_width = blend_command.source_width;
+                source_height = blend_command.source_height;
                 width = blend_command.width;
                 height = blend_command.height;
                 opacity = blend_command.opacity;
@@ -403,7 +421,8 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
             }
             RetainedObject& slot =
                 PrepareObject(used++, record.opcode, target_frame, target_width, changed, order_dirty);
-            if (slot.bitmap != bitmap_handle || slot.image.data != bitmap.data || slot.image.data_size != bitmap.size) {
+            if (slot.texture != bitmap_handle || slot.image.data != bitmap.data ||
+                slot.image.data_size != bitmap.size) {
                 if (slot.image.data != nullptr) {
                     lv_image_cache_drop(&slot.image);
                 }
@@ -415,7 +434,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                 slot.image.header.stride = bitmap.stride;
                 slot.image.data_size = bitmap.size;
                 slot.image.data = bitmap.data;
-                slot.bitmap = bitmap_handle;
+                slot.texture = bitmap_handle;
                 lv_image_set_src(slot.object, &slot.image);
                 changed = true;
             }
@@ -425,13 +444,35 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                 slot.height = height;
                 changed = true;
             }
-            if (!slot.state_valid || slot.source_x != source_x || slot.source_y != source_y) {
-                lv_image_set_offset_x(slot.object, -source_x);
-                lv_image_set_offset_y(slot.object, -source_y);
+            uint32_t scale_x = static_cast<uint32_t>(
+                (static_cast<uint64_t>(width) * LV_SCALE_NONE + static_cast<uint32_t>(source_width) / 2U) /
+                static_cast<uint32_t>(source_width));
+            uint32_t scale_y = static_cast<uint32_t>(
+                (static_cast<uint64_t>(height) * LV_SCALE_NONE + static_cast<uint32_t>(source_height) / 2U) /
+                static_cast<uint32_t>(source_height));
+            scale_x = scale_x == 0U ? 1U : scale_x;
+            scale_y = scale_y == 0U ? 1U : scale_y;
+            const bool scale_changed = !slot.state_valid || slot.scale_x != scale_x || slot.scale_y != scale_y;
+            if (scale_changed) {
+                lv_image_set_scale_x(slot.object, scale_x);
+                lv_image_set_scale_y(slot.object, scale_y);
+                slot.scale_x = scale_x;
+                slot.scale_y = scale_y;
+                changed = true;
+            }
+            if (!slot.state_valid || slot.source_x != source_x || slot.source_y != source_y || scale_changed) {
+                const int32_t offset_x = -static_cast<int32_t>(
+                    (static_cast<int64_t>(source_x) * scale_x + LV_SCALE_NONE / 2U) / LV_SCALE_NONE);
+                const int32_t offset_y = -static_cast<int32_t>(
+                    (static_cast<int64_t>(source_y) * scale_y + LV_SCALE_NONE / 2U) / LV_SCALE_NONE);
+                lv_image_set_offset_x(slot.object, offset_x);
+                lv_image_set_offset_y(slot.object, offset_y);
                 slot.source_x = source_x;
                 slot.source_y = source_y;
                 changed = true;
             }
+            slot.source_width = source_width;
+            slot.source_height = source_height;
             if (!slot.state_valid || slot.x != x || slot.y != y) {
                 lv_obj_set_pos(slot.object, x - target_origin_x, y - target_origin_y);
                 slot.x = x;
@@ -493,13 +534,14 @@ bool RetainedScene::InvalidateBitmap(const uint8_t* data, uint32_t x, uint32_t y
     for (uint32_t index = 0U; index < last_used_; ++index) {
         RetainedObject& slot = objects_[index];
         if (!slot.visible || slot.image.data != data ||
-            (slot.opcode != MICROPIXEL_GRAPHICS_OP_DRAW_BITMAP && slot.opcode != MICROPIXEL_GRAPHICS_OP_BLEND_BITMAP)) {
+            (slot.opcode != MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE &&
+             slot.opcode != MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE)) {
             continue;
         }
         const uint32_t source_left = static_cast<uint32_t>(slot.source_x);
         const uint32_t source_top = static_cast<uint32_t>(slot.source_y);
-        const uint64_t source_right = static_cast<uint64_t>(source_left) + static_cast<uint32_t>(slot.width);
-        const uint64_t source_bottom = static_cast<uint64_t>(source_top) + static_cast<uint32_t>(slot.height);
+        const uint64_t source_right = static_cast<uint64_t>(source_left) + static_cast<uint32_t>(slot.source_width);
+        const uint64_t source_bottom = static_cast<uint64_t>(source_top) + static_cast<uint32_t>(slot.source_height);
         const uint32_t clipped_left = x > source_left ? x : source_left;
         const uint32_t clipped_top = y > source_top ? y : source_top;
         const uint64_t clipped_right = dirty_right < source_right ? dirty_right : source_right;
@@ -510,10 +552,20 @@ bool RetainedScene::InvalidateBitmap(const uint8_t* data, uint32_t x, uint32_t y
         lv_area_t object_area{};
         lv_obj_get_coords(slot.object, &object_area);
         lv_area_t dirty_area{
-            .x1 = object_area.x1 + static_cast<int32_t>(clipped_left - source_left),
-            .y1 = object_area.y1 + static_cast<int32_t>(clipped_top - source_top),
-            .x2 = object_area.x1 + static_cast<int32_t>(clipped_right - source_left) - 1,
-            .y2 = object_area.y1 + static_cast<int32_t>(clipped_bottom - source_top) - 1,
+            .x1 = object_area.x1 + static_cast<int32_t>((clipped_left - source_left) * slot.width /
+                                                        static_cast<uint32_t>(slot.source_width)),
+            .y1 = object_area.y1 + static_cast<int32_t>((clipped_top - source_top) * slot.height /
+                                                        static_cast<uint32_t>(slot.source_height)),
+            .x2 = object_area.x1 +
+                  static_cast<int32_t>(
+                      ((clipped_right - source_left) * slot.width + static_cast<uint32_t>(slot.source_width) - 1U) /
+                      static_cast<uint32_t>(slot.source_width)) -
+                  1,
+            .y2 = object_area.y1 +
+                  static_cast<int32_t>(
+                      ((clipped_bottom - source_top) * slot.height + static_cast<uint32_t>(slot.source_height) - 1U) /
+                      static_cast<uint32_t>(slot.source_height)) -
+                  1,
         };
         (void)lv_obj_invalidate_area(slot.object, &dirty_area);
         invalidated = true;

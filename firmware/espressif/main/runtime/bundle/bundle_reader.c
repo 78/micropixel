@@ -93,7 +93,7 @@ static bool valid_launch_asset_section(const micropixel_bundle_section_t* sectio
     if (section == NULL || section->size == 0U || section->width == 0U || section->height == 0U) {
         return false;
     }
-    if (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB888) {
+    if (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888) {
         return section->stride == section->width * 3U && (uint64_t)section->stride * section->height == section->size;
     }
     return section->format == MICROPIXEL_BUNDLE_FORMAT_PNG && section->stride == 0U;
@@ -403,13 +403,13 @@ bool micropixel_open_aot_package(uint32_t store_offset, micropixel_aot_package_t
             }
             aot_section = section;
         } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_ASSET) {
-            if (section->id == 0U || section->format < MICROPIXEL_BUNDLE_FORMAT_RAW_RGB888 ||
-                section->format > MICROPIXEL_BUNDLE_FORMAT_RAW_ARGB8888 || section->width == 0U ||
+            if (section->id == 0U || section->format < MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 ||
+                section->format > MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 || section->width == 0U ||
                 section->height == 0U ||
-                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB888 &&
+                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
                  (section->stride != section->width * 3U ||
                   (uint64_t)section->stride * section->height != section->size)) ||
-                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_ARGB8888 &&
+                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 &&
                  (section->stride != section->width * 4U ||
                   (uint64_t)section->stride * section->height != section->size))) {
                 ESP_LOGE(TAG, "invalid asset section #%" PRIu32, index);

@@ -18,15 +18,10 @@ uint32_t ReadU32OrDefault(micropixel::KVStore storage, const char* key, uint32_t
     return fallback;
 }
 
-micropixel::Bitmap LoadPackageBitmap(micropixel::Application& app, micropixel::AssetId asset) {
-    micropixel::LoadRequest request = app.resources().Load(micropixel::ResourceRef::Package(asset));
-    for (;;) {
-        micropixel::Event event = app.WaitEvent();
-        if (micropixel::ResourceReadyEvent* ready = event.ResourceFrom(request)) {
-            micropixel::AssertThat(ready->succeeded(), "snake: critical sprite resource failed");
-            return ready->TakeBitmap();
-        }
-    }
+micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
+    auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(asset));
+    micropixel::AssertThat(result.has_value(), "snake: critical texture resource failed");
+    return static_cast<micropixel::Texture&&>(result.value());
 }
 
 constexpr micropixel::AssetId kFoodAssets[] = {
@@ -43,8 +38,8 @@ static_assert(snake_assets::burst_atlas_count == 4U && sizeof(kFoodAssets) / siz
 
 int SnakeAppMain() {
     micropixel::Application app;
-    micropixel::Graphics graphics = app.graphics();
-    micropixel::GraphicsInfo display = graphics.info();
+    micropixel::Renderer renderer = app.renderer();
+    micropixel::RendererInfo display = renderer.info();
     micropixel::AssertThat(display.width() == 720U && display.height() == 720U, "snake: requires 720x720 display");
 
     micropixel::KVStore storage = app.storage();
@@ -56,16 +51,16 @@ int SnakeAppMain() {
     app.log().Info(restored.c_str());
 
     app.log().Info("snake: launch page retained while ARGB sprite set predecodes");
-    micropixel::Bitmap board = LoadPackageBitmap(app, snake_assets::board);
-    micropixel::Bitmap start_button = LoadPackageBitmap(app, snake_assets::button_start);
-    micropixel::Bitmap restart_button = LoadPackageBitmap(app, snake_assets::button_restart);
-    micropixel::Bitmap burst_sheets[4U]{};
+    micropixel::Texture board = LoadPackageTexture(app, snake_assets::board);
+    micropixel::Texture start_button = LoadPackageTexture(app, snake_assets::button_start);
+    micropixel::Texture restart_button = LoadPackageTexture(app, snake_assets::button_restart);
+    micropixel::Texture burst_sheets[4U]{};
     for (uint32_t type = 0U; type < 4U; ++type) {
-        burst_sheets[type] = LoadPackageBitmap(app, snake_assets::burst_atlases[type].asset);
+        burst_sheets[type] = LoadPackageTexture(app, snake_assets::burst_atlases[type].asset);
     }
-    micropixel::Bitmap food_sheets[4U]{};
+    micropixel::Texture food_sheets[4U]{};
     for (uint32_t type = 0U; type < 4U; ++type) {
-        food_sheets[type] = LoadPackageBitmap(app, kFoodAssets[type]);
+        food_sheets[type] = LoadPackageTexture(app, kFoodAssets[type]);
     }
     app.log().Info("snake: board/buttons and eight sprite sheets decoded to persistent PSRAM");
 
@@ -87,32 +82,30 @@ int SnakeAppMain() {
         app.log().Info(audio_master.c_str());
     }
 
-    SnakeGame game{app, graphics, display, audio, audio_available, best_score};
-    game.set_board(static_cast<micropixel::Bitmap&&>(board));
-    game.set_button_bitmaps(static_cast<micropixel::Bitmap&&>(start_button),
-                            static_cast<micropixel::Bitmap&&>(restart_button));
+    SnakeGame game{app, renderer, display, audio, audio_available, best_score};
+    game.set_board(static_cast<micropixel::Texture&&>(board));
+    game.set_button_textures(static_cast<micropixel::Texture&&>(start_button),
+                             static_cast<micropixel::Texture&&>(restart_button));
     for (uint32_t type = 0U; type < 4U; ++type) {
-        game.set_burst_sheet(static_cast<FoodType>(type), static_cast<micropixel::Bitmap&&>(burst_sheets[type]));
+        game.set_burst_sheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(burst_sheets[type]));
     }
     for (uint32_t type = 0U; type < 4U; ++type) {
-        game.set_food_sheet(static_cast<FoodType>(type), static_cast<micropixel::Bitmap&&>(food_sheets[type]));
+        game.set_food_sheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(food_sheets[type]));
     }
     micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
     game.Render();
     app.log().Info("snake: M18 ready; themes/interpolation/fixed effects/overlays");
 
-    for (;;) {
-        micropixel::Event event = app.WaitEvent();
+    app.Run([&](const micropixel::Event& event) {
         if (const micropixel::TimerEvent* tick = event.TimerFrom(ticker)) {
             game.OnTimer(*tick);
         } else if (const micropixel::TouchEvent* touch = event.touch()) {
             game.OnTouch(*touch);
         } else if (event.type() == micropixel::EventType::kResume) {
             game.Render();
-        } else if (event.type() == micropixel::EventType::kStop) {
-            return 0;
         }
-    }
+    });
+    return 0;
 }
 
 }  // namespace snake

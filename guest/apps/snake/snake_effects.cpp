@@ -80,7 +80,7 @@ void SnakeGame::TriggerShake(bool heavy, uint64_t duration_us) {
     // The Surface compositor captures the already presented panel frame. Keep
     // translation disabled until Render has presented the committed head at
     // the destination cell, then give that completed frame to the cache.
-    shake_capture_delay_frames_ = surface_translation_available_ ? 1U : 0U;
+    shake_capture_delay_frames_ = 1U;
 }
 
 void SnakeGame::TriggerFoodEffects(Cell cell, const MoveOutcome& outcome) {

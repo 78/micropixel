@@ -53,7 +53,7 @@ class TimerPage final {
         return redraw;
     }
 
-    void Render(DemoContext& context, micropixel::CommandBuffer& commands) {
+    void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
         commands.DrawTextCentered(center_x, 130, "A Host Timer drives this page every 100 ms.", MutedColor(), 18U);
 
@@ -104,8 +104,6 @@ bool TimerDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event)
     return timer_page.OnTouch(context, event);
 }
 
-void TimerDemoRender(DemoContext& context, micropixel::CommandBuffer& commands) {
-    timer_page.Render(context, commands);
-}
+void TimerDemoRender(DemoContext& context, micropixel::Frame& commands) { timer_page.Render(context, commands); }
 
 }  // namespace demo

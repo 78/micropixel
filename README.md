@@ -14,7 +14,7 @@ C++23 API，并由与 Host 匹配的 WAMR 2.4.3 `wamrc` 编译为 RISC-V 32-bit 
 .
 ├── firmware/espressif/      # ESP32-P4 Host 固件与 WAMR fork submodule
 ├── guest/                   # ABI、Runtime、C++ SDK、应用和 conformance tests
-├── docs/                    # 架构、开发规范、路线图和硬件来源链接
+├── docs/                    # 当前架构、开发规范和硬件来源
 └── tools/                   # 构建、打包、烧录、串口和静态检查脚本
 ```
 
@@ -64,21 +64,20 @@ bash tools/check_firmware_style.sh --format-only
 bash tools/flash_system_shell_p4.sh /dev/cu.usbmodemXXXX
 ```
 
-`guest/tests/conformance/` 是仍在构建链路中的回归用例，应予保留。需要合成 Host 事件的两项板端用例
+`guest/tests/conformance/` 是仍在构建链路中的回归用例，应予保留。需要合成 Host 事件的板端用例
 使用 `firmware/espressif/sdkconfig.p4-conformance.defaults`；产品 defaults 默认关闭这些 test hooks。
 用于 App 开发调试的 USB 屏幕抓取与触摸注入通道直接包含在 P4 产品固件中，不增加 Guest ABI。
 构建、烧录和监视的详细入口见 [Firmware README](firmware/espressif/README.md)，Guest API 与 Bundle
 入口见 [Guest README](guest/README.md)。
 
-## 设计文档
+## 文档
 
-- [应用框架 V1 设计稿](docs/design/application-framework-v1.zh-CN.md)
-- [Firmware 架构](docs/design/firmware-architecture.zh-CN.md)
-- [Guest–Host Service ABI](docs/design/guest-host-service-abi.zh-CN.md)
+- [架构与发布基线](docs/design/architecture.zh-CN.md)
+- [Guest C++ SDK](guest/sdk/README.md)
+- [Guest–Host ABI](guest/abi/README.md)
 - [C/C++ 代码风格](docs/development/code-style.zh-CN.md)
 
-设计稿用于记录当前方向，不代表接口已经冻结。硬件资料只保留官方来源链接，见
-[Hardware references](docs/hardware/README.md)。
+文档索引、维护规则和硬件官方来源见 [Documentation](docs/README.md)。
 
 ## 许可证
 
