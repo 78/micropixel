@@ -118,6 +118,7 @@ struct SystemInformationModel final {
     std::array<char, kSystemInformationTextCapacity> host_chip{};
     std::array<char, kSystemInformationTextCapacity> cpu{};
     std::array<char, kSystemInformationTextCapacity> wifi_coprocessor{};
+    std::array<char, kSystemInformationTextCapacity> wifi_mac{};
     std::array<char, kSystemInformationTextCapacity> flash_capacity{};
     std::array<char, kSystemInformationTextCapacity> panel{};
     std::array<char, kSystemInformationTextCapacity> display_interface{};

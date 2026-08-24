@@ -181,7 +181,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     lv_obj_set_style_bg_color(root_, lv_color_hex(0x08111fU), 0);
     (void)DrawDetailHeader(root_, "System Information", "Device and software", SystemInformationBackEvent, this);
 
-    constexpr int32_t kContentHeight = 1300;
+    constexpr int32_t kContentHeight = 1358;
     lv_obj_t* scroll_content = CreateDetailScrollContent(root_, kContentHeight, DetailScrollEvent, this);
     lv_obj_t* firmware =
         CreatePanel(scroll_content, Bounds{.x = 40, .y = 14, .width = 640, .height = 128}, 0x111f32U, 0x2e4562U, 22);
@@ -204,23 +204,24 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
 
     DrawInformationSectionLabel(scroll_content, "HARDWARE", 420);
     lv_obj_t* hardware =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 452, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 452, .width = 640, .height = 290}, 0x111f32U, 0x2e4562U, 22);
     DrawInformationRow(hardware, 0, "Host Chip", model.host_chip.data());
     DrawInformationRow(hardware, 58, "CPU", model.cpu.data());
     DrawInformationRow(hardware, 116, "Wi-Fi Coprocessor", model.wifi_coprocessor.data());
-    DrawInformationRow(hardware, 174, "Flash", model.flash_capacity.data());
+    DrawInformationRow(hardware, 174, "Wi-Fi MAC", model.wifi_mac.data());
+    DrawInformationRow(hardware, 232, "Flash", model.flash_capacity.data());
 
-    DrawInformationSectionLabel(scroll_content, "DISPLAY", 712);
+    DrawInformationSectionLabel(scroll_content, "DISPLAY", 770);
     lv_obj_t* display_panel =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 744, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 802, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
     DrawInformationRow(display_panel, 0, "Panel", model.panel.data());
     DrawInformationRow(display_panel, 58, "Interface", model.display_interface.data());
     DrawInformationRow(display_panel, 116, "Resolution", model.resolution.data());
     DrawInformationRow(display_panel, 174, "Touch", model.touch_controller.data());
 
-    DrawInformationSectionLabel(scroll_content, "SOFTWARE", 1004);
+    DrawInformationSectionLabel(scroll_content, "SOFTWARE", 1062);
     lv_obj_t* software =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 1036, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 1094, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
     DrawInformationRow(software, 0, "ESP-IDF", model.idf_version.data());
     DrawInformationRow(software, 58, "Uptime", model.uptime.data());
     DrawInformationRow(software, 116, "Last Reset", model.last_reset.data());

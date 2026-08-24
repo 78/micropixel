@@ -20,6 +20,7 @@
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "host_ui/system_settings_store.hpp"
@@ -394,6 +395,15 @@ host_ui::SystemInformationModel MakeSystemInformationModel() {
     std::snprintf(model.cpu.data(), model.cpu.size(), "%u Core%s / %u MHz", static_cast<unsigned>(chip.cores),
                   chip.cores == 1U ? "" : "s", static_cast<unsigned>(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
     CopySystemInformationText(model.wifi_coprocessor, "ESP32-C5");
+    std::array<uint8_t, 6> wifi_mac{};
+    if (esp_wifi_get_mac(WIFI_IF_STA, wifi_mac.data()) == ESP_OK) {
+        std::snprintf(model.wifi_mac.data(), model.wifi_mac.size(), "%02X:%02X:%02X:%02X:%02X:%02X",
+                      static_cast<unsigned>(wifi_mac[0]), static_cast<unsigned>(wifi_mac[1]),
+                      static_cast<unsigned>(wifi_mac[2]), static_cast<unsigned>(wifi_mac[3]),
+                      static_cast<unsigned>(wifi_mac[4]), static_cast<unsigned>(wifi_mac[5]));
+    } else {
+        CopySystemInformationText(model.wifi_mac, "Unknown");
+    }
 
     uint32_t flash_bytes = 0U;
     if (esp_flash_get_size(nullptr, &flash_bytes) == ESP_OK) {
