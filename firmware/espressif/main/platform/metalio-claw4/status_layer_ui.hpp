@@ -15,6 +15,11 @@ namespace micropixel::platform::metalio_claw4 {
 // lock for methods whose name ends in Locked.
 class StatusLayerUi final {
    public:
+    static constexpr int32_t kTransitionDialogVisibleY = 36;
+    static constexpr int32_t kTransitionDialogHiddenY = -508;
+    static constexpr uint32_t kTransitionScrimRgb = 0x02060cU;
+    static constexpr uint8_t kTransitionScrimOpacity = 190U;
+
     StatusLayerUi() = default;
     StatusLayerUi(const StatusLayerUi&) = delete;
     StatusLayerUi& operator=(const StatusLayerUi&) = delete;
@@ -23,9 +28,11 @@ class StatusLayerUi final {
                                                                          host_ui::SystemUiActionSink action_sink,
                                                                          void* action_context);
     void UpdateLocked(const host_ui::StatusLayerModel& model);
+    void SetTransitionProgressLocked(uint16_t progress_per_mille);
     void Deactivate();
     void LeaveLocked();
     [[nodiscard]] void* ActionContext() const;
+    [[nodiscard]] lv_obj_t* TransitionDialogLocked() const { return status_dialog_; }
 
     static bool TouchSink(void* context, const device::TouchSample& sample);
 
@@ -62,8 +69,8 @@ class StatusLayerUi final {
     [[nodiscard]] static uint32_t SliderValue(TouchTarget target, int32_t x);
     [[nodiscard]] static bool PointInside(const Bounds& bounds, int32_t x, int32_t y);
 
-    void EmitAction(host_ui::SystemUiActionType type, uint32_t value = 0U);
-    void EmitTarget(TouchTarget target, int32_t x);
+    void EmitAction(host_ui::SystemUiActionType type, uint32_t value = 0U, uint64_t timestamp_us = 0U);
+    void EmitTarget(TouchTarget target, int32_t x, uint64_t timestamp_us);
     void SetButtonPressedLocked(TouchTarget target, bool pressed);
     void SetButtonPressed(TouchTarget target, bool pressed);
     void UpdateSliderLocked(TouchTarget target, uint8_t percent, bool pressed);

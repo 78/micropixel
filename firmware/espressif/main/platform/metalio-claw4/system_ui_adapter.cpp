@@ -26,8 +26,9 @@ void SystemUiAdapter::StopWatchingGuestActions(void* action_context) {
     operations_.stop_watching_guest_actions(operations_.context, action_context);
 }
 
-std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> SystemUiAdapter::CaptureGuestFrame() {
-    return operations_.capture_guest_frame(operations_.context);
+std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> SystemUiAdapter::CaptureGuestFrame(
+    uint32_t hall_app_index, uint64_t trigger_timestamp_us) {
+    return operations_.capture_guest_frame(operations_.context, hall_app_index, trigger_timestamp_us);
 }
 
 void SystemUiAdapter::ReleaseGuestSnapshot() { operations_.release_guest_snapshot(operations_.context); }
@@ -72,16 +73,19 @@ void SystemUiAdapter::UpdateWifiSettings(const host_ui::WifiSettingsModel& model
 void SystemUiAdapter::LeaveWifiSettings() { operations_.leave_wifi_settings(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowStatusLayer(const host_ui::StatusLayerModel& model,
+                                                                             uint64_t trigger_timestamp_us,
                                                                              host_ui::SystemUiActionSink action_sink,
                                                                              void* action_context) {
-    return operations_.show_status_layer(operations_.context, model, action_sink, action_context);
+    return operations_.show_status_layer(operations_.context, model, trigger_timestamp_us, action_sink, action_context);
 }
 
 void SystemUiAdapter::UpdateStatusLayer(const host_ui::StatusLayerModel& model) {
     operations_.update_status_layer(operations_.context, model);
 }
 
-void SystemUiAdapter::LeaveStatusLayer() { operations_.leave_status_layer(operations_.context); }
+void SystemUiAdapter::LeaveStatusLayer(uint64_t trigger_timestamp_us) {
+    operations_.leave_status_layer(operations_.context, trigger_timestamp_us);
+}
 
 void SystemUiAdapter::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) {
     operations_.update_performance_overlay(operations_.context, enabled, cpu_percent);

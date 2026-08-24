@@ -48,7 +48,7 @@ class SystemGestureRouter final : public device::InputBackend {
     static bool Receive(void* context, const device::TouchSample& sample);
     [[nodiscard]] bool Route(const device::TouchSample& sample);
     [[nodiscard]] bool Forward(const device::TouchSample& sample);
-    void Emit(SystemUiActionType type);
+    void Emit(SystemUiActionType type, uint64_t timestamp_us);
     void ClearCandidate();
 
     device::InputBackend& input_;

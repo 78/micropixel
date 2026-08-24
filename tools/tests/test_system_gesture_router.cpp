@@ -136,10 +136,10 @@ bool BottomGestureRejectsIncidentalMovement() {
 
     capture = {};
     // A short movement from the physical edge is also insufficient; the
-    // deliberate System gesture must travel at least 96 pixels upward.
+    // deliberate System gesture must travel at least 56 pixels upward.
     (void)input.Emit(Sample(TouchPhase::kDown, 360U, 710U, 200000U));
-    (void)input.Emit(Sample(TouchPhase::kMove, 358U, 646U, 290000U));
-    (void)input.Emit(Sample(TouchPhase::kUp, 358U, 646U, 310000U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 358U, 655U, 290000U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 358U, 655U, 310000U));
     return Check(capture.system_actions.empty(), "short bottom-edge movement must not suspend");
 }
 

@@ -27,7 +27,8 @@ class SystemShell final {
     [[nodiscard]] std::expected<void, SystemUiError> RestoreGuestView();
     void WatchGuestActions();
     void StopWatchingGuestActions();
-    [[nodiscard]] std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame();
+    [[nodiscard]] std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame(uint32_t hall_app_index,
+                                                                                 uint64_t trigger_timestamp_us);
     void ReleaseGuestSnapshot();
     [[nodiscard]] std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model);
     void UpdateSystemMenu(const SystemMenuModel& model);
@@ -39,9 +40,10 @@ class SystemShell final {
     [[nodiscard]] std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel& model);
     void UpdateWifiSettings(const WifiSettingsModel& model);
     void LeaveWifiSettings();
-    [[nodiscard]] std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel& model);
+    [[nodiscard]] std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel& model,
+                                                                     uint64_t trigger_timestamp_us = 0U);
     void UpdateStatusLayer(const StatusLayerModel& model);
-    void LeaveStatusLayer();
+    void LeaveStatusLayer(uint64_t trigger_timestamp_us = 0U);
     void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent);
     void ApplyBrightness(uint8_t percent);
     void ApplyVolume(uint8_t percent);

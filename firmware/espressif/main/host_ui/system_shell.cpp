@@ -17,7 +17,7 @@ SystemShell::SystemShell(SystemUiBackend& ui) : ui_(ui) {
 
 SystemShell::~SystemShell() {
     ui_.StopWatchingGuestActions(this);
-    ui_.LeaveStatusLayer();
+    ui_.LeaveStatusLayer(0U);
     ui_.LeaveWifiSettings();
     ui_.LeaveAppManagement();
     ui_.LeaveSystemInformation();
@@ -62,7 +62,10 @@ void SystemShell::WatchGuestActions() {
 
 void SystemShell::StopWatchingGuestActions() { ui_.StopWatchingGuestActions(this); }
 
-std::expected<HallCoverModel, SystemUiError> SystemShell::CaptureGuestFrame() { return ui_.CaptureGuestFrame(); }
+std::expected<HallCoverModel, SystemUiError> SystemShell::CaptureGuestFrame(uint32_t hall_app_index,
+                                                                            uint64_t trigger_timestamp_us) {
+    return ui_.CaptureGuestFrame(hall_app_index, trigger_timestamp_us);
+}
 
 void SystemShell::ReleaseGuestSnapshot() { ui_.ReleaseGuestSnapshot(); }
 
@@ -110,17 +113,18 @@ void SystemShell::UpdateWifiSettings(const WifiSettingsModel& model) { ui_.Updat
 
 void SystemShell::LeaveWifiSettings() { ui_.LeaveWifiSettings(); }
 
-std::expected<void, SystemUiError> SystemShell::ShowStatusLayer(const StatusLayerModel& model) {
+std::expected<void, SystemUiError> SystemShell::ShowStatusLayer(const StatusLayerModel& model,
+                                                                uint64_t trigger_timestamp_us) {
     if (action_queue_ == nullptr) {
         return std::unexpected(SystemUiError::kUnavailable);
     }
     ResetActionQueue();
-    return ui_.ShowStatusLayer(model, ReceiveAction, this);
+    return ui_.ShowStatusLayer(model, trigger_timestamp_us, ReceiveAction, this);
 }
 
 void SystemShell::UpdateStatusLayer(const StatusLayerModel& model) { ui_.UpdateStatusLayer(model); }
 
-void SystemShell::LeaveStatusLayer() { ui_.LeaveStatusLayer(); }
+void SystemShell::LeaveStatusLayer(uint64_t trigger_timestamp_us) { ui_.LeaveStatusLayer(trigger_timestamp_us); }
 
 void SystemShell::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) {
     ui_.UpdatePerformanceOverlay(enabled, cpu_percent);

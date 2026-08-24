@@ -63,6 +63,7 @@ struct HallModel final {
     uint32_t detail{};
     bool launch_enabled{};
     HallWifiModel wifi{};
+    uint64_t transition_trigger_us{};
 };
 
 struct StatusLayerModel final {
@@ -218,6 +219,7 @@ struct SystemUiAction final {
     SystemUiActionType type{SystemUiActionType::kLaunchApp};
     uint32_t app_index{};
     uint32_t value{};
+    uint64_t timestamp_us{};
     std::array<char, kMaxWifiSsidLength + 1U> text{};
     std::array<char, kMaxWifiPasswordLength + 1U> secret{};
 };
@@ -243,7 +245,8 @@ class SystemUiBackend {
     [[nodiscard]] virtual std::expected<void, SystemUiError> RestoreGuestView() = 0;
     virtual void WatchGuestActions(SystemUiActionSink action_sink, void* action_context) = 0;
     virtual void StopWatchingGuestActions(void* action_context) = 0;
-    [[nodiscard]] virtual std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame() = 0;
+    [[nodiscard]] virtual std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame(
+        uint32_t hall_app_index, uint64_t trigger_timestamp_us) = 0;
     virtual void ReleaseGuestSnapshot() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model,
                                                                             SystemUiActionSink action_sink,
@@ -264,10 +267,11 @@ class SystemUiBackend {
     virtual void UpdateWifiSettings(const WifiSettingsModel& model) = 0;
     virtual void LeaveWifiSettings() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel& model,
+                                                                             uint64_t trigger_timestamp_us,
                                                                              SystemUiActionSink action_sink,
                                                                              void* action_context) = 0;
     virtual void UpdateStatusLayer(const StatusLayerModel& model) = 0;
-    virtual void LeaveStatusLayer() = 0;
+    virtual void LeaveStatusLayer(uint64_t trigger_timestamp_us) = 0;
     virtual void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) = 0;
     virtual void ApplyBrightness(uint8_t percent) = 0;
     virtual void ApplyVolume(uint8_t percent) = 0;

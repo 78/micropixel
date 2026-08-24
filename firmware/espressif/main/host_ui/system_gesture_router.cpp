@@ -12,7 +12,7 @@ constexpr char kTag[] = "micropixel_gestures";
 constexpr uint16_t kTopReservedEdgeHeight = 64U;
 constexpr uint16_t kBottomReservedEdgeHeight = 32U;
 constexpr int32_t kTopRecognitionDistance = 56;
-constexpr int32_t kBottomRecognitionDistance = 96;
+constexpr int32_t kBottomRecognitionDistance = 56;
 constexpr int32_t kDirectionSlop = 40;
 constexpr uint64_t kRecognitionTimeoutUs = 600000U;
 constexpr uint64_t kPostGestureReleaseGuardUs = 300000U;
@@ -143,7 +143,8 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
     if (sample.phase == device::TouchPhase::kMove && correct_direction && std::abs(delta_x) <= kDirectionSlop &&
         elapsed_us <= kRecognitionTimeoutUs) {
         candidate_.recognized = true;
-        Emit(candidate_.edge == Edge::kTop ? SystemUiActionType::kOpenStatusLayer : SystemUiActionType::kSuspendToHall);
+        Emit(candidate_.edge == Edge::kTop ? SystemUiActionType::kOpenStatusLayer : SystemUiActionType::kSuspendToHall,
+             sample.timestamp_us);
         return true;
     }
 
@@ -188,7 +189,7 @@ bool SystemGestureRouter::Forward(const device::TouchSample& sample) {
     return delivered;
 }
 
-void SystemGestureRouter::Emit(SystemUiActionType type) {
+void SystemGestureRouter::Emit(SystemUiActionType type, uint64_t timestamp_us) {
     SystemUiActionSink sink = nullptr;
     void* context = nullptr;
     portENTER_CRITICAL(&sink_lock_);
@@ -196,7 +197,7 @@ void SystemGestureRouter::Emit(SystemUiActionType type) {
     context = system_context_;
     portEXIT_CRITICAL(&sink_lock_);
     if (sink != nullptr) {
-        sink(context, SystemUiAction{.type = type});
+        sink(context, SystemUiAction{.type = type, .timestamp_us = timestamp_us});
         ESP_LOGI(kTag, "recognized system gesture: action=%u", static_cast<unsigned>(type));
     }
 }

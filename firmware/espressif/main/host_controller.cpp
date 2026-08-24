@@ -108,13 +108,15 @@ host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, co
                                  uint32_t detail = 0U, bool launch_enabled = true,
                                  const HallCoverMappings* covers = nullptr,
                                  const std::optional<uint32_t>& suspended_index = std::nullopt,
-                                 const host_ui::HallCoverModel* suspended_snapshot = nullptr) {
+                                 const host_ui::HallCoverModel* suspended_snapshot = nullptr,
+                                 uint64_t transition_trigger_us = 0U) {
     host_ui::HallModel model{.app_count = catalog.count,
                              .status_app_id = outcome != nullptr ? outcome->app_id.data() : nullptr,
                              .status = status,
                              .detail = detail,
                              .launch_enabled = launch_enabled,
-                             .wifi = MakeHallWifiModel(wifi)};
+                             .wifi = MakeHallWifiModel(wifi),
+                             .transition_trigger_us = transition_trigger_us};
     for (uint32_t index = 0U; index < catalog.count && index < host_ui::kMaxHallApps; ++index) {
         model.apps[index].app_id = catalog.apps[index].app_id.data();
         model.apps[index].display_name = catalog.apps[index].display_name.data();
@@ -464,7 +466,8 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, hos
 
 bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, device::BatteryBackend& battery,
                     device::WifiBackend& wifi, host_ui::StatusLayerModel& model,
-                    const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store) {
+                    const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store,
+                    uint64_t trigger_timestamp_us) {
     if (controller != nullptr) {
         auto suspend_result = controller->Suspend(pdMS_TO_TICKS(500));
         if (!suspend_result) {
@@ -476,7 +479,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
     }
     RefreshStatusMetrics(model, catalog, battery);
     RefreshWifiStatus(model, wifi.Snapshot());
-    auto show_result = shell.ShowStatusLayer(model);
+    auto show_result = shell.ShowStatusLayer(model, trigger_timestamp_us);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show status layer: error=%u", static_cast<unsigned>(show_result.error()));
         if (controller == nullptr) {
@@ -495,6 +498,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
     bool close = false;
     bool open_wifi_settings = false;
     bool settings_changed = false;
+    uint64_t close_trigger_timestamp_us = 0U;
     while (!close) {
         const TickType_t timeout = model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : portMAX_DELAY;
         const auto action = shell.PollAction(timeout);
@@ -510,6 +514,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
         switch (action->type) {
             case host_ui::SystemUiActionType::kCloseStatusLayer:
             case host_ui::SystemUiActionType::kSuspendToHall:
+                close_trigger_timestamp_us = action->timestamp_us;
                 close = true;
                 break;
             case host_ui::SystemUiActionType::kSetBrightness: {
@@ -563,10 +568,10 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
         }
     }
 
+    shell.LeaveStatusLayer(close_trigger_timestamp_us);
     if (settings_changed && settings_store.ready() && !settings_store.Save(model)) {
         ESP_LOGW(kTag, "Host settings changed but could not be persisted");
     }
-    shell.LeaveStatusLayer();
     const bool wifi_settings_ok = !open_wifi_settings || RunWifiSettings(shell, wifi, model);
     if (controller == nullptr) {
         return wifi_settings_ok;
@@ -821,7 +826,8 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                 break;
             case host_ui::SystemUiActionType::kOpenStatusLayer:
                 shell.LeaveSystemMenu();
-                if (!RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store)) {
+                if (!RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store,
+                                    action->timestamp_us)) {
                     return false;
                 }
                 RefreshWifiStatus(status_model, wifi.Snapshot());
@@ -896,7 +902,8 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
                          static_cast<unsigned>(action->type));
                 continue;
             }
-            (void)RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store);
+            (void)RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store,
+                                 action->timestamp_us);
             cpu_sampler.Reset();
             (void)cpu_sampler.Sample();
             next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
@@ -911,6 +918,7 @@ class ActiveHost final {
                device::BatteryBackend& battery, device::WifiBackend& wifi, host_ui::StatusLayerModel& status_model,
                host_ui::SystemSettingsStore& settings_store)
         : catalog_(std::move(catalog)),
+          covers_(OpenHallCovers(catalog_)),
           app_controller_(runtime),
           shell_(shell),
           battery_(battery),
@@ -945,13 +953,15 @@ class ActiveHost final {
                (lifecycle == AppLifecycleState::kNotRunning || lifecycle == AppLifecycleState::kSuspended);
     }
 
-    [[nodiscard]] bool ShowCurrentHall(const HallCoverMappings& covers) {
+    [[nodiscard]] bool ShowCurrentHall() {
         const device::WifiSnapshot wifi_snapshot = wifi_.Snapshot();
         RefreshWifiStatus(status_model_, wifi_snapshot);
-        if (!ShowHall(shell_, MakeHallModel(catalog_, wifi_snapshot, hall_status_, outcome_, hall_detail_, CanLaunch(),
-                                            &covers, suspended_index_, &suspended_snapshot_))) {
+        if (!ShowHall(shell_,
+                      MakeHallModel(catalog_, wifi_snapshot, hall_status_, outcome_, hall_detail_, CanLaunch(),
+                                    &covers_, suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_))) {
             return false;
         }
+        hall_transition_trigger_us_ = 0U;
         shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, 0U);
         return true;
     }
@@ -963,10 +973,7 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool RunHall() {
-        const std::optional<uint32_t> snapshot_index =
-            suspended_snapshot_.data != nullptr ? suspended_index_ : std::nullopt;
-        HallCoverMappings covers = OpenHallCovers(catalog_, snapshot_index);
-        if (!ShowCurrentHall(covers)) {
+        if (!ShowCurrentHall()) {
             return false;
         }
 
@@ -1001,7 +1008,7 @@ class ActiveHost final {
             }
             if (action.type == host_ui::SystemUiActionType::kStopApp && suspended_index_.has_value() &&
                 action.app_index == *suspended_index_) {
-                if (!StopSuspendedApp(covers)) {
+                if (!StopSuspendedApp()) {
                     return false;
                 }
                 cpu_sampler.Reset();
@@ -1010,10 +1017,11 @@ class ActiveHost final {
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kOpenStatusLayer) {
-                if (!RunStatusLayer(shell_, nullptr, battery_, wifi_, status_model_, catalog_, settings_store_)) {
+                if (!RunStatusLayer(shell_, nullptr, battery_, wifi_, status_model_, catalog_, settings_store_,
+                                    action.timestamp_us)) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
-                if (!ShowCurrentHall(covers)) {
+                if (!ShowCurrentHall()) {
                     return false;
                 }
                 cpu_sampler.Reset();
@@ -1025,7 +1033,7 @@ class ActiveHost final {
                 if (!RunWifiSettings(shell_, wifi_, status_model_)) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
-                if (!ShowCurrentHall(covers)) {
+                if (!ShowCurrentHall()) {
                     return false;
                 }
                 cpu_sampler.Reset();
@@ -1039,7 +1047,7 @@ class ActiveHost final {
                                    launch_request)) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
-                if (!ShowCurrentHall(covers)) {
+                if (!ShowCurrentHall()) {
                     return false;
                 }
                 if (launch_request.has_value() && *launch_request < catalog_.count && CanLaunch()) {
@@ -1056,7 +1064,7 @@ class ActiveHost final {
         }
     }
 
-    [[nodiscard]] bool StopSuspendedApp(HallCoverMappings& covers) {
+    [[nodiscard]] bool StopSuspendedApp() {
         const uint32_t stopped_index = *suspended_index_;
         ESP_LOGI(kTag, "stopping suspended App from Hall: index=%" PRIu32, stopped_index);
         auto stopped_result = StopApp(app_controller_);
@@ -1064,21 +1072,14 @@ class ActiveHost final {
             ESP_LOGE(kTag, "Hall could not complete suspended App stop: error=%u",
                      static_cast<unsigned>(stopped_result.error()));
             RecordHostFailure(static_cast<uint32_t>(stopped_result.error()));
-            return ShowCurrentHall(covers);
+            return ShowCurrentHall();
         }
 
         suspended_index_.reset();
-        auto stopped_cover = runtime::LaunchAssetMapping::Open(catalog_.apps[stopped_index].store_offset);
-        if (stopped_cover) {
-            covers[stopped_index] = std::move(*stopped_cover);
-        } else {
-            ESP_LOGW(kTag, "stopped App cover unavailable: index=%" PRIu32 " app=%s", stopped_index,
-                     catalog_.apps[stopped_index].app_id.data());
-        }
         outcome_ = nullptr;
         hall_status_ = host_ui::HallStatus::kReady;
         hall_detail_ = 0U;
-        if (!ShowCurrentHall(covers)) {
+        if (!ShowCurrentHall()) {
             return false;
         }
         shell_.ReleaseGuestSnapshot();
@@ -1210,12 +1211,12 @@ class ActiveHost final {
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kOpenStatusLayer) {
-                OpenForegroundStatusLayer(cpu_sampler, next_performance_sample_us);
+                OpenForegroundStatusLayer(action->timestamp_us, cpu_sampler, next_performance_sample_us);
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kSuspendToHall &&
                 app_controller_.state() == AppLifecycleState::kForeground) {
-                SuspendToHall();
+                SuspendToHall(action->timestamp_us);
                 return;
             }
             ESP_LOGW(kTag, "ignored Guest system action=%u in lifecycle state=%u", static_cast<unsigned>(action->type),
@@ -1223,13 +1224,15 @@ class ActiveHost final {
         }
     }
 
-    void OpenForegroundStatusLayer(CpuUsageSampler& cpu_sampler, int64_t& next_performance_sample_us) {
+    void OpenForegroundStatusLayer(uint64_t trigger_timestamp_us, CpuUsageSampler& cpu_sampler,
+                                   int64_t& next_performance_sample_us) {
         if (app_controller_.state() != AppLifecycleState::kForeground) {
             ESP_LOGW(kTag, "ignored status-layer gesture in lifecycle state=%u",
                      static_cast<unsigned>(app_controller_.state()));
             return;
         }
-        if (!RunStatusLayer(shell_, &app_controller_, battery_, wifi_, status_model_, catalog_, settings_store_)) {
+        if (!RunStatusLayer(shell_, &app_controller_, battery_, wifi_, status_model_, catalog_, settings_store_,
+                            trigger_timestamp_us)) {
             RecordHostFailure(static_cast<uint32_t>(AppControllerError::kResumeFailed));
         }
         cpu_sampler.Reset();
@@ -1237,15 +1240,21 @@ class ActiveHost final {
         next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
     }
 
-    void SuspendToHall() {
+    void SuspendToHall(uint64_t trigger_timestamp_us) {
+        const int64_t suspend_started_us = esp_timer_get_time();
+        if (trigger_timestamp_us == 0U) {
+            trigger_timestamp_us = static_cast<uint64_t>(suspend_started_us);
+        }
         auto suspend_result = app_controller_.Suspend(pdMS_TO_TICKS(500));
         if (!suspend_result) {
             ESP_LOGE(kTag, "failed to suspend App for Hall: error=%u", static_cast<unsigned>(suspend_result.error()));
             RecordHostFailure(static_cast<uint32_t>(suspend_result.error()));
             return;
         }
+        const int64_t suspend_completed_us = esp_timer_get_time();
         shell_.StopWatchingGuestActions();
-        auto snapshot_result = shell_.CaptureGuestFrame();
+        auto snapshot_result = shell_.CaptureGuestFrame(foreground_index_, trigger_timestamp_us);
+        const int64_t snapshot_completed_us = esp_timer_get_time();
         if (snapshot_result) {
             suspended_snapshot_ = *snapshot_result;
         } else {
@@ -1257,7 +1266,15 @@ class ActiveHost final {
         outcome_ = nullptr;
         hall_status_ = host_ui::HallStatus::kReady;
         hall_detail_ = 0U;
+        hall_transition_trigger_us_ = trigger_timestamp_us;
         LeaveForegroundUi();
+        ESP_LOGI(kTag,
+                 "Hall preparation timing: trigger-to-host=%" PRIu64 " us suspend=%" PRIu64 " us snapshot=%" PRIu64
+                 " us trigger-to-snapshot=%" PRIu64 " us",
+                 static_cast<uint64_t>(suspend_started_us) - trigger_timestamp_us,
+                 static_cast<uint64_t>(suspend_completed_us - suspend_started_us),
+                 static_cast<uint64_t>(snapshot_completed_us - suspend_completed_us),
+                 static_cast<uint64_t>(snapshot_completed_us) - trigger_timestamp_us);
         ESP_LOGI(kTag, "suspended App moved to Hall: index=%" PRIu32, foreground_index_);
         state_ = State::kHall;
     }
@@ -1268,6 +1285,7 @@ class ActiveHost final {
     }
 
     runtime::InstalledAppCatalog catalog_;
+    HallCoverMappings covers_;
     AppController app_controller_;
     host_ui::SystemShell& shell_;
     device::BatteryBackend& battery_;
@@ -1282,6 +1300,7 @@ class ActiveHost final {
     uint32_t foreground_index_{};
     std::optional<uint32_t> suspended_index_;
     host_ui::HallCoverModel suspended_snapshot_{};
+    uint64_t hall_transition_trigger_us_{};
 };
 
 }  // namespace

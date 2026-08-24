@@ -168,7 +168,10 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         (void)action_context;
     }
     void StopWatchingGuestActions(void* action_context) override { (void)action_context; }
-    [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame() override {
+    [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame(
+        uint32_t hall_app_index, uint64_t trigger_timestamp_us) override {
+        (void)hall_app_index;
+        (void)trigger_timestamp_us;
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     void ReleaseGuestSnapshot() override {}
@@ -211,15 +214,17 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
     void UpdateWifiSettings(const host_ui::WifiSettingsModel& model) override { (void)model; }
     void LeaveWifiSettings() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowStatusLayer(const host_ui::StatusLayerModel& model,
+                                                                              uint64_t trigger_timestamp_us,
                                                                               host_ui::SystemUiActionSink action_sink,
                                                                               void* action_context) override {
         (void)model;
+        (void)trigger_timestamp_us;
         (void)action_sink;
         (void)action_context;
         return {};
     }
     void UpdateStatusLayer(const host_ui::StatusLayerModel& model) override { (void)model; }
-    void LeaveStatusLayer() override {}
+    void LeaveStatusLayer(uint64_t trigger_timestamp_us) override { (void)trigger_timestamp_us; }
     void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) override {
         (void)enabled;
         (void)cpu_percent;

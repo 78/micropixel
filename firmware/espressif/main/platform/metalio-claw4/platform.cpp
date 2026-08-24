@@ -30,6 +30,7 @@
 #include "platform/metalio-claw4/board_hardware.hpp"
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
+#include "platform/metalio-claw4/display/system_transition_compositor.hpp"
 #include "platform/metalio-claw4/graphics_adapter.hpp"
 #include "platform/metalio-claw4/guest_graphics_engine.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
@@ -62,6 +63,18 @@ constexpr uint32_t kHallCoverBytesPerPixel = 3U;
 constexpr uint32_t kHallCoverNativeSize = static_cast<uint32_t>(kHallCardWidth);
 constexpr uint32_t kHallCoverNativeStride = kHallCoverNativeSize * kHallCoverBytesPerPixel;
 constexpr uint32_t kHallCoverNativeBytes = kHallCoverNativeStride * kHallCoverNativeSize;
+constexpr uint32_t kGuestTransitionStride = static_cast<uint32_t>(kWidth) * kHallCoverBytesPerPixel;
+constexpr uint32_t kGuestTransitionBytes = kGuestTransitionStride * static_cast<uint32_t>(kHeight);
+constexpr uint32_t kGuestTransitionHalfSize = 360U;
+constexpr uint32_t kGuestTransitionHalfBytes =
+    kGuestTransitionHalfSize * kGuestTransitionHalfSize * kHallCoverBytesPerPixel;
+constexpr uint32_t kPpaBufferAlignment = 128U;
+constexpr uint32_t kGuestTransitionHalfAllocationBytes =
+    (kGuestTransitionHalfBytes + kPpaBufferAlignment - 1U) / kPpaBufferAlignment * kPpaBufferAlignment;
+constexpr uint32_t kStatusTransitionDurationMs = 100U;
+constexpr uint32_t kGuestTransitionDurationMs = 100U;
+constexpr uint32_t kUiTransitionFrameCount = 6U;
+constexpr uint16_t kTransitionComplete = 1000U;
 #if CONFIG_MICROPIXEL_LVGL_PPA_ACCEL
 constexpr bool kEnablePpaAccel = true;
 #else
@@ -214,10 +227,12 @@ struct MetalioClaw4PlatformState final {
     lv_display_t* display{};
     lv_obj_t* host_smoke{};
     metalio_claw4::GuestGraphicsEngine guest_graphics{kWidth, kHeight};
+    metalio_claw4::SystemTransitionCompositor system_transition{};
     lv_obj_t* hall_settings_press_overlay{};
     lv_image_dsc_t launch_image_descriptor{};
     lv_image_dsc_t hall_cover_descriptors[host_ui::kMaxHallApps]{};
     HallCoverCacheEntry hall_cover_cache[host_ui::kMaxHallApps]{};
+    lv_obj_t* hall_cards[host_ui::kMaxHallApps]{};
     lv_obj_t* hall_card_press_overlays[host_ui::kMaxHallApps]{};
     metalio_claw4::Tca9555PowerKey power_key{};
     metalio_claw4::Gt911Input touch_input{kWidth, kHeight, kTouchInterrupt};
@@ -238,6 +253,7 @@ struct MetalioClaw4PlatformState final {
     bool host_pointer_touch_active{};
     bool host_pointer_release_queued{};
     uint8_t* guest_snapshot_pixels{};
+    uint8_t* guest_transition_pixels{};
     host_ui::SystemUiActionSink hall_action_sink{};
     void* hall_action_context{};
     uint32_t hall_app_count{};
@@ -250,7 +266,42 @@ struct MetalioClaw4PlatformState final {
     bool hall_touch_settings{};
     bool hall_app_running[host_ui::kMaxHallApps]{};
     bool hall_touch_active{};
+    bool guest_snapshot_in_hall{};
 };
+
+uint16_t EaseInCubic(uint16_t progress) {
+    const uint64_t value = progress;
+    return static_cast<uint16_t>(value * value * value / 1000000U);
+}
+
+uint16_t EaseOutCubic(uint16_t progress) {
+    return static_cast<uint16_t>(kTransitionComplete - EaseInCubic(kTransitionComplete - progress));
+}
+
+template <typename Apply>
+void RunUiTransition(MetalioClaw4PlatformState& state, bool entering, Apply&& apply) {
+    const TickType_t frame_period =
+        std::max<TickType_t>(1U, pdMS_TO_TICKS(kStatusTransitionDurationMs / kUiTransitionFrameCount));
+    TickType_t next_frame = xTaskGetTickCount();
+    for (uint32_t frame = 0U; frame <= kUiTransitionFrameCount; ++frame) {
+        const uint16_t linear = static_cast<uint16_t>(frame * kTransitionComplete / kUiTransitionFrameCount);
+        const uint16_t progress = entering ? EaseOutCubic(linear) : kTransitionComplete - EaseInCubic(linear);
+        if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+            break;
+        }
+        apply(progress);
+        lv_timer_ready(lv_display_get_refr_timer(state.display));
+        esp_lv_adapter_unlock();
+        if (frame != kUiTransitionFrameCount) {
+            vTaskDelayUntil(&next_frame, frame_period);
+        }
+    }
+}
+
+void RunStatusLayerTransition(MetalioClaw4PlatformState& state, bool entering) {
+    RunUiTransition(state, entering,
+                    [&state](uint16_t progress) { state.status_layer_ui.SetTransitionProgressLocked(progress); });
+}
 
 void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
     auto* state = static_cast<MetalioClaw4PlatformState*>(lv_indev_get_user_data(indev));
@@ -415,6 +466,10 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     if (status != ESP_OK) {
         return status;
     }
+    status = state.system_transition.Initialize(state.display, state.hardware.Panel(), kWidth, kHeight);
+    if (status != ESP_OK) {
+        return status;
+    }
     lv_timer_set_period(lv_display_get_refr_timer(state.display), kRefreshPeriodMs);
 
     state.host_pointer_indev = lv_indev_create();
@@ -480,6 +535,7 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
 
 void ResetHallImageDescriptorsLocked(MetalioClaw4PlatformState& state) {
     for (uint32_t index = 0U; index < host_ui::kMaxHallApps; ++index) {
+        state.hall_cards[index] = nullptr;
         state.hall_card_press_overlays[index] = nullptr;
         state.hall_app_running[index] = false;
         auto& descriptor = state.hall_cover_descriptors[index];
@@ -898,6 +954,7 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
     constexpr uint32_t kCoverColors[] = {0xff9f43U, 0x4dd6a4U, 0x69a7ffU};
     const HallCardBounds bounds = HallCard(index);
     lv_obj_t* card = lv_obj_create(parent);
+    state.hall_cards[index] = card;
     lv_obj_set_pos(card, bounds.x, bounds.y);
     lv_obj_set_size(card, bounds.width, bounds.height);
     lv_obj_set_style_pad_all(card, 0, 0);
@@ -1008,52 +1065,24 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const host
     state.hall_app_running[index] = app.running;
 }
 
-std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrameImpl(MetalioClaw4PlatformState& state) {
+std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrameImpl(MetalioClaw4PlatformState& state,
+                                                                                     uint32_t hall_app_index,
+                                                                                     uint64_t trigger_timestamp_us) {
 #if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
     lv_obj_t* guest_frame = state.guest_graphics.FrameLocked();
-    if (state.display == nullptr || guest_frame == nullptr || state.guest_snapshot_pixels != nullptr) {
+    if (state.display == nullptr || guest_frame == nullptr || state.guest_snapshot_pixels != nullptr ||
+        state.guest_transition_pixels != nullptr || hall_app_index >= host_ui::kMaxHallApps) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    constexpr uint32_t kBytesPerPixel = 3U;
-    constexpr uint32_t kSourceStride = static_cast<uint32_t>(kWidth) * kBytesPerPixel;
-    constexpr uint32_t kSourceBytes = kSourceStride * static_cast<uint32_t>(kHeight);
-    auto* pixels =
-        static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, kSourceBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (pixels == nullptr) {
-        ESP_LOGE(kTag, "suspended-App snapshot could not allocate %" PRIu32 " PSRAM bytes", kSourceBytes);
-        return std::unexpected(host_ui::SystemUiError::kUnavailable);
-    }
-
-    lv_draw_buf_t snapshot{};
-    bool captured = lv_draw_buf_init(&snapshot, kWidth, kHeight, LV_COLOR_FORMAT_RGB888, kSourceStride, pixels,
-                                     kSourceBytes) == LV_RESULT_OK;
-    if (captured && esp_lv_adapter_lock(-1) == ESP_OK) {
-        captured = lv_snapshot_take_to_draw_buf(guest_frame, LV_COLOR_FORMAT_RGB888, &snapshot) == LV_RESULT_OK;
-        esp_lv_adapter_unlock();
-    } else {
-        captured = false;
-    }
-    if (!captured || snapshot.header.w != kWidth || snapshot.header.h != kHeight ||
-        snapshot.header.stride != kSourceStride) {
-        heap_caps_free(pixels);
-        ESP_LOGE(kTag, "LVGL suspended-App snapshot failed");
-        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
-    }
-
-    // This is a one-time transition snapshot, so compact it on the CPU to the
-    // exact Hall viewport. It avoids retaining a transformed image or asking
-    // LVGL to scale every refresh.
     constexpr uint32_t kThumbnailWidth = kHallCoverNativeSize;
     constexpr uint32_t kThumbnailHeight = kHallCoverNativeSize;
     constexpr uint32_t kThumbnailStride = kHallCoverNativeStride;
     constexpr uint32_t kThumbnailBytes = kHallCoverNativeBytes;
-    constexpr uint32_t kCacheAlignment = 64U;
     constexpr uint32_t kThumbnailAllocationBytes =
-        (kThumbnailBytes + kCacheAlignment - 1U) / kCacheAlignment * kCacheAlignment;
-    auto* thumbnail = static_cast<uint8_t*>(
-        heap_caps_aligned_calloc(kCacheAlignment, kThumbnailAllocationBytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        (kThumbnailBytes + kPpaBufferAlignment - 1U) / kPpaBufferAlignment * kPpaBufferAlignment;
+    auto* thumbnail = static_cast<uint8_t*>(heap_caps_aligned_calloc(kPpaBufferAlignment, kThumbnailAllocationBytes, 1U,
+                                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (thumbnail == nullptr) {
-        heap_caps_free(pixels);
         ESP_LOGE(kTag, "suspended-App thumbnail could not allocate %" PRIu32 " PSRAM bytes", kThumbnailAllocationBytes);
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
@@ -1062,21 +1091,67 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame
     if (lv_draw_buf_init(&thumbnail_draw_buf, kThumbnailWidth, kThumbnailHeight, LV_COLOR_FORMAT_RGB888,
                          kThumbnailStride, thumbnail, kThumbnailBytes) != LV_RESULT_OK) {
         heap_caps_free(thumbnail);
-        heap_caps_free(pixels);
         ESP_LOGE(kTag, "could not initialize suspended-App thumbnail draw buffer");
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
+    auto* half = static_cast<uint8_t*>(heap_caps_aligned_alloc(kPpaBufferAlignment, kGuestTransitionHalfAllocationBytes,
+                                                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (half == nullptr) {
+        heap_caps_free(thumbnail);
+        ESP_LOGE(kTag, "suspended-App transition source could not allocate %" PRIu32 " PSRAM bytes",
+                 kGuestTransitionHalfAllocationBytes);
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    if (!state.system_transition.ResetBackgroundToBaseline()) {
+        heap_caps_free(half);
+        heap_caps_free(thumbnail);
+        ESP_LOGE(kTag, "could not restore baseline Hall background before transition");
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    uint32_t half_elapsed_us = 0U;
+    const HallCardBounds target_card = HallCard(hall_app_index);
+    const bool scaled_half = state.system_transition.CaptureDisplayedToHalf(
+        half, kGuestTransitionHalfAllocationBytes,
+        metalio_claw4::SystemTransitionRect{
+            .x = target_card.x, .y = target_card.y, .width = target_card.width, .height = target_card.width},
+        trigger_timestamp_us, half_elapsed_us);
     const int64_t scale_started_us = esp_timer_get_time();
-    ScaleRgb888Cover(pixels, kWidth, kHeight, kSourceStride, thumbnail);
-    const uint32_t scale_elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - scale_started_us);
-    heap_caps_free(pixels);
+    const bool scaled_card =
+        scaled_half && state.system_transition.ScaleHalfToCard(half, thumbnail, kThumbnailAllocationBytes);
+    const uint32_t card_elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - scale_started_us);
+    if (!scaled_card) {
+        state.system_transition.CancelPreparedToHall();
+        heap_caps_free(half);
+        heap_caps_free(thumbnail);
+        ESP_LOGE(kTag, "PPA suspended-App transition preparation failed");
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    MaskHallCoverCorners(thumbnail);
     lv_draw_buf_flush_cache(&thumbnail_draw_buf, nullptr);
 
+    const metalio_claw4::SystemTransitionRect cover_region{
+        .x = target_card.x, .y = target_card.y, .width = target_card.width, .height = target_card.width};
+    const bool background_patched = state.system_transition.UpdateBackgroundPixels(thumbnail, cover_region);
+    const bool animated =
+        background_patched &&
+        state.system_transition.Animate(half, cover_region, metalio_claw4::SystemTransitionDirection::kToHall,
+                                        kGuestTransitionDurationMs, trigger_timestamp_us);
+    heap_caps_free(half);
+    if (!animated) {
+        state.system_transition.CancelPreparedToHall();
+        heap_caps_free(thumbnail);
+        ESP_LOGE(kTag, "PPA suspended-App early Hall transition failed");
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+
     state.guest_snapshot_pixels = thumbnail;
+    state.guest_transition_pixels = nullptr;
+    state.guest_snapshot_in_hall = true;
     ESP_LOGI(kTag,
-             "captured suspended-App snapshot: source=%dx%d RGB888 thumbnail=%" PRIu32 "x%" PRIu32 " bytes=%" PRIu32
-             " cpu=%" PRIu32 " us",
-             kWidth, kHeight, kHallCoverNativeSize, kHallCoverNativeSize, kHallCoverNativeBytes, scale_elapsed_us);
+             "captured suspended-App snapshot: source=displayed-%dx%d RGB888 thumbnail=%" PRIu32 "x%" PRIu32
+             " bytes=%" PRIu32 " first-frame=%" PRIu32 " us ppa-card=%" PRIu32 " us transition=complete",
+             kWidth, kHeight, kHallCoverNativeSize, kHallCoverNativeSize, kHallCoverNativeBytes, half_elapsed_us,
+             card_elapsed_us);
     return host_ui::HallCoverModel{.data = thumbnail,
                                    .size = kHallCoverNativeBytes,
                                    .width = kHallCoverNativeSize,
@@ -1084,16 +1159,22 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame
                                    .stride = kHallCoverNativeStride};
 #else
     (void)state;
+    (void)hall_app_index;
+    (void)trigger_timestamp_us;
     return std::unexpected(host_ui::SystemUiError::kUnavailable);
 #endif
 }
 
 void ReleaseGuestSnapshotImpl(MetalioClaw4PlatformState& state) {
-    if (state.guest_snapshot_pixels == nullptr) {
+    state.system_transition.CancelPreparedToHall();
+    if (state.guest_snapshot_pixels == nullptr && state.guest_transition_pixels == nullptr) {
         return;
     }
     heap_caps_free(state.guest_snapshot_pixels);
+    heap_caps_free(state.guest_transition_pixels);
     state.guest_snapshot_pixels = nullptr;
+    state.guest_transition_pixels = nullptr;
+    state.guest_snapshot_in_hall = false;
     ESP_LOGI(kTag, "released suspended-App snapshot");
 }
 
@@ -1104,6 +1185,7 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     if (state.display == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    const bool hall_was_visible = state.host_smoke != nullptr && state.hall_action_context != nullptr;
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
@@ -1116,6 +1198,8 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     state.hall_settings_press_overlay = nullptr;
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
+    lv_obj_set_pos(state.host_smoke, 0, 0);
+    lv_obj_set_style_opa(state.host_smoke, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
 
@@ -1183,15 +1267,87 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     if (model.status_app_id != nullptr && model.status_app_id[0] != '\0') {
         (void)CreateHallLabel(state.host_smoke, model.status_app_id, &lv_font_montserrat_18, 0x91a4bdU, 40, 638);
     }
-    lv_obj_move_foreground(state.host_smoke);
+
+    uint32_t running_index = host_ui::kMaxHallApps;
+    for (uint32_t index = 0U; index < visible_count; ++index) {
+        if (model.apps[index].running) {
+            running_index = index;
+            break;
+        }
+    }
+    lv_obj_t* guest_frame = state.guest_graphics.FrameLocked();
+    const bool transition_candidate = running_index < visible_count && guest_frame != nullptr &&
+                                      state.guest_transition_pixels != nullptr && !state.guest_snapshot_in_hall;
+    const int64_t background_started_us = esp_timer_get_time();
+    bool background_ready = false;
+    bool background_updated_region = false;
+    if (running_index < visible_count && state.system_transition.HasBackground() &&
+        state.hall_cards[running_index] != nullptr) {
+        const HallCardBounds card = HallCard(running_index);
+        background_ready = state.system_transition.UpdateBackgroundRegionLocked(
+            state.hall_cards[running_index], {.x = card.x, .y = card.y, .width = card.width, .height = card.height});
+        background_updated_region = background_ready;
+    }
+    if (!background_ready) {
+        background_ready = state.system_transition.PrepareBackgroundLocked(state.host_smoke);
+    }
+    const uint32_t background_elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - background_started_us);
+    ESP_LOGI(kTag, "Hall transition background prepared: mode=%s elapsed=%" PRIu32 " us",
+             background_updated_region ? "card-region" : "full", background_elapsed_us);
+    const bool transition_ready = transition_candidate && background_ready;
+    if (transition_ready) {
+        // Keep the already-visible paused Guest on top until the PPA compositor
+        // submits its first frame. The Hall exists only as an off-screen static
+        // background at this point, so there is no one-frame Hall flash.
+        lv_obj_move_foreground(guest_frame);
+    } else {
+        lv_obj_move_foreground(state.host_smoke);
+    }
     if (state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
         // Rebinding the Hall after its status layer closes rebuilds this root.
         // Preserve the final-display HUD z-order in the same locked update so
         // the Hall cannot cover it for one refresh before the next sample.
         state.status_layer_ui.RaisePerformanceOverlayLocked();
     }
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    if (!transition_ready) {
+        lv_timer_ready(lv_display_get_refr_timer(state.display));
+    }
     esp_lv_adapter_unlock();
+
+    if (transition_ready) {
+        const HallCardBounds card = HallCard(running_index);
+        const bool animated = state.system_transition.Animate(
+            state.guest_transition_pixels,
+            metalio_claw4::SystemTransitionRect{.x = card.x, .y = card.y, .width = card.width, .height = card.width},
+            metalio_claw4::SystemTransitionDirection::kToHall, kGuestTransitionDurationMs, model.transition_trigger_us);
+        heap_caps_free(state.guest_transition_pixels);
+        state.guest_transition_pixels = nullptr;
+        state.guest_snapshot_in_hall = true;
+        if (esp_lv_adapter_lock(-1) == ESP_OK) {
+            lv_obj_set_pos(state.host_smoke, 0, 0);
+            lv_obj_set_style_opa(state.host_smoke, LV_OPA_COVER, 0);
+            lv_obj_move_foreground(state.host_smoke);
+            if (state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
+                state.status_layer_ui.RaisePerformanceOverlayLocked();
+            }
+            lv_timer_ready(lv_display_get_refr_timer(state.display));
+            esp_lv_adapter_unlock();
+        }
+        if (!animated) {
+            ESP_LOGW(kTag, "PPA Guest-to-Hall transition failed; Hall restored directly");
+        }
+    } else {
+        if (state.guest_transition_pixels != nullptr) {
+            state.system_transition.CancelPreparedToHall();
+            heap_caps_free(state.guest_transition_pixels);
+            state.guest_transition_pixels = nullptr;
+            state.guest_snapshot_in_hall = true;
+            state.system_transition.ClearBackground();
+        }
+        if (!hall_was_visible) {
+            ESP_LOGI(kTag, "App Hall presented without a root transition");
+        }
+    }
 
     state.hall_action_sink = action_sink;
     state.hall_action_context = action_context;
@@ -1229,6 +1385,8 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     }
     state.guest_graphics.DrainRefreshReady();
     lv_obj_clean(state.host_smoke);
+    lv_obj_set_pos(state.host_smoke, 0, 0);
+    lv_obj_set_style_opa(state.host_smoke, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
     lv_timer_ready(lv_display_get_refr_timer(state.display));
@@ -1244,6 +1402,13 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
 }
 
 std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4PlatformState& state) {
+    uint32_t transition_index = host_ui::kMaxHallApps;
+    for (uint32_t index = 0U; index < host_ui::kMaxHallApps; ++index) {
+        if (state.hall_app_running[index]) {
+            transition_index = index;
+            break;
+        }
+    }
     state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(state.hall_action_context);
     state.hall_action_sink = nullptr;
@@ -1256,14 +1421,60 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
     state.hall_settings_press_overlay = nullptr;
     lv_obj_t* guest_frame = state.guest_graphics.FrameLocked();
     if (state.display == nullptr || state.host_smoke == nullptr || guest_frame == nullptr ||
-        !state.guest_graphics.RefreshSynchronizationAvailable() || esp_lv_adapter_lock(-1) != ESP_OK) {
+        !state.guest_graphics.RefreshSynchronizationAvailable()) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
 
+    auto* transition_fullscreen =
+        static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, kGuestTransitionBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    auto* transition_half = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+        kPpaBufferAlignment, kGuestTransitionHalfAllocationBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    lv_draw_buf_t transition_snapshot{};
+    bool transition_ready =
+        transition_fullscreen != nullptr && transition_half != nullptr && transition_index < host_ui::kMaxHallApps &&
+        state.guest_snapshot_in_hall &&
+        lv_draw_buf_init(&transition_snapshot, kWidth, kHeight, LV_COLOR_FORMAT_RGB888, kGuestTransitionStride,
+                         transition_fullscreen, kGuestTransitionBytes) == LV_RESULT_OK;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        heap_caps_free(transition_half);
+        heap_caps_free(transition_fullscreen);
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
     state.guest_graphics.DrainRefreshReady();
+    if (transition_ready) {
+        transition_ready =
+            lv_snapshot_take_to_draw_buf(guest_frame, LV_COLOR_FORMAT_RGB888, &transition_snapshot) == LV_RESULT_OK;
+        if (transition_ready) {
+            lv_draw_buf_flush_cache(&transition_snapshot, nullptr);
+            transition_ready = state.system_transition.HasBackground() ||
+                               state.system_transition.PrepareBackgroundLocked(state.host_smoke);
+        }
+    }
+    esp_lv_adapter_unlock();
+
+    if (transition_ready) {
+        transition_ready = state.system_transition.ScaleFullscreenToHalf(transition_fullscreen, transition_half,
+                                                                         kGuestTransitionHalfAllocationBytes);
+    }
+    heap_caps_free(transition_fullscreen);
+    if (transition_ready) {
+        const HallCardBounds card = HallCard(transition_index);
+        transition_ready = state.system_transition.Animate(
+            transition_half,
+            metalio_claw4::SystemTransitionRect{.x = card.x, .y = card.y, .width = card.width, .height = card.width},
+            metalio_claw4::SystemTransitionDirection::kToGuest, kGuestTransitionDurationMs);
+    } else {
+        state.system_transition.ClearBackground();
+    }
+    heap_caps_free(transition_half);
+    state.guest_snapshot_in_hall = false;
+
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
     // Delete the Hall and reveal the retained Guest tree in one LVGL update.
-    // Rendering an empty opaque Host container first caused a black interval
-    // until an event-driven Guest happened to submit its next frame.
+    // A successful PPA transition already left the physical panel on the same
+    // full-size frame. The retained tree replaces it without a black interval.
     lv_obj_delete(state.host_smoke);
     state.host_smoke = nullptr;
     state.launch_image_descriptor = {};
@@ -1276,7 +1487,7 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
         ResetHallImageDescriptorsLocked(state);
         esp_lv_adapter_unlock();
     }
-    ESP_LOGI(kTag, "retained Guest view restored directly from App Hall");
+    ESP_LOGI(kTag, "retained Guest view restored from App Hall: transition=%s", transition_ready ? "PPA" : "direct");
     return {};
 }
 
@@ -1489,15 +1700,42 @@ void LeaveWifiSettingsImpl(MetalioClaw4PlatformState& state) {
 
 std::expected<void, host_ui::SystemUiError> ShowStatusLayerImpl(MetalioClaw4PlatformState& state,
                                                                 const host_ui::StatusLayerModel& model,
+                                                                uint64_t trigger_timestamp_us,
                                                                 host_ui::SystemUiActionSink action_sink,
                                                                 void* action_context) {
+    const bool hardware_started = state.system_transition.BeginStatusLayerTransition(
+        true, metalio_claw4::StatusLayerUi::kTransitionScrimRgb, metalio_claw4::StatusLayerUi::kTransitionScrimOpacity,
+        trigger_timestamp_us);
     if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        if (hardware_started) {
+            state.system_transition.CancelStatusLayerTransition();
+        }
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     auto result = state.status_layer_ui.ShowLocked(model, action_sink, action_context);
+    bool hardware_finished = false;
+    if (result.has_value() && hardware_started) {
+        const bool animated = state.system_transition.AnimateStatusLayerLocked(
+            state.status_layer_ui.TransitionDialogLocked(), metalio_claw4::StatusLayerUi::kTransitionDialogVisibleY,
+            metalio_claw4::StatusLayerUi::kTransitionDialogHiddenY, true, kStatusTransitionDurationMs,
+            trigger_timestamp_us);
+        if (animated) {
+            state.status_layer_ui.SetTransitionProgressLocked(kTransitionComplete);
+            hardware_finished = state.system_transition.FinishStatusLayerTransition(true);
+        }
+        if (!animated || !hardware_finished) {
+            state.system_transition.CancelStatusLayerTransition();
+        }
+    }
     esp_lv_adapter_unlock();
     if (!result.has_value()) {
+        if (hardware_started) {
+            state.system_transition.CancelStatusLayerTransition();
+        }
         return result;
+    }
+    if (!hardware_finished) {
+        RunStatusLayerTransition(state, true);
     }
     state.input_router.BindTouchSink(metalio_claw4::StatusLayerUi::TouchSink, &state.status_layer_ui);
     state.input_router.BindSystemActionSink(action_sink, action_context);
@@ -1512,12 +1750,39 @@ void UpdateStatusLayerImpl(MetalioClaw4PlatformState& state, const host_ui::Stat
     esp_lv_adapter_unlock();
 }
 
-void LeaveStatusLayerImpl(MetalioClaw4PlatformState& state) {
+void LeaveStatusLayerImpl(MetalioClaw4PlatformState& state, uint64_t trigger_timestamp_us) {
     void* action_context = state.status_layer_ui.ActionContext();
     state.input_router.UnbindTouchSink(&state.status_layer_ui);
     state.input_router.ClearSystemActionSink(action_context);
     state.status_layer_ui.Deactivate();
+    const bool hardware_started = state.system_transition.BeginStatusLayerTransition(
+        false, metalio_claw4::StatusLayerUi::kTransitionScrimRgb, metalio_claw4::StatusLayerUi::kTransitionScrimOpacity,
+        trigger_timestamp_us);
     if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        if (hardware_started) {
+            state.system_transition.CancelStatusLayerTransition();
+        }
+        return;
+    }
+    if (hardware_started) {
+        const bool animated = state.system_transition.AnimateStatusLayerLocked(
+            state.status_layer_ui.TransitionDialogLocked(), metalio_claw4::StatusLayerUi::kTransitionDialogVisibleY,
+            metalio_claw4::StatusLayerUi::kTransitionDialogHiddenY, false, kStatusTransitionDurationMs,
+            trigger_timestamp_us);
+        if (animated) {
+            state.status_layer_ui.LeaveLocked();
+            const bool finished = state.system_transition.FinishStatusLayerTransition(false);
+            if (!finished) {
+                state.system_transition.CancelStatusLayerTransition();
+            }
+            esp_lv_adapter_unlock();
+            return;
+        }
+        state.system_transition.CancelStatusLayerTransition();
+    }
+    esp_lv_adapter_unlock();
+    RunStatusLayerTransition(state, false);
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
     state.status_layer_ui.LeaveLocked();
@@ -1607,7 +1872,10 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
                 static_cast<MetalioClaw4PlatformState*>(context)->input_router.ClearSystemActionSink(action_context);
             },
         .capture_guest_frame =
-            [](void* context) { return CaptureGuestFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+            [](void* context, uint32_t hall_app_index, uint64_t trigger_timestamp_us) {
+                return CaptureGuestFrameImpl(*static_cast<MetalioClaw4PlatformState*>(context), hall_app_index,
+                                             trigger_timestamp_us);
+            },
         .release_guest_snapshot =
             [](void* context) { ReleaseGuestSnapshotImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .show_system_menu =
@@ -1651,17 +1919,19 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
         .leave_wifi_settings =
             [](void* context) { LeaveWifiSettingsImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .show_status_layer =
-            [](void* context, const host_ui::StatusLayerModel& model, host_ui::SystemUiActionSink action_sink,
-               void* action_context) {
-                return ShowStatusLayerImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
-                                           action_context);
+            [](void* context, const host_ui::StatusLayerModel& model, uint64_t trigger_timestamp_us,
+               host_ui::SystemUiActionSink action_sink, void* action_context) {
+                return ShowStatusLayerImpl(*static_cast<MetalioClaw4PlatformState*>(context), model,
+                                           trigger_timestamp_us, action_sink, action_context);
             },
         .update_status_layer =
             [](void* context, const host_ui::StatusLayerModel& model) {
                 UpdateStatusLayerImpl(*static_cast<MetalioClaw4PlatformState*>(context), model);
             },
         .leave_status_layer =
-            [](void* context) { LeaveStatusLayerImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+            [](void* context, uint64_t trigger_timestamp_us) {
+                LeaveStatusLayerImpl(*static_cast<MetalioClaw4PlatformState*>(context), trigger_timestamp_us);
+            },
         .update_performance_overlay =
             [](void* context, bool enabled, uint8_t cpu_percent) {
                 UpdatePerformanceOverlayImpl(*static_cast<MetalioClaw4PlatformState*>(context), enabled, cpu_percent);

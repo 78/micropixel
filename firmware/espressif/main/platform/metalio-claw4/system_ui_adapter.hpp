@@ -17,7 +17,7 @@ struct SystemUiOperations final {
     std::expected<void, host_ui::SystemUiError> (*restore_guest_view)(void*){};
     void (*watch_guest_actions)(void*, host_ui::SystemUiActionSink, void*){};
     void (*stop_watching_guest_actions)(void*, void*){};
-    std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> (*capture_guest_frame)(void*){};
+    std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> (*capture_guest_frame)(void*, uint32_t, uint64_t){};
     void (*release_guest_snapshot)(void*){};
     std::expected<void, host_ui::SystemUiError> (*show_system_menu)(void*, const host_ui::SystemMenuModel&,
                                                                     host_ui::SystemUiActionSink, void*){};
@@ -34,10 +34,10 @@ struct SystemUiOperations final {
                                                                       host_ui::SystemUiActionSink, void*){};
     void (*update_wifi_settings)(void*, const host_ui::WifiSettingsModel&){};
     void (*leave_wifi_settings)(void*){};
-    std::expected<void, host_ui::SystemUiError> (*show_status_layer)(void*, const host_ui::StatusLayerModel&,
+    std::expected<void, host_ui::SystemUiError> (*show_status_layer)(void*, const host_ui::StatusLayerModel&, uint64_t,
                                                                      host_ui::SystemUiActionSink, void*){};
     void (*update_status_layer)(void*, const host_ui::StatusLayerModel&){};
-    void (*leave_status_layer)(void*){};
+    void (*leave_status_layer)(void*, uint64_t){};
     void (*update_performance_overlay)(void*, bool, uint8_t){};
     void (*apply_brightness)(void*, uint8_t){};
     void (*apply_volume)(void*, uint8_t){};
@@ -55,7 +55,8 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override;
     void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override;
     void StopWatchingGuestActions(void* action_context) override;
-    [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame() override;
+    [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame(
+        uint32_t hall_app_index, uint64_t trigger_timestamp_us) override;
     void ReleaseGuestSnapshot() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemMenu(const host_ui::SystemMenuModel& model,
                                                                              host_ui::SystemUiActionSink action_sink,
@@ -76,10 +77,11 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
     void UpdateWifiSettings(const host_ui::WifiSettingsModel& model) override;
     void LeaveWifiSettings() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowStatusLayer(const host_ui::StatusLayerModel& model,
+                                                                              uint64_t trigger_timestamp_us,
                                                                               host_ui::SystemUiActionSink action_sink,
                                                                               void* action_context) override;
     void UpdateStatusLayer(const host_ui::StatusLayerModel& model) override;
-    void LeaveStatusLayer() override;
+    void LeaveStatusLayer(uint64_t trigger_timestamp_us) override;
     void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) override;
     void ApplyBrightness(uint8_t percent) override;
     void ApplyVolume(uint8_t percent) override;

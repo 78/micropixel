@@ -53,7 +53,9 @@ class FakeSystemUi final : public SystemUiBackend {
         }
     }
 
-    std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame() override { return HallCoverModel{}; }
+    std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame(uint32_t, uint64_t) override {
+        return HallCoverModel{};
+    }
     void ReleaseGuestSnapshot() override {}
 
     std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel&, SystemUiActionSink sink,
@@ -94,15 +96,19 @@ class FakeSystemUi final : public SystemUiBackend {
     void UpdateWifiSettings(const WifiSettingsModel&) override { ++update_wifi_settings_calls; }
     void LeaveWifiSettings() override { ++leave_wifi_settings_calls; }
 
-    std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel&, SystemUiActionSink sink,
-                                                       void* context) override {
+    std::expected<void, SystemUiError> ShowStatusLayer(const StatusLayerModel&, uint64_t trigger_timestamp_us,
+                                                       SystemUiActionSink sink, void* context) override {
+        status_open_trigger_us = trigger_timestamp_us;
         sink_ = sink;
         context_ = context;
         return {};
     }
 
     void UpdateStatusLayer(const StatusLayerModel&) override {}
-    void LeaveStatusLayer() override { ++leave_status_calls; }
+    void LeaveStatusLayer(uint64_t trigger_timestamp_us) override {
+        status_close_trigger_us = trigger_timestamp_us;
+        ++leave_status_calls;
+    }
     void UpdatePerformanceOverlay(bool, uint8_t) override {}
     void ApplyBrightness(uint8_t) override {}
     void ApplyVolume(uint8_t) override {}
@@ -116,6 +122,8 @@ class FakeSystemUi final : public SystemUiBackend {
     [[nodiscard]] bool HasSink() const { return sink_ != nullptr || context_ != nullptr; }
 
     uint32_t stop_watching_calls{};
+    uint64_t status_open_trigger_us{};
+    uint64_t status_close_trigger_us{};
     uint32_t update_hall_wifi_calls{};
     uint32_t update_system_menu_calls{};
     uint32_t leave_system_menu_calls{};

@@ -16,6 +16,10 @@ constexpr int32_t kScreenWidth = 720;
 constexpr int32_t kScreenHeight = 720;
 constexpr uint32_t kThemeAccentColor = 0x287ee8U;
 constexpr uint32_t kStatusControlColor = 0x68a7ffU;
+constexpr int32_t kStatusDialogVisibleY = StatusLayerUi::kTransitionDialogVisibleY;
+constexpr int32_t kStatusDialogHiddenY = StatusLayerUi::kTransitionDialogHiddenY;
+constexpr uint16_t kTransitionComplete = 1000U;
+constexpr lv_opa_t kStatusScrimOpacity = StatusLayerUi::kTransitionScrimOpacity;
 
 void StyleFullscreenContainer(lv_obj_t* container, uint32_t background) {
     lv_obj_set_pos(container, 0, 0);
@@ -51,7 +55,7 @@ StatusLayerUi::Bounds StatusLayerUi::TargetBounds(TouchTarget target) {
 }
 
 StatusLayerUi::Bounds StatusLayerUi::DialogRelative(const Bounds& bounds) {
-    constexpr Bounds kDialogBounds{.x = 24, .y = 36, .width = 672, .height = 508};
+    constexpr Bounds kDialogBounds{.x = 24, .y = kStatusDialogVisibleY, .width = 672, .height = 508};
     return {.x = bounds.x - kDialogBounds.x,
             .y = bounds.y - kDialogBounds.y,
             .width = bounds.width,
@@ -98,7 +102,7 @@ StatusLayerUi::TouchTarget StatusLayerUi::FindTouchTarget(int32_t x, int32_t y) 
             return target;
         }
     }
-    constexpr Bounds kDialogBounds{.x = 24, .y = 36, .width = 672, .height = 508};
+    constexpr Bounds kDialogBounds{.x = 24, .y = kStatusDialogVisibleY, .width = 672, .height = 508};
     return PointInside(kDialogBounds, x, y) ? TouchTarget::kNone : TouchTarget::kScrim;
 }
 
@@ -128,13 +132,14 @@ uint32_t StatusLayerUi::SliderValue(TouchTarget target, int32_t x) {
     return minimum + position_percent * (100U - minimum) / 100U;
 }
 
-void StatusLayerUi::EmitAction(host_ui::SystemUiActionType type, uint32_t value) {
+void StatusLayerUi::EmitAction(host_ui::SystemUiActionType type, uint32_t value, uint64_t timestamp_us) {
     if (action_sink_ != nullptr) {
-        action_sink_(action_context_, host_ui::SystemUiAction{.type = type, .value = value});
+        action_sink_(action_context_,
+                     host_ui::SystemUiAction{.type = type, .value = value, .timestamp_us = timestamp_us});
     }
 }
 
-void StatusLayerUi::EmitTarget(TouchTarget target, int32_t x) {
+void StatusLayerUi::EmitTarget(TouchTarget target, int32_t x, uint64_t timestamp_us) {
     switch (target) {
         case TouchTarget::kWifi:
             EmitAction(host_ui::SystemUiActionType::kOpenWifiSettings);
@@ -152,7 +157,7 @@ void StatusLayerUi::EmitTarget(TouchTarget target, int32_t x) {
             EmitAction(host_ui::SystemUiActionType::kSetVolume, SliderValue(target, x));
             break;
         case TouchTarget::kScrim:
-            EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer);
+            EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer, 0U, timestamp_us);
             break;
         case TouchTarget::kNone:
             break;
@@ -314,11 +319,11 @@ bool StatusLayerUi::HandleTouch(const device::TouchSample& sample) {
     button_pressed_ = false;
     touch_target_ = TouchTarget::kNone;
     if (swipe_up) {
-        EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer);
+        EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer, 0U, sample.timestamp_us);
         return true;
     }
 
-    constexpr Bounds kDialogBounds{.x = 24, .y = 36, .width = 672, .height = 508};
+    constexpr Bounds kDialogBounds{.x = 24, .y = kStatusDialogVisibleY, .width = 672, .height = 508};
     const int32_t slider_index = SliderIndex(target);
     if (slider_index >= 0) {
         const uint8_t percent = static_cast<uint8_t>(SliderValue(target, sample.x));
@@ -326,10 +331,10 @@ bool StatusLayerUi::HandleTouch(const device::TouchSample& sample) {
         EmitSliderValue(target, percent, sample.timestamp_us, true);
     } else if (target == TouchTarget::kScrim && !PointInside(kDialogBounds, sample.x, sample.y) &&
                std::abs(delta_x) <= kTapSlop && std::abs(delta_y) <= kTapSlop && elapsed_us <= kGestureTimeoutUs) {
-        EmitTarget(target, sample.x);
+        EmitTarget(target, sample.x, sample.timestamp_us);
     } else if (QuickIndex(target) >= 0 && PointInside(TargetBounds(target), sample.x, sample.y) &&
                std::abs(delta_x) <= kTapSlop && std::abs(delta_y) <= kTapSlop && elapsed_us <= kGestureTimeoutUs) {
-        EmitTarget(target, sample.x);
+        EmitTarget(target, sample.x, sample.timestamp_us);
     }
     return true;
 }
@@ -522,10 +527,10 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     ResetObjectPointers();
     lv_obj_clean(status_layer_);
     lv_obj_remove_flag(status_layer_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(status_layer_, lv_color_hex(0x02060cU), 0);
-    lv_obj_set_style_bg_opa(status_layer_, 190, 0);
+    lv_obj_set_style_bg_color(status_layer_, lv_color_hex(kTransitionScrimRgb), 0);
+    lv_obj_set_style_bg_opa(status_layer_, kStatusScrimOpacity, 0);
 
-    constexpr Bounds kDialogBounds{.x = 24, .y = 36, .width = 672, .height = 508};
+    constexpr Bounds kDialogBounds{.x = 24, .y = kStatusDialogVisibleY, .width = 672, .height = 508};
     status_dialog_ = CreatePanel(status_layer_, kDialogBounds, 0x0d1b2cU);
     lv_obj_set_style_radius(status_dialog_, 30, 0);
     lv_obj_set_style_border_width(status_dialog_, 2, 0);
@@ -584,6 +589,7 @@ std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     DrawLayerLocked(model);
+    SetTransitionProgressLocked(0U);
     action_sink_ = action_sink;
     action_context_ = action_context;
     touch_active_ = false;
@@ -598,6 +604,24 @@ void StatusLayerUi::UpdateLocked(const host_ui::StatusLayerModel& model) {
         return;
     }
     UpdateControlsLocked(model);
+    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+}
+
+void StatusLayerUi::SetTransitionProgressLocked(uint16_t progress_per_mille) {
+    if (status_layer_ == nullptr || status_dialog_ == nullptr || lv_obj_has_flag(status_layer_, LV_OBJ_FLAG_HIDDEN)) {
+        return;
+    }
+    const uint32_t progress = progress_per_mille <= kTransitionComplete ? progress_per_mille : kTransitionComplete;
+    const int32_t dialog_y =
+        kStatusDialogHiddenY +
+        static_cast<int32_t>((kStatusDialogVisibleY - kStatusDialogHiddenY) * progress / kTransitionComplete);
+    lv_obj_set_y(status_dialog_, dialog_y);
+    // Keep the scrim stable while the panel moves. Animating a translucent
+    // 720x720 object forces LVGL to blend and refresh the full display on
+    // every step, which turns the status transition into a slideshow even
+    // though the CPU meter remains low while the panel pipeline is blocked.
+    lv_obj_set_style_bg_opa(status_layer_, kStatusScrimOpacity, 0);
+    RaisePerformanceOverlayLocked();
     lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
 }
 

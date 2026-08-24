@@ -22,6 +22,7 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
         "platform/metalio-claw4/display/dirty_region_coalescer.cpp"
         "platform/metalio-claw4/display/png_cover_decoder.cpp"
         "platform/metalio-claw4/display/screen_capture.cpp"
+        "platform/metalio-claw4/display/system_transition_compositor.cpp"
         "platform/metalio-claw4/graphics_adapter.cpp"
         "platform/metalio-claw4/guest_graphics_engine.cpp"
         "platform/metalio-claw4/platform.cpp"
