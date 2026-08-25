@@ -29,8 +29,10 @@ Resource 页使用 `assets/manifest.json` 描述一张 12 帧 PNG atlas。构建
 
 ```sh
 bash tools/build_demo_bundle.sh
-bash tools/flash_guest_p4.sh /dev/cu.usbmodemPORT build/apps/demo/demo.bundle.bin
+bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
+
+`flash-apps` 会清空 App Store 并写入 Blocks、Snake 和 Demo 三个示例 App。
 
 构建输出统一写入 `build/apps/demo/`。Audio 页显示 Host 返回的实际采样率；当前 P4 / Metalio-Claw4
 Mode 1 音频硬件链路固定为 16 kHz。页面可以分别试听 sine、square、triangle 和 noise；

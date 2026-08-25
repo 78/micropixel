@@ -60,12 +60,15 @@ destination rectangle 与 source rectangle，因此 1:1、裁剪、缩放及裁�
 
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、
-Input touch 和 Core host wake。新增事件不会扩大 Core import 表。
+Input touch、Input semantic key 和 Core host wake。新增事件不会扩大 Core import 表。
 
 - 周期 Timer 队列中同一 handle 最多保留一条记录。积压时 `elapsed_us` 累加，`missed_count` 统计未单独
   投递的 tick；队列满导致的 tick 也结转到下一次成功事件。
 - Touch wire 坐标是 `int32_t`。`pressure_per_mille` 仅在 Input 宣告
   `MICROPIXEL_INPUT_CAP_PRESSURE` 时有意义，范围固定为 0..1000。GT911 不宣告该能力并始终写 0。
+- Input 1.1 追加 `MICROPIXEL_INPUT_EVENT_KEY` 与 `MICROPIXEL_INPUT_CAP_KEY_EVENTS`。固定键码为方向、
+  Confirm、Back、Menu 和 A/B/X/Y，阶段为 Down、Up、Repeat、Cancel；Repeat 必须携带非零计数，
+  其他阶段的计数必须为 0。它是 Host 语义输入，不表示设备一定安装了物理键盘。
 
 ## 稳定性与安全规则
 

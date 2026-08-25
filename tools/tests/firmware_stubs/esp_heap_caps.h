@@ -13,4 +13,6 @@ static inline void* heap_caps_malloc(size_t size, unsigned capabilities) {
     return malloc(size);
 }
 
+static inline void heap_caps_free(void* memory) { free(memory); }
+
 #endif

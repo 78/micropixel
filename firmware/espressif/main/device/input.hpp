@@ -25,6 +25,36 @@ struct TouchSample final {
 
 using TouchSink = bool (*)(void* context, const TouchSample& sample);
 
+enum class KeyCode : uint16_t {
+    kUp = MICROPIXEL_KEY_UP,
+    kDown = MICROPIXEL_KEY_DOWN,
+    kLeft = MICROPIXEL_KEY_LEFT,
+    kRight = MICROPIXEL_KEY_RIGHT,
+    kConfirm = MICROPIXEL_KEY_CONFIRM,
+    kBack = MICROPIXEL_KEY_BACK,
+    kMenu = MICROPIXEL_KEY_MENU,
+    kA = MICROPIXEL_KEY_A,
+    kB = MICROPIXEL_KEY_B,
+    kX = MICROPIXEL_KEY_X,
+    kY = MICROPIXEL_KEY_Y,
+};
+
+enum class KeyPhase : uint8_t {
+    kDown,
+    kUp,
+    kRepeat,
+    kCancel,
+};
+
+struct KeySample final {
+    uint64_t timestamp_us{};
+    KeyCode code{KeyCode::kConfirm};
+    KeyPhase phase{KeyPhase::kCancel};
+    uint32_t repeat_count{};
+};
+
+using KeySink = bool (*)(void* context, const KeySample& sample);
+
 class InputBackend {
    public:
     virtual ~InputBackend() = default;
@@ -32,6 +62,19 @@ class InputBackend {
     [[nodiscard]] virtual int32_t GetInfo(micropixel_input_info_t& info) = 0;
     virtual void BindTouchSink(TouchSink sink, void* context) = 0;
     virtual void UnbindTouchSink(void* context) = 0;
+    virtual void BindKeySink(KeySink sink, void* context) {
+        (void)sink;
+        (void)context;
+    }
+    virtual void UnbindKeySink(void* context) { (void)context; }
+    [[nodiscard]] virtual bool InjectTouch(const TouchSample& sample) {
+        (void)sample;
+        return false;
+    }
+    [[nodiscard]] virtual bool InjectKey(const KeySample& sample) {
+        (void)sample;
+        return false;
+    }
 };
 
 }  // namespace micropixel::device

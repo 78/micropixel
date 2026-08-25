@@ -18,6 +18,7 @@ namespace micropixel::runtime {
 
 class GuestContext;
 class DecodedBitmap;
+class GuestLogSink;
 
 enum class AppSessionError {
     kPackageLoad,
@@ -51,7 +52,8 @@ class AppSession final {
     ~AppSession();
 
     [[nodiscard]] static std::expected<AppSession, AppSessionFailure> Create(device::DeviceServices& devices,
-                                                                             uint32_t store_offset);
+                                                                             const bundlefs_file_t& file,
+                                                                             GuestLogSink* log_sink = nullptr);
     [[nodiscard]] std::expected<void, AppSessionError> Run();
     [[nodiscard]] bool Suspend(TickType_t timeout);
     [[nodiscard]] bool Resume();

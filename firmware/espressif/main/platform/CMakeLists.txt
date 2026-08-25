@@ -9,7 +9,7 @@ list(APPEND micropixel_requires esp_hw_support)
 # so declare the union of P4 platform dependencies here. The source list below
 # still selects exactly one implementation per backend.
 list(APPEND micropixel_requires
-    esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_ledc
+    esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_jpeg esp_driver_ledc
     esp_driver_ppa esp_driver_uart esp_driver_usb_serial_jtag
     button esp_event esp_lcd esp_lvgl_adapter esp_lcd_touch_gt911 esp_netif esp_timer esp_wifi lvgl__lvgl
 )
@@ -26,6 +26,7 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
         "platform/metalio-claw4/graphics_adapter.cpp"
         "platform/metalio-claw4/guest_graphics_engine.cpp"
         "platform/metalio-claw4/platform.cpp"
+        "platform/metalio-claw4/icons/wifi_status_icons.c"
         "platform/metalio-claw4/status_layer_ui.cpp"
         "platform/metalio-claw4/system_detail_ui.cpp"
         "platform/metalio-claw4/system_menu_ui.cpp"

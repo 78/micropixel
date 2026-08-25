@@ -15,6 +15,8 @@ class DeviceServices;
 
 namespace micropixel::runtime {
 
+class GuestLogSink;
+
 enum class AppRuntimeError {
     kRuntimeInitialization,
     kNativeApiRegistration,
@@ -45,7 +47,8 @@ class AppRuntime final {
     AppRuntime& operator=(AppRuntime&& other) = delete;
     ~AppRuntime();
 
-    [[nodiscard]] static std::expected<AppRuntime, AppRuntimeError> Initialize(device::DeviceServices& devices);
+    [[nodiscard]] static std::expected<AppRuntime, AppRuntimeError> Initialize(device::DeviceServices& devices,
+                                                                               GuestLogSink* log_sink = nullptr);
     [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app, AppSessionReadySink ready_sink = nullptr,
                                        void* ready_context = nullptr);
     [[nodiscard]] bool RequestSuspend(TickType_t timeout);
@@ -54,11 +57,13 @@ class AppRuntime final {
     [[nodiscard]] bool ForceStop();
 
    private:
-    AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex);
+    AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex,
+               GuestLogSink* log_sink);
     [[nodiscard]] bool TakeSessionLock();
     void GiveSessionLock();
 
     device::DeviceServices& devices_;
+    GuestLogSink* log_sink_{};
     WamrRuntime wamr_;
     SemaphoreHandle_t session_mutex_{};
     AppSession* active_session_{};

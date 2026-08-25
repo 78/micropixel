@@ -14,7 +14,8 @@ ESP-IDF 6.1 和 WAMR 2.4.3 AOT，Guest 使用受限 C++23 SDK，通过稳定的 
 - 硬件：ESP32-P4 + Metalio-Claw4；
 - Host：ESP-IDF 6.1，一个长驻 `AppRuntime`，同时最多一个 Guest `AppSession`；
 - Guest：Wasm32 + RISC-V 32-bit AOT，单线程事件模型；
-- 分发：Bundle v1 + 只读 `app_store` 分区；
+- 分发：Bundle v1 + 统一 24 MiB 可写 `app_store`；BundleFS 使用离散 64 KiB 数据块、写时复制和
+  四个 4 KiB Catalog Bank，不依赖 NVS Catalog；
 - 系统 UI：Host 原生 App Hall、Status Layer、系统菜单和系统手势；
 - 集成 App：Blocks、Snake 和 Demo。
 
@@ -24,6 +25,7 @@ ESP-IDF 6.1 和 WAMR 2.4.3 AOT，Guest 使用受限 C++23 SDK，通过稳定的 
 
 - 项目入口、环境和常用命令：[`README.md`](README.md)；
 - 产品边界、分层和发布基线：[`docs/design/architecture.zh-CN.md`](docs/design/architecture.zh-CN.md)；
+- BundleFS 持久化格式和事务：[`docs/design/bundlefs.zh-CN.md`](docs/design/bundlefs.zh-CN.md)；
 - Firmware 文件职责：[`firmware/espressif/main/README.md`](firmware/espressif/main/README.md)；
 - Guest 目录与构建：[`guest/README.md`](guest/README.md)；
 - Public C++ API：[`guest/sdk/README.md`](guest/sdk/README.md)；
@@ -130,10 +132,13 @@ build/                            # 本地生成产物，不提交
 bash tools/build_guest_p4.sh
 
 # ESP32-P4 Host 产品基线
-bash tools/build_p4_baseline.sh
+bash tools/p4.sh build-host
 
 # System Shell + Blocks + Snake + Demo + App Store 集成
-bash tools/build_system_shell_p4.sh
+bash tools/p4.sh build-all
+
+# 发布前或推送前完整门禁；普通 build/flash 不隐式运行
+bash tools/p4.sh test
 
 # Firmware 格式；首次完整 clang-tidy 需要 --configure
 bash tools/check_firmware_style.sh --format-only
@@ -158,7 +163,7 @@ bash -n tools/*.sh
 - 文档变更：检查相对链接和 `git diff --check`；
 - Guest SDK/ABI：至少运行 Guest 构建和相关 conformance；
 - Firmware 代码：至少运行相关 Host test、格式和 P4 Host 构建；
-- System Shell、Bundle 或集成 App：运行 `build_system_shell_p4.sh`；
+- System Shell、Bundle 或集成 App：运行 `bash tools/p4.sh build-all`；
 - 音频：运行分析器 unit tests、对应 Bundle 构建和真机试听；
 - 硬件行为：记录目标板型和验收结果，但不提交 MAC、串口日志或设备标识。
 

@@ -12,6 +12,7 @@ constexpr UBaseType_t kHostPriority = 7U;
 constexpr UBaseType_t kDisplayPriority = 6U;
 constexpr UBaseType_t kCapturePriority = 6U;
 constexpr UBaseType_t kGuestPriority = 5U;
+constexpr UBaseType_t kRemoteControlPriority = 4U;
 constexpr UBaseType_t kAssetWorkerPriority = 3U;
 
 static_assert(kAudioPriority > kHostPriority);
@@ -19,6 +20,8 @@ static_assert(kHostPriority > kCapturePriority);
 static_assert(kCapturePriority > kGuestPriority);
 static_assert(kTouchPriority > kDisplayPriority);
 static_assert(kDisplayPriority > kGuestPriority);
+static_assert(kGuestPriority > kRemoteControlPriority);
+static_assert(kRemoteControlPriority > kAssetWorkerPriority);
 static_assert(kGuestPriority > kAssetWorkerPriority);
 static_assert(kAudioPriority < configMAX_PRIORITIES);
 

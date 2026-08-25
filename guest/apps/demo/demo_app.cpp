@@ -65,17 +65,6 @@ void ExitPage(PageId page, DemoContext& context) {
     }
 }
 
-[[nodiscard]] bool HandleTimer(PageId page, DemoContext& context, const micropixel::TimerEvent& event) {
-    switch (page) {
-        case PageId::kTimer:
-            return TimerDemoOnTimer(context, event);
-        case PageId::kResourceAtlas:
-            return ResourceAtlasDemoOnTimer(context, event);
-        default:
-            return false;
-    }
-}
-
 [[nodiscard]] bool HandleTouch(PageId page, DemoContext& context, const micropixel::TouchEvent& event) {
     switch (page) {
         case PageId::kTimer:
@@ -175,6 +164,7 @@ int DemoAppMain() {
     micropixel::Texture atlas_texture = LoadDemoAtlas(app);
     DemoContext context{app, renderer, display, input, atlas_texture};
     micropixel::Timer ticker = CreateDemoTicker(app);
+    micropixel::Timer atlas_ticker = CreateResourceAtlasTicker(app);
     PageId active_page = PageId::kHome;
     micropixel::ui::Button menu_buttons[kPageCount]{};
     for (uint32_t index = 0U; index < kPageCount; ++index) {
@@ -191,7 +181,9 @@ int DemoAppMain() {
         }
         bool redraw = false;
         if (const micropixel::TimerEvent* timer = event.TimerFrom(ticker)) {
-            redraw = HandleTimer(active_page, context, *timer);
+            redraw = active_page == PageId::kTimer && TimerDemoOnTimer(context, *timer);
+        } else if (const micropixel::TimerEvent* timer = event.TimerFrom(atlas_ticker)) {
+            redraw = active_page == PageId::kResourceAtlas && ResourceAtlasDemoOnTimer(context, *timer);
         } else if (const micropixel::TouchEvent* touch = event.touch()) {
             if (active_page != PageId::kHome) {
                 const micropixel::ui::ButtonUpdate back_update = back_button.OnTouch(*touch);

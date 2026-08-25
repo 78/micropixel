@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 bool micropixel_register_native_apis(void);
+int32_t micropixel_runtime_log_write(wasm_exec_env_t exec_env, uint32_t level, const uint8_t* bytes, uint32_t length);
 int32_t micropixel_runtime_event_wait(wasm_exec_env_t exec_env, micropixel_event_t* event_out, uint32_t event_capacity,
                                       uint64_t timeout_us);
 micropixel_app_time_t micropixel_runtime_clock_now(wasm_exec_env_t exec_env);

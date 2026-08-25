@@ -16,6 +16,8 @@ dependencies:
       - if: "target == esp32p4"
   espressif/button:
     version: "^4.2.0"
+  espressif/cjson:
+    version: "^1.7.19"
   espressif/esp_mmap_assets:
     version: "2.0.0"
   espressif/esp_new_jpeg:

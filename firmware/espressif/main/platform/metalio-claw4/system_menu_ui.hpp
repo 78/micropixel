@@ -29,6 +29,7 @@ class SystemMenuUi final {
         kNone,
         kBack,
         kWifi,
+        kRemoteControl,
         kLanguage,
         kSystemInformation,
         kManageApps,
@@ -40,7 +41,10 @@ class SystemMenuUi final {
 
     lv_display_t* display_{};
     lv_obj_t* wifi_detail_label_{};
-    lv_obj_t* press_overlays_[5]{};
+    lv_obj_t* remote_control_detail_label_{};
+    lv_obj_t* system_information_detail_label_{};
+    lv_obj_t* firmware_update_dot_{};
+    lv_obj_t* press_overlays_[6]{};
     host_ui::SystemUiActionSink action_sink_{};
     void* action_context_{};
     uint32_t touch_id_{};

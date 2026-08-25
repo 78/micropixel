@@ -2,6 +2,7 @@
 
 #include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,14 +13,17 @@ namespace {
 constexpr char kTag[] = "micropixel_guest";
 }
 
-GuestContext::GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices)
+GuestContext::GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
+                           GuestLogSink* log_sink)
     : devices_(devices),
+      log_sink_(log_sink),
       clock_origin_us_(esp_timer_get_time()),
       events_{},
       timers_(events_, clock_origin_us_),
       resources_(package),
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),
+      key_events_(events_, devices_.input(), clock_origin_us_),
       timer_endpoint_(*this),
       storage_endpoint_(*this),
       resource_endpoint_(*this),
@@ -28,9 +32,12 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       input_endpoint_(*this),
       audio_endpoint_(*this),
       service_registry_(timer_endpoint_, storage_endpoint_, resource_endpoint_, random_endpoint_, graphics_endpoint_,
-                        input_endpoint_, audio_endpoint_) {}
+                        input_endpoint_, audio_endpoint_) {
+    (void)std::snprintf(app_id_.data(), app_id_.size(), "%s", reinterpret_cast<const char*>(package.app_id));
+}
 
 GuestContext::~GuestContext() {
+    key_events_.Shutdown();
     touch_events_.Shutdown();
     (void)devices_.audio().StopAll();
     (void)devices_.audio().ResumeAll();
@@ -39,11 +46,18 @@ GuestContext::~GuestContext() {
     events_.Close();
 }
 
+void GuestContext::WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length) const {
+    if (log_sink_ != nullptr) {
+        log_sink_->WriteGuestLog(app_id_.data(), level, bytes, length, static_cast<uint64_t>(esp_timer_get_time()));
+    }
+}
+
 bool GuestContext::Suspend(TickType_t timeout) {
     if (suspended_) {
         return true;
     }
     touch_events_.Suspend();
+    key_events_.Suspend();
     const bool timers_suspended = timers_.Suspend();
     auto audio_result = devices_.audio().SuspendAll();
     const bool audio_suspended = audio_result || audio_result.error().status == MICROPIXEL_STATUS_UNSUPPORTED;
@@ -51,6 +65,7 @@ bool GuestContext::Suspend(TickType_t timeout) {
         (void)timers_.Resume();
         (void)devices_.audio().ResumeAll();
         touch_events_.Resume();
+        key_events_.Resume();
         events_.Resume();
         return false;
     }
@@ -82,6 +97,7 @@ bool GuestContext::Resume() {
         return false;
     }
     touch_events_.Resume();
+    key_events_.Resume();
     events_.Resume();
     suspended_ = false;
     ESP_LOGI(kTag, "Guest services resumed from the same AppSession: event=%" PRIu32, core_sequence_);
@@ -90,6 +106,7 @@ bool GuestContext::Resume() {
 
 bool GuestContext::RequestStop() {
     touch_events_.Suspend();
+    key_events_.Suspend();
     (void)timers_.Suspend();
     (void)devices_.audio().SuspendAll();
     micropixel_event_t stop_event{};
@@ -107,6 +124,7 @@ bool GuestContext::RequestStop() {
 
 void GuestContext::ForceStop() {
     touch_events_.Suspend();
+    key_events_.Suspend();
     (void)timers_.Suspend();
     (void)devices_.audio().SuspendAll();
     events_.Close();

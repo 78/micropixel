@@ -1,11 +1,15 @@
 #ifndef MICROPIXEL_RUNTIME_GUEST_CONTEXT_HPP
 #define MICROPIXEL_RUNTIME_GUEST_CONTEXT_HPP
 
+#include <array>
+
 #include "abi/micropixel_abi.h"
 #include "device/device_services.hpp"
 #include "runtime/abi/service_endpoints.hpp"
 #include "runtime/abi/service_registry.hpp"
 #include "runtime/event_queue.hpp"
+#include "runtime/guest_log_sink.hpp"
+#include "runtime/key_event_bridge.hpp"
 #include "runtime/resources/resource_service.hpp"
 #include "runtime/services/storage_service.hpp"
 #include "runtime/services/timer_service.hpp"
@@ -15,7 +19,7 @@ namespace micropixel::runtime {
 
 class GuestContext final {
    public:
-    GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices);
+    GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices, GuestLogSink* log_sink);
     GuestContext(const GuestContext&) = delete;
     GuestContext& operator=(const GuestContext&) = delete;
     ~GuestContext();
@@ -34,6 +38,8 @@ class GuestContext final {
     }
     [[nodiscard]] bool PushRequired(const micropixel_event_t& event) { return events_.PushRequired(event); }
     [[nodiscard]] bool PushTouch(const device::TouchSample& sample) { return touch_events_.Push(sample); }
+    [[nodiscard]] bool PushKey(const device::KeySample& sample) { return key_events_.Push(sample); }
+    void WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length) const;
     void NoteEventDelivered(const micropixel_event_t& event) { touch_events_.NoteDelivered(event); }
     [[nodiscard]] int32_t ServiceOpen(uint32_t service_id, uint32_t required_interface_version,
                                       micropixel_service_info_t& info_out, uint32_t info_capacity) const {
@@ -120,12 +126,15 @@ class GuestContext final {
     [[nodiscard]] device::TextureAccess GraphicsTextureAccess();
 
     device::DeviceServices& devices_;
+    GuestLogSink* log_sink_{};
+    std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id_{};
     int64_t clock_origin_us_{};
     EventQueue events_;
     TimerService timers_;
     ResourceService resources_;
     StorageService storage_;
     TouchEventBridge touch_events_;
+    KeyEventBridge key_events_;
     TimerServiceEndpoint timer_endpoint_;
     StorageServiceEndpoint storage_endpoint_;
     ResourceServiceEndpoint resource_endpoint_;

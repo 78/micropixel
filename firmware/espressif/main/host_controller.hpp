@@ -12,6 +12,9 @@ class SystemShell;
 }
 
 namespace micropixel::firmware {
+namespace remote_control {
+class RemoteControlAgent;
+}
 
 // Owns Host-level App selection and lifecycle policy. FirmwareApp remains the
 // composition root; this controller performs explicit Hall/Foreground state
@@ -19,7 +22,7 @@ namespace micropixel::firmware {
 class HostController final {
    public:
     HostController(device::DeviceServices& devices, device::BatteryBackend& battery, device::WifiBackend& wifi,
-                   host_ui::SystemShell& shell);
+                   host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control);
     ~HostController();
     HostController(const HostController&) = delete;
     HostController& operator=(const HostController&) = delete;
@@ -31,6 +34,7 @@ class HostController final {
     device::BatteryBackend& battery_;
     device::WifiBackend& wifi_;
     host_ui::SystemShell& shell_;
+    remote_control::RemoteControlAgent& remote_control_;
 };
 
 }  // namespace micropixel::firmware

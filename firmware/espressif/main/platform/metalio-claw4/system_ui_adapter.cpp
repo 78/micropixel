@@ -8,8 +8,8 @@ std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowHall(const host
     return operations_.show_hall(operations_.context, model, action_sink, action_context);
 }
 
-void SystemUiAdapter::UpdateHallWifi(const host_ui::HallWifiModel& model) {
-    operations_.update_hall_wifi(operations_.context, model);
+void SystemUiAdapter::UpdateHallStatusBar(const host_ui::HallStatusBarModel& model) {
+    operations_.update_hall_status_bar(operations_.context, model);
 }
 
 void SystemUiAdapter::LeaveHall() { operations_.leave_hall(operations_.context); }
@@ -31,6 +31,13 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> SystemUiAdapter::
     return operations_.capture_guest_frame(operations_.context, hall_app_index, trigger_timestamp_us);
 }
 
+std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> SystemUiAdapter::CaptureScreenJpeg() {
+    if (operations_.capture_screen_jpeg == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    return operations_.capture_screen_jpeg(operations_.context);
+}
+
 void SystemUiAdapter::ReleaseGuestSnapshot() { operations_.release_guest_snapshot(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemMenu(const host_ui::SystemMenuModel& model,
@@ -50,7 +57,25 @@ std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowSystemInformati
     return operations_.show_system_information(operations_.context, model, action_sink, action_context);
 }
 
+void SystemUiAdapter::UpdateSystemInformation(const host_ui::SystemInformationModel& model) {
+    if (operations_.update_system_information != nullptr) {
+        operations_.update_system_information(operations_.context, model);
+    }
+}
+
 void SystemUiAdapter::LeaveSystemInformation() { operations_.leave_system_information(operations_.context); }
+
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowRemoteControl(const host_ui::RemoteControlModel& model,
+                                                                               host_ui::SystemUiActionSink action_sink,
+                                                                               void* action_context) {
+    return operations_.show_remote_control(operations_.context, model, action_sink, action_context);
+}
+
+void SystemUiAdapter::UpdateRemoteControl(const host_ui::RemoteControlModel& model) {
+    operations_.update_remote_control(operations_.context, model);
+}
+
+void SystemUiAdapter::LeaveRemoteControl() { operations_.leave_remote_control(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowAppManagement(const host_ui::AppManagementModel& model,
                                                                                host_ui::SystemUiActionSink action_sink,

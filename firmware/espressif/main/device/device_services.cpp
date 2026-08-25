@@ -72,6 +72,14 @@ void InputService::BindTouchSink(TouchSink sink, void* context) const { backend_
 
 void InputService::UnbindTouchSink(void* context) const { backend_.UnbindTouchSink(context); }
 
+bool InputService::InjectTouch(const TouchSample& sample) const { return backend_.InjectTouch(sample); }
+
+void InputService::BindKeySink(KeySink sink, void* context) const { backend_.BindKeySink(sink, context); }
+
+void InputService::UnbindKeySink(void* context) const { backend_.UnbindKeySink(context); }
+
+bool InputService::InjectKey(const KeySample& sample) const { return backend_.InjectKey(sample); }
+
 DeviceResult<micropixel_audio_info_t> AudioService::GetInfo() const {
     micropixel_audio_info_t info{};
     int32_t status = backend_.GetInfo(info);

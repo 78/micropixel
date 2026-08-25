@@ -14,11 +14,14 @@ MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产�
 - Host：ESP32-P4 + Metalio-Claw4，ESP-IDF 6.1；
 - Runtime：WAMR 2.4.3 AOT，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
-- App 分发：Bundle v1 封装 AOT、资源和 App metadata；
+- App 分发：Bundle v1 封装 AOT、资源和 App metadata；24 MiB 可写 App Store 由 BundleFS 以离散
+  64 KiB 块和四 Bank Catalog 提供写时复制事务；
 - 系统 UI：Host 原生 App Hall、Status Layer 和系统手势，不作为 Guest App 运行。
 
-当前不承诺 ESP32-S3 产品适配、多 Guest 并行、Guest 多线程、在线应用安装、网络 Service、
-Camera Service 或通用 Widget Server。只有进入代码和回归基线的功能才是当前架构的一部分。
+当前不承诺 ESP32-S3 产品适配、多 Guest 并行、Guest 多线程、生产级在线 App 分发、网络 Service、
+Camera Service 或通用 Widget Server。Remote Control 的开发版在线安装已经进入代码基线，但 package
+数字签名、BundleFS 真机断电恢复矩阵和完整 TLS peer 验证仍是发布门槛。BundleFS 的块号表允许物理块
+离散分布，卸载后的块可直接复用，不依赖连续 extent GC。
 
 ## 2. Host 分层
 
@@ -169,6 +172,8 @@ Renderer -> StreamingTexture / TextureUpdateBatch
 
 Bundle v1 当前使用 128-byte header 和 48-byte section，section 可包含 AOT、Asset 和 App
 metadata。Bundle reader 在创建 WAMR instance 前完成 magic、hash、范围、对齐、格式和唯一性检查。
+Bundle 文件由 [BundleFS](bundlefs.zh-CN.md) 保存；Catalog 位于 `app_store` 自身，不使用 NVS，也没有
+预置 App 或连续 extent 的特殊语义。
 
 设备能力与 App 权限必须分开建模：
 
@@ -191,19 +196,19 @@ Input、Storage 和 Audio，Blocks 覆盖 StreamingTexture 与批量 damage。
 
 ```sh
 bash tools/build_guest_p4.sh
-bash tools/build_p4_baseline.sh
-bash tools/build_system_shell_p4.sh
+bash tools/p4.sh build-host
+bash tools/p4.sh build-all
 bash tools/check_firmware_style.sh
 bash tools/tests/test_firmware_host.sh
 python3 -m unittest tools.tests.test_build_app_store_image
-bash tools/tests/test_bundle_reader.sh build/system-shell-p4/app-store.bin
 ```
 
 真机发布前至少检查：
 
 - App Hall 能显示并启动三个 App，切换时旧 Session 已先销毁；
+- App Hall 顶部居中显示紧凑 FPS/CPU，右侧 Wi-Fi 信号与电池状态不会互相遮挡；
 - 顶部下滑打开 Status Layer，底部上滑暂停并返回大厅；
-- 恢复同一 App 时复用 Session、retained scene 和最后一帧 thumbnail；
+- 恢复同一 App 时复用 Session 和 retained scene，并由 PPA 从 Hall 卡片硬件放大回最后一帧；
 - Texture `Present → Reset → 重绘/换场景` 不产生 UAF；
 - Timer 积压时 `elapsed` 和 `missed_count` 正确；
 - GT911 不声明 pressure capability，Touch 坐标与 Renderer 使用同一逻辑空间；

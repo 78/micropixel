@@ -51,7 +51,7 @@ constexpr int32_t kActionButtonHeight = 96;
 constexpr int32_t kActionButtonX = (kScreenWidth - kActionButtonWidth) / 2;
 constexpr uint16_t kActionButtonFontSize = 24U;
 constexpr int32_t kActionButtonTextOpticalOffsetY = -2;
-constexpr uint8_t kOverlayOpacity = 216U;
+constexpr uint8_t kOverlayOpacity = 180U;
 constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
 constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButtonWidth, kActionButtonHeight};
 constexpr micropixel::Rect kPauseTouchRect{0, 0, 180, kBoardY};

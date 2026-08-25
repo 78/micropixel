@@ -47,6 +47,14 @@ lv_obj_t* CreatePanel(lv_obj_t* parent, const Bounds& bounds, uint32_t backgroun
     return panel;
 }
 
+void CreateDismissibleScrim(lv_obj_t* parent, lv_event_cb_t dismiss_callback, void* user_data) {
+    lv_obj_t* scrim =
+        CreatePanel(parent, Bounds{.x = 0, .y = 0, .width = kScreenWidth, .height = kScreenHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(scrim, dismiss_callback, LV_EVENT_SHORT_CLICKED, user_data);
+}
+
 lv_obj_t* CreateActionButton(lv_obj_t* parent, const Bounds& bounds, const char* text, uint32_t color,
                              uint32_t border = 0x365472U) {
     constexpr lv_style_selector_t kPressed = static_cast<lv_style_selector_t>(LV_STATE_PRESSED);
@@ -165,6 +173,151 @@ void DrawAppMoreIndicator(lv_obj_t* parent) {
     }
 }
 
+const char* RemoteControlStateText(host_ui::RemoteControlConnectionState state) {
+    switch (state) {
+        case host_ui::RemoteControlConnectionState::kDisabled:
+            return "Off";
+        case host_ui::RemoteControlConnectionState::kWaitingForNetwork:
+            return "Waiting for network";
+        case host_ui::RemoteControlConnectionState::kConnecting:
+            return "Connecting";
+        case host_ui::RemoteControlConnectionState::kConnected:
+            return "Connected";
+        case host_ui::RemoteControlConnectionState::kBackoff:
+            return "Retrying";
+        case host_ui::RemoteControlConnectionState::kAuthenticationError:
+            return "Authentication error";
+    }
+    return "Unknown";
+}
+
+uint32_t RemoteControlStateColor(host_ui::RemoteControlConnectionState state) {
+    switch (state) {
+        case host_ui::RemoteControlConnectionState::kConnected:
+            return 0xc5f36dU;
+        case host_ui::RemoteControlConnectionState::kConnecting:
+        case host_ui::RemoteControlConnectionState::kWaitingForNetwork:
+            return 0x69a7ffU;
+        case host_ui::RemoteControlConnectionState::kBackoff:
+            return 0xf4c86aU;
+        case host_ui::RemoteControlConnectionState::kAuthenticationError:
+            return 0xff6b74U;
+        case host_ui::RemoteControlConnectionState::kDisabled:
+            return 0x748aa5U;
+    }
+    return 0x748aa5U;
+}
+
+const char* DisplayText(const char* text, const char* fallback) {
+    return text != nullptr && text[0] != '\0' ? text : fallback;
+}
+
+bool FirmwareUpdateInProgress(host_ui::FirmwareUpdateState state) {
+    return state == host_ui::FirmwareUpdateState::kDownloading || state == host_ui::FirmwareUpdateState::kVerifying ||
+           state == host_ui::FirmwareUpdateState::kInstalling;
+}
+
+const char* FirmwareUpdateStageText(host_ui::FirmwareUpdateState state) {
+    switch (state) {
+        case host_ui::FirmwareUpdateState::kChecking:
+            return "Checking for update";
+        case host_ui::FirmwareUpdateState::kDownloading:
+            return "Downloading firmware";
+        case host_ui::FirmwareUpdateState::kVerifying:
+            return "Verifying package";
+        case host_ui::FirmwareUpdateState::kInstalling:
+            return "Installing firmware";
+        case host_ui::FirmwareUpdateState::kCurrent:
+            return "Firmware is up to date";
+        case host_ui::FirmwareUpdateState::kAvailable:
+            return "Ready to update";
+        case host_ui::FirmwareUpdateState::kFailed:
+            return "Update failed";
+        case host_ui::FirmwareUpdateState::kUnknown:
+            return "Firmware update";
+    }
+    return "Firmware update";
+}
+
+void DrawFirmwareUpdateView(lv_obj_t* root, const host_ui::SystemInformationModel& model, lv_event_cb_t back_callback,
+                            lv_event_cb_t update_callback, void* user_data) {
+    const bool in_progress = FirmwareUpdateInProgress(model.firmware_update_state);
+    lv_obj_t* back = DrawDetailHeader(root, "Firmware Update", "Keep the device powered on", back_callback, user_data);
+    if (in_progress) {
+        lv_obj_add_state(back, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(back, LV_OPA_30, 0);
+    }
+
+    lv_obj_t* panel =
+        CreatePanel(root, Bounds{.x = 40, .y = 138, .width = 640, .height = 500}, 0x111f32U, 0x2e4562U, 26);
+    lv_obj_t* icon = CreateLabel(
+        panel, LV_SYMBOL_REFRESH, &lv_font_montserrat_32,
+        model.firmware_update_state == host_ui::FirmwareUpdateState::kFailed ? 0xff6b74U : 0x69a7ffU, 292, 38);
+    lv_obj_set_width(icon, 56);
+    lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
+
+    const char* stage = FirmwareUpdateStageText(model.firmware_update_state);
+    lv_obj_t* stage_label = CreateLabel(panel, stage, &lv_font_montserrat_24, 0xf2f7ffU, 40, 99);
+    lv_obj_set_width(stage_label, 560);
+    lv_obj_set_style_text_align(stage_label, LV_TEXT_ALIGN_CENTER, 0);
+
+    char versions[160]{};
+    const char* latest = DisplayText(model.latest_firmware_version.data(), model.firmware_version.data());
+    std::snprintf(versions, sizeof(versions), "%s  %s  %s", model.firmware_version.data(), LV_SYMBOL_RIGHT, latest);
+    lv_obj_t* version_label = CreateLabel(panel, versions, &lv_font_montserrat_18, 0x91a4bdU, 40, 141);
+    lv_obj_set_width(version_label, 560);
+    lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, 0);
+
+    const uint8_t progress = std::min<uint8_t>(model.firmware_progress_percent, 100U);
+    char percent[16]{};
+    std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
+    lv_obj_t* percent_label = CreateLabel(panel, percent, &lv_font_montserrat_32, 0xf2f7ffU, 40, 190);
+    lv_obj_set_width(percent_label, 560);
+    lv_obj_set_style_text_align(percent_label, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t* progress_bar = lv_bar_create(panel);
+    lv_obj_set_pos(progress_bar, 48, 244);
+    lv_obj_set_size(progress_bar, 544, 18);
+    lv_obj_set_style_radius(progress_bar, 9, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(progress_bar, lv_color_hex(0x21364eU), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(progress_bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(progress_bar, 9, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(progress_bar, lv_color_hex(0x69a7ffU), LV_PART_INDICATOR);
+    lv_bar_set_range(progress_bar, 0, 100);
+    lv_bar_set_value(progress_bar, progress, LV_ANIM_OFF);
+
+    if (model.firmware_size_bytes != 0U) {
+        char size[64]{};
+        const uint32_t shown_bytes = std::min(model.firmware_processed_bytes, model.firmware_size_bytes);
+        const uint32_t shown_tenths =
+            static_cast<uint32_t>((static_cast<uint64_t>(shown_bytes) * 10U) / (1024U * 1024U));
+        const uint32_t total_tenths =
+            static_cast<uint32_t>((static_cast<uint64_t>(model.firmware_size_bytes) * 10U) / (1024U * 1024U));
+        std::snprintf(size, sizeof(size), "%" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB", shown_tenths / 10U,
+                      shown_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
+        lv_obj_t* size_label = CreateLabel(panel, size, &lv_font_montserrat_18, 0x91a4bdU, 40, 281);
+        lv_obj_set_width(size_label, 560);
+        lv_obj_set_style_text_align(size_label, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    const char* message = DisplayText(model.firmware_update_message.data(), stage);
+    lv_obj_t* message_label = CreateLabel(
+        panel, message, &lv_font_montserrat_18,
+        model.firmware_update_state == host_ui::FirmwareUpdateState::kFailed ? 0xff8a91U : 0x91a4bdU, 40, 326);
+    lv_obj_set_width(message_label, 560);
+    lv_obj_set_style_text_align(message_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(message_label, LV_LABEL_LONG_WRAP);
+
+    if (!in_progress && model.firmware_update_installable) {
+        const char* button_text = model.firmware_update_state == host_ui::FirmwareUpdateState::kFailed ? "Retry update"
+                                  : model.firmware_update_available ? "Download and install"
+                                                                    : "Reinstall current version";
+        lv_obj_t* update = CreateActionButton(panel, Bounds{.x = 160, .y = 402, .width = 320, .height = 64},
+                                              button_text, 0xcdf5c6U, 0x5e9f59U);
+        lv_obj_add_event_cb(update, update_callback, LV_EVENT_SHORT_CLICKED, user_data);
+    }
+}
+
 }  // namespace
 
 std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformationLocked(
@@ -173,18 +326,28 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     if (root == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    LeaveRemoteControl();
     LeaveAppManagement();
     root_ = root;
     system_information_action_sink_ = action_sink;
     system_information_action_context_ = action_context;
     active_screen_ = Screen::kSystemInformation;
     lv_obj_set_style_bg_color(root_, lv_color_hex(0x08111fU), 0);
+    if (model.firmware_update_view) {
+        DrawFirmwareUpdateView(root_, model, SystemInformationBackEvent, SystemInformationUpdateEvent, this);
+        lv_obj_move_foreground(root_);
+        lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(root_)));
+        ESP_LOGI(kTag, "Firmware Update visible: state=%u progress=%u%%",
+                 static_cast<unsigned>(model.firmware_update_state),
+                 static_cast<unsigned>(model.firmware_progress_percent));
+        return {};
+    }
     (void)DrawDetailHeader(root_, "System Information", "Device and software", SystemInformationBackEvent, this);
 
-    constexpr int32_t kContentHeight = 1358;
+    constexpr int32_t kContentHeight = 1420;
     lv_obj_t* scroll_content = CreateDetailScrollContent(root_, kContentHeight, DetailScrollEvent, this);
     lv_obj_t* firmware =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 14, .width = 640, .height = 128}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 14, .width = 640, .height = 190}, 0x111f32U, 0x2e4562U, 22);
     (void)CreateLabel(firmware, "MicroPixel Firmware", &lv_font_montserrat_18, 0x91a4bdU, 24, 18);
     char version[96]{};
     std::snprintf(version, sizeof(version), "Version %s", model.firmware_version.data());
@@ -196,32 +359,47 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     lv_obj_set_width(build_label, 592);
     lv_label_set_long_mode(build_label, LV_LABEL_LONG_DOT);
 
-    DrawInformationSectionLabel(scroll_content, "MEMORY", 166);
+    const char* update_status = model.firmware_update_message[0] != '\0' ? model.firmware_update_message.data()
+                                                                         : "Connect to Control to check for updates";
+    lv_obj_t* update_status_label = CreateLabel(firmware, update_status, &lv_font_montserrat_18, 0x91a4bdU, 24, 139);
+    lv_obj_set_width(update_status_label, model.firmware_update_installable ? 382 : 592);
+    lv_label_set_long_mode(update_status_label, LV_LABEL_LONG_DOT);
+    if (model.firmware_update_installable) {
+        char update_action[96]{};
+        std::snprintf(update_action, sizeof(update_action),
+                      model.firmware_update_available ? "Update to %s" : "Reinstall %s",
+                      model.latest_firmware_version.data());
+        lv_obj_t* update = CreateActionButton(firmware, Bounds{.x = 430, .y = 124, .width = 184, .height = 50},
+                                              update_action, 0xcdf5c6U, 0x5e9f59U);
+        lv_obj_add_event_cb(update, SystemInformationUpdateEvent, LV_EVENT_SHORT_CLICKED, this);
+    }
+
+    DrawInformationSectionLabel(scroll_content, "MEMORY", 228);
     lv_obj_t* memory =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 198, .width = 640, .height = 194}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 260, .width = 640, .height = 194}, 0x111f32U, 0x2e4562U, 22);
     DrawMemoryStatisticsRow(memory, 0, "SRAM", model.internal_sram);
     DrawMemoryStatisticsRow(memory, 97, "PSRAM", model.psram);
 
-    DrawInformationSectionLabel(scroll_content, "HARDWARE", 420);
+    DrawInformationSectionLabel(scroll_content, "HARDWARE", 482);
     lv_obj_t* hardware =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 452, .width = 640, .height = 290}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 514, .width = 640, .height = 290}, 0x111f32U, 0x2e4562U, 22);
     DrawInformationRow(hardware, 0, "Host Chip", model.host_chip.data());
     DrawInformationRow(hardware, 58, "CPU", model.cpu.data());
     DrawInformationRow(hardware, 116, "Wi-Fi Coprocessor", model.wifi_coprocessor.data());
     DrawInformationRow(hardware, 174, "Wi-Fi MAC", model.wifi_mac.data());
     DrawInformationRow(hardware, 232, "Flash", model.flash_capacity.data());
 
-    DrawInformationSectionLabel(scroll_content, "DISPLAY", 770);
+    DrawInformationSectionLabel(scroll_content, "DISPLAY", 832);
     lv_obj_t* display_panel =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 802, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 864, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
     DrawInformationRow(display_panel, 0, "Panel", model.panel.data());
     DrawInformationRow(display_panel, 58, "Interface", model.display_interface.data());
     DrawInformationRow(display_panel, 116, "Resolution", model.resolution.data());
     DrawInformationRow(display_panel, 174, "Touch", model.touch_controller.data());
 
-    DrawInformationSectionLabel(scroll_content, "SOFTWARE", 1062);
+    DrawInformationSectionLabel(scroll_content, "SOFTWARE", 1124);
     lv_obj_t* software =
-        CreatePanel(scroll_content, Bounds{.x = 40, .y = 1094, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
+        CreatePanel(scroll_content, Bounds{.x = 40, .y = 1156, .width = 640, .height = 232}, 0x111f32U, 0x2e4562U, 22);
     DrawInformationRow(software, 0, "ESP-IDF", model.idf_version.data());
     DrawInformationRow(software, 58, "Uptime", model.uptime.data());
     DrawInformationRow(software, 116, "Last Reset", model.last_reset.data());
@@ -233,6 +411,17 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     ESP_LOGI(kTag, "System Information visible: chip=%s firmware=%s", model.host_chip.data(),
              model.firmware_version.data());
     return {};
+}
+
+void SystemDetailUi::UpdateSystemInformationLocked(const host_ui::SystemInformationModel& model) {
+    if (!SystemInformationVisible() || root_ == nullptr) {
+        return;
+    }
+    lv_obj_t* root = root_;
+    host_ui::SystemUiActionSink action_sink = system_information_action_sink_;
+    void* action_context = system_information_action_context_;
+    lv_obj_clean(root);
+    (void)ShowSystemInformationLocked(root, model, action_sink, action_context);
 }
 
 void SystemDetailUi::LeaveSystemInformation() {
@@ -264,6 +453,262 @@ void SystemDetailUi::SystemInformationBackEvent(lv_event_t* event) {
     }
 }
 
+void SystemDetailUi::SystemInformationUpdateEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui != nullptr && ui->system_information_action_sink_ != nullptr) {
+        ui->system_information_action_sink_(
+            ui->system_information_action_context_,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kInstallFirmwareUpdate});
+    }
+}
+
+std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowRemoteControlLocked(
+    lv_obj_t* root, const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
+    void* action_context) {
+    if (root == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    LeaveSystemInformation();
+    LeaveAppManagement();
+    root_ = root;
+    remote_control_action_sink_ = action_sink;
+    remote_control_action_context_ = action_context;
+    remote_control_model_ = model;
+    remote_control_off_confirmation_visible_ = false;
+    active_screen_ = Screen::kRemoteControl;
+    RenderRemoteControlLocked();
+    ESP_LOGI(kTag, "Remote Control visible: enabled=%s state=%u", model.enabled ? "yes" : "no",
+             static_cast<unsigned>(model.connection_state));
+    return {};
+}
+
+void SystemDetailUi::UpdateRemoteControlLocked(const host_ui::RemoteControlModel& model) {
+    if (!RemoteControlVisible() || root_ == nullptr) {
+        return;
+    }
+    remote_control_model_ = model;
+    if (!model.enabled) {
+        remote_control_off_confirmation_visible_ = false;
+    }
+    RenderRemoteControlLocked();
+}
+
+void SystemDetailUi::RenderRemoteControlLocked() {
+    if (root_ == nullptr) {
+        return;
+    }
+    lv_obj_clean(root_);
+    lv_obj_set_style_bg_color(root_, lv_color_hex(0x08111fU), 0);
+    (void)DrawDetailHeader(root_, "Remote Control", "Control service and temporary code", RemoteControlBackEvent, this);
+
+    lv_obj_t* status =
+        CreatePanel(root_, Bounds{.x = 40, .y = 126, .width = 640, .height = 128}, 0x111f32U, 0x2e4562U, 22);
+    (void)CreatePanel(status, Bounds{.x = 24, .y = 24, .width = 13, .height = 13},
+                      RemoteControlStateColor(remote_control_model_.connection_state), 0U, LV_RADIUS_CIRCLE);
+    (void)CreateLabel(status, RemoteControlStateText(remote_control_model_.connection_state), &lv_font_montserrat_24,
+                      0xf2f7ffU, 54, 16);
+    (void)CreatePanel(status, Bounds{.x = 20, .y = 61, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
+    (void)CreateLabel(status, "Service", &lv_font_montserrat_18, 0x91a4bdU, 22, 82);
+    lv_obj_t* service = CreateLabel(status, DisplayText(remote_control_model_.service.data(), "Not configured"),
+                                    &lv_font_montserrat_18, 0xf2f7ffU, 260, 82);
+    lv_obj_set_width(service, 356);
+    lv_obj_set_style_text_align(service, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(service, LV_LABEL_LONG_DOT);
+
+    const bool code_available = remote_control_model_.pairing_code_available;
+    const bool code_pending = remote_control_model_.pairing_code_pending;
+    const bool pairing_available =
+        remote_control_model_.enabled &&
+        remote_control_model_.connection_state == host_ui::RemoteControlConnectionState::kConnected;
+    const int32_t pairing_height = code_available ? 300 : code_pending ? 264 : 224;
+    lv_obj_t* pairing =
+        CreatePanel(root_, Bounds{.x = 40, .y = 278, .width = 640, .height = pairing_height}, 0x111f32U, 0x2e4562U, 22);
+    if (code_available) {
+        lv_obj_t* eyebrow = CreateLabel(pairing, "CONNECTION CODE", &lv_font_montserrat_18, 0xc5f36dU, 24, 24);
+        lv_obj_set_width(eyebrow, 592);
+        lv_obj_set_style_text_align(eyebrow, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_t* code_panel =
+            CreatePanel(pairing, Bounds{.x = 22, .y = 64, .width = 596, .height = 112}, 0x0d1929U, 0xc5f36dU, 16);
+        lv_obj_t* code = CreateLabel(code_panel, DisplayText(remote_control_model_.pairing_code.data(), "---- ----"),
+                                     &lv_font_montserrat_32, 0xc5f36dU, 0, 36);
+        lv_obj_set_width(code, 596);
+        lv_obj_set_style_text_align(code, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_letter_space(code, 6, 0);
+        char expiry[48]{};
+        const uint32_t minutes = remote_control_model_.pairing_expires_seconds / 60U;
+        const uint32_t seconds = remote_control_model_.pairing_expires_seconds % 60U;
+        std::snprintf(expiry, sizeof(expiry), "Expires in %02" PRIu32 ":%02" PRIu32, minutes, seconds);
+        lv_obj_t* expiry_label = CreateLabel(pairing, expiry, &lv_font_montserrat_18, 0x91a4bdU, 24, 198);
+        lv_obj_set_width(expiry_label, 592);
+        lv_obj_set_style_text_align(expiry_label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_t* note = CreateLabel(pairing, "Connection codes are single-use and expire after 5 minutes",
+                                     &lv_font_montserrat_18, 0x748aa5U, 24, 252);
+        lv_obj_set_width(note, 592);
+        lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
+    } else {
+        (void)CreateLabel(pairing, "Connect this device", &lv_font_montserrat_24, 0xf2f7ffU, 24, 22);
+        (void)CreateLabel(pairing, "Use a one-time code to add this device.", &lv_font_montserrat_18, 0x91a4bdU, 24,
+                          61);
+        lv_obj_t* pairing_button = CreateActionButton(pairing, Bounds{.x = 22, .y = 104, .width = 596, .height = 70},
+                                                      code_pending        ? "Getting connection code..."
+                                                      : pairing_available ? "Generate Connection Code"
+                                                                          : "Control service unavailable",
+                                                      code_pending || !pairing_available ? 0x91a4bdU : 0xc5f36dU,
+                                                      code_pending || !pairing_available ? 0x365472U : 0x526b2cU);
+        if (code_pending) {
+            lv_obj_set_style_bg_color(pairing_button, lv_color_hex(0x24364eU), 0);
+            lv_obj_t* spinner = lv_spinner_create(pairing_button);
+            lv_obj_set_pos(spinner, 34, 20);
+            lv_obj_set_size(spinner, 30, 30);
+            lv_spinner_set_anim_params(spinner, 800U, 230U);
+            lv_obj_set_style_arc_width(spinner, 4, LV_PART_MAIN);
+            lv_obj_set_style_arc_color(spinner, lv_color_hex(0x526983U), LV_PART_MAIN);
+            lv_obj_set_style_arc_width(spinner, 4, LV_PART_INDICATOR);
+            lv_obj_set_style_arc_color(spinner, lv_color_hex(0x69a7ffU), LV_PART_INDICATOR);
+            lv_obj_remove_flag(pairing_button, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_t* waiting =
+                CreateLabel(pairing, "Waiting for Control service", &lv_font_montserrat_18, 0x69a7ffU, 24, 190);
+            lv_obj_set_width(waiting, 592);
+            lv_obj_set_style_text_align(waiting, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_t* note = CreateLabel(pairing, "Connection codes are single-use and expire after 5 minutes",
+                                         &lv_font_montserrat_18, 0x748aa5U, 24, 226);
+            lv_obj_set_width(note, 592);
+            lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
+        } else {
+            if (pairing_available) {
+                lv_obj_add_event_cb(pairing_button, RemoteControlPairingEvent, LV_EVENT_SHORT_CLICKED, this);
+            } else {
+                lv_obj_remove_flag(pairing_button, LV_OBJ_FLAG_CLICKABLE);
+            }
+            lv_obj_t* note = CreateLabel(pairing, "Connection codes are single-use and expire after 5 minutes",
+                                         &lv_font_montserrat_18, 0x748aa5U, 24, 190);
+            lv_obj_set_width(note, 592);
+            lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
+        }
+    }
+
+    (void)CreatePanel(root_, Bounds{.x = 40, .y = 590, .width = 640, .height = 1}, 0x21364eU, 0U, 0);
+    lv_obj_t* toggle =
+        CreatePanel(root_, Bounds{.x = 40, .y = 610, .width = 640, .height = 82}, 0x0d1929U, 0x2e4562U, 18);
+    lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(toggle, RemoteControlToggleEvent, LV_EVENT_SHORT_CLICKED, this);
+    (void)CreateLabel(toggle, LV_SYMBOL_POWER, &lv_font_montserrat_24,
+                      remote_control_model_.enabled ? 0xff6b74U : 0x69a7ffU, 24, 27);
+    (void)CreateLabel(toggle, remote_control_model_.enabled ? "Turn Remote Control Off" : "Turn Remote Control On",
+                      &lv_font_montserrat_18, 0xf2f7ffU, 74, 16);
+    (void)CreateLabel(toggle, remote_control_model_.enabled ? "Requires confirmation" : "Remote access is disabled",
+                      &lv_font_montserrat_18, 0x748aa5U, 74, 46);
+    (void)CreateLabel(toggle, LV_SYMBOL_RIGHT, &lv_font_montserrat_18, 0x91a4bdU, 594, 31);
+
+    if (remote_control_off_confirmation_visible_) {
+        DrawRemoteControlOffConfirmationLocked();
+    }
+    lv_obj_move_foreground(root_);
+    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(root_)));
+}
+
+void SystemDetailUi::LeaveRemoteControl() {
+    remote_control_action_sink_ = nullptr;
+    remote_control_action_context_ = nullptr;
+    remote_control_model_ = {};
+    remote_control_off_confirmation_visible_ = false;
+    if (active_screen_ == Screen::kRemoteControl) {
+        active_screen_ = Screen::kNone;
+        root_ = nullptr;
+    }
+}
+
+bool SystemDetailUi::RemoteControlVisible() const { return active_screen_ == Screen::kRemoteControl; }
+
+void* SystemDetailUi::RemoteControlActionContext() const { return remote_control_action_context_; }
+
+void SystemDetailUi::RemoteControlBackEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui != nullptr && ui->remote_control_action_sink_ != nullptr) {
+        ui->remote_control_action_sink_(
+            ui->remote_control_action_context_,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseRemoteControl});
+    }
+}
+
+void SystemDetailUi::RemoteControlToggleEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr || ui->remote_control_action_sink_ == nullptr) {
+        return;
+    }
+    if (ui->remote_control_model_.enabled) {
+        ui->remote_control_off_confirmation_visible_ = true;
+        ui->QueueRemoteControlRender();
+        return;
+    }
+    ui->remote_control_action_sink_(
+        ui->remote_control_action_context_,
+        host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSetRemoteControlEnabled, .value = 1U});
+}
+
+void SystemDetailUi::RemoteControlPairingEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr || ui->remote_control_action_sink_ == nullptr || !ui->remote_control_model_.enabled ||
+        ui->remote_control_model_.connection_state != host_ui::RemoteControlConnectionState::kConnected ||
+        ui->remote_control_model_.pairing_code_pending || ui->remote_control_model_.pairing_code_available) {
+        return;
+    }
+    ESP_LOGI(kTag, "Remote Control pairing button short-clicked: action=generate");
+    ui->remote_control_action_sink_(
+        ui->remote_control_action_context_,
+        host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kGenerateRemoteControlPairingCode});
+}
+
+void SystemDetailUi::RemoteControlConfirmationCancelEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr) {
+        return;
+    }
+    ui->remote_control_off_confirmation_visible_ = false;
+    ui->QueueRemoteControlRender();
+}
+
+void SystemDetailUi::RemoteControlConfirmOffEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr || ui->remote_control_action_sink_ == nullptr || !ui->remote_control_model_.enabled) {
+        return;
+    }
+    ui->remote_control_off_confirmation_visible_ = false;
+    ui->remote_control_action_sink_(
+        ui->remote_control_action_context_,
+        host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSetRemoteControlEnabled, .value = 0U});
+}
+
+void SystemDetailUi::RemoteControlRenderAsync(void* context) {
+    auto* ui = static_cast<SystemDetailUi*>(context);
+    if (ui != nullptr && ui->RemoteControlVisible()) {
+        ui->RenderRemoteControlLocked();
+    }
+}
+
+void SystemDetailUi::QueueRemoteControlRender() {
+    if (lv_async_call(RemoteControlRenderAsync, this) != LV_RESULT_OK) {
+        ESP_LOGW(kTag, "failed to queue Remote Control render");
+    }
+}
+
+void SystemDetailUi::DrawRemoteControlOffConfirmationLocked() {
+    CreateDismissibleScrim(root_, RemoteControlConfirmationCancelEvent, this);
+    lv_obj_t* sheet =
+        CreatePanel(root_, Bounds{.x = 28, .y = 390, .width = 664, .height = 302}, 0x101c2cU, 0x653c48U, 24);
+    (void)CreateLabel(sheet, "Turn Off Remote Control?", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    lv_obj_t* detail = CreateLabel(sheet, "Remote access and active connection codes will stop.",
+                                   &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
+    lv_obj_set_size(detail, 616, 52);
+    lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+    lv_obj_t* turn_off = CreateActionButton(sheet, Bounds{.x = 20, .y = 128, .width = 624, .height = 58}, "Turn Off",
+                                            0xff6b74U, 0x653c48U);
+    lv_obj_add_event_cb(turn_off, RemoteControlConfirmOffEvent, LV_EVENT_SHORT_CLICKED, this);
+    lv_obj_t* cancel =
+        CreateActionButton(sheet, Bounds{.x = 20, .y = 208, .width = 624, .height = 58}, "Cancel", 0xf2f7ffU);
+    lv_obj_add_event_cb(cancel, RemoteControlConfirmationCancelEvent, LV_EVENT_SHORT_CLICKED, this);
+}
+
 std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLocked(
     lv_obj_t* root, const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
     void* action_context) {
@@ -271,6 +716,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     LeaveSystemInformation();
+    LeaveRemoteControl();
     root_ = root;
     app_management_action_sink_ = action_sink;
     app_management_action_context_ = action_context;
@@ -356,7 +802,7 @@ void SystemDetailUi::AppManagementOpenEvent(lv_event_t* event) {
         return;
     }
     ui->app_management_action_sink_(ui->app_management_action_context_,
-                                    host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchManagedApp,
+                                    host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchInstalledApp,
                                                             .app_index = ui->app_management_selected_index_});
 }
 
@@ -386,16 +832,13 @@ void SystemDetailUi::AppManagementConfirmUninstallEvent(lv_event_t* event) {
         return;
     }
     ui->app_management_action_sink_(ui->app_management_action_context_,
-                                    host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUninstallManagedApp,
+                                    host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUninstallInstalledApp,
                                                             .app_index = ui->app_management_selected_index_});
 }
 
 void SystemDetailUi::DrawAppManagementActionsLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* scrim =
-        CreatePanel(root_, Bounds{.x = 0, .y = 0, .width = kScreenWidth, .height = kScreenHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 330, .width = 664, .height = 362}, 0x101c2cU, 0x42607fU, 24);
     lv_obj_t* title = CreateLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
@@ -422,10 +865,7 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
 
 void SystemDetailUi::DrawAppManagementInformationLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* scrim =
-        CreatePanel(root_, Bounds{.x = 0, .y = 0, .width = kScreenWidth, .height = kScreenHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 352, .width = 664, .height = 340}, 0x101c2cU, 0x42607fU, 24);
     lv_obj_t* title = CreateLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
@@ -445,15 +885,12 @@ void SystemDetailUi::DrawAppManagementInformationLocked() {
 
 void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* scrim =
-        CreatePanel(root_, Bounds{.x = 0, .y = 0, .width = kScreenWidth, .height = kScreenHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 420, .width = 664, .height = 272}, 0x101c2cU, 0x42607fU, 24);
     (void)CreateLabel(sheet, "Uninstall unavailable", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
     char message[160]{};
-    std::snprintf(message, sizeof(message), "%s is stored in the read-only App Store. Storage migration is required.",
+    std::snprintf(message, sizeof(message), "%s can currently be uninstalled through Remote Control.",
                   app.display_name != nullptr ? app.display_name : "This App");
     lv_obj_t* detail = CreateLabel(sheet, message, &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
     lv_obj_set_size(detail, 616, 92);
@@ -465,10 +902,7 @@ void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
 
 void SystemDetailUi::DrawAppManagementUninstallConfirmationLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* scrim =
-        CreatePanel(root_, Bounds{.x = 0, .y = 0, .width = kScreenWidth, .height = kScreenHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 390, .width = 664, .height = 302}, 0x101c2cU, 0x653c48U, 24);
     (void)CreateLabel(sheet, "Uninstall App?", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);

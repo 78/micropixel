@@ -2,6 +2,8 @@
 /artifacts/
 /benchmarks/
 /legacy/
+/tmp/
+/firmware/espressif/components/78__esp-http3
 /.codex-tmp/
 /guest/apps/snake/assets/snake_launch_360x360.argb8888
 .DS_Store

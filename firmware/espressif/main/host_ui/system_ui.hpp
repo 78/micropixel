@@ -2,8 +2,10 @@
 #define MICROPIXEL_HOST_UI_SYSTEM_UI_HPP
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <utility>
 
 namespace micropixel::host_ui {
 
@@ -22,6 +24,19 @@ constexpr uint32_t kMaxWifiSsidLength = 32U;
 constexpr uint32_t kMaxWifiPasswordLength = 64U;
 constexpr uint32_t kMaxSavedWifiNetworks = 8U;
 constexpr uint32_t kMaxVisibleWifiNetworks = 16U;
+constexpr uint32_t kFirmwareVersionTextCapacity = 64U;
+constexpr uint32_t kFirmwareUpdateMessageCapacity = 96U;
+
+enum class FirmwareUpdateState : uint8_t {
+    kUnknown,
+    kChecking,
+    kCurrent,
+    kAvailable,
+    kDownloading,
+    kVerifying,
+    kInstalling,
+    kFailed,
+};
 
 enum class HallCoverFormat : uint8_t {
     kRgb888,
@@ -40,6 +55,69 @@ struct HallCoverModel final {
     uint64_t cache_key{};
 };
 
+using ScreenCaptureRelease = void (*)(uint8_t* data);
+
+// Move-only ownership for one encoded screenshot. Platform allocates and
+// releases the bytes; Host may detach them when handing the artifact to a
+// bounded transport queue.
+class ScreenCapture final {
+   public:
+    ScreenCapture() = default;
+    ScreenCapture(uint8_t* data, size_t size, uint32_t width, uint32_t height, ScreenCaptureRelease release)
+        : data_(data), size_(size), width_(width), height_(height), release_(release) {}
+    ScreenCapture(const ScreenCapture&) = delete;
+    ScreenCapture& operator=(const ScreenCapture&) = delete;
+    ScreenCapture(ScreenCapture&& other) noexcept
+        : data_(std::exchange(other.data_, nullptr)),
+          size_(std::exchange(other.size_, 0U)),
+          width_(std::exchange(other.width_, 0U)),
+          height_(std::exchange(other.height_, 0U)),
+          release_(std::exchange(other.release_, nullptr)) {}
+    ScreenCapture& operator=(ScreenCapture&& other) noexcept {
+        if (this != &other) {
+            Reset();
+            data_ = std::exchange(other.data_, nullptr);
+            size_ = std::exchange(other.size_, 0U);
+            width_ = std::exchange(other.width_, 0U);
+            height_ = std::exchange(other.height_, 0U);
+            release_ = std::exchange(other.release_, nullptr);
+        }
+        return *this;
+    }
+    ~ScreenCapture() { Reset(); }
+
+    [[nodiscard]] bool valid() const { return data_ != nullptr && size_ != 0U && release_ != nullptr; }
+    [[nodiscard]] size_t size() const { return size_; }
+    [[nodiscard]] uint32_t width() const { return width_; }
+    [[nodiscard]] uint32_t height() const { return height_; }
+    [[nodiscard]] ScreenCaptureRelease releaser() const { return release_; }
+    [[nodiscard]] uint8_t* Detach() {
+        size_ = 0U;
+        width_ = 0U;
+        height_ = 0U;
+        release_ = nullptr;
+        return std::exchange(data_, nullptr);
+    }
+
+   private:
+    void Reset() {
+        if (data_ != nullptr && release_ != nullptr) {
+            release_(data_);
+        }
+        data_ = nullptr;
+        size_ = 0U;
+        width_ = 0U;
+        height_ = 0U;
+        release_ = nullptr;
+    }
+
+    uint8_t* data_{};
+    size_t size_{};
+    uint32_t width_{};
+    uint32_t height_{};
+    ScreenCaptureRelease release_{};
+};
+
 struct HallAppModel final {
     const char* app_id{};
     const char* display_name{};
@@ -55,6 +133,26 @@ struct HallWifiModel final {
     bool connected{};
 };
 
+struct HallBatteryModel final {
+    uint8_t percent{};
+    bool available{};
+    bool charging{};
+};
+
+struct HallCellularModel final {
+    uint8_t signal_bars{};
+    bool available{};
+    bool enabled{};
+    bool connected{};
+};
+
+struct HallStatusBarModel final {
+    std::array<char, 6U> time_text{'-', '-', ':', '-', '-', '\0'};
+    HallWifiModel wifi{};
+    HallCellularModel cellular{};
+    HallBatteryModel battery{};
+};
+
 struct HallModel final {
     std::array<HallAppModel, kMaxHallApps> apps{};
     uint32_t app_count{};
@@ -62,13 +160,16 @@ struct HallModel final {
     HallStatus status{HallStatus::kReady};
     uint32_t detail{};
     bool launch_enabled{};
-    HallWifiModel wifi{};
+    HallStatusBarModel status_bar{};
     uint64_t transition_trigger_us{};
+    bool firmware_update_available{};
 };
 
 struct StatusLayerModel final {
     uint32_t memory_used_kib{};
     uint32_t memory_total_kib{};
+    uint32_t sram_used_kib{};
+    uint32_t sram_total_kib{};
     uint32_t storage_used_kib{};
     uint32_t storage_total_kib{};
     uint8_t battery_percent{};
@@ -82,11 +183,17 @@ struct StatusLayerModel final {
     bool cellular_enabled{};
     bool cellular_connected{};
     bool battery_available{};
+    bool battery_charging{};
+    bool battery_discharging{};
+    bool battery_charging_available{};
+    bool external_power_connected{};
+    bool external_power_available{};
     bool performance_overlay_enabled{};
 };
 
 enum class SystemMenuItem : uint32_t {
     kWifi,
+    kRemoteControl,
     kLanguage,
     kSystemInformation,
     kManageApps,
@@ -99,6 +206,45 @@ struct SystemMenuModel final {
     bool wifi_enabled{};
     bool wifi_connected{};
     bool wifi_connecting{};
+    bool remote_control_enabled{};
+    bool remote_control_connected{};
+    bool firmware_update_available{};
+    std::array<char, kFirmwareVersionTextCapacity> latest_firmware_version{};
+    std::array<char, kFirmwareUpdateMessageCapacity> firmware_update_message{};
+    FirmwareUpdateState firmware_update_state{FirmwareUpdateState::kUnknown};
+};
+
+enum class RemoteControlConnectionState : uint8_t {
+    kDisabled,
+    kWaitingForNetwork,
+    kConnecting,
+    kConnected,
+    kBackoff,
+    kAuthenticationError,
+};
+
+constexpr uint32_t kRemoteControlServiceTextCapacity = 64U;
+constexpr uint32_t kRemoteControlDeviceIdCapacity = 37U;
+constexpr uint32_t kRemoteControlPairingCodeCapacity = 10U;
+constexpr uint32_t kRemoteControlStatusTextCapacity = 96U;
+struct RemoteControlModel final {
+    std::array<char, kRemoteControlServiceTextCapacity> service{};
+    std::array<char, kRemoteControlDeviceIdCapacity> device_id{};
+    std::array<char, kRemoteControlPairingCodeCapacity> pairing_code{};
+    std::array<char, kRemoteControlStatusTextCapacity> status_message{};
+    std::array<char, kFirmwareVersionTextCapacity> latest_firmware_version{};
+    std::array<char, kRemoteControlStatusTextCapacity> firmware_update_message{};
+    uint32_t pairing_expires_seconds{};
+    uint32_t firmware_size_bytes{};
+    uint32_t firmware_processed_bytes{};
+    uint8_t firmware_progress_percent{};
+    RemoteControlConnectionState connection_state{RemoteControlConnectionState::kDisabled};
+    FirmwareUpdateState firmware_update_state{FirmwareUpdateState::kUnknown};
+    bool enabled{};
+    bool pairing_code_pending{};
+    bool pairing_code_available{};
+    bool firmware_update_available{};
+    bool firmware_update_installable{};
 };
 
 constexpr uint32_t kSystemInformationTextCapacity = 64U;
@@ -112,6 +258,8 @@ struct MemoryStatisticsModel final {
 
 struct SystemInformationModel final {
     std::array<char, kSystemInformationTextCapacity> firmware_version{};
+    std::array<char, kSystemInformationTextCapacity> latest_firmware_version{};
+    std::array<char, kRemoteControlStatusTextCapacity> firmware_update_message{};
     std::array<char, kSystemInformationTextCapacity> build_date{};
     std::array<char, kSystemInformationTextCapacity> build_time{};
     std::array<char, kSystemInformationTextCapacity> build_id{};
@@ -129,16 +277,23 @@ struct SystemInformationModel final {
     std::array<char, kSystemInformationTextCapacity> last_reset{};
     MemoryStatisticsModel internal_sram{};
     MemoryStatisticsModel psram{};
+    uint32_t firmware_size_bytes{};
+    uint32_t firmware_processed_bytes{};
+    uint8_t firmware_progress_percent{};
+    FirmwareUpdateState firmware_update_state{FirmwareUpdateState::kUnknown};
+    bool firmware_update_available{};
+    bool firmware_update_installable{};
+    bool firmware_update_view{};
 };
 
-struct ManagedAppModel final {
+struct InstalledAppModel final {
     const char* app_id{};
     const char* display_name{};
     uint32_t bundle_size_kib{};
 };
 
 struct AppManagementModel final {
-    std::array<ManagedAppModel, kMaxHallApps> apps{};
+    std::array<InstalledAppModel, kMaxHallApps> apps{};
     uint32_t app_count{};
     uint32_t storage_used_kib{};
     uint32_t storage_total_kib{};
@@ -191,12 +346,18 @@ enum class SystemUiActionType {
     kSuspendToHall,
     kOpenWifiSettings,
     kOpenSystemMenu,
+    kOpenFirmwareUpdate,
     kCloseSystemMenu,
     kSelectSystemMenuItem,
     kCloseSystemInformation,
+    kInstallFirmwareUpdate,
+    kCloseRemoteControl,
+    kSetRemoteControlEnabled,
+    kGenerateRemoteControlPairingCode,
+    kCancelRemoteControlPairingCode,
     kCloseAppManagement,
-    kLaunchManagedApp,
-    kUninstallManagedApp,
+    kLaunchInstalledApp,
+    kUninstallInstalledApp,
     kCloseWifiSettings,
     kOpenWifiNetworkScan,
     kCloseWifiNetworkScan,
@@ -213,6 +374,7 @@ enum class SystemUiActionType {
     // Internal Host wake-up signal. SystemUiBackend implementations never emit
     // this action directly.
     kWifiStateChanged,
+    kBatteryStateChanged,
 };
 
 struct SystemUiAction final {
@@ -240,13 +402,16 @@ class SystemUiBackend {
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowHall(const HallModel& model,
                                                                       SystemUiActionSink action_sink,
                                                                       void* action_context) = 0;
-    virtual void UpdateHallWifi(const HallWifiModel& model) = 0;
+    virtual void UpdateHallStatusBar(const HallStatusBarModel& model) = 0;
     virtual void LeaveHall() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> RestoreGuestView() = 0;
     virtual void WatchGuestActions(SystemUiActionSink action_sink, void* action_context) = 0;
     virtual void StopWatchingGuestActions(void* action_context) = 0;
     [[nodiscard]] virtual std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame(
         uint32_t hall_app_index, uint64_t trigger_timestamp_us) = 0;
+    [[nodiscard]] virtual std::expected<ScreenCapture, SystemUiError> CaptureScreenJpeg() {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
     virtual void ReleaseGuestSnapshot() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model,
                                                                             SystemUiActionSink action_sink,
@@ -256,7 +421,13 @@ class SystemUiBackend {
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel& model,
                                                                                    SystemUiActionSink action_sink,
                                                                                    void* action_context) = 0;
+    virtual void UpdateSystemInformation(const SystemInformationModel&) {}
     virtual void LeaveSystemInformation() = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowRemoteControl(const RemoteControlModel& model,
+                                                                               SystemUiActionSink action_sink,
+                                                                               void* action_context) = 0;
+    virtual void UpdateRemoteControl(const RemoteControlModel& model) = 0;
+    virtual void LeaveRemoteControl() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowAppManagement(const AppManagementModel& model,
                                                                                SystemUiActionSink action_sink,
                                                                                void* action_context) = 0;

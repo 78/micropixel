@@ -16,30 +16,8 @@ static uint32_t host_abi_version(wasm_exec_env_t exec_env) {
 }
 
 static int32_t host_log_write(wasm_exec_env_t exec_env, uint32_t level, const uint8_t* bytes, uint32_t length) {
-    (void)exec_env;
     micropixel_watchdog_checkpoint();
-    if ((bytes == NULL && length != 0U) || length > MICROPIXEL_ABI_MAX_LOG_BYTES) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-
-    const char* message = bytes != NULL ? (const char*)bytes : "";
-    switch (level) {
-        case MICROPIXEL_LOG_DEBUG:
-            ESP_LOGD(TAG, "guest: %.*s", (int)length, message);
-            break;
-        case MICROPIXEL_LOG_INFO:
-            ESP_LOGI(TAG, "guest: %.*s", (int)length, message);
-            break;
-        case MICROPIXEL_LOG_WARNING:
-            ESP_LOGW(TAG, "guest: %.*s", (int)length, message);
-            break;
-        case MICROPIXEL_LOG_ERROR:
-            ESP_LOGE(TAG, "guest: %.*s", (int)length, message);
-            break;
-        default:
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    return MICROPIXEL_STATUS_OK;
+    return micropixel_runtime_log_write(exec_env, level, bytes, length);
 }
 
 static NativeSymbol micropixel_symbols[] = {

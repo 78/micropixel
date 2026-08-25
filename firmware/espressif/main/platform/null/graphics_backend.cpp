@@ -121,6 +121,7 @@ class NullInputBackend final : public device::InputBackend {
 class NullBatteryBackend final : public device::BatteryBackend {
    public:
     [[nodiscard]] device::BatterySnapshot Snapshot() override { return {}; }
+    void SetStateChangeSink(device::BatteryStateChangeSink, void*) override {}
 };
 
 class NullWifiBackend final : public device::WifiBackend {
@@ -160,7 +161,7 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         (void)action_context;
         return {};
     }
-    void UpdateHallWifi(const host_ui::HallWifiModel& model) override { (void)model; }
+    void UpdateHallStatusBar(const host_ui::HallStatusBarModel& model) override { (void)model; }
     void LeaveHall() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override { return {}; }
     void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override {
@@ -194,6 +195,16 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         return {};
     }
     void LeaveSystemInformation() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowRemoteControl(
+        const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context) override {
+        (void)model;
+        (void)action_sink;
+        (void)action_context;
+        return {};
+    }
+    void UpdateRemoteControl(const host_ui::RemoteControlModel& model) override { (void)model; }
+    void LeaveRemoteControl() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowAppManagement(
         const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
         void* action_context) override {

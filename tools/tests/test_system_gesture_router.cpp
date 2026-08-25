@@ -6,6 +6,9 @@
 namespace {
 
 using micropixel::device::InputBackend;
+using micropixel::device::KeyCode;
+using micropixel::device::KeyPhase;
+using micropixel::device::KeySample;
 using micropixel::device::TouchPhase;
 using micropixel::device::TouchSample;
 using micropixel::device::TouchSink;
@@ -32,20 +35,33 @@ class FakeInputBackend final : public InputBackend {
         }
     }
 
+    [[nodiscard]] bool InjectTouch(const TouchSample& sample) override {
+        ++injected_count_;
+        return Emit(sample);
+    }
+
     [[nodiscard]] bool Emit(const TouchSample& sample) const { return sink_ != nullptr && sink_(context_, sample); }
+    [[nodiscard]] uint32_t injected_count() const { return injected_count_; }
 
    private:
     TouchSink sink_{};
     void* context_{};
+    uint32_t injected_count_{};
 };
 
 struct Capture final {
     std::vector<TouchSample> guest_samples;
+    std::vector<KeySample> guest_keys;
     std::vector<SystemUiAction> system_actions;
 };
 
 bool CaptureGuest(void* context, const TouchSample& sample) {
     static_cast<Capture*>(context)->guest_samples.push_back(sample);
+    return true;
+}
+
+bool CaptureGuestKey(void* context, const KeySample& sample) {
+    static_cast<Capture*>(context)->guest_keys.push_back(sample);
     return true;
 }
 
@@ -83,6 +99,42 @@ bool NormalTouchPassesThrough() {
     (void)input.Emit(Sample(TouchPhase::kUp, 126U, 208U, 20000U));
     return Check(capture.guest_samples.size() == 3U, "ordinary touch sequence must reach Guest") &&
            Check(capture.system_actions.empty(), "ordinary touch must not emit a System action");
+}
+
+bool InjectedTouchTraversesPlatformAndSystemRouter() {
+    FakeInputBackend input;
+    SystemGestureRouter router(input, 720U, 720U);
+    Capture capture;
+    router.BindTouchSink(CaptureGuest, &capture);
+
+    const bool injected = router.InjectTouch(Sample(TouchPhase::kDown, 120U, 200U, 0U));
+    return Check(injected, "virtual touch must be accepted by the platform backend") &&
+           Check(input.injected_count() == 1U, "virtual touch must traverse the platform backend") &&
+           Check(capture.guest_samples.size() == 1U, "virtual touch must return through the System gesture router");
+}
+
+bool SemanticKeyReachesGuest() {
+    FakeInputBackend input;
+    SystemGestureRouter router(input, 720U, 720U);
+    Capture capture;
+    router.BindKeySink(CaptureGuestKey, &capture);
+
+    micropixel_input_info_t info{};
+    const KeySample sample{
+        .timestamp_us = 42U,
+        .code = KeyCode::kConfirm,
+        .phase = KeyPhase::kDown,
+    };
+    const bool injected = router.InjectKey(sample);
+    return Check(router.GetInfo(info) == MICROPIXEL_STATUS_OK, "logical input info must remain available") &&
+           Check(info.interface_major == MICROPIXEL_INPUT_INTERFACE_MAJOR &&
+                     info.interface_minor == MICROPIXEL_INPUT_INTERFACE_MINOR,
+                 "logical input must advertise the current Input interface") &&
+           Check((info.capabilities & MICROPIXEL_INPUT_CAP_KEY_EVENTS) != 0U,
+                 "logical input must advertise semantic key events") &&
+           Check(injected, "semantic key must be accepted while a Guest sink is bound") &&
+           Check(capture.guest_keys.size() == 1U && capture.guest_keys[0].code == KeyCode::kConfirm,
+                 "semantic key must reach the Guest key sink");
 }
 
 bool TopGestureIsReserved() {
@@ -249,13 +301,14 @@ bool TimedOutCandidateReturnsToGuest() {
 }  // namespace
 
 int main() {
-    const bool passed = NormalTouchPassesThrough() && TopGestureIsReserved() && BottomGestureIsReserved() &&
+    const bool passed = NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() &&
+                        SemanticKeyReachesGuest() && TopGestureIsReserved() && BottomGestureIsReserved() &&
                         BottomGestureRejectsIncidentalMovement() && RecognizedGestureQuarantinesReplacementTrack() &&
                         RejectedEdgeGestureReplaysCompleteSequence() && ReleasedEdgeTapReplaysDownAndUp() &&
                         RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
     if (!passed) {
         return 1;
     }
-    std::puts("SystemGestureRouter host tests passed (9 cases).");
+    std::puts("SystemGestureRouter host tests passed (11 cases).");
     return 0;
 }

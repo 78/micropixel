@@ -8,6 +8,7 @@ namespace demo {
 namespace {
 
 static_assert(demo_assets::sprite_atlas_count == 1U, "demo: expected one sprite atlas");
+constexpr uint64_t kAtlasFramePeriodUs = 20000U;
 
 class ResourceAtlasPage final {
    public:
@@ -27,11 +28,12 @@ class ResourceAtlasPage final {
             return false;
         }
         accumulated_us_ += event.delta().count_microseconds();
-        if (accumulated_us_ < 120000U) {
+        const uint64_t elapsed_frames = accumulated_us_ / kAtlasFramePeriodUs;
+        if (elapsed_frames == 0U) {
             return false;
         }
-        accumulated_us_ %= 120000U;
-        frame_ = (frame_ + 1U) % demo_assets::sprite_atlas_frame_count;
+        accumulated_us_ %= kAtlasFramePeriodUs;
+        frame_ = static_cast<uint32_t>((frame_ + elapsed_frames) % demo_assets::sprite_atlas_frame_count);
         return true;
     }
 
@@ -102,6 +104,10 @@ class ResourceAtlasPage final {
 ResourceAtlasPage resource_atlas_page;
 
 }  // namespace
+
+micropixel::Timer CreateResourceAtlasTicker(micropixel::Application& app) {
+    return app.timers().Every(micropixel::Duration::Microseconds(kAtlasFramePeriodUs));
+}
 
 micropixel::Texture LoadDemoAtlas(micropixel::Application& app) {
     const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[0];

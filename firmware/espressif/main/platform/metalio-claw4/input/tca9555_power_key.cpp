@@ -20,6 +20,7 @@ constexpr uint8_t kInputPort0 = 0x00U;
 constexpr uint8_t kInputPort1 = 0x01U;
 constexpr uint8_t kConfigurationPort0 = 0x06U;
 constexpr uint8_t kPowerKeyMask = 1U << 5U;
+constexpr uint8_t kPowerInputMask = (1U << 2U) | (1U << 3U);
 constexpr int kI2cTimeoutMs = 20;
 
 esp_err_t ReadRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t& value) {
@@ -116,6 +117,11 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander) {
     return ESP_OK;
 }
 
+void Tca9555PowerKey::SetPowerInputChangeSink(PowerInputChangeSink sink, void* context) {
+    power_input_change_context_ = context;
+    power_input_change_sink_ = sink;
+}
+
 esp_err_t Tca9555PowerKey::ConfigurePowerKeyInput() {
     uint8_t configuration = 0U;
     esp_err_t status = ReadRegister(io_expander_, kConfigurationPort0, configuration);
@@ -172,12 +178,19 @@ uint8_t Tca9555PowerKey::ReadKeyLevel() {
 
 uint8_t Tca9555PowerKey::RecordRawLevel(uint8_t port0, uint8_t port1, int interrupt_level) {
     const uint8_t key_level = (port0 & kPowerKeyMask) == 0U ? BUTTON_ACTIVE : BUTTON_INACTIVE;
+    const uint8_t power_inputs = port1 & kPowerInputMask;
     if (!raw_level_known_ || key_level != last_key_level_) {
         ESP_LOGI(kTag, "raw %s: P0=0x%02x P1=0x%02x TCA_INT(before-read)=%d",
                  key_level == BUTTON_ACTIVE ? "down" : "up", port0, port1, interrupt_level);
     }
     raw_level_known_ = true;
     last_key_level_ = key_level;
+    const bool power_inputs_changed = power_inputs_known_ && power_inputs != last_power_inputs_;
+    power_inputs_known_ = true;
+    last_power_inputs_ = power_inputs;
+    if (power_inputs_changed && power_input_change_sink_ != nullptr) {
+        power_input_change_sink_(power_input_change_context_);
+    }
     return key_level;
 }
 

@@ -22,6 +22,41 @@ micropixel::runtime::GuestContext* GetContext(wasm_exec_env_t exec_env) {
 
 }  // namespace
 
+extern "C" int32_t micropixel_runtime_log_write(wasm_exec_env_t exec_env, uint32_t level, const uint8_t* bytes,
+                                                uint32_t length) {
+    if ((bytes == nullptr && length != 0U) || length > MICROPIXEL_ABI_MAX_LOG_BYTES) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (level != MICROPIXEL_LOG_DEBUG && level != MICROPIXEL_LOG_INFO && level != MICROPIXEL_LOG_WARNING &&
+        level != MICROPIXEL_LOG_ERROR) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+
+    const char* message = bytes != nullptr ? reinterpret_cast<const char*>(bytes) : "";
+    switch (level) {
+        case MICROPIXEL_LOG_DEBUG:
+            ESP_LOGD(kTag, "guest: %.*s", static_cast<int>(length), message);
+            break;
+        case MICROPIXEL_LOG_INFO:
+            ESP_LOGI(kTag, "guest: %.*s", static_cast<int>(length), message);
+            break;
+        case MICROPIXEL_LOG_WARNING:
+            ESP_LOGW(kTag, "guest: %.*s", static_cast<int>(length), message);
+            break;
+        case MICROPIXEL_LOG_ERROR:
+            ESP_LOGE(kTag, "guest: %.*s", static_cast<int>(length), message);
+            break;
+        default:
+            break;
+    }
+
+    auto* context = GetContext(exec_env);
+    if (context != nullptr) {
+        context->WriteLog(level, bytes, length);
+    }
+    return MICROPIXEL_STATUS_OK;
+}
+
 extern "C" int32_t micropixel_runtime_event_wait(wasm_exec_env_t exec_env, micropixel_event_t* event_out,
                                                  uint32_t event_capacity, uint64_t timeout_us) {
     micropixel_watchdog_checkpoint();

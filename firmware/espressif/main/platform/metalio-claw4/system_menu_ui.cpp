@@ -1,6 +1,7 @@
 #include "platform/metalio-claw4/system_menu_ui.hpp"
 
 #include <cinttypes>
+#include <cstdio>
 #include <cstdlib>
 
 #include "esp_log.h"
@@ -54,6 +55,28 @@ const char* WifiDetail(const host_ui::SystemMenuModel& model) {
                                    : "Off";
 }
 
+const char* RemoteControlDetail(const host_ui::SystemMenuModel& model) {
+    return model.remote_control_connected ? "Connected" : model.remote_control_enabled ? "Not connected" : "Off";
+}
+
+std::array<char, host_ui::kFirmwareUpdateMessageCapacity> FirmwareDetail(const host_ui::SystemMenuModel& model) {
+    std::array<char, host_ui::kFirmwareUpdateMessageCapacity> detail{};
+    if (model.firmware_update_state == host_ui::FirmwareUpdateState::kDownloading) {
+        std::snprintf(detail.data(), detail.size(), "Downloading update...");
+    } else if (model.firmware_update_state == host_ui::FirmwareUpdateState::kVerifying) {
+        std::snprintf(detail.data(), detail.size(), "Verifying update...");
+    } else if (model.firmware_update_state == host_ui::FirmwareUpdateState::kInstalling) {
+        std::snprintf(detail.data(), detail.size(), "Installing update...");
+    } else if (model.firmware_update_available) {
+        std::snprintf(detail.data(), detail.size(), "Update %s available", model.latest_firmware_version.data());
+    } else if (model.firmware_update_state == host_ui::FirmwareUpdateState::kCurrent) {
+        std::snprintf(detail.data(), detail.size(), "Up to date");
+    } else {
+        std::snprintf(detail.data(), detail.size(), "Device and software");
+    }
+    return detail;
+}
+
 }  // namespace
 
 struct SystemMenuUiAccess final {
@@ -64,13 +87,15 @@ struct SystemMenuUiAccess final {
             case TouchTarget::kBack:
                 return {.x = 24, .y = 24, .width = 88, .height = 88};
             case TouchTarget::kWifi:
-                return {.x = 32, .y = 140, .width = 656, .height = 120};
+                return {.x = 32, .y = 120, .width = 656, .height = 100};
+            case TouchTarget::kRemoteControl:
+                return {.x = 32, .y = 220, .width = 656, .height = 100};
             case TouchTarget::kLanguage:
-                return {.x = 32, .y = 380, .width = 656, .height = 120};
+                return {.x = 32, .y = 420, .width = 656, .height = 100};
             case TouchTarget::kSystemInformation:
-                return {.x = 32, .y = 260, .width = 656, .height = 120};
+                return {.x = 32, .y = 320, .width = 656, .height = 100};
             case TouchTarget::kManageApps:
-                return {.x = 32, .y = 500, .width = 656, .height = 120};
+                return {.x = 32, .y = 520, .width = 656, .height = 100};
             case TouchTarget::kNone:
                 break;
         }
@@ -83,12 +108,14 @@ struct SystemMenuUiAccess final {
                 return 0;
             case TouchTarget::kWifi:
                 return 1;
-            case TouchTarget::kLanguage:
+            case TouchTarget::kRemoteControl:
                 return 2;
-            case TouchTarget::kSystemInformation:
+            case TouchTarget::kLanguage:
                 return 3;
-            case TouchTarget::kManageApps:
+            case TouchTarget::kSystemInformation:
                 return 4;
+            case TouchTarget::kManageApps:
+                return 5;
             case TouchTarget::kNone:
                 break;
         }
@@ -97,7 +124,11 @@ struct SystemMenuUiAccess final {
 
     static TouchTarget FindTouchTarget(int32_t x, int32_t y) {
         constexpr TouchTarget kTargets[] = {
-            TouchTarget::kBack,       TouchTarget::kWifi, TouchTarget::kLanguage, TouchTarget::kSystemInformation,
+            TouchTarget::kBack,
+            TouchTarget::kWifi,
+            TouchTarget::kRemoteControl,
+            TouchTarget::kLanguage,
+            TouchTarget::kSystemInformation,
             TouchTarget::kManageApps,
         };
         for (TouchTarget target : kTargets) {
@@ -112,6 +143,8 @@ struct SystemMenuUiAccess final {
         switch (target) {
             case TouchTarget::kLanguage:
                 return host_ui::SystemMenuItem::kLanguage;
+            case TouchTarget::kRemoteControl:
+                return host_ui::SystemMenuItem::kRemoteControl;
             case TouchTarget::kSystemInformation:
                 return host_ui::SystemMenuItem::kSystemInformation;
             case TouchTarget::kManageApps:
@@ -127,14 +160,17 @@ struct SystemMenuUiAccess final {
     static void DrawRow(SystemMenuUi& state, lv_obj_t* root, TouchTarget target, const char* icon_text,
                         const char* name, const char* detail, uint32_t icon_color) {
         const Bounds target_bounds = TargetBounds(target);
-        const Bounds bounds{.x = 40, .y = target_bounds.y + 8, .width = 640, .height = target_bounds.height - 16};
+        const Bounds bounds{.x = 40, .y = target_bounds.y + 6, .width = 640, .height = target_bounds.height - 12};
         lv_obj_t* panel = lv_obj_create(root);
         lv_obj_set_pos(panel, bounds.x, bounds.y);
         lv_obj_set_size(panel, bounds.width, bounds.height);
         lv_obj_set_style_pad_all(panel, 0, 0);
         lv_obj_set_style_radius(panel, 22, 0);
         lv_obj_set_style_border_width(panel, 1, 0);
-        lv_obj_set_style_border_color(panel, lv_color_hex(target == TouchTarget::kWifi ? 0x42607fU : 0x2e4562U), 0);
+        lv_obj_set_style_border_color(
+            panel,
+            lv_color_hex(target == TouchTarget::kWifi || target == TouchTarget::kRemoteControl ? 0x42607fU : 0x2e4562U),
+            0);
         lv_obj_set_style_bg_color(panel, lv_color_hex(0x111f32U), 0);
         lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
         lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
@@ -146,17 +182,30 @@ struct SystemMenuUiAccess final {
         lv_obj_set_style_text_color(icon, lv_color_hex(icon_color), 0);
         lv_obj_set_size(icon, 56, 38);
         lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_pos(icon, 26, 32);
-        (void)CreateLabel(panel, name, &lv_font_montserrat_24, 0xf2f7ffU, 104, 20);
-        lv_obj_t* detail_label = CreateLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 59);
+        lv_obj_set_pos(icon, 26, 24);
+        (void)CreateLabel(panel, name, &lv_font_montserrat_24, 0xf2f7ffU, 104, 13);
+        lv_obj_t* detail_label = CreateLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 50);
         if (target == TouchTarget::kWifi) {
             state.wifi_detail_label_ = detail_label;
+        } else if (target == TouchTarget::kRemoteControl) {
+            state.remote_control_detail_label_ = detail_label;
+        } else if (target == TouchTarget::kSystemInformation) {
+            state.system_information_detail_label_ = detail_label;
+            state.firmware_update_dot_ = lv_obj_create(panel);
+            lv_obj_set_pos(state.firmware_update_dot_, bounds.width - 73, 19);
+            lv_obj_set_size(state.firmware_update_dot_, 10, 10);
+            lv_obj_set_style_pad_all(state.firmware_update_dot_, 0, 0);
+            lv_obj_set_style_radius(state.firmware_update_dot_, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_border_width(state.firmware_update_dot_, 0, 0);
+            lv_obj_set_style_bg_color(state.firmware_update_dot_, lv_color_hex(0xef5d4fU), 0);
+            lv_obj_remove_flag(state.firmware_update_dot_, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(state.firmware_update_dot_, LV_OBJ_FLAG_CLICKABLE);
         }
         lv_obj_t* chevron = lv_label_create(panel);
         lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
         lv_obj_set_style_text_font(chevron, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(chevron, lv_color_hex(0xf2f7ffU), 0);
-        lv_obj_set_pos(chevron, bounds.width - 46, 38);
+        lv_obj_set_pos(chevron, bounds.width - 46, 30);
 
         const int32_t index = TargetIndex(target);
         if (index >= 0) {
@@ -167,16 +216,29 @@ struct SystemMenuUiAccess final {
 
 void SystemMenuUi::ResetObjectPointers() {
     wifi_detail_label_ = nullptr;
+    remote_control_detail_label_ = nullptr;
+    system_information_detail_label_ = nullptr;
+    firmware_update_dot_ = nullptr;
     for (lv_obj_t*& overlay : press_overlays_) {
         overlay = nullptr;
     }
 }
 
 void SystemMenuUi::Update(const host_ui::SystemMenuModel& model) {
-    if (wifi_detail_label_ == nullptr || display_ == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (wifi_detail_label_ == nullptr || remote_control_detail_label_ == nullptr ||
+        system_information_detail_label_ == nullptr || firmware_update_dot_ == nullptr || display_ == nullptr ||
+        esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
     lv_label_set_text(wifi_detail_label_, WifiDetail(model));
+    lv_label_set_text(remote_control_detail_label_, RemoteControlDetail(model));
+    const auto firmware_detail = FirmwareDetail(model);
+    lv_label_set_text(system_information_detail_label_, firmware_detail.data());
+    if (model.firmware_update_available) {
+        lv_obj_remove_flag(firmware_update_dot_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(firmware_update_dot_, LV_OBJ_FLAG_HIDDEN);
+    }
     lv_timer_ready(lv_display_get_refr_timer(display_));
     esp_lv_adapter_unlock();
 }
@@ -301,8 +363,14 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     (void)CreateLabel(root, "Configure this device", &lv_font_montserrat_18, 0x91a4bdU, 116, 78);
 
     SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", WifiDetail(model), 0x69a7ffU);
+    SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kRemoteControl, LV_SYMBOL_REFRESH, "Remote Control",
+                                RemoteControlDetail(model), 0xc5f36dU);
+    const auto firmware_detail = FirmwareDetail(model);
     SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kSystemInformation, "i", "System Information",
-                                "Device and software", 0x69a7ffU);
+                                firmware_detail.data(), 0x69a7ffU);
+    if (firmware_update_dot_ != nullptr && !model.firmware_update_available) {
+        lv_obj_add_flag(firmware_update_dot_, LV_OBJ_FLAG_HIDDEN);
+    }
     SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kLanguage, "A", "Language",
                                 model.language != nullptr ? model.language : "English", 0x4dd6a4U);
     SystemMenuUiAccess::DrawRow(*this, root, TouchTarget::kManageApps, LV_SYMBOL_LIST, "Manage Apps",

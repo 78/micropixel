@@ -153,14 +153,16 @@ int32_t CallVoid(ServiceCache& cache, uint32_t method_id, const void* request, u
 
 const micropixel_input_info_t& LoadInputInfo() {
     if (!input_info_loaded) {
-        RequireOk(OpenService(input_service, MICROPIXEL_SERVICE_INPUT, 1U, 0U), "input.open");
+        RequireOk(OpenService(input_service, MICROPIXEL_SERVICE_INPUT, MICROPIXEL_INPUT_INTERFACE_MAJOR, 0U),
+                  "input.open");
         uint32_t response_size = 0U;
         RequireOk(CallService(input_service, MICROPIXEL_INPUT_METHOD_GET_INFO, nullptr, 0U, &cached_input_info,
                               sizeof(cached_input_info), response_size),
                   "input.info");
         if (response_size < sizeof(cached_input_info) || cached_input_info.size < sizeof(cached_input_info) ||
-            cached_input_info.interface_major != 1U || cached_input_info.logical_width == 0U ||
-            cached_input_info.logical_height == 0U || cached_input_info.max_touch_points == 0U ||
+            cached_input_info.interface_major != MICROPIXEL_INPUT_INTERFACE_MAJOR ||
+            cached_input_info.logical_width == 0U || cached_input_info.logical_height == 0U ||
+            cached_input_info.max_touch_points == 0U ||
             cached_input_info.max_touch_points > MICROPIXEL_MAX_TOUCH_POINTS) {
             micropixel::runtime::Panic("input.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
         }
@@ -1320,8 +1322,8 @@ Event Application::WaitEvent() const {
     if (raw.service_id == MICROPIXEL_SERVICE_TIMER && raw.event_id == MICROPIXEL_TIMER_EVENT_EXPIRED) {
         micropixel_timer_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        return Event{TimerEvent{timestamp, Duration::Microseconds(payload.elapsed_us), payload.missed_count,
-                                raw.source}};
+        return Event{
+            TimerEvent{timestamp, Duration::Microseconds(payload.elapsed_us), payload.missed_count, raw.source}};
     }
 
     if (raw.service_id == MICROPIXEL_SERVICE_INPUT && raw.event_id == MICROPIXEL_INPUT_EVENT_TOUCH) {
@@ -1351,6 +1353,36 @@ Event Application::WaitEvent() const {
         }
         return Event{TouchEvent{timestamp, phase, raw.source, payload.x, payload.y, has_pressure,
                                 static_cast<uint16_t>(has_pressure ? payload.pressure_per_mille : 0U)}};
+    }
+
+    if (raw.service_id == MICROPIXEL_SERVICE_INPUT && raw.event_id == MICROPIXEL_INPUT_EVENT_KEY) {
+        micropixel_key_event_payload_t payload{};
+        CopyBytes(&payload, raw.payload, sizeof(payload));
+        if (payload.code < MICROPIXEL_KEY_UP || payload.code > MICROPIXEL_KEY_Y || payload.modifiers != 0U ||
+            payload.reserved0 != 0U) {
+            runtime::Panic("application.wait_event.key_payload", MICROPIXEL_STATUS_INTERNAL);
+        }
+        KeyPhase phase = KeyPhase::kCancel;
+        switch (payload.phase) {
+            case MICROPIXEL_KEY_DOWN_PHASE:
+                phase = KeyPhase::kDown;
+                break;
+            case MICROPIXEL_KEY_UP_PHASE:
+                phase = KeyPhase::kUp;
+                break;
+            case MICROPIXEL_KEY_REPEAT_PHASE:
+                phase = KeyPhase::kRepeat;
+                break;
+            case MICROPIXEL_KEY_CANCEL_PHASE:
+                phase = KeyPhase::kCancel;
+                break;
+            default:
+                runtime::Panic("application.wait_event.key_phase", MICROPIXEL_STATUS_INTERNAL);
+        }
+        if ((phase == KeyPhase::kRepeat) != (payload.repeat_count != 0U)) {
+            runtime::Panic("application.wait_event.key_repeat", MICROPIXEL_STATUS_INTERNAL);
+        }
+        return Event{KeyEvent{timestamp, static_cast<KeyCode>(payload.code), phase, payload.repeat_count}};
     }
 
     return Event{timestamp};

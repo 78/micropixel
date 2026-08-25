@@ -17,6 +17,7 @@ namespace {
 constexpr char kTag[] = "micropixel_test";
 constexpr char kEventWaitMarker[] = "__micropixel_test_event_wait";
 constexpr char kTouchPressureMarker[] = "__micropixel_test_touch_pressure";
+constexpr char kKeyInputMarker[] = "__micropixel_test_key_input";
 constexpr char kRunHandlerMarker[] = "__micropixel_test_run_handler";
 
 }  // namespace
@@ -24,13 +25,17 @@ constexpr char kRunHandlerMarker[] = "__micropixel_test_run_handler";
 GuestTestHooks::GuestTestHooks(wasm_module_inst_t instance, wasm_exec_env_t, runtime::GuestContext& context) {
     const bool event_wait = wasm_runtime_lookup_function(instance, kEventWaitMarker) != nullptr;
     const bool touch_pressure = wasm_runtime_lookup_function(instance, kTouchPressureMarker) != nullptr;
+    const bool key_input = wasm_runtime_lookup_function(instance, kKeyInputMarker) != nullptr;
     const bool run_handler = wasm_runtime_lookup_function(instance, kRunHandlerMarker) != nullptr;
-    if (!event_wait && !touch_pressure && !run_handler) {
+    if (!event_wait && !touch_pressure && !key_input && !run_handler) {
         return;
     }
 
     context_ = &context;
-    kind_ = touch_pressure ? Kind::kTouchPressure : (run_handler ? Kind::kRunHandlerStop : Kind::kHostWake);
+    kind_ = touch_pressure ? Kind::kTouchPressure
+            : key_input    ? Kind::kKeyInput
+            : run_handler  ? Kind::kRunHandlerStop
+                           : Kind::kHostWake;
     if (pthread_create(&thread_, nullptr, InjectEventBurst, this) != 0) {
         ESP_LOGE(kTag, "failed to start conformance event injector");
         ready_ = false;
@@ -96,6 +101,33 @@ void* GuestTestHooks::InjectEventBurst(void* argument) {
             return nullptr;
         }
         ESP_LOGI(kTag, "injected Touch pressure: Down + " PRIu32 " Move + Up", kMoveCount);
+        return nullptr;
+    }
+    if (hooks.kind_ == Kind::kKeyInput) {
+        vTaskDelay(pdMS_TO_TICKS(150));
+        device::KeySample sample{};
+        sample.timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
+        sample.code = device::KeyCode::kConfirm;
+        sample.phase = device::KeyPhase::kDown;
+        if (!hooks.context_->PushKey(sample)) {
+            ESP_LOGE(kTag, "failed to inject required Key Down");
+            return nullptr;
+        }
+        sample.timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
+        sample.phase = device::KeyPhase::kRepeat;
+        sample.repeat_count = 2U;
+        if (!hooks.context_->PushKey(sample)) {
+            ESP_LOGE(kTag, "failed to inject required Key Repeat");
+            return nullptr;
+        }
+        sample.timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
+        sample.phase = device::KeyPhase::kUp;
+        sample.repeat_count = 0U;
+        if (!hooks.context_->PushKey(sample)) {
+            ESP_LOGE(kTag, "failed to inject required Key Up");
+            return nullptr;
+        }
+        ESP_LOGI(kTag, "injected Key Confirm: Down + Repeat + Up");
         return nullptr;
     }
 

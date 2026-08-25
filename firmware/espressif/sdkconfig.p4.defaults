@@ -1,6 +1,7 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Enable the 32 MiB DIO flash configuration used by the supported Metalio-Claw4 board.
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
@@ -32,20 +33,22 @@ CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
 CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
 CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
 CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
-CONFIG_ESP_HOSTED_SDIO_PIN_CMD=50
-CONFIG_ESP_HOSTED_SDIO_PIN_CLK=51
-CONFIG_ESP_HOSTED_SDIO_PIN_D0=49
-CONFIG_ESP_HOSTED_SDIO_PIN_D1=34
-CONFIG_ESP_HOSTED_SDIO_PIN_D2=31
-CONFIG_ESP_HOSTED_SDIO_PIN_D3=53
+# esp_hosted derives ESP_HOSTED_SDIO_PIN_* from these user-configurable Slot 1
+# symbols. Setting the derived symbols is ignored by current Kconfig versions.
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=50
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=51
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=49
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=34
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=31
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=53
 CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
 CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-# System Shell screen transitions synchronously rebuild LVGL trees on the Host
-# main task. Wi-Fi adds two bounded network snapshots to that call chain, so
-# leave enough headroom for recursive LVGL object deletion and rendering.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+# BundleFS workspaces and persistent Host state live in PSRAM-backed heap.
+# Keep enough internal stack for synchronous LVGL tree rebuilds and the bounded
+# control flow used by System UI capture; pixel and PNG buffers remain in PSRAM.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # Product firmware is performance-sensitive. Use ESP-IDF's supported release
 # optimization profile; sdkconfig.debug.defaults can be appended explicitly
@@ -87,6 +90,10 @@ CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
 # and bounded dirty-region coalescing.
 CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND=y
 CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=y
+# The TCA9555 power-key wake ISR disables its GPIO interrupt through the
+# esp-iot-solution button driver. PPA/PSRAM activity can temporarily disable
+# the flash cache, so the GPIO control path must remain callable from IRAM.
+CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
 CONFIG_MICROPIXEL_LVGL_PPA_ACCEL=y
 CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS=4096
 CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT=y
@@ -110,3 +117,11 @@ CONFIG_LV_DEF_REFR_PERIOD=4
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y
+# ESP32-P4 revisions used by Metalio-Claw4 reject the ESP ECDSA peripheral at
+# runtime. Keep TLS 1.3 CertificateVerify on the software path and do not link
+# the unusable PSA hardware driver.
+# CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY is not set
+# Remote Control either skips trust-chain verification in development or uses
+# its configured single DER trust anchor. The Mozilla root bundle is unused.
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set

@@ -26,7 +26,15 @@ SystemGestureRouter::SystemGestureRouter(device::InputBackend& input, uint16_t w
 
 SystemGestureRouter::~SystemGestureRouter() { input_.UnbindTouchSink(this); }
 
-int32_t SystemGestureRouter::GetInfo(micropixel_input_info_t& info) { return input_.GetInfo(info); }
+int32_t SystemGestureRouter::GetInfo(micropixel_input_info_t& info) {
+    const int32_t status = input_.GetInfo(info);
+    if (status == MICROPIXEL_STATUS_OK) {
+        info.interface_major = MICROPIXEL_INPUT_INTERFACE_MAJOR;
+        info.interface_minor = MICROPIXEL_INPUT_INTERFACE_MINOR;
+        info.capabilities |= MICROPIXEL_INPUT_CAP_KEY_EVENTS;
+    }
+    return status;
+}
 
 void SystemGestureRouter::BindTouchSink(device::TouchSink sink, void* context) {
     portENTER_CRITICAL(&sink_lock_);
@@ -53,6 +61,36 @@ void SystemGestureRouter::UnbindTouchSink(void* context) {
         vTaskDelay(1U);
     }
 }
+
+bool SystemGestureRouter::InjectTouch(const device::TouchSample& sample) { return input_.InjectTouch(sample); }
+
+void SystemGestureRouter::BindKeySink(device::KeySink sink, void* context) {
+    portENTER_CRITICAL(&sink_lock_);
+    key_sink_ = sink;
+    key_context_ = context;
+    portEXIT_CRITICAL(&sink_lock_);
+}
+
+void SystemGestureRouter::UnbindKeySink(void* context) {
+    portENTER_CRITICAL(&sink_lock_);
+    if (key_context_ == context) {
+        key_sink_ = nullptr;
+        key_context_ = nullptr;
+    }
+    portEXIT_CRITICAL(&sink_lock_);
+
+    for (;;) {
+        portENTER_CRITICAL(&sink_lock_);
+        const uint32_t inflight = key_inflight_;
+        portEXIT_CRITICAL(&sink_lock_);
+        if (inflight == 0U) {
+            break;
+        }
+        vTaskDelay(1U);
+    }
+}
+
+bool SystemGestureRouter::InjectKey(const device::KeySample& sample) { return ForwardKey(sample); }
 
 void SystemGestureRouter::BindSystemActionSink(SystemUiActionSink sink, void* context) {
     portENTER_CRITICAL(&sink_lock_);
@@ -185,6 +223,26 @@ bool SystemGestureRouter::Forward(const device::TouchSample& sample) {
     const bool delivered = sink(context, sample);
     portENTER_CRITICAL(&sink_lock_);
     --downstream_inflight_;
+    portEXIT_CRITICAL(&sink_lock_);
+    return delivered;
+}
+
+bool SystemGestureRouter::ForwardKey(const device::KeySample& sample) {
+    device::KeySink sink = nullptr;
+    void* context = nullptr;
+    portENTER_CRITICAL(&sink_lock_);
+    if (key_sink_ != nullptr) {
+        sink = key_sink_;
+        context = key_context_;
+        ++key_inflight_;
+    }
+    portEXIT_CRITICAL(&sink_lock_);
+    if (sink == nullptr) {
+        return false;
+    }
+    const bool delivered = sink(context, sample);
+    portENTER_CRITICAL(&sink_lock_);
+    --key_inflight_;
     portEXIT_CRITICAL(&sink_lock_);
     return delivered;
 }

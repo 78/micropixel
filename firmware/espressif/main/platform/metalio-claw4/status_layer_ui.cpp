@@ -446,14 +446,14 @@ void StatusLayerUi::DrawSlider(lv_obj_t* root, TouchTarget target, const char* n
     }
 }
 
-void StatusLayerUi::DrawMetric(lv_obj_t* root, int32_t x, const char* name, const char* value, uint8_t percent,
-                               uint32_t color) {
+StatusLayerUi::MetricObjects StatusLayerUi::DrawMetric(lv_obj_t* root, int32_t x, const char* name, const char* value,
+                                                       uint8_t percent, uint32_t color) {
     constexpr int32_t kDialogX = 24;
     constexpr int32_t kDialogY = 36;
     const Bounds bounds{.x = x - kDialogX, .y = 390 - kDialogY, .width = 192, .height = 124};
     lv_obj_t* panel = CreatePanel(root, bounds, 0x142235U);
     (void)CreateLabel(panel, name, &lv_font_montserrat_18, 0x91a4bdU, 16, 15);
-    (void)CreateLabel(panel, value, &lv_font_montserrat_18, 0xf4f8ffU, 16, 47);
+    lv_obj_t* value_label = CreateLabel(panel, value, &lv_font_montserrat_18, 0xf4f8ffU, 16, 47);
     lv_obj_t* track = lv_obj_create(panel);
     lv_obj_set_pos(track, 16, 90);
     lv_obj_set_size(track, 160, 10);
@@ -472,6 +472,7 @@ void StatusLayerUi::DrawMetric(lv_obj_t* root, int32_t x, const char* name, cons
     lv_obj_set_style_bg_color(fill, lv_color_hex(color), 0);
     lv_obj_remove_flag(fill, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(fill, LV_OBJ_FLAG_CLICKABLE);
+    return {.panel = panel, .value_label = value_label, .fill = fill};
 }
 
 void StatusLayerUi::ResetObjectPointers() {
@@ -486,6 +487,8 @@ void StatusLayerUi::ResetObjectPointers() {
         slider_fills_[index] = nullptr;
         slider_knobs_[index] = nullptr;
     }
+    sram_value_label_ = nullptr;
+    sram_fill_ = nullptr;
 }
 
 void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail, bool active, bool available) {
@@ -517,6 +520,19 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
                           model.performance_overlay_enabled, true);
     UpdateSliderLocked(TouchTarget::kBrightness, model.brightness_percent, false);
     UpdateSliderLocked(TouchTarget::kVolume, model.volume_percent, false);
+    UpdateSramMetricLocked(model);
+}
+
+void StatusLayerUi::UpdateSramMetricLocked(const host_ui::StatusLayerModel& model) {
+    if (sram_value_label_ == nullptr || sram_fill_ == nullptr) {
+        return;
+    }
+    char sram[24]{};
+    (void)std::snprintf(sram, sizeof(sram), "%" PRIu32 " / %" PRIu32 " KB", model.sram_used_kib, model.sram_total_kib);
+    lv_label_set_text(sram_value_label_, sram);
+    const uint8_t percent =
+        model.sram_total_kib > 0U ? static_cast<uint8_t>(model.sram_used_kib * 100U / model.sram_total_kib) : 0U;
+    lv_obj_set_width(sram_fill_, percent > 0U ? static_cast<int32_t>(percent) * 160 / 100 : 1);
 }
 
 void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
@@ -556,26 +572,22 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
 
     char memory[24]{};
     char storage[24]{};
-    char battery[16]{};
     (void)std::snprintf(memory, sizeof(memory), "%" PRIu32 " / %" PRIu32 " MB", model.memory_used_kib / 1024U,
                         model.memory_total_kib / 1024U);
     const uint32_t storage_used_tenths = (model.storage_used_kib * 10U + 512U) / 1024U;
     (void)std::snprintf(storage, sizeof(storage), "%" PRIu32 ".%" PRIu32 " / %" PRIu32 " MB", storage_used_tenths / 10U,
                         storage_used_tenths % 10U, model.storage_total_kib / 1024U);
-    if (model.battery_available) {
-        (void)std::snprintf(battery, sizeof(battery), "%u%%", static_cast<unsigned>(model.battery_percent));
-    } else {
-        (void)std::snprintf(battery, sizeof(battery), "UNAVAILABLE");
-    }
     const uint8_t memory_percent =
         model.memory_total_kib > 0U ? static_cast<uint8_t>(model.memory_used_kib * 100U / model.memory_total_kib) : 0U;
     const uint8_t storage_percent = model.storage_total_kib > 0U
                                         ? static_cast<uint8_t>(model.storage_used_kib * 100U / model.storage_total_kib)
                                         : 0U;
-    DrawMetric(status_dialog_, 48, "MEMORY", memory, memory_percent, kStatusControlColor);
-    DrawMetric(status_dialog_, 264, "STORAGE", storage, storage_percent, kStatusControlColor);
-    DrawMetric(status_dialog_, 480, "BATTERY", battery, model.battery_available ? model.battery_percent : 0U,
-               kStatusControlColor);
+    (void)DrawMetric(status_dialog_, 48, "STORAGE", storage, storage_percent, kStatusControlColor);
+    (void)DrawMetric(status_dialog_, 264, "MEMORY", memory, memory_percent, kStatusControlColor);
+    MetricObjects sram_metric = DrawMetric(status_dialog_, 480, "SRAM", "", 0U, kStatusControlColor);
+    sram_value_label_ = sram_metric.value_label;
+    sram_fill_ = sram_metric.fill;
+    UpdateSramMetricLocked(model);
 
     lv_obj_move_foreground(status_layer_);
     RaisePerformanceOverlayLocked();
@@ -672,7 +684,7 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
 
     if (performance_overlay_ == nullptr) {
         performance_overlay_ = lv_obj_create(lv_screen_active());
-        lv_obj_set_pos(performance_overlay_, 566, 4);
+        lv_obj_set_pos(performance_overlay_, 282, 4);
         lv_obj_set_size(performance_overlay_, 150, 30);
         lv_obj_set_style_pad_all(performance_overlay_, 0, 0);
         lv_obj_set_style_radius(performance_overlay_, 6, 0);
@@ -683,10 +695,9 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
         lv_obj_set_style_bg_opa(performance_overlay_, 176, 0);
         lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_CLICKABLE);
-        performance_cpu_label_ = CreateLabel(performance_overlay_, "", &lv_font_montserrat_14, 0xf4f8ffU, 7, 7);
-        performance_fps_label_ = CreateLabel(performance_overlay_, "", &lv_font_montserrat_14, 0xf4f8ffU, 76, 7);
-        lv_obj_set_width(performance_fps_label_, 67);
-        lv_obj_set_style_text_align(performance_fps_label_, LV_TEXT_ALIGN_RIGHT, 0);
+        performance_label_ = CreateLabel(performance_overlay_, "", &lv_font_montserrat_14, 0xf4f8ffU, 0, 7);
+        lv_obj_set_width(performance_label_, 150);
+        lv_obj_set_style_text_align(performance_label_, LV_TEXT_ALIGN_CENTER, 0);
     }
     lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
 
@@ -699,12 +710,10 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
     }
     performance_last_frame_sequence_ = display_refresh_sequence;
     performance_last_sample_us_ = now_us;
-    char cpu_text[16]{};
-    char fps_text[16]{};
-    (void)std::snprintf(cpu_text, sizeof(cpu_text), "CPU %u%%", static_cast<unsigned>(cpu_percent));
-    (void)std::snprintf(fps_text, sizeof(fps_text), "FPS %" PRIu32, performance_fps_);
-    lv_label_set_text(performance_cpu_label_, cpu_text);
-    lv_label_set_text(performance_fps_label_, fps_text);
+    char performance_text[32]{};
+    (void)std::snprintf(performance_text, sizeof(performance_text), "CPU %u%%     FPS %" PRIu32,
+                        static_cast<unsigned>(cpu_percent), performance_fps_);
+    lv_label_set_text(performance_label_, performance_text);
     RaisePerformanceOverlayLocked();
     lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(performance_overlay_)));
 }

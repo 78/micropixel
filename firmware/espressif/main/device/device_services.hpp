@@ -48,6 +48,10 @@ class InputService final {
     [[nodiscard]] DeviceResult<micropixel_input_info_t> GetInfo() const;
     void BindTouchSink(TouchSink sink, void* context) const;
     void UnbindTouchSink(void* context) const;
+    [[nodiscard]] bool InjectTouch(const TouchSample& sample) const;
+    void BindKeySink(KeySink sink, void* context) const;
+    void UnbindKeySink(void* context) const;
+    [[nodiscard]] bool InjectKey(const KeySample& sample) const;
 
    private:
     InputBackend& backend_;

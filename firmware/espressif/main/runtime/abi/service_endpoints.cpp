@@ -309,8 +309,8 @@ int32_t GraphicsServiceEndpoint::Submit(uint32_t channel_id, const uint8_t* byte
 ServiceDescriptor InputServiceEndpoint::Describe() const {
     return ServiceDescriptor{
         .service_id = MICROPIXEL_SERVICE_INPUT,
-        .interface_major = 1U,
-        .interface_minor = 0U,
+        .interface_major = MICROPIXEL_INPUT_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_INPUT_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_EVENTS,
         .max_response_bytes = sizeof(micropixel_input_info_t),
     };

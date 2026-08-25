@@ -45,3 +45,23 @@ build_and_run system_shell \
     -pthread \
     "$workspace_root/tools/tests/test_system_shell.cpp" \
     "$workspace_root/firmware/espressif/main/host_ui/system_shell.cpp"
+
+build_and_run app_store \
+    "$workspace_root/tools/tests/test_app_store.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
+
+build_and_run bundlefs \
+    "$workspace_root/tools/tests/test_bundlefs.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
+
+build_and_run http3_tls_parser \
+    -I "$workspace_root/firmware/espressif/components/78__esp-http3/include" \
+    "$workspace_root/tools/tests/test_http3_tls_parser.cpp" \
+    "$workspace_root/firmware/espressif/components/78__esp-http3/src/tls/tls_handshake.cc"
+
+build_and_run remote_control_reconnect_policy \
+    "$workspace_root/tools/tests/test_remote_control_reconnect_policy.cpp"
+
+build_and_run system_time \
+    "$workspace_root/tools/tests/test_system_time.cpp" \
+    "$workspace_root/firmware/espressif/main/system_time.cpp"

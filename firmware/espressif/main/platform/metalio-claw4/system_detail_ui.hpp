@@ -10,7 +10,7 @@
 
 namespace micropixel::platform::metalio_claw4 {
 
-// Owns the LVGL object references and interaction state for the two detail
+// Owns the LVGL object references and interaction state for the detail
 // screens reached from System Settings. The platform remains responsible for
 // display locking and for binding the shared Host pointer input device.
 class SystemDetailUi final {
@@ -22,9 +22,18 @@ class SystemDetailUi final {
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformationLocked(
         lv_obj_t* root, const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,
         void* action_context);
+    void UpdateSystemInformationLocked(const host_ui::SystemInformationModel& model);
     void LeaveSystemInformation();
     [[nodiscard]] bool SystemInformationVisible() const;
     [[nodiscard]] void* SystemInformationActionContext() const;
+
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowRemoteControlLocked(
+        lv_obj_t* root, const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context);
+    void UpdateRemoteControlLocked(const host_ui::RemoteControlModel& model);
+    void LeaveRemoteControl();
+    [[nodiscard]] bool RemoteControlVisible() const;
+    [[nodiscard]] void* RemoteControlActionContext() const;
 
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowAppManagementLocked(
         lv_obj_t* root, const host_ui::AppManagementModel& model, host_ui::SystemUiActionSink action_sink,
@@ -45,11 +54,19 @@ class SystemDetailUi final {
     enum class Screen : uint8_t {
         kNone,
         kSystemInformation,
+        kRemoteControl,
         kAppManagement,
     };
 
     static void DetailScrollEvent(lv_event_t* event);
     static void SystemInformationBackEvent(lv_event_t* event);
+    static void SystemInformationUpdateEvent(lv_event_t* event);
+    static void RemoteControlBackEvent(lv_event_t* event);
+    static void RemoteControlToggleEvent(lv_event_t* event);
+    static void RemoteControlPairingEvent(lv_event_t* event);
+    static void RemoteControlConfirmationCancelEvent(lv_event_t* event);
+    static void RemoteControlConfirmOffEvent(lv_event_t* event);
+    static void RemoteControlRenderAsync(void* context);
     static void AppManagementRenderAsync(void* context);
     static void AppManagementBackEvent(lv_event_t* event);
     static void AppManagementRowEvent(lv_event_t* event);
@@ -60,6 +77,9 @@ class SystemDetailUi final {
     static void AppManagementConfirmUninstallEvent(lv_event_t* event);
 
     void QueueAppManagementRender();
+    void QueueRemoteControlRender();
+    void RenderRemoteControlLocked();
+    void DrawRemoteControlOffConfirmationLocked();
     void RenderAppManagementLocked(bool clean_root);
     void DrawAppManagementActionsLocked();
     void DrawAppManagementInformationLocked();
@@ -71,6 +91,10 @@ class SystemDetailUi final {
     std::array<lv_obj_t*, host_ui::kMaxHallApps> app_management_rows_{};
     host_ui::SystemUiActionSink system_information_action_sink_{};
     void* system_information_action_context_{};
+    host_ui::SystemUiActionSink remote_control_action_sink_{};
+    void* remote_control_action_context_{};
+    host_ui::RemoteControlModel remote_control_model_{};
+    bool remote_control_off_confirmation_visible_{};
     host_ui::SystemUiActionSink app_management_action_sink_{};
     void* app_management_action_context_{};
     host_ui::AppManagementModel app_management_model_{};

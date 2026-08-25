@@ -4,18 +4,23 @@
 Metalio-Claw4 板级 backend。先按仓库根目录 README 初始化 submodule，并设置 `IDF_PATH`、WASI
 Clang 和 `WAMRC`。
 
-新设备、System Shell 和仅更新 Guest 的完整步骤见 [ESP32-P4 烧录指南](../../docs/development/flashing.zh-CN.md)。
+日常增量构建、Host 烧录、显式 fullclean、空 App Store 重置和示例 App 安装见
+[ESP32-P4 烧录指南](../../docs/development/flashing.zh-CN.md)。统一入口不会把这些行为混在一起：
 
 ```sh
-bash tools/build_p4_baseline.sh
-bash tools/flash_p4_baseline.sh /dev/cu.usbmodemPORT
-bash tools/monitor_p4.sh /dev/cu.usbmodemPORT
+bash tools/p4.sh build-host
+bash tools/p4.sh flash-host /dev/cu.usbmodemPORT  # 保留 App Store
+bash tools/p4.sh monitor /dev/cu.usbmodemPORT     # 仅监控，不构建或烧录
+bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT  # 清空并写入三个示例 App
+bash tools/p4.sh flash-all /dev/cu.usbmodemPORT   # Host 和三个示例 App，不跑测试
+bash tools/p4.sh test                              # 仅发布前或推送前运行
+bash tools/p4.sh --help
 ```
 
-也可以构建、烧录并等待 Hello Guest 成功标记：
+ABI/SDK conformance 的完整 Guest 基线仍可单独运行：
 
 ```sh
-bash tools/run_p4_baseline.sh /dev/cu.usbmodemPORT
+bash tools/build_guest_p4.sh
 ```
 
 Host 输出到 `build/host-esp32p4/`，conformance Guest 输出到 `build/guest-p4/`。两者均为本地产物。
@@ -31,7 +36,7 @@ Host 输出到 `build/host-esp32p4/`，conformance Guest 输出到 `build/guest-
 
 ```sh
 P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.p4-conformance.defaults" \
-    bash tools/build_p4_baseline.sh
+    bash tools/p4.sh build-host
 ```
 
 P4 产品固件常驻 USB Serial/JTAG 开发通道，可以直接获取最终的 720x720 LVGL 合成画面：

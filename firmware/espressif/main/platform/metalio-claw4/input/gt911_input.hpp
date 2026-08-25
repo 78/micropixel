@@ -26,6 +26,7 @@ class Gt911Input final : public device::InputBackend {
     [[nodiscard]] int32_t GetInfo(micropixel_input_info_t& info) override;
     void BindTouchSink(device::TouchSink sink, void* context) override;
     void UnbindTouchSink(void* context) override;
+    [[nodiscard]] bool InjectTouch(const device::TouchSample& sample) override;
     void BindSmokeUi(lv_obj_t* root, lv_obj_t* marker, lv_obj_t* status);
     void ClearSmokeUi();
     void InjectTouchForCapture(const device::TouchSample& sample);

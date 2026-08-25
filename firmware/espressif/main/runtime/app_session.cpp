@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "runtime/guest_context.hpp"
+#include "runtime/guest_log_sink.hpp"
 #include "runtime/resources/bitmap_decoder.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "runtime/wamr/watchdog.h"
@@ -117,8 +118,8 @@ AppSession::~AppSession() {
 }
 
 std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceServices& devices,
-                                                                uint32_t store_offset) {
-    auto package_result = AotPackage::Load(store_offset);
+                                                                const bundlefs_file_t& file, GuestLogSink* log_sink) {
+    auto package_result = AotPackage::Load(file);
     if (!package_result) {
         ESP_LOGE(kTag, "unable to read the configured AOT package");
         return std::unexpected(MakeFailure(AppSessionError::kPackageLoad));
@@ -159,7 +160,7 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceSe
     }
     micropixel_log_heap_state("Guest instantiated");
 
-    auto context = std::unique_ptr<GuestContext>(new (std::nothrow) GuestContext(package.raw(), devices));
+    auto context = std::unique_ptr<GuestContext>(new (std::nothrow) GuestContext(package.raw(), devices, log_sink));
     if (context == nullptr || !context->valid()) {
         ESP_LOGE(kTag, "unable to initialize bounded Guest services");
         return std::unexpected(MakeFailure(AppSessionError::kGuestServices, package.raw()));

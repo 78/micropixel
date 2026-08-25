@@ -35,8 +35,11 @@ P4 应用构建入口是：
 ```sh
 bash tools/build_demo_bundle.sh
 bash tools/build_snake_bundle.sh
-bash tools/flash_guest_p4.sh /dev/cu.usbmodemPORT build/apps/demo/demo.bundle.bin
+bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
+
+`flash-apps` 明确替换 App Store，并写入 Blocks、Snake 和 Demo；不再提供会把任意 Bundle 直接写入
+分区的独立公开脚本。单 App 开发安装走 Remote Control 的正常安装事务。
 
 默认 `development` profile 保留 Wasm 调试信息和 AOT 调用栈；发布构建显式设置
 `MICROPIXEL_GUEST_PROFILE=release`。链接器只允许 [`abi/allowed_imports.txt`](abi/allowed_imports.txt)

@@ -38,9 +38,10 @@ bash tools/check_firmware_style.sh --configure
 bash tools/check_firmware_style.sh
 ```
 
-`tools/build_p4_baseline.sh` 会先执行 Firmware 格式门禁；完整 clang-tidy 门禁由上面的检查脚本执行，避免
-使用 GCC compilation database 时靠删除未知参数得到不可靠结果。Firmware 的 conformance test hooks
-也在检查范围内，只有第三方组件、managed components 和生成目录排除。
+普通 build/flash 不隐式执行格式或静态分析门禁。发布前或推送前统一运行 `bash tools/p4.sh test`；需要
+单独检查完整 clang-tidy 时仍使用上面的检查脚本，避免使用 GCC compilation database 时靠删除未知参数
+得到不可靠结果。Firmware 的 conformance test hooks 也在检查范围内，只有第三方组件、managed
+components 和生成目录排除。
 
 Guest 的命名规则由 `guest/.clang-tidy` 中的 `readability-identifier-naming` 固化。C ABI 约定要求的
 `__micropixel_*` 内部导出是函数命名检查的显式例外，普通 C++ API 不得沿用该前缀。

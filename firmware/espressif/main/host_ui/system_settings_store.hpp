@@ -18,10 +18,15 @@ class SystemSettingsStore final {
     [[nodiscard]] bool Initialize();
     [[nodiscard]] bool Load(StatusLayerModel& model) const;
     [[nodiscard]] bool Save(const StatusLayerModel& model) const;
-    [[nodiscard]] bool ready() const { return handle_ != 0U; }  // NOLINT(readability-identifier-naming)
+    [[nodiscard]] bool LoadRemoteControl(RemoteControlModel& model) const;
+    [[nodiscard]] bool SaveRemoteControl(const RemoteControlModel& model) const;
+    [[nodiscard]] bool ready() const {  // NOLINT(readability-identifier-naming)
+        return handle_ != 0U && control_handle_ != 0U;
+    }
 
    private:
     nvs_handle_t handle_{};
+    nvs_handle_t control_handle_{};
 };
 
 }  // namespace micropixel::host_ui

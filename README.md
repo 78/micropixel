@@ -45,25 +45,43 @@ export WAMRC=/path/to/wamrc
 python3 -m pip install -r requirements-dev.txt
 ```
 
+本机默认的 `IDF_PATH`、`P4_PORT`、`P4_BAUD` 和 `MICROPIXEL_REMOTE_CONTROL_HOST` 可写在被 Git 忽略的根目录
+`.env` 中；`tools/p4.sh` 会自动加载，并将远控地址写入生成的
+`CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST`。显式环境变量或命令行端口优先级更高。
+
+`p4.sh` 会在自身进程内退出已激活的 Conda 环境，避免 Conda Python/动态库污染 ESP-IDF venv；它不会也
+无法改变父终端的 Conda 状态。ESP-IDF 官方导出的工具环境缓存在 `build/p4-idf-environment.sh`，仅首次运行
+或 IDF/脚本更新后重新生成，因此无需每次手动执行 `export.sh`。
+
 ## 构建与测试
 
 ```sh
-# 构建 Host，以及当前仍维护的 ABI/SDK conformance Guests
-bash tools/build_p4_baseline.sh
+# 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
+bash tools/p4.sh build-host
 
-# 先运行生命周期、手势、Bundle 与架构回归，再构建 System Shell 首版所需的 Host、Blocks、Snake、Demo 和三包 App Store 镜像
-bash tools/build_system_shell_p4.sh
+# 构建 Host、Blocks、Snake、Demo 和 App Store 镜像；不跑测试
+bash tools/p4.sh build-all
 
-# 只检查 Firmware 格式；完整 clang-tidy 首次需要 --configure
-bash tools/check_firmware_style.sh --format-only
+# 仅在发布前或推送前显式运行完整测试门禁
+bash tools/p4.sh test
 ```
 
-设备连接后可用一个入口烧录 Host 与三 App Store。环境准备、端口/MAC 识别、仅更新 Guest
-和烧录后验收见 [ESP32-P4 烧录指南](docs/development/flashing.zh-CN.md)：
+设备连接后，日常 Host 修改使用保留 App Store 的增量烧录入口：
 
 ```sh
-bash tools/flash_system_shell_p4.sh /dev/cu.usbmodemXXXX
+bash tools/p4.sh flash-host /dev/cu.usbmodemXXXX
+bash tools/p4.sh monitor /dev/cu.usbmodemXXXX
 ```
+
+两条命令在只连接一台 ESP32-P4 时都可省略端口；`monitor` 不构建、不烧录、不清空数据，也不运行测试。
+USB 调试的 App 烧录默认清空旧 Catalog 并写入 Blocks、Snake、Demo：
+
+```sh
+bash tools/p4.sh flash-apps
+```
+
+`fullclean-host`、Host-only 烧录和完整 Host+Apps 烧录都是独立的显式命令；详见
+[ESP32-P4 烧录指南](docs/development/flashing.zh-CN.md)。
 
 `guest/tests/conformance/` 是仍在构建链路中的回归用例，应予保留。需要合成 Host 事件的板端用例
 使用 `firmware/espressif/sdkconfig.p4-conformance.defaults`；产品 defaults 默认关闭这些 test hooks。

@@ -20,6 +20,7 @@ SystemShell::~SystemShell() {
     ui_.LeaveStatusLayer(0U);
     ui_.LeaveWifiSettings();
     ui_.LeaveAppManagement();
+    ui_.LeaveRemoteControl();
     ui_.LeaveSystemInformation();
     ui_.LeaveSystemMenu();
     ui_.LeaveHall();
@@ -33,7 +34,7 @@ std::expected<void, SystemUiError> SystemShell::ShowHall(const HallModel& model)
     return ui_.ShowHall(model, ReceiveAction, this);
 }
 
-void SystemShell::UpdateHallWifi(const HallWifiModel& model) { ui_.UpdateHallWifi(model); }
+void SystemShell::UpdateHallStatusBar(const HallStatusBarModel& model) { ui_.UpdateHallStatusBar(model); }
 
 std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
     SystemUiAction action{};
@@ -43,8 +44,12 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
     if (action.type == SystemUiActionType::kWifiStateChanged) {
         wifi_state_change_pending_.store(false, std::memory_order_release);
         wifi_state_change_queued_.store(false, std::memory_order_release);
+    } else if (action.type == SystemUiActionType::kBatteryStateChanged) {
+        battery_state_change_pending_.store(false, std::memory_order_release);
+        battery_state_change_queued_.store(false, std::memory_order_release);
     }
     QueuePendingWifiStateChange();
+    QueuePendingBatteryStateChange();
     return action;
 }
 
@@ -66,6 +71,8 @@ std::expected<HallCoverModel, SystemUiError> SystemShell::CaptureGuestFrame(uint
                                                                             uint64_t trigger_timestamp_us) {
     return ui_.CaptureGuestFrame(hall_app_index, trigger_timestamp_us);
 }
+
+std::expected<ScreenCapture, SystemUiError> SystemShell::CaptureScreenJpeg() { return ui_.CaptureScreenJpeg(); }
 
 void SystemShell::ReleaseGuestSnapshot() { ui_.ReleaseGuestSnapshot(); }
 
@@ -89,7 +96,21 @@ std::expected<void, SystemUiError> SystemShell::ShowSystemInformation(const Syst
     return ui_.ShowSystemInformation(model, ReceiveAction, this);
 }
 
+void SystemShell::UpdateSystemInformation(const SystemInformationModel& model) { ui_.UpdateSystemInformation(model); }
+
 void SystemShell::LeaveSystemInformation() { ui_.LeaveSystemInformation(); }
+
+std::expected<void, SystemUiError> SystemShell::ShowRemoteControl(const RemoteControlModel& model) {
+    if (action_queue_ == nullptr) {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
+    ResetActionQueue();
+    return ui_.ShowRemoteControl(model, ReceiveAction, this);
+}
+
+void SystemShell::UpdateRemoteControl(const RemoteControlModel& model) { ui_.UpdateRemoteControl(model); }
+
+void SystemShell::LeaveRemoteControl() { ui_.LeaveRemoteControl(); }
 
 std::expected<void, SystemUiError> SystemShell::ShowAppManagement(const AppManagementModel& model) {
     if (action_queue_ == nullptr) {
@@ -142,6 +163,14 @@ void SystemShell::NotifyWifiStateChanged() {
     QueuePendingWifiStateChange();
 }
 
+void SystemShell::NotifyBatteryStateChanged() {
+    if (action_queue_ == nullptr) {
+        return;
+    }
+    battery_state_change_pending_.store(true, std::memory_order_release);
+    QueuePendingBatteryStateChange();
+}
+
 void SystemShell::QueuePendingWifiStateChange() {
     if (action_queue_ == nullptr || !wifi_state_change_pending_.load(std::memory_order_acquire) ||
         wifi_state_change_queued_.exchange(true, std::memory_order_acq_rel)) {
@@ -153,13 +182,26 @@ void SystemShell::QueuePendingWifiStateChange() {
     }
 }
 
+void SystemShell::QueuePendingBatteryStateChange() {
+    if (action_queue_ == nullptr || !battery_state_change_pending_.load(std::memory_order_acquire) ||
+        battery_state_change_queued_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const SystemUiAction action{.type = SystemUiActionType::kBatteryStateChanged};
+    if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
+        battery_state_change_queued_.store(false, std::memory_order_release);
+    }
+}
+
 void SystemShell::ResetActionQueue() {
     if (action_queue_ == nullptr) {
         return;
     }
     (void)xQueueReset(action_queue_);
     wifi_state_change_queued_.store(false, std::memory_order_release);
+    battery_state_change_queued_.store(false, std::memory_order_release);
     QueuePendingWifiStateChange();
+    QueuePendingBatteryStateChange();
 }
 
 void SystemShell::ReceiveAction(void* context, const SystemUiAction& action) {

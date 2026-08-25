@@ -130,6 +130,14 @@ lv_obj_t* CreateWifiPanel(lv_obj_t* parent, const WifiBounds& bounds, uint32_t b
     return panel;
 }
 
+void CreateWifiDismissibleScrim(lv_obj_t* parent, lv_event_cb_t dismiss_callback, void* user_data) {
+    lv_obj_t* scrim =
+        CreateWifiPanel(parent, WifiBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
+    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
+    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(scrim, dismiss_callback, LV_EVENT_SHORT_CLICKED, user_data);
+}
+
 const char* WifiBandText(host_ui::WifiBand band) {
     switch (band) {
         case host_ui::WifiBand::k2_4Ghz:
@@ -594,11 +602,7 @@ void WifiSettingsUiAccess::DrawWifiPasswordOverlayLocked(WifiSettingsUi& state) 
 }
 
 void WifiSettingsUiAccess::DrawWifiActionSheetLocked(WifiSettingsUi& state) {
-    lv_obj_t* scrim =
-        CreateWifiPanel(state.root, WifiBounds{.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 0x030913U, 0U, 0);
-    lv_obj_set_style_bg_opa(scrim, LV_OPA_80, 0);
-    lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(scrim, WifiSheetCancelEvent, LV_EVENT_SHORT_CLICKED, &state);
+    CreateWifiDismissibleScrim(state.root, WifiSheetCancelEvent, &state);
     lv_obj_t* sheet = CreateWifiPanel(state.root, WifiBounds{.x = 28, .y = 304, .width = 664, .height = 388}, 0x101c2cU,
                                       0x42607fU, 24);
     (void)CreateWifiLabel(sheet, "SAVED NETWORK", &lv_font_montserrat_18, 0x91a4bdU, 24, 20);

@@ -16,6 +16,7 @@ enum class EventType : uint16_t {
     kStop,
     kTimer,
     kTouch,
+    kKey,
 };
 
 enum class TouchPhase : uint8_t {
@@ -39,8 +40,8 @@ class TouchEvent final {
     [[nodiscard]] constexpr uint16_t pressure_per_mille() const { return pressure_per_mille_; }
 
    private:
-    constexpr TouchEvent(TimePoint timestamp, TouchPhase phase, uint32_t id, int32_t x, int32_t y,
-                         bool has_pressure, uint16_t pressure_per_mille)
+    constexpr TouchEvent(TimePoint timestamp, TouchPhase phase, uint32_t id, int32_t x, int32_t y, bool has_pressure,
+                         uint16_t pressure_per_mille)
         : timestamp_(timestamp),
           phase_(phase),
           id_(id),
@@ -56,6 +57,50 @@ class TouchEvent final {
     int32_t y_{};
     bool has_pressure_{};
     uint16_t pressure_per_mille_{};
+
+    friend class Application;
+    friend class Event;
+};
+
+enum class KeyCode : uint16_t {
+    kUp = 1,
+    kDown = 2,
+    kLeft = 3,
+    kRight = 4,
+    kConfirm = 5,
+    kBack = 6,
+    kMenu = 7,
+    kA = 8,
+    kB = 9,
+    kX = 10,
+    kY = 11,
+};
+
+enum class KeyPhase : uint8_t {
+    kDown,
+    kUp,
+    kRepeat,
+    kCancel,
+};
+
+class KeyEvent final {
+   public:
+    constexpr KeyEvent(const KeyEvent&) = default;
+    constexpr KeyEvent& operator=(const KeyEvent&) = default;
+
+    [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
+    [[nodiscard]] constexpr KeyCode code() const { return code_; }
+    [[nodiscard]] constexpr KeyPhase phase() const { return phase_; }
+    [[nodiscard]] constexpr uint32_t repeat_count() const { return repeat_count_; }
+
+   private:
+    constexpr KeyEvent(TimePoint timestamp, KeyCode code, KeyPhase phase, uint32_t repeat_count)
+        : timestamp_(timestamp), code_(code), phase_(phase), repeat_count_(repeat_count) {}
+
+    TimePoint timestamp_{};
+    KeyCode code_{KeyCode::kConfirm};
+    KeyPhase phase_{KeyPhase::kCancel};
+    uint32_t repeat_count_{};
 
     friend class Application;
     friend class Event;
@@ -99,6 +144,7 @@ class Event final {
     // The pointer remains valid until this Event is destroyed or reassigned.
     [[nodiscard]] const TimerEvent* TimerFrom(const Timer& source) const;
     [[nodiscard]] constexpr const TouchEvent* touch() const { return type_ == EventType::kTouch ? &touch_ : nullptr; }
+    [[nodiscard]] constexpr const KeyEvent* key() const { return type_ == EventType::kKey ? &key_ : nullptr; }
 
    private:
     [[nodiscard]] constexpr const TimerEvent* timer() const { return type_ == EventType::kTimer ? &timer_ : nullptr; }
@@ -113,10 +159,13 @@ class Event final {
     explicit constexpr Event(TouchEvent touch)
         : type_(EventType::kTouch), timestamp_(touch.timestamp()), touch_(touch) {}
 
+    explicit constexpr Event(KeyEvent key) : type_(EventType::kKey), timestamp_(key.timestamp()), key_(key) {}
+
     EventType type_{EventType::kUnknown};
     TimePoint timestamp_{};
     TimerEvent timer_{};
     TouchEvent touch_{TimePoint{}, TouchPhase::kCancel, 0U, 0, 0, false, 0U};
+    KeyEvent key_{TimePoint{}, KeyCode::kConfirm, KeyPhase::kCancel, 0U};
     friend class Application;
 };
 

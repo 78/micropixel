@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_hosted.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -21,7 +22,7 @@ constexpr char kNvsNamespace[] = "host_wifi";
 constexpr char kNvsStateKey[] = "state";
 constexpr uint32_t kStoredStateMagic = 0x57494649U;
 constexpr uint16_t kStoredStateVersion = 1U;
-constexpr uint8_t kReconnectAttemptLimit = 1U;
+constexpr uint8_t kReconnectAttemptLimit = 2U;
 constexpr int64_t kUserScanDiscoveryHoldoffUs = 20LL * 1000LL * 1000LL;
 constexpr std::array<int64_t, 4U> kDiscoveryBackoffUs = {
     60LL * 1000LL * 1000LL,
@@ -29,6 +30,8 @@ constexpr std::array<int64_t, 4U> kDiscoveryBackoffUs = {
     5LL * 60LL * 1000LL * 1000LL,
     15LL * 60LL * 1000LL * 1000LL,
 };
+constexpr size_t kScanRecordWorkspaceBytes =
+    sizeof(wifi_ap_record_t) * static_cast<size_t>(device::kMaxVisibleWifiNetworks);
 
 struct StoredProfile final {
     char ssid[device::kWifiSsidCapacity + 1U]{};
@@ -191,6 +194,8 @@ void LogCoprocessorInfo() {
 
 }  // namespace
 
+void WifiBackend::HeapCapsDeleter::operator()(std::byte* value) const { heap_caps_free(value); }
+
 std::expected<void, device::WifiError> WifiBackend::Initialize() {
     if (initialized_) {
         return {};
@@ -199,6 +204,16 @@ std::expected<void, device::WifiError> WifiBackend::Initialize() {
     if (mutex_ == nullptr) {
         return std::unexpected(device::WifiError::kOperationFailed);
     }
+    auto* scan_record_workspace =
+        static_cast<std::byte*>(heap_caps_calloc(1U, kScanRecordWorkspaceBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (scan_record_workspace == nullptr) {
+        scan_record_workspace =
+            static_cast<std::byte*>(heap_caps_calloc(1U, kScanRecordWorkspaceBytes, MALLOC_CAP_8BIT));
+    }
+    if (scan_record_workspace == nullptr) {
+        return std::unexpected(device::WifiError::kOperationFailed);
+    }
+    scan_record_workspace_.reset(scan_record_workspace);
     const esp_timer_create_args_t discovery_timer_args{
         .callback = DiscoveryTimerHandler,
         .arg = this,
@@ -834,9 +849,9 @@ void WifiBackend::HandleGotIp() {
 }
 
 void WifiBackend::HandleScanDone() {
-    std::array<wifi_ap_record_t, device::kMaxVisibleWifiNetworks> records{};
-    uint16_t count = static_cast<uint16_t>(records.size());
-    const esp_err_t status = esp_wifi_scan_get_ap_records(&count, records.data());
+    auto* records = reinterpret_cast<wifi_ap_record_t*>(scan_record_workspace_.get());
+    uint16_t count = static_cast<uint16_t>(device::kMaxVisibleWifiNetworks);
+    const esp_err_t status = records == nullptr ? ESP_ERR_NO_MEM : esp_wifi_scan_get_ap_records(&count, records);
     SavedProfile discovery_profile{};
     bool connect_discovery_candidate = false;
     bool start_next_discovery_channel = false;
@@ -848,7 +863,7 @@ void WifiBackend::HandleScanDone() {
         ScopedLock lock(mutex_);
         if (scan_purpose_ == ScanPurpose::kDiscovery) {
             if (status == ESP_OK) {
-                MergeDiscoveryScanResultsLocked(records.data(), count);
+                MergeDiscoveryScanResultsLocked(records, count);
             } else {
                 ESP_LOGW(kTag, "could not read passive discovery results: %s", esp_err_to_name(status));
             }
@@ -910,7 +925,7 @@ void WifiBackend::HandleScanDone() {
         } else if (scan_purpose_ == ScanPurpose::kUser) {
             snapshot_.scanning = false;
             if (status == ESP_OK) {
-                UpdateScanResultsLocked(records.data(), count);
+                UpdateScanResultsLocked(records, count);
             } else {
                 ESP_LOGW(kTag, "could not read active scan results: %s", esp_err_to_name(status));
             }

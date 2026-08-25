@@ -7,7 +7,8 @@
 ```text
                          ┌─ owns/initializes ─ Platform ─ implements ─ Device/System UI contracts
 FirmwareApp (组合根) ────┼─ creates ─ DeviceServices ── injects ─ AppRuntime
-                         └─ creates ─ SystemShell ─────── HostController
+                         ├─ creates ─ SystemShell ─────── HostController
+                         └─ creates ─ RemoteControlAgent ────────┘
                                                         │
                                                owns 0..1 AppSession
 ```
@@ -48,6 +49,9 @@ main/
 │   ├── system_settings_store.cpp
 │   ├── system_settings_store.hpp
 │   └── system_ui.hpp
+├── remote_control/
+│   ├── remote_control_agent.cpp
+│   └── remote_control_agent.hpp
 ├── conformance/
 │   ├── CMakeLists.txt
 │   ├── guest_test_hooks.cpp
@@ -80,6 +84,9 @@ main/
 │   │   ├── system_ui_adapter.hpp
 │   │   ├── board_hardware.cpp
 │   │   ├── board_hardware.hpp
+│   │   ├── icons/
+│   │   │   ├── wifi_status_icons.c
+│   │   │   └── wifi_status_icons.hpp
 │   │   ├── audio/
 │   │   │   └── synth_audio.cpp
 │   │   ├── input/
@@ -114,6 +121,8 @@ main/
     ├── runtime_limits.hpp
     ├── touch_event_bridge.cpp
     ├── touch_event_bridge.hpp
+    ├── key_event_bridge.cpp
+    ├── key_event_bridge.hpp
     ├── abi/
     │   ├── abi_bridge.h
     │   ├── guest_abi.cpp
@@ -128,6 +137,10 @@ main/
     │   ├── bundle_format.h
     │   ├── bundle_reader.c
     │   └── bundle_reader.h
+    ├── bundlefs/
+    │   ├── bundlefs.cpp
+    │   ├── bundlefs.h
+    │   └── bundlefs_format.h
     ├── resources/
     │   ├── bitmap_decoder.cpp
     │   ├── bitmap_decoder.hpp
@@ -153,7 +166,13 @@ main/
 ## 子目录职责
 
 - `runtime/abi/` 固定为 7 个文件。它包含 C ABI 声明、WAMR native symbol 表、参数适配、固定容量服务注册表和各服务 Endpoint；`ServiceHandler` 与注册表放在一起，避免为一个小抽象再增加文件。
-- `runtime/bundle/` 负责 Bundle v1 格式、只读映射、校验和 AOT payload 所有权。v1 使用显式长度的 64 字节 AppId、必需的 UTF-8 App 标题元数据，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h` 固定，目录调整不改变磁盘 ABI。
+- `runtime/bundle/` 负责 Bundle v1 解析、语义校验和 AOT payload 所有权。v1 使用显式长度的 64 字节
+  AppId、必需的 UTF-8 App 标题元数据，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h`
+  固定，目录调整不改变磁盘 ABI。
+- `runtime/bundlefs/` 是 24 MiB `app_store` 的底层文件系统。它以离散 64 KiB 数据块保存不可变 Bundle，
+  使用四个 4 KiB Catalog Bank 环形提交，提供不透明的 read/mmap/replace/remove 接口。Catalog 不使用
+  NVS，不扫描或安装预置 App；完整格式见
+  [`docs/design/bundlefs.zh-CN.md`](../../../docs/design/bundlefs.zh-CN.md)。
 - `runtime/resources/` 负责异步资源请求、图片解码和 Bitmap handle/PSRAM 配额。Guest PNG 由 libpng
   逐行直接写入最终 ARGB8888 PSRAM buffer，避免整图 inflate 临时副本和第二遍整图颜色转换干扰显示
   framebuffer scanout。
@@ -162,13 +181,21 @@ main/
 - `runtime/app_runtime.*` 持有长驻 WAMR，并同步创建最多一个 `AppSession`；`runtime/app_session.*` 持有一次
   Guest 的 Bundle、module、instance、exec-env 与 `GuestContext` 销毁边界。
 - `host_ui/` 是 Host 原生 App Hall/状态层的控制边界；具体绘制仍由所选 Platform 的 `SystemUiBackend` 完成，FPS 开关、亮度与音量保存到独立的 `sys_store` NVS。
+- `remote_control/` 是 Host 拥有的远程调试 Agent：独立任务维护 HTTP/3 控制流和有界命令队列，设备
+  UUID/credential 与 Remote Control 开关分别保存在 `sys_store/control`；它只向 System Shell 发布快照，
+  不从网络回调直接调用 WAMR、LVGL 或板级驱动。发布配置必须提供匹配 Control 主机名的 DER CA
+  base64 和可达 NTP 服务；设备先建立可信 wall clock，再校验证书链/用途/有效期/主机名、TLS 1.3
+  CertificateVerify 与 Finished。开发 bypass 只跳过证书链、有效期和主机名。
 - `app_controller.*` 在单独 pthread 上运行唯一 Guest，并把 `NotRunning / Starting / Foreground / Suspending /
   Suspended / Resuming / Stopping` 内部状态收敛为同步 Host 命令；Guest SDK 不暴露暂时无用的 lifecycle callback。
 - Resume/Stop 通过两个 typed Core Event 暴露给 Guest；正常切换先协作 Stop，500ms 超时才强制 terminate，
   真实 trap 的 WAMR 调用栈诊断保持开启。
 - App Hall 只 mmap 每个 Bundle 的压缩 PNG 封面，并逐行解码、等比裁切到当前卡片尺寸；无论作者提供
-  多大的源图，Host 都只缓存一份 218x218 RGB888 thumbnail。唯一挂起 App 的卡片改用窗口截图。状态层使用
-  LVGL primitive 和单次半透明合成；亮度、主音量及 FPS/聚合 CPU 小蒙层均由 Host 控制。
+  多大的源图，Host 都只缓存一份 202x202 RGB888 thumbnail。唯一挂起 App 的卡片改用窗口截图，并由
+  ESP32-P4 PPA 完成 720x720 ↔ 卡片区域的硬件缩放动画；全尺寸截图只在切换期间存在，不做软件缩放
+  fallback。大厅顶部由 Host 显示基于 LVGL 内置 Wi-Fi 字形生成的 RSSI 分级图标和 LVGL 多档电池图标；
+  蜂窝信号使用 Host 绘制的分级信号柱，真实蜂窝后端可用前不显示。状态层使用 LVGL primitive 和单次半透明合成；亮度、主音量及居中的 FPS/聚合 CPU 小蒙层
+  均由 Host 控制。
 - Wi-Fi 冷启动和掉线发现使用被动扫描，只按已保存网络的信道去重后逐个检查，并优先检查上次连接网络的
   信道；发现候选后才连接。已连接链路掉线后只做一次快速重连，失败后立即进入被动发现，未发现候选时按
   1、2、5、15 分钟退避。Wi-Fi 首页只管理开关和已保存网络；“Connect to New Wi-Fi”子页才执行主动全信道
@@ -176,7 +203,7 @@ main/
   后等待 10 秒再开始下一轮，已连接时使用驱动的 background scan。后端状态变化
   通过非阻塞、可合并的 Host 事件主动更新 App Hall、系统菜单、Status Layer 和 Wi-Fi 页面；只有扫描间隔
   与性能采样等真正的周期任务使用定时等待。
-- `platform/graphics/` 是跨板级图形协议校验；`platform/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；Battery backend 复用板级 I²C 总线读取 BQ27220。
+- `platform/graphics/` 是跨板级图形协议校验；`platform/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；Battery backend 复用板级 I²C 总线读取 BQ27220 电量和充电电流，并通过 TCA9555 的 USB / 无线充电检测输入及共享中断报告外部电源状态。
 - `platform/null/` 提供没有真实板级设备时的构建实现。
 
 只在 `device/`、`runtime/`、`platform/`、`conformance/` 这些已有子系统设置独立 CMake 清单；当前很小的

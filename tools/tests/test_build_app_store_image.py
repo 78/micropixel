@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
-
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 
@@ -17,153 +17,90 @@ STORE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(STORE)
 
 
-def make_bundle(
-    path: Path,
-    app_id: str,
-    payload: bytes = b"AOT!",
-    display_name: str = "Test App",
-    include_metadata: bool = True,
-) -> Path:
-    bundle_size = STORE.EXTENT_ALIGNMENT
-    metadata_offset = 256
-    section_offset = 320
-    app_id_bytes = app_id.encode("ascii")
-    app_id_field = app_id_bytes + bytes(64 - len(app_id_bytes))
-    sections = [STORE.SECTION.pack(
-        STORE.KIND_AOT,
-        0,
-        section_offset,
-        len(payload),
-        STORE.fnv1a32(payload),
-        STORE.FORMAT_AOT_RELOCATABLE,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    )]
-    display_name_bytes = display_name.encode("utf-8")
-    if include_metadata:
-        sections.append(STORE.SECTION.pack(
-            STORE.KIND_APP_METADATA,
-            0,
-            metadata_offset,
-            len(display_name_bytes),
-            STORE.fnv1a32(display_name_bytes),
-            STORE.FORMAT_UTF8,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ))
-    header_without_hash = STORE.HEADER.pack(
-        STORE.MAGIC,
-        STORE.VERSION,
-        STORE.HEADER_SIZE,
-        bundle_size,
-        STORE.HEADER_SIZE,
-        app_id_field,
-        len(app_id_bytes),
-        len(sections),
-        STORE.FRAMEWORK_ABI_VERSION,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    )
-    header = STORE.HEADER.pack(
-        STORE.MAGIC,
-        STORE.VERSION,
-        STORE.HEADER_SIZE,
-        bundle_size,
-        STORE.HEADER_SIZE,
-        app_id_field,
-        len(app_id_bytes),
-        len(sections),
-        STORE.FRAMEWORK_ABI_VERSION,
-        0,
-        STORE.fnv1a32(header_without_hash),
-        0,
-        0,
-        0,
-        0,
-        0,
-    )
-    image = bytearray(bundle_size)
-    image[: STORE.HEADER_SIZE] = header
-    for index, section in enumerate(sections):
-        begin = STORE.HEADER_SIZE + index * STORE.SECTION.size
-        image[begin : begin + STORE.SECTION.size] = section
-    if include_metadata:
-        image[metadata_offset : metadata_offset + len(display_name_bytes)] = display_name_bytes
-    image[section_offset : section_offset + len(payload)] = payload
-    path.write_bytes(image)
-    return path
+class BundleFsImageTest(unittest.TestCase):
+    def test_empty_image_contains_one_committed_bank(self) -> None:
+        image = STORE.build_empty_bundlefs()
 
+        self.assertEqual(len(image), STORE.METADATA_SIZE)
+        fields = STORE.CATALOG_HEADER.unpack_from(image)
+        self.assertEqual(fields[0], STORE.CATALOG_MAGIC)
+        self.assertEqual(fields[1], STORE.FORMAT_VERSION)
+        self.assertEqual(fields[2], STORE.HEADER_SIZE)
+        self.assertEqual(fields[3], STORE.BANK_SIZE)
+        self.assertEqual(fields[4], 1)
+        self.assertEqual(fields[5], 0)
+        self.assertEqual(fields[6], STORE.BANK_COUNT)
+        self.assertEqual(fields[7], STORE.BANK_SIZE)
+        self.assertEqual(fields[8], STORE.METADATA_SIZE)
+        self.assertEqual(fields[9], STORE.DATA_OFFSET)
+        self.assertEqual(fields[10], STORE.DATA_BLOCK_SIZE)
+        self.assertEqual(fields[11], STORE.APP_STORE_SIZE)
+        self.assertEqual(fields[12], 383)
+        self.assertEqual(struct.unpack_from("<I", image, STORE.COMMIT_OFFSET)[0], STORE.COMMIT_MARKER)
+        self.assertEqual(image[STORE.BANK_SIZE :], b"\xff" * (STORE.METADATA_SIZE - STORE.BANK_SIZE))
 
-class AppStoreImageTest(unittest.TestCase):
-    def test_three_bundles_are_sequential_and_terminated(self) -> None:
+    def test_bank_checksum_covers_erased_commit_marker(self) -> None:
+        image = bytearray(STORE.build_empty_bundlefs())
+        expected = struct.unpack_from("<I", image, STORE.CHECKSUM_OFFSET)[0]
+        struct.pack_into("<I", image, STORE.CHECKSUM_OFFSET, 0)
+        struct.pack_into("<I", image, STORE.COMMIT_OFFSET, 0xFFFFFFFF)
+        self.assertEqual(zlib.crc32(image[: STORE.BANK_SIZE]) & 0xFFFFFFFF, expected)
+
+    def test_geometry_uses_four_banks_without_slots(self) -> None:
+        self.assertEqual(STORE.BANK_COUNT, 4)
+        self.assertEqual(STORE.BANK_SIZE, 4096)
+        self.assertEqual(STORE.DATA_OFFSET, 65536)
+        self.assertEqual(STORE.DATA_BLOCK_COUNT, 383)
+        self.assertFalse(hasattr(STORE, "SLOT_SIZE"))
+
+    def test_seeded_image_contains_bundle_catalog_and_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            first = make_bundle(root / "blocks.bin", "micropixel.blocks")
-            second = make_bundle(root / "snake.bin", "micropixel.snake")
-            third = make_bundle(root / "demo.bin", "micropixel.demo")
-            image = STORE.build_app_store([first, second, third])
-        self.assertEqual(len(image), 3 * STORE.EXTENT_ALIGNMENT + STORE.TERMINATOR_SIZE)
-        self.assertEqual(image[:8], STORE.MAGIC)
-        self.assertEqual(image[STORE.EXTENT_ALIGNMENT : STORE.EXTENT_ALIGNMENT + 8], STORE.MAGIC)
-        self.assertEqual(image[2 * STORE.EXTENT_ALIGNMENT : 2 * STORE.EXTENT_ALIGNMENT + 8], STORE.MAGIC)
-        self.assertEqual(image[-STORE.TERMINATOR_SIZE :], bytes([0xFF]) * STORE.TERMINATOR_SIZE)
+            path = Path(directory) / "demo.bundle.bin"
+            data = bytearray(STORE.DATA_BLOCK_SIZE)
+            STORE.BUNDLE_HEADER.pack_into(
+                data,
+                0,
+                STORE.BUNDLE_MAGIC,
+                STORE.BUNDLE_VERSION,
+                STORE.BUNDLE_HEADER_SIZE,
+                len(data),
+                STORE.BUNDLE_HEADER_SIZE,
+                b"demo" + bytes(60),
+                4,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+            path.write_bytes(data)
 
-    def test_duplicate_app_id_is_rejected(self) -> None:
+            image = STORE.build_bundlefs([path])
+            fields = STORE.CATALOG_HEADER.unpack_from(image)
+            self.assertEqual(fields[13:16], (1, 1, 1))
+            entry = image[STORE.CATALOG_ENTRIES_OFFSET : STORE.CATALOG_ENTRIES_OFFSET + STORE.CATALOG_ENTRY_SIZE]
+            self.assertEqual(entry[:5], b"demo\0")
+            self.assertEqual(struct.unpack_from("<IIHH", entry, 68), (len(data),
+                             int.from_bytes(hashlib.sha256(data).digest()[:4], "big"), 0, 1))
+            self.assertEqual(entry[80:112], hashlib.sha256(data).digest())
+            self.assertEqual(image[STORE.DATA_OFFSET:], data)
+
+    def test_seeded_image_rejects_duplicate_app_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            first = make_bundle(root / "first.bin", "micropixel.same")
-            second = make_bundle(root / "second.bin", "micropixel.same")
+            paths = [Path(directory) / "first.bundle.bin", Path(directory) / "second.bundle.bin"]
+            for path in paths:
+                data = bytearray(STORE.DATA_BLOCK_SIZE)
+                STORE.BUNDLE_HEADER.pack_into(
+                    data, 0, STORE.BUNDLE_MAGIC, STORE.BUNDLE_VERSION, STORE.BUNDLE_HEADER_SIZE, len(data),
+                    STORE.BUNDLE_HEADER_SIZE, b"same" + bytes(60), 4, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+                )
+                path.write_bytes(data)
             with self.assertRaisesRegex(ValueError, "Duplicate AppId"):
-                STORE.build_app_store([first, second])
-
-    def test_display_name_is_read_from_metadata(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = make_bundle(Path(directory) / "named.bin", "micropixel.named", display_name="Named App")
-            app_id, display_name, bundle_size = STORE.bundle_identity(bundle, bundle.read_bytes())
-        self.assertEqual(app_id, "micropixel.named")
-        self.assertEqual(display_name, "Named App")
-        self.assertEqual(bundle_size, STORE.EXTENT_ALIGNMENT)
-
-    def test_missing_display_name_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = make_bundle(Path(directory) / "unnamed.bin", "micropixel.unnamed", include_metadata=False)
-            with self.assertRaisesRegex(ValueError, "missing.*App metadata"):
-                STORE.build_app_store([bundle])
-
-    def test_more_than_hall_capacity_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bundles = [make_bundle(root / f"app-{index}.bin", f"micropixel.app{index}") for index in range(4)]
-            with self.assertRaisesRegex(ValueError, "between 1 and 3"):
-                STORE.build_app_store(bundles)
-
-    def test_invalid_app_id_is_rejected_before_flash(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = make_bundle(Path(directory) / "bad.bin", "micropixel.bad!")
-            with self.assertRaisesRegex(ValueError, "Invalid AppId characters"):
-                STORE.build_app_store([bundle])
-
-    def test_corrupt_section_is_rejected_before_flash(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = make_bundle(Path(directory) / "corrupt.bin", "micropixel.corrupt")
-            data = bytearray(bundle.read_bytes())
-            data[320] ^= 0xFF
-            bundle.write_bytes(data)
-            with self.assertRaisesRegex(ValueError, "section 0 hash mismatch"):
-                STORE.build_app_store([bundle])
+                STORE.build_bundlefs(paths)
 
 
 if __name__ == "__main__":

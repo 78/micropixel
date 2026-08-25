@@ -11,6 +11,8 @@
 #define MICROPIXEL_MAX_TOUCH_POINTS 5U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 0U
+#define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
+#define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
 #define MICROPIXEL_GRAPHICS_COMMAND_MAGIC 0x4652474dU
 #define MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES 4096U
 #define MICROPIXEL_GRAPHICS_MAX_COMMANDS 128U
@@ -404,7 +406,29 @@ typedef enum micropixel_touch_phase {
 
 typedef enum micropixel_input_capability {
     MICROPIXEL_INPUT_CAP_PRESSURE = 1U << 0U,
+    MICROPIXEL_INPUT_CAP_KEY_EVENTS = 1U << 1U,
 } micropixel_input_capability_t;
+
+typedef enum micropixel_key_code {
+    MICROPIXEL_KEY_UP = 1,
+    MICROPIXEL_KEY_DOWN = 2,
+    MICROPIXEL_KEY_LEFT = 3,
+    MICROPIXEL_KEY_RIGHT = 4,
+    MICROPIXEL_KEY_CONFIRM = 5,
+    MICROPIXEL_KEY_BACK = 6,
+    MICROPIXEL_KEY_MENU = 7,
+    MICROPIXEL_KEY_A = 8,
+    MICROPIXEL_KEY_B = 9,
+    MICROPIXEL_KEY_X = 10,
+    MICROPIXEL_KEY_Y = 11,
+} micropixel_key_code_t;
+
+typedef enum micropixel_key_phase {
+    MICROPIXEL_KEY_DOWN_PHASE = 1,
+    MICROPIXEL_KEY_UP_PHASE = 2,
+    MICROPIXEL_KEY_REPEAT_PHASE = 3,
+    MICROPIXEL_KEY_CANCEL_PHASE = 4,
+} micropixel_key_phase_t;
 
 typedef struct micropixel_input_info {
     uint16_t size;
@@ -430,6 +454,7 @@ typedef enum micropixel_timer_event_id {
 
 typedef enum micropixel_input_event_id {
     MICROPIXEL_INPUT_EVENT_TOUCH = 1,
+    MICROPIXEL_INPUT_EVENT_KEY = 2,
 } micropixel_input_event_id_t;
 
 typedef struct micropixel_timer_event_payload {
@@ -446,6 +471,14 @@ typedef struct micropixel_touch_event_payload {
     uint16_t phase;
     uint32_t reserved0;
 } micropixel_touch_event_payload_t;
+
+typedef struct micropixel_key_event_payload {
+    uint16_t code;
+    uint16_t phase;
+    uint32_t repeat_count;
+    uint32_t modifiers;
+    uint32_t reserved0;
+} micropixel_key_event_payload_t;
 
 /* Fixed-size envelope. Event IDs are scoped by service_id. */
 typedef struct micropixel_event {
@@ -464,6 +497,7 @@ typedef struct micropixel_event {
 static_assert(sizeof(micropixel_event_t) == 48U, "micropixel_event_t ABI size changed");
 static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
+static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_graphics_info_t) == 32U, "micropixel_graphics_info_t ABI size changed");
 static_assert(sizeof(micropixel_graphics_command_header_t) == 16U,
               "micropixel_graphics_command_header_t ABI size changed");
@@ -502,6 +536,7 @@ static_assert(sizeof(micropixel_random_u32_response_t) == 8U, "micropixel_random
 _Static_assert(sizeof(micropixel_event_t) == 48U, "micropixel_event_t ABI size changed");
 _Static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
+_Static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_graphics_info_t) == 32U, "micropixel_graphics_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_graphics_command_header_t) == 16U,
                "micropixel_graphics_command_header_t ABI size changed");

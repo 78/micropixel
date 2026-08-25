@@ -21,7 +21,7 @@ class SystemShell final {
     ~SystemShell();
 
     [[nodiscard]] std::expected<void, SystemUiError> ShowHall(const HallModel& model);
-    void UpdateHallWifi(const HallWifiModel& model);
+    void UpdateHallStatusBar(const HallStatusBarModel& model);
     [[nodiscard]] std::optional<SystemUiAction> PollAction(TickType_t timeout);
     void LeaveHall();
     [[nodiscard]] std::expected<void, SystemUiError> RestoreGuestView();
@@ -29,12 +29,17 @@ class SystemShell final {
     void StopWatchingGuestActions();
     [[nodiscard]] std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame(uint32_t hall_app_index,
                                                                                  uint64_t trigger_timestamp_us);
+    [[nodiscard]] std::expected<ScreenCapture, SystemUiError> CaptureScreenJpeg();
     void ReleaseGuestSnapshot();
     [[nodiscard]] std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel& model);
     void UpdateSystemMenu(const SystemMenuModel& model);
     void LeaveSystemMenu();
     [[nodiscard]] std::expected<void, SystemUiError> ShowSystemInformation(const SystemInformationModel& model);
+    void UpdateSystemInformation(const SystemInformationModel& model);
     void LeaveSystemInformation();
+    [[nodiscard]] std::expected<void, SystemUiError> ShowRemoteControl(const RemoteControlModel& model);
+    void UpdateRemoteControl(const RemoteControlModel& model);
+    void LeaveRemoteControl();
     [[nodiscard]] std::expected<void, SystemUiError> ShowAppManagement(const AppManagementModel& model);
     void LeaveAppManagement();
     [[nodiscard]] std::expected<void, SystemUiError> ShowWifiSettings(const WifiSettingsModel& model);
@@ -48,12 +53,14 @@ class SystemShell final {
     void ApplyBrightness(uint8_t percent);
     void ApplyVolume(uint8_t percent);
     void NotifyWifiStateChanged();
+    void NotifyBatteryStateChanged();
 
    private:
     static constexpr UBaseType_t kActionQueueCapacity = 8U;
 
     static void ReceiveAction(void* context, const SystemUiAction& action);
     void QueuePendingWifiStateChange();
+    void QueuePendingBatteryStateChange();
     void ResetActionQueue();
 
     SystemUiBackend& ui_;
@@ -62,6 +69,8 @@ class SystemShell final {
     QueueHandle_t action_queue_{};
     std::atomic_bool wifi_state_change_pending_{};
     std::atomic_bool wifi_state_change_queued_{};
+    std::atomic_bool battery_state_change_pending_{};
+    std::atomic_bool battery_state_change_queued_{};
 };
 
 }  // namespace micropixel::host_ui

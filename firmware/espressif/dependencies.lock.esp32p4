@@ -13,6 +13,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 4.2.0
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
   espressif/cmake_utilities:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
@@ -293,6 +303,7 @@ dependencies:
     version: 9.5.0
 direct_dependencies:
 - espressif/button
+- espressif/cjson
 - espressif/esp_hosted
 - espressif/esp_lcd_touch_gt911
 - espressif/esp_lvgl_adapter
@@ -302,6 +313,6 @@ direct_dependencies:
 - espressif/libpng
 - idf
 - lvgl/lvgl
-manifest_hash: 02a07c8740ea586275eb876ce1f75d19549ed9a8efa222e40e2e99f15af003fb
+manifest_hash: b614d81ace094fb6c457f82d7ba3e025ce90415fa10bf64e73d847a61c3adf95
 target: esp32p4
 version: 3.0.0

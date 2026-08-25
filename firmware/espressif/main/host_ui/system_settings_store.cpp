@@ -13,8 +13,11 @@ namespace {
 constexpr char kTag[] = "micropixel_settings";
 constexpr char kPartition[] = "sys_store";
 constexpr char kNamespace[] = "system";
+constexpr char kControlNamespace[] = "control";
 constexpr char kSettingsKey[] = "ui";
+constexpr char kControlSettingsKey[] = "settings";
 constexpr uint8_t kSettingsVersion = 1U;
+constexpr uint8_t kControlSettingsVersion = 1U;
 constexpr uint8_t kPerformanceOverlayFlag = 1U << 0U;
 
 struct SettingsRecord final {
@@ -26,6 +29,14 @@ struct SettingsRecord final {
 };
 
 static_assert(sizeof(SettingsRecord) == 8U, "System settings v1 record size changed");
+
+struct ControlSettingsRecord final {
+    uint8_t version{};
+    uint8_t enabled{};
+    uint8_t reserved[6]{};
+};
+
+static_assert(sizeof(ControlSettingsRecord) == 8U, "Remote Control settings v1 record size changed");
 
 bool ValidRecord(const SettingsRecord& record) {
     if (record.version != kSettingsVersion || record.brightness_percent > 100U || record.volume_percent > 100U ||
@@ -40,16 +51,31 @@ bool ValidRecord(const SettingsRecord& record) {
     return true;
 }
 
+bool ValidControlRecord(const ControlSettingsRecord& record) {
+    if (record.version != kControlSettingsVersion || record.enabled > 1U) {
+        return false;
+    }
+    for (uint8_t byte : record.reserved) {
+        if (byte != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 SystemSettingsStore::~SystemSettingsStore() {
+    if (control_handle_ != 0U) {
+        nvs_close(control_handle_);
+    }
     if (handle_ != 0U) {
         nvs_close(handle_);
     }
 }
 
 bool SystemSettingsStore::Initialize() {
-    if (handle_ != 0U) {
+    if (handle_ != 0U && control_handle_ != 0U) {
         return true;
     }
     esp_err_t error = nvs_flash_init_partition(kPartition);
@@ -68,6 +94,14 @@ bool SystemSettingsStore::Initialize() {
     if (error != ESP_OK) {
         handle_ = 0U;
         ESP_LOGE(kTag, "unable to open Host settings namespace: %s", esp_err_to_name(error));
+        return false;
+    }
+    error = nvs_open_from_partition(kPartition, kControlNamespace, NVS_READWRITE, &control_handle_);
+    if (error != ESP_OK) {
+        nvs_close(handle_);
+        handle_ = 0U;
+        control_handle_ = 0U;
+        ESP_LOGE(kTag, "unable to open Remote Control settings namespace: %s", esp_err_to_name(error));
         return false;
     }
     ESP_LOGI(kTag, "Host system settings ready in %s", kPartition);
@@ -123,6 +157,51 @@ bool SystemSettingsStore::Save(const StatusLayerModel& model) const {
     ESP_LOGI(kTag, "saved Host settings: brightness=%u volume=%u performance=%s",
              static_cast<unsigned>(model.brightness_percent), static_cast<unsigned>(model.volume_percent),
              model.performance_overlay_enabled ? "on" : "off");
+    return true;
+}
+
+bool SystemSettingsStore::LoadRemoteControl(RemoteControlModel& model) const {
+    if (control_handle_ == 0U) {
+        return false;
+    }
+    size_t size = 0U;
+    esp_err_t error = nvs_get_blob(control_handle_, kControlSettingsKey, nullptr, &size);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(kTag, "no saved Remote Control settings; using defaults");
+        return true;
+    }
+    if (error != ESP_OK || size != sizeof(ControlSettingsRecord)) {
+        ESP_LOGW(kTag, "ignored unreadable Remote Control settings record");
+        return false;
+    }
+    ControlSettingsRecord record{};
+    error = nvs_get_blob(control_handle_, kControlSettingsKey, &record, &size);
+    if (error != ESP_OK || size != sizeof(record) || !ValidControlRecord(record)) {
+        ESP_LOGW(kTag, "ignored invalid Remote Control settings v1 record");
+        return false;
+    }
+    model.enabled = record.enabled != 0U;
+    model.connection_state =
+        model.enabled ? RemoteControlConnectionState::kWaitingForNetwork : RemoteControlConnectionState::kDisabled;
+    ESP_LOGI(kTag, "restored Remote Control setting: enabled=%s", model.enabled ? "yes" : "no");
+    return true;
+}
+
+bool SystemSettingsStore::SaveRemoteControl(const RemoteControlModel& model) const {
+    if (control_handle_ == 0U) {
+        return false;
+    }
+    const ControlSettingsRecord record{.version = kControlSettingsVersion,
+                                       .enabled = static_cast<uint8_t>(model.enabled ? 1U : 0U)};
+    esp_err_t error = nvs_set_blob(control_handle_, kControlSettingsKey, &record, sizeof(record));
+    if (error == ESP_OK) {
+        error = nvs_commit(control_handle_);
+    }
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "failed to persist Remote Control settings: %s", esp_err_to_name(error));
+        return false;
+    }
+    ESP_LOGI(kTag, "saved Remote Control setting: enabled=%s", model.enabled ? "yes" : "no");
     return true;
 }
 

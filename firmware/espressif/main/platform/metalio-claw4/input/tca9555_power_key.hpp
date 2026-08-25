@@ -16,7 +16,10 @@ namespace micropixel::platform::metalio_claw4 {
 
 class Tca9555PowerKey final {
    public:
+    using PowerInputChangeSink = void (*)(void* context);
+
     [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander);
+    void SetPowerInputChangeSink(PowerInputChangeSink sink, void* context);
 
    private:
     struct DriverContext final {
@@ -45,7 +48,11 @@ class Tca9555PowerKey final {
     button_handle_t button_{};
     uint32_t read_error_count_{};
     uint8_t last_key_level_{BUTTON_INACTIVE};
+    uint8_t last_power_inputs_{};
+    PowerInputChangeSink power_input_change_sink_{};
+    void* power_input_change_context_{};
     bool raw_level_known_{};
+    bool power_inputs_known_{};
     bool isr_registered_{};
     bool initialized_{};
 };

@@ -90,7 +90,7 @@ int32_t Gt911Input::GetInfo(micropixel_input_info_t& info) {
     }
     info = {};
     info.size = sizeof(info);
-    info.interface_major = 1U;
+    info.interface_major = MICROPIXEL_INPUT_INTERFACE_MAJOR;
     info.interface_minor = 0U;
     /* GT911 reports contact area/strength, not calibrated touch pressure. */
     info.capabilities = 0U;
@@ -139,6 +139,15 @@ void Gt911Input::ClearSmokeUi() {
 }
 
 void Gt911Input::InjectTouchForCapture(const device::TouchSample& sample) { Emit(sample); }
+
+bool Gt911Input::InjectTouch(const device::TouchSample& sample) {
+    if (!Available() || sample.x < 0 || sample.y < 0 || sample.x >= width_ || sample.y >= height_ ||
+        sample.pressure_per_mille > 1000U) {
+        return false;
+    }
+    Emit(sample);
+    return true;
+}
 
 void Gt911Input::Emit(const device::TouchSample& sample) {
     device::TouchSink sink = nullptr;

@@ -2,8 +2,10 @@
 #define MICROPIXEL_PLATFORM_METALIO_CLAW4_WIFI_BACKEND_HPP
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <memory>
 #include <string_view>
 
 #include "device/wifi.hpp"
@@ -31,6 +33,10 @@ class WifiBackend final : public device::WifiBackend {
     [[nodiscard]] std::expected<void, device::WifiError> Forget(std::string_view ssid) override;
 
    private:
+    struct HeapCapsDeleter final {
+        void operator()(std::byte* value) const;
+    };
+
     enum class ScanPurpose : uint8_t {
         kNone,
         kDiscovery,
@@ -81,6 +87,7 @@ class WifiBackend final : public device::WifiBackend {
     esp_netif_t* station_netif_{};
     esp_event_handler_instance_t wifi_event_instance_{};
     esp_event_handler_instance_t ip_event_instance_{};
+    std::unique_ptr<std::byte, HeapCapsDeleter> scan_record_workspace_{};
     std::array<SavedProfile, device::kMaxSavedWifiNetworks> profiles_{};
     SavedProfile pending_profile_{};
     std::array<ScanResult, device::kMaxVisibleWifiNetworks> scan_results_{};

@@ -33,7 +33,7 @@ int main() {
 
 - `app.timers().Every(period)` 创建周期 Timer；一次性 Timer 使用 `app.timers().After(delay)`；
 - `app.Run(handler)` 是 Guest 自己的串行事件循环，不是 Host 回调，也不创建 Guest 线程；
-- Timer、Touch、Resume、Stop 和未来 Event 全部进入同一个 handler；
+- Timer、Touch、Key、Resume、Stop 和未来 Event 全部进入同一个 handler；
 - Timer 通过 `event.TimerFrom(timer)` 匹配，资源身份和 capture 生命周期在代码中可见；
 - `Stop` 会先交给 handler，handler 返回后 `Run()` 返回，应用随后从 `main()` 返回；
 - SDK/Runtime 失败在发生点 panic，普通应用不写 `try`、`if (!result)` 或 ABI status 样板。
@@ -142,6 +142,9 @@ app.Run([&](const micropixel::Event& event) {
 
 `TouchEvent::x()/y()` 为 `int32_t`。只有 `InputInfo::supports_pressure()` 为 true 时，
 `TouchEvent::has_pressure()` 才为 true，且 `pressure_per_mille()` 的范围为 0..1000；GT911 返回不支持和 0。
+`InputInfo::supports_key_events()` 表示 Host 可以投递固定语义按键；它不承诺存在物理键盘。handler 可用
+`event.key()` 取得 `KeyEvent`，读取方向、Confirm、Back、Menu、A/B/X/Y 以及 Down、Up、Repeat、Cancel。
+只有 Repeat 的 `repeat_count()` 非零。
 日志完整支持 `Debug()`、`Info()`、`Warning()`、`Error()` 四个等级。
 
 ## Service 演进与 ABI 隔离
@@ -302,13 +305,15 @@ python3 tools/build_app_bundle.py \
 bash tools/build_guest_app_p4.sh path/to/app.cpp
 python3 tools/build_app_bundle.py --aot build/guest-p4/app.aot \
     --app-id vendor.app --output build/bundles/app.bundle.bin
-bash tools/flash_guest_p4.sh /dev/cu.usbmodemPORT build/bundles/app.bundle.bin
 ```
 
 默认在 `build/guest-p4/` 产生同名 `.wasm` 和 `.aot`，最终可烧录产物只有 App Bundle。构建脚本
 固定 Restricted C++23、警告即错误、共享 Wasm memory 和 AOT 回跳中断点。开发 profile 使用
 `-O1 -g` 并生成 AOT 调用栈；production `release` profile 使用 Clang `-O2` 和 WAMR AOT
 opt level 3。只有明确以体积优先时才使用 `MICROPIXEL_GUEST_PROFILE=size`（Clang `-Oz`）：
+
+USB 调试统一使用 `bash tools/p4.sh flash-apps` 写入 Blocks、Snake 和 Demo。自定义 Bundle 不再绕过
+安装事务直接覆写分区，应通过 Remote Control 安装。
 
 ```sh
 MICROPIXEL_GUEST_PROFILE=release \

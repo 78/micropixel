@@ -22,6 +22,10 @@ class SystemGestureRouter final : public device::InputBackend {
     [[nodiscard]] int32_t GetInfo(micropixel_input_info_t& info) override;
     void BindTouchSink(device::TouchSink sink, void* context) override;
     void UnbindTouchSink(void* context) override;
+    [[nodiscard]] bool InjectTouch(const device::TouchSample& sample) override;
+    void BindKeySink(device::KeySink sink, void* context) override;
+    void UnbindKeySink(void* context) override;
+    [[nodiscard]] bool InjectKey(const device::KeySample& sample) override;
 
     void BindSystemActionSink(SystemUiActionSink sink, void* context);
     void ClearSystemActionSink(void* context);
@@ -48,6 +52,7 @@ class SystemGestureRouter final : public device::InputBackend {
     static bool Receive(void* context, const device::TouchSample& sample);
     [[nodiscard]] bool Route(const device::TouchSample& sample);
     [[nodiscard]] bool Forward(const device::TouchSample& sample);
+    [[nodiscard]] bool ForwardKey(const device::KeySample& sample);
     void Emit(SystemUiActionType type, uint64_t timestamp_us);
     void ClearCandidate();
 
@@ -58,6 +63,9 @@ class SystemGestureRouter final : public device::InputBackend {
     device::TouchSink downstream_sink_{};
     void* downstream_context_{};
     uint32_t downstream_inflight_{};
+    device::KeySink key_sink_{};
+    void* key_context_{};
+    uint32_t key_inflight_{};
     SystemUiActionSink system_sink_{};
     void* system_context_{};
     Candidate candidate_{};

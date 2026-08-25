@@ -9,6 +9,7 @@ namespace {
 using micropixel::host_ui::AppManagementModel;
 using micropixel::host_ui::HallCoverModel;
 using micropixel::host_ui::HallModel;
+using micropixel::host_ui::RemoteControlModel;
 using micropixel::host_ui::StatusLayerModel;
 using micropixel::host_ui::SystemInformationModel;
 using micropixel::host_ui::SystemMenuModel;
@@ -35,7 +36,9 @@ class FakeSystemUi final : public SystemUiBackend {
         return {};
     }
 
-    void UpdateHallWifi(const micropixel::host_ui::HallWifiModel&) override { ++update_hall_wifi_calls; }
+    void UpdateHallStatusBar(const micropixel::host_ui::HallStatusBarModel&) override {
+        ++update_hall_status_bar_calls;
+    }
 
     void LeaveHall() override { ++leave_hall_calls; }
     std::expected<void, SystemUiError> RestoreGuestView() override { return {}; }
@@ -76,6 +79,16 @@ class FakeSystemUi final : public SystemUiBackend {
     }
 
     void LeaveSystemInformation() override { ++leave_system_information_calls; }
+
+    std::expected<void, SystemUiError> ShowRemoteControl(const RemoteControlModel&, SystemUiActionSink sink,
+                                                         void* context) override {
+        sink_ = sink;
+        context_ = context;
+        return {};
+    }
+
+    void UpdateRemoteControl(const RemoteControlModel&) override { ++update_remote_control_calls; }
+    void LeaveRemoteControl() override { ++leave_remote_control_calls; }
 
     std::expected<void, SystemUiError> ShowAppManagement(const AppManagementModel&, SystemUiActionSink sink,
                                                          void* context) override {
@@ -124,8 +137,10 @@ class FakeSystemUi final : public SystemUiBackend {
     uint32_t stop_watching_calls{};
     uint64_t status_open_trigger_us{};
     uint64_t status_close_trigger_us{};
-    uint32_t update_hall_wifi_calls{};
+    uint32_t update_hall_status_bar_calls{};
     uint32_t update_system_menu_calls{};
+    uint32_t update_remote_control_calls{};
+    uint32_t leave_remote_control_calls{};
     uint32_t leave_system_menu_calls{};
     uint32_t leave_system_information_calls{};
     uint32_t leave_app_management_calls{};
@@ -199,6 +214,15 @@ void SystemMenuActionsReachTheShell() {
     Check(ui.update_system_menu_calls == 1U, "system menu updates should reach the backend");
 }
 
+void HallStatusBarUpdatesReachTheShell() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render before a status-bar update");
+
+    shell.UpdateHallStatusBar(micropixel::host_ui::HallStatusBarModel{});
+    Check(ui.update_hall_status_bar_calls == 1U, "Hall status-bar updates should reach the backend");
+}
+
 void WifiStateNotificationsAreCoalescedAndSurviveScreenChanges() {
     FakeSystemUi ui;
     SystemShell shell(ui);
@@ -216,6 +240,26 @@ void WifiStateNotificationsAreCoalescedAndSurviveScreenChanges() {
     const auto preserved = shell.PollAction(0U);
     Check(preserved.has_value() && preserved->type == SystemUiActionType::kWifiStateChanged,
           "pending Wi-Fi notification should survive a screen queue reset");
+}
+
+void BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowStatusLayer(StatusLayerModel{}).has_value(), "status layer should render");
+
+    shell.NotifyBatteryStateChanged();
+    shell.NotifyBatteryStateChanged();
+    const auto coalesced = shell.PollAction(0U);
+    Check(coalesced.has_value() && coalesced->type == SystemUiActionType::kBatteryStateChanged,
+          "duplicate Battery state notifications should coalesce");
+    Check(!shell.PollAction(0U).has_value(), "coalesced Battery notification should only be queued once");
+
+    shell.NotifyBatteryStateChanged();
+    Check(shell.ShowStatusLayer(StatusLayerModel{}).has_value(),
+          "status layer should rerender after Battery notification");
+    const auto preserved = shell.PollAction(0U);
+    Check(preserved.has_value() && preserved->type == SystemUiActionType::kBatteryStateChanged,
+          "pending Battery notification should survive a screen queue reset");
 }
 
 void WifiActionsReachTheShell() {
@@ -245,11 +289,20 @@ void DetailScreenActionsReachTheShell() {
     Check(close_info.has_value() && close_info->type == SystemUiActionType::kCloseSystemInformation,
           "system information close should be retained");
 
+    Check(shell.ShowRemoteControl(RemoteControlModel{}).has_value(), "Remote Control should render");
+    ui.Emit({.type = SystemUiActionType::kSetRemoteControlEnabled, .value = 1U});
+    const auto enable_remote = shell.PollAction(0U);
+    Check(enable_remote.has_value() && enable_remote->type == SystemUiActionType::kSetRemoteControlEnabled &&
+              enable_remote->value == 1U,
+          "Remote Control actions should be retained");
+    shell.UpdateRemoteControl(RemoteControlModel{});
+    Check(ui.update_remote_control_calls == 1U, "Remote Control updates should reach the backend");
+
     Check(shell.ShowAppManagement(AppManagementModel{}).has_value(), "App Management should render");
-    ui.Emit({.type = SystemUiActionType::kLaunchManagedApp, .app_index = 1U});
+    ui.Emit({.type = SystemUiActionType::kLaunchInstalledApp, .app_index = 1U});
     const auto launch = shell.PollAction(0U);
-    Check(launch.has_value() && launch->type == SystemUiActionType::kLaunchManagedApp && launch->app_index == 1U,
-          "managed App launch should be retained");
+    Check(launch.has_value() && launch->type == SystemUiActionType::kLaunchInstalledApp && launch->app_index == 1U,
+          "installed App launch should be retained");
 }
 
 }  // namespace
@@ -258,9 +311,11 @@ int main() {
     DiscreteActionsRemainOrdered();
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
+    HallStatusBarUpdatesReachTheShell();
     WifiStateNotificationsAreCoalescedAndSurviveScreenChanges();
+    BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 6 cases\n";
+    std::cout << "system_shell tests passed: 8 cases\n";
     return 0;
 }

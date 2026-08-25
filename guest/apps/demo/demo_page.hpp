@@ -60,6 +60,7 @@ enum class PageId : uint8_t {
 };
 
 [[nodiscard]] micropixel::Timer CreateDemoTicker(micropixel::Application& app);
+[[nodiscard]] micropixel::Timer CreateResourceAtlasTicker(micropixel::Application& app);
 [[nodiscard]] micropixel::Texture LoadDemoAtlas(micropixel::Application& app);
 
 void TimerDemoEnter(DemoContext& context);

@@ -13,18 +13,21 @@ enum class AotPackageError {
     kOpenFailed,
 };
 
-constexpr uint32_t kMaxInstalledApps = 3U;
+constexpr uint32_t kMaxInstalledApps = 7U;
 
 struct InstalledApp final {
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id{};
     std::array<char, MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH + 1U> display_name{};
-    uint32_t store_offset{};
     uint32_t bundle_size{};
+    uint32_t content_id{};
+    bundlefs_file_t file{};
 };
 
 struct InstalledAppCatalog final {
     std::array<InstalledApp, kMaxInstalledApps> apps{};
     uint32_t count{};
+    uint32_t store_total_bytes{};
+    uint32_t store_used_bytes{};
 };
 
 [[nodiscard]] std::expected<InstalledAppCatalog, AotPackageError> ScanInstalledApps();
@@ -40,7 +43,7 @@ class LaunchAssetMapping final {
     LaunchAssetMapping& operator=(LaunchAssetMapping&& other) noexcept;
     ~LaunchAssetMapping();
 
-    [[nodiscard]] static std::expected<LaunchAssetMapping, AotPackageError> Open(uint32_t store_offset);
+    [[nodiscard]] static std::expected<LaunchAssetMapping, AotPackageError> Open(const bundlefs_file_t& file);
     [[nodiscard]] bool valid() const { return mapping_.mapping != nullptr; }  // NOLINT(readability-identifier-naming)
     [[nodiscard]] const micropixel_bundle_asset_view_t& asset() const {       // NOLINT(readability-identifier-naming)
         return mapping_.asset;
@@ -61,7 +64,7 @@ class AotPackage final {
     AotPackage& operator=(AotPackage&& other) noexcept;
     ~AotPackage();
 
-    [[nodiscard]] static std::expected<AotPackage, AotPackageError> Load(uint32_t store_offset);
+    [[nodiscard]] static std::expected<AotPackage, AotPackageError> Load(const bundlefs_file_t& file);
 
     [[nodiscard]] uint8_t* data() const;                        // NOLINT(readability-identifier-naming)
     [[nodiscard]] uint32_t size() const;                        // NOLINT(readability-identifier-naming)

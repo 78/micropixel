@@ -6,6 +6,7 @@
 #include "device/device_services.hpp"
 #include "esp_log.h"
 #include "runtime/abi/abi_bridge.h"
+#include "runtime/guest_log_sink.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
 
@@ -20,11 +21,13 @@ void CopyAppId(const char* source, std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX
 
 }  // namespace
 
-AppRuntime::AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex)
-    : devices_(devices), wamr_(std::move(wamr)), session_mutex_(session_mutex) {}
+AppRuntime::AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex,
+                       GuestLogSink* log_sink)
+    : devices_(devices), log_sink_(log_sink), wamr_(std::move(wamr)), session_mutex_(session_mutex) {}
 
 AppRuntime::AppRuntime(AppRuntime&& other) noexcept
     : devices_(other.devices_),
+      log_sink_(other.log_sink_),
       wamr_(std::move(other.wamr_)),
       session_mutex_(std::exchange(other.session_mutex_, nullptr)),
       active_session_(std::exchange(other.active_session_, nullptr)),
@@ -48,7 +51,8 @@ void AppRuntime::GiveSessionLock() {
     }
 }
 
-std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::DeviceServices& devices) {
+std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::DeviceServices& devices,
+                                                                  GuestLogSink* log_sink) {
     auto runtime_result = WamrRuntime::Initialize();
     if (!runtime_result) {
         ESP_LOGE(kTag, "%s", runtime_result.error().message.data());
@@ -69,7 +73,7 @@ std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::Device
         return std::unexpected(AppRuntimeError::kSynchronization);
     }
     ESP_LOGI(kTag, "process-wide WAMR runtime ready");
-    return AppRuntime(devices, std::move(wamr), session_mutex);
+    return AppRuntime(devices, std::move(wamr), session_mutex, log_sink);
 }
 
 AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink ready_sink, void* ready_context) {
@@ -91,7 +95,7 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
     GiveSessionLock();
 
     micropixel_log_heap_state("AppSession create begin");
-    auto session_result = AppSession::Create(devices_, app.store_offset);
+    auto session_result = AppSession::Create(devices_, app.file, log_sink_);
     if (!session_result) {
         if (session_result.error().app_id[0] != '\0') {
             outcome.app_id = session_result.error().app_id;

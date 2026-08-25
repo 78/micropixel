@@ -48,6 +48,12 @@ class StatusLayerUi final {
         int32_t height{};
     };
 
+    struct MetricObjects final {
+        lv_obj_t* panel{};
+        lv_obj_t* value_label{};
+        lv_obj_t* fill{};
+    };
+
     enum class TouchTarget : uint8_t {
         kNone,
         kScrim,
@@ -84,11 +90,12 @@ class StatusLayerUi final {
     void DrawQuickCard(lv_obj_t* root, TouchTarget target, const char* name, const char* detail, bool active,
                        bool available);
     void DrawSlider(lv_obj_t* root, TouchTarget target, const char* name, uint8_t percent, uint32_t color);
-    static void DrawMetric(lv_obj_t* root, int32_t x, const char* name, const char* value, uint8_t percent,
-                           uint32_t color);
+    [[nodiscard]] static MetricObjects DrawMetric(lv_obj_t* root, int32_t x, const char* name, const char* value,
+                                                  uint8_t percent, uint32_t color);
     void ResetObjectPointers();
     void UpdateQuickCardLocked(TouchTarget target, const char* detail, bool active, bool available);
     void UpdateControlsLocked(const host_ui::StatusLayerModel& model);
+    void UpdateSramMetricLocked(const host_ui::StatusLayerModel& model);
     void DrawLayerLocked(const host_ui::StatusLayerModel& model);
 
     lv_obj_t* status_layer_{};
@@ -99,9 +106,10 @@ class StatusLayerUi final {
     lv_obj_t* slider_value_labels_[2]{};
     lv_obj_t* slider_fills_[2]{};
     lv_obj_t* slider_knobs_[2]{};
+    lv_obj_t* sram_value_label_{};
+    lv_obj_t* sram_fill_{};
     lv_obj_t* performance_overlay_{};
-    lv_obj_t* performance_cpu_label_{};
-    lv_obj_t* performance_fps_label_{};
+    lv_obj_t* performance_label_{};
     host_ui::SystemUiActionSink action_sink_{};
     void* action_context_{};
     uint32_t touch_id_{};

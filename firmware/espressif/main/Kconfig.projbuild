@@ -165,15 +165,82 @@ menu "MicroPixel board backends"
             and retain a non-surface fallback.
 
     config MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
-        bool "Keep one RGB888 suspended-App thumbnail for the App Hall"
+        bool "Enable suspended-App snapshot transitions for the App Hall"
         depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND && SPIRAM
         select LV_USE_SNAPSHOT
         default y
         help
             Capture the paused Guest object tree into a transient 720x720
-            RGB888 PSRAM buffer, compact it once to one native 218x218 RGB888
-            Hall thumbnail, then release the full-size source. Only one
-            thumbnail can exist because only one Guest can be resident.
+            RGB888 PSRAM buffer. The ESP32-P4 PPA hardware scales it into one
+            native 202x202 Hall thumbnail and drives the fixed Guest-to-Hall
+            transition; the full-size source is released after the animation.
+            The retained Guest tree is captured again for the reverse Hall-to-
+            Guest transition. Only one thumbnail can persist because only one
+            Guest can be resident.
+
+endmenu
+
+menu "MicroPixel system time"
+
+    config MICROPIXEL_NTP_SERVER
+        string "Host NTP server"
+        default "pool.ntp.org"
+        help
+            SNTP hostname used to establish and periodically maintain the
+            Host system UTC whenever networking is available. System time is
+            independent of Remote Control. A product or isolated-LAN profile
+            may replace this with a reachable local time server.
+
+endmenu
+
+menu "MicroPixel Remote Control"
+
+    config MICROPIXEL_REMOTE_CONTROL_AGENT
+        bool "Enable the Host Remote Control agent"
+        default y
+        help
+            Build the Host-owned HTTP/3 control agent, stateless device
+            bootstrap, NVS identity, control stream, and temporary pairing
+            flow. The user-facing Remote Control switch remains off by
+            default and is stored separately in sys_store.
+
+    config MICROPIXEL_REMOTE_CONTROL_HOST
+        string "Control service hostname"
+        depends on MICROPIXEL_REMOTE_CONTROL_AGENT
+        default ""
+        help
+            DNS name or IP address used by the HTTP/3 client. Leave empty to
+            keep the agent offline until a development or product profile
+            supplies a service endpoint.
+
+    config MICROPIXEL_REMOTE_CONTROL_PORT
+        int "Control service HTTPS port"
+        depends on MICROPIXEL_REMOTE_CONTROL_AGENT
+        range 1 65535
+        default 8443
+
+    config MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS
+        bool "Allow an untrusted HTTP/3 certificate chain (development only)"
+        depends on MICROPIXEL_REMOTE_CONTROL_AGENT
+        default y
+        help
+            Skip certificate chain, validity-period and hostname verification
+            only. The TLS 1.3 CertificateVerify signature and Finished MAC
+            remain mandatory.
+            Keep this disabled in product builds. Enabling it is an explicit
+            development-only exception for a trusted local Control service.
+
+    config MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64
+        string "Trusted Control CA certificate (DER, base64)"
+        depends on MICROPIXEL_REMOTE_CONTROL_AGENT
+        default ""
+        help
+            Base64 of one DER-encoded CA trust anchor. The HTTP/3 client
+            validates the server chain, validity period and configured
+            hostname against this CA before accepting application keys. For
+            local Caddy, export its local root certificate to DER and encode
+            it as a single-line base64 value. Leave empty only when Remote
+            Control is offline or the development bypass above is enabled.
 
 endmenu
 
