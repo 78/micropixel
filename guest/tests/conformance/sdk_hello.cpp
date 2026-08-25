@@ -74,6 +74,10 @@ int main() {
 
     micropixel::Log log = app.log();
     micropixel::Log same_log = log;
+    const micropixel::Locale locale = app.localization().CurrentLocale();
+    if (locale.tag()[0] != 'e' || locale.tag()[1] != 'n' || locale.tag()[2] != '\0') {
+        return 17;
+    }
     same_log.Debug("sdk_hello: debug log available");
     same_log.Info("sdk_hello: startup ABI check, service views and SDK are ready");
     same_log.Warning("sdk_hello: warning log available");

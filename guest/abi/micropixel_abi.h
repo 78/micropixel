@@ -10,7 +10,7 @@
 #define MICROPIXEL_ABI_MAX_LOG_BYTES 1024U
 #define MICROPIXEL_MAX_TOUCH_POINTS 5U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
-#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 0U
+#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
 #define MICROPIXEL_GRAPHICS_COMMAND_MAGIC 0x4652474dU
@@ -30,6 +30,9 @@
 #define MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS 5000U
 #define MICROPIXEL_STORAGE_MAX_KEY_BYTES 15U
 #define MICROPIXEL_STORAGE_MAX_VALUE_BYTES 4096U
+#define MICROPIXEL_SYSTEM_INTERFACE_MAJOR 1U
+#define MICROPIXEL_SYSTEM_INTERFACE_MINOR 0U
+#define MICROPIXEL_LOCALE_TAG_MAX_BYTES 31U
 
 typedef enum micropixel_status {
     MICROPIXEL_STATUS_OK = 0,
@@ -59,6 +62,7 @@ typedef enum micropixel_service_id {
     MICROPIXEL_SERVICE_STORAGE = 2,
     MICROPIXEL_SERVICE_RESOURCE = 3,
     MICROPIXEL_SERVICE_RANDOM = 4,
+    MICROPIXEL_SERVICE_SYSTEM = 5,
     MICROPIXEL_SERVICE_GRAPHICS = 16,
     MICROPIXEL_SERVICE_INPUT = 17,
     MICROPIXEL_SERVICE_AUDIO = 18,
@@ -103,6 +107,16 @@ typedef enum micropixel_resource_method {
 typedef enum micropixel_random_method {
     MICROPIXEL_RANDOM_METHOD_GET_U32 = 1,
 } micropixel_random_method_t;
+
+typedef enum micropixel_system_method {
+    MICROPIXEL_SYSTEM_METHOD_GET_LOCALE = 1,
+} micropixel_system_method_t;
+
+typedef struct micropixel_system_locale_response {
+    uint16_t size;
+    uint16_t tag_length;
+    char tag[MICROPIXEL_LOCALE_TAG_MAX_BYTES + 1U];
+} micropixel_system_locale_response_t;
 
 typedef enum micropixel_graphics_method {
     MICROPIXEL_GRAPHICS_METHOD_GET_INFO = 1,
@@ -280,6 +294,13 @@ typedef enum micropixel_graphics_state_flag {
     MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE = 1U << 0U,
 } micropixel_graphics_state_flag_t;
 
+typedef enum micropixel_system_font_handle {
+    MICROPIXEL_SYSTEM_FONT_SMALL = 1,
+    MICROPIXEL_SYSTEM_FONT_MEDIUM = 2,
+    MICROPIXEL_SYSTEM_FONT_LARGE = 3,
+    MICROPIXEL_SYSTEM_FONT_TITLE = 4,
+} micropixel_system_font_handle_t;
+
 typedef struct micropixel_graphics_info {
     uint16_t size;
     uint16_t interface_major;
@@ -337,7 +358,7 @@ typedef struct micropixel_graphics_draw_text_command {
     int32_t x;
     int32_t y;
     uint32_t rgb888;
-    uint16_t font_size_px;
+    uint16_t font_handle;
     uint16_t text_length;
 } micropixel_graphics_draw_text_command_t;
 

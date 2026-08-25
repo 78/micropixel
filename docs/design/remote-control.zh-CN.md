@@ -17,7 +17,7 @@
 - 临时连接码由设备界面主动申请，短时、单次使用，并绑定当前设备和网站登录会话；
 - App 启停、截图、日志和输入注入通过 Host 内部的有界命令接口完成，网络任务不得直接调用 WAMR、LVGL 或板级驱动；
 - App 使用 24 MiB 可写 `app_store`；BundleFS 以离散 64 KiB 数据块写时复制，并在分区内用四个
-  4 KiB Catalog Bank 环形提交，生产发布仍需补齐 package 数字签名与断电压测；
+  16 KiB Catalog Bank 环形提交，生产发布仍需补齐 package 数字签名与断电压测；
 - Web Console 同时服务人类和开发 Agent，公开版本化 OpenAPI、Agent 指南、SDK、示例和可复现的 AOT/Package 构建环境。
 
 ## 2. 目标与非目标
@@ -60,7 +60,7 @@
 
 但以下能力目前仍不足：
 
-- Remote Control 页面、NVS 身份和 TLS peer 验证已有开发实现；生产配置在缺少 CA、匹配主机名或可信网络时间时默认拒绝连接，真机负向安全矩阵仍待验收；
+- Remote Control 页面、NVS 身份和 TLS peer 验证已有开发实现；生产配置在缺少 CA 或匹配主机名时默认拒绝连接，真机负向安全矩阵仍待验收；
 - 配对和 Job 只保存在单个 Fastify 进程内，尚无限流、审计历史和多实例恢复；
 - 截图 artifact、Guest 日志环形缓冲和触摸/语义按键序列已有首版，但 TTL、流式日志和物理抢占待补；
 - 当前开发版 App Store 已使用 BundleFS；离散块回收不依赖连续 extent GC，签名与真机断电恢复
@@ -325,7 +325,7 @@ Disabled
        -> Online -> Backoff -> Connecting
 ```
 
-使用带随机抖动的指数退避；bootstrap 失败、Control stream 连接失败、任意非 `200` 响应、异常关闭和读取错误都必须进入退避，不得固定频率重试。当前退避上限依次为 10、20、40、80、160、300 秒，每次实际等待使用硬件随机源落在该档位的 50%–100%（即首次 5–10 秒，封顶后每次 150–300 秒）；只有收到有效控制流数据才重置退避。网络切换、服务器重启和 QUIC idle timeout 不得造成忙循环。连接恢复后发送设备快照和最后确认的 server sequence。
+使用带随机抖动的指数退避；bootstrap 失败、Control stream 连接失败、任意非 `200` 响应、异常关闭和读取错误都必须进入退避，不得固定频率重试。当前退避上限依次为 10、20、40、80、160、300 秒，每次实际等待使用硬件随机源落在该档位的 50%–100%（即首次 5–10 秒，封顶后每次 150–300 秒）；只有收到有效控制流数据才重置退避。网络切换、服务器重启和 QUIC idle timeout 不得造成忙循环。连接恢复后以新 `sessionId` 发送 `device.hello` 和完整设备快照，未完成 Job 由服务端按 replay policy 重投。
 
 ## 10. HTTP/3 控制协议
 
@@ -348,10 +348,10 @@ QUIC ACK 只表示传输层数据到达，不能代表“App 已启动”或“�
 {
   "protocolVersion": 1,
   "type": "command",
+  "sessionId": "control-session-uuid",
   "commandId": "018f...",
-  "sequence": 1842,
   "name": "input.sequence",
-  "issuedAt": "2026-08-25T10:00:00Z",
+  "timeoutMs": 60000,
   "params": {}
 }
 ```
@@ -360,9 +360,14 @@ QUIC ACK 只表示传输层数据到达，不能代表“App 已启动”或“�
 
 ```json
 {
-  "type": "command.result",
+  "protocolVersion": 1,
+  "type": "command.completed",
+  "sessionId": "control-session-uuid",
+  "deviceBootId": "device-boot-uuid",
+  "eventId": "event-uuid",
+  "eventSequence": 41,
   "commandId": "018f...",
-  "ok": true,
+  "outcome": "succeeded",
   "result": {
     "message": "sequence_completed",
     "screenshots": []
@@ -370,31 +375,32 @@ QUIC ACK 只表示传输层数据到达，不能代表“App 已启动”或“�
 }
 ```
 
-Fastify 根据最终 `command.result` 把内存 Job 标成 `acknowledged | failed`。完整的
-`accepted | running | succeeded | failed | cancelled | expired` 状态、deadline 和 idempotency key
-仍是后续兼容扩展；设备必须忽略未知可选字段。错误码保持机器可读，例如 `device_offline`、
+Fastify 根据 `command.accepted/progress/completed` 把 Job 推进为
+`queued | dispatched | accepted | running | succeeded | failed | cancelled | expired | indeterminate`。
+所有事件都绑定当前 control session 与 device boot；`eventSequence` 在每个 control session 从 1 开始单调递增，
+服务端拒绝倒退但允许缺口，因为设备可能在本地丢弃可再生的 snapshot/progress 事件。`eventId` 用于重传去重，
+`commandId` 用于命令生命周期关联。错误码保持机器可读，例如 `device_offline`、
 `permission_denied`、`device_busy`、`package_invalid`、`deadline_exceeded`。
 
 ### 10.3 幂等与恢复
 
 当前无数据库单实例提供的是**进程内、至少一次投递**，不能宣称跨进程持久恢复：
 
-- Fastify 在同一进程内保留 `queued` 和未完成的 `sent` Job；设备 control stream 重连后重新投递；
+- Fastify 在同一进程内保留所有未完成 Job；设备 control stream 重连并完成 `device.hello` 后按 replay policy 重新投递；
 - `Idempotency-Key` 只在当前内存窗口内去重，服务重启会丢失 Job、最终结果和去重窗口；
-- 设备在本次 boot 内保存最近 16 个 `command_id`，重连收到重复命令时不再次执行；设备重启后窗口丢失；
+- 设备在本次 boot 内保存最近 16 个 `commandId` 和最多 4 个完成结果；重复命令重放 accepted/final 状态而不再次执行；设备重启后窗口丢失；
 - `app.start`、`app.stop`、安装同一版本和卸载不存在 App 应保持状态幂等；输入序列不是天然幂等，设备在
   “已执行但结果尚未送达”后重启仍可能再次执行，生产版本需要持久完成记录或服务端恢复协议；
-- 每条命令携带剩余 timeout，设备转换为 FreeRTOS 单调 deadline，并在开始执行及序列步骤间复核；
+- `timeoutMs` 是服务端投递当时剩余的设备执行预算，不是 wall-clock 截止时间；设备转换为 FreeRTOS 单调 deadline，并在开始执行及序列步骤间复核；CLI 的 `--wait-timeout` 仅控制客户端等多久，不取消设备端 Job；
 - 后续增加数据库时持久化 `command_id`、idempotency key、目标身份代次和最终结果，但不改变 v1 envelope。
 
 ### 10.4 心跳
 
 QUIC 自身负责链路和重传，但双方仍需要识别应用是否存活：
 
-- 设备每 20–60 秒发送轻量状态或 presence update；
-- 没有状态变化时可使用 HTTP/3/QUIC keepalive；
-- 服务端不要求设备对每个心跳发送业务 pong；
-- 只有在需要测量应用层往返或确认 Agent event loop 存活时才发送 ping command。
+- 服务端在 `session.ready` 后立即发送 `ping`，之后按协商间隔发送带当前 `sessionId` 的 `heartbeat`；
+- 设备不需要逐帧业务 pong；状态变化通过 `device.snapshot` 事件上报，没有变化时依赖 HTTP/3/QUIC keepalive；
+- `ping/heartbeat` 的服务端 UTC 只用于观测，不能替代设备单调时钟或校准系统时间。
 
 间隔应由服务端下发并允许固件设最小值，避免被配置成高频耗电轮询。
 
@@ -521,7 +527,7 @@ app_id, app_version, session_id, message, truncated
 - 固定容量 ring buffer，按记录和总字节双重限制；
 - App 启动产生新 session，停止时封存游标；
 - 缓冲溢出时丢弃最旧记录并报告 dropped count；
-- Console 首次打开或日志对话框可见期间按 cursor 创建后台 `logs.snapshot` Job，设备返回增量批次；
+- Console 首次打开或日志对话框可见期间按不透明 cursor 创建后台 `logs.read` Job，设备返回增量批次；
 - 日志对话框内返回 `hasMore=true` 时 Console 立即续拉，否则等待 3 秒；服务端不拥有轮询定时器；
 - Console 复用已有 NDJSON 实时流接收合并后的快照；REST API 用 cursor 读取服务端缓存；
 - 默认只提供 Guest 日志，不上传可能含凭据的完整 Host 日志；
@@ -538,7 +544,7 @@ SHA-256，以内容 hash 作为不可变下载地址，不信任 JSONC 中手写
 
 - App Hall 右上角显示带红点的 `Update` 快捷入口，点击直接进入 System Information 的升级界面；
 - System Settings 的 System Information 行显示更新状态，详情页提供安装按钮；
-- Web Console 的系统信息卡显示目标版本，并通过带结果和超时语义的 `device.ota` Job 发起升级。
+- Web Console 的系统信息卡显示目标版本，并通过带结果和超时语义的 `firmware.update` Job 发起升级。
 
 设备把镜像下载到有上限的 PSRAM staging，复核长度和 SHA-256 后分块写入非活动 OTA 分区；写完后再次读取
 ESP image descriptor，要求镜像内版本与 JSONC 版本完全一致，才切换启动分区并重启。新固件完成 Platform
@@ -553,7 +559,7 @@ Guest 无法直接访问 Host Flash，也不能绕过 Bundle reader 获得 App S
 24 MiB 可写 `app_store`，其底层格式是 [BundleFS](bundlefs.zh-CN.md)：
 
 ```text
-app_store metadata  64 KiB；前 16 KiB 是四个 4 KiB Catalog Bank
+app_store metadata  64 KiB；四个 16 KiB Catalog Bank
 app_store data      383 个 64 KiB 数据块
 PSRAM               当前下载 staging，单个 package 上限 8 MiB
 ```
@@ -562,7 +568,7 @@ BundleFS 不使用 NVS Catalog，也没有预置 App。全擦除态分区首次�
 和 Demo 与其他 Bundle 一样通过安装事务进入 Store。擦除 `sys_store` 只轮换设备身份和系统设置，不改变
 已安装 App；清空 App 必须显式格式化 `app_store`。
 
-Catalog 最多保存 7 个 App。每个 Bundle 的有序物理块号只保存在 Catalog，数据块本身没有链表头；同一
+Catalog 最多保存 50 个 App。每个 Bundle 的有序物理块号只保存在 Catalog，数据块本身没有链表头；同一
 Bundle 的块可以离散分布，并通过 `spi_flash_mmap_pages()` 映射为连续虚拟地址。卸载后的块可直接复用，
 不需要为连续 extent 空洞执行搬迁 GC。
 
@@ -603,7 +609,7 @@ payload:
 
 开发模式可信任用户账户的临时签名；生产发布使用开发者签名或服务端审核签名。设备必须拥有受信任公钥或可验证的签名链。
 
-Catalog 当前固定容量为 7 个 App；本机 UI 需要分页，但仍不能在实时路径无界扩容。
+Catalog 当前固定容量为 50 个 App；本机 UI 需要分页，但仍不能在实时路径无界扩容。
 
 ## 13. Control 服务设计
 
@@ -631,7 +637,7 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 
 - `onlineDevices: Map<device_id, DeviceConnection>`：连接、auth epoch、状态、last seen；
 - `pairingChallenges: Map<code_digest, PairingChallenge>`：设备、过期、失败次数；
-- `jobs: Map<job_id, CommandJob>`：sequence、idempotency、deadline、状态和结果；
+- `jobs: Map<job_id, CommandJob>`：服务端内部排序、idempotency、deadline、状态和结果；内部 delivery attempt 不进入设备 wire envelope；
 - `recentEvents`：每设备固定容量的调试环形缓冲区；
 - `artifacts/`：截图、Package 和构建产物，文件名使用随机 artifact ID；
 - `artifact manifest`：与文件同目录的小型 JSON 元数据，可由文件扫描重建。
@@ -653,7 +659,7 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 | `GET` | `/devices/{id}/stream` | Console Token 认证的 NDJSON 实时快照、Job 和事件流 |
 | `POST` | `/tokens` | 从有效控制凭据签发更窄 scope 的 Agent JWT |
 | `GET` | `/devices/{id}/apps` | App 列表和当前状态 |
-| `POST` | `/devices/{id}/apps:install` | 从 package artifact 安装 |
+| `POST` | `/devices/{id}/apps/install` | 从 package artifact 安装 |
 | `DELETE` | `/devices/{id}/apps/{appId}` | 卸载 App |
 | `POST` | `/devices/{id}/apps/{appId}/actions/start` | 启动 App |
 | `POST` | `/devices/{id}/apps/{appId}/actions/stop` | 停止 App |
@@ -667,7 +673,7 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 | `GET` | `/builds/{id}` | 构建状态和产物 |
 | `GET` | `/sdk/releases/latest` | 当前 SDK 元数据与版本化下载地址 |
 
-会改变设备状态的接口支持 `Idempotency-Key`。默认返回 `202 Accepted + job_id`；短操作可通过 `wait_timeout_ms` 等待最终结果，但等待超时不取消设备端 Job。
+所有创建 Job 的接口支持 `Idempotency-Key`。默认返回 `202 Accepted + job_id`；客户端等待超时不取消设备端 Job，之后可按 `job_id` 继续查询，CLI 使用 `micropixel job wait <job-id>` 恢复等待。
 
 设备 Gateway 使用独立的 `/device/v1` 路由和 `typ=device` 凭据，不能接受 `typ=control` 的用户 JWT 伪装设备。
 
@@ -690,9 +696,9 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 
 浏览器通过 Console Token 认证的版本化 NDJSON 长连接接收设备 presence、App 状态、Job 进度和事件；
 断线后按指数退避重连。设备控制流建立时服务端立即发送带 `utcTimeMs` 的 `ping`，后续 heartbeat 继续携带
-UTC 时间；这些字段只作为 Control 协议的补充观测，不参与设备校时。Host 在 Wi-Fi 可用后独立运行 SNTP，
-维护系统 UTC，并为 TLS 证书有效期校验提供可信时间；大厅在 localization 配置落地前固定按 UTC+8 显示
-`HH:MM`。
+UTC 时间；这些字段只作为 Control 协议的补充观测，不参与设备校时。大厅在 localization 配置落地前固定
+按 UTC+8 显示 `HH:MM`；TLS 不依赖该时间，产品关闭 `CONFIG_MBEDTLS_HAVE_TIME_DATE` 并忽略证书
+`notBefore`/`notAfter`。
 连接建立时 Console 自动请求系统信息、App 列表和一批日志，服务端 heartbeat 主动
 结算超时 Job。无对话框时，浏览器活跃状态每 10 秒同步系统与 App 信息，不活跃时降为每 60 秒；屏幕、任务、
 应用或日志对话框打开时每 3 秒同步对应数据，日志 `hasMore` 时不等待并立即续拉。浏览器连续 5 分钟无活动会
@@ -721,7 +727,7 @@ Agent 页面既要能读，也要能被工具稳定解析：
 2. 下载固定版本 SDK 和工具链；
 3. 从示例生成 Guest App；
 4. 编译 Wasm；
-5. 使用与 Host 匹配的 `wamrc 2.4.3` 生成 RISC-V 32-bit AOT；
+5. 使用 MicroPixel WAMR fork 固定 commit 生成 RISC-V 32-bit AOT format v6；
 6. 生成并签名 `.mpxapp`；
 7. 上传、安装、启动；
 8. 订阅日志；
@@ -737,7 +743,7 @@ Agent 页面既要能读，也要能被工具稳定解析：
 发布一个锁定版本的容器或 devcontainer，包含：
 
 - 与项目匹配的 WASI SDK/Clang；
-- WAMR `wamrc 2.4.3`；
+- MicroPixel WAMR fork commit `77eb0f2ceb331e96ceab9737cc37f0b4a492781b`，AOT format v6；
 - `wasm32` C++23 编译参数；
 - RISC-V 32-bit AOT target、ABI、CPU feature 参数；
 - Bundle/Package 构建和签名工具；
@@ -775,7 +781,7 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 
 发布前必须满足：
 
-- 设备严格验证服务端 TLS 证书、主机名和有效期；
+- 设备严格验证服务端 TLS 证书链、用途和主机名；设备无可信 wall clock，不验证证书有效期；
 - 设备 credential 不离开设备，服务端签名密钥使用轮换和 KMS/受限文件权限；
 - 配对、Token、安装、输入、截图和日志分别授权；
 - 所有命令记录审计事件，包含操作者、设备、scope、结果，不含 secret；
@@ -810,9 +816,9 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 - `control/apis` 使用 Fastify 实现无数据库 bootstrap、HS256 设备凭据、内存在线表、单次连接码、Console/API Token、设备与 Console 两条 NDJSON 长连接、设备事件入口、资源型 Job API、日志快照和文件 screenshot/package artifact；Console 长连接推送 presence、Job 和事件，并在 heartbeat 中主动结算超时；
 - `control/console` 未登录或会话失效时只显示连接码输入和文档入口；登录后使用单页 Overview 和按场景打开的对话框，不暴露 Console 会话凭据或期限。右上角可签发默认包含全部设备权限的 7 天、30 天或永久 API Token；App 列表连接后自动同步，每项操作都有持续回执与可展开的完整结果；
 - System Settings 已增加 Remote Control 页面，启用状态保存在 `sys_store/control`，设备身份也独立保存在该命名空间；
-- Runtime 通过抽象 `GuestLogSink` 把 Guest `log_write` 复制到 PSRAM 中的 1024 条固定环形缓存（约 1.1 MiB），网络层不反向依赖 Remote Control；`logs.snapshot` 带 session/cursor，每个结果最多返回 48 条，由 Console 在日志对话框中根据 `hasMore` 连续追赶积压；服务端不调度轮询，设备不主动上传；
+- Runtime 通过抽象 `GuestLogSink` 把 Guest `log_write` 复制到 PSRAM 中的 1024 条固定环形缓存（约 1.1 MiB），网络层不反向依赖 Remote Control；`logs.read` 使用绑定 App Session 的不透明 cursor，每个结果最多返回 48 条，由 Console 在日志对话框中根据 `hasMore` 连续追赶积压；服务端不调度轮询，设备不主动上传；
 - Host 与网络 Agent 之间使用 PSRAM 后备的固定容量命令/结果队列；网络任务不直接调用 WAMR、LVGL 或驱动；
-- 已实现 `capture_screen`/`screen.capture`、`app.start`、`app.stop` 和包含触摸、语义按键、延迟、带 ID 截图的 `input.sequence`；虚拟触摸经 Platform 坐标校验后重新进入 `SystemGestureRouter`，按键通过 Input 1.1 的固定键码事件进入 Guest；Remote Control 从当前显示 framebuffer 使用 ESP32-P4 JPEG 外设编码，网络任务再独立上传；
+- 已实现 `screen.capture`、`app.start`、`app.stop` 和包含触摸、语义按键、延迟、带 ID 截图的 `input.sequence`；虚拟触摸经 Platform 坐标校验后重新进入 `SystemGestureRouter`，按键通过 Input 1.1 的固定键码事件进入 Guest；Remote Control 从当前显示 framebuffer 使用 ESP32-P4 JPEG 外设编码，网络任务再独立上传；
 - Hall、System Settings、Remote Control 等 modal System UI 都会泵入安全的截图和输入命令；输入序列由
   跨 Host 循环的固定容量状态机推进，可以跨页面执行“输入→延迟→截图”，App 生命周期命令仍请求当前
   modal UI 安全退栈后再改变 Hall/Foreground 状态；
@@ -821,8 +827,8 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 - ESP32-P4 分区是单一 24 MiB 可写 `app_store`；BundleFS 使用离散 64 KiB 数据块、写时复制和
   分区内四 Bank Catalog，所有 App 均可升级和卸载；
 - 创建 Job 的 API 支持内存窗口内的 `Idempotency-Key` 去重与 1–300 秒命令 timeout；服务端离线排队过期，设备把剩余时间转换为 FreeRTOS 单调时钟 deadline，并在 Host 开始执行以及输入步骤之间复核；
-- 设备在 PSRAM 优先的 4 项固定结果队列中保留发送失败的 `command.result`，重连后按序重试；服务端按 `commandId` 幂等处理完成事件，避免安装结果重传重复触发刷新；
-- Fastify 对 `queued`/`sent` 命令做进程内重连重投，设备以 boot-local 16 项 command ID 窗口抑制重复
+- 设备为终态 `command.completed` 预留 PSRAM 优先的固定结果队列槽位；当前连接发送失败时缓存结果，控制流重连后由命令重投触发带新 session envelope 的完成状态重放。服务端按 `eventId/commandId` 去重，并把 `eventSequence` 作为会话内顺序和缺口观测；
+- Fastify 对所有未完成命令按 replay policy 做进程内重连重投，设备以 boot-local 16 项 command ID 窗口抑制重复
   执行；服务重启和设备重启后的 exactly-once 仍未解决；
 - 链接的 `esp-http3` 已支持 PSRAM allocator、大 POST 的 1 KiB 分块上传、ACK-only packet number 跟踪和
   RFC 9001 Key Update；旧 PNG 路径曾以 720×720、约 183 KiB artifact 验证跨服务端 Key Phase 上传，
@@ -831,8 +837,8 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 - Control 从 JSONC 加载最新固件并发布内容寻址镜像；Web Console、App Hall 更新红点/快捷入口和 System Information 都可发起同一套 OTA。设备即使关闭 Remote Control 也会发现更新，安装前验证长度、SHA-256 和 ESP image 内嵌版本，再写入非活动 OTA 分区；
 - 未实现的远程命令返回明确的 `not_implemented` 应用层结果，不能把 QUIC ACK 当成命令完成。
 
-本轮自动验证基线为：Fastify 16 项测试、TypeScript typecheck、Control/Console production build、
-Firmware Host 7/11/8 项回归、HTTP/3 TLS parser 16 项测试、Firmware 格式/架构检查、Guest 全量构建
+本轮自动验证基线为：Fastify 24 项测试、TypeScript typecheck、Control/Console production build、
+Firmware Host 回归（含 App Store 与 BundleFS）、HTTP/3 TLS parser 16 项测试、Firmware 格式/架构检查、Guest 全量构建
 （含 key input conformance）和完整 System Shell + 三个集成 Bundle 构建。真机正向验收覆盖严格
 CA/主机名 HTTP/3、NVS 身份跨重启、一次性连接码、系统信息、App 列表、Hall→Settings→Remote 页面输入
 序列、带 ID 截图以及大 artifact；不在文档或日志样例记录设备 UUID、MAC、连接码和 Token。JPEG 硬件
@@ -845,16 +851,16 @@ Bundle 暂存在 PSRAM，不含 `.mpxapp` 外层数字签名、版本/capability
 矩阵；安装时还会同步占用 Host 控制循环。因此 Phase 1/2 已有可运行子集，Phase 3 只有开发版最小事务，
 仍不能宣称生产安全或 Agent 开发闭环已经完成。
 
-当前链接的 `esp-http3` 已在代码层完成服务端证书链、证书用途/有效期/主机名、TLS 1.3
+当前链接的 `esp-http3` 已在代码层完成服务端证书链、证书用途/主机名、TLS 1.3
 `CertificateVerify` 签名和 `Finished` MAC 验证，并用显式状态机约束 ServerHello、
 EncryptedExtensions、Certificate、CertificateVerify、Finished 与 NewSessionTicket 的顺序和 QUIC
-加密级别。固件必须配置 `MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64`，并在联网后先通过
-Host 通过独立的 `MICROPIXEL_NTP_SERVER` 建立可信 wall clock；Remote Control 不拥有或启动 SNTP。缺少可信
-系统时间时，严格 TLS 连接保持等待。
-`MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS` 只用于受信局域网排查，它跳过证书链、有效期和主机名，
+加密级别。固件必须配置 `MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64`。设备没有可信 wall clock，
+产品配置关闭 `CONFIG_MBEDTLS_HAVE_TIME_DATE`，因此 X.509 `notBefore`/`notAfter` 不参与验证，TLS 连接也不
+等待 SNTP。
+`MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS` 只用于受信局域网排查，它额外跳过证书链和主机名，
 仍强制证书用途、CertificateVerify 和 Finished。该实现已经通过 ESP32-P4 编译，但错误 CA、错误 SAN、
-过期证书、篡改 CertificateVerify/Finished 和 PSK 恢复仍需真机负向测试；严格 CA/主机名的正向真机
-连接已通过，但 Phase 0 尚不能标记为完整安全验收。
+篡改 CertificateVerify/Finished 和 PSK 恢复仍需真机负向测试；严格 CA/主机名的正向真机连接已通过，
+但 Phase 0 尚不能标记为完整安全验收。
 
 可信配置使用单个 DER trust anchor，不链接系统根证书 bundle。ESP32-P4 产品配置关闭运行时不支持的
 PSA 硬件 ECDSA verify driver，由软件 ECDSA 完成 TLS 1.3 CertificateVerify。

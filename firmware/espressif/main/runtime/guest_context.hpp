@@ -136,6 +136,7 @@ class GuestContext final {
     TouchEventBridge touch_events_;
     KeyEventBridge key_events_;
     TimerServiceEndpoint timer_endpoint_;
+    SystemServiceEndpoint system_endpoint_;
     StorageServiceEndpoint storage_endpoint_;
     ResourceServiceEndpoint resource_endpoint_;
     RandomServiceEndpoint random_endpoint_;

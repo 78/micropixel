@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define BUNDLEFS_MAX_FILES 7U
+#define BUNDLEFS_MAX_FILES 50U
 #define BUNDLEFS_MAX_NAME_LENGTH 64U
 #define BUNDLEFS_SHA256_SIZE 32U
 #define BUNDLEFS_FILE_HANDLE_WORDS 88U
@@ -67,6 +67,7 @@ bundlefs_error_t bundlefs_mount(void);
 bundlefs_error_t bundlefs_format(void);
 bundlefs_error_t bundlefs_get_store_info(bundlefs_store_info_t* info_out);
 bundlefs_error_t bundlefs_list(bundlefs_file_info_t* files_out, uint32_t capacity, uint32_t* count_out);
+bundlefs_error_t bundlefs_get_file_sha256(const char* name, uint8_t sha256_out[BUNDLEFS_SHA256_SIZE]);
 bundlefs_error_t bundlefs_open(const char* name, bundlefs_file_t* file_out);
 bundlefs_error_t bundlefs_get_file_info(const bundlefs_file_t* file, bundlefs_file_info_t* info_out);
 bundlefs_error_t bundlefs_read(const bundlefs_file_t* file, uint32_t offset, void* destination, uint32_t size);

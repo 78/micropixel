@@ -13,6 +13,10 @@ namespace {
 constexpr char kTag[] = "micropixel_details";
 constexpr int32_t kScreenWidth = 720;
 constexpr int32_t kScreenHeight = 720;
+constexpr int32_t kAppManagementRowTop = 90;
+constexpr int32_t kAppManagementRowStep = 116;
+constexpr int32_t kAppManagementRowHeight = 104;
+constexpr uint32_t kAppManagementRowOverscan = 1U;
 
 struct Bounds final {
     int32_t x{};
@@ -440,6 +444,9 @@ void* SystemDetailUi::SystemInformationActionContext() const { return system_inf
 void SystemDetailUi::DetailScrollEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr && ui->root_ != nullptr) {
+        if (ui->AppManagementVisible()) {
+            ui->RefreshAppManagementRowsLocked();
+        }
         lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(ui->root_)));
     }
 }
@@ -722,6 +729,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
     app_management_action_context_ = action_context;
     app_management_model_ = model;
     app_management_selected_index_ = 0U;
+    app_management_scroll_y_ = 0;
     app_management_overlay_ = AppOverlay::kNone;
     active_screen_ = Screen::kAppManagement;
     RenderAppManagementLocked(false);
@@ -734,7 +742,9 @@ void SystemDetailUi::LeaveAppManagement() {
     app_management_action_context_ = nullptr;
     app_management_overlay_ = AppOverlay::kNone;
     app_management_model_ = {};
+    app_management_scroll_ = nullptr;
     app_management_rows_.fill(nullptr);
+    app_management_scroll_y_ = 0;
     if (active_screen_ == Screen::kAppManagement) {
         active_screen_ = Screen::kNone;
         root_ = nullptr;
@@ -884,15 +894,12 @@ void SystemDetailUi::DrawAppManagementInformationLocked() {
 }
 
 void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
-    const auto& app = app_management_model_.apps[app_management_selected_index_];
     CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 420, .width = 664, .height = 272}, 0x101c2cU, 0x42607fU, 24);
     (void)CreateLabel(sheet, "Uninstall unavailable", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
-    char message[160]{};
-    std::snprintf(message, sizeof(message), "%s can currently be uninstalled through Remote Control.",
-                  app.display_name != nullptr ? app.display_name : "This App");
-    lv_obj_t* detail = CreateLabel(sheet, message, &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
+    lv_obj_t* detail = CreateLabel(sheet, "Close the running App from the Hall before uninstalling Apps.",
+                                   &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
     lv_obj_set_size(detail, 616, 92);
     lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
     lv_obj_t* done =
@@ -917,10 +924,82 @@ void SystemDetailUi::DrawAppManagementUninstallConfirmationLocked() {
     lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
 }
 
+void SystemDetailUi::DrawAppManagementRowLocked(uint32_t index) {
+    if (app_management_scroll_ == nullptr || index >= app_management_model_.app_count ||
+        index >= app_management_rows_.size()) {
+        return;
+    }
+    constexpr std::array<uint32_t, 3U> kAppIconColors{0x2c7867U, 0x305f9eU, 0x76539bU};
+    const auto& app = app_management_model_.apps[index];
+    const int32_t y = kAppManagementRowTop + static_cast<int32_t>(index) * kAppManagementRowStep;
+    lv_obj_t* row =
+        CreatePanel(app_management_scroll_, Bounds{.x = 40, .y = y, .width = 640, .height = kAppManagementRowHeight},
+                    0x111f32U, 0x2e4562U, 22);
+    app_management_rows_[index] = row;
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+    lv_obj_add_event_cb(row, AppManagementRowEvent, LV_EVENT_SHORT_CLICKED, this);
+    lv_obj_t* icon = CreatePanel(row, Bounds{.x = 16, .y = 20, .width = 64, .height = 64},
+                                 kAppIconColors[index % kAppIconColors.size()], 0U, 17);
+    char initial[2]{'?', '\0'};
+    if (app.display_name != nullptr && app.display_name[0] != '\0') {
+        initial[0] = app.display_name[0];
+    }
+    lv_obj_t* initial_label = lv_label_create(icon);
+    lv_label_set_text(initial_label, initial);
+    lv_obj_set_style_text_font(initial_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(initial_label, lv_color_white(), 0);
+    lv_obj_center(initial_label);
+    lv_obj_t* name = CreateLabel(row, app.display_name != nullptr ? app.display_name : "Unknown App",
+                                 &lv_font_montserrat_24, 0xf2f7ffU, 98, 20);
+    lv_obj_set_width(name, 438);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    char metadata[128]{};
+    char size[24]{};
+    FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
+    std::snprintf(metadata, sizeof(metadata), "%s   %s", app.app_id != nullptr ? app.app_id : "Unknown", size);
+    lv_obj_t* metadata_label = CreateLabel(row, metadata, &lv_font_montserrat_18, 0x91a4bdU, 98, 59);
+    lv_obj_set_width(metadata_label, 438);
+    lv_label_set_long_mode(metadata_label, LV_LABEL_LONG_DOT);
+    DrawAppMoreIndicator(row);
+}
+
+void SystemDetailUi::RefreshAppManagementRowsLocked() {
+    if (!AppManagementVisible() || app_management_scroll_ == nullptr || app_management_model_.app_count == 0U) {
+        return;
+    }
+    app_management_scroll_y_ = std::max<int32_t>(0, lv_obj_get_scroll_y(app_management_scroll_));
+    const int32_t viewport_bottom = app_management_scroll_y_ + (kScreenHeight - 108);
+    uint32_t first =
+        app_management_scroll_y_ <= kAppManagementRowTop
+            ? 0U
+            : static_cast<uint32_t>((app_management_scroll_y_ - kAppManagementRowTop) / kAppManagementRowStep);
+    first = first > kAppManagementRowOverscan ? first - kAppManagementRowOverscan : 0U;
+    const int32_t last_position = std::max<int32_t>(0, viewport_bottom - kAppManagementRowTop);
+    const uint32_t last = std::min<uint32_t>(
+        app_management_model_.app_count,
+        static_cast<uint32_t>(last_position / kAppManagementRowStep) + 1U + kAppManagementRowOverscan);
+    for (uint32_t index = 0U; index < app_management_model_.app_count; ++index) {
+        if (app_management_rows_[index] != nullptr && (index < first || index >= last)) {
+            lv_obj_delete(app_management_rows_[index]);
+            app_management_rows_[index] = nullptr;
+        }
+    }
+    for (uint32_t index = first; index < last; ++index) {
+        if (app_management_rows_[index] == nullptr) {
+            DrawAppManagementRowLocked(index);
+        }
+    }
+}
+
 void SystemDetailUi::RenderAppManagementLocked(bool clean_root) {
+    if (app_management_scroll_ != nullptr) {
+        app_management_scroll_y_ = std::max<int32_t>(0, lv_obj_get_scroll_y(app_management_scroll_));
+    }
     if (clean_root) {
         lv_obj_clean(root_);
     }
+    app_management_scroll_ = nullptr;
     app_management_rows_.fill(nullptr);
     lv_obj_set_style_bg_color(root_, lv_color_hex(0x08111fU), 0);
     (void)DrawDetailHeader(root_, "App Management", "Installed applications", AppManagementBackEvent, this);
@@ -929,6 +1008,7 @@ void SystemDetailUi::RenderAppManagementLocked(bool clean_root) {
         kScreenHeight - 108,
         106 + static_cast<int32_t>(std::max<uint32_t>(1U, app_management_model_.app_count)) * 116 + 30);
     lv_obj_t* scroll_content = CreateDetailScrollContent(root_, content_height, DetailScrollEvent, this);
+    app_management_scroll_ = scroll_content;
     char count[48]{};
     if (app_management_model_.app_count == 1U) {
         std::snprintf(count, sizeof(count), "1 App");
@@ -951,47 +1031,16 @@ void SystemDetailUi::RenderAppManagementLocked(bool clean_root) {
     lv_obj_set_width(used_label, 230);
     lv_obj_set_style_text_align(used_label, LV_TEXT_ALIGN_RIGHT, 0);
 
-    constexpr std::array<uint32_t, 3U> kAppIconColors{0x2c7867U, 0x305f9eU, 0x76539bU};
     if (app_management_model_.app_count == 0U) {
         lv_obj_t* empty = CreatePanel(scroll_content, Bounds{.x = 40, .y = 90, .width = 640, .height = 104}, 0x111f32U,
                                       0x2e4562U, 22);
         (void)CreateLabel(empty, "No installed Apps", &lv_font_montserrat_18, 0x91a4bdU, 22, 39);
-    } else {
-        for (uint32_t index = 0U; index < app_management_model_.app_count; ++index) {
-            const auto& app = app_management_model_.apps[index];
-            const int32_t y = 90 + static_cast<int32_t>(index) * 116;
-            lv_obj_t* row = CreatePanel(scroll_content, Bounds{.x = 40, .y = y, .width = 640, .height = 104}, 0x111f32U,
-                                        0x2e4562U, 22);
-            app_management_rows_[index] = row;
-            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-            lv_obj_add_event_cb(row, AppManagementRowEvent, LV_EVENT_SHORT_CLICKED, this);
-            lv_obj_t* icon = CreatePanel(row, Bounds{.x = 16, .y = 20, .width = 64, .height = 64},
-                                         kAppIconColors[index % kAppIconColors.size()], 0U, 17);
-            char initial[2]{'?', '\0'};
-            if (app.display_name != nullptr && app.display_name[0] != '\0') {
-                initial[0] = app.display_name[0];
-            }
-            lv_obj_t* initial_label = lv_label_create(icon);
-            lv_label_set_text(initial_label, initial);
-            lv_obj_set_style_text_font(initial_label, &lv_font_montserrat_24, 0);
-            lv_obj_set_style_text_color(initial_label, lv_color_white(), 0);
-            lv_obj_center(initial_label);
-            lv_obj_t* name = CreateLabel(row, app.display_name != nullptr ? app.display_name : "Unknown App",
-                                         &lv_font_montserrat_24, 0xf2f7ffU, 98, 20);
-            lv_obj_set_width(name, 438);
-            lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-            char metadata[128]{};
-            char size[24]{};
-            FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
-            std::snprintf(metadata, sizeof(metadata), "%s   %s", app.app_id != nullptr ? app.app_id : "Unknown", size);
-            lv_obj_t* metadata_label = CreateLabel(row, metadata, &lv_font_montserrat_18, 0x91a4bdU, 98, 59);
-            lv_obj_set_width(metadata_label, 438);
-            lv_label_set_long_mode(metadata_label, LV_LABEL_LONG_DOT);
-            DrawAppMoreIndicator(row);
-        }
     }
     lv_obj_update_layout(scroll_content);
+    if (app_management_scroll_y_ != 0) {
+        lv_obj_scroll_to_y(scroll_content, app_management_scroll_y_, LV_ANIM_OFF);
+    }
+    RefreshAppManagementRowsLocked();
     switch (app_management_overlay_) {
         case AppOverlay::kActions:
             DrawAppManagementActionsLocked();

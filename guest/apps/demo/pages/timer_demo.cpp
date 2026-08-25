@@ -55,26 +55,28 @@ class TimerPage final {
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 130, "A Host Timer drives this page every 100 ms.", MutedColor(), 18U);
+        commands.DrawTextCentered(center_x, 130, "A Host Timer drives this page every 100 ms.", MutedColor(),
+                                  micropixel::SystemFont::kMedium);
 
         Line elapsed;
         elapsed.Append("Elapsed: ");
         elapsed.AppendUint(elapsed_us_ / 1000U);
         elapsed.Append(" ms");
-        commands.DrawTextCentered(center_x, 238, elapsed.c_str(), AccentColor(), 36U);
+        commands.DrawTextCentered(center_x, 238, elapsed.c_str(), AccentColor(), micropixel::SystemFont::kTitle);
 
         Line ticks;
         ticks.Append("Timer events: ");
         ticks.AppendUint(tick_count_);
-        commands.DrawTextCentered(center_x, 310, ticks.c_str(), micropixel::Color::White(), 22U);
+        commands.DrawTextCentered(center_x, 310, ticks.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kLarge);
 
         Line clock;
         clock.Append("Clock::Now(): ");
         clock.AppendUint(context.app.clock().Now().microseconds());
         clock.Append(" us");
-        commands.DrawTextCentered(center_x, 366, clock.c_str(), MutedColor(), 18U);
+        commands.DrawTextCentered(center_x, 366, clock.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
         commands.DrawTextCentered(center_x, 422, running_ ? "RUNNING" : "PAUSED",
-                                  running_ ? AccentColor() : DangerColor(), 24U);
+                                  running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
         DrawButton(commands, buttons_[0], "START", AccentColor());
         DrawButton(commands, buttons_[1], "PAUSE", DangerColor());

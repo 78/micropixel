@@ -97,7 +97,7 @@ struct ButtonStyle final {
     Color feedback_overlay{Color::Black()};
     uint8_t pressed_opacity{48U};
     uint8_t disabled_opacity{112U};
-    uint16_t font_size_px{22U};
+    SystemFont font{SystemFont::kLarge};
     int8_t pressed_text_offset_px{1};
 };
 
@@ -111,9 +111,9 @@ inline void DrawTextButton(Frame& commands, const Button& button, const char* la
     // then reuse the same command slot while the pressed state changes.
     commands.FillRect(bounds, style.feedback_overlay, feedback_opacity);
     const int32_t text_offset = button.pressed() ? style.pressed_text_offset_px : 0;
-    commands.DrawTextCentered(bounds.center_x(),
-                              bounds.y + (bounds.height - static_cast<int32_t>(style.font_size_px)) / 2 + text_offset,
-                              label, style.text, style.font_size_px);
+    constexpr int32_t kLargeFontLineHeight = 24;
+    commands.DrawTextCentered(bounds.center_x(), bounds.y + (bounds.height - kLargeFontLineHeight) / 2 + text_offset,
+                              label, style.text, style.font);
 }
 
 inline void DrawTextureButton(Frame& commands, const Button& button, const Texture& texture,

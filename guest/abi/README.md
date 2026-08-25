@@ -24,8 +24,9 @@ Audio 或 Network 方法通常只新增 Service 内的稳定数字 ID 和 wire s
 
 ## Service 模型
 
-当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Graphics `16`、Input `17`、
-Audio `18`；Network `19` 只预留 ID，尚未实现。
+当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Random `4`、System `5`、Graphics `16`、
+Input `17`、Audio `18`；Network `19` 只预留 ID，尚未实现。System 1.0 提供最长 31 bytes 的
+BCP 47 locale tag；当前 Host 返回 `en`，以后改变设备语言不需要修改 Guest ABI。
 
 `service_open` 校验 Service 独立的 major/minor，返回 48-byte `micropixel_service_info_t`：
 
@@ -50,13 +51,16 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
   无法满足背压或吞吐需求时，才讨论新增 Core import。
 - Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
-当前 Graphics command protocol 包含 `PUSH_STATE` / `POP_STATE`、`BLEND_RECT`、`DRAW_TEXTURE` 和
+当前 Graphics 1.1 command protocol 包含 `PUSH_STATE` / `POP_STATE`、`BLEND_RECT`、`DRAW_TEXTURE` 和
 `BLEND_TEXTURE`。SDK 用前两者 lowering `Save`、clip、translation 和 `Restore`；capable Host 可把稳定
 scope 识别为 retained translation，但该优化不进入 Public C++ API。texture command 的 `opacity` 与
 资源自身逐像素 alpha 相乘；不透明 `DRAW_TEXTURE` 走 Host copy 快速路径。Texture wire command 分别携带
 destination rectangle 与 source rectangle，因此 1:1、裁剪、缩放及裁剪后缩放不需要新增 opcode。
 `max_draw_operations` 是 Public SDK 可见的稳定绘制预算，`max_frame_commands` 只用于 SDK/Host transport，
 自动生成的 state 与跨批续接记录不会改变应用预算。
+
+文字命令传递稳定的 System Font role handle（Small、Medium、Large、Title），不传具体像素字号。
+Guest 使用逻辑像素定位；Host 可以按设备密度、语言和字体可用性为这些角色选择实际字形与字号。
 
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、

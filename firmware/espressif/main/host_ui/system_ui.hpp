@@ -18,7 +18,7 @@ enum class HallStatus {
     kHostFailure,
 };
 
-constexpr uint32_t kMaxHallApps = 3U;
+constexpr uint32_t kMaxHallApps = 50U;
 constexpr uint8_t kMinimumBrightnessPercent = 0U;
 constexpr uint32_t kMaxWifiSsidLength = 32U;
 constexpr uint32_t kMaxWifiPasswordLength = 64U;
@@ -157,8 +157,13 @@ struct HallModel final {
     std::array<HallAppModel, kMaxHallApps> apps{};
     uint32_t app_count{};
     const char* status_app_id{};
+    const char* status_error_phase{};
+    const char* status_error_code{};
+    const char* status_error_detail{};
     HallStatus status{HallStatus::kReady};
     uint32_t detail{};
+    int32_t status_exit_code{};
+    bool status_has_exit_code{};
     bool launch_enabled{};
     HallStatusBarModel status_bar{};
     uint64_t transition_trigger_us{};
@@ -403,6 +408,7 @@ class SystemUiBackend {
                                                                       SystemUiActionSink action_sink,
                                                                       void* action_context) = 0;
     virtual void UpdateHallStatusBar(const HallStatusBarModel& model) = 0;
+    virtual void PauseHallCoverLoading() {}
     virtual void LeaveHall() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> RestoreGuestView() = 0;
     virtual void WatchGuestActions(SystemUiActionSink action_sink, void* action_context) = 0;

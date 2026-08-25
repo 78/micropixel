@@ -26,7 +26,7 @@ constexpr uint8_t kBtPowerMask = 1U << 6U;
 constexpr uint8_t kPaEnableMask = 1U << 0U;
 constexpr uint32_t kFramesPerChunk = 128U;
 constexpr uint32_t kSineTableSize = 256U;
-constexpr uint32_t kAudioTaskStackSize = 6144U;
+constexpr uint32_t kAudioTaskStackSize = 4096U;
 constexpr BaseType_t kAudioTaskCore = 0;
 constexpr uint32_t kMetalioClaw4AudioSampleRate = 16000U;
 

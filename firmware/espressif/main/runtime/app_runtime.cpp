@@ -81,12 +81,15 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
     CopyAppId(app.app_id.data(), outcome.app_id);
     if (!TakeSessionLock()) {
         outcome.error = AppSessionError::kRuntimeSynchronization;
+        (void)std::snprintf(outcome.detail.data(), outcome.detail.size(), "%s", "unable to lock AppSession state");
         ESP_LOGE(kTag, "unable to lock AppSession state");
         return outcome;
     }
     if (session_active_) {
         GiveSessionLock();
         outcome.error = AppSessionError::kSessionAlreadyActive;
+        (void)std::snprintf(outcome.detail.data(), outcome.detail.size(), "%s",
+                            "another AppSession already owns the runtime");
         ESP_LOGE(kTag, "rejected a second concurrent AppSession");
         return outcome;
     }
@@ -101,6 +104,9 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
             outcome.app_id = session_result.error().app_id;
         }
         outcome.error = session_result.error().code;
+        outcome.detail = session_result.error().detail;
+        outcome.exit_code = session_result.error().exit_code;
+        outcome.has_exit_code = session_result.error().has_exit_code;
         if (TakeSessionLock()) {
             if (stop_requested_) {
                 outcome.completion = AppCompletion::kStopped;
@@ -140,7 +146,10 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
         } else if (run_result) {
             outcome.completion = AppCompletion::kExited;
         } else {
-            outcome.error = run_result.error();
+            outcome.error = run_result.error().code;
+            outcome.detail = run_result.error().detail;
+            outcome.exit_code = run_result.error().exit_code;
+            outcome.has_exit_code = run_result.error().has_exit_code;
         }
     }
 

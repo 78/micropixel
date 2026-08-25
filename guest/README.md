@@ -10,6 +10,9 @@ guest/
 ├── apps/demo/    # 可导航的 SDK 功能演示应用
 ├── apps/snake/   # 完整产品应用及其 metadata、素材
 ├── apps/blocks/  # 触控俄罗斯方块产品应用
+├── apps/showcase/ # 四个轻量 Showcase App 的共享实现
+├── apps/{tap-counter,color-lab,pixel-sketch,orbit-pad}/
+│                 # 用于多 App 大厅与 Guest SDK 验收的四个独立 Bundle
 └── tests/        # P4 Runtime/SDK conformance
 ```
 
@@ -35,10 +38,11 @@ P4 应用构建入口是：
 ```sh
 bash tools/build_demo_bundle.sh
 bash tools/build_snake_bundle.sh
+bash tools/build_showcase_bundles.sh
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
-`flash-apps` 明确替换 App Store，并写入 Blocks、Snake 和 Demo；不再提供会把任意 Bundle 直接写入
+`flash-apps` 明确替换 App Store，并写入七个示例 App；不再提供会把任意 Bundle 直接写入
 分区的独立公开脚本。单 App 开发安装走 Remote Control 的正常安装事务。
 
 默认 `development` profile 保留 Wasm 调试信息和 AOT 调用栈；发布构建显式设置
@@ -49,6 +53,10 @@ Guest 代码不得直接依赖 ESP-IDF 或具体开发板。需要访问设备�
 [Runtime Host ABI](abi/README.md) 进入 Host。当前 Public API、错误策略和待冻结事项见
 [Guest C++ SDK](sdk/README.md)。`Application` 是可发现的 capability façade；`app.xxx()` 返回
 copyable Service View，Service 创建的 Host Resource 才使用 move-only RAII。
+
+Guest AOT 的兼容性基线是 MicroPixel WAMR fork commit
+`77eb0f2ceb331e96ceab9737cc37f0b4a492781b` 和 AOT format v6，不是 `wamrc 2.4.3` 版本字符串。
+上游 WAMR 2.4.3 至 2.4.5 生成的 AOT v5 不能用于当前固件。
 
 项目自有 C/C++ 代码遵循
 [Google-based C++23 代码风格](../docs/development/code-style.zh-CN.md)。项目正式名称为 MicroPixel，

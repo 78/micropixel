@@ -63,7 +63,7 @@ bash tools/p4.sh monitor "$P4_PORT"     # 持续查看串口；Ctrl+] 退出
 bash tools/p4.sh fullclean-host
 ```
 
-## 4. 完整烧录 Host 和三个示例 App
+## 4. 完整烧录 Host 和七个示例 App
 
 新设备或需要同时更新 Host 与 BundleFS 元数据时，使用：
 
@@ -73,8 +73,8 @@ bash tools/p4.sh flash-all "$P4_PORT"
 
 该入口会：
 
-1. 构建 Host 固件和 Blocks、Snake、Demo Bundle；
-2. 生成包含三个 App 的 BundleFS 镜像；
+1. 构建 Host 固件和 Blocks、Snake、Demo 及四个 Showcase Bundle；
+2. 生成包含七个 App 的 BundleFS 镜像；
 3. 烧录 bootloader、分区表、OTA 初始数据和 Host 固件；
 4. 清空并烧录 App Store，随后读回校验。
 
@@ -87,14 +87,14 @@ bash tools/p4.sh test
 成功时命令末尾会输出：
 
 ```text
-System Shell P4 flashed and verified ... with Blocks, Snake, and Demo.
+System Shell P4 flashed and verified ... with seven Apps.
 ```
 
-设备复位后应在 App Hall 中看到 Blocks、Snake 和 Demo。
+设备复位后应在 App Hall 中看到七个 App，并可在第一行左右滑动浏览。
 
-## 5. USB 烧录三个示例 App
+## 5. USB 烧录七个示例 App
 
-Host 固件和分区表未变化时，直接清空旧 App Store 并烧录已有的三个示例 Bundle：
+Host 固件和分区表未变化时，直接清空旧 App Store 并烧录已有的七个示例 Bundle：
 
 ```sh
 bash tools/p4.sh flash-apps "$P4_PORT"
@@ -138,8 +138,8 @@ bash tools/p4.sh monitor "$P4_PORT"
 完整烧录后至少检查：
 
 - 终端中 Host 固件和 BundleFS 元数据均报告写入校验成功；
-- 烧录脚本捕获到 `System Shell ready: App Hall rendered with apps=3`；
-- App Hall 中可见并能启动 Blocks、Snake、Demo；
+- 烧录脚本捕获到 `System Shell ready: App Hall rendered with apps=7`；
+- App Hall 中可左右滑动浏览并启动七个示例 App；
 - 状态栏中的亮度和音量控制生效。
 
 常见失败：

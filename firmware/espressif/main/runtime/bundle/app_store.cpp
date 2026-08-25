@@ -93,9 +93,23 @@ std::expected<InstalledApp, AppStoreError> InstalledFromFile(const bundlefs_file
     return app;
 }
 
+std::expected<InstalledApp, AppStoreError> OpenInstalledApp(const char* app_id) {
+    bundlefs_file_t file{};
+    bundlefs_file_info_t file_info{};
+    bundlefs_error_t error = bundlefs_open(app_id, &file);
+    if (error == BUNDLEFS_OK) {
+        error = bundlefs_get_file_info(&file, &file_info);
+    }
+    if (error != BUNDLEFS_OK) {
+        return std::unexpected(MapBundleFsError(error));
+    }
+    return InstalledFromFile(file, file_info);
+}
+
 }  // namespace
 
-std::expected<InstalledAppCatalog, AppStoreError> LoadAppStoreCatalog() {
+std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& catalog_out) {
+    catalog_out = {};
     bundlefs_error_t error = bundlefs_mount();
     if (error != BUNDLEFS_OK) {
         return std::unexpected(MapBundleFsError(error));
@@ -113,10 +127,9 @@ std::expected<InstalledAppCatalog, AppStoreError> LoadAppStoreCatalog() {
         return std::unexpected(MapBundleFsError(error));
     }
 
-    InstalledAppCatalog catalog{};
-    catalog.count = file_count;
-    catalog.store_total_bytes = store_info.total_bytes;
-    catalog.store_used_bytes = store_info.used_bytes;
+    catalog_out.count = file_count;
+    catalog_out.store_total_bytes = store_info.total_bytes;
+    catalog_out.store_used_bytes = store_info.used_bytes;
     for (uint32_t index = 0U; index < file_count; ++index) {
         bundlefs_file_t file{};
         error = bundlefs_open(files[index].name, &file);
@@ -127,12 +140,12 @@ std::expected<InstalledAppCatalog, AppStoreError> LoadAppStoreCatalog() {
         if (!installed) {
             return std::unexpected(installed.error());
         }
-        catalog.apps[index] = *installed;
+        catalog_out.apps[index] = *installed;
     }
-    return catalog;
+    return {};
 }
 
-std::expected<InstalledApp, AppStoreError> InstallApp(const AppInstallRequest& request) {
+std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallRequest& request) {
     if (request.data == nullptr || request.size < sizeof(micropixel_bundle_header_t) || request.size > UINT32_MAX ||
         (request.size % MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT) != 0U || !ValidAppId(request.expected_app_id)) {
         return std::unexpected(AppStoreError::kInvalidPackage);
@@ -158,9 +171,23 @@ std::expected<InstalledApp, AppStoreError> InstallApp(const AppInstallRequest& r
         return std::unexpected(AppStoreError::kAppIdMismatch);
     }
 
+    std::array<uint8_t, BUNDLEFS_SHA256_SIZE> installed_sha256{};
+    bundlefs_error_t error = bundlefs_get_file_sha256(request.expected_app_id, installed_sha256.data());
+    if (error == BUNDLEFS_OK && installed_sha256 == request.expected_sha256) {
+        auto installed = OpenInstalledApp(request.expected_app_id);
+        if (!installed) {
+            return std::unexpected(installed.error());
+        }
+        ESP_LOGI(kTag, "App is already current: app=%s content=%08" PRIx32, request.expected_app_id,
+                 installed->content_id);
+        return AppInstallResult{.app = *installed, .changed = false};
+    }
+    if (error != BUNDLEFS_OK && error != BUNDLEFS_ERR_NOT_FOUND) {
+        return std::unexpected(MapBundleFsError(error));
+    }
+
     bundlefs_writer_t writer{};
-    bundlefs_error_t error =
-        bundlefs_begin_replace(request.expected_app_id, static_cast<uint32_t>(request.size), &writer);
+    error = bundlefs_begin_replace(request.expected_app_id, static_cast<uint32_t>(request.size), &writer);
     if (error != BUNDLEFS_OK) {
         return std::unexpected(MapBundleFsError(error));
     }
@@ -204,22 +231,13 @@ std::expected<InstalledApp, AppStoreError> InstallApp(const AppInstallRequest& r
         return std::unexpected(MapBundleFsError(error));
     }
 
-    bundlefs_file_t committed_file{};
-    bundlefs_file_info_t file_info{};
-    error = bundlefs_open(request.expected_app_id, &committed_file);
-    if (error == BUNDLEFS_OK) {
-        error = bundlefs_get_file_info(&committed_file, &file_info);
-    }
-    if (error != BUNDLEFS_OK) {
-        return std::unexpected(MapBundleFsError(error));
-    }
-    auto installed = InstalledFromFile(committed_file, file_info);
+    auto installed = OpenInstalledApp(request.expected_app_id);
     if (!installed) {
         return std::unexpected(installed.error());
     }
     ESP_LOGI(kTag, "committed App: app=%s bytes=%zu content=%08" PRIx32, request.expected_app_id, request.size,
              installed->content_id);
-    return *installed;
+    return AppInstallResult{.app = *installed, .changed = true};
 }
 
 std::expected<void, AppStoreError> UninstallApp(const char* app_id) {

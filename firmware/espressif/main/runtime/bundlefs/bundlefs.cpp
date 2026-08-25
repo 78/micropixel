@@ -61,6 +61,36 @@ struct CatalogRecord final {
     uint32_t payload_size{};
     std::array<CatalogEntry, BUNDLEFS_MAX_FILES> entries{};
     std::array<uint16_t, MICROPIXEL_BUNDLEFS_MAX_DATA_BLOCKS> block_map{};
+    std::array<uint8_t, 9946U> reserved{};
+    uint32_t checksum{};
+    uint32_t commit_marker{kErasedWord};
+};
+
+// BundleFS v1 used four 4 KiB records and could describe seven files. Keep the
+// exact wire layout so existing devices can mount it and migrate on their next
+// Catalog commit. The first v2 migration write targets Bank 1 at offset 16 KiB,
+// after all four legacy records, preserving power-loss rollback.
+struct CatalogRecordV1 final {
+    std::array<uint8_t, 8U> magic{};
+    uint16_t format_version{};
+    uint16_t header_size{};
+    uint32_t record_size{};
+    uint64_t generation{};
+    uint16_t bank_index{};
+    uint16_t bank_count{};
+    uint32_t bank_size{};
+    uint32_t metadata_size{};
+    uint32_t data_offset{};
+    uint32_t data_block_size{};
+    uint32_t partition_size{};
+    uint16_t data_block_count{};
+    uint16_t allocation_cursor{};
+    uint16_t file_count{};
+    uint16_t block_map_count{};
+    uint32_t feature_flags{};
+    uint32_t payload_size{};
+    std::array<CatalogEntry, MICROPIXEL_BUNDLEFS_V1_MAX_FILES> entries{};
+    std::array<uint16_t, MICROPIXEL_BUNDLEFS_MAX_DATA_BLOCKS> block_map{};
     std::array<uint8_t, 2474U> reserved{};
     uint32_t checksum{};
     uint32_t commit_marker{kErasedWord};
@@ -89,15 +119,20 @@ struct WriterState final {
 
 struct CatalogScan final {
     CatalogRecord latest{};
+    CatalogRecordV1 legacy_latest{};
     bool has_latest{};
+    bool has_legacy_latest{};
     bool any_non_erased{};
     bool unsupported{};
     bool divergent{};
+    bool legacy_divergent{};
 };
 
 static_assert(sizeof(CatalogEntry) == 112U);
 static_assert(sizeof(CatalogRecord) == MICROPIXEL_BUNDLEFS_CATALOG_RECORD_SIZE);
+static_assert(sizeof(CatalogRecordV1) == MICROPIXEL_BUNDLEFS_V1_BANK_SIZE);
 static_assert(offsetof(CatalogRecord, entries) == 64U);
+static_assert(offsetof(CatalogRecordV1, entries) == 64U);
 static_assert(sizeof(FileState) <= sizeof(bundlefs_file_t));
 static_assert(sizeof(WriterState) <= sizeof(bundlefs_writer_t));
 static_assert(SPI_FLASH_MMU_PAGE_SIZE == MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE,
@@ -155,6 +190,8 @@ uint32_t BlockOffset(uint16_t block) {
 
 uint32_t CatalogBankOffset(uint32_t bank) { return bank * MICROPIXEL_BUNDLEFS_BANK_SIZE; }
 
+uint32_t LegacyCatalogBankOffset(uint32_t bank) { return bank * MICROPIXEL_BUNDLEFS_V1_BANK_SIZE; }
+
 bool ValidName(const char* name) {
     if (name == nullptr) {
         return false;
@@ -185,18 +222,20 @@ uint32_t Crc32Update(uint32_t crc, const uint8_t* data, size_t size) {
     return crc;
 }
 
-uint32_t CatalogChecksum(const CatalogRecord& record) {
+template <typename Record>
+uint32_t CatalogChecksum(const Record& record) {
     constexpr std::array<uint8_t, 4U> kZeroWord{};
     constexpr std::array<uint8_t, 4U> kErasedMarker{UINT8_MAX, UINT8_MAX, UINT8_MAX, UINT8_MAX};
     const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
     uint32_t crc = UINT32_MAX;
-    crc = Crc32Update(crc, bytes, offsetof(CatalogRecord, checksum));
+    crc = Crc32Update(crc, bytes, offsetof(Record, checksum));
     crc = Crc32Update(crc, kZeroWord.data(), kZeroWord.size());
     crc = Crc32Update(crc, kErasedMarker.data(), kErasedMarker.size());
     return crc ^ UINT32_MAX;
 }
 
-bool IsErased(const CatalogRecord& record) {
+template <typename Record>
+bool IsErased(const Record& record) {
     const auto* bytes = reinterpret_cast<const uint8_t*>(&record);
     return std::all_of(bytes, bytes + sizeof(record), [](uint8_t value) { return value == UINT8_MAX; });
 }
@@ -205,7 +244,8 @@ bool IsZero(const uint8_t* bytes, size_t size) {
     return std::all_of(bytes, bytes + size, [](uint8_t value) { return value == 0U; });
 }
 
-bool HasCommittedChecksum(const CatalogRecord& record) {
+template <typename Record>
+bool HasCommittedChecksum(const Record& record) {
     return record.magic == kCatalogMagic && record.commit_marker == kCommitMarker &&
            record.checksum == CatalogChecksum(record);
 }
@@ -219,11 +259,21 @@ bool HasSupportedGeometry(const CatalogRecord& record, const esp_partition_t* pa
            record.data_block_size == MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE && record.partition_size == partition->size;
 }
 
-bool ValidCatalog(const CatalogRecord& record, const esp_partition_t* partition) {
+bool HasSupportedGeometry(const CatalogRecordV1& record, const esp_partition_t* partition) {
+    return record.format_version == MICROPIXEL_BUNDLEFS_V1_FORMAT_VERSION &&
+           record.header_size == offsetof(CatalogRecordV1, entries) && record.record_size == sizeof(record) &&
+           record.bank_count == MICROPIXEL_BUNDLEFS_BANK_COUNT &&
+           record.bank_size == MICROPIXEL_BUNDLEFS_V1_BANK_SIZE &&
+           record.metadata_size == MICROPIXEL_BUNDLEFS_METADATA_SIZE &&
+           record.data_offset == MICROPIXEL_BUNDLEFS_DATA_OFFSET &&
+           record.data_block_size == MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE && record.partition_size == partition->size;
+}
+
+template <typename Record>
+bool ValidCatalogPayload(const Record& record, const esp_partition_t* partition) {
     const uint16_t data_blocks = DataBlockCount(partition);
-    if (!HasCommittedChecksum(record) || !HasSupportedGeometry(record, partition) || record.generation == 0U ||
-        record.bank_index >= record.bank_count || record.data_block_count != data_blocks || data_blocks == 0U ||
-        record.allocation_cursor >= data_blocks || record.file_count > BUNDLEFS_MAX_FILES ||
+    if (record.generation == 0U || record.bank_index >= record.bank_count || record.data_block_count != data_blocks ||
+        data_blocks == 0U || record.allocation_cursor >= data_blocks || record.file_count > record.entries.size() ||
         record.block_map_count > data_blocks || record.feature_flags != 0U ||
         record.payload_size != sizeof(record.entries) + sizeof(record.block_map) ||
         !IsZero(record.reserved.data(), record.reserved.size())) {
@@ -273,6 +323,16 @@ bool ValidCatalog(const CatalogRecord& record, const esp_partition_t* partition)
     return true;
 }
 
+bool ValidCatalog(const CatalogRecord& record, const esp_partition_t* partition) {
+    return HasCommittedChecksum(record) && HasSupportedGeometry(record, partition) &&
+           ValidCatalogPayload(record, partition);
+}
+
+bool ValidCatalog(const CatalogRecordV1& record, const esp_partition_t* partition) {
+    return HasCommittedChecksum(record) && HasSupportedGeometry(record, partition) &&
+           ValidCatalogPayload(record, partition);
+}
+
 void InitializeEmptyCatalog(const esp_partition_t* partition, uint64_t generation, CatalogRecord& record,
                             uint16_t allocation_cursor = 0U) {
     ZeroWorkspace(record);
@@ -294,6 +354,10 @@ void InitializeEmptyCatalog(const esp_partition_t* partition, uint64_t generatio
 }
 
 bundlefs_error_t ReadRecord(const esp_partition_t* partition, uint32_t offset, CatalogRecord& record) {
+    return esp_partition_read(partition, offset, &record, sizeof(record)) == ESP_OK ? BUNDLEFS_OK : BUNDLEFS_ERR_IO;
+}
+
+bundlefs_error_t ReadRecord(const esp_partition_t* partition, uint32_t offset, CatalogRecordV1& record) {
     return esp_partition_read(partition, offset, &record, sizeof(record)) == ESP_OK ? BUNDLEFS_OK : BUNDLEFS_ERR_IO;
 }
 
@@ -325,6 +389,35 @@ bundlefs_error_t ScanCatalog(const esp_partition_t* partition, CatalogScan& scan
             scan.has_latest = true;
         } else if (record->generation == scan.latest.generation && record->checksum != scan.latest.checksum) {
             scan.divergent = true;
+        }
+    }
+    auto legacy = AllocateWorkspace<CatalogRecordV1>();
+    if (legacy == nullptr) {
+        return BUNDLEFS_ERR_UNAVAILABLE;
+    }
+    for (uint32_t bank = 0U; bank < MICROPIXEL_BUNDLEFS_BANK_COUNT; ++bank) {
+        const uint32_t offset = LegacyCatalogBankOffset(bank);
+        const bundlefs_error_t read_error = ReadRecord(partition, offset, *legacy);
+        if (read_error != BUNDLEFS_OK) {
+            return read_error;
+        }
+        if (IsErased(*legacy)) {
+            continue;
+        }
+        scan.any_non_erased = true;
+        if (HasCommittedChecksum(*legacy) && !HasSupportedGeometry(*legacy, partition)) {
+            scan.unsupported = true;
+            continue;
+        }
+        if (!ValidCatalog(*legacy, partition) || legacy->bank_index != bank) {
+            continue;
+        }
+        if (!scan.has_legacy_latest || IsNewer(legacy->generation, scan.legacy_latest.generation)) {
+            scan.legacy_latest = *legacy;
+            scan.has_legacy_latest = true;
+        } else if (legacy->generation == scan.legacy_latest.generation &&
+                   legacy->checksum != scan.legacy_latest.checksum) {
+            scan.legacy_divergent = true;
         }
     }
     return BUNDLEFS_OK;
@@ -381,10 +474,29 @@ bundlefs_error_t LoadCatalog(const esp_partition_t* partition, CatalogRecord& re
     if (error != BUNDLEFS_OK) {
         return error;
     }
-    if (scan->divergent) {
+    if (scan->divergent || (!scan->has_latest && scan->legacy_divergent)) {
         return BUNDLEFS_ERR_CORRUPT;
     }
-    if (!scan->has_latest) {
+    if (scan->has_latest) {
+        record_out = scan->latest;
+        return BUNDLEFS_OK;
+    }
+    if (scan->has_legacy_latest) {
+        const CatalogRecordV1& legacy = scan->legacy_latest;
+        InitializeEmptyCatalog(partition, legacy.generation, record_out, legacy.allocation_cursor);
+        // Pretend the imported generation occupied v2 Bank 0. Its first v2
+        // successor is therefore committed at offset 16 KiB, beyond all four
+        // v1 records, so migration remains atomic across power loss.
+        record_out.bank_index = 0U;
+        record_out.file_count = legacy.file_count;
+        record_out.block_map_count = legacy.block_map_count;
+        std::copy_n(legacy.entries.begin(), legacy.file_count, record_out.entries.begin());
+        std::copy_n(legacy.block_map.begin(), legacy.block_map_count, record_out.block_map.begin());
+        ESP_LOGI(kTag, "mounted legacy v1 Catalog: generation=%" PRIu64 " files=%u; migration pending",
+                 legacy.generation, static_cast<unsigned>(legacy.file_count));
+        return BUNDLEFS_OK;
+    }
+    {
         if (scan->unsupported) {
             return BUNDLEFS_ERR_UNSUPPORTED_FORMAT;
         }
@@ -398,8 +510,6 @@ bundlefs_error_t LoadCatalog(const esp_partition_t* partition, CatalogRecord& re
         }
         return BUNDLEFS_OK;
     }
-    record_out = scan->latest;
-    return BUNDLEFS_OK;
 }
 
 bundlefs_error_t CommitCatalog(const esp_partition_t* partition, const CatalogRecord& current, CatalogRecord& next) {
@@ -667,6 +777,27 @@ bundlefs_error_t bundlefs_list(bundlefs_file_info_t* files_out, uint32_t capacit
     return BUNDLEFS_OK;
 }
 
+bundlefs_error_t bundlefs_get_file_sha256(const char* name, uint8_t sha256_out[BUNDLEFS_SHA256_SIZE]) {
+    if (!ValidName(name) || sha256_out == nullptr) {
+        return BUNDLEFS_ERR_INVALID_ARGUMENT;
+    }
+    const esp_partition_t* partition = FindPartition();
+    auto record = AllocateWorkspace<CatalogRecord>();
+    if (record == nullptr) {
+        return BUNDLEFS_ERR_UNAVAILABLE;
+    }
+    const bundlefs_error_t error = LoadCatalog(partition, *record);
+    if (error != BUNDLEFS_OK) {
+        return error;
+    }
+    const CatalogEntry* entry = FindEntry(*record, name);
+    if (entry == nullptr) {
+        return BUNDLEFS_ERR_NOT_FOUND;
+    }
+    std::copy(entry->sha256.begin(), entry->sha256.end(), sha256_out);
+    return BUNDLEFS_OK;
+}
+
 bundlefs_error_t bundlefs_open(const char* name, bundlefs_file_t* file_out) {
     if (!ValidName(name) || file_out == nullptr) {
         return BUNDLEFS_ERR_INVALID_ARGUMENT;
@@ -857,23 +988,22 @@ bundlefs_error_t bundlefs_commit(bundlefs_writer_t* writer_handle,
         return BUNDLEFS_ERR_CONFLICT;
     }
     InitializeEmptyCatalog(partition, current->generation + 1U, *next, writer.allocation_cursor);
-    bool replaced = false;
+    const bool replacing = FindEntry(*current, writer.file.name.data()) != nullptr;
+    if (!replacing) {
+        error = AppendEntry(*next, writer.file.name.data(), writer.file.size, ContentId(digest.data()), digest.data(),
+                            writer.file.blocks.data(), writer.file.block_count);
+        if (error != BUNDLEFS_OK) {
+            return error;
+        }
+    }
     for (uint32_t index = 0U; index < current->file_count; ++index) {
         const CatalogEntry& entry = current->entries[index];
         if (std::strcmp(entry.name.data(), writer.file.name.data()) == 0) {
             error = AppendEntry(*next, writer.file.name.data(), writer.file.size, ContentId(digest.data()),
                                 digest.data(), writer.file.blocks.data(), writer.file.block_count);
-            replaced = true;
         } else {
             error = AppendExisting(*next, *current, entry);
         }
-        if (error != BUNDLEFS_OK) {
-            return error;
-        }
-    }
-    if (!replaced) {
-        error = AppendEntry(*next, writer.file.name.data(), writer.file.size, ContentId(digest.data()), digest.data(),
-                            writer.file.blocks.data(), writer.file.block_count);
         if (error != BUNDLEFS_OK) {
             return error;
         }

@@ -13,6 +13,7 @@ struct SystemUiOperations final {
     std::expected<void, host_ui::SystemUiError> (*show_hall)(void*, const host_ui::HallModel&,
                                                              host_ui::SystemUiActionSink, void*){};
     void (*update_hall_status_bar)(void*, const host_ui::HallStatusBarModel&){};
+    void (*pause_hall_cover_loading)(void*){};
     void (*leave_hall)(void*){};
     std::expected<void, host_ui::SystemUiError> (*restore_guest_view)(void*){};
     void (*watch_guest_actions)(void*, host_ui::SystemUiActionSink, void*){};
@@ -57,6 +58,7 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
                                                                        host_ui::SystemUiActionSink action_sink,
                                                                        void* action_context) override;
     void UpdateHallStatusBar(const host_ui::HallStatusBarModel& model) override;
+    void PauseHallCoverLoading() override;
     void LeaveHall() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override;
     void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override;

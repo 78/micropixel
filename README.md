@@ -5,7 +5,7 @@
 
 当前支持范围是 ESP32-P4 + [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4)。Host 使用
 ESP-IDF 6.1 和固定 commit 的 [WAMR fork](https://github.com/78/wasm-micro-runtime)，Guest 使用受限的
-C++23 API，并由与 Host 匹配的 WAMR 2.4.3 `wamrc` 编译为 RISC-V 32-bit AOT。项目正式名称为 MicroPixel，ABI
+C++23 API，并由同一 fork commit 的 `wamrc` 编译为 RISC-V 32-bit AOT format v6。项目正式名称为 MicroPixel，ABI
 目前仍在演进中。
 
 ## 目录
@@ -34,8 +34,8 @@ git submodule update --init --recursive
 - ESP-IDF 6.1，并已通过其 `export.sh` 设置 `IDF_PATH`；本次清理验证使用 commit
   `6a9c44fe7e725af45cb99293ae38afd7d481f1e3`；
 - 带 wasm32 backend 的 Clang（设置 `WASI_CLANG`，或设置 `WASI_SDK_PATH`）；
-- WAMR 2.4.3 的 `wamrc`，目标为 `RISCV32_ILP32F`（设置 `WAMRC`）；构建脚本会拒绝与当前 Host
-  Runtime 版本不一致的编译器；
+- MicroPixel WAMR fork 固定 commit `77eb0f2ceb331e96ceab9737cc37f0b4a492781b` 构建的 `wamrc`，目标为
+  `RISCV32_ILP32F`、AOT format v6（设置 `WAMRC`）；上游 WAMR 2.4.3 至 2.4.5 的 AOT v5 不兼容；
 - Python 3；烧录和串口工具的 Python 依赖见 `requirements-dev.txt`。
 
 ```sh
@@ -59,7 +59,7 @@ python3 -m pip install -r requirements-dev.txt
 # 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
 bash tools/p4.sh build-host
 
-# 构建 Host、Blocks、Snake、Demo 和 App Store 镜像；不跑测试
+# 构建 Host、7 个示例 App 和 App Store 镜像；不跑测试
 bash tools/p4.sh build-all
 
 # 仅在发布前或推送前显式运行完整测试门禁
@@ -74,7 +74,7 @@ bash tools/p4.sh monitor /dev/cu.usbmodemXXXX
 ```
 
 两条命令在只连接一台 ESP32-P4 时都可省略端口；`monitor` 不构建、不烧录、不清空数据，也不运行测试。
-USB 调试的 App 烧录默认清空旧 Catalog 并写入 Blocks、Snake、Demo：
+USB 调试的 App 烧录默认清空旧 Catalog 并写入 7 个示例 App：
 
 ```sh
 bash tools/p4.sh flash-apps

@@ -170,8 +170,8 @@ main/
   AppId、必需的 UTF-8 App 标题元数据，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h`
   固定，目录调整不改变磁盘 ABI。
 - `runtime/bundlefs/` 是 24 MiB `app_store` 的底层文件系统。它以离散 64 KiB 数据块保存不可变 Bundle，
-  使用四个 4 KiB Catalog Bank 环形提交，提供不透明的 read/mmap/replace/remove 接口。Catalog 不使用
-  NVS，不扫描或安装预置 App；完整格式见
+  使用四个 16 KiB Catalog Bank 环形提交，最多保存 50 个 App，并兼容读取和迁移旧 v1 的四个 4 KiB
+  Bank。它提供不透明的 read/mmap/replace/remove 接口；Catalog 不使用 NVS，不扫描或安装预置 App；完整格式见
   [`docs/design/bundlefs.zh-CN.md`](../../../docs/design/bundlefs.zh-CN.md)。
 - `runtime/resources/` 负责异步资源请求、图片解码和 Bitmap handle/PSRAM 配额。Guest PNG 由 libpng
   逐行直接写入最终 ARGB8888 PSRAM buffer，避免整图 inflate 临时副本和第二遍整图颜色转换干扰显示
@@ -190,8 +190,12 @@ main/
   Suspended / Resuming / Stopping` 内部状态收敛为同步 Host 命令；Guest SDK 不暴露暂时无用的 lifecycle callback。
 - Resume/Stop 通过两个 typed Core Event 暴露给 Guest；正常切换先协作 Stop，500ms 超时才强制 terminate，
   真实 trap 的 WAMR 调用栈诊断保持开启。
-- App Hall 只 mmap 每个 Bundle 的压缩 PNG 封面，并逐行解码、等比裁切到当前卡片尺寸；无论作者提供
-  多大的源图，Host 都只缓存一份 202x202 RGB888 thumbnail。唯一挂起 App 的卡片改用窗口截图，并由
+- App Hall 最多展示 50 个 App，首行三张完整卡片并露出下一张，支持触控左右自由拖动和基于释放速度的
+  惯性滚动，不强制按卡片位置吸附。卡片作为一个裁剪内容带移动，每帧只 invalidates 大厅视口；面板
+  partial-buffer 通过 DMA2D 传输，较大的 LVGL fill/blend 使用 PPA。Catalog 变化时回到最左侧，使新安装在
+  index 0 的 App 立即可见。大厅只保留与视口相交项及左右各一个预取项，最多 6 套卡片控件和 6 张
+  202x202 RGB888 解码封面；快速滑动时先显示占位图，后台任务只为当前窗口解码，并丢弃已经滑过的结果。
+  压缩 PNG 保持 Flash mmap，不复制到 PSRAM。唯一挂起 App 的卡片改用窗口截图，并由
   ESP32-P4 PPA 完成 720x720 ↔ 卡片区域的硬件缩放动画；全尺寸截图只在切换期间存在，不做软件缩放
   fallback。大厅顶部由 Host 显示基于 LVGL 内置 Wi-Fi 字形生成的 RSSI 分级图标和 LVGL 多档电池图标；
   蜂窝信号使用 Host 绘制的分级信号柱，真实蜂窝后端可用前不显示。状态层使用 LVGL primitive 和单次半透明合成；亮度、主音量及居中的 FPS/聚合 CPU 小蒙层

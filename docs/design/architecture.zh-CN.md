@@ -12,7 +12,7 @@ Firmware 文件职责以 [Espressif main README](../../firmware/espressif/main/R
 MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产品基线为：
 
 - Host：ESP32-P4 + Metalio-Claw4，ESP-IDF 6.1；
-- Runtime：WAMR 2.4.3 AOT，同时最多运行一个 Guest `AppSession`；
+- Runtime：MicroPixel WAMR fork 固定 commit、AOT format v6，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
 - App 分发：Bundle v1 封装 AOT、资源和 App metadata；24 MiB 可写 App Store 由 BundleFS 以离散
   64 KiB 块和四 Bank Catalog 提供写时复制事务；
@@ -205,7 +205,8 @@ python3 -m unittest tools.tests.test_build_app_store_image
 
 真机发布前至少检查：
 
-- App Hall 能显示并启动三个 App，切换时旧 Session 已先销毁；
+- App Hall 能显示并启动最多 50 个 App，第一行可自由左右拖动并带惯性、不强制卡片吸附；新安装 App 位于
+  最左侧。卡片和解码封面使用最多 6 项的视口窗口，快速滑动期间允许占位；切换时旧 Session 已先销毁；
 - App Hall 顶部居中显示紧凑 FPS/CPU，右侧 Wi-Fi 信号与电池状态不会互相遮挡；
 - 顶部下滑打开 Status Layer，底部上滑暂停并返回大厅；
 - 恢复同一 App 时复用 Session 和 retained scene，并由 PPA 从 Hall 卡片硬件放大回最后一帧；

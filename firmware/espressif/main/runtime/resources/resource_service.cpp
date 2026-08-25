@@ -11,7 +11,7 @@ namespace micropixel::runtime {
 namespace {
 
 constexpr char kTag[] = "micropixel_resource";
-constexpr uint32_t kWorkerStackBytes = 12U * 1024U;
+constexpr uint32_t kWorkerStackBytes = 8U * 1024U;
 constexpr BaseType_t kWorkerCore = 0;
 
 }  // namespace

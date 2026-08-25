@@ -39,7 +39,13 @@ enum class AppSessionError {
 struct AppSessionFailure final {
     AppSessionError code{};
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id{};
+    std::array<char, 256U> detail{};
+    int32_t exit_code{};
+    bool has_exit_code{};
 };
+
+[[nodiscard]] const char* AppSessionErrorCode(AppSessionError error);
+[[nodiscard]] const char* AppSessionErrorPhase(AppSessionError error);
 
 // Owns every resource belonging to one runnable Guest. Destruction tears the
 // instance down in reverse order and leaves process-wide WAMR state intact.
@@ -54,7 +60,7 @@ class AppSession final {
     [[nodiscard]] static std::expected<AppSession, AppSessionFailure> Create(device::DeviceServices& devices,
                                                                              const bundlefs_file_t& file,
                                                                              GuestLogSink* log_sink = nullptr);
-    [[nodiscard]] std::expected<void, AppSessionError> Run();
+    [[nodiscard]] std::expected<void, AppSessionFailure> Run();
     [[nodiscard]] bool Suspend(TickType_t timeout);
     [[nodiscard]] bool Resume();
     void RequestStop();
@@ -63,13 +69,15 @@ class AppSession final {
 
    private:
     AppSession(device::DeviceServices& devices, AotPackage package, LoadedModule module, GuestInstance guest,
-               std::unique_ptr<GuestContext> context, std::unique_ptr<GuestContextBinding> context_binding,
-               std::unique_ptr<DecodedBitmap> launch_bitmap, bool launch_visible);
+               wasm_function_inst_t entry, std::unique_ptr<GuestContext> context,
+               std::unique_ptr<GuestContextBinding> context_binding, std::unique_ptr<DecodedBitmap> launch_bitmap,
+               bool launch_visible);
 
     device::DeviceServices& devices_;
     AotPackage package_;
     LoadedModule module_;
     GuestInstance guest_;
+    wasm_function_inst_t entry_{};
     std::unique_ptr<GuestContext> context_;
     std::unique_ptr<GuestContextBinding> context_binding_;
     std::unique_ptr<DecodedBitmap> launch_bitmap_;

@@ -33,6 +33,9 @@ struct AppRunOutcome final {
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id{};
     AppCompletion completion{AppCompletion::kFailed};
     AppSessionError error{AppSessionError::kPackageLoad};
+    std::array<char, 256U> detail{};
+    int32_t exit_code{};
+    bool has_exit_code{};
 };
 
 using AppSessionReadySink = void (*)(void* context);

@@ -46,7 +46,7 @@ inline void DrawButton(micropixel::Frame& commands, const micropixel::ui::Button
                                                                .feedback_overlay = micropixel::Color::Black(),
                                                                .pressed_opacity = 48U,
                                                                .disabled_opacity = 112U,
-                                                               .font_size_px = 22U,
+                                                               .font = micropixel::SystemFont::kLarge,
                                                                .pressed_text_offset_px = 1});
 }
 

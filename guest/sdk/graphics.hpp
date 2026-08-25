@@ -115,6 +115,13 @@ enum class PixelFormat : uint32_t {
     kBgra8888 = 2U,
 };
 
+enum class SystemFont : uint16_t {
+    kSmall = 1U,
+    kMedium = 2U,
+    kLarge = 3U,
+    kTitle = 4U,
+};
+
 class RendererInfo final {
    public:
     [[nodiscard]] constexpr uint32_t width() const { return width_; }
@@ -163,8 +170,9 @@ class Frame final {
 
     void Clear(Color color);
     void FillRect(Rect rect, Color color, uint8_t opacity = 255U);
-    void DrawText(Point position, const char* text, Color color, uint16_t font_size_px = 24U);
-    void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, uint16_t font_size_px = 24U);
+    void DrawText(Point position, const char* text, Color color, SystemFont font = SystemFont::kMedium);
+    void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color,
+                          SystemFont font = SystemFont::kMedium);
     void DrawTexture(Point position, const Texture& texture, uint8_t opacity = 255U);
     void DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity = 255U);
     void DrawTexture(Rect destination, const Texture& texture, uint8_t opacity = 255U);

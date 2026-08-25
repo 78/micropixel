@@ -156,8 +156,19 @@ host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, co
                                  uint64_t transition_trigger_us = 0U, bool firmware_update_available = false) {
     host_ui::HallModel model{.app_count = std::min(catalog.count, host_ui::kMaxHallApps),
                              .status_app_id = outcome != nullptr ? outcome->app_id.data() : nullptr,
+                             .status_error_phase = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
+                                                       ? runtime::AppSessionErrorPhase(outcome->error)
+                                                       : nullptr,
+                             .status_error_code = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
+                                                      ? runtime::AppSessionErrorCode(outcome->error)
+                                                      : nullptr,
+                             .status_error_detail = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
+                                                        ? outcome->detail.data()
+                                                        : nullptr,
                              .status = status,
                              .detail = detail,
+                             .status_exit_code = outcome != nullptr ? outcome->exit_code : 0,
+                             .status_has_exit_code = outcome != nullptr && outcome->has_exit_code,
                              .launch_enabled = launch_enabled,
                              .status_bar = MakeHallStatusBarModel(wifi, battery),
                              .transition_trigger_us = transition_trigger_us,
@@ -550,9 +561,11 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
     return model;
 }
 
-host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCatalog& catalog, bool launch_available) {
+host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCatalog& catalog, bool launch_available,
+                                                   bool uninstall_available) {
     host_ui::AppManagementModel model{.app_count = std::min(catalog.count, host_ui::kMaxHallApps),
-                                      .launch_available = launch_available};
+                                      .launch_available = launch_available,
+                                      .uninstall_available = uninstall_available};
     model.storage_total_kib = catalog.store_total_bytes / 1024U;
     model.storage_used_kib = catalog.store_used_bytes / 1024U;
     for (uint32_t index = 0U; index < model.app_count; ++index) {
@@ -563,9 +576,6 @@ host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCa
             .bundle_size_kib = source.bundle_size / 1024U,
         };
     }
-    // Local App Management remains an overview. Mutation is exposed through
-    // Remote Control until the native page defines an explicit confirmation flow.
-    model.uninstall_available = false;
     return model;
 }
 
@@ -583,6 +593,15 @@ remote_control::RemoteControlCatalogSnapshot MakeRemoteControlCatalog(const runt
         destination.bundle_size = source.bundle_size;
     }
     return snapshot;
+}
+
+// Keep the 50-entry catalog snapshot out of long-lived caller stack frames.
+// In particular, HostController::Run() does not return while the product is
+// running, so an inlined/by-value snapshot temporary there would permanently
+// consume roughly 7 KiB of the main task stack.
+[[gnu::noinline]] void UpdateRemoteControlCatalog(remote_control::RemoteControlAgent& remote_control,
+                                                  const runtime::InstalledAppCatalog& catalog) {
+    remote_control.UpdateInstalledApps(MakeRemoteControlCatalog(catalog));
 }
 
 const char* RemoteLifecycleText(AppLifecycleState state) {
@@ -657,6 +676,18 @@ const char* AppControllerErrorText(AppControllerError error) {
     }
 }
 
+void AddAppDiagnostic(remote_control::RemoteControlHostResult& result, const runtime::AppRunOutcome& outcome) {
+    result.has_diagnostic = true;
+    std::snprintf(result.diagnostic.app_id.data(), result.diagnostic.app_id.size(), "%s", outcome.app_id.data());
+    std::snprintf(result.diagnostic.phase.data(), result.diagnostic.phase.size(), "%s",
+                  runtime::AppSessionErrorPhase(outcome.error));
+    std::snprintf(result.diagnostic.code.data(), result.diagnostic.code.size(), "%s",
+                  runtime::AppSessionErrorCode(outcome.error));
+    std::snprintf(result.diagnostic.detail.data(), result.diagnostic.detail.size(), "%s", outcome.detail.data());
+    result.diagnostic.exit_code = outcome.exit_code;
+    result.diagnostic.has_exit_code = outcome.has_exit_code;
+}
+
 struct RemoteCommandPump final {
     bool (*poll)(void*){};
     void* context{};
@@ -667,6 +698,16 @@ struct RemoteCommandPump final {
             unwind_requested = poll(context);
         }
         return unwind_requested;
+    }
+};
+
+struct AppManagementUninstallHandler final {
+    bool (*uninstall)(void*, uint32_t){};
+    void* context{};
+    bool available{};
+
+    [[nodiscard]] bool Uninstall(uint32_t app_index) const {
+        return available && uninstall != nullptr && uninstall(context, app_index);
     }
 };
 
@@ -1078,8 +1119,10 @@ bool RunRemoteControlSettings(host_ui::SystemShell& shell, host_ui::SystemSettin
 }
 
 bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCatalog& catalog, bool launch_available,
-                      std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump) {
-    const auto show_result = shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available));
+                      const AppManagementUninstallHandler* uninstall_handler, std::optional<uint32_t>& launch_request,
+                      RemoteCommandPump* command_pump) {
+    const bool uninstall_available = uninstall_handler != nullptr && uninstall_handler->available;
+    auto show_result = shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available, uninstall_available));
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show App Management: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1105,7 +1148,21 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             return true;
         }
         if (action->type == host_ui::SystemUiActionType::kUninstallInstalledApp) {
-            ESP_LOGW(kTag, "ignored unavailable local uninstall request: index=%" PRIu32, action->app_index);
+            if (!uninstall_available || action->app_index >= catalog.count) {
+                ESP_LOGW(kTag, "ignored unavailable local uninstall request: index=%" PRIu32, action->app_index);
+                continue;
+            }
+            shell.LeaveAppManagement();
+            if (!uninstall_handler->Uninstall(action->app_index)) {
+                ESP_LOGE(kTag, "local App uninstall failed: index=%" PRIu32, action->app_index);
+            }
+            show_result =
+                shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available, uninstall_available));
+            if (!show_result) {
+                ESP_LOGE(kTag, "failed to refresh App Management after uninstall: error=%u",
+                         static_cast<unsigned>(show_result.error()));
+                return false;
+            }
             continue;
         }
         ESP_LOGW(kTag, "ignored action=%u while App Management is visible", static_cast<unsigned>(action->type));
@@ -1115,7 +1172,8 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
 bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery, device::WifiBackend& wifi,
                    host_ui::StatusLayerModel& status_model, const runtime::InstalledAppCatalog& catalog,
                    host_ui::SystemSettingsStore& settings_store, remote_control::RemoteControlAgent& remote_control,
-                   bool launch_available, std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump) {
+                   bool launch_available, const AppManagementUninstallHandler* uninstall_handler,
+                   std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump) {
     RefreshWifiStatus(status_model, wifi.Snapshot());
     host_ui::RemoteControlModel remote_control_model = remote_control.Snapshot();
     auto show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
@@ -1210,7 +1268,8 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                     }
                 } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kManageApps)) {
                     shell.LeaveSystemMenu();
-                    if (!RunAppManagement(shell, catalog, launch_available, launch_request, command_pump)) {
+                    if (!RunAppManagement(shell, catalog, launch_available, uninstall_handler, launch_request,
+                                          command_pump)) {
                         return false;
                     }
                     if (command_pump != nullptr && command_pump->unwind_requested) {
@@ -1326,7 +1385,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             if (action->type == host_ui::SystemUiActionType::kOpenSystemMenu) {
                 std::optional<uint32_t> launch_request;
                 (void)RunSystemMenu(shell, battery, wifi, status_model, catalog, settings_store, remote_control, false,
-                                    launch_request, nullptr);
+                                    nullptr, launch_request, nullptr);
                 cpu_sampler.Reset();
                 (void)cpu_sampler.Sample();
                 next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
@@ -1371,7 +1430,7 @@ class ActiveHost final {
           settings_store_(settings_store),
           remote_control_(remote_control),
           hall_status_(catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady) {
-        remote_control_.UpdateInstalledApps(MakeRemoteControlCatalog(catalog_));
+        UpdateRemoteControlCatalog(remote_control_, catalog_);
         remote_control_.UpdateAppLifecycle(nullptr, "not_running");
     }
 
@@ -1459,17 +1518,49 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool ReloadAppCatalog() {
-        auto catalog_result = runtime::ScanInstalledApps();
-        if (!catalog_result) {
+        // Preserve the active catalog if scanning fails without placing the
+        // 3456-byte replacement catalog on the Host supervisor stack.
+        auto reloaded_catalog = MakePsramObject<runtime::InstalledAppCatalog>();
+        if (reloaded_catalog == nullptr || !runtime::ScanInstalledApps(*reloaded_catalog)) {
             return false;
         }
-        catalog_ = *catalog_result;
+        catalog_ = std::move(*reloaded_catalog);
         covers_ = OpenHallCovers(catalog_);
-        remote_control_.UpdateInstalledApps(MakeRemoteControlCatalog(catalog_));
+        UpdateRemoteControlCatalog(remote_control_, catalog_);
         RefreshStatusMetrics(status_model_, catalog_, battery_);
         hall_status_ = catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady;
         hall_detail_ = 0U;
         outcome_ = nullptr;
+        return true;
+    }
+
+    void ReleaseHallCovers() {
+        shell_.PauseHallCoverLoading();
+        covers_ = {};
+    }
+
+    void RestoreHallCovers() { covers_ = OpenHallCovers(catalog_, suspended_index_); }
+
+    [[nodiscard]] bool UninstallInstalledApp(uint32_t app_index) {
+        if (app_controller_.state() != AppLifecycleState::kNotRunning || app_index >= catalog_.count) {
+            return false;
+        }
+        const auto app_id = catalog_.apps[app_index].app_id;
+        ESP_LOGI(kTag, "uninstalling App from System Settings: index=%" PRIu32 " app=%s", app_index, app_id.data());
+        ReleaseHallCovers();
+        const auto uninstall_result = runtime::UninstallApp(app_id.data());
+        if (!uninstall_result) {
+            ESP_LOGE(kTag, "System Settings App uninstall failed: app=%s error=%s", app_id.data(),
+                     AppStoreErrorText(uninstall_result.error()));
+            RestoreHallCovers();
+            return false;
+        }
+        if (!ReloadAppCatalog()) {
+            ESP_LOGE(kTag, "App catalog refresh failed after uninstalling app=%s", app_id.data());
+            RestoreHallCovers();
+            return false;
+        }
+        ESP_LOGI(kTag, "System Settings App uninstall completed: app=%s", app_id.data());
         return true;
     }
 
@@ -1478,6 +1569,27 @@ class ActiveHost final {
         std::snprintf(result.message.data(), result.message.size(), "%s", message != nullptr ? message : "");
         if (!remote_control_.SubmitHostResult(result)) {
             ESP_LOGW(kTag, "Remote Control result queue is full: command=%.16s", result.command_id.data());
+        }
+    }
+
+    void FinishPendingStart(bool ok, const char* message, const runtime::AppRunOutcome* outcome = nullptr) {
+        if (!pending_start_active_) {
+            return;
+        }
+        if (outcome != nullptr && outcome->completion == runtime::AppCompletion::kFailed) {
+            AddAppDiagnostic(pending_start_result_, *outcome);
+        }
+        SubmitRemoteResult(pending_start_result_, ok, message);
+        pending_start_result_ = {};
+        pending_start_deadline_ticks_ = 0U;
+        pending_start_active_ = false;
+    }
+
+    void ReportAppFailure(const runtime::AppRunOutcome& outcome) {
+        remote_control::RemoteControlHostResult event{};
+        AddAppDiagnostic(event, outcome);
+        if (!remote_control_.SubmitHostResult(event)) {
+            ESP_LOGW(kTag, "Remote Control App failure queue is full: app=%s", outcome.app_id.data());
         }
     }
 
@@ -1655,11 +1767,22 @@ class ActiveHost final {
                     return false;
                 }
                 const char* activation_error = ActivateSelectedApp(*app_index);
-                const bool started = activation_error == nullptr && state_ == State::kForeground;
-                SubmitRemoteResult(
-                    result, started,
-                    started ? "app_started" : (activation_error != nullptr ? activation_error : "app_start_failed"));
-                return started;
+                if (activation_error != nullptr) {
+                    SubmitRemoteResult(result, false, activation_error);
+                    return false;
+                }
+                if (app_controller_.state() == AppLifecycleState::kForeground) {
+                    SubmitRemoteResult(result, true, "app_started");
+                    return true;
+                }
+                if (app_controller_.state() != AppLifecycleState::kStarting || pending_start_active_) {
+                    SubmitRemoteResult(result, false, "app_start_failed");
+                    return false;
+                }
+                pending_start_result_ = result;
+                pending_start_deadline_ticks_ = command.deadline_ticks;
+                pending_start_active_ = true;
+                return true;
             }
             case remote_control::RemoteControlHostCommandType::kStopApp: {
                 const AppLifecycleState lifecycle = app_controller_.state();
@@ -1681,6 +1804,7 @@ class ActiveHost final {
                     SubmitRemoteResult(result, false, "app_stop_failed");
                     return false;
                 }
+                FinishPendingStart(false, "app_start_cancelled");
                 if (suspended_index_.has_value()) {
                     shell_.ReleaseGuestSnapshot();
                     suspended_snapshot_ = {};
@@ -1702,6 +1826,7 @@ class ActiveHost final {
                     SubmitRemoteResult(result, false, "stop_active_app_before_install");
                     return false;
                 }
+                ReleaseHallCovers();
                 const runtime::AppInstallRequest request{
                     .data = command.package_data,
                     .size = command.package_size,
@@ -1711,14 +1836,16 @@ class ActiveHost final {
                 auto install_result = runtime::InstallApp(request);
                 heap_caps_free(command.package_data);
                 if (!install_result) {
+                    RestoreHallCovers();
                     SubmitRemoteResult(result, false, AppStoreErrorText(install_result.error()));
                     return false;
                 }
                 if (!ReloadAppCatalog()) {
+                    RestoreHallCovers();
                     SubmitRemoteResult(result, false, "catalog_refresh_failed");
                     return false;
                 }
-                SubmitRemoteResult(result, true, "app_installed");
+                SubmitRemoteResult(result, true, install_result->changed ? "app_installed" : "already_installed");
                 return true;
             }
             case remote_control::RemoteControlHostCommandType::kUninstallApp: {
@@ -1726,12 +1853,19 @@ class ActiveHost final {
                     SubmitRemoteResult(result, false, "stop_active_app_before_uninstall");
                     return false;
                 }
+                if (!FindApp(command.app_id.data()).has_value()) {
+                    SubmitRemoteResult(result, true, "already_uninstalled");
+                    return false;
+                }
+                ReleaseHallCovers();
                 auto uninstall_result = runtime::UninstallApp(command.app_id.data());
                 if (!uninstall_result) {
+                    RestoreHallCovers();
                     SubmitRemoteResult(result, false, AppStoreErrorText(uninstall_result.error()));
                     return false;
                 }
                 if (!ReloadAppCatalog()) {
+                    RestoreHallCovers();
                     SubmitRemoteResult(result, false, "catalog_refresh_failed");
                     return false;
                 }
@@ -1901,8 +2035,16 @@ class ActiveHost final {
             }
             if (action.type == host_ui::SystemUiActionType::kOpenSystemMenu) {
                 std::optional<uint32_t> launch_request;
+                const AppManagementUninstallHandler uninstall_handler{
+                    .uninstall =
+                        [](void* context, uint32_t app_index) {
+                            return static_cast<ActiveHost*>(context)->UninstallInstalledApp(app_index);
+                        },
+                    .context = this,
+                    .available = app_controller_.state() == AppLifecycleState::kNotRunning,
+                };
                 if (!RunSystemMenu(shell_, battery_, wifi_, status_model_, catalog_, settings_store_, remote_control_,
-                                   CanLaunch(), launch_request, &command_pump)) {
+                                   CanLaunch(), &uninstall_handler, launch_request, &command_pump)) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
                 if (command_pump.unwind_requested) {
@@ -2060,6 +2202,14 @@ class ActiveHost final {
             auto completion_result = app_controller_.PollCompletion(pdMS_TO_TICKS(20));
             remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(),
                                                RemoteLifecycleText(app_controller_.state()));
+            if (pending_start_active_ && app_controller_.state() == AppLifecycleState::kForeground) {
+                FinishPendingStart(true, "app_started");
+            }
+            if (pending_start_active_ && pending_start_deadline_ticks_ != 0U &&
+                static_cast<int32_t>(xTaskGetTickCount() - pending_start_deadline_ticks_) >= 0) {
+                FinishPendingStart(false, "command_expired");
+                (void)app_controller_.RequestStop();
+            }
             if (ProcessRemoteCommands()) {
                 return;
             }
@@ -2074,12 +2224,19 @@ class ActiveHost final {
                          static_cast<unsigned>(completion_result.error()));
                 LeaveForegroundUi();
                 RecordHostFailure(static_cast<uint32_t>(completion_result.error()));
+                FinishPendingStart(false, AppControllerErrorText(completion_result.error()));
                 remote_control_.UpdateAppLifecycle(nullptr, "not_running");
                 state_ = State::kHall;
                 return;
             }
             if (completion_result->has_value()) {
                 last_outcome_ = **completion_result;
+                if (pending_start_active_) {
+                    const bool started_and_exited = last_outcome_.completion == runtime::AppCompletion::kExited;
+                    FinishPendingStart(started_and_exited,
+                                       started_and_exited ? "app_started_and_exited" : "app_start_failed",
+                                       &last_outcome_);
+                }
                 LeaveForegroundUi();
                 outcome_ = &last_outcome_;
                 hall_status_ = last_outcome_.completion == runtime::AppCompletion::kFailed
@@ -2091,6 +2248,7 @@ class ActiveHost final {
                 if (last_outcome_.completion == runtime::AppCompletion::kFailed) {
                     ESP_LOGE(kTag, "AppSession failed: app=%s error=%u", last_outcome_.app_id.data(),
                              static_cast<unsigned>(last_outcome_.error));
+                    ReportAppFailure(last_outcome_);
                 }
                 micropixel_log_heap_state("host after AppController completion");
                 remote_control_.UpdateAppLifecycle(nullptr, "not_running");
@@ -2217,6 +2375,9 @@ class ActiveHost final {
     uint64_t hall_transition_trigger_us_{};
     bool ready_logged_{};
     bool hall_firmware_update_available_{};
+    remote_control::RemoteControlHostResult pending_start_result_{};
+    TickType_t pending_start_deadline_ticks_{};
+    bool pending_start_active_{};
 };
 
 }  // namespace
@@ -2258,39 +2419,40 @@ void HostController::Run() {
     shell_.ApplyBrightness(status_model.brightness_percent);
     shell_.ApplyVolume(status_model.volume_percent);
 
-    auto catalog_result = runtime::ScanInstalledApps();
+    auto catalog = MakePsramObject<runtime::InstalledAppCatalog>();
+    if (catalog == nullptr) {
+        ESP_LOGE(kTag, "failed to allocate App Store catalog");
+        return;
+    }
+    auto catalog_result = runtime::ScanInstalledApps(*catalog);
     if (!catalog_result) {
         ESP_LOGE(kTag, "App Store catalog scan failed");
-        auto empty_catalog = MakePsramObject<runtime::InstalledAppCatalog>();
-        if (empty_catalog == nullptr) {
-            ESP_LOGE(kTag, "failed to allocate empty App Store catalog");
-            return;
-        }
-        remote_control_.UpdateInstalledApps(MakeRemoteControlCatalog(*empty_catalog));
+        *catalog = {};
+        UpdateRemoteControlCatalog(remote_control_, *catalog);
         remote_control_.UpdateAppLifecycle(nullptr, "not_running");
-        RunUnavailableHall(shell_, battery_, wifi_, *empty_catalog, host_ui::HallStatus::kNoApps,
+        RunUnavailableHall(shell_, battery_, wifi_, *catalog, host_ui::HallStatus::kNoApps,
                            static_cast<uint32_t>(catalog_result.error()), status_model, settings_store,
                            remote_control_);
         return;
     }
-    remote_control_.UpdateInstalledApps(MakeRemoteControlCatalog(*catalog_result));
+    UpdateRemoteControlCatalog(remote_control_, *catalog);
     remote_control_.UpdateAppLifecycle(nullptr, "not_running");
 
     auto runtime_result = runtime::AppRuntime::Initialize(devices_, &remote_control_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
-        RunUnavailableHall(shell_, battery_, wifi_, *catalog_result, host_ui::HallStatus::kRuntimeUnavailable,
+        RunUnavailableHall(shell_, battery_, wifi_, *catalog, host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(runtime_result.error()), status_model, settings_store,
                            remote_control_);
         return;
     }
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
-    auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog_result), app_runtime, devices_, shell_, battery_,
-                                                   wifi_, status_model, settings_store, remote_control_);
+    auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_runtime, devices_, shell_, battery_, wifi_,
+                                                   status_model, settings_store, remote_control_);
     if (active_host == nullptr) {
         ESP_LOGE(kTag, "failed to allocate ActiveHost state");
-        RunUnavailableHall(shell_, battery_, wifi_, *catalog_result, host_ui::HallStatus::kRuntimeUnavailable,
+        RunUnavailableHall(shell_, battery_, wifi_, *catalog, host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store,
                            remote_control_);
         return;

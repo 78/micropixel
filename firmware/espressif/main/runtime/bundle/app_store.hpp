@@ -30,8 +30,16 @@ struct AppInstallRequest final {
     std::array<uint8_t, 32U> expected_sha256{};
 };
 
-[[nodiscard]] std::expected<InstalledAppCatalog, AppStoreError> LoadAppStoreCatalog();
-[[nodiscard]] std::expected<InstalledApp, AppStoreError> InstallApp(const AppInstallRequest& request);
+struct AppInstallResult final {
+    InstalledApp app{};
+    bool changed{};
+};
+
+// InstalledAppCatalog contains up to fifty opaque BundleFS handles and is too large
+// to return by value on the bounded Host supervisor stack. The caller owns its
+// storage so production paths can keep it in PSRAM.
+[[nodiscard]] std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& catalog_out);
+[[nodiscard]] std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallRequest& request);
 [[nodiscard]] std::expected<void, AppStoreError> UninstallApp(const char* app_id);
 
 }  // namespace micropixel::runtime

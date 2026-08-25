@@ -98,22 +98,26 @@ void Reset() {
 
 void TestEmptyInstallUpdateAndRemove() {
     Reset();
-    auto catalog = micropixel::runtime::LoadAppStoreCatalog();
-    Check(catalog.has_value() && catalog->count == 0U, "empty BundleFS must produce an empty App catalog");
+    micropixel::runtime::InstalledAppCatalog catalog{};
+    auto catalog_result = micropixel::runtime::LoadAppStoreCatalog(catalog);
+    Check(catalog_result.has_value() && catalog.count == 0U, "empty BundleFS must produce an empty App catalog");
 
     auto first_bundle = MakeBundle("demo", 0x31U);
     auto installed = micropixel::runtime::InstallApp(Request(first_bundle, "demo"));
-    Check(installed.has_value() && std::strcmp(installed->app_id.data(), "demo") == 0,
+    Check(installed.has_value() && installed->changed && std::strcmp(installed->app.app_id.data(), "demo") == 0,
           "valid Bundle must install through BundleFS");
 
-    catalog = micropixel::runtime::LoadAppStoreCatalog();
-    Check(catalog.has_value() && catalog->count == 1U &&
-              catalog->store_used_bytes == MICROPIXEL_BUNDLEFS_METADATA_SIZE + first_bundle.size(),
+    catalog_result = micropixel::runtime::LoadAppStoreCatalog(catalog);
+    Check(catalog_result.has_value() && catalog.count == 1U &&
+              catalog.store_used_bytes == MICROPIXEL_BUNDLEFS_METADATA_SIZE + first_bundle.size(),
           "installed Bundle must be listed with metadata-inclusive Store usage");
+    installed = micropixel::runtime::InstallApp(Request(first_bundle, "demo"));
+    Check(installed.has_value() && !installed->changed && file_count == 1U,
+          "installing the same Bundle digest must converge without rewriting it");
 
     auto second_bundle = MakeBundle("demo", 0x72U);
     installed = micropixel::runtime::InstallApp(Request(second_bundle, "demo"));
-    Check(installed.has_value() && file_count == 1U && files[0].data == second_bundle,
+    Check(installed.has_value() && installed->changed && file_count == 1U && files[0].data == second_bundle,
           "same AppId must atomically replace one BundleFS file");
 
     auto invalid_request = Request(first_bundle, "demo");
@@ -124,7 +128,8 @@ void TestEmptyInstallUpdateAndRemove() {
         "hash failure must leave the active file unchanged");
 
     Check(micropixel::runtime::UninstallApp("demo").has_value(), "installed App must uninstall");
-    Check(micropixel::runtime::LoadAppStoreCatalog()->count == 0U, "uninstalled App must disappear");
+    Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 0U,
+          "uninstalled App must disappear");
 }
 
 void TestIdentityAndCapacityErrors() {
@@ -135,6 +140,31 @@ void TestIdentityAndCapacityErrors() {
           "request AppId must match Bundle header");
     Check(micropixel::runtime::UninstallApp("missing").error() == micropixel::runtime::AppStoreError::kNotFound,
           "missing App uninstall must be reported");
+}
+
+void TestNewestInstallIsListedFirst() {
+    Reset();
+    auto blocks = MakeBundle("blocks", 0x31U);
+    auto snake = MakeBundle("snake", 0x42U);
+    auto demo = MakeBundle("demo", 0x53U);
+    Check(micropixel::runtime::InstallApp(Request(blocks, "blocks")).has_value(), "Blocks must install");
+    Check(micropixel::runtime::InstallApp(Request(snake, "snake")).has_value(), "Snake must install");
+    Check(micropixel::runtime::InstallApp(Request(demo, "demo")).has_value(), "Demo must install");
+
+    micropixel::runtime::InstalledAppCatalog catalog{};
+    Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 3U,
+          "three installed Apps must load");
+    Check(std::strcmp(catalog.apps[0].app_id.data(), "demo") == 0 &&
+              std::strcmp(catalog.apps[1].app_id.data(), "snake") == 0 &&
+              std::strcmp(catalog.apps[2].app_id.data(), "blocks") == 0,
+          "App Store catalog must expose newest installs first");
+
+    snake = MakeBundle("snake", 0x64U);
+    Check(micropixel::runtime::InstallApp(Request(snake, "snake")).has_value(), "Snake update must install");
+    Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() &&
+              std::strcmp(catalog.apps[0].app_id.data(), "demo") == 0 &&
+              std::strcmp(catalog.apps[1].app_id.data(), "snake") == 0,
+          "updating an App must preserve its catalog position");
 }
 
 }  // namespace
@@ -176,6 +206,19 @@ bundlefs_error_t bundlefs_list(bundlefs_file_info_t* files_out, uint32_t capacit
         files_out[index].size = files[index].data.size();
         files_out[index].content_id = files[index].content_id;
     }
+    return BUNDLEFS_OK;
+}
+
+bundlefs_error_t bundlefs_get_file_sha256(const char* name, uint8_t sha256_out[BUNDLEFS_SHA256_SIZE]) {
+    const int index = name == nullptr ? -1 : FindFile(name);
+    if (index < 0) {
+        return BUNDLEFS_ERR_NOT_FOUND;
+    }
+    if (sha256_out == nullptr) {
+        return BUNDLEFS_ERR_INVALID_ARGUMENT;
+    }
+    const auto digest = Hash(files[static_cast<size_t>(index)].data);
+    std::copy(digest.begin(), digest.end(), sha256_out);
     return BUNDLEFS_OK;
 }
 
@@ -248,7 +291,11 @@ bundlefs_error_t bundlefs_commit(bundlefs_writer_t* writer, const uint8_t expect
     if (existing >= 0) {
         files[static_cast<size_t>(existing)] = std::move(staged);
     } else {
-        files[file_count++] = std::move(staged);
+        for (uint32_t index = file_count; index > 0U; --index) {
+            files[index] = std::move(files[index - 1U]);
+        }
+        files[0] = std::move(staged);
+        ++file_count;
     }
     staged = {};
     writer_active = false;
@@ -315,6 +362,7 @@ void micropixel_close_aot_package(micropixel_aot_package_t* package) {
 int main() {
     TestEmptyInstallUpdateAndRemove();
     TestIdentityAndCapacityErrors();
+    TestNewestInstallIsListedFirst();
     std::printf("App Store tests passed (%u checks).\n", checks);
     return 0;
 }

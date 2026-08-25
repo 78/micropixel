@@ -7,12 +7,11 @@
 
 namespace micropixel::runtime {
 
-std::expected<InstalledAppCatalog, AotPackageError> ScanInstalledApps() {
-    auto catalog = LoadAppStoreCatalog();
-    if (!catalog) {
+std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out) {
+    if (!LoadAppStoreCatalog(catalog_out)) {
         return std::unexpected(AotPackageError::kOpenFailed);
     }
-    return *catalog;
+    return {};
 }
 
 LaunchAssetMapping::LaunchAssetMapping(LaunchAssetMapping&& other) noexcept

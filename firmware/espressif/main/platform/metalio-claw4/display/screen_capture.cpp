@@ -28,7 +28,7 @@ namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_capture";
-constexpr uint32_t kTaskStackSize = 16U * 1024U;
+constexpr uint32_t kTaskStackSize = 4U * 1024U;
 constexpr BaseType_t kTaskCore = 0;
 constexpr char kCaptureCommand[] = "MICROPIXEL_CAPTURE";
 constexpr char kTouchCommand[] = "MICROPIXEL_TOUCH";

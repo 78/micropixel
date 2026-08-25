@@ -56,16 +56,18 @@ class StoragePage final {
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 130, "The value survives app and device restarts.", MutedColor(), 18U);
+        commands.DrawTextCentered(center_x, 130, "The value survives app and device restarts.", MutedColor(),
+                                  micropixel::SystemFont::kMedium);
         commands.FillRect(micropixel::Rect{56, 198, static_cast<int32_t>(context.display.width()) - 112, 260},
                           PanelColor());
 
         Line value;
         value.Append("COUNTER  ");
         value.AppendUint(counter_);
-        commands.DrawTextCentered(center_x, 278, value.c_str(), AccentColor(), 42U);
-        commands.DrawTextCentered(center_x, 370, status_, micropixel::Color::White(), 18U);
-        commands.DrawTextCentered(center_x, 414, "KVStore::GetU32 / SetU32", MutedColor(), 16U);
+        commands.DrawTextCentered(center_x, 278, value.c_str(), AccentColor(), micropixel::SystemFont::kTitle);
+        commands.DrawTextCentered(center_x, 370, status_, micropixel::Color::White(), micropixel::SystemFont::kMedium);
+        commands.DrawTextCentered(center_x, 414, "KVStore::GetU32 / SetU32", MutedColor(),
+                                  micropixel::SystemFont::kSmall);
 
         DrawButton(commands, buttons_[0], "ADD + SAVE", AccentColor());
         DrawButton(commands, buttons_[1], "RESET", DangerColor());

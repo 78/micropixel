@@ -12,6 +12,12 @@ void SystemUiAdapter::UpdateHallStatusBar(const host_ui::HallStatusBarModel& mod
     operations_.update_hall_status_bar(operations_.context, model);
 }
 
+void SystemUiAdapter::PauseHallCoverLoading() {
+    if (operations_.pause_hall_cover_loading != nullptr) {
+        operations_.pause_hall_cover_loading(operations_.context);
+    }
+}
+
 void SystemUiAdapter::LeaveHall() { operations_.leave_hall(operations_.context); }
 
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::RestoreGuestView() {

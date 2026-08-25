@@ -13,6 +13,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "host_ui/system_ui.hpp"
+#include "remote_control/control_protocol.hpp"
 #include "runtime/guest_log_sink.hpp"
 
 struct cJSON;
@@ -23,7 +24,7 @@ class WifiBackend;
 
 namespace micropixel::firmware::remote_control {
 
-constexpr size_t kRemoteControlMaxApps = 7U;
+constexpr size_t kRemoteControlMaxApps = 50U;
 constexpr size_t kRemoteControlAppIdCapacity = 65U;
 constexpr size_t kRemoteControlDisplayNameCapacity = 65U;
 
@@ -88,11 +89,22 @@ struct RemoteControlArtifact final {
     host_ui::ScreenCaptureRelease release{};
 };
 
+struct RemoteControlAppDiagnostic final {
+    std::array<char, kRemoteControlAppIdCapacity> app_id{};
+    std::array<char, 24U> phase{};
+    std::array<char, 48U> code{};
+    std::array<char, 256U> detail{};
+    int32_t exit_code{};
+    bool has_exit_code{};
+};
+
 struct RemoteControlHostResult final {
     std::array<char, kRemoteControlCommandIdCapacity> command_id{};
     std::array<char, 96U> message{};
     std::array<RemoteControlArtifact, kRemoteControlMaxResultArtifacts> artifacts{};
+    RemoteControlAppDiagnostic diagnostic{};
     uint32_t artifact_count{};
+    bool has_diagnostic{};
     bool ok{};
 };
 
@@ -126,7 +138,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     static constexpr UBaseType_t kHostCommandQueueCapacity = 4U;
     static constexpr UBaseType_t kHostResultQueueCapacity = 4U;
     static constexpr size_t kPendingResultCapacity = 4U;
-    static constexpr size_t kControlLineCapacity = 2048U;
+    static constexpr size_t kControlLineCapacity = 4096U;
     static constexpr size_t kRecentCommandCapacity = 16U;
 
     enum class CommandType : uint8_t {
@@ -168,14 +180,16 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     void SetConnectionState(host_ui::RemoteControlConnectionState state, const char* message);
     void SetIdentityInSnapshot(const Identity& identity);
     void ClearPairingInSnapshot(const char* message);
-    void FinishPairingRequestWithoutCode(const char* message);
     void RefreshPairingDeadline();
     [[nodiscard]] bool LoadIdentity(Identity& identity) const;
     [[nodiscard]] bool SaveIdentity(const Identity& identity) const;
     [[nodiscard]] bool ClearIdentity(Identity& identity);
     [[nodiscard]] bool Bootstrap(void* client, Identity& identity);
+    [[nodiscard]] bool RefreshCredential(void* client, Identity& identity);
     [[nodiscard]] bool PostCommandResult(void* client, const Identity& identity, const char* command_id, bool ok,
                                          cJSON* result);
+    [[nodiscard]] bool PostCommandAccepted(void* client, const Identity& identity, const char* command_id);
+    [[nodiscard]] bool PostEvent(void* client, const Identity& identity, cJSON* root, const char* type);
     [[nodiscard]] bool SendCommandResultBody(void* client, const Identity& identity, const uint8_t* body,
                                              size_t body_size);
     [[nodiscard]] bool QueuePendingResult(const uint8_t* body, size_t body_size);
@@ -184,6 +198,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     [[nodiscard]] bool PostUnsupportedCommandResult(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostRestartResult(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostFirmwareUpdateStatus(void* client, const Identity& identity);
+    void PublishRuntimeSnapshotIfChanged(void* client, const Identity& identity);
     [[nodiscard]] bool PostSystemInformation(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostInstalledApps(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostGuestLogs(void* client, const Identity& identity, const char* command_id,
@@ -208,6 +223,8 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     void HandleControlLine(void* client, const Identity& identity, const char* line,
                            const FirmwareStatusPublisher& publish_status);
     [[nodiscard]] bool RememberCommandId(const char* command_id);
+    [[nodiscard]] bool ReplayCommandState(void* client, const Identity& identity, const char* command_id);
+    void CacheCompletedResult(const char* command_id, const uint8_t* body, size_t body_size);
 
     device::WifiBackend& wifi_;
     mutable std::mutex model_mutex_;
@@ -216,6 +233,10 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     RemoteControlCatalogSnapshot installed_apps_{};
     std::array<char, kRemoteControlAppIdCapacity> active_app_id_{};
     std::array<char, 24U> app_lifecycle_{};
+    std::array<char, kRemoteControlCommandIdCapacity> app_session_id_{};
+    std::array<char, kRemoteControlCommandIdCapacity> last_app_session_id_{};
+    uint64_t runtime_snapshot_generation_{};
+    uint64_t published_runtime_snapshot_generation_{};
     static constexpr size_t kTaskDiagnosticCapacity = 48U;
     std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> previous_task_runtime_{};
     uint64_t previous_total_runtime_{};
@@ -240,8 +261,12 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     size_t control_line_size_{};
     bool control_line_overflow_{};
     std::array<std::array<char, kRemoteControlCommandIdCapacity>, kRecentCommandCapacity> recent_command_ids_{};
+    std::array<PendingResultBody, kRecentCommandCapacity> recent_command_results_{};
     size_t recent_command_start_{};
     size_t recent_command_count_{};
+    protocol::Uuid device_boot_id_{};
+    protocol::Uuid control_session_id_{};
+    uint64_t event_sequence_{};
     bool shutdown_requested_{};
     bool pairing_requested_{};
     bool pairing_cancel_requested_{};

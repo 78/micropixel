@@ -4,31 +4,30 @@ BundleFS 是 MicroPixel `app_store` 分区的专用文件系统。它只保存�
 随机覆盖写、块链表或 Guest 可见的 Flash 地址。上层 `AppStore` 负责 Bundle 语义、安装策略和 AppId 校验；
 Bundle reader、AOT loader 和 App Hall 只通过 BundleFS 的 `open/read/mmap/replace/remove` 接口访问内容。
 
-## 1. ESP32-P4 v1 几何
+## 1. ESP32-P4 v2 几何
 
-当前 `app_store` 分区固定为 24 MiB，BundleFS v1 使用以下布局：
+当前 `app_store` 分区固定为 24 MiB，BundleFS v2 使用以下布局：
 
 ```text
-0x000000–0x000fff  Catalog Bank 0，4 KiB
-0x001000–0x001fff  Catalog Bank 1，4 KiB
-0x002000–0x002fff  Catalog Bank 2，4 KiB
-0x003000–0x003fff  Catalog Bank 3，4 KiB
-0x004000–0x00ffff  预留元数据，48 KiB
+0x000000–0x003fff  Catalog Bank 0，16 KiB
+0x004000–0x007fff  Catalog Bank 1，16 KiB
+0x008000–0x00bfff  Catalog Bank 2，16 KiB
+0x00c000–0x00ffff  Catalog Bank 3，16 KiB
 0x010000–0x17fffff 383 个 64 KiB Bundle 数据块
 ```
 
-第一段 64 KiB 是元数据区域，不等同于 Catalog。v1 只把前 16 KiB 分配给四个 Catalog Bank，剩余
-48 KiB 保留给以后其他元数据用途。数据区固定从 64 KiB 边界开始，使 ESP32-P4/S3 的 64 KiB Flash
-MMU 页可以直接参与 `spi_flash_mmap_pages()`。未来 ESP32-S31 的 16 KiB 变体使用新的格式几何，不改变
-已有 v1 字段的含义。
+第一段 64 KiB 是元数据区域，v2 将其完整分配给四个 Catalog Bank。数据区仍从 64 KiB 边界开始，使
+ESP32-P4/S3 的 64 KiB Flash MMU 页可以直接参与 `spi_flash_mmap_pages()`。未来 ESP32-S31 的 16 KiB
+变体使用新的格式几何，不改变已有字段的含义。
 
 空间统计以整个 `app_store` 分区为总容量；已用容量包含完整元数据区域、因几何对齐而不可分配的尾部以及
 已分配的 Bundle 数据块，空闲容量只包含仍可分配的数据块。数据块计数仍只描述数据区，不包含元数据。
 
 ## 2. Catalog Bank
 
-一个 Bank 就是一个 4 KiB Flash 擦除单元，并且只保存一代完整 Catalog；BundleFS 没有 Bank 内 slot。
-Catalog 记录未使用的尾部必须写零并参与 CRC，以便未来在新格式版本中安全扩展。
+一个 v2 Bank 是由四个 4 KiB Flash 擦除单元组成的 16 KiB 连续记录，并且只保存一代完整 Catalog；
+BundleFS 没有 Bank 内 slot。Catalog 记录未使用的尾部必须写零并参与 CRC，以便未来在新格式版本中
+安全扩展。
 
 每个 Bank 都是自描述记录，至少包含：
 
@@ -47,10 +46,11 @@ checksum, commit_marker
 当前固定值为：
 
 - `bank_count = 4`；
-- `bank_size = 4096`；
+- `bank_size = 16384`；
 - `metadata_size = data_offset = 65536`；
 - `data_block_size = 65536`；
 - `data_block_count = 383`；
+- `file_count <= 50`；
 - `generation` 为 64 位无符号整数。
 
 每个文件条目保存名称、逻辑大小、content ID、SHA-256、块号表起点和块数。所有文件的物理块号按文件
@@ -96,8 +96,17 @@ generation 5 -> erase Bank 0, then write Bank 0
 不需要镜像同一代 Catalog，也不需要 `retired_marker`：旧 Bank 自然构成掉电回退点。目标 Bank 擦除或写入
 期间掉电时，上一个 Bank 仍然完整；commit marker 写入后，新 Catalog 才可见。
 
-每个 4 KiB 扇区按约 10,000 次擦除估算，四 Bank 环形约支持 40,000 次 Catalog 提交。Catalog 只在
-安装、升级、卸载或显式维护操作时更新，不承载运行日志或高频状态。
+每个 4 KiB 扇区按约 10,000 次擦除估算；每个 v2 Bank 的四个扇区同步擦除，四 Bank 环形仍约支持
+40,000 次 Catalog 提交。Catalog 只在安装、升级、卸载或显式维护操作时更新，不承载运行日志或高频状态。
+
+挂载器兼容读取旧 v1（四个 4 KiB Bank、最多 7 个文件）。发现 v1 后先在内存中转换为 v2 视图；第一次
+新事务写入 v2 Bank 1（`0x004000`），不会擦除仍占据 `0x000000–0x003fff` 的四个 v1 回退 Bank。v2 提交
+成功后继续按四个 16 KiB Bank 环形更新，因此升级固件不会要求先格式化或丢失已有 App。
+
+Catalog entry 的逻辑顺序同时作为 App Hall 的展示顺序。正常事务安装一个新 App 时将其插入 index 0；
+升级已有 App 时保留原 index；卸载时保留其余 App 的相对顺序。因此物理数据块仍可循环利用、离散分配，
+而用户总能在大厅最左侧找到刚安装的 App。离线构建 App Store 镜像时，命令行 Bundle 参数顺序就是展示
+顺序。
 
 ## 4. 数据分配与 mmap
 
@@ -115,7 +124,7 @@ Bundle 是不可变文件。安装和升级使用写时复制：分配足够的�
 ## 5. 初始化、格式化与 NVS 边界
 
 全擦除态 `app_store` 首次挂载时生成 generation 1 的空 Catalog，不安装任何生产预置 App。USB 连接代表
-开发调试工作流，`flash-apps` 和 `flash-all` 默认生成全新的 BundleFS 镜像并写入 Blocks、Snake、Demo；
+开发调试工作流，`flash-apps` 和 `flash-all` 默认生成全新的 BundleFS 镜像并写入七个示例 App；
 该操作会替换整个 Catalog，不能用于保留设备上的既有 App。空 Catalog 烧录仅作为显式格式恢复操作。
 正常安装和升级仍使用 BundleFS 写时复制事务。
 

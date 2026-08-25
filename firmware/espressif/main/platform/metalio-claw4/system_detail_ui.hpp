@@ -85,9 +85,12 @@ class SystemDetailUi final {
     void DrawAppManagementInformationLocked();
     void DrawAppManagementUninstallUnavailableLocked();
     void DrawAppManagementUninstallConfirmationLocked();
+    void RefreshAppManagementRowsLocked();
+    void DrawAppManagementRowLocked(uint32_t index);
     [[nodiscard]] uint32_t FindAppManagementRowIndex(lv_obj_t* row) const;
 
     lv_obj_t* root_{};
+    lv_obj_t* app_management_scroll_{};
     std::array<lv_obj_t*, host_ui::kMaxHallApps> app_management_rows_{};
     host_ui::SystemUiActionSink system_information_action_sink_{};
     void* system_information_action_context_{};
@@ -99,6 +102,7 @@ class SystemDetailUi final {
     void* app_management_action_context_{};
     host_ui::AppManagementModel app_management_model_{};
     uint32_t app_management_selected_index_{};
+    int32_t app_management_scroll_y_{};
     AppOverlay app_management_overlay_{AppOverlay::kNone};
     Screen active_screen_{Screen::kNone};
 };

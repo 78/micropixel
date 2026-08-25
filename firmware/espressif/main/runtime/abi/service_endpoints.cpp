@@ -71,6 +71,32 @@ bool ReadHandle(const uint8_t* request, uint32_t request_size, uint32_t& handle_
 
 }  // namespace
 
+ServiceDescriptor SystemServiceEndpoint::Describe() const {
+    return ServiceDescriptor{
+        .service_id = MICROPIXEL_SERVICE_SYSTEM,
+        .interface_major = MICROPIXEL_SYSTEM_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_SYSTEM_INTERFACE_MINOR,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL,
+        .max_response_bytes = sizeof(micropixel_system_locale_response_t),
+    };
+}
+
+int32_t SystemServiceEndpoint::Call(uint32_t method_id, const uint8_t*, uint32_t request_size, uint8_t* response,
+                                    uint32_t response_capacity, uint32_t& response_size_out) {
+    if (method_id != MICROPIXEL_SYSTEM_METHOD_GET_LOCALE) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    if (!EmptyRequest(request_size)) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    micropixel_system_locale_response_t locale{};
+    locale.size = sizeof(locale);
+    locale.tag_length = 2U;
+    locale.tag[0] = 'e';
+    locale.tag[1] = 'n';
+    return WriteValue(locale, response, response_capacity, response_size_out);
+}
+
 ServiceDescriptor TimerServiceEndpoint::Describe() const {
     return ServiceDescriptor{
         .service_id = MICROPIXEL_SERVICE_TIMER,

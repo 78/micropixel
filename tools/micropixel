@@ -1,0 +1,1002 @@
+#!/usr/bin/env python3
+"""MicroPixel Guest build and device-control CLI."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+VERSION = "0.9.1"
+MINIMUM_FIRMWARE_VERSION = "0.1.5"
+BUNDLE_MAGIC = b"MPXBNDL\0"
+BUNDLE_HEADER_SIZE = 128
+BUNDLE_ALIGNMENT = 64 * 1024
+NETWORK_COMMANDS = frozenset({"device", "firmware", "app", "logs", "screenshot", "input", "job"})
+ALL_API_SCOPES = (
+    "device:read",
+    "device:manage",
+    "app:read",
+    "app:install",
+    "app:manage",
+    "screen:read",
+    "logs:read",
+    "input:inject",
+    "system:diagnostics",
+)
+EMBEDDED_BUNDLE_BUILDER: str | None = None
+
+
+class CliError(RuntimeError):
+    pass
+
+
+def sdk_root() -> Path:
+    script_directory = Path(__file__).resolve().parent
+    return script_directory if (script_directory / "guest").is_dir() else script_directory.parent
+
+
+def dotenv_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            raise CliError(f"{path}:{line_number}: expected KEY=VALUE")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            raise CliError(f"{path}:{line_number}: invalid environment variable name")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def project_environment(directory: Path) -> dict[str, str]:
+    values = dotenv_values(directory / ".env")
+    values.update(os.environ)
+    return values
+
+
+def control_url(environment: dict[str, str]) -> str:
+    base_url = environment.get("MICROPIXEL_CONTROL_URL", "https://micropixel.ai").rstrip("/")
+    parsed = urllib.parse.urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+        raise CliError("MICROPIXEL_CONTROL_URL must be an HTTP(S) origin")
+    return base_url
+
+
+def token_device_id(token: str) -> str:
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise CliError("MICROPIXEL_API_TOKEN is not a JWT")
+    try:
+        encoded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CliError("MICROPIXEL_API_TOKEN has an invalid JWT payload") from error
+    if not isinstance(claims, dict) or claims.get("typ") != "api":
+        raise CliError("MICROPIXEL_API_TOKEN must be a scoped API Token, not a Console or device credential")
+    device_id = claims.get("device_id")
+    if not isinstance(device_id, str):
+        raise CliError("MICROPIXEL_API_TOKEN does not contain a device_id claim")
+    try:
+        return str(uuid.UUID(device_id))
+    except ValueError as error:
+        raise CliError("MICROPIXEL_API_TOKEN contains an invalid device_id claim") from error
+
+
+@dataclass(frozen=True)
+class ControlConfig:
+    base_url: str
+    device_id: str
+    token: str
+
+    @staticmethod
+    def load(directory: Path) -> "ControlConfig":
+        environment = project_environment(directory)
+        base_url = control_url(environment)
+        token = environment.get("MICROPIXEL_API_TOKEN", "").strip()
+        if not token:
+            raise CliError("Set MICROPIXEL_API_TOKEN in the process environment or local .env")
+        device_id = token_device_id(token)
+        explicit_device_id = environment.get("MICROPIXEL_DEVICE_ID", "").strip()
+        if explicit_device_id:
+            try:
+                explicit_device_id = str(uuid.UUID(explicit_device_id))
+            except ValueError as error:
+                raise CliError("MICROPIXEL_DEVICE_ID is not a valid UUID") from error
+            if explicit_device_id != device_id:
+                raise CliError("MICROPIXEL_DEVICE_ID does not match the device_id claim in MICROPIXEL_API_TOKEN")
+        return ControlConfig(base_url=base_url, device_id=device_id, token=token)
+
+
+class ControlClient:
+    def __init__(self, config: ControlConfig) -> None:
+        self.config = config
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Any | None = None,
+        binary_body: bytes | None = None,
+        content_type: str | None = None,
+        timeout: float = 30.0,
+        idempotency_key: str | None = None,
+        command_timeout_ms: int | None = None,
+    ) -> tuple[bytes, str]:
+        if json_body is not None and binary_body is not None:
+            raise AssertionError("request body is ambiguous")
+        body = binary_body
+        if json_body is not None:
+            body = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
+            content_type = "application/json"
+        headers = {
+            "Authorization": f"Bearer {self.config.token}",
+            "Accept": "application/json",
+            "User-Agent": f"MicroPixel-CLI/{VERSION} (+https://micropixel.ai/docs/)",
+        }
+        if content_type:
+            headers["Content-Type"] = content_type
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            headers["Idempotency-Key"] = idempotency_key or str(uuid.uuid4())
+        if command_timeout_ms is not None:
+            headers["X-MicroPixel-Command-Timeout-Ms"] = str(command_timeout_ms)
+        request = urllib.request.Request(
+            f"{self.config.base_url}{path}", data=body, headers=headers, method=method
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read(), response.headers.get_content_type()
+        except urllib.error.HTTPError as error:
+            payload = error.read()
+            try:
+                detail = json.loads(payload).get("error", payload.decode("utf-8", "replace"))
+            except (json.JSONDecodeError, AttributeError):
+                detail = payload.decode("utf-8", "replace")
+            raise CliError(f"Control API returned HTTP {error.code}: {detail}") from error
+        except urllib.error.URLError as error:
+            raise CliError(f"Control API connection failed: {error.reason}") from error
+
+    def json(
+        self,
+        method: str,
+        path: str,
+        body: Any | None = None,
+        timeout: float = 30.0,
+        *,
+        idempotency_key: str | None = None,
+        command_timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        payload, _ = self.request(
+            method,
+            path,
+            json_body=body,
+            timeout=timeout,
+            idempotency_key=idempotency_key,
+            command_timeout_ms=command_timeout_ms,
+        )
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError as error:
+            raise CliError("Control API returned invalid JSON") from error
+        if not isinstance(value, dict):
+            raise CliError("Control API returned an unexpected response")
+        return value
+
+    def device_path(self, suffix: str = "") -> str:
+        return f"/api/v1/devices/{self.config.device_id}{suffix}"
+
+    def wait_job(self, job: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+        job_id = job.get("id")
+        if not isinstance(job_id, str):
+            raise CliError("Control API did not return a Job ID")
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            current = self.json("GET", self.device_path(f"/jobs/{job_id}"))
+            status = current.get("status")
+            if status == "succeeded":
+                return current
+            if status in {"failed", "cancelled", "expired", "indeterminate"}:
+                raise CliError(job_failure_message(job_id, str(status), current.get("error")))
+            if status not in {"queued", "dispatched", "accepted", "running"}:
+                raise CliError(f"Job {job_id} returned unexpected status: {status}")
+            if time.monotonic() >= deadline:
+                raise CliError(f"Timed out waiting for Job {job_id}")
+            time.sleep(0.5)
+
+
+def job_failure_message(job_id: str, status: str, error: Any) -> str:
+    if isinstance(error, dict):
+        code = error.get("code")
+        message = error.get("message")
+        details = error.get("details")
+        diagnostic = details.get("diagnostic") if isinstance(details, dict) else None
+        if not isinstance(diagnostic, dict) and isinstance(details, dict):
+            diagnostic = details
+        if isinstance(diagnostic, dict):
+            app_id = diagnostic.get("appId")
+            phase = diagnostic.get("phase")
+            diagnostic_code = diagnostic.get("code", code)
+            detail = diagnostic.get("detail", message)
+            if all(isinstance(value, str) for value in (app_id, phase, diagnostic_code, detail)):
+                return f"App {app_id} failed during {phase}: {diagnostic_code}: {detail}"
+        if isinstance(code, str) and isinstance(message, str):
+            return f"Job {job_id} {status}: {code}: {message}"
+    return f"Job {job_id} {status}: {json.dumps(error, ensure_ascii=False)}"
+
+
+def create_job(
+    client: ControlClient,
+    args: argparse.Namespace,
+    method: str,
+    path: str,
+    body: Any | None = None,
+) -> dict[str, Any]:
+    idempotency_key = getattr(args, "idempotency_key", None)
+    if idempotency_key is not None and re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key) is None:
+        raise CliError("--idempotency-key must contain 8-128 letters, digits, dot, underscore, colon, or hyphen")
+    command_timeout_ms = getattr(args, "command_timeout_ms", None)
+    if command_timeout_ms is not None and not 1_000 <= command_timeout_ms <= 300_000:
+        raise CliError("--command-timeout-ms must be between 1000 and 300000")
+    if idempotency_key is None and command_timeout_ms is None:
+        return client.json(method, path, body)
+    return client.json(method, path, body, idempotency_key=idempotency_key, command_timeout_ms=command_timeout_ms)
+
+
+def quote_identifier(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value) is None:
+        raise CliError("App ID may contain only letters, digits, dot, underscore, and hyphen")
+    return urllib.parse.quote(value, safe="")
+
+
+def semantic_version(value: str) -> tuple[int, int, int] | None:
+    matched = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", value)
+    return tuple(map(int, matched.groups())) if matched else None
+
+
+def require_compatible_firmware(client: ControlClient) -> None:
+    snapshot = client.json("GET", client.device_path())
+    if snapshot.get("online") is not True:
+        raise CliError("The device is offline. Bring it online before installing or starting an App.")
+    status = snapshot.get("status")
+    firmware_version = status.get("firmwareVersion") if isinstance(status, dict) else None
+    current = semantic_version(firmware_version) if isinstance(firmware_version, str) else None
+    minimum = semantic_version(MINIMUM_FIRMWARE_VERSION)
+    if current is None or minimum is None or current < minimum:
+        shown = firmware_version if isinstance(firmware_version, str) and firmware_version else "unknown"
+        raise CliError(
+            f"Device firmware {shown} is not compatible with MicroPixel SDK/CLI {VERSION}. "
+            f"Upgrade the device to firmware {MINIMUM_FIRMWARE_VERSION} or later, then retry."
+        )
+
+
+def app_failure_recommendation(diagnostic: dict[str, Any]) -> str | None:
+    error = diagnostic.get("error")
+    code = error.get("code") if isinstance(error, dict) else diagnostic.get("code")
+    if code in {"aot_load_failed", "aot_instantiate_failed", "entry_missing", "guest_services_failed", "guest_trap"}:
+        return (
+            f"If the device already runs firmware {MINIMUM_FIRMWARE_VERSION} or later, rebuild this App with "
+            f"SDK {VERSION} and the pinned MicroPixel wamrc, then reinstall it."
+        )
+    return None
+
+
+def validate_bundle(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    if len(data) < BUNDLE_HEADER_SIZE or len(data) % BUNDLE_ALIGNMENT or data[:8] != BUNDLE_MAGIC:
+        raise CliError("Not a 64 KiB-aligned MicroPixel Bundle v1")
+    version, header_size, bundle_size = struct.unpack_from("<III", data, 8)
+    app_id_length = struct.unpack_from("<I", data, 88)[0]
+    if version != 1 or header_size != BUNDLE_HEADER_SIZE or bundle_size != len(data) or not 1 <= app_id_length <= 64:
+        raise CliError("Invalid MicroPixel Bundle v1 header")
+    app_id = data[24:88][:app_id_length].decode("ascii")
+    quote_identifier(app_id)
+    return {"appId": app_id, "sizeBytes": len(data)}
+
+
+def print_json(value: Any) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def auth_json_request(
+    base_url: str,
+    method: str,
+    path: str,
+    body: dict[str, Any],
+    bearer_token: str | None = None,
+) -> dict[str, Any]:
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": f"MicroPixel-CLI/{VERSION} (+https://micropixel.ai/docs/)",
+    }
+    if bearer_token is not None:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30.0) as response:
+            value = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        payload = error.read()
+        try:
+            detail = json.loads(payload).get("error", payload.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, AttributeError):
+            detail = payload.decode("utf-8", "replace")
+        raise CliError(f"Control API returned HTTP {error.code}: {detail}") from error
+    except urllib.error.URLError as error:
+        raise CliError(f"Control API connection failed: {error.reason}") from error
+    except json.JSONDecodeError as error:
+        raise CliError("Control API returned invalid JSON") from error
+    if not isinstance(value, dict):
+        raise CliError("Control API returned an unexpected response")
+    return value
+
+
+def save_dotenv_token(path: Path, token: str) -> None:
+    if not path.parent.is_dir():
+        raise CliError(f"Environment file directory does not exist: {path.parent}")
+    original = path.read_text(encoding="utf-8") if path.is_file() else ""
+    replacement = f"MICROPIXEL_API_TOKEN={token}"
+    output_lines: list[str] = []
+    replaced = False
+    for line in original.splitlines():
+        if re.match(r"^\s*(?:export\s+)?MICROPIXEL_API_TOKEN\s*=", line):
+            if not replaced:
+                output_lines.append(replacement)
+                replaced = True
+            continue
+        output_lines.append(line)
+    if not replaced:
+        output_lines.append(replacement)
+    contents = "\n".join(output_lines) + "\n"
+    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(contents)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def run_auth_login(args: argparse.Namespace) -> None:
+    environment = project_environment(Path.cwd())
+    base_url = args.control_url.rstrip("/") if args.control_url else control_url(environment)
+    if args.control_url:
+        base_url = control_url({"MICROPIXEL_CONTROL_URL": base_url})
+    issued = auth_json_request(
+        base_url,
+        "POST",
+        "/api/v1/pairings/exchange",
+        {"code": args.connection_code},
+    )
+    token = issued.get("token")
+    device_id = issued.get("deviceId")
+    if (
+        not isinstance(token, str)
+        or not isinstance(device_id, str)
+        or issued.get("tokenKind") != "api"
+        or issued.get("lifetime") != "permanent"
+        or issued.get("expiresAt") is not None
+        or issued.get("scopes") != list(ALL_API_SCOPES)
+        or token_device_id(token) != device_id
+    ):
+        raise CliError("Control API did not return the requested permanent API token")
+    env_file = Path(args.env_file).expanduser()
+    save_dotenv_token(env_file, token)
+    print(f"Connected. Permanent API token saved to {env_file.resolve()} as MICROPIXEL_API_TOKEN.")
+    if os.environ.get("MICROPIXEL_API_TOKEN", "").strip() not in {"", token}:
+        print(
+            "Note: the current shell already exports a different MICROPIXEL_API_TOKEN; unset it to use the saved token.",
+            file=sys.stderr,
+        )
+
+
+def run_build(args: argparse.Namespace) -> None:
+    root = sdk_root()
+    name = args.name or Path(args.source).stem
+    if re.fullmatch(r"[A-Za-z0-9_-]+", name) is None:
+        raise CliError("App name may contain only letters, digits, underscores, and hyphens")
+
+    sources = [Path(args.source), *(Path(source) for source in args.extra_source)]
+    for source in sources:
+        if not source.is_file():
+            raise CliError(f"Guest source not found: {source}")
+
+    environment = project_environment(Path.cwd())
+    wasi_clangxx = environment.get("WASI_CLANGXX", "").strip()
+    if not wasi_clangxx and environment.get("WASI_CLANG", "").strip().endswith("clang"):
+        wasi_clangxx = f"{environment['WASI_CLANG'].strip()[:-5]}clang++"
+    if not wasi_clangxx and environment.get("WASI_SDK_PATH", "").strip():
+        wasi_clangxx = str(Path(environment["WASI_SDK_PATH"].strip()).expanduser() / "bin/clang++")
+    if not wasi_clangxx:
+        local_wasi = Path.home() / ".local/wasi-sdk/bin/clang++"
+        if local_wasi.is_file():
+            wasi_clangxx = str(local_wasi)
+    if not wasi_clangxx or not os.access(Path(wasi_clangxx).expanduser(), os.X_OK):
+        raise CliError("Set WASI_CLANGXX or WASI_SDK_PATH to a C++23 compiler with the wasm32 backend")
+    wasi_clangxx = str(Path(wasi_clangxx).expanduser())
+
+    wamrc = environment.get("WAMRC", "").strip()
+    if not wamrc:
+        candidates = (
+            root / "build/tools/wamrc-2.4.3-riscv32-ilp32f",
+            root / "build/tools/wamrc-host-build-llvm19/wamrc",
+        )
+        wamrc = next((str(candidate) for candidate in candidates if os.access(candidate, os.X_OK)), "")
+    if not wamrc:
+        wamrc = shutil.which("wamrc") or ""
+    if not wamrc or not os.access(Path(wamrc).expanduser(), os.X_OK):
+        raise CliError("Set WAMRC to the locked wamrc 2.4.3 executable; see https://micropixel.ai/docs/environment/")
+    wamrc = str(Path(wamrc).expanduser())
+    version = subprocess.run(
+        [wamrc, "--version"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    if version != "wamrc 2.4.3":
+        raise CliError(f"WAMRC must report 'wamrc 2.4.3', got {version!r}")
+
+    generated_include = environment.get("MICROPIXEL_GUEST_GENERATED_INCLUDE_DIR", "").strip()
+    if generated_include and not Path(generated_include).is_dir():
+        raise CliError(f"Generated Guest include directory not found: {generated_include}")
+    output_dir = Path(environment.get("P4_GUEST_OUTPUT_DIR", str(Path.cwd() / "build/guest-p4")))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    profiles = {
+        "development": (["-O1", "-g"], [], ["--opt-level=1", "--size-level=3"]),
+        "release": (["-O2"], ["-Wl,--strip-all"], ["--opt-level=3", "--size-level=3"]),
+        "size": (["-Oz"], ["-Wl,--strip-all"], ["--opt-level=3", "--size-level=3"]),
+    }
+    compile_flags, link_flags, aot_flags = profiles[args.profile]
+    include_flags = ["-I", str(root / "guest")]
+    if generated_include:
+        include_flags.extend(["-I", generated_include])
+    wasm_output = output_dir / f"{name}.wasm"
+    aot_output = output_dir / f"{name}.aot"
+
+    subprocess.run(
+        [
+            wasi_clangxx,
+            "--target=wasm32-unknown-unknown",
+            "-std=c++23",
+            "-nostdlib",
+            "-ffreestanding",
+            "-matomics",
+            "-mbulk-memory",
+            *compile_flags,
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-fno-threadsafe-statics",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            *include_flags,
+            "-Wl,--no-entry",
+            "-Wl,--shared-memory",
+            "-Wl,--max-memory=131072",
+            f"-Wl,--allow-undefined-file={root / 'guest/abi/allowed_imports.txt'}",
+            "-Wl,--export=__micropixel_start",
+            "-Wl,--export-if-defined=__wasm_call_ctors",
+            "-Wl,--export-if-defined=__micropixel_test_event_wait",
+            "-Wl,--export-if-defined=__micropixel_test_touch_pressure",
+            "-Wl,--export-if-defined=__micropixel_test_key_input",
+            "-Wl,--export-if-defined=__micropixel_test_run_handler",
+            *link_flags,
+            str(root / "guest/runtime/startup.cpp"),
+            str(root / "guest/runtime/sdk.cpp"),
+            *(str(source) for source in sources),
+            "-o",
+            str(wasm_output),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            wamrc,
+            "--target=riscv32",
+            "--target-abi=ilp32f",
+            "--cpu=generic-rv32",
+            "--cpu-features=+m,+a,+f,+c,+zicsr,+zifencei",
+            "--bounds-checks=1",
+            "--enable-multi-thread",
+            "--enable-memory-profiling",
+            "--disable-ref-types",
+            "--disable-simd",
+            *aot_flags,
+            "--enable-dump-call-stack",
+            "-o",
+            str(aot_output),
+            str(wasm_output),
+        ],
+        check=True,
+    )
+    print(f"P4 Guest built ({args.profile}):\n{wasm_output}\n{aot_output}")
+
+
+def run_package(args: argparse.Namespace) -> None:
+    arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+    if not arguments:
+        raise CliError("package requires Bundle arguments; see https://micropixel.ai/docs/assets-and-bundles/")
+    local_builder = sdk_root() / "tools/build_app_bundle.py"
+    if local_builder.is_file():
+        command = [sys.executable, str(local_builder), *arguments]
+    elif EMBEDDED_BUNDLE_BUILDER is not None:
+        command = [sys.executable, "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
+    else:
+        raise CliError("This development copy does not contain the Bundle builder")
+    subprocess.run(command, check=True)
+
+
+def upload(client: ControlClient, bundle_path: Path) -> dict[str, Any]:
+    require_compatible_firmware(client)
+    details = validate_bundle(bundle_path)
+    payload, _ = client.request(
+        "POST",
+        client.device_path("/packages"),
+        binary_body=bundle_path.read_bytes(),
+        content_type="application/vnd.micropixel.app",
+        timeout=120.0,
+    )
+    response = json.loads(payload)
+    if not isinstance(response, dict):
+        raise CliError("Control API returned an unexpected upload response")
+    print(f"Uploaded {details['appId']} ({details['sizeBytes']} bytes)", file=sys.stderr)
+    return response
+
+
+def pull_logs(
+    client: ControlClient,
+    cursor: str | None,
+    timeout_seconds: float,
+    command_timeout_ms: int | None = None,
+) -> tuple[str | None, bool, list[dict[str, Any]]]:
+    if command_timeout_ms is None:
+        command = client.json("POST", client.device_path("/logs/read"), {"cursor": cursor})
+    else:
+        command = client.json(
+            "POST",
+            client.device_path("/logs/read"),
+            {"cursor": cursor},
+            command_timeout_ms=command_timeout_ms,
+        )
+    client.wait_job(command, timeout_seconds)
+    query = "" if cursor is None else f"?cursor={urllib.parse.quote(cursor, safe='')}"
+    snapshot = client.json("GET", client.device_path(f"/logs{query}"))
+    entries = snapshot.get("entries", [])
+    normalized_entries = [entry for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+    next_cursor = snapshot.get("nextCursor", cursor)
+    return (
+        next_cursor if isinstance(next_cursor, str) else cursor,
+        snapshot.get("hasMore") is True,
+        normalized_entries,
+    )
+
+
+def print_log_entries(entries: list[dict[str, Any]]) -> None:
+    for entry in entries:
+        sequence = entry.get("sequence", "-")
+        level = str(entry.get("level", "info")).upper()
+        app_id = entry.get("appId", "guest")
+        message = entry.get("message", "")
+        print(f"{sequence:>6} {level:<5} {app_id}: {message}")
+
+
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
+def screenshot_artifact(client: ControlClient, completed: dict[str, Any], output: Path) -> None:
+    result = completed.get("result")
+    screenshots = result.get("screenshots") if isinstance(result, dict) else None
+    first = screenshots[0] if isinstance(screenshots, list) and screenshots else None
+    url = first.get("downloadUrl") if isinstance(first, dict) else None
+    if not isinstance(url, str) or not url.startswith("/"):
+        raise CliError("Job completed without a valid screenshot artifact URL")
+    image, media_type = client.request("GET", url, timeout=60.0)
+    if media_type != "image/jpeg" or len(image) < 4 or image[:2] != b"\xff\xd8" or image[-2:] != b"\xff\xd9":
+        raise CliError("Screenshot artifact is not a valid JPEG")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(image)
+
+
+def bounded_argument(value: int, minimum: int, maximum: int, label: str) -> int:
+    if not minimum <= value <= maximum:
+        raise CliError(f"{label} must be between {minimum} and {maximum}")
+    return value
+
+
+def input_operations(args: argparse.Namespace) -> list[dict[str, Any]]:
+    if args.input_command == "press":
+        hold_ms = bounded_argument(args.hold_ms, 0, 5_000, "--hold-ms")
+        operations: list[dict[str, Any]] = [
+            {"type": "key", "code": args.code, "phase": "down"},
+            {"type": "key", "code": args.code, "phase": "up", "delayMs": hold_ms},
+        ]
+    elif args.input_command == "tap":
+        x = bounded_argument(args.x, 0, 0x7FFF_FFFF, "x")
+        y = bounded_argument(args.y, 0, 0x7FFF_FFFF, "y")
+        pressure = bounded_argument(args.pressure, 0, 1_000, "--pressure")
+        hold_ms = bounded_argument(args.hold_ms, 0, 5_000, "--hold-ms")
+        operations = [
+            {"type": "touch", "phase": "down", "id": 0, "x": x, "y": y, "pressurePerMille": pressure},
+            {
+                "type": "touch",
+                "phase": "up",
+                "id": 0,
+                "x": x,
+                "y": y,
+                "pressurePerMille": 0,
+                "delayMs": hold_ms,
+            },
+        ]
+    elif args.input_command == "swipe":
+        x1 = bounded_argument(args.x1, 0, 0x7FFF_FFFF, "x1")
+        y1 = bounded_argument(args.y1, 0, 0x7FFF_FFFF, "y1")
+        x2 = bounded_argument(args.x2, 0, 0x7FFF_FFFF, "x2")
+        y2 = bounded_argument(args.y2, 0, 0x7FFF_FFFF, "y2")
+        pressure = bounded_argument(args.pressure, 0, 1_000, "--pressure")
+        duration_ms = bounded_argument(args.duration_ms, 0, 5_000, "--duration-ms")
+        steps = bounded_argument(args.steps, 2, 13, "--steps")
+        step_delay = duration_ms // (steps - 1)
+        operations = []
+        for index in range(steps):
+            fraction = index / (steps - 1)
+            operations.append(
+                {
+                    "type": "touch",
+                    "phase": "down" if index == 0 else "move",
+                    "id": 0,
+                    "x": round(x1 + (x2 - x1) * fraction),
+                    "y": round(y1 + (y2 - y1) * fraction),
+                    "pressurePerMille": pressure,
+                    **({"delayMs": step_delay} if index else {}),
+                }
+            )
+        operations.append(
+            {"type": "touch", "phase": "up", "id": 0, "x": x2, "y": y2, "pressurePerMille": 0}
+        )
+    elif args.input_command == "sequence":
+        try:
+            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+            value = json.loads(text)
+        except (OSError, json.JSONDecodeError) as error:
+            raise CliError(f"Cannot read input sequence: {error}") from error
+        raw_operations = value.get("operations") if isinstance(value, dict) else value
+        if not isinstance(raw_operations, list) or not all(isinstance(item, dict) for item in raw_operations):
+            raise CliError("Input sequence must be a JSON operation array or an object containing operations")
+        operations = raw_operations
+    else:
+        raise CliError(f"Unsupported input command: {args.input_command}")
+
+    if args.screenshot:
+        if len(operations) >= 16:
+            raise CliError("Input sequence has no room for the requested screenshot operation")
+        operations.append({"type": "screenshot", "id": "after-input", "delayMs": 120})
+    if not 1 <= len(operations) <= 16:
+        raise CliError("Input sequence must contain between 1 and 16 operations")
+    return operations
+
+
+def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
+    if args.command == "device" and args.device_command == "status":
+        snapshot = client.json("GET", client.device_path())
+        if args.full:
+            print_json(snapshot)
+            return
+        status = snapshot.get("status")
+        status = status if isinstance(status, dict) else {}
+        runtime = status.get("runtime")
+        runtime = runtime if isinstance(runtime, dict) else {}
+        print_json(
+            {
+                "online": snapshot.get("online") is True,
+                "foregroundSessionId": runtime.get("foregroundSessionId"),
+                "foregroundSurface": runtime.get("foregroundSurface"),
+                "runtimeSessions": runtime.get("runtimeSessions", []),
+                "network": status.get("network"),
+                "firmwareUpdate": status.get("firmwareUpdate"),
+                "lastSeenAt": snapshot.get("lastSeenAt"),
+            }
+        )
+    elif args.command == "device" and args.device_command == "diagnostics":
+        if not args.cached:
+            job = create_job(client, args, "POST", client.device_path("/system-info/refresh"), {})
+            client.wait_job(job, args.timeout)
+        print_json(client.json("GET", client.device_path("/system-info")))
+    elif args.command == "device" and args.device_command == "reboot":
+        job = create_job(client, args, "POST", client.device_path("/reboot"), {})
+        print_json(client.wait_job(job, args.timeout))
+    elif args.command == "firmware":
+        snapshot = client.json("GET", client.device_path())
+        status = snapshot.get("status")
+        current_version = status.get("firmwareVersion") if isinstance(status, dict) else None
+        query = ""
+        body: dict[str, str] = {}
+        if isinstance(current_version, str) and current_version:
+            encoded = urllib.parse.quote(current_version, safe="")
+            query = f"?currentVersion={encoded}"
+            body["currentVersion"] = current_version
+        if args.firmware_command == "status":
+            print_json(client.json("GET", client.device_path(f"/firmware/latest{query}")))
+        elif args.firmware_command == "update":
+            if snapshot.get("online") is not True:
+                raise CliError("The device is offline. Bring it online before updating its firmware.")
+            job = create_job(client, args, "POST", client.device_path("/firmware/update"), body)
+            print_json(client.wait_job(job, args.timeout))
+    elif args.command == "app" and args.app_command == "list":
+        if not args.cached:
+            job = create_job(client, args, "POST", client.device_path("/apps/refresh"), {})
+            client.wait_job(job, args.timeout)
+        catalog = client.json("GET", client.device_path("/apps"))
+        if args.running:
+            apps = catalog.get("apps")
+            if isinstance(apps, list):
+                running_states = {"running", "foreground", "starting", "resuming", "suspended"}
+                filtered = [
+                    app
+                    for app in apps
+                    if isinstance(app, dict)
+                    and (app.get("active") is True or app.get("lifecycle") in running_states)
+                ]
+                catalog = {**catalog, "apps": filtered, "count": len(filtered)}
+        print_json(catalog)
+    elif args.command == "app" and args.app_command == "last-error":
+        response = client.json("GET", client.device_path("/app-errors/latest"))
+        diagnostic = response.get("error")
+        if isinstance(diagnostic, dict):
+            recommendation = app_failure_recommendation(diagnostic)
+            print_json({**diagnostic, **({"recommendation": recommendation} if recommendation else {})})
+        else:
+            print_json(response)
+    elif args.command == "app" and args.app_command == "upload":
+        print_json(upload(client, Path(args.bundle)))
+    elif args.command == "app" and args.app_command == "install":
+        package = upload(client, Path(args.bundle))
+        package_id = package.get("packageId")
+        job = create_job(client, args, "POST", client.device_path("/apps/install"), {"packageId": package_id})
+        print_json(client.wait_job(job, args.timeout))
+    elif args.command == "app" and args.app_command in {"start", "stop"}:
+        if args.app_command == "stop" and args.app_id is None:
+            job = create_job(client, args, "POST", client.device_path("/runtime/foreground/stop"), {})
+            print_json(client.wait_job(job, args.timeout))
+            return
+        if args.app_command == "start":
+            require_compatible_firmware(client)
+        app_id = quote_identifier(args.app_id)
+        action = args.app_command
+        job = create_job(client, args, "POST", client.device_path(f"/apps/{app_id}/actions/{action}"), {})
+        print_json(client.wait_job(job, args.timeout))
+    elif args.command == "app" and args.app_command == "uninstall":
+        app_id = quote_identifier(args.app_id)
+        job = create_job(client, args, "DELETE", client.device_path(f"/apps/{app_id}"))
+        print_json(client.wait_job(job, args.timeout))
+    elif args.command == "logs":
+        cursor = args.cursor
+        initial_entries: list[dict[str, Any]] = []
+        catching_up = args.lines is not None
+        try:
+            while True:
+                cursor, has_more, entries = pull_logs(
+                    client, cursor, args.timeout, getattr(args, "command_timeout_ms", None)
+                )
+                if catching_up:
+                    initial_entries.extend(entries)
+                    if args.lines == 0:
+                        initial_entries.clear()
+                    elif len(initial_entries) > args.lines:
+                        del initial_entries[:-args.lines]
+                else:
+                    print_log_entries(entries)
+                if catching_up and not has_more:
+                    print_log_entries(initial_entries)
+                    catching_up = False
+                if not args.follow and not has_more:
+                    break
+                if not has_more:
+                    time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("\nStopped following logs.", file=sys.stderr)
+    elif args.command == "screenshot":
+        job = create_job(client, args, "POST", client.device_path("/screenshots"), {})
+        completed = client.wait_job(job, args.timeout)
+        output = Path(args.output)
+        screenshot_artifact(client, completed, output)
+        print(output)
+    elif args.command == "input":
+        operations = input_operations(args)
+        job = create_job(client, args, "POST", client.device_path("/input-sequences"), {"operations": operations})
+        completed = client.wait_job(job, args.timeout)
+        if args.screenshot:
+            screenshot_artifact(client, completed, Path(args.screenshot))
+        print_json(completed)
+    elif args.command == "job" and args.job_command == "wait":
+        try:
+            job_id = str(uuid.UUID(args.job_id))
+        except ValueError as error:
+            raise CliError("job wait requires a valid Job UUID") from error
+        print_json(client.wait_job({"id": job_id}, args.timeout))
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(prog="micropixel", description=__doc__)
+    result.add_argument("--version", action="version", version=f"micropixel {VERSION}")
+    commands = result.add_subparsers(dest="command", required=True)
+
+    build = commands.add_parser("build", help="Build Guest C++ into Wasm and AOT")
+    build.add_argument("source")
+    build.add_argument("extra_source", nargs="*")
+    build.add_argument("--name")
+    build.add_argument("--profile", choices=["development", "release", "size"], default="development")
+
+    package = commands.add_parser("package", help="Create an installable Bundle v1 from AOT and resources")
+    package.add_argument("arguments", nargs=argparse.REMAINDER)
+    validate = commands.add_parser("validate", help="Validate a Bundle v1 header")
+    validate.add_argument("bundle")
+
+    auth = commands.add_parser("auth", help="Connect a device and save a permanent API token")
+    auth_modes = auth.add_subparsers(dest="auth_command", required=True)
+    login = auth_modes.add_parser("login", help="Exchange a device connection code for a permanent API token")
+    login.add_argument("--connection-code", required=True, help="One-time code shown on the device")
+    login.add_argument("--env-file", default=".env", help="Local environment file to update (default: .env)")
+    login.add_argument("--control-url", help="Control API origin (default: MICROPIXEL_CONTROL_URL or production)")
+
+    device = commands.add_parser("device", help="Read device connection state and runtime diagnostics")
+    device_modes = device.add_subparsers(dest="device_command", required=True)
+    status = device_modes.add_parser("status", help="Show online state, current App, network, and firmware state")
+    status.add_argument("--full", action="store_true", help="Show the complete cached Control API snapshot")
+    diagnostics = device_modes.add_parser("diagnostics", help="Refresh hardware, memory, task, and runtime details")
+    diagnostics.add_argument("--cached", action="store_true", help="Read the last snapshot without refreshing the device")
+    reboot = device_modes.add_parser("reboot", help="Reboot the device")
+
+    firmware = commands.add_parser("firmware", help="Check or install device firmware updates")
+    firmware_modes = firmware.add_subparsers(dest="firmware_command", required=True)
+    firmware_modes.add_parser("status", help="Show the installed and latest firmware versions")
+    firmware_update = firmware_modes.add_parser("update", help="Install the latest firmware on the device")
+
+    app = commands.add_parser("app", help="List, install, run, inspect, and remove Apps")
+    app_modes = app.add_subparsers(dest="app_command", required=True)
+    app_list = app_modes.add_parser("list", help="Refresh and list installed Apps")
+    app_list.add_argument("--running", action="store_true", help="Show only Apps that are active or suspended")
+    app_list.add_argument("--cached", action="store_true", help="Read the last catalog without refreshing the device")
+    app_modes.add_parser("last-error", help="Show the most recent AOT load, launch, or runtime failure")
+    upload_command = app_modes.add_parser("upload", help="Upload a Bundle without installing it")
+    upload_command.add_argument("bundle")
+    install = app_modes.add_parser("install", help="Upload and install a Bundle")
+    install.add_argument("bundle")
+    start = app_modes.add_parser("start", help="Start an installed App")
+    start.add_argument("app_id")
+    stop = app_modes.add_parser("stop", help="Stop an App or whichever App owns the runtime")
+    stop.add_argument("app_id", nargs="?", help="App ID; omit to stop whichever App owns the runtime")
+    uninstall = app_modes.add_parser("uninstall", help="Uninstall an App from the device")
+    uninstall.add_argument("app_id")
+    logs = commands.add_parser("logs", help="Read logs from the current Guest App")
+    logs.add_argument("--follow", action="store_true")
+    logs.add_argument(
+        "-n",
+        "--lines",
+        type=non_negative_int,
+        metavar="N",
+        help="Show only the latest N retained log entries before following",
+    )
+    logs.add_argument("--cursor", help="Opaque cursor returned by a previous log read")
+    logs.add_argument("--interval", type=float, default=2.0)
+    screenshot = commands.add_parser("screenshot", help="Capture a JPEG screenshot")
+    screenshot.add_argument("--output", default="micropixel-screenshot.jpg")
+    input_command = commands.add_parser("input", help="Send a button press, screen tap, swipe, or JSON sequence")
+    input_modes = input_command.add_subparsers(dest="input_command", required=True)
+
+    press = input_modes.add_parser("press", help="Press and release a device button such as confirm or back")
+    press.add_argument("code", choices=["up", "down", "left", "right", "confirm", "back", "menu", "a", "b", "x", "y"])
+    press.add_argument("--hold-ms", type=int, default=80)
+    tap = input_modes.add_parser("tap", help="Touch and release a screen coordinate")
+    tap.add_argument("x", type=int)
+    tap.add_argument("y", type=int)
+    tap.add_argument("--pressure", type=int, default=500)
+    tap.add_argument("--hold-ms", type=int, default=80)
+    swipe = input_modes.add_parser("swipe", help="Swipe between two screen coordinates")
+    swipe.add_argument("x1", type=int)
+    swipe.add_argument("y1", type=int)
+    swipe.add_argument("x2", type=int)
+    swipe.add_argument("y2", type=int)
+    swipe.add_argument("--duration-ms", type=int, default=240)
+    swipe.add_argument("--steps", type=int, default=8)
+    swipe.add_argument("--pressure", type=int, default=500)
+    sequence = input_modes.add_parser("sequence", help="Read a JSON operation sequence from a file or stdin (-)")
+    sequence.add_argument("file")
+
+    def add_job_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--wait-timeout",
+            "--timeout",
+            dest="timeout",
+            type=float,
+            default=300.0,
+            help="Seconds the CLI waits for the terminal Job state",
+        )
+        command.add_argument(
+            "--command-timeout-ms",
+            type=int,
+            help="Device execution deadline in milliseconds",
+        )
+        command.add_argument(
+            "--idempotency-key",
+            help="Stable 8-128 character key to reuse after an ambiguous request result",
+        )
+
+    for mode in (press, tap, swipe, sequence):
+        mode.add_argument("--screenshot", metavar="JPEG", help="Append a screenshot to the same device Job")
+        add_job_options(mode)
+    for command in (diagnostics, reboot, firmware_update, app_list, install, start, stop, uninstall, screenshot):
+        add_job_options(command)
+    logs.add_argument("--wait-timeout", "--timeout", dest="timeout", type=float, default=300.0)
+    logs.add_argument("--command-timeout-ms", type=int)
+
+    job = commands.add_parser("job", help="Resume waiting for an existing Control Job")
+    job_modes = job.add_subparsers(dest="job_command", required=True)
+    job_wait = job_modes.add_parser("wait", help="Wait for a Job UUID to reach a terminal state")
+    job_wait.add_argument("job_id")
+    job_wait.add_argument("--wait-timeout", "--timeout", dest="timeout", type=float, default=300.0)
+    return result
+
+
+def main() -> int:
+    args = parser().parse_args()
+    try:
+        if args.command == "build":
+            run_build(args)
+        elif args.command == "package":
+            run_package(args)
+        elif args.command == "validate":
+            print_json(validate_bundle(Path(args.bundle)))
+        elif args.command == "auth" and args.auth_command == "login":
+            run_auth_login(args)
+        elif args.command in NETWORK_COMMANDS:
+            execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
+        else:
+            raise CliError(f"Unsupported command: {args.command}")
+        return 0
+    except (CliError, FileNotFoundError, PermissionError, subprocess.CalledProcessError) as error:
+        print(f"micropixel: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

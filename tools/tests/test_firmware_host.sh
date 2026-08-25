@@ -38,6 +38,9 @@ build_and_run system_gesture_router \
     "$workspace_root/tools/tests/test_system_gesture_router.cpp" \
     "$workspace_root/firmware/espressif/main/host_ui/system_gesture_router.cpp"
 
+build_and_run hall_carousel \
+    "$workspace_root/tools/tests/test_hall_carousel.cpp"
+
 build_and_run perceptual_control \
     "$workspace_root/tools/tests/test_perceptual_control.cpp"
 

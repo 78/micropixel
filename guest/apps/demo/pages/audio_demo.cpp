@@ -83,8 +83,9 @@ class AudioPage final {
         capability.AppendUint(sample_rate_);
         capability.Append(" Hz   Max voices: ");
         capability.AppendUint(max_voices_);
-        commands.DrawTextCentered(center_x, 126, capability.c_str(), MutedColor(), 18U);
-        commands.DrawTextCentered(center_x, 184, status_, available_ ? AccentColor() : DangerColor(), 22U);
+        commands.DrawTextCentered(center_x, 126, capability.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
+        commands.DrawTextCentered(center_x, 184, status_, available_ ? AccentColor() : DangerColor(),
+                                  micropixel::SystemFont::kLarge);
 
         DrawButton(commands, buttons_[0], "SINE", BlueColor());
         DrawButton(commands, buttons_[1], "SQUARE", BlueColor());

@@ -7,6 +7,13 @@ namespace micropixel::runtime {
 
 class GuestContext;
 
+class SystemServiceEndpoint final : public ServiceHandler {
+   public:
+    [[nodiscard]] ServiceDescriptor Describe() const override;
+    [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                               uint32_t response_capacity, uint32_t& response_size_out) override;
+};
+
 class TimerServiceEndpoint final : public ServiceHandler {
    public:
     explicit TimerServiceEndpoint(GuestContext& context) : context_(context) {}

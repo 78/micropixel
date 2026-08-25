@@ -6,6 +6,7 @@
 #include "sdk/fixed_string.hpp"
 #include "sdk/graphics.hpp"
 #include "sdk/input.hpp"
+#include "sdk/localization.hpp"
 #include "sdk/panic.hpp"
 #include "sdk/random.hpp"
 #include "sdk/resources.hpp"

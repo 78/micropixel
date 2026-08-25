@@ -87,6 +87,68 @@ void ResetFlash() {
     }
 }
 
+void SeedLegacyV1Catalog() {
+    constexpr uint32_t kLegacyBankSize = MICROPIXEL_BUNDLEFS_V1_BANK_SIZE;
+    constexpr uint32_t kLegacyMaxFiles = MICROPIXEL_BUNDLEFS_V1_MAX_FILES;
+    constexpr uint32_t kEntrySize = 112U;
+    constexpr uint32_t kEntriesOffset = 64U;
+    constexpr uint32_t kBlockMapOffset = kEntriesOffset + kLegacyMaxFiles * kEntrySize;
+    constexpr uint32_t kChecksumOffset = kLegacyBankSize - 8U;
+    constexpr uint32_t kCommitOffset = kLegacyBankSize - 4U;
+    std::array<uint8_t, kLegacyBankSize> bank{};
+    const std::array<uint8_t, 8U> magic{'M', 'P', 'B', 'U', 'N', 'D', 'L', 'E'};
+    std::memcpy(bank.data(), magic.data(), magic.size());
+    const auto put16 = [&](uint32_t offset, uint16_t value) {
+        std::memcpy(bank.data() + offset, &value, sizeof(value));
+    };
+    const auto put32 = [&](uint32_t offset, uint32_t value) {
+        std::memcpy(bank.data() + offset, &value, sizeof(value));
+    };
+    const auto put64 = [&](uint32_t offset, uint64_t value) {
+        std::memcpy(bank.data() + offset, &value, sizeof(value));
+    };
+    put16(8U, MICROPIXEL_BUNDLEFS_V1_FORMAT_VERSION);
+    put16(10U, kEntriesOffset);
+    put32(12U, kLegacyBankSize);
+    put64(16U, 9U);
+    put16(24U, 0U);
+    put16(26U, MICROPIXEL_BUNDLEFS_BANK_COUNT);
+    put32(28U, kLegacyBankSize);
+    put32(32U, MICROPIXEL_BUNDLEFS_METADATA_SIZE);
+    put32(36U, MICROPIXEL_BUNDLEFS_DATA_OFFSET);
+    put32(40U, MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE);
+    put32(44U, kPartitionSize);
+    put16(48U, 383U);
+    put16(50U, 1U);
+    put16(52U, 1U);
+    put16(54U, 1U);
+    put32(60U, kLegacyMaxFiles * kEntrySize + 383U * sizeof(uint16_t));
+    std::memcpy(bank.data() + kEntriesOffset, "legacy", 6U);
+    put32(kEntriesOffset + 68U, 1024U);
+    put32(kEntriesOffset + 72U, 0x12345678U);
+    put16(kEntriesOffset + 76U, 0U);
+    put16(kEntriesOffset + 78U, 1U);
+    put16(kBlockMapOffset, 0U);
+    put32(kChecksumOffset, 0U);
+    put32(kCommitOffset, UINT32_MAX);
+    put32(kChecksumOffset, Crc32(bank.data(), bank.size()));
+    put32(kCommitOffset, 0x434f4d54U);
+    std::copy(bank.begin(), bank.end(), test_flash.begin());
+    std::fill_n(test_flash.begin() + MICROPIXEL_BUNDLEFS_DATA_OFFSET, 1024U, 0x6cU);
+}
+
+std::vector<std::string> ListFiles() {
+    std::array<bundlefs_file_info_t, BUNDLEFS_MAX_FILES> files{};
+    uint32_t count = 0U;
+    Check(bundlefs_list(files.data(), files.size(), &count) == BUNDLEFS_OK, "file list must load");
+    std::vector<std::string> names;
+    names.reserve(count);
+    for (uint32_t index = 0U; index < count; ++index) {
+        names.emplace_back(files[index].name);
+    }
+    return names;
+}
+
 void TestEmptyMountAndGeometry() {
     ResetFlash();
     Check(bundlefs_mount() == BUNDLEFS_OK, "erased partition must mount as an empty BundleFS");
@@ -136,6 +198,11 @@ void TestReadMapReplaceAndRemove() {
     }
     Replace("demo", first);
 
+    const auto first_digest = Hash(first);
+    std::array<uint8_t, BUNDLEFS_SHA256_SIZE> listed_digest{};
+    Check(bundlefs_get_file_sha256("demo", listed_digest.data()) == BUNDLEFS_OK && listed_digest == first_digest,
+          "digest lookup must expose the committed SHA-256 without expanding every file record");
+
     bundlefs_store_info_t populated_info{};
     Check(bundlefs_get_store_info(&populated_info) == BUNDLEFS_OK && populated_info.used_blocks == 2U,
           "installed file must occupy two data blocks");
@@ -171,6 +238,58 @@ void TestReadMapReplaceAndRemove() {
     bundlefs_store_info_t info{};
     Check(bundlefs_get_store_info(&info) == BUNDLEFS_OK && info.used_blocks == 0U,
           "removed file blocks must become reusable");
+}
+
+void TestNewestInstallIsFirstAndUpdateKeepsPosition() {
+    ResetFlash();
+    Check(bundlefs_mount() == BUNDLEFS_OK, "mount before Catalog ordering test must succeed");
+
+    Replace("blocks", std::vector<uint8_t>(1024U, 0x31U));
+    Replace("snake", std::vector<uint8_t>(1024U, 0x42U));
+    Replace("demo", std::vector<uint8_t>(1024U, 0x53U));
+    Check(ListFiles() == std::vector<std::string>({"demo", "snake", "blocks"}),
+          "new installs must be inserted at Catalog index zero");
+
+    Replace("snake", std::vector<uint8_t>(2048U, 0x64U));
+    Check(ListFiles() == std::vector<std::string>({"demo", "snake", "blocks"}),
+          "updating an existing App must preserve its Catalog position");
+
+    Check(bundlefs_remove("snake") == BUNDLEFS_OK, "middle App must uninstall");
+    Check(ListFiles() == std::vector<std::string>({"demo", "blocks"}),
+          "uninstall must preserve the remaining relative order");
+
+    Replace("snake", std::vector<uint8_t>(1024U, 0x75U));
+    Check(ListFiles() == std::vector<std::string>({"snake", "demo", "blocks"}),
+          "reinstalling a removed App must make it the newest entry");
+}
+
+void TestFiftyFilesAndLegacyMigration() {
+    ResetFlash();
+    SeedLegacyV1Catalog();
+    Check(bundlefs_mount() == BUNDLEFS_OK && ListFiles() == std::vector<std::string>({"legacy"}),
+          "a valid seven-file v1 Catalog must remain readable");
+    Replace("migrated", std::vector<uint8_t>(1024U, 0x51U));
+    Check(ListFiles() == std::vector<std::string>({"migrated", "legacy"}),
+          "the first v2 commit must preserve and reorder imported v1 entries");
+    uint16_t migrated_version = 0U;
+    std::memcpy(&migrated_version, test_flash.data() + MICROPIXEL_BUNDLEFS_BANK_SIZE + 8U, sizeof(migrated_version));
+    Check(migrated_version == MICROPIXEL_BUNDLEFS_FORMAT_VERSION,
+          "legacy migration must commit v2 in the safe Bank 1 region");
+    Check(!IsErased(0U, MICROPIXEL_BUNDLEFS_V1_BANK_SIZE), "legacy Bank 0 must survive the first v2 migration commit");
+
+    ResetFlash();
+    Check(bundlefs_mount() == BUNDLEFS_OK, "mount before fifty-file capacity test must succeed");
+    for (uint32_t index = 0U; index < BUNDLEFS_MAX_FILES; ++index) {
+        char name[16]{};
+        std::snprintf(name, sizeof(name), "app%02" PRIu32, index);
+        Replace(name, std::vector<uint8_t>(1U, static_cast<uint8_t>(index)));
+    }
+    const auto files = ListFiles();
+    Check(files.size() == BUNDLEFS_MAX_FILES && files.front() == "app49" && files.back() == "app00",
+          "BundleFS v2 must retain fifty files in newest-first order");
+    bundlefs_writer_t writer{};
+    Check(bundlefs_begin_replace("overflow", 1U, &writer) == BUNDLEFS_ERR_TOO_MANY_FILES,
+          "a fifty-first file must fail without disturbing the Catalog");
 }
 
 void TestFourBankRingAndInterruptedCommit() {
@@ -299,6 +418,8 @@ int main() {
     TestEmptyMountAndGeometry();
     TestUnsupportedGeometryIsDistinctFromCorruption();
     TestReadMapReplaceAndRemove();
+    TestNewestInstallIsFirstAndUpdateKeepsPosition();
+    TestFiftyFilesAndLegacyMigration();
     TestFourBankRingAndInterruptedCommit();
     std::printf("BundleFS tests passed (%" PRIu32 " checks).\n", checks);
     return 0;

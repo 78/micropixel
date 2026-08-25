@@ -190,8 +190,8 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
         } else if (IsTextOpcode(record.opcode)) {
             micropixel_graphics_draw_text_command_t command{};
             if (!ReadStruct(bytes, length, offset, command) || command.x < 0 || command.x >= logical_width ||
-                command.y < 0 || command.y >= logical_height || command.font_size_px < 8U ||
-                command.font_size_px > 48U || command.text_length == 0U ||
+                command.y < 0 || command.y >= logical_height || command.font_handle < MICROPIXEL_SYSTEM_FONT_SMALL ||
+                command.font_handle > MICROPIXEL_SYSTEM_FONT_TITLE || command.text_length == 0U ||
                 command.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES || !ValidRgb888(command.rgb888)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }

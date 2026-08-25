@@ -6,6 +6,7 @@
 #include "sdk/event.hpp"
 #include "sdk/graphics.hpp"
 #include "sdk/input.hpp"
+#include "sdk/localization.hpp"
 #include "sdk/log.hpp"
 #include "sdk/random.hpp"
 #include "sdk/resources.hpp"
@@ -34,6 +35,9 @@ class Application final {
     [[nodiscard]] constexpr Input input() const noexcept { return Input{Input::CapabilityToken{}}; }
     [[nodiscard]] constexpr Resources resources() const noexcept { return Resources{Resources::CapabilityToken{}}; }
     [[nodiscard]] constexpr KVStore storage() const noexcept { return KVStore{KVStore::CapabilityToken{}}; }
+    [[nodiscard]] constexpr Localization localization() const noexcept {
+        return Localization{Localization::CapabilityToken{}};
+    }
 
     template <typename Handler>
     void Run(Handler&& handler) const {

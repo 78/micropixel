@@ -59,9 +59,9 @@ void SnakeGame::SpawnParticles(Cell origin, uint32_t count, Rgb color, uint32_t 
     }
 }
 
-void SnakeGame::SpawnPopup(Cell cell, uint32_t points, Rgb color, uint8_t font_size_px) {
+void SnakeGame::SpawnPopup(Cell cell, uint32_t points, Rgb color, micropixel::SystemFont font) {
     Popup& popup = popups_.Acquire();
-    popup = Popup{true, cell, points, 0U, color, font_size_px};
+    popup = Popup{true, cell, points, 0U, color, font};
 }
 
 void SnakeGame::TriggerFlash(Rgb color, uint64_t duration_us) {
@@ -97,9 +97,11 @@ void SnakeGame::TriggerFoodEffects(Cell cell, const MoveOutcome& outcome) {
     burst_cell_ = cell;
     burst_type_ = outcome.food_type;
     burst_remaining_us_ = kBurstDurationUs;
-    const uint8_t popup_size =
-        outcome.food_type == FoodType::kGolden || outcome.food_type == FoodType::kSpeed ? 30U : 24U;
-    SpawnPopup(cell, outcome.points, MixRgb(color, Rgb{255U, 255U, 255U}, 190U), popup_size);
+    const micropixel::SystemFont popup_font =
+        outcome.food_type == FoodType::kGolden || outcome.food_type == FoodType::kSpeed
+            ? micropixel::SystemFont::kTitle
+            : micropixel::SystemFont::kLarge;
+    SpawnPopup(cell, outcome.points, MixRgb(color, Rgb{255U, 255U, 255U}, 190U), popup_font);
     if (outcome.food_type != FoodType::kNormal) {
         TriggerFlash(color, flash_duration);
     }

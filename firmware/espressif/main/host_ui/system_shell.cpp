@@ -55,6 +55,8 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
 
 void SystemShell::LeaveHall() { ui_.LeaveHall(); }
 
+void SystemShell::PauseHallCoverLoading() { ui_.PauseHallCoverLoading(); }
+
 std::expected<void, SystemUiError> SystemShell::RestoreGuestView() { return ui_.RestoreGuestView(); }
 
 void SystemShell::WatchGuestActions() {

@@ -53,7 +53,8 @@ class InputPage final {
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 116, "Touch and drag with one or more fingers.", MutedColor(), 18U);
+        commands.DrawTextCentered(center_x, 116, "Touch and drag with one or more fingers.", MutedColor(),
+                                  micropixel::SystemFont::kMedium);
         commands.FillRect(micropixel::Rect{28, 158, static_cast<int32_t>(context.display.width()) - 56,
                                            static_cast<int32_t>(context.display.height()) - 254},
                           PanelColor());
@@ -85,7 +86,7 @@ class InputPage final {
         status.Append("   Random::U32(): ");
         status.AppendUint(last_random_);
         commands.DrawTextCentered(center_x, static_cast<int32_t>(context.display.height()) - 60, status.c_str(),
-                                  micropixel::Color::White(), 17U);
+                                  micropixel::Color::White(), micropixel::SystemFont::kMedium);
     }
 
    private:

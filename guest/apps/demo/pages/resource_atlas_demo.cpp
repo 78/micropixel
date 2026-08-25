@@ -59,9 +59,10 @@ class ResourceAtlasPage final {
     void Render(DemoContext& context, micropixel::Frame& commands) {
         const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
         commands.DrawTextCentered(center_x, 118, "AssetId and frame rectangles come from the asset manifest.",
-                                  MutedColor(), 17U);
+                                  MutedColor(), micropixel::SystemFont::kMedium);
         if (!context.atlas_texture.valid()) {
-            commands.DrawTextCentered(center_x, 300, "Atlas texture failed to load", DangerColor(), 24U);
+            commands.DrawTextCentered(center_x, 300, "Atlas texture failed to load", DangerColor(),
+                                      micropixel::SystemFont::kLarge);
             return;
         }
 
@@ -86,9 +87,10 @@ class ResourceAtlasPage final {
         status.AppendUint(context.atlas_texture.width());
         status.Append("x");
         status.AppendUint(context.atlas_texture.height());
-        commands.DrawTextCentered(center_x, 424, status.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(center_x, 424, status.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         commands.DrawTextCentered(center_x, 468, animation_running_ ? "ANIMATING" : "PAUSED",
-                                  animation_running_ ? AccentColor() : DangerColor(), 20U);
+                                  animation_running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
         DrawButton(commands, buttons_[0], animation_running_ ? "PAUSE" : "PLAY", AccentColor());
         DrawButton(commands, buttons_[1], "NEXT FRAME", BlueColor());

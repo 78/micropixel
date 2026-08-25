@@ -122,9 +122,9 @@ void RenderHome(DemoContext& context, const micropixel::ui::Button (&menu_button
     micropixel::Frame commands = context.renderer.BeginFrame();
     commands.Clear(BackgroundColor());
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 34, "MICROPIXEL SDK DEMO",
-                              micropixel::Color::White(), 32U);
+                              micropixel::Color::White(), micropixel::SystemFont::kTitle);
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 82, "One app / five focused modules",
-                              MutedColor(), 18U);
+                              MutedColor(), micropixel::SystemFont::kMedium);
     for (uint32_t index = 0U; index < kPageCount; ++index) {
         const micropixel::ui::Button& button = menu_buttons[index];
         const micropixel::Rect bounds = button.bounds();
@@ -133,7 +133,7 @@ void RenderHome(DemoContext& context, const micropixel::ui::Button (&menu_button
         commands.FillRect(bounds, micropixel::Color::Black(), button.pressed() ? 48U : 0U);
         commands.DrawText(
             micropixel::Point{bounds.x + 30, bounds.y + (bounds.height - 24) / 2 + (button.pressed() ? 1 : 0)},
-            kPages[index].label, micropixel::Color::White(), 22U);
+            kPages[index].label, micropixel::Color::White(), micropixel::SystemFont::kLarge);
     }
     micropixel::AssertThat(commands.Present().has_value(), "demo: frame present failed");
 }
@@ -143,7 +143,7 @@ void RenderPage(DemoContext& context, PageId page, const micropixel::ui::Button&
     commands.Clear(BackgroundColor());
     DrawButton(commands, back_button, "BACK", PanelColor());
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 31, PageTitle(page),
-                              micropixel::Color::White(), 28U);
+                              micropixel::Color::White(), micropixel::SystemFont::kTitle);
     commands.FillRect(micropixel::Rect{24, 92, static_cast<int32_t>(context.display.width()) - 48, 2}, AccentColor());
     RenderPageContent(page, context, commands);
     micropixel::AssertThat(commands.Present().has_value(), "demo: frame present failed");

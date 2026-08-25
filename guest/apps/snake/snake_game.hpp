@@ -89,7 +89,8 @@ class SnakeGame final {
 
     void SpawnParticles(Cell origin, uint32_t count, Rgb color, uint32_t scale);
 
-    void SpawnPopup(Cell cell, uint32_t points, Rgb color, uint8_t font_size_px = 24U);
+    void SpawnPopup(Cell cell, uint32_t points, Rgb color,
+                    micropixel::SystemFont font = micropixel::SystemFont::kLarge);
 
     void TriggerFlash(Rgb color, uint64_t duration_us);
 

@@ -96,8 +96,7 @@ bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) {
             return false;
         }
     }
-    const bool needs_baseline = baseline_background_pixels_ == nullptr;
-    if (needs_baseline) {
+    if (baseline_background_pixels_ == nullptr) {
         baseline_background_pixels_ = static_cast<uint8_t*>(
             heap_caps_aligned_alloc(kPpaBufferAlignment, frame_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (baseline_background_pixels_ == nullptr) {
@@ -118,8 +117,8 @@ bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) {
         return false;
     }
     lv_draw_buf_flush_cache(&snapshot, nullptr);
-    if (needs_baseline && !CopyRgb888(background_pixels_, width_, height_, 0U, 0U, baseline_background_pixels_, width_,
-                                      height_, 0U, 0U, width_, height_)) {
+    if (!CopyRgb888(background_pixels_, width_, height_, 0U, 0U, baseline_background_pixels_, width_, height_, 0U, 0U,
+                    width_, height_)) {
         ESP_LOGE(kTag, "could not preserve baseline Hall background");
         ClearBackground();
         return false;
@@ -237,7 +236,6 @@ bool SystemTransitionCompositor::CaptureDisplayedToHalf(uint8_t* half, uint32_t 
         ESP_LOGE(kTag, "could not freeze displayed Guest for capture: %s", esp_err_to_name(status));
         return false;
     }
-
     uint8_t* displayed_frame_buffer = DisplayedFrameBuffer();
 
     const bool scaled =

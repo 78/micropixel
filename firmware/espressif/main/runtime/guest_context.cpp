@@ -25,14 +25,15 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       touch_events_(events_, devices_.input(), clock_origin_us_),
       key_events_(events_, devices_.input(), clock_origin_us_),
       timer_endpoint_(*this),
+      system_endpoint_{},
       storage_endpoint_(*this),
       resource_endpoint_(*this),
       random_endpoint_(*this),
       graphics_endpoint_(*this),
       input_endpoint_(*this),
       audio_endpoint_(*this),
-      service_registry_(timer_endpoint_, storage_endpoint_, resource_endpoint_, random_endpoint_, graphics_endpoint_,
-                        input_endpoint_, audio_endpoint_) {
+      service_registry_(timer_endpoint_, system_endpoint_, storage_endpoint_, resource_endpoint_, random_endpoint_,
+                        graphics_endpoint_, input_endpoint_, audio_endpoint_) {
     (void)std::snprintf(app_id_.data(), app_id_.size(), "%s", reinterpret_cast<const char*>(package.app_id));
 }
 

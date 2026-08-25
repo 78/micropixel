@@ -1,7 +1,16 @@
 # Guest C++ SDK
 
-状态：**0.7，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
+状态：**0.9.1，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
 `app.timers().After/Every()` 创建。`WaitEvent()` 只用于需要有限等待或协议级控制的高级代码。
+
+## 工具链兼容性
+
+SDK 0.9.1 生成的 Guest 必须使用公开的
+[MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime) 固定 commit
+`77eb0f2ceb331e96ceab9737cc37f0b4a492781b` 编译为 AOT format v6。该编译器当前仍自报
+`wamrc 2.4.3`，但上游 WAMR 2.4.3、2.4.4 和 2.4.5 Release 都生成不兼容的 AOT v5；因此
+`wamrc --version` 不是兼容性判断依据。安装步骤和产物头检查见 MicroPixel Developer 的
+[开发环境](https://micropixel.ai/docs/environment/)页面。
 
 MicroPixel 是项目正式名称。Public C++ API 使用 `micropixel` namespace 和 `sdk/micropixel.hpp`，
 C ABI 统一使用 `micropixel_` 前缀。ABI 与 Renderer、Input 等后续能力仍须按各自里程碑用真实任务
@@ -57,7 +66,7 @@ micropixel::AssertThat(display.width() >= 320U && display.height() >= 320U,
 
 `Application` 是可通过自动补全逐层发现能力的 façade/capability root，不是实现所有能力的
 “上帝对象”。`app.clock()`、`app.random()`、`app.log()`、`app.timers()`、`app.renderer()`、`app.input()`、
-`app.resources()`、`app.storage()` 和 `app.audio()` 都按值返回轻量 **Service View**；它们不包含对应 Host Service 的
+`app.resources()`、`app.storage()`、`app.audio()` 和 `app.localization()` 都按值返回轻量 **Service View**；它们不包含对应 Host Service 的
 实现和资源状态。同类 Service View 的多个副本访问同一个 Guest Service：
 
 ```cpp
@@ -72,7 +81,7 @@ micropixel::TimePoint current = same_clock.Now();
 
 | 分类 | C++ 语义 | 示例 |
 | --- | --- | --- |
-| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Random`、`Timers`、`Renderer`、`Resources`、`KVStore`、`Audio` |
+| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Random`、`Timers`、`Renderer`、`Resources`、`KVStore`、`Audio`、`Localization` |
 | Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`StreamingTexture`、`Frame`、`TextureUpdateBatch` |
 | Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`Duration`、`TimerEvent` |
 | Module | 编译、链接或部署单元，不作为 `app.xxx()` 的返回对象 | Renderer SDK、Host Audio backend |
@@ -215,6 +224,17 @@ frame.DrawTexture(destination, texture, source);              // 裁剪并缩放
 `Frame::draw_operation_count()` 与 `RendererInfo::max_draw_operations()` 只统计应用绘制操作；SDK 自动生成的
 state、transport batch 和 retained acceleration 记录不计入预算，因此 Host 优化变化不会破坏应用的槽位计算。
 `Present()` 返回 `Result<void>`；参数和状态编程错误仍会 trap，提交失败、容量耗尽等运行时错误可由应用处理。
+
+文字使用语义字体角色而不是固定物理字号，坐标仍是 `RendererInfo` 给出的逻辑像素：
+
+```cpp
+const micropixel::Locale locale = app.localization().CurrentLocale(); // BCP 47，例如 en
+frame.DrawText({24, 24}, "Hello", micropixel::Color::White(),
+               micropixel::SystemFont::kLarge);
+```
+
+`SystemFont::{kSmall,kMedium,kLarge,kTitle}` 的实际字体和像素大小由 Host 决定。这样 Host 后续可在不改变
+应用或 wire schema 的情况下选择不同语言字体；SDK 0.9.1 暂不提供翻译目录或语言包 API。
 
 需要维护棋盘、画布或其他动态像素时，创建 `StreamingTexture`。格式名直接描述 Guest 内存字节顺序：
 `kBgr888` 为 B/G/R，`kBgra8888` 为 B/G/R/A。

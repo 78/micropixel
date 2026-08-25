@@ -13,7 +13,7 @@ enum class AotPackageError {
     kOpenFailed,
 };
 
-constexpr uint32_t kMaxInstalledApps = 7U;
+constexpr uint32_t kMaxInstalledApps = BUNDLEFS_MAX_FILES;
 
 struct InstalledApp final {
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id{};
@@ -30,7 +30,7 @@ struct InstalledAppCatalog final {
     uint32_t store_used_bytes{};
 };
 
-[[nodiscard]] std::expected<InstalledAppCatalog, AotPackageError> ScanInstalledApps();
+[[nodiscard]] std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out);
 
 // Owns one Flash-mapped launch asset used as the first App Hall cover.
 // Unlike AotPackage, it never maps the complete Bundle.

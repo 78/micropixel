@@ -22,6 +22,7 @@ class SystemShell final {
 
     [[nodiscard]] std::expected<void, SystemUiError> ShowHall(const HallModel& model);
     void UpdateHallStatusBar(const HallStatusBarModel& model);
+    void PauseHallCoverLoading();
     [[nodiscard]] std::optional<SystemUiAction> PollAction(TickType_t timeout);
     void LeaveHall();
     [[nodiscard]] std::expected<void, SystemUiError> RestoreGuestView();

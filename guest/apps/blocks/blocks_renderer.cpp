@@ -231,38 +231,48 @@ void BlocksGame::RenderMiniPiece(micropixel::Frame& commands, Tetromino type, in
 }
 
 void BlocksGame::RenderHeader(micropixel::Frame& commands, const Theme& theme) const {
-    commands.DrawText(micropixel::Point{24, 8}, "Juicy Blocks", AsColor(theme.text), 32U);
-    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{24, 8}, "Juicy Blocks", AsColor(theme.text), micropixel::SystemFont::kTitle);
+    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U),
+                      micropixel::SystemFont::kSmall);
     Line status;
     status.Append("LVL ");
     status.AppendUint(model_.level());
-    commands.DrawText(micropixel::Point{172, 47}, status.c_str(), AsColor(theme.text), 14U);
-    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{172, 47}, status.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U),
+                      micropixel::SystemFont::kSmall);
     Line score;
     score.AppendPadded4(model_.score());
-    commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(), 24U);
-    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(),
+                      micropixel::SystemFont::kLarge);
+    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U),
+                      micropixel::SystemFont::kSmall);
     Line best;
     best.AppendPadded4(best_score_ > model_.score() ? best_score_ : model_.score());
-    commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(kBestScoreColor), 24U);
+    commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(kBestScoreColor),
+                      micropixel::SystemFont::kLarge);
 }
 
 void BlocksGame::RenderSidebar(micropixel::Frame& commands, const Theme& theme) const {
     const int32_t sidebar_left = kBoardX + kSidebarX;
     const micropixel::Color muted = micropixel::Color::Rgb(115U, 115U, 115U);
     commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 14}, "HOLD",
-                      model_.hold_available() ? AsColor(theme.text) : muted, 18U);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 156}, "NEXT", AsColor(theme.text), 18U);
+                      model_.hold_available() ? AsColor(theme.text) : muted, micropixel::SystemFont::kMedium);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 156}, "NEXT", AsColor(theme.text),
+                      micropixel::SystemFont::kMedium);
     Line level;
     level.Append("LEVEL ");
     level.AppendUint(model_.level());
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 310}, level.c_str(), AsColor(theme.text), 20U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 310}, level.c_str(), AsColor(theme.text),
+                      micropixel::SystemFont::kLarge);
     Line lines;
     lines.Append("LINES ");
     lines.AppendUint(model_.lines());
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 426}, lines.c_str(), AsColor(theme.text), 20U);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 548}, "TAP TO ROTATE", muted, 14U);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 574}, "SWIPE ANYWHERE", muted, 14U);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 426}, lines.c_str(), AsColor(theme.text),
+                      micropixel::SystemFont::kLarge);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 548}, "TAP TO ROTATE", muted,
+                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 574}, "SWIPE ANYWHERE", muted,
+                      micropixel::SystemFont::kSmall);
 }
 
 void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const {
@@ -278,7 +288,7 @@ void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& th
         points.Append("LINE CLEAR  +");
         points.AppendUint(clear_points_);
         commands.DrawTextCentered(kBoardX + kPlayfieldWidth / 2, first_row_y - 34, points.c_str(), AsColor(theme.text),
-                                  22U);
+                                  micropixel::SystemFont::kLarge);
         return;
     }
     if (screen_ == Screen::kPlaying && model_.combo() > 1U) {
@@ -289,7 +299,8 @@ void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& th
         Line combo;
         combo.Append("COMBO x");
         combo.AppendUint(model_.combo());
-        commands.DrawTextCentered(428, 31, combo.c_str(), micropixel::Color::Rgb(251U, 191U, 36U), 14U);
+        commands.DrawTextCentered(428, 31, combo.c_str(), micropixel::Color::Rgb(251U, 191U, 36U),
+                                  micropixel::SystemFont::kSmall);
     }
 }
 
@@ -314,25 +325,31 @@ void BlocksGame::RenderOverlay(micropixel::Frame& commands) const {
 
     if (screen_ == Screen::kMenu) {
         commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "START GAME",
-                                  micropixel::Color::Black(), kActionButtonFontSize);
+                                  micropixel::Color::Black(), kActionButtonFont);
     } else if (screen_ == Screen::kPaused) {
         commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "CONTINUE",
-                                  micropixel::Color::Black(), kActionButtonFontSize);
+                                  micropixel::Color::Black(), kActionButtonFont);
     } else {
-        commands.DrawTextCentered(kScreenCenterX, 260, "STACK OVERFLOW", micropixel::Color::Rgb(244U, 63U, 94U), 24U);
+        commands.DrawTextCentered(kScreenCenterX, 260, "STACK OVERFLOW", micropixel::Color::Rgb(244U, 63U, 94U),
+                                  micropixel::SystemFont::kLarge);
         Line score;
         score.AppendPadded4(model_.score());
-        commands.DrawTextCentered(kScreenCenterX, 312, score.c_str(), micropixel::Color::White(), 24U);
-        commands.DrawTextCentered(kScreenCenterX - 55, 360, "LINES", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
-        commands.DrawTextCentered(kScreenCenterX + 55, 360, "LEVEL", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+        commands.DrawTextCentered(kScreenCenterX, 312, score.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kLarge);
+        commands.DrawTextCentered(kScreenCenterX - 55, 360, "LINES", micropixel::Color::Rgb(115U, 115U, 115U),
+                                  micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kScreenCenterX + 55, 360, "LEVEL", micropixel::Color::Rgb(115U, 115U, 115U),
+                                  micropixel::SystemFont::kSmall);
         Line lines;
         lines.AppendUint(model_.lines());
-        commands.DrawTextCentered(kScreenCenterX - 55, 382, lines.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(kScreenCenterX - 55, 382, lines.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         Line level;
         level.AppendUint(model_.level());
-        commands.DrawTextCentered(kScreenCenterX + 55, 382, level.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(kScreenCenterX + 55, 382, level.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kRestartButtonRect), "RESTART",
-                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFontSize);
+                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
     }
 }
 

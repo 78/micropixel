@@ -30,7 +30,8 @@ constexpr uint32_t kDefaultRandomSeed = 0x4b10c5e7U;
 constexpr int32_t kActionButtonWidth = 280;
 constexpr int32_t kActionButtonHeight = 96;
 constexpr int32_t kActionButtonX = kScreenCenterX - kActionButtonWidth / 2;
-constexpr uint16_t kActionButtonFontSize = 24U;
+constexpr micropixel::SystemFont kActionButtonFont = micropixel::SystemFont::kLarge;
+constexpr int32_t kActionButtonFontHeight = 24;
 constexpr int32_t kActionButtonTextOpticalOffsetY = -2;
 constexpr uint8_t kOverlayOpacity = 180U;
 constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
@@ -42,8 +43,7 @@ constexpr micropixel::Rect kPlayTouchRect{0, 0, static_cast<int32_t>(kScreenWidt
                                           static_cast<int32_t>(kScreenHeight)};
 
 [[nodiscard]] constexpr int32_t ActionButtonTextY(micropixel::Rect bounds) {
-    return bounds.y + (bounds.height - static_cast<int32_t>(kActionButtonFontSize)) / 2 +
-           kActionButtonTextOpticalOffsetY;
+    return bounds.y + (bounds.height - kActionButtonFontHeight) / 2 + kActionButtonTextOpticalOffsetY;
 }
 
 enum class Tetromino : uint8_t { kI, kJ, kL, kO, kS, kT, kZ };

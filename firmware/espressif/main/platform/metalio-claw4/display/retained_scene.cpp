@@ -27,17 +27,18 @@ lv_color_format_t BitmapLvColorFormat(uint32_t pixel_format) {
     return pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
 }
 
-const lv_font_t* FontForSize(uint16_t pixels) {
-    if (pixels >= 28U) {
-        return &lv_font_montserrat_32;
+const lv_font_t* SystemFontForHandle(uint16_t handle) {
+    switch (handle) {
+        case MICROPIXEL_SYSTEM_FONT_TITLE:
+            return &lv_font_montserrat_32;
+        case MICROPIXEL_SYSTEM_FONT_LARGE:
+            return &lv_font_montserrat_24;
+        case MICROPIXEL_SYSTEM_FONT_MEDIUM:
+            return &lv_font_montserrat_18;
+        case MICROPIXEL_SYSTEM_FONT_SMALL:
+        default:
+            return &lv_font_montserrat_14;
     }
-    if (pixels >= 22U) {
-        return &lv_font_montserrat_24;
-    }
-    if (pixels >= 16U) {
-        return &lv_font_montserrat_18;
-    }
-    return &lv_font_montserrat_14;
 }
 
 uint16_t RetainedObjectOpcode(uint16_t opcode) {
@@ -377,7 +378,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                     slot.rgb888 = command.rgb888;
                     changed = true;
                 }
-                const lv_font_t* font = FontForSize(command.font_size_px);
+                const lv_font_t* font = SystemFontForHandle(command.font_handle);
                 if (!slot.state_valid || slot.font != font) {
                     lv_obj_set_style_text_font(slot.object, font, 0);
                     slot.font = font;

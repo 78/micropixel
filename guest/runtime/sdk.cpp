@@ -114,6 +114,7 @@ ServiceCache timer_service;
 ServiceCache storage_service;
 ServiceCache resource_service;
 ServiceCache random_service;
+ServiceCache system_service;
 ServiceCache graphics_service;
 ServiceCache input_service;
 ServiceCache audio_service;
@@ -385,6 +386,24 @@ uint32_t Random::U32() const {
         runtime::Panic("random.u32.response", MICROPIXEL_STATUS_INTERNAL);
     }
     return response.value;
+}
+
+Locale Localization::CurrentLocale() const {
+    Locale locale{};
+    RequireOk(OpenService(system_service, MICROPIXEL_SERVICE_SYSTEM, MICROPIXEL_SYSTEM_INTERFACE_MAJOR,
+                          MICROPIXEL_SYSTEM_INTERFACE_MINOR),
+              "system.open");
+    micropixel_system_locale_response_t wire{};
+    uint32_t response_size = 0U;
+    RequireOk(CallService(system_service, MICROPIXEL_SYSTEM_METHOD_GET_LOCALE, nullptr, 0U, &wire, sizeof(wire),
+                          response_size),
+              "system.locale");
+    if (response_size < sizeof(wire) || wire.size < sizeof(wire) || wire.tag_length == 0U ||
+        wire.tag_length > MICROPIXEL_LOCALE_TAG_MAX_BYTES || wire.tag[wire.tag_length] != '\0') {
+        runtime::Panic("system.locale.invalid", MICROPIXEL_STATUS_INTERNAL);
+    }
+    CopyBytes(locale.tag_, wire.tag, wire.tag_length + 1U);
+    return locale;
 }
 
 Result<AudioInfo> Audio::info() const {
@@ -875,8 +894,9 @@ void Frame::FillRect(Rect rect, Color color, uint8_t opacity) {
     }
 }
 
-void Frame::DrawText(Point position, const char* text, Color color, uint16_t font_size_px) {
-    if (text == nullptr || font_size_px < 8U || font_size_px > 48U) {
+void Frame::DrawText(Point position, const char* text, Color color, SystemFont font) {
+    const uint16_t font_handle = static_cast<uint16_t>(font);
+    if (text == nullptr || font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     if (state_depth_ != 0U) {
@@ -907,14 +927,15 @@ void Frame::DrawText(Point position, const char* text, Color color, uint16_t fon
     command.x = position.x;
     command.y = position.y;
     command.rgb888 = color.rgb888_;
-    command.font_size_px = font_size_px;
+    command.font_handle = font_handle;
     command.text_length = static_cast<uint16_t>(text_length);
     CopyBytes(record, &command, sizeof(command));
     CopyBytes(record + sizeof(command), text, text_length);
 }
 
-void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, uint16_t font_size_px) {
-    if (text == nullptr || font_size_px < 8U || font_size_px > 48U) {
+void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, SystemFont font) {
+    const uint16_t font_handle = static_cast<uint16_t>(font);
+    if (text == nullptr || font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     if (state_depth_ != 0U) {
@@ -945,7 +966,7 @@ void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Colo
     command.x = center_x;
     command.y = y;
     command.rgb888 = color.rgb888_;
-    command.font_size_px = font_size_px;
+    command.font_handle = font_handle;
     command.text_length = static_cast<uint16_t>(text_length);
     CopyBytes(record, &command, sizeof(command));
     CopyBytes(record + sizeof(command), text, text_length);

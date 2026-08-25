@@ -12,15 +12,15 @@ from pathlib import Path
 
 
 CATALOG_MAGIC = b"MPBUNDLE"
-FORMAT_VERSION = 1
-BANK_SIZE = 4 * 1024
+FORMAT_VERSION = 2
+BANK_SIZE = 16 * 1024
 BANK_COUNT = 4
 METADATA_SIZE = 64 * 1024
 DATA_OFFSET = METADATA_SIZE
 DATA_BLOCK_SIZE = 64 * 1024
 APP_STORE_SIZE = 24 * 1024 * 1024
 DATA_BLOCK_COUNT = (APP_STORE_SIZE - DATA_OFFSET) // DATA_BLOCK_SIZE
-MAX_FILES = 7
+MAX_FILES = 50
 CATALOG_ENTRY_SIZE = 112
 BLOCK_NUMBER_SIZE = 2
 HEADER_SIZE = 64
@@ -60,9 +60,9 @@ def bundle_identity(path: Path, data: bytes) -> str:
 
 
 def build_empty_bundlefs() -> bytes:
-    """Return the 64 KiB metadata region for an empty BundleFS v1."""
+    """Return the 64 KiB metadata region for an empty BundleFS v2."""
     if DATA_BLOCK_COUNT != 383 or CATALOG_HEADER.size != HEADER_SIZE:
-        raise AssertionError("BundleFS v1 geometry changed without updating the image builder")
+        raise AssertionError("BundleFS v2 geometry changed without updating the image builder")
 
     bank = bytearray(BANK_SIZE)
     payload_size = MAX_FILES * CATALOG_ENTRY_SIZE + DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE

@@ -6,6 +6,10 @@ workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 # Load machine-local defaults without overriding values supplied by the caller.
 idf_path_override="${IDF_PATH:-}"
 p4_port_override="${P4_PORT:-}"
+remote_control_host_override="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
+remote_control_port_override="${MICROPIXEL_REMOTE_CONTROL_PORT:-}"
+remote_control_tls_override="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-}"
+remote_control_ca_override="${MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64:-}"
 if [[ -f "$workspace_root/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
@@ -18,11 +22,24 @@ fi
 if [[ -n "$p4_port_override" ]]; then
     P4_PORT="$p4_port_override"
 fi
+if [[ -n "$remote_control_host_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_HOST="$remote_control_host_override"
+fi
+if [[ -n "$remote_control_port_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_PORT="$remote_control_port_override"
+fi
+if [[ -n "$remote_control_tls_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS="$remote_control_tls_override"
+fi
+if [[ -n "$remote_control_ca_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64="$remote_control_ca_override"
+fi
 
 firmware_dir="$workspace_root/firmware/espressif"
 host_build_dir="${P4_HOST_BUILD_DIR:-$workspace_root/build/host-esp32p4}"
 system_shell_output_dir="${P4_SYSTEM_SHELL_OUTPUT_DIR:-$workspace_root/build/system-shell-p4}"
 example_app_store_image="$system_shell_output_dir/app-store.bin"
+release_app_store_image="$system_shell_output_dir/app-store-release.bin"
 idf_environment_cache="$workspace_root/build/p4-idf-environment.sh"
 sdkconfig_path="${P4_SDKCONFIG:-$host_build_dir/sdkconfig.release}"
 sdkconfig_defaults="${P4_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.p4.defaults}"
@@ -37,21 +54,23 @@ variables and command-line PORT arguments take precedence.
 
 Normal development commands:
   build-host                         Incrementally build only the ESP32-P4 Host.
+  build-release                      Build Host, Blocks, and SDK Demo; create a browser-flashable
+                                     micropixel-full.bin containing only those two Apps.
   flash-host [PORT]                  Incrementally build and flash only the Host;
                                      preserve the app_store partition.
   monitor [PORT]                     Monitor the running ESP32-P4 Host without
                                      building, flashing, erasing, or testing.
-  build-apps                         Build Blocks, Snake, and Demo Bundles.
-  build-all                          Build Host plus Blocks, Snake, Demo, and the
+  build-apps                         Build Blocks, Snake, Demo, and four Showcase Bundles.
+  build-all                          Build Host plus seven example Apps and the
                                      App Store image. Run no tests; flash nothing.
-  flash-apps [PORT]                  Clear app_store and flash Blocks, Snake, Demo
+  flash-apps [PORT]                  Clear app_store and flash seven example Apps
                                      over USB. Uses the unique connected ESP32-P4
                                      when PORT is omitted.
 
 Explicit full/destructive commands:
   fullclean-host                     Delete the Host build cache with idf.py fullclean.
   flash-all [PORT]                   Build and flash the Host, then clear and flash
-                                     Blocks, Snake, Demo. Run no tests.
+                                     seven example Apps. Run no tests.
   reset-app-store [PORT]             Recovery only: clear app_store to an EMPTY Catalog.
   install-apps-examples              Non-USB alternative: install examples through
                                      Remote Control while preserving other Apps.
@@ -64,6 +83,13 @@ install-apps-examples requires these environment variables:
   MICROPIXEL_DEVICE_ID               Paired device UUID.
   MICROPIXEL_CONTROL_TOKEN           Control JWT with app:install and device:read.
   MICROPIXEL_CONTROL_URL             Optional; defaults to https://localhost:8443.
+
+Host build configuration:
+  MICROPIXEL_REMOTE_CONTROL_HOST                 Control HTTP/3 hostname.
+  MICROPIXEL_REMOTE_CONTROL_PORT                 Control HTTP/3 port; defaults to 8443.
+  MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS y/n; defaults to y for local development.
+  MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64
+                                                  Required when unverified TLS is disabled.
 
 Examples:
   bash tools/p4.sh build-host
@@ -156,8 +182,32 @@ prepare_host_config() {
         return
     fi
     local remote_host="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
+    local remote_port="${MICROPIXEL_REMOTE_CONTROL_PORT:-8443}"
+    local allow_unverified="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-y}"
+    local trusted_ca="${MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64:-}"
+    local lv_mem_size_kib="96"
     if [[ -n "$remote_host" && ! "$remote_host" =~ ^[A-Za-z0-9._:-]+$ ]]; then
         echo "MICROPIXEL_REMOTE_CONTROL_HOST contains unsupported characters: $remote_host" >&2
+        exit 2
+    fi
+    if [[ ! "$remote_port" =~ ^[0-9]+$ ]] || (( remote_port < 1 || remote_port > 65535 )); then
+        echo "MICROPIXEL_REMOTE_CONTROL_PORT must be between 1 and 65535: $remote_port" >&2
+        exit 2
+    fi
+    case "$allow_unverified" in
+        y | Y | yes | YES | true | TRUE | 1) allow_unverified="y" ;;
+        n | N | no | NO | false | FALSE | 0) allow_unverified="n" ;;
+        *)
+            echo "MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS must be y or n" >&2
+            exit 2
+            ;;
+    esac
+    if [[ -n "$trusted_ca" && ! "$trusted_ca" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        echo "MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64 is not valid base64 text" >&2
+        exit 2
+    fi
+    if [[ "$allow_unverified" == n && -z "$trusted_ca" ]]; then
+        echo "Strict Remote Control TLS requires MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64" >&2
         exit 2
     fi
 
@@ -167,7 +217,16 @@ prepare_host_config() {
     env_defaults_updated="$(mktemp "${env_defaults}.XXXXXX")"
     {
         printf 'CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST="%s"\n' "$remote_host"
-        printf 'CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y\n'
+        printf 'CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=%s\n' "$remote_port"
+        if [[ "$allow_unverified" == y ]]; then
+            printf 'CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y\n'
+        else
+            printf '# CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS is not set\n'
+        fi
+        printf 'CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64="%s"\n' "$trusted_ca"
+        printf '# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set\n'
+        printf 'CONFIG_LV_MEM_SIZE_KILOBYTES=%s\n' "$lv_mem_size_kib"
+        printf 'CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0\n'
     } >"$env_defaults_updated"
     if [[ ! -f "$env_defaults" ]] || ! cmp -s "$env_defaults_updated" "$env_defaults"; then
         mv "$env_defaults_updated" "$env_defaults"
@@ -183,17 +242,36 @@ prepare_host_config() {
     if [[ -f "$sdkconfig_path" ]]; then
         local updated
         updated="$(mktemp "${sdkconfig_path}.XXXXXX")"
-        awk -v remote_host="$remote_host" '
-            BEGIN { saw_host = 0; saw_tls = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0 }
+        awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
+            -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
+            -v lv_mem_size_kib="$lv_mem_size_kib" '
+            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0 }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
                 next
             }
+            /^CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=/ {
+                print "CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=" remote_port
+                saw_port = 1
+                next
+            }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=/ ||
             /^# CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS is not set$/ {
-                print "CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y"
+                if (allow_unverified == "y") print "CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y"
+                else print "# CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS is not set"
                 saw_tls = 1
+                next
+            }
+            /^CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64=/ {
+                print "CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64=\"" trusted_ca "\""
+                saw_ca = 1
+                next
+            }
+            /^CONFIG_MBEDTLS_HAVE_TIME_DATE=/ ||
+            /^# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set$/ {
+                print "# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set"
+                saw_cert_time = 1
                 next
             }
             /^CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY=/ ||
@@ -214,13 +292,31 @@ prepare_host_config() {
                 saw_ota_rollback = 1
                 next
             }
+            /^CONFIG_LV_MEM_SIZE_KILOBYTES=/ {
+                print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
+                saw_lv_mem_size = 1
+                next
+            }
+            /^CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=/ {
+                print "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0"
+                saw_lv_mem_expand = 1
+                next
+            }
             { print }
             END {
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
-                if (!saw_tls) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y"
+                if (!saw_port) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=" remote_port
+                if (!saw_tls) {
+                    if (allow_unverified == "y") print "CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y"
+                    else print "# CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS is not set"
+                }
+                if (!saw_ca) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64=\"" trusted_ca "\""
+                if (!saw_cert_time) print "# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set"
                 if (!saw_hw_ecdsa) print "# CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY is not set"
                 if (!saw_cert_bundle) print "# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set"
                 if (!saw_ota_rollback) print "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y"
+                if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
+                if (!saw_lv_mem_expand) print "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0"
             }
         ' "$sdkconfig_path" >"$updated"
         if ! cmp -s "$updated" "$sdkconfig_path"; then
@@ -286,6 +382,23 @@ build_host() {
     idf_host build
 }
 
+build_release() {
+    echo "==> Building release Apps: Blocks and SDK Demo"
+    bash "$workspace_root/tools/build_blocks_bundle.sh"
+    bash "$workspace_root/tools/build_demo_bundle.sh"
+    build_host
+    mkdir -p "$system_shell_output_dir"
+    python3 "$workspace_root/tools/build_app_store_image.py" \
+        --output "$release_app_store_image" \
+        "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/demo/demo.bundle.bin"
+    echo "==> Creating browser-flashable image with Blocks and SDK Demo"
+    python3 "$workspace_root/tools/build_full_firmware_image.py" \
+        --build-dir "$host_build_dir" \
+        --app-store-image "$release_app_store_image" \
+        --output "$host_build_dir/micropixel-full.bin"
+}
+
 flash_host() {
     local port="$1"
     local baud="${P4_BAUD:-2000000}"
@@ -307,10 +420,11 @@ monitor_host() {
 }
 
 build_example_apps() {
-    echo "==> Building example Apps: Blocks, Snake, Demo"
+    echo "==> Building seven example Apps"
     bash "$workspace_root/tools/build_blocks_bundle.sh"
     bash "$workspace_root/tools/build_snake_bundle.sh"
     bash "$workspace_root/tools/build_demo_bundle.sh"
+    bash "$workspace_root/tools/build_showcase_bundles.sh"
 }
 
 app_store_partition_info() {
@@ -328,6 +442,10 @@ app_store_partition_info() {
 
 create_example_app_store_image() {
     local bundles=(
+        "$workspace_root/build/apps/orbit-pad/orbit-pad.bundle.bin"
+        "$workspace_root/build/apps/pixel-sketch/pixel-sketch.bundle.bin"
+        "$workspace_root/build/apps/color-lab/color-lab.bundle.bin"
+        "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin"
         "$workspace_root/build/apps/blocks/blocks.bundle.bin"
         "$workspace_root/build/apps/snake/snake.bundle.bin"
         "$workspace_root/build/apps/demo/demo.bundle.bin"
@@ -366,7 +484,7 @@ write_app_store_image() {
 }
 
 build_all() {
-    echo "==> Building Host + Blocks, Snake, Demo, and App Store image (no tests, no flash)"
+    echo "==> Building Host + seven example Apps + App Store image (no tests, no flash)"
     build_example_apps
     build_host
     create_example_app_store_image
@@ -377,7 +495,7 @@ build_all() {
         echo "App Store image is larger than app_store ($image_size > $partition_size)." >&2
         return 2
     fi
-    echo "==> App Store image ready: $example_app_store_image (Blocks, Snake, Demo)"
+    echo "==> App Store image ready: $example_app_store_image (7 Apps)"
 }
 
 flash_all() {
@@ -386,11 +504,11 @@ flash_all() {
     build_all
     echo "==> Flashing Host at $baud baud"
     idf_host -b "$baud" -p "$port" flash
-    echo "==> Clearing app_store and flashing Blocks, Snake, Demo"
+    echo "==> Clearing app_store and flashing seven example Apps"
     write_app_store_image "$port" "$example_app_store_image" true
     python "$workspace_root/tools/capture_serial_until.py" \
         "$port" "System Shell ready: App Hall rendered" --timeout 30 --reset
-    echo "System Shell P4 flashed and verified on $port with Blocks, Snake, and Demo."
+    echo "System Shell P4 flashed and verified on $port with seven Apps."
 }
 
 install_bundle() {
@@ -412,7 +530,7 @@ install_bundle() {
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
         -d "{\"packageId\":\"$package_id\"}" \
-        "$base_url/api/v1/devices/$device_id/apps:install")"
+        "$base_url/api/v1/devices/$device_id/apps/install")"
     job_id="$(jq -er '.id' <<<"$job_json")"
 
     for _ in {1..300}; do
@@ -421,15 +539,15 @@ install_bundle() {
             "$base_url/api/v1/devices/$device_id/jobs/$job_id")"
         job_json_status="$(jq -er '.status' <<<"$job_json")"
         case "$job_json_status" in
-            acknowledged)
+            succeeded)
                 echo "    $app_name installed (job $job_id)"
                 return 0
                 ;;
-            failed | expired)
+            failed | cancelled | expired | indeterminate)
                 echo "$app_name installation $job_json_status: $job_json" >&2
                 return 1
                 ;;
-            queued | sent)
+            queued | dispatched | accepted | running)
                 sleep 1
                 ;;
             *)
@@ -457,6 +575,10 @@ install_example_apps() {
     install_bundle "$workspace_root/build/apps/blocks/blocks.bundle.bin" Blocks
     install_bundle "$workspace_root/build/apps/snake/snake.bundle.bin" Snake
     install_bundle "$workspace_root/build/apps/demo/demo.bundle.bin" Demo
+    install_bundle "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin" "Tap Counter"
+    install_bundle "$workspace_root/build/apps/color-lab/color-lab.bundle.bin" "Color Lab"
+    install_bundle "$workspace_root/build/apps/pixel-sketch/pixel-sketch.bundle.bin" "Pixel Sketch"
+    install_bundle "$workspace_root/build/apps/orbit-pad/orbit-pad.bundle.bin" "Orbit Pad"
 }
 
 run_tests() {
@@ -470,7 +592,11 @@ run_tests() {
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
-        "$workspace_root/build/apps/demo/demo.bundle.bin"
+        "$workspace_root/build/apps/demo/demo.bundle.bin" \
+        "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin" \
+        "$workspace_root/build/apps/color-lab/color-lab.bundle.bin" \
+        "$workspace_root/build/apps/pixel-sketch/pixel-sketch.bundle.bin" \
+        "$workspace_root/build/apps/orbit-pad/orbit-pad.bundle.bin"
     bash -n "$workspace_root"/tools/*.sh
     echo "P4 release/pre-push test suite passed."
 }
@@ -479,7 +605,7 @@ flash_example_apps() {
     local port="$1"
     require_idf
     create_example_app_store_image
-    echo "==> USB App flash: clearing app_store and writing Blocks, Snake, Demo"
+    echo "==> USB App flash: clearing app_store and writing seven example Apps"
     write_app_store_image "$port" "$example_app_store_image"
 }
 
@@ -504,6 +630,10 @@ case "$command_name" in
     build-host)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         build_host
+        ;;
+    build-release)
+        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+        build_release
         ;;
     flash-host)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }

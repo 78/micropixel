@@ -18,6 +18,32 @@ SPEC.loader.exec_module(STORE)
 
 
 class BundleFsImageTest(unittest.TestCase):
+    def write_bundle(self, path: Path, app_id: str) -> bytes:
+        data = bytearray(STORE.DATA_BLOCK_SIZE)
+        encoded_id = app_id.encode("ascii")
+        STORE.BUNDLE_HEADER.pack_into(
+            data,
+            0,
+            STORE.BUNDLE_MAGIC,
+            STORE.BUNDLE_VERSION,
+            STORE.BUNDLE_HEADER_SIZE,
+            len(data),
+            STORE.BUNDLE_HEADER_SIZE,
+            encoded_id + bytes(64 - len(encoded_id)),
+            len(encoded_id),
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        path.write_bytes(data)
+        return bytes(data)
+
     def test_empty_image_contains_one_committed_bank(self) -> None:
         image = STORE.build_empty_bundlefs()
 
@@ -48,7 +74,8 @@ class BundleFsImageTest(unittest.TestCase):
 
     def test_geometry_uses_four_banks_without_slots(self) -> None:
         self.assertEqual(STORE.BANK_COUNT, 4)
-        self.assertEqual(STORE.BANK_SIZE, 4096)
+        self.assertEqual(STORE.BANK_SIZE, 16384)
+        self.assertEqual(STORE.MAX_FILES, 50)
         self.assertEqual(STORE.DATA_OFFSET, 65536)
         self.assertEqual(STORE.DATA_BLOCK_COUNT, 383)
         self.assertFalse(hasattr(STORE, "SLOT_SIZE"))
@@ -101,6 +128,25 @@ class BundleFsImageTest(unittest.TestCase):
                 path.write_bytes(data)
             with self.assertRaisesRegex(ValueError, "Duplicate AppId"):
                 STORE.build_bundlefs(paths)
+
+    def test_seeded_image_preserves_explicit_hall_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            app_ids = ["orbit", "sketch", "colors", "counter", "blocks", "snake", "demo"]
+            paths = []
+            for app_id in app_ids:
+                path = Path(directory) / f"{app_id}.bundle.bin"
+                self.write_bundle(path, app_id)
+                paths.append(path)
+
+            image = STORE.build_bundlefs(paths)
+            fields = STORE.CATALOG_HEADER.unpack_from(image)
+            self.assertEqual(fields[14], len(app_ids))
+            actual_ids = []
+            for index in range(len(app_ids)):
+                offset = STORE.CATALOG_ENTRIES_OFFSET + index * STORE.CATALOG_ENTRY_SIZE
+                entry = image[offset : offset + STORE.CATALOG_ENTRY_SIZE]
+                actual_ids.append(entry[: STORE.CATALOG_ENTRY_SIZE].split(b"\0", 1)[0].decode("ascii"))
+            self.assertEqual(actual_ids, app_ids)
 
 
 if __name__ == "__main__":

@@ -92,6 +92,9 @@ void bundlefs_munmap(bundlefs_mapping_t* mapping) {
 
 static bool validate_bundle(void) {
     const bundlefs_file_t file = {.opaque = {1U}};
+    micropixel_bundle_header_t header;
+    memcpy(&header, test_bundle, sizeof(header));
+    const bool has_launch_asset = header.launch_asset_id != 0U;
     micropixel_bundle_metadata_t metadata;
     if (!check(micropixel_read_bundle_metadata(&file, &metadata), "Bundle metadata must validate") ||
         !check(metadata.bundle_size == test_bundle_size, "metadata must expose the Bundle logical size") ||
@@ -100,18 +103,25 @@ static bool validate_bundle(void) {
     }
 
     micropixel_bundle_asset_mapping_t cover;
-    if (!check(micropixel_open_launch_asset(&file, &cover), "launch cover must map") ||
-        !check(active_mappings == 1U, "cover path must own exactly one mapping") ||
-        !check(last_mapping_offset > 0U, "cover mapping must begin at the asset, not Bundle start") ||
-        !check(last_mapping_size == cover.asset.size && last_mapping_size < metadata.bundle_size,
-               "Hall must map only the launch asset") ||
-        !check(cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG, "production Hall cover must stay compressed") ||
-        !check(cover.asset.content_hash != 0U, "Hall cover identity must include its content hash")) {
-        return false;
-    }
-    const uint32_t cover_offset = (uint32_t)(cover.asset.data - test_bundle);
-    micropixel_close_asset_mapping(&cover);
-    if (!check(active_mappings == 0U, "closing a cover must release its mapping")) {
+    uint32_t cover_offset = 0U;
+    if (has_launch_asset) {
+        if (!check(micropixel_open_launch_asset(&file, &cover), "launch cover must map") ||
+            !check(active_mappings == 1U, "cover path must own exactly one mapping") ||
+            !check(last_mapping_offset > 0U, "cover mapping must begin at the asset, not Bundle start") ||
+            !check(last_mapping_size == cover.asset.size && last_mapping_size < metadata.bundle_size,
+                   "Hall must map only the launch asset") ||
+            !check(cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG, "production Hall cover must stay compressed") ||
+            !check(cover.asset.content_hash != 0U, "Hall cover identity must include its content hash")) {
+            return false;
+        }
+        cover_offset = (uint32_t)(cover.asset.data - test_bundle);
+        micropixel_close_asset_mapping(&cover);
+        if (!check(active_mappings == 0U, "closing a cover must release its mapping")) {
+            return false;
+        }
+    } else if (!check(!micropixel_open_launch_asset(&file, &cover),
+                      "a Bundle without a launch asset must select the Hall fallback cover") ||
+               !check(active_mappings == 0U, "missing cover lookup must not create a mapping")) {
         return false;
     }
 
@@ -126,11 +136,14 @@ static bool validate_bundle(void) {
     micropixel_bundle_asset_view_t launch;
     const bool found_launch = micropixel_bundle_find_asset(&package, package.launch_asset_id, &launch);
     micropixel_close_aot_package(&package);
-    if (!check(found_launch, "running package must resolve its launch asset") ||
+    if (!check(found_launch == has_launch_asset, "running package launch asset state must match its header") ||
         !check(active_mappings == 0U, "closing a package must release its Bundle mapping")) {
         return false;
     }
 
+    if (!has_launch_asset) {
+        return true;
+    }
     const uint8_t original = test_bundle[cover_offset];
     test_bundle[cover_offset] ^= 0xffU;
     const bool corrupt_opened = micropixel_open_launch_asset(&file, &cover);

@@ -5,6 +5,8 @@
 /tmp/
 /firmware/espressif/components/78__esp-http3
 /.codex-tmp/
+/.private/
+/control/etc/Caddyfile.production
 /guest/apps/snake/assets/snake_launch_360x360.argb8888
 .DS_Store
 .env

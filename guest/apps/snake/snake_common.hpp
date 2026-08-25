@@ -49,7 +49,8 @@ constexpr int32_t kScreenHeight = 720;
 constexpr int32_t kActionButtonWidth = 280;
 constexpr int32_t kActionButtonHeight = 96;
 constexpr int32_t kActionButtonX = (kScreenWidth - kActionButtonWidth) / 2;
-constexpr uint16_t kActionButtonFontSize = 24U;
+constexpr micropixel::SystemFont kActionButtonFont = micropixel::SystemFont::kLarge;
+constexpr int32_t kActionButtonFontHeight = 24;
 constexpr int32_t kActionButtonTextOpticalOffsetY = -2;
 constexpr uint8_t kOverlayOpacity = 180U;
 constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
@@ -57,8 +58,7 @@ constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButton
 constexpr micropixel::Rect kPauseTouchRect{0, 0, 180, kBoardY};
 
 [[nodiscard]] constexpr int32_t ActionButtonTextY(micropixel::Rect bounds) {
-    return bounds.y + (bounds.height - static_cast<int32_t>(kActionButtonFontSize)) / 2 +
-           kActionButtonTextOpticalOffsetY;
+    return bounds.y + (bounds.height - kActionButtonFontHeight) / 2 + kActionButtonTextOpticalOffsetY;
 }
 
 static_assert(kBurstFrameCount == snake_assets::burst_atlas_frame_count);
@@ -166,7 +166,7 @@ struct Popup final {
     uint32_t points{};
     uint32_t age_us{};
     Rgb color{};
-    uint8_t font_size_px{24U};
+    micropixel::SystemFont font{micropixel::SystemFont::kLarge};
 };
 
 using Line = micropixel::FixedString<96U>;

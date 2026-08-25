@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <ctime>
 #include <memory>
 #include <string>
 #include <utility>
@@ -36,7 +35,6 @@
 #include "remote_control/reconnect_policy.hpp"
 #include "runtime/bundle/bundle_format.h"
 #include "sdkconfig.h"
-#include "system_time.hpp"
 #include "task_policy.hpp"
 
 namespace micropixel::firmware::remote_control {
@@ -73,6 +71,55 @@ constexpr uint32_t kDefaultCommandTimeoutMs = 60000U;
 constexpr uint32_t kMinCommandTimeoutMs = 1000U;
 constexpr uint32_t kMaxCommandTimeoutMs = 5U * 60U * 1000U;
 constexpr TickType_t kFirmwareCheckIntervalTicks = pdMS_TO_TICKS(15U * 60U * 1000U);
+
+const char* ProtocolErrorMessage(const char* code) {
+    if (code == nullptr || code[0] == '\0') return "The device command failed.";
+    if (std::strcmp(code, "not_implemented") == 0) return "The command is not supported by this firmware.";
+    if (std::strcmp(code, "invalid_command") == 0) return "The command payload is invalid.";
+    if (std::strcmp(code, "invalid_command_timeout") == 0) return "The command timeout is invalid.";
+    if (std::strcmp(code, "invalid_app_id") == 0) return "The App ID is invalid.";
+    if (std::strcmp(code, "app_not_found") == 0) return "The requested App is not installed.";
+    if (std::strcmp(code, "app_active") == 0) return "Another App Session is already active.";
+    if (std::strcmp(code, "host_command_queue_full") == 0) return "The Host command queue is full.";
+    if (std::strcmp(code, "artifact_upload_failed") == 0) return "A result artifact could not be uploaded.";
+    return "The device command failed; inspect error.details for diagnostics.";
+}
+
+bool ProtocolErrorRetryable(const char* code) {
+    return code != nullptr &&
+           (std::strcmp(code, "host_command_queue_full") == 0 || std::strcmp(code, "artifact_upload_failed") == 0 ||
+            std::strcmp(code, "lifecycle_busy") == 0);
+}
+
+bool AddRuntimeSnapshotJson(cJSON* parent, const char* app_id, const char* app_session_id, const char* state) {
+    cJSON* runtime = parent != nullptr ? cJSON_AddObjectToObject(parent, "runtime") : nullptr;
+    cJSON* sessions = runtime != nullptr ? cJSON_AddArrayToObject(runtime, "runtimeSessions") : nullptr;
+    if (runtime == nullptr || sessions == nullptr) return false;
+    const bool has_app =
+        app_id != nullptr && app_id[0] != '\0' && app_session_id != nullptr && app_session_id[0] != '\0';
+    if (has_app) {
+        cJSON* session = cJSON_CreateObject();
+        if (session == nullptr) return false;
+        (void)cJSON_AddStringToObject(session, "sessionId", app_session_id);
+        (void)cJSON_AddStringToObject(session, "appId", app_id);
+        (void)cJSON_AddStringToObject(session, "state", state != nullptr && state[0] != '\0' ? state : "running");
+        (void)cJSON_AddBoolToObject(session, "foreground",
+                                    std::strcmp(state != nullptr ? state : "", "suspended") != 0);
+        cJSON_AddItemToArray(sessions, session);
+        if (std::strcmp(state != nullptr ? state : "", "suspended") == 0) {
+            (void)cJSON_AddNullToObject(runtime, "foregroundSessionId");
+        } else {
+            (void)cJSON_AddStringToObject(runtime, "foregroundSessionId", app_session_id);
+        }
+        (void)cJSON_AddStringToObject(
+            runtime, "foregroundSurface",
+            std::strcmp(state != nullptr ? state : "", "suspended") == 0 ? "system_modal" : "app");
+    } else {
+        (void)cJSON_AddNullToObject(runtime, "foregroundSessionId");
+        (void)cJSON_AddStringToObject(runtime, "foregroundSurface", "app_hall");
+    }
+    return true;
+}
 
 const char* FirmwareUpdateStateText(host_ui::FirmwareUpdateState state) {
     switch (state) {
@@ -385,7 +432,7 @@ Http3Client& ClientFrom(void* client) { return *static_cast<Http3Client*>(client
 
 struct RemoteControlAgent::GuestLogBuffer final {
     std::array<GuestLogEntry, kGuestLogCapacity> entries{};
-    std::array<char, 17U> session_id{};
+    std::array<char, kRemoteControlCommandIdCapacity> session_id{};
     size_t start{};
     size_t count{};
     uint64_t next_sequence{1U};
@@ -395,6 +442,7 @@ static_assert(sizeof(GuestLogEntry) * kGuestLogCapacity < 2U * 1024U * 1024U,
               "Guest log ring must remain a bounded PSRAM allocation");
 
 RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) {
+    protocol::GenerateUuid(device_boot_id_);
     command_queue_ = xQueueCreateStatic(kCommandQueueCapacity, sizeof(Command), command_queue_bytes_.data(),
                                         &command_queue_storage_);
     host_command_queue_bytes_ = static_cast<uint8_t*>(heap_caps_calloc(
@@ -421,15 +469,13 @@ RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) 
     guest_logs_ =
         static_cast<GuestLogBuffer*>(heap_caps_calloc(1U, sizeof(GuestLogBuffer), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (guest_logs_ != nullptr) {
-        std::snprintf(guest_logs_->session_id.data(), guest_logs_->session_id.size(), "%08" PRIx32 "%08" PRIx32,
-                      esp_random(), esp_random());
         guest_logs_->next_sequence = 1U;
         ESP_LOGI(kTag, "Guest log ring allocated in PSRAM: entries=%zu bytes=%zu", guest_logs_->entries.size(),
                  sizeof(GuestLogBuffer));
     } else {
         ESP_LOGW(kTag, "Guest log ring is unavailable");
     }
-    CopyText(app_lifecycle_, "not_running");
+    app_lifecycle_.fill('\0');
     if (CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST[0] == '\0') {
         CopyText(model_.service, "Not configured");
         CopyText(model_.status_message, "Set MICROPIXEL_REMOTE_CONTROL_HOST to connect");
@@ -443,6 +489,10 @@ RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) 
 RemoteControlAgent::~RemoteControlAgent() {
     Stop();
     ClearPendingResults();
+    for (PendingResultBody& cached : recent_command_results_) {
+        heap_caps_free(cached.data);
+        cached = {};
+    }
     RemoteControlHostCommand pending_command{};
     while (host_command_queue_ != nullptr && xQueueReceive(host_command_queue_, &pending_command, 0U) == pdTRUE) {
         ReleaseHostCommand(pending_command);
@@ -570,9 +620,53 @@ void RemoteControlAgent::UpdateInstalledApps(const RemoteControlCatalogSnapshot&
 }
 
 void RemoteControlAgent::UpdateAppLifecycle(const char* app_id, const char* lifecycle) {
-    std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-    CopyText(active_app_id_, app_id);
-    CopyText(app_lifecycle_, lifecycle != nullptr ? lifecycle : "unknown");
+    const bool has_app = app_id != nullptr && app_id[0] != '\0';
+    std::array<char, kRemoteControlCommandIdCapacity> next_session_id{};
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+        const auto previous_app_id = active_app_id_;
+        const auto previous_lifecycle = app_lifecycle_;
+        const auto previous_session_id = app_session_id_;
+        const bool new_session =
+            has_app && (active_app_id_[0] == '\0' || std::strcmp(active_app_id_.data(), app_id) != 0);
+        if (new_session) {
+            protocol::Uuid generated{};
+            protocol::GenerateUuid(generated);
+            std::snprintf(app_session_id_.data(), app_session_id_.size(), "%s", generated.data());
+            last_app_session_id_ = app_session_id_;
+        } else if (!has_app) {
+            if (app_session_id_[0] != '\0') last_app_session_id_ = app_session_id_;
+            app_session_id_.fill('\0');
+        }
+        CopyText(active_app_id_, has_app ? app_id : nullptr);
+        const char* normalized = "running";
+        if (!has_app)
+            normalized = "";
+        else if (lifecycle != nullptr && std::strcmp(lifecycle, "starting") == 0)
+            normalized = "starting";
+        else if (lifecycle != nullptr && std::strcmp(lifecycle, "suspended") == 0)
+            normalized = "suspended";
+        else if (lifecycle != nullptr && std::strcmp(lifecycle, "stopping") == 0)
+            normalized = "stopping";
+        else if (lifecycle != nullptr && std::strcmp(lifecycle, "failed") == 0)
+            normalized = "failed";
+        std::snprintf(app_lifecycle_.data(), app_lifecycle_.size(), "%s", normalized);
+        next_session_id = app_session_id_;
+        if (previous_app_id != active_app_id_ || previous_lifecycle != app_lifecycle_ ||
+            previous_session_id != app_session_id_) {
+            ++runtime_snapshot_generation_;
+        }
+    }
+    if (has_app && guest_logs_ != nullptr) {
+        std::lock_guard<std::mutex> lock(log_mutex_);
+        if (std::strcmp(guest_logs_->session_id.data(), next_session_id.data()) != 0) {
+            guest_logs_->entries = {};
+            guest_logs_->start = 0U;
+            guest_logs_->count = 0U;
+            guest_logs_->next_sequence = 1U;
+            std::snprintf(guest_logs_->session_id.data(), guest_logs_->session_id.size(), "%s", next_session_id.data());
+        }
+    }
 }
 
 void RemoteControlAgent::WriteGuestLog(const char* app_id, uint32_t level, const uint8_t* bytes, size_t length,
@@ -643,18 +737,6 @@ void RemoteControlAgent::SetIdentityInSnapshot(const Identity& identity) {
 }
 
 void RemoteControlAgent::ClearPairingInSnapshot(const char* message) {
-    std::lock_guard<std::mutex> lock(model_mutex_);
-    model_.pairing_code.fill('\0');
-    model_.pairing_code_pending = false;
-    model_.pairing_code_available = false;
-    model_.pairing_expires_seconds = 0U;
-    pairing_deadline_ticks_ = 0U;
-    if (message != nullptr) {
-        CopyText(model_.status_message, message);
-    }
-}
-
-void RemoteControlAgent::FinishPairingRequestWithoutCode(const char* message) {
     std::lock_guard<std::mutex> lock(model_mutex_);
     model_.pairing_code.fill('\0');
     model_.pairing_code_pending = false;
@@ -785,6 +867,38 @@ bool RemoteControlAgent::Bootstrap(void* client, Identity& identity) {
     return true;
 }
 
+bool RemoteControlAgent::RefreshCredential(void* client, Identity& identity) {
+    if (client == nullptr || identity.device_id[0] == '\0' || identity.credential[0] == '\0') {
+        return false;
+    }
+    const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/credentials/refresh";
+    static constexpr uint8_t kEmptyBody[] = {'{', '}'};
+    Http3Response response{};
+    if (!ClientFrom(client).Post(path, JsonHeaders(identity.credential.data()), kEmptyBody, sizeof(kEmptyBody),
+                                 response, kRequestTimeoutMs) ||
+        response.status != 200) {
+        ESP_LOGW(kTag, "device credential refresh failed: status=%d error=%s", response.status, response.error.c_str());
+        return false;
+    }
+    cJSON* root = cJSON_ParseWithLength(response.body.data(), response.body.size());
+    const char* device_id = root != nullptr ? JsonString(root, "deviceId") : nullptr;
+    const char* credential = root != nullptr ? JsonString(root, "deviceCredential") : nullptr;
+    const uint32_t auth_epoch = root != nullptr ? JsonPositiveUint(root, "authEpoch", identity.auth_epoch) : 0U;
+    const bool valid = device_id != nullptr && std::strcmp(device_id, identity.device_id.data()) == 0 &&
+                       credential != nullptr && std::strlen(credential) < identity.credential.size() &&
+                       auth_epoch == identity.auth_epoch;
+    if (valid) {
+        CopyText(identity.credential, credential);
+    }
+    cJSON_Delete(root);
+    if (!valid || !SaveIdentity(identity)) {
+        ESP_LOGW(kTag, "device credential refresh returned an invalid identity");
+        return false;
+    }
+    ESP_LOGI(kTag, "refreshed Remote Control device credential for %.8s...", identity.device_id.data());
+    return true;
+}
+
 bool RemoteControlAgent::PostCommandResult(void* client, const Identity& identity, const char* command_id, bool ok,
                                            cJSON* result) {
     if (command_id == nullptr || std::strlen(command_id) >= 64U) {
@@ -796,13 +910,30 @@ bool RemoteControlAgent::PostCommandResult(void* client, const Identity& identit
         cJSON_Delete(result);
         return false;
     }
-    (void)cJSON_AddStringToObject(root, "type", "command.result");
+    if (!protocol::AddEventEnvelope(root, "command.completed", control_session_id_, device_boot_id_, ++event_sequence_,
+                                    static_cast<uint64_t>(esp_timer_get_time() / 1000))) {
+        cJSON_Delete(root);
+        cJSON_Delete(result);
+        return false;
+    }
     (void)cJSON_AddStringToObject(root, "commandId", command_id);
-    (void)cJSON_AddBoolToObject(root, "ok", ok);
-    if (result != nullptr) {
+    (void)cJSON_AddStringToObject(root, "outcome", ok ? "succeeded" : "failed");
+    if (ok && result != nullptr) {
         cJSON_AddItemToObject(root, "result", result);
-    } else {
+    } else if (ok) {
         (void)cJSON_AddNullToObject(root, "result");
+    } else {
+        const char* error_code = result != nullptr ? JsonString(result, "error") : nullptr;
+        if (error_code == nullptr && result != nullptr) error_code = JsonString(result, "message");
+        if (error_code == nullptr || error_code[0] == '\0') error_code = "command_failed";
+        protocol::AddProtocolError(root, error_code, ProtocolErrorMessage(error_code),
+                                   ProtocolErrorRetryable(error_code));
+        cJSON* error = cJSON_GetObjectItemCaseSensitive(root, "error");
+        if (result != nullptr && cJSON_IsObject(error)) {
+            (void)cJSON_ReplaceItemInObjectCaseSensitive(error, "details", result);
+        } else {
+            cJSON_Delete(result);
+        }
     }
     char* body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -816,10 +947,44 @@ bool RemoteControlAgent::PostCommandResult(void* client, const Identity& identit
         return false;
     }
     const auto* body_bytes = reinterpret_cast<const uint8_t*>(body);
+    CacheCompletedResult(command_id, body_bytes, body_size);
     const bool posted = pending_result_count_ == 0U && SendCommandResultBody(client, identity, body_bytes, body_size);
     const bool queued = !posted && QueuePendingResult(body_bytes, body_size);
     cJSON_free(body);
     return posted || queued;
+}
+
+bool RemoteControlAgent::PostEvent(void* client, const Identity& identity, cJSON* root, const char* type) {
+    if (root == nullptr ||
+        !protocol::AddEventEnvelope(root, type, control_session_id_, device_boot_id_, ++event_sequence_,
+                                    static_cast<uint64_t>(esp_timer_get_time() / 1000))) {
+        cJSON_Delete(root);
+        return false;
+    }
+    char* body = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (body == nullptr) return false;
+    const size_t body_size = std::strlen(body);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(body);
+    const bool posted = body_size <= kMaxEventBodyBytes && pending_result_count_ == 0U &&
+                        SendCommandResultBody(client, identity, bytes, body_size);
+    // Keep one slot available for a terminal command result. Snapshots,
+    // diagnostics, acceptance, and progress are observable hints and may be
+    // regenerated or coalesced; command.completed must take priority.
+    const bool queued = body_size <= kMaxEventBodyBytes && !posted &&
+                        pending_result_count_ + 1U < pending_results_.size() && QueuePendingResult(bytes, body_size);
+    cJSON_free(body);
+    return posted || queued;
+}
+
+bool RemoteControlAgent::PostCommandAccepted(void* client, const Identity& identity, const char* command_id) {
+    cJSON* root = cJSON_CreateObject();
+    if (root == nullptr || command_id == nullptr) {
+        cJSON_Delete(root);
+        return false;
+    }
+    (void)cJSON_AddStringToObject(root, "commandId", command_id);
+    return PostEvent(client, identity, root, "command.accepted");
 }
 
 bool RemoteControlAgent::SendCommandResultBody(void* client, const Identity& identity, const uint8_t* body,
@@ -831,7 +996,7 @@ bool RemoteControlAgent::SendCommandResultBody(void* client, const Identity& ide
     Http3Response response{};
     return ClientFrom(client).Post(path, JsonHeaders(identity.credential.data()), body, body_size, response,
                                    kRequestTimeoutMs) &&
-           response.status == 202;
+           (response.status == 200 || response.status == 202);
 }
 
 bool RemoteControlAgent::QueuePendingResult(const uint8_t* body, size_t body_size) {
@@ -887,26 +1052,13 @@ bool RemoteControlAgent::PostUnsupportedCommandResult(void* client, const Identi
 }
 
 bool RemoteControlAgent::PostRestartResult(void* client, const Identity& identity, const char* command_id) {
-    cJSON* root = cJSON_CreateObject();
-    cJSON* result = root != nullptr ? cJSON_AddObjectToObject(root, "result") : nullptr;
-    if (root == nullptr || result == nullptr) {
-        cJSON_Delete(root);
+    cJSON* result = cJSON_CreateObject();
+    if (result == nullptr) {
         return false;
     }
-    (void)cJSON_AddStringToObject(root, "type", "command.result");
-    (void)cJSON_AddStringToObject(root, "commandId", command_id);
-    (void)cJSON_AddBoolToObject(root, "ok", true);
     (void)cJSON_AddStringToObject(result, "message", "device_restarting");
     (void)cJSON_AddNumberToObject(result, "delayMs", 750U);
-    char* body = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (body == nullptr) {
-        return false;
-    }
-    const size_t body_size = std::strlen(body);
-    const bool posted = SendCommandResultBody(client, identity, reinterpret_cast<const uint8_t*>(body), body_size);
-    cJSON_free(body);
-    if (!posted) {
+    if (!PostCommandResult(client, identity, command_id, true, result)) {
         return false;
     }
     vTaskDelay(pdMS_TO_TICKS(750U));
@@ -918,17 +1070,30 @@ bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& 
     if (root == nullptr) {
         return false;
     }
-    (void)cJSON_AddStringToObject(root, "type", "status");
-    AddFirmwareUpdateJson(root, Snapshot());
-    char* body = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (body == nullptr) {
-        return false;
+    std::array<char, kRemoteControlAppIdCapacity> active_app{};
+    std::array<char, kRemoteControlCommandIdCapacity> app_session{};
+    std::array<char, 24U> lifecycle{};
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+        active_app = active_app_id_;
+        app_session = app_session_id_;
+        lifecycle = app_lifecycle_;
     }
-    const size_t body_size = std::strlen(body);
-    const bool posted = SendCommandResultBody(client, identity, reinterpret_cast<const uint8_t*>(body), body_size);
-    cJSON_free(body);
-    return posted;
+    (void)AddRuntimeSnapshotJson(root, active_app.data(), app_session.data(), lifecycle.data());
+    AddFirmwareUpdateJson(root, Snapshot());
+    return PostEvent(client, identity, root, "device.snapshot");
+}
+
+void RemoteControlAgent::PublishRuntimeSnapshotIfChanged(void* client, const Identity& identity) {
+    uint64_t generation = 0U;
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+        generation = runtime_snapshot_generation_;
+        if (generation == published_runtime_snapshot_generation_) return;
+    }
+    if (!PostFirmwareUpdateStatus(client, identity)) return;
+    std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+    published_runtime_snapshot_generation_ = generation;
 }
 
 bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& identity, const char* command_id) {
@@ -981,11 +1146,13 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
 
     RemoteControlCatalogSnapshot catalog{};
     std::array<char, kRemoteControlAppIdCapacity> active_app{};
+    std::array<char, kRemoteControlCommandIdCapacity> app_session{};
     std::array<char, 24U> lifecycle{};
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
         catalog = installed_apps_;
         active_app = active_app_id_;
+        app_session = app_session_id_;
         lifecycle = app_lifecycle_;
     }
     cJSON* storage = cJSON_AddObjectToObject(result, "storage");
@@ -1001,12 +1168,9 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
         }
     }
 
-    cJSON* runtime = cJSON_AddObjectToObject(result, "runtime");
-    if (runtime != nullptr) {
-        (void)cJSON_AddNumberToObject(runtime, "uptimeMs", esp_timer_get_time() / 1000);
-        (void)cJSON_AddStringToObject(runtime, "currentApp", active_app.data());
-        (void)cJSON_AddStringToObject(runtime, "appLifecycle", lifecycle.data());
-    }
+    (void)AddRuntimeSnapshotJson(result, active_app.data(), app_session.data(), lifecycle.data());
+    cJSON* runtime = cJSON_GetObjectItemCaseSensitive(result, "runtime");
+    if (cJSON_IsObject(runtime)) (void)cJSON_AddNumberToObject(runtime, "uptimeMs", esp_timer_get_time() / 1000);
 
     cJSON* task_diagnostics = cJSON_AddObjectToObject(result, "taskDiagnostics");
 #if configUSE_TRACE_FACILITY == 1
@@ -1151,7 +1315,7 @@ bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identit
         (void)cJSON_AddStringToObject(item, "source", "app_store");
         const bool active = active_app[0] != '\0' && active_app == app.app_id;
         (void)cJSON_AddBoolToObject(item, "active", active);
-        (void)cJSON_AddStringToObject(item, "lifecycle", active ? lifecycle.data() : "not_running");
+        (void)cJSON_AddStringToObject(item, "lifecycle", active ? lifecycle.data() : "stopped");
         cJSON_AddItemToArray(apps, item);
     }
     (void)cJSON_AddNumberToObject(result, "count", catalog.count);
@@ -1174,7 +1338,11 @@ cJSON* RemoteControlAgent::CreateGuestLogPayload(uint64_t after_sequence, size_t
     {
         std::lock_guard<std::mutex> lock(log_mutex_);
         if (guest_logs_ != nullptr) {
-            (void)cJSON_AddStringToObject(result, "sessionId", guest_logs_->session_id.data());
+            if (guest_logs_->session_id[0] != '\0') {
+                (void)cJSON_AddStringToObject(result, "appSessionId", guest_logs_->session_id.data());
+            } else {
+                (void)cJSON_AddNullToObject(result, "appSessionId");
+            }
             if (guest_logs_->count != 0U) {
                 const uint64_t oldest_sequence = guest_logs_->entries[guest_logs_->start].sequence;
                 truncated = oldest_sequence > after_sequence && oldest_sequence - after_sequence > 1U;
@@ -1211,7 +1379,7 @@ cJSON* RemoteControlAgent::CreateGuestLogPayload(uint64_t after_sequence, size_t
             }
         }
     }
-    (void)cJSON_AddNumberToObject(result, "nextCursor", static_cast<double>(next_cursor));
+    (void)cJSON_AddNumberToObject(result, "nextSequence", static_cast<double>(next_cursor));
     (void)cJSON_AddBoolToObject(result, "truncated", truncated);
     (void)cJSON_AddBoolToObject(result, "hasMore", has_more);
     next_cursor_out = next_cursor;
@@ -1253,7 +1421,7 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         params = nullptr;
     }
 
-    if (std::strcmp(name, "capture_screen") == 0 || std::strcmp(name, "screen.capture") == 0) {
+    if (std::strcmp(name, "screen.capture") == 0) {
         command.type = RemoteControlHostCommandType::kCaptureScreen;
     } else if (std::strcmp(name, "app.start") == 0) {
         const char* app_id = params != nullptr ? JsonString(params, "appId") : nullptr;
@@ -1577,6 +1745,29 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
         return finish(false, "firmware_image_invalid");
     }
 
+    const esp_app_desc_t* current_description = esp_app_get_description();
+    if (current_description != nullptr && std::strcmp(current_description->version, version) == 0) {
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            model_.firmware_update_state = host_ui::FirmwareUpdateState::kCurrent;
+            model_.firmware_update_available = false;
+            model_.firmware_update_installable = true;
+            model_.firmware_progress_percent = 100U;
+            CopyText(model_.firmware_update_message, "Firmware is already current");
+        }
+        if (publish_status) {
+            publish_status();
+        } else if (!PostFirmwareUpdateStatus(client, identity)) {
+            ESP_LOGW(kTag, "OTA no-op state event could not be delivered");
+        }
+        if (command_id == nullptr) return true;
+        cJSON* result = cJSON_CreateObject();
+        if (result != nullptr) {
+            (void)cJSON_AddStringToObject(result, "message", "firmware_already_current");
+        }
+        return PostCommandResult(client, identity, command_id, true, result);
+    }
+
     {
         std::lock_guard<std::mutex> lock(model_mutex_);
         model_.firmware_update_state = host_ui::FirmwareUpdateState::kDownloading;
@@ -1703,15 +1894,28 @@ bool RemoteControlAgent::UploadArtifact(void* client, const Identity& identity, 
         return false;
     }
     cJSON* upload = cJSON_ParseWithLength(response.body.data(), response.body.size());
-    const char* url = upload != nullptr ? JsonString(upload, "url") : nullptr;
-    if (url == nullptr) {
+    const char* artifact_id = upload != nullptr ? JsonString(upload, "artifactId") : nullptr;
+    const char* kind = upload != nullptr ? JsonString(upload, "kind") : nullptr;
+    const char* media_type = upload != nullptr ? JsonString(upload, "mediaType") : nullptr;
+    const char* sha256 = upload != nullptr ? JsonString(upload, "sha256") : nullptr;
+    const char* created_at = upload != nullptr ? JsonString(upload, "createdAt") : nullptr;
+    const char* expires_at = upload != nullptr ? JsonString(upload, "expiresAt") : nullptr;
+    const char* download_url = upload != nullptr ? JsonString(upload, "downloadUrl") : nullptr;
+    if (artifact_id == nullptr || kind == nullptr || media_type == nullptr || sha256 == nullptr ||
+        created_at == nullptr || expires_at == nullptr || download_url == nullptr) {
         cJSON_Delete(upload);
         return false;
     }
     cJSON* item = cJSON_CreateObject();
     if (item != nullptr) {
-        (void)cJSON_AddStringToObject(item, "id", artifact.capture_id.data());
-        (void)cJSON_AddStringToObject(item, "url", url);
+        (void)cJSON_AddStringToObject(item, "artifactId", artifact_id);
+        (void)cJSON_AddStringToObject(item, "stepId", artifact.capture_id.data());
+        (void)cJSON_AddStringToObject(item, "kind", kind);
+        (void)cJSON_AddStringToObject(item, "mediaType", media_type);
+        (void)cJSON_AddStringToObject(item, "sha256", sha256);
+        (void)cJSON_AddStringToObject(item, "createdAt", created_at);
+        (void)cJSON_AddStringToObject(item, "expiresAt", expires_at);
+        (void)cJSON_AddStringToObject(item, "downloadUrl", download_url);
         (void)cJSON_AddNumberToObject(item, "width", artifact.width);
         (void)cJSON_AddNumberToObject(item, "height", artifact.height);
         (void)cJSON_AddNumberToObject(item, "sizeBytes", static_cast<double>(artifact.size));
@@ -1731,6 +1935,20 @@ void RemoteControlAgent::DrainHostResults(void* client, const Identity& identity
         if (result != nullptr && host_result.message[0] != '\0') {
             (void)cJSON_AddStringToObject(result, "message", host_result.message.data());
         }
+        if (result != nullptr && host_result.has_diagnostic) {
+            cJSON* diagnostic = cJSON_AddObjectToObject(result, "diagnostic");
+            if (diagnostic == nullptr) {
+                ok = false;
+            } else {
+                (void)cJSON_AddStringToObject(diagnostic, "appId", host_result.diagnostic.app_id.data());
+                (void)cJSON_AddStringToObject(diagnostic, "phase", host_result.diagnostic.phase.data());
+                (void)cJSON_AddStringToObject(diagnostic, "code", host_result.diagnostic.code.data());
+                (void)cJSON_AddStringToObject(diagnostic, "detail", host_result.diagnostic.detail.data());
+                if (host_result.diagnostic.has_exit_code) {
+                    (void)cJSON_AddNumberToObject(diagnostic, "exitCode", host_result.diagnostic.exit_code);
+                }
+            }
+        }
         const uint32_t count =
             std::min(host_result.artifact_count, static_cast<uint32_t>(host_result.artifacts.size()));
         ESP_LOGI(kTag, "Draining Host result: ok=%u artifacts=%" PRIu32, host_result.ok ? 1U : 0U, count);
@@ -1745,7 +1963,33 @@ void RemoteControlAgent::DrainHostResults(void* client, const Identity& identity
                                           host_result.ok ? "artifact_upload_failed" : host_result.message.data());
         }
         ReleaseArtifacts(host_result);
-        if (!PostCommandResult(client, identity, host_result.command_id.data(), ok, result)) {
+        if (host_result.command_id[0] == '\0') {
+            cJSON* event = cJSON_CreateObject();
+            protocol::Uuid failure_id{};
+            protocol::GenerateUuid(failure_id);
+            std::array<char, kRemoteControlCommandIdCapacity> app_session{};
+            {
+                std::lock_guard<std::mutex> lock(diagnostics_mutex_);
+                app_session = app_session_id_[0] != '\0' ? app_session_id_ : last_app_session_id_;
+            }
+            if (event == nullptr || !host_result.has_diagnostic || app_session[0] == '\0') {
+                cJSON_Delete(event);
+                cJSON_Delete(result);
+                break;
+            }
+            (void)cJSON_AddStringToObject(event, "failureId", failure_id.data());
+            (void)cJSON_AddStringToObject(event, "appId", host_result.diagnostic.app_id.data());
+            (void)cJSON_AddNullToObject(event, "appVersion");
+            (void)cJSON_AddStringToObject(event, "appSessionId", app_session.data());
+            (void)cJSON_AddStringToObject(event, "phase", host_result.diagnostic.phase.data());
+            protocol::AddProtocolError(event, host_result.diagnostic.code.data(), host_result.diagnostic.detail.data(),
+                                       false);
+            if (host_result.diagnostic.has_exit_code) {
+                (void)cJSON_AddNumberToObject(event, "exitCode", host_result.diagnostic.exit_code);
+            }
+            cJSON_Delete(result);
+            if (!PostEvent(client, identity, event, "app.failure")) break;
+        } else if (!PostCommandResult(client, identity, host_result.command_id.data(), ok, result)) {
             break;
         }
     }
@@ -1792,10 +2036,44 @@ bool RemoteControlAgent::RememberCommandId(const char* command_id) {
         ++recent_command_count_;
     } else {
         index = recent_command_start_;
+        heap_caps_free(recent_command_results_[index].data);
+        recent_command_results_[index] = {};
         recent_command_start_ = (recent_command_start_ + 1U) % recent_command_ids_.size();
     }
     CopyText(recent_command_ids_[index], command_id);
     return true;
+}
+
+void RemoteControlAgent::CacheCompletedResult(const char* command_id, const uint8_t* body, size_t body_size) {
+    if (command_id == nullptr || body == nullptr || body_size == 0U || body_size > kMaxEventBodyBytes) return;
+    for (size_t offset = 0U; offset < recent_command_count_; ++offset) {
+        const size_t index = (recent_command_start_ + offset) % recent_command_ids_.size();
+        if (std::strcmp(recent_command_ids_[index].data(), command_id) != 0) continue;
+        uint8_t* copy = static_cast<uint8_t*>(heap_caps_malloc(body_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (copy == nullptr) copy = static_cast<uint8_t*>(heap_caps_malloc(body_size, MALLOC_CAP_8BIT));
+        if (copy == nullptr) return;
+        std::memcpy(copy, body, body_size);
+        heap_caps_free(recent_command_results_[index].data);
+        recent_command_results_[index] = PendingResultBody{.data = copy, .size = body_size};
+        return;
+    }
+}
+
+bool RemoteControlAgent::ReplayCommandState(void* client, const Identity& identity, const char* command_id) {
+    for (size_t offset = 0U; offset < recent_command_count_; ++offset) {
+        const size_t index = (recent_command_start_ + offset) % recent_command_ids_.size();
+        if (std::strcmp(recent_command_ids_[index].data(), command_id) != 0) continue;
+        const PendingResultBody& cached = recent_command_results_[index];
+        if (cached.data == nullptr || cached.size == 0U) return PostCommandAccepted(client, identity, command_id);
+        cJSON* root = cJSON_ParseWithLength(reinterpret_cast<const char*>(cached.data), cached.size);
+        if (root == nullptr) return PostCommandAccepted(client, identity, command_id);
+        for (const char* field : {"protocolVersion", "type", "sessionId", "deviceBootId", "eventId", "eventSequence",
+                                  "occurredAtUptimeMs"}) {
+            cJSON_DeleteItemFromObjectCaseSensitive(root, field);
+        }
+        return PostEvent(client, identity, root, "command.completed");
+    }
+    return false;
 }
 
 void RemoteControlAgent::HandleControlLine(void* client, const Identity& identity, const char* line,
@@ -1805,16 +2083,49 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
         return;
     }
     const char* type = JsonString(root, "type");
-    if (type != nullptr && std::strcmp(type, "command") == 0) {
+    if (type != nullptr && std::strcmp(type, "session.ready") == 0) {
+        protocol::Uuid session_id{};
+        if (!protocol::ParseSessionReady(root, session_id)) {
+            ESP_LOGW(kTag, "Rejected incompatible Device Protocol session");
+        } else {
+            control_session_id_ = session_id;
+            event_sequence_ = 0U;
+            cJSON* hello = cJSON_CreateObject();
+            cJSON* capabilities = hello != nullptr ? cJSON_AddArrayToObject(hello, "capabilities") : nullptr;
+            cJSON* limits = hello != nullptr ? cJSON_AddObjectToObject(hello, "limits") : nullptr;
+            if (hello != nullptr && capabilities != nullptr && limits != nullptr) {
+                const esp_app_desc_t* description = esp_app_get_description();
+                (void)cJSON_AddStringToObject(hello, "firmwareVersion",
+                                              description != nullptr ? description->version : "unknown");
+                for (const char* command :
+                     {"device.get_info", "device.reboot", "firmware.update", "app.list", "app.install", "app.uninstall",
+                      "app.start", "app.stop", "logs.read", "screen.capture", "input.sequence"}) {
+                    std::array<char, 80U> capability{};
+                    std::snprintf(capability.data(), capability.size(), "command:%s", command);
+                    cJSON_AddItemToArray(capabilities, cJSON_CreateString(capability.data()));
+                }
+                (void)cJSON_AddNumberToObject(limits, "maxControlFrameBytes", kControlLineCapacity);
+                (void)cJSON_AddNumberToObject(limits, "maxRuntimeSessions", 1U);
+                (void)cJSON_AddNumberToObject(limits, "maxInputOperations", kRemoteControlMaxSequenceOperations);
+                (void)PostEvent(client, identity, hello, "device.hello");
+                (void)PostFirmwareUpdateStatus(client, identity);
+            } else {
+                cJSON_Delete(hello);
+            }
+        }
+    } else if (type != nullptr && std::strcmp(type, "command") == 0) {
         const char* command_id = JsonString(root, "commandId");
         const char* name = JsonString(root, "name");
         const cJSON* params = cJSON_GetObjectItemCaseSensitive(root, "params");
         uint32_t timeout_ms = 0U;
-        if (command_id == nullptr || command_id[0] == '\0' ||
-            std::strlen(command_id) >= kRemoteControlCommandIdCapacity) {
+        if (!protocol::ValidateCommandEnvelope(root, control_session_id_)) {
+            ESP_LOGW(kTag, "Ignored command from an incompatible or stale control session");
+        } else if (command_id == nullptr || command_id[0] == '\0' ||
+                   std::strlen(command_id) >= kRemoteControlCommandIdCapacity) {
             ESP_LOGW(kTag, "Ignored control frame with invalid command id");
         } else if (!RememberCommandId(command_id)) {
-            ESP_LOGI(kTag, "Ignored duplicate command after control stream reconnect");
+            ESP_LOGI(kTag, "Replaying duplicate command state after control stream reconnect");
+            (void)ReplayCommandState(client, identity, command_id);
         } else if (!JsonUint(root, "timeoutMs", kMaxCommandTimeoutMs, timeout_ms, kDefaultCommandTimeoutMs) ||
                    timeout_ms < kMinCommandTimeoutMs) {
             cJSON* result = cJSON_CreateObject();
@@ -1822,28 +2133,44 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
                 (void)cJSON_AddStringToObject(result, "error", "invalid_command_timeout");
             }
             (void)PostCommandResult(client, identity, command_id, false, result);
-        } else if (name != nullptr &&
-                   (std::strcmp(name, "device.get_info") == 0 || std::strcmp(name, "get_system_info") == 0)) {
-            (void)PostSystemInformation(client, identity, command_id);
-        } else if (name != nullptr && (std::strcmp(name, "app.list") == 0 || std::strcmp(name, "list_apps") == 0)) {
-            (void)PostInstalledApps(client, identity, command_id);
-        } else if (name != nullptr && std::strcmp(name, "device.ota") == 0) {
-            (void)ApplyFirmwareUpdate(client, identity, params, command_id, publish_status);
-        } else if (name != nullptr && std::strcmp(name, "device.reboot") == 0) {
-            (void)PostRestartResult(client, identity, command_id);
-        } else if (name != nullptr && (std::strcmp(name, "logs.snapshot") == 0 || std::strcmp(name, "logs.get") == 0 ||
-                                       std::strcmp(name, "export_logs") == 0)) {
-            const uint64_t after_sequence =
-                cJSON_IsObject(params) ? JsonNonNegativeUint64(params, "afterSequence", 0U) : 0U;
-            (void)PostGuestLogs(client, identity, command_id, after_sequence);
-        } else if (name != nullptr &&
-                   (std::strcmp(name, "capture_screen") == 0 || std::strcmp(name, "screen.capture") == 0 ||
-                    std::strcmp(name, "app.start") == 0 || std::strcmp(name, "app.stop") == 0 ||
-                    std::strcmp(name, "app.install") == 0 || std::strcmp(name, "app.uninstall") == 0 ||
-                    std::strcmp(name, "input.sequence") == 0)) {
-            (void)QueueHostCommand(client, identity, root, name, command_id, timeout_ms);
         } else {
-            (void)PostUnsupportedCommandResult(client, identity, command_id);
+            // Acceptance is observability, not admission control. Once the command
+            // has passed validation and entered the boot-local dedup window, a
+            // transient event-outbox failure must not permanently suppress its
+            // first execution.
+            if (!PostCommandAccepted(client, identity, command_id)) {
+                ESP_LOGW(kTag, "Unable to acknowledge command %s; continuing execution", command_id);
+            }
+            if (name != nullptr && std::strcmp(name, "device.get_info") == 0) {
+                (void)PostSystemInformation(client, identity, command_id);
+            } else if (name != nullptr && std::strcmp(name, "app.list") == 0) {
+                (void)PostInstalledApps(client, identity, command_id);
+            } else if (name != nullptr && std::strcmp(name, "firmware.update") == 0) {
+                (void)ApplyFirmwareUpdate(client, identity, params, command_id, publish_status);
+            } else if (name != nullptr && std::strcmp(name, "device.reboot") == 0) {
+                (void)PostRestartResult(client, identity, command_id);
+            } else if (name != nullptr && std::strcmp(name, "logs.read") == 0) {
+                const cJSON* cursor =
+                    cJSON_IsObject(params) ? cJSON_GetObjectItemCaseSensitive(params, "cursor") : nullptr;
+                uint64_t after_sequence =
+                    cJSON_IsObject(cursor) ? JsonNonNegativeUint64(cursor, "afterSequence", 0U) : 0U;
+                const char* cursor_session = cJSON_IsObject(cursor) ? JsonString(cursor, "appSessionId") : nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(log_mutex_);
+                    if (guest_logs_ == nullptr || cursor_session == nullptr ||
+                        std::strcmp(cursor_session, guest_logs_->session_id.data()) != 0) {
+                        after_sequence = 0U;
+                    }
+                }
+                (void)PostGuestLogs(client, identity, command_id, after_sequence);
+            } else if (name != nullptr &&
+                       (std::strcmp(name, "screen.capture") == 0 || std::strcmp(name, "app.start") == 0 ||
+                        std::strcmp(name, "app.stop") == 0 || std::strcmp(name, "app.install") == 0 ||
+                        std::strcmp(name, "app.uninstall") == 0 || std::strcmp(name, "input.sequence") == 0)) {
+                (void)QueueHostCommand(client, identity, root, name, command_id, timeout_ms);
+            } else {
+                (void)PostUnsupportedCommandResult(client, identity, command_id);
+            }
         }
     }
     cJSON_Delete(root);
@@ -1863,6 +2190,7 @@ void RemoteControlAgent::TaskMain() {
     Http3AsyncRequestHandle pairing_cancel_request{};
     std::array<uint8_t, 1024U> read_buffer{};
     TickType_t next_firmware_check_ticks = 0U;
+    bool credential_refresh_attempted = false;
     ReconnectBackoff reconnect_backoff;
 
     auto close_transport = [&]() {
@@ -1884,49 +2212,15 @@ void RemoteControlAgent::TaskMain() {
         }
         control_line_size_ = 0U;
         control_line_overflow_ = false;
+        control_session_id_.fill('\0');
+        ClearPendingResults();
         pairing_requested_ = pairing_requested_ || retry_pairing;
         next_firmware_check_ticks = 0U;
+        credential_refresh_attempted = false;
     };
 
     auto start_status_request = [&]() {
-        if (!async_client) {
-            return false;
-        }
-
-        std::array<char, kRemoteControlAppIdCapacity> active_app{};
-        std::array<char, 24U> lifecycle{};
-        {
-            std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-            active_app = active_app_id_;
-            lifecycle = app_lifecycle_;
-        }
-        cJSON* root = cJSON_CreateObject();
-        if (root == nullptr) {
-            return false;
-        }
-        (void)cJSON_AddStringToObject(root, "type", "status");
-        (void)cJSON_AddNumberToObject(root, "protocolVersion", 1);
-        (void)cJSON_AddStringToObject(root, "currentApp", active_app[0] != '\0' ? active_app.data() : "System Shell");
-        (void)cJSON_AddStringToObject(root, "appLifecycle", lifecycle.data());
-        (void)cJSON_AddStringToObject(root, "network", "Wi-Fi");
-        AddFirmwareUpdateJson(root, Snapshot());
-        char* body = cJSON_PrintUnformatted(root);
-        cJSON_Delete(root);
-        if (body == nullptr) {
-            return false;
-        }
-
-        Http3AsyncRequest request{};
-        request.method = "POST";
-        request.path = std::string("/device/v1/devices/") + identity.device_id.data() + "/events";
-        request.headers = AsyncJsonHeaders(identity.credential.data());
-        const auto* body_bytes = reinterpret_cast<const uint8_t*>(body);
-        request.body.assign(body_bytes, body_bytes + std::strlen(body));
-        request.timeout_ms = kRequestTimeoutMs;
-        request.max_response_body_size = 1024U;
-        status_request = async_client->Submit(std::move(request));
-        cJSON_free(body);
-        return status_request.valid();
+        return client != nullptr && control_session_id_[0] != '\0' && PostFirmwareUpdateStatus(client.get(), identity);
     };
 
     auto poll_async_completions = [&]() {
@@ -1959,7 +2253,7 @@ void RemoteControlAgent::TaskMain() {
                     pairing_deadline_ticks_ = xTaskGetTickCount() + pdMS_TO_TICKS(kPairingTtlMs);
                     CopyText(model_.status_message, "Enter this code in the Control Console");
                 } else {
-                    FinishPairingRequestWithoutCode("Unable to create connection code");
+                    ClearPairingInSnapshot("Unable to create connection code");
                 }
                 if (root != nullptr) {
                     cJSON_Delete(root);
@@ -2103,16 +2397,6 @@ void RemoteControlAgent::TaskMain() {
             vTaskDelay(kOfflinePollTicks);
             continue;
         }
-        const std::time_t current_time = std::time(nullptr);
-        if (!kAllowUnverifiedTls && !system_time::IsTrustedUtcTime(current_time)) {
-            close_transport();
-            if (snapshot.enabled) {
-                SetConnectionState(host_ui::RemoteControlConnectionState::kBackoff, "Waiting for trusted network time");
-            }
-            vTaskDelay(kOfflinePollTicks);
-            continue;
-        }
-
         if (!client) {
             Http3AsyncClientConfig config{};
             config.hostname = CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST;
@@ -2166,6 +2450,12 @@ void RemoteControlAgent::TaskMain() {
             }
             continue;
         }
+        if (!credential_refresh_attempted) {
+            credential_refresh_attempted = true;
+            if (identity.device_id[0] != '\0') {
+                (void)RefreshCredential(client.get(), identity);
+            }
+        }
 
         if (!control_stream) {
             Http3Request request{};
@@ -2197,7 +2487,6 @@ void RemoteControlAgent::TaskMain() {
                                   "Event-driven HTTP/3 requests failed to start");
                 continue;
             }
-            (void)start_status_request();
             next_firmware_check_ticks = 0U;
         }
 
@@ -2234,7 +2523,7 @@ void RemoteControlAgent::TaskMain() {
                 pairing_request = async_client->Submit(std::move(request));
                 ESP_LOGI(kTag, "pairing request submitted asynchronously: %s", pairing_request.valid() ? "yes" : "no");
                 if (!pairing_request.valid()) {
-                    FinishPairingRequestWithoutCode("Unable to create connection code");
+                    ClearPairingInSnapshot("Unable to create connection code");
                 }
             }
             pairing_requested_ = false;
@@ -2249,6 +2538,7 @@ void RemoteControlAgent::TaskMain() {
 
         FlushPendingResults(client.get(), identity);
         DrainHostResults(client.get(), identity);
+        PublishRuntimeSnapshotIfChanged(client.get(), identity);
 
         const int64_t control_read_started_us = esp_timer_get_time();
         const int bytes_read = control_stream->Read(read_buffer.data(), read_buffer.size(), kControlReadTimeoutMs);

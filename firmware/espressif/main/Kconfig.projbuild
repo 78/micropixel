@@ -224,8 +224,9 @@ menu "MicroPixel Remote Control"
         depends on MICROPIXEL_REMOTE_CONTROL_AGENT
         default y
         help
-            Skip certificate chain, validity-period and hostname verification
-            only. The TLS 1.3 CertificateVerify signature and Finished MAC
+            Skip certificate chain and hostname verification. It also skips
+            validity-period verification when CONFIG_MBEDTLS_HAVE_TIME_DATE is
+            enabled. The TLS 1.3 CertificateVerify signature and Finished MAC
             remain mandatory.
             Keep this disabled in product builds. Enabling it is an explicit
             development-only exception for a trusted local Control service.
@@ -236,11 +237,12 @@ menu "MicroPixel Remote Control"
         default ""
         help
             Base64 of one DER-encoded CA trust anchor. The HTTP/3 client
-            validates the server chain, validity period and configured
-            hostname against this CA before accepting application keys. For
-            local Caddy, export its local root certificate to DER and encode
-            it as a single-line base64 value. Leave empty only when Remote
-            Control is offline or the development bypass above is enabled.
+            validates the server chain and configured hostname against this CA
+            before accepting application keys. Certificate dates are checked
+            only when CONFIG_MBEDTLS_HAVE_TIME_DATE is enabled. For local Caddy,
+            export its local root certificate to DER and encode it as a
+            single-line base64 value. Leave empty only when Remote Control is
+            offline or the development bypass above is enabled.
 
 endmenu
 

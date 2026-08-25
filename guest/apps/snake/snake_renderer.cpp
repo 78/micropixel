@@ -169,7 +169,8 @@ void SnakeGame::AppendPlaceholderRect(micropixel::Frame& commands) const {
 }
 
 void SnakeGame::AppendPlaceholderText(micropixel::Frame& commands) {
-    commands.DrawText(micropixel::Point{kBoardX, kBoardY}, " ", micropixel::Color::Rgb(5U, 5U, 5U), 18U);
+    commands.DrawText(micropixel::Point{kBoardX, kBoardY}, " ", micropixel::Color::Rgb(5U, 5U, 5U),
+                      micropixel::SystemFont::kMedium);
 }
 
 void SnakeGame::FillClippedRect(micropixel::Frame& commands, micropixel::Rect rect, micropixel::Color color) const {
@@ -462,20 +463,24 @@ void SnakeGame::RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, 
 }
 
 void SnakeGame::RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const {
-    commands.DrawText(micropixel::Point{24, 8}, "Juicy Snake", AsColor(theme.text), 32U);
-    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{24, 8}, "Juicy Snake", AsColor(theme.text), micropixel::SystemFont::kTitle);
+    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U),
+                      micropixel::SystemFont::kSmall);
     Line level;
     level.Append("LVL ");
     level.AppendUint(model_.level());
-    commands.DrawText(micropixel::Point{172, 47}, level.c_str(), AsColor(theme.text), 14U);
-    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{172, 47}, level.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U),
+                      micropixel::SystemFont::kSmall);
     Line score;
     score.AppendPadded4(model_.score());
-    commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(), 24U);
-    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U), 14U);
+    commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(),
+                      micropixel::SystemFont::kLarge);
+    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U),
+                      micropixel::SystemFont::kSmall);
     Line best;
     best.AppendPadded4(best_score_);
-    commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(theme.text), 24U);
+    commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(theme.text), micropixel::SystemFont::kLarge);
     Line status;
     if (screen_ == Screen::kPlaying && model_.invincible()) {
         status.Append("SHIELD ");
@@ -499,7 +504,7 @@ void SnakeGame::RenderHeaderTexts(micropixel::Frame& commands, const Theme& them
                       model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
                       : model_.combo() > 1U ? micropixel::Color::Rgb(251U, 191U, 36U)
                                             : micropixel::Color::Rgb(5U, 5U, 5U),
-                      14U);
+                      micropixel::SystemFont::kSmall);
 }
 
 void SnakeGame::RenderPopups(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const {
@@ -518,7 +523,7 @@ void SnakeGame::RenderPopups(micropixel::Frame& commands, int32_t board_x, int32
         commands.DrawText(micropixel::Point{board_x + static_cast<int32_t>(popup.cell.x) * kCellPitch,
                                             board_y + static_cast<int32_t>(popup.cell.y) * kCellPitch -
                                                 static_cast<int32_t>(progress * 50U / 256U)},
-                          label.c_str(), AsColor(MixRgb(popup.color, theme.board, opacity)), popup.font_size_px);
+                          label.c_str(), AsColor(MixRgb(popup.color, theme.board, opacity)), popup.font);
     }
 }
 
@@ -526,44 +531,49 @@ void SnakeGame::RenderOverlayTexts(micropixel::Frame& commands, const Theme& the
     uint32_t used = 0U;
     if (screen_ == Screen::kMenu) {
         commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect), "START GAME", micropixel::Color::Black(),
-                                  kActionButtonFontSize);
+                                  kActionButtonFont);
         used = 1U;
     } else if (screen_ == Screen::kPaused) {
         commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect), "CONTINUE", micropixel::Color::Black(),
-                                  kActionButtonFontSize);
+                                  kActionButtonFont);
         used = 1U;
     } else if (screen_ == Screen::kGameOver) {
-        commands.DrawTextCentered(360, 268, "CRITICAL FAILURE", micropixel::Color::Rgb(244U, 63U, 94U), 32U);
+        commands.DrawTextCentered(360, 268, "CRITICAL FAILURE", micropixel::Color::Rgb(244U, 63U, 94U),
+                                  micropixel::SystemFont::kTitle);
         Line score;
         score.AppendPadded4(model_.score());
-        commands.DrawTextCentered(360, 320, score.c_str(), micropixel::Color::White(), 24U);
+        commands.DrawTextCentered(360, 320, score.c_str(), micropixel::Color::White(), micropixel::SystemFont::kLarge);
         constexpr int32_t kFoodCenter = 250;
         constexpr int32_t kComboCenter = 360;
         constexpr int32_t kLevelCenter = 470;
         const micropixel::Color label_color = micropixel::Color::Rgb(115U, 115U, 115U);
-        commands.DrawTextCentered(kFoodCenter, 360, "FOOD", label_color, 14U);
-        commands.DrawTextCentered(kComboCenter, 360, "MAX COMBO", label_color, 14U);
-        commands.DrawTextCentered(kLevelCenter, 360, "LEVEL", label_color, 14U);
+        commands.DrawTextCentered(kFoodCenter, 360, "FOOD", label_color, micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kComboCenter, 360, "MAX COMBO", label_color, micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kLevelCenter, 360, "LEVEL", label_color, micropixel::SystemFont::kSmall);
         Line food;
         food.AppendUint(model_.food_eaten());
-        commands.DrawTextCentered(kFoodCenter, 382, food.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(kFoodCenter, 382, food.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         Line combo;
         combo.Append("x");
         combo.AppendUint(model_.max_combo());
-        commands.DrawTextCentered(kComboCenter, 382, combo.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(kComboCenter, 382, combo.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         Line level;
         level.AppendUint(model_.level());
-        commands.DrawTextCentered(kLevelCenter, 382, level.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(kLevelCenter, 382, level.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         commands.DrawTextCentered(360, ActionButtonTextY(kRestartButtonRect), "RESTART",
-                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFontSize);
+                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
         used = 9U;
     } else if (level_banner_us_ != 0U) {
-        commands.DrawTextCentered(360, 315, "SYSTEM UPGRADE", AsColor(theme.text), 24U);
+        commands.DrawTextCentered(360, 315, "SYSTEM UPGRADE", AsColor(theme.text), micropixel::SystemFont::kLarge);
         Line reached;
         reached.Append("LVL ");
         reached.AppendUint(model_.level());
         reached.Append(" REACHED");
-        commands.DrawTextCentered(360, 370, reached.c_str(), micropixel::Color::White(), 18U);
+        commands.DrawTextCentered(360, 370, reached.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         used = 2U;
     }
     while (used++ < 9U) {

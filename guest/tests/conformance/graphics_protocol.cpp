@@ -125,7 +125,8 @@ int main() {
     commands.Clear(micropixel::Color::Black());
     commands.FillRect(micropixel::Rect{40, 40, 360, 56}, micropixel::Color::Green());
     commands.FillRect(micropixel::Rect{40, 40, 360, 56}, micropixel::Color::Black(), 48U);
-    commands.DrawText(micropixel::Point{52, 56}, "graphics_protocol: blend accepted", micropixel::Color::White(), 18U);
+    commands.DrawText(micropixel::Point{52, 56}, "graphics_protocol: blend accepted", micropixel::Color::White(),
+                      micropixel::SystemFont::kMedium);
     commands.DrawTexture(micropixel::Rect{420, 40, 56, 56}, texture);
     commands.DrawTexture(micropixel::Rect{488, 40, 28, 56}, texture, micropixel::Rect{1, 0, 1, 2}, 192U);
     commands.Save();
@@ -158,11 +159,10 @@ int main() {
     micropixel::Frame replacement = renderer.BeginFrame();
     replacement.Clear(micropixel::Color::Black());
     replacement.DrawText(micropixel::Point{52, 56}, "graphics_protocol: texture lifetime safe",
-                         micropixel::Color::White(), 18U);
+                         micropixel::Color::White(), micropixel::SystemFont::kMedium);
     if (!replacement.Present()) {
         return 84;
     }
-    app.log().Info(
-        "graphics_protocol: malformed batches rejected; texture scene pinning and 128+ frame accepted");
+    app.log().Info("graphics_protocol: malformed batches rejected; texture scene pinning and 128+ frame accepted");
     return 0;
 }

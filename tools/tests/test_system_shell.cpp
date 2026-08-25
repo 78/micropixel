@@ -303,6 +303,11 @@ void DetailScreenActionsReachTheShell() {
     const auto launch = shell.PollAction(0U);
     Check(launch.has_value() && launch->type == SystemUiActionType::kLaunchInstalledApp && launch->app_index == 1U,
           "installed App launch should be retained");
+    ui.Emit({.type = SystemUiActionType::kUninstallInstalledApp, .app_index = 2U});
+    const auto uninstall = shell.PollAction(0U);
+    Check(uninstall.has_value() && uninstall->type == SystemUiActionType::kUninstallInstalledApp &&
+              uninstall->app_index == 2U,
+          "installed App uninstall should be retained");
 }
 
 }  // namespace
