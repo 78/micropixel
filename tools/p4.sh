@@ -54,8 +54,8 @@ variables and command-line PORT arguments take precedence.
 
 Normal development commands:
   build-host                         Incrementally build only the ESP32-P4 Host.
-  build-release                      Build Host, Blocks, and SDK Demo; create a browser-flashable
-                                     micropixel-full.bin containing only those two Apps.
+  build-release                      Build Host, Blocks, Snake, and SDK Demo; create a browser-flashable
+                                     micropixel-full.bin containing only those three Apps.
   flash-host [PORT]                  Incrementally build and flash only the Host;
                                      preserve the app_store partition.
   monitor [PORT]                     Monitor the running ESP32-P4 Host without
@@ -383,16 +383,18 @@ build_host() {
 }
 
 build_release() {
-    echo "==> Building release Apps: Blocks and SDK Demo"
+    echo "==> Building release Apps: Blocks, Snake, and SDK Demo"
     bash "$workspace_root/tools/build_blocks_bundle.sh"
+    bash "$workspace_root/tools/build_snake_bundle.sh"
     bash "$workspace_root/tools/build_demo_bundle.sh"
     build_host
     mkdir -p "$system_shell_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
         --output "$release_app_store_image" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/snake/snake.bundle.bin" \
         "$workspace_root/build/apps/demo/demo.bundle.bin"
-    echo "==> Creating browser-flashable image with Blocks and SDK Demo"
+    echo "==> Creating browser-flashable image with Blocks, Snake, and SDK Demo"
     python3 "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \
         --app-store-image "$release_app_store_image" \

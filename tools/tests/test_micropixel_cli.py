@@ -297,7 +297,7 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(client.request, ("GET", "/device/app-errors/latest", None))
         rendered = json.loads(output.getvalue())
         self.assertEqual(rendered["code"], "guest_trap")
-        self.assertIn("rebuild this App with SDK 0.9.1", rendered["recommendation"])
+        self.assertIn("rebuild this App with SDK 0.9.2", rendered["recommendation"])
 
     def test_firmware_preflight_requires_0_1_5_before_install_or_start(self) -> None:
         class Client:
