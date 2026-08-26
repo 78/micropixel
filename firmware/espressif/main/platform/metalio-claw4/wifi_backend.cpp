@@ -284,9 +284,9 @@ std::expected<void, device::WifiError> WifiBackend::Initialize() {
             return std::unexpected(WifiErrorFor(status));
         }
 #if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5
-        status = esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO);
+        status = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
         if (status != ESP_OK) {
-            ESP_LOGW(kTag, "could not enable automatic 2.4/5 GHz band selection: %s", esp_err_to_name(status));
+            ESP_LOGW(kTag, "could not restrict Wi-Fi to 2.4 GHz: %s", esp_err_to_name(status));
             return std::unexpected(WifiErrorFor(status));
         }
         LogCoprocessorInfo();
@@ -374,7 +374,7 @@ std::expected<void, device::WifiError> WifiBackend::SetEnabled(bool enabled) {
     esp_err_t status = enabled ? esp_wifi_start() : esp_wifi_stop();
 #if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5
     if (status == ESP_OK && enabled) {
-        status = esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO);
+        status = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
     }
 #endif
     if (status != ESP_OK) {
@@ -1003,19 +1003,20 @@ std::expected<void, device::WifiError> WifiBackend::ConfigureAndConnect(const Sa
     config.sta.scan_method = full_channel_scan ? WIFI_ALL_CHANNEL_SCAN : WIFI_FAST_SCAN;
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     config.sta.channel = full_channel_scan ? 0U : profile.channel;
-    config.sta.bssid_set = !full_channel_scan && profile.bssid_valid;
-    if (config.sta.bssid_set) {
-        std::memcpy(config.sta.bssid, profile.bssid.data(), profile.bssid.size());
-    }
+    // A BSSID identifies one radio, not the saved network. Let the station
+    // select any AP advertising the requested SSID so roaming, mesh nodes and
+    // randomized BSSIDs do not turn a fresh scan result into a stale target.
+    config.sta.bssid_set = false;
     config.sta.threshold.authmode = WIFI_AUTH_OPEN;
     config.sta.pmf_cfg.capable = true;
     config.sta.pmf_cfg.required = false;
 
     ESP_LOGI(kTag,
-             "connect start: ssid=%s band=%s channel=%u auth=%s targeted=%s "
-             "bssid=%02x:%02x:%02x:%02x:%02x:%02x",
+             "connect start: ssid=%s band=%s channel=%u auth=%s scan=%s "
+             "candidate_bssid=%02x:%02x:%02x:%02x:%02x:%02x",
              profile.ssid.data(), BandForChannel(config.sta.channel) == device::WifiBand::k5Ghz ? "5GHz" : "2.4GHz",
-             config.sta.channel, AuthModeName(profile.auth_mode), full_channel_scan ? "no" : "yes", profile.bssid[0],
+             config.sta.channel, AuthModeName(profile.auth_mode), full_channel_scan ? "full" : "channel",
+             profile.bssid[0],
              profile.bssid[1], profile.bssid[2], profile.bssid[3], profile.bssid[4], profile.bssid[5]);
 
     esp_err_t status = esp_wifi_set_config(WIFI_IF_STA, &config);
