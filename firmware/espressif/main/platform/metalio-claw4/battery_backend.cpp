@@ -89,7 +89,7 @@ device::BatterySnapshot BatteryBackend::Snapshot() {
                 .external_power_connected = external_power_connected_,
                 .external_power_available = external_power_available_};
     }
-    last_percent_ = Filter(EstimatePercent(voltage_mv));
+    last_percent_ = Filter(EstimatePercent(voltage_mv), now_us);
     sample_available_ = true;
 
     uint16_t raw_current_ma = 0U;
@@ -245,19 +245,32 @@ bool BatteryBackend::ReadExternalPower(bool& connected) {
     return true;
 }
 
-uint8_t BatteryBackend::Filter(uint8_t sample) {
+uint8_t BatteryBackend::Filter(uint8_t sample, int64_t now_us) {
     if (!filter_primed_) {
         filter_.fill(sample);
         filter_sum_ = static_cast<uint32_t>(sample) * kFilterCapacity;
         filter_index_ = 0U;
+        filter_last_update_us_ = now_us;
         filter_primed_ = true;
         return sample;
     }
 
-    filter_sum_ -= filter_[filter_index_];
-    filter_[filter_index_] = sample;
-    filter_sum_ += sample;
-    filter_index_ = (filter_index_ + 1U) % kFilterCapacity;
+    const int64_t elapsed_us = now_us - filter_last_update_us_;
+    uint32_t elapsed_steps = 1U;
+    if (elapsed_us > kFilterStepUs) {
+        elapsed_steps = static_cast<uint32_t>(elapsed_us / kFilterStepUs);
+        if (elapsed_steps > kFilterCapacity) {
+            elapsed_steps = kFilterCapacity;
+        }
+    }
+    filter_last_update_us_ = now_us;
+
+    for (uint32_t step = 0U; step < elapsed_steps; ++step) {
+        filter_sum_ -= filter_[filter_index_];
+        filter_[filter_index_] = sample;
+        filter_sum_ += sample;
+        filter_index_ = (filter_index_ + 1U) % kFilterCapacity;
+    }
     return static_cast<uint8_t>((filter_sum_ + kFilterCapacity / 2U) / kFilterCapacity);
 }
 

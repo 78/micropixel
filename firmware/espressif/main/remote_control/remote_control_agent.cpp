@@ -714,6 +714,16 @@ bool RemoteControlAgent::SubmitHostResult(const RemoteControlHostResult& result)
     return false;
 }
 
+void RemoteControlAgent::SetHostCommandReadySink(HostCommandReadySink sink, void* context) {
+    if (sink == nullptr) {
+        host_command_ready_sink_.store(nullptr, std::memory_order_release);
+        host_command_ready_context_.store(nullptr, std::memory_order_release);
+        return;
+    }
+    host_command_ready_context_.store(context, std::memory_order_release);
+    host_command_ready_sink_.store(sink, std::memory_order_release);
+}
+
 void RemoteControlAgent::TaskEntry(void* context) {
     auto* agent = static_cast<RemoteControlAgent*>(context);
     if (agent != nullptr) {
@@ -1536,6 +1546,10 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
     if (host_command_queue_ == nullptr || xQueueSend(host_command_queue_, &command, 0U) != pdTRUE) {
         ReleaseHostCommand(command);
         return reject("device_busy");
+    }
+    HostCommandReadySink sink = host_command_ready_sink_.load(std::memory_order_acquire);
+    if (sink != nullptr) {
+        sink(host_command_ready_context_.load(std::memory_order_acquire));
     }
     ESP_LOGI(kTag, "Queued Host command: type=%u", static_cast<unsigned>(command.type));
     return true;

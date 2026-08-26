@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 #include "driver/i2s_std.h"
 #include "driver/uart.h"
@@ -29,6 +30,9 @@ constexpr uint32_t kSineTableSize = 256U;
 constexpr uint32_t kAudioTaskStackSize = 4096U;
 constexpr BaseType_t kAudioTaskCore = 0;
 constexpr uint32_t kMetalioClaw4AudioSampleRate = 16000U;
+constexpr uint32_t kAudioIdleGraceMs = 80U;
+constexpr uint32_t kAudioIdleGraceChunks =
+    (kAudioIdleGraceMs * kMetalioClaw4AudioSampleRate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
 
 i2s_std_clk_config_t AudioClockConfig() { return I2S_STD_CLK_DEFAULT_CONFIG(kMetalioClaw4AudioSampleRate); }
 
@@ -59,6 +63,7 @@ struct AudioBackendState final {
     std::atomic<bool> suspended{};
     std::atomic<uint16_t> master_volume_per_ten_thousand{
         static_cast<uint16_t>(metalio_claw4::PerceptualVolumeOutputPerTenThousand(70U))};
+    std::atomic<TaskHandle_t> task{};
     SemaphoreHandle_t voices_mutex{};
     Voice voices[kMaxVoices]{};
     int16_t sine_table[kSineTableSize]{};
@@ -183,26 +188,94 @@ int32_t NextVoiceSample(Voice& voice) {
     return sample;
 }
 
-void FillAudioChunk(int32_t* frames) {
-    if (xSemaphoreTake(State().voices_mutex, portMAX_DELAY) != pdTRUE) {
-        return;
+struct AudioChunkState final {
+    bool rendered_audio{};
+    bool active_after{};
+};
+
+bool HasPlayableVoiceLocked() {
+    if (State().suspended.load(std::memory_order_acquire)) {
+        return false;
     }
-    for (uint32_t frame = 0U; frame < kFramesPerChunk; ++frame) {
-        int32_t mixed = 0;
-        if (!State().suspended.load(std::memory_order_acquire)) {
+    for (const Voice& voice : State().voices) {
+        if (voice.active) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasPlayableVoice() {
+    if (xSemaphoreTake(State().voices_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+    const bool playable = HasPlayableVoiceLocked();
+    (void)xSemaphoreGive(State().voices_mutex);
+    return playable;
+}
+
+AudioChunkState FillAudioChunk(int32_t* frames) {
+    std::memset(frames, 0, kFramesPerChunk * 2U * sizeof(*frames));
+    if (xSemaphoreTake(State().voices_mutex, portMAX_DELAY) != pdTRUE) {
+        return {};
+    }
+    AudioChunkState chunk{};
+    if (!State().suspended.load(std::memory_order_acquire)) {
+        for (uint32_t frame = 0U; frame < kFramesPerChunk; ++frame) {
+            int32_t mixed = 0;
             for (Voice& voice : State().voices) {
                 if (voice.active) {
+                    chunk.rendered_audio = true;
                     mixed += NextVoiceSample(voice);
                 }
             }
+            mixed = metalio_claw4::ScaleAudioOutputSample(
+                mixed, State().master_volume_per_ten_thousand.load(std::memory_order_relaxed));
+            const int32_t output = mixed * 65536;
+            frames[frame * 2U] = output;
+            frames[frame * 2U + 1U] = output;
         }
-        mixed = metalio_claw4::ScaleAudioOutputSample(
-            mixed, State().master_volume_per_ten_thousand.load(std::memory_order_relaxed));
-        const int32_t output = mixed * 65536;
-        frames[frame * 2U] = output;
-        frames[frame * 2U + 1U] = output;
+        chunk.active_after = HasPlayableVoiceLocked();
     }
     (void)xSemaphoreGive(State().voices_mutex);
+    return chunk;
+}
+
+void NotifyAudioTask() {
+    TaskHandle_t task = State().task.load(std::memory_order_acquire);
+    if (task != nullptr) {
+        xTaskNotifyGive(task);
+    }
+}
+
+esp_err_t StartAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx, int32_t* frames) {
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), kTag, "enable idle-gated I2S output");
+
+    std::memset(frames, 0, kFramesPerChunk * 2U * sizeof(*frames));
+    size_t bytes_written = 0U;
+    const size_t bytes = kFramesPerChunk * 2U * sizeof(*frames);
+    const esp_err_t write_status = i2s_channel_write(tx, frames, bytes, &bytes_written, pdMS_TO_TICKS(500));
+    if (write_status != ESP_OK || bytes_written != bytes) {
+        (void)i2s_channel_disable(tx);
+        ESP_LOGE(kTag, "I2S silent prefill failed: %s, wrote=%zu/%zu", esp_err_to_name(write_status), bytes_written,
+                 bytes);
+        return write_status != ESP_OK ? write_status : ESP_FAIL;
+    }
+
+    const esp_err_t amplifier_status = UpdateRegister(expander, kOutputPort1, kPaEnableMask, 0U);
+    if (amplifier_status != ESP_OK) {
+        (void)i2s_channel_disable(tx);
+    }
+    return amplifier_status;
+}
+
+esp_err_t StopAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx) {
+    const esp_err_t amplifier_status = UpdateRegister(expander, kOutputPort1, 0U, kPaEnableMask);
+    const esp_err_t i2s_status = i2s_channel_disable(tx);
+    if (amplifier_status != ESP_OK) {
+        return amplifier_status;
+    }
+    return i2s_status;
 }
 
 void AudioTask(void* argument) {
@@ -231,12 +304,6 @@ void AudioTask(void* argument) {
         standard_config.gpio_cfg.din = I2S_GPIO_UNUSED;
         status = i2s_channel_init_std_mode(tx, &standard_config);
     }
-    if (status == ESP_OK) {
-        status = i2s_channel_enable(tx);
-    }
-    if (status == ESP_OK) {
-        status = UpdateRegister(expander, kOutputPort1, kPaEnableMask, 0U);
-    }
     if (status != ESP_OK) {
         State().backend_state.store(BackendState::kFailed, std::memory_order_release);
         ESP_LOGE(kTag, "Metalio-Claw4 audio backend failed: %s", esp_err_to_name(status));
@@ -249,20 +316,46 @@ void AudioTask(void* argument) {
     }
 
     State().backend_state.store(BackendState::kReady, std::memory_order_release);
-    ESP_LOGI(kTag, "Metalio-Claw4 audio ready: %lu Hz, %u synth voices, core=%d",
+    ESP_LOGI(kTag, "Metalio-Claw4 audio ready: %lu Hz, %u synth voices, idle-gated I2S/PA, core=%d",
              static_cast<unsigned long>(kMetalioClaw4AudioSampleRate), kMaxVoices, xPortGetCoreID());
     int32_t frames[kFramesPerChunk * 2U]{};
-    for (;;) {
-        FillAudioChunk(frames);
-        size_t bytes_written = 0U;
-        const size_t bytes = sizeof(frames);
-        status = i2s_channel_write(tx, frames, bytes, &bytes_written, pdMS_TO_TICKS(500));
-        if (status != ESP_OK || bytes_written != bytes) {
-            State().backend_state.store(BackendState::kFailed, std::memory_order_release);
-            ESP_LOGE(kTag, "I2S mixer stopped: %s, wrote=%zu/%zu", esp_err_to_name(status), bytes_written, bytes);
+    bool first_output_transition = true;
+    while (status == ESP_OK) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!HasPlayableVoice()) {
+            continue;
+        }
+        status = StartAudioOutput(expander, tx, frames);
+        if (status == ESP_OK && first_output_transition) {
+            ESP_LOGI(kTag, "audio output started on first tone event");
+        }
+        uint32_t idle_chunks = 0U;
+        while (status == ESP_OK) {
+            const AudioChunkState chunk = FillAudioChunk(frames);
+            size_t bytes_written = 0U;
+            status = i2s_channel_write(tx, frames, sizeof(frames), &bytes_written, pdMS_TO_TICKS(500));
+            if (status != ESP_OK || bytes_written != sizeof(frames)) {
+                ESP_LOGE(kTag, "I2S mixer stopped: %s, wrote=%zu/%zu", esp_err_to_name(status), bytes_written,
+                         sizeof(frames));
+                status = status != ESP_OK ? status : ESP_FAIL;
+                break;
+            }
+            idle_chunks = chunk.rendered_audio || chunk.active_after ? 0U : idle_chunks + 1U;
+            if (idle_chunks < kAudioIdleGraceChunks || HasPlayableVoice()) {
+                continue;
+            }
+            status = StopAudioOutput(expander, tx);
+            if (status == ESP_OK && first_output_transition) {
+                ESP_LOGI(kTag, "audio output returned to idle after %lu ms grace",
+                         static_cast<unsigned long>(kAudioIdleGraceMs));
+                first_output_transition = false;
+            }
             break;
         }
     }
+    State().backend_state.store(BackendState::kFailed, std::memory_order_release);
+    State().task.store(nullptr, std::memory_order_release);
+    ESP_LOGE(kTag, "Metalio-Claw4 audio output failed: %s", esp_err_to_name(status));
     (void)UpdateRegister(expander, kOutputPort1, 0U, kPaEnableMask);
     (void)i2s_channel_disable(tx);
     (void)i2s_del_channel(tx);
@@ -308,13 +401,15 @@ esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expand
             static_cast<int16_t>(std::sin(kTau * static_cast<double>(index) / kSineTableSize) * 32767.0);
     }
     State().backend_state.store(BackendState::kInitializing, std::memory_order_release);
+    TaskHandle_t task = nullptr;
     if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, io_expander,
-                                task_policy::kAudioPriority, nullptr, kAudioTaskCore) != pdPASS) {
+                                task_policy::kAudioPriority, &task, kAudioTaskCore) != pdPASS) {
         State().backend_state.store(BackendState::kStopped, std::memory_order_release);
         vSemaphoreDelete(State().voices_mutex);
         State().voices_mutex = nullptr;
         return ESP_ERR_NO_MEM;
     }
+    State().task.store(task, std::memory_order_release);
     return ESP_OK;
 }
 
@@ -383,6 +478,7 @@ int32_t MetalioClaw4AudioBackend::PlayTone(const micropixel_audio_tone_t& tone) 
         .active = true,
     };
     (void)xSemaphoreGive(State().voices_mutex);
+    NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -401,6 +497,7 @@ int32_t MetalioClaw4AudioBackend::StopAll() {
         voice.active = false;
     }
     (void)xSemaphoreGive(State().voices_mutex);
+    NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -413,6 +510,7 @@ int32_t MetalioClaw4AudioBackend::SuspendAll() {
         return MICROPIXEL_STATUS_INTERNAL;
     }
     State().suspended.store(true, std::memory_order_release);
+    NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -425,6 +523,7 @@ int32_t MetalioClaw4AudioBackend::ResumeAll() {
         return MICROPIXEL_STATUS_INTERNAL;
     }
     State().suspended.store(false, std::memory_order_release);
+    NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
 }
 

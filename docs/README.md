@@ -6,6 +6,7 @@
   所有权、安全规则和尚未完成的发布门槛；
 - [C/C++ 代码风格](development/code-style.zh-CN.md)：Firmware、Guest SDK 和 C ABI 的编码规则与检查入口；
 - [游戏音频规范](development/game-audio.zh-CN.md)：当前 App 的合成音效格式、感知约束和构建门禁；
+- [定时器与大厅空闲功耗](development/timers-and-idle-power.zh-CN.md)：LVGL、`esp_timer`、周期唤醒和事件化边界；
 - [ESP32-P4 烧录指南](development/flashing.zh-CN.md)：环境、设备识别、完整/增量烧录、验收和排错；
 - [音效清单模板](development/game-sfx.template.json)：新游戏的起始配置。
 

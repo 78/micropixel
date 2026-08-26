@@ -24,9 +24,10 @@ class BatteryBackend final : public device::BatteryBackend {
     [[nodiscard]] bool ReadRegister(uint8_t address, uint16_t& value);
     [[nodiscard]] bool ConfigurePowerDetectionInputs();
     [[nodiscard]] bool ReadExternalPower(bool& connected);
-    [[nodiscard]] uint8_t Filter(uint8_t sample);
+    [[nodiscard]] uint8_t Filter(uint8_t sample, int64_t now_us);
 
     static constexpr uint32_t kFilterCapacity = 60U;
+    static constexpr int64_t kFilterStepUs = 1000000;
 
     i2c_master_bus_handle_t bus_{};
     i2c_master_dev_handle_t device_{};
@@ -34,6 +35,7 @@ class BatteryBackend final : public device::BatteryBackend {
     std::array<uint8_t, kFilterCapacity> filter_{};
     uint32_t filter_sum_{};
     uint32_t filter_index_{};
+    int64_t filter_last_update_us_{};
     int64_t next_probe_us_{};
     int64_t read_cooldown_until_us_{};
     uint32_t consecutive_read_failures_{};

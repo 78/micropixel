@@ -167,11 +167,15 @@ void ResourceService::ReleaseSceneTexture(micropixel_texture_handle_t texture) {
 void ResourceService::WorkerEntry(void* argument) { static_cast<ResourceService*>(argument)->WorkerLoop(); }
 
 void ResourceService::WorkerLoop() {
-    while (!stopping_.load(std::memory_order_acquire)) {
+    for (;;) {
         Work work{};
-        if (xQueueReceive(work_queue_, &work, pdMS_TO_TICKS(20)) == pdTRUE && work.asset.data != nullptr) {
-            Process(work);
+        if (xQueueReceive(work_queue_, &work, portMAX_DELAY) != pdTRUE) {
+            continue;
         }
+        if (stopping_.load(std::memory_order_acquire) || work.asset.data == nullptr) {
+            break;
+        }
+        Process(work);
     }
     xSemaphoreGive(worker_stopped_);
     vTaskDelete(nullptr);
@@ -206,6 +210,8 @@ void ResourceService::Shutdown() {
     }
     stopping_.store(true, std::memory_order_release);
     if (worker_ != nullptr && worker_stopped_ != nullptr) {
+        const Work stop{};
+        (void)xQueueOverwrite(work_queue_, &stop);
         (void)xSemaphoreTake(worker_stopped_, pdMS_TO_TICKS(2000));
         worker_ = nullptr;
     }

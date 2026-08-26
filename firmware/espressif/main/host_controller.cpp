@@ -43,8 +43,9 @@ namespace {
 constexpr char kTag[] = "micropixel_host";
 constexpr TickType_t kCooperativeStopTimeout = pdMS_TO_TICKS(500);
 constexpr TickType_t kForcedStopTimeout = pdMS_TO_TICKS(2500);
-constexpr int64_t kPerformanceSamplePeriodUs = 500000;
+constexpr int64_t kPerformanceSamplePeriodUs = 1000LL * 1000LL;
 constexpr int64_t kBatterySamplePeriodUs = 1000000;
+constexpr int64_t kHallStatusSamplePeriodUs = 30LL * 1000LL * 1000LL;
 constexpr int64_t kWifiScanRefreshDelayUs = 10LL * 1000LL * 1000LL;
 constexpr int64_t kWifiScanRetryDelayUs = 1000LL * 1000LL;
 constexpr TickType_t kPowerSuspendTimeout = pdMS_TO_TICKS(500U);
@@ -508,11 +509,11 @@ bool FirmwareUpdateInProgress(host_ui::FirmwareUpdateState state) {
            state == host_ui::FirmwareUpdateState::kInstalling;
 }
 
-TickType_t WifiScanWaitTimeout(int64_t next_scan_request_us) {
-    if (next_scan_request_us == 0) {
+TickType_t DeadlineWaitTimeout(int64_t deadline_us) {
+    if (deadline_us == 0) {
         return portMAX_DELAY;
     }
-    const int64_t remaining_us = next_scan_request_us - esp_timer_get_time();
+    const int64_t remaining_us = deadline_us - esp_timer_get_time();
     if (remaining_us <= 0) {
         return 0U;
     }
@@ -777,6 +778,7 @@ void AddAppDiagnostic(remote_control::RemoteControlHostResult& result, const run
 
 struct RemoteCommandPump final {
     bool (*poll)(void*){};
+    bool (*requires_periodic_poll)(void*){};
     void* context{};
     bool unwind_requested{};
 
@@ -785,6 +787,10 @@ struct RemoteCommandPump final {
             unwind_requested = poll(context);
         }
         return unwind_requested;
+    }
+
+    [[nodiscard]] bool RequiresPeriodicPoll() const {
+        return requires_periodic_poll != nullptr && requires_periodic_poll(context);
     }
 };
 
@@ -800,7 +806,8 @@ struct AppManagementUninstallHandler final {
 
 TickType_t RemoteAwareTimeout(TickType_t timeout, const RemoteCommandPump* command_pump) {
     constexpr TickType_t kMaximumWait = pdMS_TO_TICKS(250U);
-    return command_pump != nullptr && timeout > kMaximumWait ? kMaximumWait : timeout;
+    return command_pump != nullptr && command_pump->RequiresPeriodicPoll() && timeout > kMaximumWait ? kMaximumWait
+                                                                                                     : timeout;
 }
 
 bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, host_ui::StatusLayerModel& status_model,
@@ -843,7 +850,8 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
     bool settings_changed = false;
     uint64_t close_trigger_timestamp_us = 0U;
     while (!close) {
-        const TickType_t timeout = model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
+        const TickType_t timeout =
+            model.performance_overlay_enabled ? DeadlineWaitTimeout(next_performance_sample_us) : pdMS_TO_TICKS(250);
         const auto action = shell.PollAction(RemoteAwareTimeout(timeout, command_pump));
         if (command_pump != nullptr && command_pump->Process()) {
             close = true;
@@ -962,7 +970,7 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, hos
     int64_t next_scan_request_us = 0;
     for (;;) {
         const TickType_t timeout =
-            scan_view && snapshot.enabled ? WifiScanWaitTimeout(next_scan_request_us) : portMAX_DELAY;
+            scan_view && snapshot.enabled ? DeadlineWaitTimeout(next_scan_request_us) : portMAX_DELAY;
         const auto action = shell.PollAction(RemoteAwareTimeout(timeout, command_pump));
         if (command_pump != nullptr && command_pump->Process()) {
             snapshot = wifi.Snapshot();
@@ -1354,7 +1362,9 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
     (void)cpu_sampler.Sample();
     int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
     for (;;) {
-        const TickType_t timeout = status_model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250U);
+        const TickType_t timeout = status_model.performance_overlay_enabled
+                                       ? DeadlineWaitTimeout(next_performance_sample_us)
+                                       : pdMS_TO_TICKS(250U);
         const auto action = shell.PollAction(RemoteAwareTimeout(timeout, command_pump));
         if (command_pump != nullptr && command_pump->Process()) {
             shell.LeaveSystemMenu();
@@ -1542,10 +1552,10 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             return;
         }
         shell.UpdatePerformanceOverlay(status_model.performance_overlay_enabled, 0U);
-        int64_t next_hall_status_sample_us = esp_timer_get_time() + kBatterySamplePeriodUs;
+        int64_t next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
         for (;;) {
-            const TickType_t timeout =
-                status_model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
+            const TickType_t timeout = DeadlineWaitTimeout(
+                status_model.performance_overlay_enabled ? next_performance_sample_us : next_hall_status_sample_us);
             const auto action = shell.PollAction(timeout);
             if (shell.PowerOffRequested()) {
                 break;
@@ -1562,7 +1572,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             }
             if (now_us >= next_hall_status_sample_us) {
                 shell.UpdateHallStatusBar(MakeHallStatusBarModel(wifi.Snapshot(), battery.Snapshot()));
-                next_hall_status_sample_us = now_us + kBatterySamplePeriodUs;
+                next_hall_status_sample_us = now_us + kHallStatusSamplePeriodUs;
             }
             const host_ui::RemoteControlModel latest_remote_control = remote_control.Snapshot();
             if (FirmwareUpdateInProgress(latest_remote_control.firmware_update_state) ||
@@ -1580,7 +1590,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             }
             if (action->type == host_ui::SystemUiActionType::kBatteryStateChanged) {
                 shell.UpdateHallStatusBar(MakeHallStatusBarModel(wifi.Snapshot(), battery.Snapshot()));
-                next_hall_status_sample_us = esp_timer_get_time() + kBatterySamplePeriodUs;
+                next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kOpenWifiSettings) {
@@ -2190,6 +2200,8 @@ class ActiveHost final {
 
         RemoteCommandPump command_pump{
             .poll = [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(); },
+            .requires_periodic_poll =
+                [](void* context) { return static_cast<ActiveHost*>(context)->RemoteInputSequence().active; },
             .context = this,
         };
 
@@ -2197,11 +2209,11 @@ class ActiveHost final {
         cpu_sampler.Reset();
         (void)cpu_sampler.Sample();
         int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
-        int64_t next_hall_status_sample_us = esp_timer_get_time() + kBatterySamplePeriodUs;
+        int64_t next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
         for (;;) {
-            const TickType_t timeout =
-                status_model_.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
-            const auto pending_action = shell_.PollAction(timeout);
+            const TickType_t timeout = DeadlineWaitTimeout(
+                status_model_.performance_overlay_enabled ? next_performance_sample_us : next_hall_status_sample_us);
+            const auto pending_action = shell_.PollAction(RemoteAwareTimeout(timeout, &command_pump));
             if (shell_.PowerTransitionRequested()) {
                 return true;
             }
@@ -2215,7 +2227,7 @@ class ActiveHost final {
             }
             if (now_us >= next_hall_status_sample_us) {
                 shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_.Snapshot(), battery_.Snapshot()));
-                next_hall_status_sample_us = now_us + kBatterySamplePeriodUs;
+                next_hall_status_sample_us = now_us + kHallStatusSamplePeriodUs;
             }
             const host_ui::RemoteControlModel remote_control_snapshot = remote_control_.Snapshot();
             if (FirmwareUpdateInProgress(remote_control_snapshot.firmware_update_state) ||
@@ -2235,7 +2247,7 @@ class ActiveHost final {
             }
             if (action.type == host_ui::SystemUiActionType::kBatteryStateChanged) {
                 shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_.Snapshot(), battery_.Snapshot()));
-                next_hall_status_sample_us = esp_timer_get_time() + kBatterySamplePeriodUs;
+                next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kLaunchApp && action.app_index < catalog_.count &&
@@ -2551,6 +2563,8 @@ class ActiveHost final {
         remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(), "suspending");
         RemoteCommandPump command_pump{
             .poll = [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(); },
+            .requires_periodic_poll =
+                [](void* context) { return static_cast<ActiveHost*>(context)->RemoteInputSequence().active; },
             .context = this,
         };
         if (!RunStatusLayer(shell_, &app_controller_, battery_, wifi_, status_model_, catalog_, settings_store_,
@@ -2817,6 +2831,8 @@ HostController::HostController(device::DeviceServices& devices, device::BatteryB
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
     wifi_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyWifiStateChanged(); }, &shell_);
+    remote_control_.SetHostCommandReadySink(
+        [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyRemoteCommandReady(); }, &shell_);
     devices_.input().SetActivitySink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyUserActivity(); }, &shell_);
     power_.SetPowerButtonSink(
@@ -2842,6 +2858,7 @@ HostController::HostController(device::DeviceServices& devices, device::BatteryB
 
 HostController::~HostController() {
     devices_.input().SetActivitySink(nullptr, nullptr);
+    remote_control_.SetHostCommandReadySink(nullptr, nullptr);
     remote_control_.Stop();
     battery_.SetStateChangeSink(nullptr, nullptr);
     wifi_.SetStateChangeSink(nullptr, nullptr);

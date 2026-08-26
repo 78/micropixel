@@ -95,6 +95,7 @@ bash tools/p4.sh flash-apps
 - [Guest C++ SDK](guest/sdk/README.md)
 - [Guest–Host ABI](guest/abi/README.md)
 - [C/C++ 代码风格](docs/development/code-style.zh-CN.md)
+- [定时器与大厅空闲功耗](docs/development/timers-and-idle-power.zh-CN.md)
 - [ESP32-P4 烧录指南](docs/development/flashing.zh-CN.md)
 
 文档索引、维护规则和硬件官方来源见 [Documentation](docs/README.md)。

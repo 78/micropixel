@@ -282,6 +282,29 @@ void BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges() {
           "pending Battery notification should survive a screen queue reset");
 }
 
+void RemoteCommandsWakePollingWithoutBecomingUiActions() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
+
+    shell.NotifyRemoteCommandReady();
+    shell.NotifyRemoteCommandReady();
+    ui.Emit({.type = SystemUiActionType::kLaunchApp, .app_index = 1U});
+    Check(!shell.PollAction(0U).has_value(), "remote command readiness should only wake the Host command pump");
+    const auto launch = shell.PollAction(0U);
+    Check(launch.has_value() && launch->type == SystemUiActionType::kLaunchApp && launch->app_index == 1U,
+          "a remote wake token must not consume the following UI action");
+
+    shell.NotifyRemoteCommandReady();
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(),
+          "screen changes should preserve pending remote command readiness");
+    ui.Emit({.type = SystemUiActionType::kCloseSystemMenu});
+    Check(!shell.PollAction(0U).has_value(), "a preserved remote command should wake after a queue reset");
+    const auto close = shell.PollAction(0U);
+    Check(close.has_value() && close->type == SystemUiActionType::kCloseSystemMenu,
+          "the System Menu action should remain ordered after the remote wake token");
+}
+
 void PowerButtonNotificationsAreCoalescedAndSurviveScreenChanges() {
     FakeSystemUi ui;
     SystemShell shell(ui);
@@ -440,11 +463,12 @@ int main() {
     HallStatusBarUpdatesReachTheShell();
     WifiStateNotificationsAreCoalescedAndSurviveScreenChanges();
     BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges();
+    RemoteCommandsWakePollingWithoutBecomingUiActions();
     PowerButtonNotificationsAreCoalescedAndSurviveScreenChanges();
     PowerOffNotificationsAreExclusiveAndReachTheShutdownScreen();
     ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 11 cases\n";
+    std::cout << "system_shell tests passed: 12 cases\n";
     return 0;
 }

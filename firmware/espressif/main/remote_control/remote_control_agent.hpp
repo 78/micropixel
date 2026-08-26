@@ -2,6 +2,7 @@
 #define MICROPIXEL_FIRMWARE_REMOTE_CONTROL_AGENT_HPP
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -113,6 +114,8 @@ struct RemoteControlHostResult final {
 // WAMR, LVGL, or board drivers from an HTTP/3 callback.
 class RemoteControlAgent final : public runtime::GuestLogSink {
    public:
+    using HostCommandReadySink = void (*)(void*);
+
     explicit RemoteControlAgent(device::WifiBackend& wifi);
     RemoteControlAgent(const RemoteControlAgent&) = delete;
     RemoteControlAgent& operator=(const RemoteControlAgent&) = delete;
@@ -133,6 +136,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     [[nodiscard]] bool PeekHostCommand(RemoteControlHostCommand& command) const;
     [[nodiscard]] bool PollHostCommand(RemoteControlHostCommand& command, TickType_t timeout = 0U);
     [[nodiscard]] bool SubmitHostResult(const RemoteControlHostResult& result);
+    void SetHostCommandReadySink(HostCommandReadySink sink, void* context);
 
    private:
     static constexpr UBaseType_t kCommandQueueCapacity = 8U;
@@ -249,6 +253,8 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     StaticQueue_t host_command_queue_storage_{};
     uint8_t* host_command_queue_bytes_{};
     QueueHandle_t host_command_queue_{};
+    std::atomic<HostCommandReadySink> host_command_ready_sink_{};
+    std::atomic<void*> host_command_ready_context_{};
     StaticQueue_t host_result_queue_storage_{};
     uint8_t* host_result_queue_bytes_{};
     QueueHandle_t host_result_queue_{};

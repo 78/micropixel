@@ -70,19 +70,21 @@ class SystemShell final {
     [[nodiscard]] bool PowerTransitionRequested() const;
     void NotifyWifiStateChanged();
     void NotifyBatteryStateChanged();
+    void NotifyRemoteCommandReady();
     void NotifyUserActivity();
     void ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query, void* power_context);
     void SetAutoSleepTimeout(uint8_t timeout_minutes);
     void NotifyPowerCycleCompleted();
 
    private:
-    static constexpr UBaseType_t kActionQueueCapacity = 9U;
+    static constexpr UBaseType_t kActionQueueCapacity = 10U;
 
     static void ReceiveAction(void* context, const SystemUiAction& action);
     void QueuePendingPowerButton();
     void QueuePendingPowerOff();
     void QueuePendingWifiStateChange();
     void QueuePendingBatteryStateChange();
+    void QueuePendingRemoteCommand();
     void QueuePendingUserActivity();
     void RefreshExternalPowerState();
     [[nodiscard]] TickType_t AutoSleepAwareTimeout(TickType_t requested_timeout) const;
@@ -105,6 +107,8 @@ class SystemShell final {
     std::atomic_bool wifi_state_change_queued_{};
     std::atomic_bool battery_state_change_pending_{};
     std::atomic_bool battery_state_change_queued_{};
+    std::atomic_bool remote_command_pending_{};
+    std::atomic_bool remote_command_queued_{};
     std::atomic_bool user_activity_pending_{};
     std::atomic_bool user_activity_queued_{};
     std::atomic<TickType_t> last_user_activity_ticks_{};
