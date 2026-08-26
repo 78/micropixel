@@ -37,20 +37,43 @@ std::expected<void, SystemUiError> SystemShell::ShowHall(const HallModel& model)
 void SystemShell::UpdateHallStatusBar(const HallStatusBarModel& model) { ui_.UpdateHallStatusBar(model); }
 
 std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
-    SystemUiAction action{};
-    if (action_queue_ == nullptr || xQueueReceive(action_queue_, &action, timeout) != pdTRUE) {
-        return std::nullopt;
+    TickType_t receive_timeout = timeout;
+    for (;;) {
+        SystemUiAction action{};
+        if (action_queue_ == nullptr || xQueueReceive(action_queue_, &action, receive_timeout) != pdTRUE) {
+            return std::nullopt;
+        }
+        if (action.type == SystemUiActionType::kPowerButtonPressed) {
+            power_button_queued_.store(false, std::memory_order_release);
+            if (!power_button_pending_.load(std::memory_order_acquire)) {
+                receive_timeout = 0U;
+                continue;
+            }
+            action.timestamp_us = power_button_timestamp_us_.load(std::memory_order_acquire);
+        } else if (action.type == SystemUiActionType::kPowerOffRequested) {
+            power_off_queued_.store(false, std::memory_order_release);
+            if (!power_off_pending_.load(std::memory_order_acquire)) {
+                receive_timeout = 0U;
+                continue;
+            }
+            action.timestamp_us = power_off_timestamp_us_.load(std::memory_order_acquire);
+        } else if (action.type == SystemUiActionType::kWifiStateChanged) {
+            wifi_state_change_pending_.store(false, std::memory_order_release);
+            wifi_state_change_queued_.store(false, std::memory_order_release);
+        } else if (action.type == SystemUiActionType::kBatteryStateChanged) {
+            battery_state_change_pending_.store(false, std::memory_order_release);
+            battery_state_change_queued_.store(false, std::memory_order_release);
+        }
+        QueuePendingWifiStateChange();
+        QueuePendingBatteryStateChange();
+        if (action.type != SystemUiActionType::kPowerButtonPressed) {
+            QueuePendingPowerButton();
+        }
+        if (action.type != SystemUiActionType::kPowerOffRequested) {
+            QueuePendingPowerOff();
+        }
+        return action;
     }
-    if (action.type == SystemUiActionType::kWifiStateChanged) {
-        wifi_state_change_pending_.store(false, std::memory_order_release);
-        wifi_state_change_queued_.store(false, std::memory_order_release);
-    } else if (action.type == SystemUiActionType::kBatteryStateChanged) {
-        battery_state_change_pending_.store(false, std::memory_order_release);
-        battery_state_change_queued_.store(false, std::memory_order_release);
-    }
-    QueuePendingWifiStateChange();
-    QueuePendingBatteryStateChange();
-    return action;
 }
 
 void SystemShell::LeaveHall() { ui_.LeaveHall(); }
@@ -157,6 +180,65 @@ void SystemShell::ApplyBrightness(uint8_t percent) { ui_.ApplyBrightness(percent
 
 void SystemShell::ApplyVolume(uint8_t percent) { ui_.ApplyVolume(percent); }
 
+std::expected<void, SystemUiError> SystemShell::ShowShutdown() {
+    ui_.StopWatchingGuestActions(this);
+    return ui_.ShowShutdown();
+}
+
+bool SystemShell::NotifyPowerButtonPressed(uint64_t timestamp_us) {
+    if (action_queue_ == nullptr) {
+        return false;
+    }
+    bool expected = false;
+    if (!power_transition_pending_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    power_button_timestamp_us_.store(timestamp_us, std::memory_order_release);
+    power_button_pending_.store(true, std::memory_order_release);
+    QueuePendingPowerButton();
+    return true;
+}
+
+bool SystemShell::NotifyPowerOffRequested(uint64_t timestamp_us) {
+    if (action_queue_ == nullptr) {
+        return false;
+    }
+    bool expected = false;
+    if (!power_transition_pending_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    power_off_timestamp_us_.store(timestamp_us, std::memory_order_release);
+    power_off_pending_.store(true, std::memory_order_release);
+    QueuePendingPowerOff();
+    return true;
+}
+
+bool SystemShell::PowerOffRequested() const { return power_off_pending_.load(std::memory_order_acquire); }
+
+bool SystemShell::ConsumePowerOffRequested() {
+    const bool pending = power_off_pending_.exchange(false, std::memory_order_acq_rel);
+    power_off_queued_.store(false, std::memory_order_release);
+    if (pending) {
+        power_transition_pending_.store(false, std::memory_order_release);
+    }
+    QueuePendingPowerOff();
+    return pending;
+}
+
+bool SystemShell::PowerTransitionRequested() const { return power_transition_pending_.load(std::memory_order_acquire); }
+
+bool SystemShell::PowerButtonPressed() const { return power_button_pending_.load(std::memory_order_acquire); }
+
+bool SystemShell::ConsumePowerButtonPressed() {
+    const bool pending = power_button_pending_.exchange(false, std::memory_order_acq_rel);
+    power_button_queued_.store(false, std::memory_order_release);
+    if (pending) {
+        power_transition_pending_.store(false, std::memory_order_release);
+    }
+    QueuePendingPowerButton();
+    return pending;
+}
+
 void SystemShell::NotifyWifiStateChanged() {
     if (action_queue_ == nullptr) {
         return;
@@ -171,6 +253,34 @@ void SystemShell::NotifyBatteryStateChanged() {
     }
     battery_state_change_pending_.store(true, std::memory_order_release);
     QueuePendingBatteryStateChange();
+}
+
+void SystemShell::QueuePendingPowerButton() {
+    if (action_queue_ == nullptr || !power_button_pending_.load(std::memory_order_acquire) ||
+        power_button_queued_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const SystemUiAction action{
+        .type = SystemUiActionType::kPowerButtonPressed,
+        .timestamp_us = power_button_timestamp_us_.load(std::memory_order_acquire),
+    };
+    if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
+        power_button_queued_.store(false, std::memory_order_release);
+    }
+}
+
+void SystemShell::QueuePendingPowerOff() {
+    if (action_queue_ == nullptr || !power_off_pending_.load(std::memory_order_acquire) ||
+        power_off_queued_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const SystemUiAction action{
+        .type = SystemUiActionType::kPowerOffRequested,
+        .timestamp_us = power_off_timestamp_us_.load(std::memory_order_acquire),
+    };
+    if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
+        power_off_queued_.store(false, std::memory_order_release);
+    }
 }
 
 void SystemShell::QueuePendingWifiStateChange() {
@@ -200,8 +310,12 @@ void SystemShell::ResetActionQueue() {
         return;
     }
     (void)xQueueReset(action_queue_);
+    power_button_queued_.store(false, std::memory_order_release);
+    power_off_queued_.store(false, std::memory_order_release);
     wifi_state_change_queued_.store(false, std::memory_order_release);
     battery_state_change_queued_.store(false, std::memory_order_release);
+    QueuePendingPowerButton();
+    QueuePendingPowerOff();
     QueuePendingWifiStateChange();
     QueuePendingBatteryStateChange();
 }

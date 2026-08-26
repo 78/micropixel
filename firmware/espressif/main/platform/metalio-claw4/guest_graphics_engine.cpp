@@ -115,6 +115,14 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, esp_lcd_panel_h
     return ESP_OK;
 }
 
+void GuestGraphicsEngine::RebindPanel(esp_lcd_panel_handle_t panel) {
+#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
+    retained_scene_.BindSurface(display_, panel);
+#else
+    (void)panel;
+#endif
+}
+
 void GuestGraphicsEngine::DisplayRefreshStartEvent(lv_event_t* event) {
     auto* engine = static_cast<GuestGraphicsEngine*>(lv_event_get_user_data(event));
     if (engine == nullptr) {

@@ -89,8 +89,23 @@ app.Run([&](const micropixel::Event& event) {
 - `Stop` 先交给 handler，handler 返回后 `Run()` 返回；
 - Timer 只由 `app.timers().After/Every()` 创建，并作为普通 Event 匹配；
 - `WaitEvent()` 只保留给有限等待和协议测试，不是长期 App 的第二套标准写法；
-- Host 暂停 Guest 时同时暂停 watchdog；恢复同一 Session 时投递 `Resume`；
+- Host 暂停 Guest 时通过 Runtime 内部控制消息等待 `event_wait` 安全点，并同时暂停 watchdog；不存在 Guest
+  可见的 `Pause` 事件。恢复同一 Session 时只投递 `Resume`；
 - 系统手势由 Host 拦截，不泄漏给 Guest。
+
+电源管理由 Host supervisor 独立持有 `Awake / EnteringSleep / Asleep / Waking / ShuttingDown` 状态，不与
+`Hall / Foreground` 或 App lifecycle 混成一个枚举。单击电源键时，前台 App 先完成上述安全点确认，再渐暗
+背光并进入平台 light sleep；唤醒后先恢复显示硬件和原 Session，再渐亮。安全点等待超过 500ms 时强制停止
+App，唤醒目标为 App Hall。该流程不修改 Guest ABI，也不靠“再次调用 wait”作为确认。
+进入低功耗的过渡期内，电源键驱动会保留首个请求对应的按下代次；若再次检测到物理按下，则在真正执行
+light sleep 前取消本次入睡、恢复显示。Host 状态机不是 `Awake` 时也不会接受新的入睡请求，唤醒按键释放
+产生的延迟 click 由短暂 guard 窗口过滤。若按键唤醒后仍保持按下，则必须先观察到物理 `PRESS_UP` 才重新
+开放电源请求，避免长按唤醒过程中再次进入休眠。
+
+亮屏且电源状态为 `Awake` 时，新一轮按下持续 2 秒进入终态 `ShuttingDown`；唤醒所用的同一轮长按不会
+触发关机。Host 先停止当前 App、取消远控输入并静音，再显示 `Shutting down...` 系统画面并立即开始物理
+关机；Metalio-Claw4 平台把 TCA9555 `P0.4 / PWR_KEY_PULSE` 配置为输出，以 100ms 高、100ms 低持续脉冲，
+画面在脉冲期间保持显示，直到电源管理芯片切断电源。OTA 正在写入时拒绝休眠和关机，避免中断固件事务。
 
 ## 4. Guest–Host 边界
 
@@ -214,6 +229,11 @@ python3 -m unittest tools.tests.test_build_app_store_image
 - Timer 积压时 `elapsed` 和 `missed_count` 正确；
 - GT911 不声明 pressure capability，Touch 坐标与 Renderer 使用同一逻辑空间；
 - 亮度、Host 主音量、FPS/CPU 蒙层、音频结束状态和设备重启后的随机源正常。
+- 电源键从前台 App 和大厅均可进入 light sleep；前台 App 正常路径唤醒后只收到一次 `Resume`，安全点超时
+  路径停止 App 并回到大厅，唤醒按键释放产生的 click 不会立即再次休眠；
+- 亮屏时新按下并持续 2 秒会先停止 App、显示关机画面，再通过 `PWR_KEY_PULSE` 实际切断电源；关机画面
+  利用脉冲执行时间保持可见，不额外固定等待；
+  唤醒后持续按住的同一轮按键不会误触发关机，OTA 写入期的关机请求会被拒绝；
 
 尚未完成的发布门槛只保留下列当前事项：
 

@@ -1,9 +1,12 @@
 #ifndef MICROPIXEL_FIRMWARE_HOST_CONTROLLER_HPP
 #define MICROPIXEL_FIRMWARE_HOST_CONTROLLER_HPP
 
+#include "host_power_state.hpp"
+
 namespace micropixel::device {
 class BatteryBackend;
 class DeviceServices;
+class PowerBackend;
 class WifiBackend;
 }  // namespace micropixel::device
 
@@ -22,7 +25,8 @@ class RemoteControlAgent;
 class HostController final {
    public:
     HostController(device::DeviceServices& devices, device::BatteryBackend& battery, device::WifiBackend& wifi,
-                   host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control);
+                   device::PowerBackend& power, host_ui::SystemShell& shell,
+                   remote_control::RemoteControlAgent& remote_control);
     ~HostController();
     HostController(const HostController&) = delete;
     HostController& operator=(const HostController&) = delete;
@@ -33,8 +37,10 @@ class HostController final {
     device::DeviceServices& devices_;
     device::BatteryBackend& battery_;
     device::WifiBackend& wifi_;
+    device::PowerBackend& power_;
     host_ui::SystemShell& shell_;
     remote_control::RemoteControlAgent& remote_control_;
+    HostPowerStateMachine power_state_{};
 };
 
 }  // namespace micropixel::firmware

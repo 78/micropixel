@@ -30,6 +30,11 @@ uint32_t DurationSample(int64_t duration_us) {
 
 void RetainedSurface::Bind(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t display_width,
                            uint32_t display_height) {
+    if (panel_ != panel) {
+        for (auto& state : frame_states_) {
+            state = {};
+        }
+    }
     display_ = display;
     panel_ = panel;
     display_width_ = display_width;

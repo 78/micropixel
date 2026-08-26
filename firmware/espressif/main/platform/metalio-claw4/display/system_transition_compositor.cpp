@@ -84,6 +84,12 @@ esp_err_t SystemTransitionCompositor::Initialize(lv_display_t* display, esp_lcd_
     return ESP_OK;
 }
 
+void SystemTransitionCompositor::RebindPanel(esp_lcd_panel_handle_t panel) {
+    panel_ = panel;
+    status_frame_states_ = {};
+    prepared_to_hall_ = false;
+}
+
 bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) { return CaptureBackgroundLocked(root, true); }
 
 bool SystemTransitionCompositor::RefreshBackgroundLocked(lv_obj_t* root) {

@@ -27,6 +27,7 @@ class GuestGraphicsEngine final {
 
     void SetPresentationHooks(GuestPresentationHooks hooks) { presentation_hooks_ = hooks; }
     [[nodiscard]] esp_err_t Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel);
+    void RebindPanel(esp_lcd_panel_handle_t panel);
 
     [[nodiscard]] bool Available() const { return true; }
     [[nodiscard]] int32_t GetInfo(micropixel_graphics_info_t& info) const;

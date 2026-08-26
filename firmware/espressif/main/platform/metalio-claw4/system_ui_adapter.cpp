@@ -126,4 +126,8 @@ void SystemUiAdapter::ApplyBrightness(uint8_t percent) { operations_.apply_brigh
 
 void SystemUiAdapter::ApplyVolume(uint8_t percent) { operations_.apply_volume(operations_.context, percent); }
 
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowShutdown() {
+    return operations_.show_shutdown(operations_.context);
+}
+
 }  // namespace micropixel::platform::metalio_claw4

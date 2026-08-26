@@ -15,6 +15,7 @@
 #include "app_controller.hpp"
 #include "device/battery.hpp"
 #include "device/device_services.hpp"
+#include "device/power.hpp"
 #include "device/wifi.hpp"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -46,6 +47,88 @@ constexpr int64_t kPerformanceSamplePeriodUs = 500000;
 constexpr int64_t kBatterySamplePeriodUs = 1000000;
 constexpr int64_t kWifiScanRefreshDelayUs = 10LL * 1000LL * 1000LL;
 constexpr int64_t kWifiScanRetryDelayUs = 1000LL * 1000LL;
+constexpr TickType_t kPowerSuspendTimeout = pdMS_TO_TICKS(500U);
+constexpr TickType_t kShutdownRemoteStopTimeout = pdMS_TO_TICKS(500U);
+constexpr uint32_t kBrightnessFadeSteps = 12U;
+constexpr TickType_t kBrightnessFadeStepDelay = pdMS_TO_TICKS(15U);
+
+const char* PowerErrorText(device::PowerError error) {
+    switch (error) {
+        case device::PowerError::kUnavailable:
+            return "unavailable";
+        case device::PowerError::kWakeSource:
+            return "wake_source";
+        case device::PowerError::kDisplayPrepare:
+            return "display_prepare";
+        case device::PowerError::kDisplayShutdown:
+            return "display_shutdown";
+        case device::PowerError::kSleepRejected:
+            return "sleep_rejected";
+        case device::PowerError::kDisplayRestore:
+        default:
+            return "display_restore";
+    }
+}
+
+void FadeBrightness(host_ui::SystemShell& shell, uint8_t from, uint8_t to) {
+    for (uint32_t step = 1U; step <= kBrightnessFadeSteps; ++step) {
+        const int32_t value = static_cast<int32_t>(from) + (static_cast<int32_t>(to) - static_cast<int32_t>(from)) *
+                                                               static_cast<int32_t>(step) /
+                                                               static_cast<int32_t>(kBrightnessFadeSteps);
+        shell.ApplyBrightness(static_cast<uint8_t>(value));
+        if (step != kBrightnessFadeSteps) {
+            vTaskDelay(kBrightnessFadeStepDelay);
+        }
+    }
+}
+
+void RunBasicShutdown(host_ui::SystemShell& shell, device::PowerBackend& power, HostPowerStateMachine& power_state,
+                      remote_control::RemoteControlAgent& remote_control) {
+    if (!shell.PowerOffRequested() || !power_state.BeginShutdown()) {
+        return;
+    }
+    if (!shell.ConsumePowerOffRequested()) {
+        power_state.RecoverAwake();
+        return;
+    }
+
+    ESP_LOGI(kTag, "power-off sequence started without a running App");
+    const auto show_result = shell.ShowShutdown();
+    if (!show_result) {
+        ESP_LOGE(kTag, "could not show shutdown screen: error=%u", static_cast<unsigned>(show_result.error()));
+    }
+    shell.ApplyVolume(0U);
+    remote_control.Stop(kShutdownRemoteStopTimeout);
+    power.PowerOff();
+}
+
+void RunBasicPowerCycle(host_ui::SystemShell& shell, const host_ui::StatusLayerModel& status_model,
+                        device::PowerBackend& power, HostPowerStateMachine& power_state) {
+    if (!shell.PowerButtonPressed() || !power_state.BeginSleep()) {
+        return;
+    }
+    if (!shell.ConsumePowerButtonPressed()) {
+        power_state.RecoverAwake();
+        return;
+    }
+    FadeBrightness(shell, status_model.brightness_percent, 0U);
+    if (!power_state.MarkAsleep()) {
+        power_state.RecoverAwake();
+        FadeBrightness(shell, 0U, status_model.brightness_percent);
+        return;
+    }
+    const auto sleep_result = power.EnterLowPower();
+    if (!power_state.BeginWake()) {
+        power_state.RecoverAwake();
+    }
+    if (!sleep_result) {
+        ESP_LOGE(kTag, "low-power cycle failed: %s", PowerErrorText(sleep_result.error()));
+    }
+    FadeBrightness(shell, 0U, status_model.brightness_percent);
+    if (!power_state.FinishWake()) {
+        power_state.RecoverAwake();
+    }
+}
 
 template <typename T>
 struct HeapCapsObjectDeleter final {
@@ -847,6 +930,9 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
     if (controller == nullptr) {
         return wifi_settings_ok;
     }
+    if (shell.PowerTransitionRequested()) {
+        return wifi_settings_ok;
+    }
     auto resume_result = controller->Resume();
     if (!resume_result) {
         ESP_LOGE(kTag, "failed to resume App after status layer: error=%u",
@@ -973,7 +1059,6 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, hos
 
 bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control,
                        RemoteCommandPump* command_pump) {
-    (void)command_pump;
     host_ui::RemoteControlModel remote_model = remote_control.Snapshot();
     const auto show_result = shell.ShowSystemInformation(MakeSystemInformationModel(remote_model, true));
     if (!show_result) {
@@ -988,6 +1073,35 @@ bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteContro
             remote_model = latest;
             request_pending = FirmwareUpdateInProgress(remote_model.firmware_update_state);
             shell.UpdateSystemInformation(MakeSystemInformationModel(remote_model, true));
+        }
+        if (shell.PowerOffRequested()) {
+            if (request_pending || FirmwareUpdateInProgress(remote_model.firmware_update_state)) {
+                (void)shell.ConsumePowerOffRequested();
+                ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
+                continue;
+            }
+            if (command_pump != nullptr) {
+                (void)command_pump->Process();
+            }
+            shell.LeaveSystemInformation();
+            return true;
+        }
+        if (shell.PowerButtonPressed()) {
+            if (request_pending || FirmwareUpdateInProgress(remote_model.firmware_update_state)) {
+                (void)shell.ConsumePowerButtonPressed();
+                ESP_LOGW(kTag, "power button ignored while firmware update is in progress");
+                continue;
+            }
+            if (command_pump != nullptr) {
+                (void)command_pump->Process();
+            }
+            shell.LeaveSystemInformation();
+            return true;
+        }
+        if (!FirmwareUpdateInProgress(remote_model.firmware_update_state) && command_pump != nullptr &&
+            command_pump->Process()) {
+            shell.LeaveSystemInformation();
+            return true;
         }
         if (!action.has_value()) {
             continue;
@@ -1317,17 +1431,35 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
 }
 
 void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& battery, device::WifiBackend& wifi,
+                        device::PowerBackend& power, HostPowerStateMachine& power_state,
                         const runtime::InstalledAppCatalog& catalog, host_ui::HallStatus status, uint32_t detail,
                         host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store,
                         remote_control::RemoteControlAgent& remote_control) {
     HallCoverMappings covers = OpenHallCovers(catalog);
+    RemoteCommandPump power_pump{
+        .poll = [](void* context) { return static_cast<host_ui::SystemShell*>(context)->PowerTransitionRequested(); },
+        .context = &shell,
+    };
     CpuUsageSampler cpu_sampler;
     cpu_sampler.Reset();
     (void)cpu_sampler.Sample();
     int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
     for (;;) {
+        if (shell.PowerOffRequested()) {
+            if (FirmwareUpdateInProgress(remote_control.Snapshot().firmware_update_state)) {
+                (void)shell.ConsumePowerOffRequested();
+                ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
+            } else {
+                RunBasicShutdown(shell, power, power_state, remote_control);
+            }
+        }
+        if (shell.PowerButtonPressed()) {
+            RunBasicPowerCycle(shell, status_model, power, power_state);
+            power_pump.unwind_requested = false;
+        }
         if (FirmwareUpdateInProgress(remote_control.Snapshot().firmware_update_state)) {
-            (void)RunFirmwareUpdate(shell, remote_control, nullptr);
+            (void)RunFirmwareUpdate(shell, remote_control, &power_pump);
+            power_pump.unwind_requested = false;
         }
         const device::WifiSnapshot wifi_snapshot = wifi.Snapshot();
         RefreshWifiStatus(status_model, wifi_snapshot);
@@ -1344,6 +1476,14 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             const TickType_t timeout =
                 status_model.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
             const auto action = shell.PollAction(timeout);
+            if (shell.PowerOffRequested()) {
+                break;
+            }
+            if (shell.PowerButtonPressed()) {
+                RunBasicPowerCycle(shell, status_model, power, power_state);
+                power_pump.unwind_requested = false;
+                break;
+            }
             const int64_t now_us = esp_timer_get_time();
             if (status_model.performance_overlay_enabled && now_us >= next_performance_sample_us) {
                 shell.UpdatePerformanceOverlay(true, cpu_sampler.Sample());
@@ -1373,7 +1513,11 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kOpenWifiSettings) {
-                (void)RunWifiSettings(shell, wifi, status_model, nullptr);
+                (void)RunWifiSettings(shell, wifi, status_model, &power_pump);
+                if (power_pump.unwind_requested) {
+                    power_pump.unwind_requested = false;
+                    break;
+                }
                 cpu_sampler.Reset();
                 (void)cpu_sampler.Sample();
                 next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
@@ -1382,14 +1526,22 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             if (action->type == host_ui::SystemUiActionType::kOpenSystemMenu) {
                 std::optional<uint32_t> launch_request;
                 (void)RunSystemMenu(shell, battery, wifi, status_model, catalog, settings_store, remote_control, false,
-                                    nullptr, launch_request, nullptr);
+                                    nullptr, launch_request, &power_pump);
+                if (power_pump.unwind_requested) {
+                    power_pump.unwind_requested = false;
+                    break;
+                }
                 cpu_sampler.Reset();
                 (void)cpu_sampler.Sample();
                 next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
                 break;
             }
             if (action->type == host_ui::SystemUiActionType::kOpenFirmwareUpdate) {
-                (void)RunFirmwareUpdate(shell, remote_control, nullptr);
+                (void)RunFirmwareUpdate(shell, remote_control, &power_pump);
+                if (power_pump.unwind_requested) {
+                    power_pump.unwind_requested = false;
+                    break;
+                }
                 cpu_sampler.Reset();
                 (void)cpu_sampler.Sample();
                 next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
@@ -1400,8 +1552,12 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
                          static_cast<unsigned>(action->type));
                 continue;
             }
-            (void)RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store, nullptr,
+            (void)RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store, &power_pump,
                                  action->timestamp_us);
+            if (power_pump.unwind_requested) {
+                power_pump.unwind_requested = false;
+                break;
+            }
             cpu_sampler.Reset();
             (void)cpu_sampler.Sample();
             next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
@@ -1414,8 +1570,8 @@ class ActiveHost final {
    public:
     ActiveHost(runtime::InstalledAppCatalog&& catalog, runtime::AppRuntime& runtime, device::DeviceServices& devices,
                host_ui::SystemShell& shell, device::BatteryBackend& battery, device::WifiBackend& wifi,
-               host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store,
-               remote_control::RemoteControlAgent& remote_control)
+               device::PowerBackend& power, HostPowerStateMachine& power_state, host_ui::StatusLayerModel& status_model,
+               host_ui::SystemSettingsStore& settings_store, remote_control::RemoteControlAgent& remote_control)
         : catalog_(std::move(catalog)),
           covers_(OpenHallCovers(catalog_)),
           app_controller_(runtime),
@@ -1423,6 +1579,8 @@ class ActiveHost final {
           shell_(shell),
           battery_(battery),
           wifi_(wifi),
+          power_(power),
+          power_state_(power_state),
           status_model_(status_model),
           settings_store_(settings_store),
           remote_control_(remote_control),
@@ -1437,6 +1595,19 @@ class ActiveHost final {
 
     void Run() {
         for (;;) {
+            if (shell_.PowerOffRequested()) {
+                if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+                    (void)shell_.ConsumePowerOffRequested();
+                    ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
+                } else {
+                    RunShutdown();
+                }
+                continue;
+            }
+            if (shell_.PowerButtonPressed()) {
+                RunPowerCycle();
+                continue;
+            }
             switch (state_) {
                 case State::kHall:
                     if (!RunHall()) {
@@ -1893,6 +2064,9 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool ProcessRemoteCommandsInSystemUi() {
+        if (shell_.PowerTransitionRequested()) {
+            return true;
+        }
         if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
             return true;
         }
@@ -1928,10 +2102,16 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool RunHall() {
+        if (shell_.PowerTransitionRequested()) {
+            return true;
+        }
         if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
             if (!RunFirmwareUpdate(shell_, remote_control_, nullptr)) {
                 return false;
             }
+        }
+        if (shell_.PowerTransitionRequested()) {
+            return true;
         }
         if (!ShowCurrentHall()) {
             return false;
@@ -1951,6 +2131,9 @@ class ActiveHost final {
             const TickType_t timeout =
                 status_model_.performance_overlay_enabled ? pdMS_TO_TICKS(20) : pdMS_TO_TICKS(250);
             const auto pending_action = shell_.PollAction(timeout);
+            if (shell_.PowerTransitionRequested()) {
+                return true;
+            }
             if (ProcessRemoteCommands()) {
                 return true;
             }
@@ -2196,6 +2379,9 @@ class ActiveHost final {
         shell_.WatchGuestActions();
 
         for (;;) {
+            if (shell_.PowerTransitionRequested()) {
+                return;
+            }
             auto completion_result = app_controller_.PollCompletion(pdMS_TO_TICKS(20));
             remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(),
                                                RemoteLifecycleText(app_controller_.state()));
@@ -2260,6 +2446,9 @@ class ActiveHost final {
             }
 
             const auto action = shell_.PollAction(0U);
+            if (shell_.PowerTransitionRequested()) {
+                return;
+            }
             if (!action.has_value()) {
                 continue;
             }
@@ -2302,6 +2491,171 @@ class ActiveHost final {
         cpu_sampler.Reset();
         (void)cpu_sampler.Sample();
         next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
+    }
+
+    void RunShutdown() {
+        if (!shell_.PowerOffRequested() || !power_state_.BeginShutdown()) {
+            return;
+        }
+        if (!shell_.ConsumePowerOffRequested()) {
+            power_state_.RecoverAwake();
+            return;
+        }
+
+        ESP_LOGI(kTag, "power-off sequence started");
+        if (RemoteInputSequence().active) {
+            FinishRemoteInputSequence(false, "device_shutting_down");
+        }
+        FinishPendingStart(false, "device_shutting_down");
+        shell_.StopWatchingGuestActions();
+        shell_.UpdatePerformanceOverlay(false, 0U);
+        shell_.ApplyVolume(0U);
+
+        const AppLifecycleState lifecycle = app_controller_.state();
+        if (lifecycle == AppLifecycleState::kNotRunning) {
+            const auto completion_result = app_controller_.PollCompletion(pdMS_TO_TICKS(50U));
+            if (!completion_result) {
+                ESP_LOGW(kTag, "could not collect completed App before power off: error=%u",
+                         static_cast<unsigned>(completion_result.error()));
+            }
+        } else {
+            const uint32_t active_index = suspended_index_.value_or(foreground_index_);
+            if (active_index < catalog_.count) {
+                remote_control_.UpdateAppLifecycle(catalog_.apps[active_index].app_id.data(), "stopping");
+            }
+            const auto stop_result = StopApp(app_controller_);
+            if (!stop_result) {
+                ESP_LOGE(kTag, "could not stop App before power off: error=%u",
+                         static_cast<unsigned>(stop_result.error()));
+                RecordHostFailure(static_cast<uint32_t>(stop_result.error()));
+            } else {
+                ESP_LOGI(kTag, "App stopped before power off");
+            }
+        }
+        remote_control_.UpdateAppLifecycle(nullptr, "not_running");
+        suspended_index_.reset();
+        suspended_snapshot_ = {};
+        shell_.ReleaseGuestSnapshot();
+
+        const auto show_result = shell_.ShowShutdown();
+        if (!show_result) {
+            ESP_LOGE(kTag, "could not show shutdown screen: error=%u", static_cast<unsigned>(show_result.error()));
+        }
+        remote_control_.Stop(kShutdownRemoteStopTimeout);
+        ESP_LOGI(kTag, "shutdown cleanup complete; requesting physical power cut");
+        power_.PowerOff();
+    }
+
+    void RunPowerCycle() {
+        if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+            (void)shell_.ConsumePowerButtonPressed();
+            ESP_LOGW(kTag, "power button ignored while firmware update is in progress");
+            return;
+        }
+        if (!shell_.PowerButtonPressed() || !power_state_.BeginSleep()) {
+            return;
+        }
+        if (!shell_.ConsumePowerButtonPressed()) {
+            power_state_.RecoverAwake();
+            return;
+        }
+
+        if (RemoteInputSequence().active) {
+            FinishRemoteInputSequence(false, "power_transition");
+        }
+
+        bool resume_foreground = false;
+        bool moved_to_hall = false;
+        if (state_ == State::kForeground) {
+            const AppLifecycleState lifecycle = app_controller_.state();
+            if (lifecycle == AppLifecycleState::kForeground) {
+                remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(), "suspending");
+                const auto suspend_result = app_controller_.Suspend(kPowerSuspendTimeout);
+                if (suspend_result) {
+                    resume_foreground = true;
+                    shell_.StopWatchingGuestActions();
+                    remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(), "suspended");
+                } else {
+                    ESP_LOGE(kTag, "App did not reach the power suspend safe point: error=%u",
+                             static_cast<unsigned>(suspend_result.error()));
+                    RecordHostFailure(static_cast<uint32_t>(suspend_result.error()));
+                }
+            } else if (lifecycle == AppLifecycleState::kSuspended) {
+                resume_foreground = true;
+            }
+
+            if (!resume_foreground) {
+                FinishPendingStart(false, "power_transition");
+                if (lifecycle == AppLifecycleState::kNotRunning) {
+                    const auto completion_result = app_controller_.PollCompletion(pdMS_TO_TICKS(50U));
+                    if (!completion_result) {
+                        RecordHostFailure(static_cast<uint32_t>(completion_result.error()));
+                    }
+                    remote_control_.UpdateAppLifecycle(nullptr, "not_running");
+                } else {
+                    const auto stopped_result = StopApp(app_controller_);
+                    if (!stopped_result) {
+                        ESP_LOGE(kTag, "could not stop App before low power: error=%u",
+                                 static_cast<unsigned>(stopped_result.error()));
+                        RecordHostFailure(static_cast<uint32_t>(stopped_result.error()));
+                        remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(),
+                                                           RemoteLifecycleText(app_controller_.state()));
+                    } else {
+                        remote_control_.UpdateAppLifecycle(nullptr, "not_running");
+                    }
+                }
+                suspended_index_.reset();
+                suspended_snapshot_ = {};
+                shell_.ReleaseGuestSnapshot();
+                LeaveForegroundUi();
+                state_ = State::kHall;
+                moved_to_hall = true;
+            }
+        }
+
+        FadeBrightness(shell_, status_model_.brightness_percent, 0U);
+        if (!power_state_.MarkAsleep()) {
+            power_state_.RecoverAwake();
+            if (resume_foreground) {
+                (void)app_controller_.Resume();
+            }
+            FadeBrightness(shell_, 0U, status_model_.brightness_percent);
+            return;
+        }
+
+        const auto sleep_result = power_.EnterLowPower();
+        if (!power_state_.BeginWake()) {
+            power_state_.RecoverAwake();
+        }
+        if (!sleep_result) {
+            ESP_LOGE(kTag, "low-power cycle failed: %s", PowerErrorText(sleep_result.error()));
+        }
+
+        if (resume_foreground) {
+            const auto resume_result = app_controller_.Resume();
+            if (!resume_result) {
+                ESP_LOGE(kTag, "failed to resume App after wake: error=%u",
+                         static_cast<unsigned>(resume_result.error()));
+                (void)StopApp(app_controller_);
+                RecordHostFailure(static_cast<uint32_t>(resume_result.error()));
+                remote_control_.UpdateAppLifecycle(nullptr, "not_running");
+                LeaveForegroundUi();
+                state_ = State::kHall;
+                moved_to_hall = true;
+            } else {
+                remote_control_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(), "foreground");
+            }
+        }
+
+        const bool display_restored =
+            sleep_result.has_value() || sleep_result.error() != device::PowerError::kDisplayRestore;
+        if (moved_to_hall && display_restored && !ShowCurrentHall()) {
+            RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
+        }
+        FadeBrightness(shell_, 0U, status_model_.brightness_percent);
+        if (!power_state_.FinishWake()) {
+            power_state_.RecoverAwake();
+        }
     }
 
     void SuspendToHall(uint64_t trigger_timestamp_us) {
@@ -2358,6 +2712,8 @@ class ActiveHost final {
     host_ui::SystemShell& shell_;
     device::BatteryBackend& battery_;
     device::WifiBackend& wifi_;
+    device::PowerBackend& power_;
+    HostPowerStateMachine& power_state_;
     host_ui::StatusLayerModel& status_model_;
     host_ui::SystemSettingsStore& settings_store_;
     remote_control::RemoteControlAgent& remote_control_;
@@ -2380,19 +2736,40 @@ class ActiveHost final {
 }  // namespace
 
 HostController::HostController(device::DeviceServices& devices, device::BatteryBackend& battery,
-                               device::WifiBackend& wifi, host_ui::SystemShell& shell,
+                               device::WifiBackend& wifi, device::PowerBackend& power, host_ui::SystemShell& shell,
                                remote_control::RemoteControlAgent& remote_control)
-    : devices_(devices), battery_(battery), wifi_(wifi), shell_(shell), remote_control_(remote_control) {
+    : devices_(devices), battery_(battery), wifi_(wifi), power_(power), shell_(shell), remote_control_(remote_control) {
     battery_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
     wifi_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyWifiStateChanged(); }, &shell_);
+    power_.SetPowerButtonSink(
+        [](void* context, uint64_t timestamp_us) {
+            auto* controller = static_cast<HostController*>(context);
+            if (controller->power_state_.state() != HostPowerState::kAwake) {
+                return false;
+            }
+            return controller->shell_.NotifyPowerButtonPressed(timestamp_us);
+        },
+        this);
+    power_.SetPowerOffButtonSink(
+        [](void* context, uint64_t timestamp_us) {
+            auto* controller = static_cast<HostController*>(context);
+            if (controller->power_state_.state() != HostPowerState::kAwake ||
+                controller->shell_.PowerTransitionRequested()) {
+                return false;
+            }
+            return controller->shell_.NotifyPowerOffRequested(timestamp_us);
+        },
+        this);
 }
 
 HostController::~HostController() {
     remote_control_.Stop();
     battery_.SetStateChangeSink(nullptr, nullptr);
     wifi_.SetStateChangeSink(nullptr, nullptr);
+    power_.SetPowerButtonSink(nullptr, nullptr);
+    power_.SetPowerOffButtonSink(nullptr, nullptr);
 }
 
 void HostController::Run() {
@@ -2430,7 +2807,7 @@ void HostController::Run() {
         *catalog = {};
         UpdateRemoteControlCatalog(remote_control_, *catalog);
         remote_control_.UpdateAppLifecycle(nullptr, "not_running");
-        RunUnavailableHall(shell_, battery_, wifi_, *catalog, host_ui::HallStatus::kNoApps,
+        RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, *catalog, host_ui::HallStatus::kNoApps,
                            static_cast<uint32_t>(catalog_result.error()), status_model, settings_store,
                            remote_control_);
         return;
@@ -2441,25 +2818,26 @@ void HostController::Run() {
     auto runtime_result = runtime::AppRuntime::Initialize(devices_, &remote_control_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
-        RunUnavailableHall(shell_, battery_, wifi_, *catalog, host_ui::HallStatus::kRuntimeUnavailable,
-                           static_cast<uint32_t>(runtime_result.error()), status_model, settings_store,
-                           remote_control_);
+        RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, *catalog,
+                           host_ui::HallStatus::kRuntimeUnavailable, static_cast<uint32_t>(runtime_result.error()),
+                           status_model, settings_store, remote_control_);
         return;
     }
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
     auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_runtime, devices_, shell_, battery_, wifi_,
-                                                   status_model, settings_store, remote_control_);
+                                                   power_, power_state_, status_model, settings_store, remote_control_);
     if (active_host == nullptr) {
         ESP_LOGE(kTag, "failed to allocate ActiveHost state");
-        RunUnavailableHall(shell_, battery_, wifi_, *catalog, host_ui::HallStatus::kRuntimeUnavailable,
-                           static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store,
-                           remote_control_);
+        RunUnavailableHall(
+            shell_, battery_, wifi_, power_, power_state_, *catalog, host_ui::HallStatus::kRuntimeUnavailable,
+            static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store, remote_control_);
         return;
     }
     if (!active_host->Valid()) {
         ESP_LOGE(kTag, "AppController initialization failed");
-        RunUnavailableHall(shell_, battery_, wifi_, active_host->catalog(), host_ui::HallStatus::kRuntimeUnavailable,
+        RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, active_host->catalog(),
+                           host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store,
                            remote_control_);
         return;

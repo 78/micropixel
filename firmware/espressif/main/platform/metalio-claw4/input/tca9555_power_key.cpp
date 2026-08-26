@@ -9,6 +9,7 @@
 #include "esp_intr_alloc.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "iot_button.h"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -18,10 +19,15 @@ constexpr char kTag[] = "micropixel_power_key";
 constexpr gpio_num_t kTcaInterrupt = GPIO_NUM_2;
 constexpr uint8_t kInputPort0 = 0x00U;
 constexpr uint8_t kInputPort1 = 0x01U;
+constexpr uint8_t kOutputPort0 = 0x02U;
 constexpr uint8_t kConfigurationPort0 = 0x06U;
 constexpr uint8_t kPowerKeyMask = 1U << 5U;
+constexpr uint8_t kPowerKeyPulseMask = 1U << 4U;
 constexpr uint8_t kPowerInputMask = (1U << 2U) | (1U << 3U);
 constexpr int kI2cTimeoutMs = 20;
+constexpr uint64_t kPowerClickGuardUs = 2000000U;
+constexpr uint16_t kPowerOffLongPressMs = 2000U;
+constexpr TickType_t kPowerOffPulseHalfPeriod = pdMS_TO_TICKS(100U);
 
 esp_err_t ReadRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t& value) {
     return i2c_master_transmit_receive(device, &address, sizeof(address), &value, sizeof(value), kI2cTimeoutMs);
@@ -76,6 +82,7 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander) {
     driver_.base.del = DeleteDriver;
 
     button_config_t button_config{};
+    button_config.long_press_time = kPowerOffLongPressMs;
     status = iot_button_create(&button_config, &driver_.base, &button_);
     if (status != ESP_OK) {
         return status;
@@ -120,6 +127,100 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander) {
 void Tca9555PowerKey::SetPowerInputChangeSink(PowerInputChangeSink sink, void* context) {
     power_input_change_context_ = context;
     power_input_change_sink_ = sink;
+}
+
+void Tca9555PowerKey::SetKeyPressSink(KeyPressSink sink, void* context) {
+    portENTER_CRITICAL(&key_press_sink_lock_);
+    key_press_sink_ = sink;
+    key_press_context_ = context;
+    portEXIT_CRITICAL(&key_press_sink_lock_);
+}
+
+void Tca9555PowerKey::SetPowerOffSink(PowerOffSink sink, void* context) {
+    portENTER_CRITICAL(&key_press_sink_lock_);
+    power_off_sink_ = sink;
+    power_off_context_ = context;
+    portEXIT_CRITICAL(&key_press_sink_lock_);
+}
+
+esp_err_t Tca9555PowerKey::PrepareForLightSleep() {
+    esp_err_t status = esp_sleep_enable_gpio_wakeup();
+    return status == ESP_OK ? EnterPowerSave() : status;
+}
+
+bool Tca9555PowerKey::IsPressed() {
+    uint8_t port0 = 0U;
+    uint8_t port1 = 0U;
+    return ReadPorts(port0, port1) == ESP_OK && (port0 & kPowerKeyMask) == 0U;
+}
+
+bool Tca9555PowerKey::PowerPressOccurredAfterRequest() const {
+    return press_generation_.load(std::memory_order_acquire) !=
+           power_request_generation_.load(std::memory_order_acquire);
+}
+
+void Tca9555PowerKey::GuardWakeButtonUntilRelease(uint64_t click_deadline_us) {
+    wake_key_release_required_.store(true, std::memory_order_release);
+    SuppressSingleClicksUntil(click_deadline_us);
+
+    uint8_t port0 = 0U;
+    uint8_t port1 = 0U;
+    const esp_err_t status = ReadPorts(port0, port1);
+    if (status != ESP_OK) {
+        ESP_LOGW(kTag, "could not confirm wake-key state; power requests remain blocked: %s", esp_err_to_name(status));
+        return;
+    }
+    if ((port0 & kPowerKeyMask) != 0U) {
+        wake_key_release_required_.store(false, std::memory_order_release);
+        ESP_LOGI(kTag, "wake key already released; guarded clicks remain suppressed");
+        return;
+    }
+    ESP_LOGI(kTag, "wake key remains pressed; power requests are blocked until release");
+}
+
+void Tca9555PowerKey::SuppressSingleClicksUntil(uint64_t deadline_us) {
+    uint64_t current = suppress_single_click_until_us_.load(std::memory_order_acquire);
+    while (current < deadline_us &&
+           !suppress_single_click_until_us_.compare_exchange_weak(current, deadline_us, std::memory_order_acq_rel)) {
+    }
+}
+
+[[noreturn]] void Tca9555PowerKey::PowerOff() {
+    uint8_t output = 0U;
+    uint8_t configuration = 0U;
+    for (;;) {
+        esp_err_t status = ReadRegister(io_expander_, kOutputPort0, output);
+        if (status == ESP_OK) {
+            output = static_cast<uint8_t>(output & ~kPowerKeyPulseMask);
+            status = WriteRegister(io_expander_, kOutputPort0, output);
+        }
+        if (status == ESP_OK) {
+            status = ReadRegister(io_expander_, kConfigurationPort0, configuration);
+        }
+        if (status == ESP_OK) {
+            configuration = static_cast<uint8_t>(configuration & ~kPowerKeyPulseMask);
+            status = WriteRegister(io_expander_, kConfigurationPort0, configuration);
+        }
+        if (status == ESP_OK) {
+            break;
+        }
+        ESP_LOGE(kTag, "power-off pulse configuration failed; retrying: %s", esp_err_to_name(status));
+        vTaskDelay(kPowerOffPulseHalfPeriod);
+    }
+
+    ESP_LOGI(kTag, "pulsing TCA9555 P0.4 until the power-management IC cuts power");
+    for (;;) {
+        const esp_err_t high_status = WriteRegister(io_expander_, kOutputPort0, output | kPowerKeyPulseMask);
+        if (high_status != ESP_OK) {
+            ESP_LOGE(kTag, "power-off pulse high failed: %s", esp_err_to_name(high_status));
+        }
+        vTaskDelay(kPowerOffPulseHalfPeriod);
+        const esp_err_t low_status = WriteRegister(io_expander_, kOutputPort0, output);
+        if (low_status != ESP_OK) {
+            ESP_LOGE(kTag, "power-off pulse low failed: %s", esp_err_to_name(low_status));
+        }
+        vTaskDelay(kPowerOffPulseHalfPeriod);
+    }
 }
 
 esp_err_t Tca9555PowerKey::ConfigurePowerKeyInput() {
@@ -239,15 +340,69 @@ void IRAM_ATTR Tca9555PowerKey::InterruptEntry(void*) {
     iot_button_power_save_wakeup_isr(static_cast<uint32_t>(kTcaInterrupt));
 }
 
-void Tca9555PowerKey::ButtonEvent(void* button, void*) {
+void Tca9555PowerKey::ButtonEvent(void* button, void* context) {
+    auto* owner = static_cast<Tca9555PowerKey*>(context);
     auto button_handle = static_cast<button_handle_t>(button);
     button_event_t event = iot_button_get_event(button_handle);
     if (event == BUTTON_PRESS_UP || event == BUTTON_LONG_PRESS_UP) {
         ESP_LOGI(kTag, "event %s, pressed=%" PRIu32 " ms", iot_button_get_event_str(event),
                  iot_button_get_pressed_time(button_handle));
+        if (owner != nullptr && owner->wake_key_release_required_.exchange(false, std::memory_order_acq_rel)) {
+            ESP_LOGI(kTag, "wake key released; power requests rearmed");
+        }
         return;
     }
     ESP_LOGI(kTag, "event %s", iot_button_get_event_str(event));
+    if (event == BUTTON_PRESS_DOWN && owner != nullptr) {
+        owner->press_generation_.fetch_add(1U, std::memory_order_acq_rel);
+    }
+    if (event != BUTTON_SINGLE_CLICK || owner == nullptr) {
+        if (event == BUTTON_LONG_PRESS_START && owner != nullptr) {
+            if (owner->wake_key_release_required_.load(std::memory_order_acquire)) {
+                ESP_LOGI(kTag, "suppressing power-off hold until the wake key is released");
+                return;
+            }
+            PowerOffSink sink = nullptr;
+            void* sink_context = nullptr;
+            portENTER_CRITICAL(&owner->key_press_sink_lock_);
+            sink = owner->power_off_sink_;
+            sink_context = owner->power_off_context_;
+            portEXIT_CRITICAL(&owner->key_press_sink_lock_);
+            if (sink == nullptr || !sink(sink_context, static_cast<uint64_t>(esp_timer_get_time()))) {
+                ESP_LOGI(kTag, "power-off request rejected by Host power supervisor");
+            } else {
+                ESP_LOGI(kTag, "two-second power-button hold accepted as a power-off request");
+            }
+        }
+        return;
+    }
+    if (owner->wake_key_release_required_.load(std::memory_order_acquire)) {
+        ESP_LOGI(kTag, "suppressing power-button click until the wake key is released");
+        return;
+    }
+
+    const uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
+    const uint64_t suppress_until_us = owner->suppress_single_click_until_us_.load(std::memory_order_acquire);
+    if (timestamp_us <= suppress_until_us) {
+        ESP_LOGI(kTag, "suppressing guarded power-button click");
+        return;
+    }
+
+    KeyPressSink sink = nullptr;
+    void* sink_context = nullptr;
+    portENTER_CRITICAL(&owner->key_press_sink_lock_);
+    sink = owner->key_press_sink_;
+    sink_context = owner->key_press_context_;
+    portEXIT_CRITICAL(&owner->key_press_sink_lock_);
+    if (sink == nullptr || !sink(sink_context, timestamp_us)) {
+        ESP_LOGI(kTag, "power-button request rejected by Host power supervisor");
+        owner->SuppressSingleClicksUntil(timestamp_us + kPowerClickGuardUs);
+        return;
+    }
+
+    owner->power_request_generation_.store(owner->press_generation_.load(std::memory_order_acquire),
+                                           std::memory_order_release);
+    owner->SuppressSingleClicksUntil(timestamp_us + kPowerClickGuardUs);
 }
 
 }  // namespace micropixel::platform::metalio_claw4

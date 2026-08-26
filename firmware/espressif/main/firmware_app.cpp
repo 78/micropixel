@@ -41,7 +41,7 @@ void FirmwareApp::Run() {
                                           platform_.random());
     static host_ui::SystemShell shell(platform_.system_ui());
     static remote_control::RemoteControlAgent remote_control(platform_.wifi());
-    HostController(devices, platform_.battery(), platform_.wifi(), shell, remote_control).Run();
+    HostController(devices, platform_.battery(), platform_.wifi(), platform_.power(), shell, remote_control).Run();
 }
 
 std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform() {

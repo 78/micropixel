@@ -41,6 +41,7 @@ main/
 ├── firmware_app.hpp
 ├── host_controller.cpp
 ├── host_controller.hpp
+├── host_power_state.hpp
 ├── host_ui/
 │   ├── system_shell.cpp
 │   ├── system_shell.hpp
@@ -62,6 +63,7 @@ main/
 │   ├── battery.hpp
 │   ├── graphics.hpp
 │   ├── input.hpp
+│   ├── power.hpp
 │   ├── random.hpp
 │   ├── device_services.cpp
 │   └── device_services.hpp
@@ -91,7 +93,9 @@ main/
 │   │   │   └── synth_audio.cpp
 │   │   ├── input/
 │   │   │   ├── gt911_input.cpp
-│   │   │   └── gt911_input.hpp
+│   │   │   ├── gt911_input.hpp
+│   │   │   ├── tca9555_power_key.cpp
+│   │   │   └── tca9555_power_key.hpp
 │   │   └── display/
 │   │       ├── dirty_region_coalescer.cpp
 │   │       ├── dirty_region_coalescer.hpp
@@ -190,6 +194,17 @@ main/
   Suspended / Resuming / Stopping` 内部状态收敛为同步 Host 命令；Guest SDK 不暴露暂时无用的 lifecycle callback。
 - Resume/Stop 通过两个 typed Core Event 暴露给 Guest；正常切换先协作 Stop，500ms 超时才强制 terminate，
   真实 trap 的 WAMR 调用栈诊断保持开启。
+- 单击电源键由 Host 的 `Awake → EnteringSleep → Asleep → Waking → Awake` 状态机统一编排，不先返回大厅，
+  也不新增 `Pause` 事件。前台 App 先用现有 `Suspend()` 控制消息等待 Guest 停在 `event_wait` 安全点，再渐暗
+  背光、暂停 LVGL、释放 LCD/DSI 并进入 light sleep；唤醒后重建并重绑显示，再用现有 `Resume()` 让同一
+  Session 首先收到 `Resume`。500ms 内未到安全点时走现有强制 Stop，唤醒后显示大厅；OTA 正在写入时忽略
+  电源键。进入低功耗的过渡期若再次检测到物理按下，则取消本次入睡并恢复显示；非 `Awake` 状态拒绝新的
+  入睡请求。按键唤醒后必须先确认物理释放才重新开放电源请求，同时用 click guard 防止快速连按或释放事件
+  在显示恢复后立即触发再次休眠。
+- 亮屏且处于 `Awake` 时，新一轮电源键长按满 2 秒进入终态 `ShuttingDown`；唤醒所用且尚未释放的同一轮
+  长按始终被拒绝。Host 停止当前 App、取消远控输入并静音后显示 `Shutting down...`，然后立即由
+  Metalio-Claw4 backend 按板级 `PWR_KEY_PULSE` 协议持续驱动 TCA9555 P0.4（高/低各 100ms）。关机画面
+  在脉冲执行期间保持可见，不额外固定等待，直到电源管理芯片切断电源。OTA 写入期间拒绝该请求。
 - App Hall 最多展示 50 个 App，首行三张完整卡片并露出下一张，支持触控左右自由拖动和基于释放速度的
   惯性滚动，不强制按卡片位置吸附。卡片作为一个裁剪内容带移动，每帧只 invalidates 大厅视口；面板
   partial-buffer 通过 DMA2D 传输，较大的 LVGL fill/blend 使用 PPA。Catalog 变化时回到最左侧，使新安装在

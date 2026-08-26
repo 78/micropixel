@@ -49,6 +49,9 @@ build_and_run system_shell \
     "$workspace_root/tools/tests/test_system_shell.cpp" \
     "$workspace_root/firmware/espressif/main/host_ui/system_shell.cpp"
 
+build_and_run host_power_state \
+    "$workspace_root/tools/tests/test_host_power_state.cpp"
+
 build_and_run app_store \
     "$workspace_root/tools/tests/test_app_store.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"

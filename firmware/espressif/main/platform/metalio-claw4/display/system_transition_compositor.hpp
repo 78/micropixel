@@ -35,6 +35,7 @@ class SystemTransitionCompositor final {
 
     [[nodiscard]] esp_err_t Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t width,
                                        uint32_t height);
+    void RebindPanel(esp_lcd_panel_handle_t panel);
     [[nodiscard]] bool HasBackground() const { return background_pixels_ != nullptr; }
     [[nodiscard]] bool PrepareBackgroundLocked(lv_obj_t* root);
     // Refresh only the working animation background. The preserved Hall

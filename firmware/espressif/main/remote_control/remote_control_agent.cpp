@@ -538,7 +538,9 @@ bool RemoteControlAgent::Start(bool enabled) {
 #endif
 }
 
-void RemoteControlAgent::Stop() {
+void RemoteControlAgent::Stop() { Stop(pdMS_TO_TICKS(kShutdownTimeoutMs)); }
+
+void RemoteControlAgent::Stop(TickType_t timeout) {
     TaskHandle_t task = task_;
     if (task == nullptr) {
         return;
@@ -548,7 +550,7 @@ void RemoteControlAgent::Stop() {
         (void)xQueueReset(command_queue_);
         (void)QueueCommand(Command{.type = CommandType::kShutdown});
     }
-    if (xSemaphoreTake(stopped_semaphore_, pdMS_TO_TICKS(kShutdownTimeoutMs)) != pdTRUE) {
+    if (xSemaphoreTake(stopped_semaphore_, timeout) != pdTRUE) {
         ESP_LOGE(kTag, "Remote Control task did not stop in time; forcing deletion");
         vTaskDelete(task_);
     }

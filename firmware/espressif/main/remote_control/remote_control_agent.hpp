@@ -120,6 +120,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
 
     [[nodiscard]] bool Start(bool enabled);
     void Stop();
+    void Stop(TickType_t timeout);
     [[nodiscard]] bool SetEnabled(bool enabled);
     [[nodiscard]] bool RequestPairingCode();
     [[nodiscard]] bool CancelPairingCode();

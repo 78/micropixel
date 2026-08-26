@@ -4,6 +4,7 @@
 #ifndef MICROPIXEL_PLATFORM_METALIO_CLAW4_INPUT_TCA9555_POWER_KEY_HPP
 #define MICROPIXEL_PLATFORM_METALIO_CLAW4_INPUT_TCA9555_POWER_KEY_HPP
 
+#include <atomic>
 #include <cstdint>
 
 #include "button_interface.h"
@@ -11,15 +12,26 @@
 #include "driver/i2c_master.h"
 #include "esp_attr.h"
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
 
 namespace micropixel::platform::metalio_claw4 {
 
 class Tca9555PowerKey final {
    public:
     using PowerInputChangeSink = void (*)(void* context);
+    using KeyPressSink = bool (*)(void* context, uint64_t timestamp_us);
+    using PowerOffSink = bool (*)(void* context, uint64_t timestamp_us);
 
     [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander);
     void SetPowerInputChangeSink(PowerInputChangeSink sink, void* context);
+    void SetKeyPressSink(KeyPressSink sink, void* context);
+    void SetPowerOffSink(PowerOffSink sink, void* context);
+    [[nodiscard]] esp_err_t PrepareForLightSleep();
+    [[nodiscard]] bool IsPressed();
+    [[nodiscard]] bool PowerPressOccurredAfterRequest() const;
+    void GuardWakeButtonUntilRelease(uint64_t click_deadline_us);
+    void SuppressSingleClicksUntil(uint64_t deadline_us);
+    [[noreturn]] void PowerOff();
 
    private:
     struct DriverContext final {
@@ -51,6 +63,15 @@ class Tca9555PowerKey final {
     uint8_t last_power_inputs_{};
     PowerInputChangeSink power_input_change_sink_{};
     void* power_input_change_context_{};
+    portMUX_TYPE key_press_sink_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    KeyPressSink key_press_sink_{};
+    void* key_press_context_{};
+    PowerOffSink power_off_sink_{};
+    void* power_off_context_{};
+    std::atomic<uint64_t> suppress_single_click_until_us_{};
+    std::atomic<uint32_t> press_generation_{};
+    std::atomic<uint32_t> power_request_generation_{};
+    std::atomic_bool wake_key_release_required_{};
     bool raw_level_known_{};
     bool power_inputs_known_{};
     bool isr_registered_{};

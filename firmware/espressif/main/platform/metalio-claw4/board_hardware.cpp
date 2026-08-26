@@ -43,6 +43,67 @@ esp_err_t BoardHardware::Initialize() {
     return status;
 }
 
+esp_err_t BoardHardware::SuspendDisplay() {
+    esp_err_t status = SetBacklight(false);
+    if (panel_ != nullptr) {
+        const esp_err_t display_status = esp_lcd_panel_disp_on_off(panel_, false);
+        if (status == ESP_OK) {
+            status = display_status;
+        }
+        if (panel_dma2d_enabled_) {
+            const esp_err_t dma2d_status = esp_lcd_dpi_panel_disable_dma2d(panel_);
+            if (dma2d_status == ESP_OK) {
+                panel_dma2d_enabled_ = false;
+            }
+            if (status == ESP_OK) {
+                status = dma2d_status;
+            }
+        }
+        if (!panel_dma2d_enabled_) {
+            const esp_err_t delete_status = esp_lcd_panel_del(panel_);
+            if (delete_status == ESP_OK) {
+                panel_ = nullptr;
+            }
+            if (status == ESP_OK) {
+                status = delete_status;
+            }
+        }
+    }
+    if (panel_ == nullptr && panel_io_ != nullptr) {
+        const esp_err_t delete_status = esp_lcd_panel_io_del(panel_io_);
+        if (delete_status == ESP_OK) {
+            panel_io_ = nullptr;
+        }
+        if (status == ESP_OK) {
+            status = delete_status;
+        }
+    }
+    if (panel_ == nullptr && panel_io_ == nullptr && dsi_bus_ != nullptr) {
+        const esp_err_t delete_status = esp_lcd_del_dsi_bus(dsi_bus_);
+        if (delete_status == ESP_OK) {
+            dsi_bus_ = nullptr;
+        }
+        if (status == ESP_OK) {
+            status = delete_status;
+        }
+    }
+    return status;
+}
+
+esp_err_t BoardHardware::ResumeDisplay() {
+    if (panel_ != nullptr) {
+        if (!panel_dma2d_enabled_) {
+            const esp_err_t status = esp_lcd_dpi_panel_enable_dma2d(panel_);
+            if (status != ESP_OK) {
+                return status;
+            }
+            panel_dma2d_enabled_ = true;
+        }
+        return esp_lcd_panel_disp_on_off(panel_, true);
+    }
+    return InitializeLcd();
+}
+
 esp_err_t BoardHardware::SetBacklight(bool enabled) {
     return SetBacklightOutputPerTenThousand(enabled ? kPerceptualControlScale : 0U);
 }
@@ -105,29 +166,45 @@ esp_err_t BoardHardware::InitializeIoExpander() {
 }
 
 esp_err_t BoardHardware::InitializeLcd() {
-    esp_ldo_channel_config_t ldo_config{};
-    ldo_config.chan_id = kDsiLdoChannel;
-    ldo_config.voltage_mv = kDsiLdoMillivolts;
-    esp_err_t status = esp_ldo_acquire_channel(&ldo_config, &dsi_ldo_);
-    if (status != ESP_OK) {
-        return status;
+    if (panel_ != nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (dsi_ldo_ == nullptr) {
+        esp_ldo_channel_config_t ldo_config{};
+        ldo_config.chan_id = kDsiLdoChannel;
+        ldo_config.voltage_mv = kDsiLdoMillivolts;
+        esp_err_t status = esp_ldo_acquire_channel(&ldo_config, &dsi_ldo_);
+        if (status != ESP_OK) {
+            return status;
+        }
     }
 
-    esp_lcd_dsi_bus_config_t bus_config{};
-    bus_config.bus_id = 0;
-    bus_config.num_data_lanes = 2;
-    bus_config.phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT;
-    bus_config.lane_bit_rate_mbps = 1000;
-    esp_lcd_dsi_bus_handle_t dsi_bus = nullptr;
-    status = esp_lcd_new_dsi_bus(&bus_config, &dsi_bus);
-    if (status != ESP_OK) {
-        return status;
+    bool created_bus = false;
+    if (dsi_bus_ == nullptr) {
+        esp_lcd_dsi_bus_config_t bus_config{};
+        bus_config.bus_id = 0;
+        bus_config.num_data_lanes = 2;
+        bus_config.phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT;
+        bus_config.lane_bit_rate_mbps = 1000;
+        const esp_err_t status = esp_lcd_new_dsi_bus(&bus_config, &dsi_bus_);
+        if (status != ESP_OK) {
+            return status;
+        }
+        created_bus = true;
     }
 
-    const esp_lcd_dbi_io_config_t dbi_config = NV3051F_PANEL_IO_DBI_CONFIG();
-    status = esp_lcd_new_panel_io_dbi(dsi_bus, &dbi_config, &panel_io_);
-    if (status != ESP_OK) {
-        return status;
+    bool created_panel_io = false;
+    if (panel_io_ == nullptr) {
+        const esp_lcd_dbi_io_config_t dbi_config = NV3051F_PANEL_IO_DBI_CONFIG();
+        const esp_err_t status = esp_lcd_new_panel_io_dbi(dsi_bus_, &dbi_config, &panel_io_);
+        if (status != ESP_OK) {
+            if (created_bus) {
+                (void)esp_lcd_del_dsi_bus(dsi_bus_);
+                dsi_bus_ = nullptr;
+            }
+            return status;
+        }
+        created_panel_io = true;
     }
 
     esp_lcd_dpi_panel_config_t dpi_config{};
@@ -147,7 +224,7 @@ esp_err_t BoardHardware::InitializeLcd() {
     dpi_config.out_color_format = LCD_COLOR_FMT_RGB888;
 
     nv3051f_vendor_config_t vendor_config{};
-    vendor_config.mipi_config.dsi_bus = dsi_bus;
+    vendor_config.mipi_config.dsi_bus = dsi_bus_;
     vendor_config.mipi_config.dpi_config = &dpi_config;
 
     esp_lcd_panel_dev_config_t panel_config{};
@@ -155,23 +232,39 @@ esp_err_t BoardHardware::InitializeLcd() {
     panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
     panel_config.bits_per_pixel = 24;
     panel_config.vendor_config = &vendor_config;
-    status = esp_lcd_new_panel_nv3051f(panel_io_, &panel_config, &panel_);
+    esp_err_t status = esp_lcd_new_panel_nv3051f(panel_io_, &panel_config, &panel_);
     if (status != ESP_OK) {
+        if (created_panel_io) {
+            (void)esp_lcd_panel_io_del(panel_io_);
+            panel_io_ = nullptr;
+        }
+        if (created_bus) {
+            (void)esp_lcd_del_dsi_bus(dsi_bus_);
+            dsi_bus_ = nullptr;
+        }
         return status;
     }
     status = esp_lcd_dpi_panel_enable_dma2d(panel_);
     if (status != ESP_OK) {
+        (void)SuspendDisplay();
         return status;
     }
+    panel_dma2d_enabled_ = true;
     status = esp_lcd_panel_reset(panel_);
     if (status != ESP_OK) {
+        (void)SuspendDisplay();
         return status;
     }
     status = esp_lcd_panel_init(panel_);
     if (status != ESP_OK) {
+        (void)SuspendDisplay();
         return status;
     }
-    return esp_lcd_panel_disp_on_off(panel_, true);
+    status = esp_lcd_panel_disp_on_off(panel_, true);
+    if (status != ESP_OK) {
+        (void)SuspendDisplay();
+    }
+    return status;
 }
 
 }  // namespace micropixel::platform::metalio_claw4

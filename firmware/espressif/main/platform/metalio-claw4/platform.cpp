@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_memory_utils.h"
+#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -629,6 +630,74 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
              static_cast<int>(kTouchInterrupt), GraphicsBackendName(), kEnablePpaAccel ? "on" : "off", kLvglTaskCore,
              static_cast<unsigned>(task_policy::kDisplayPriority));
     return ESP_OK;
+}
+
+std::expected<void, device::PowerError> RestoreDisplayAfterSleep(MetalioClaw4PlatformState& state) {
+    const esp_err_t resume_status = state.hardware.ResumeDisplay();
+    if (resume_status != ESP_OK) {
+        ESP_LOGE(kTag, "display reinitialization failed after sleep: %s", esp_err_to_name(resume_status));
+        return std::unexpected(device::PowerError::kDisplayRestore);
+    }
+
+    state.guest_graphics.RebindPanel(state.hardware.Panel());
+    state.system_transition.RebindPanel(state.hardware.Panel());
+    const esp_err_t status =
+        esp_lv_adapter_sleep_recover(state.display, state.hardware.Panel(), state.hardware.PanelIo());
+    if (status != ESP_OK) {
+        ESP_LOGE(kTag, "LVGL display recovery failed after sleep: %s", esp_err_to_name(status));
+        return std::unexpected(device::PowerError::kDisplayRestore);
+    }
+    return {};
+}
+
+std::expected<void, device::PowerError> EnterLowPowerImpl(MetalioClaw4PlatformState& state) {
+    esp_err_t status = state.power_key.PrepareForLightSleep();
+    if (status != ESP_OK) {
+        ESP_LOGE(kTag, "power-key wake source preparation failed: %s", esp_err_to_name(status));
+        return std::unexpected(device::PowerError::kWakeSource);
+    }
+
+    status = esp_lv_adapter_sleep_prepare();
+    if (status != ESP_OK) {
+        ESP_LOGE(kTag, "LVGL sleep preparation failed: %s", esp_err_to_name(status));
+        return std::unexpected(device::PowerError::kDisplayPrepare);
+    }
+
+    status = state.hardware.SuspendDisplay();
+    if (status != ESP_OK) {
+        ESP_LOGE(kTag, "display shutdown failed: %s", esp_err_to_name(status));
+        (void)RestoreDisplayAfterSleep(state);
+        return std::unexpected(device::PowerError::kDisplayShutdown);
+    }
+
+    if (state.power_key.PowerPressOccurredAfterRequest() || state.power_key.IsPressed()) {
+        ESP_LOGI(kTag, "light sleep canceled by a power press during the entry transition");
+        state.power_key.SuppressSingleClicksUntil(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+        return RestoreDisplayAfterSleep(state);
+    }
+
+    ESP_LOGI(kTag, "entering light sleep; power key is the wake source");
+    const int64_t sleep_started_us = esp_timer_get_time();
+    status = esp_light_sleep_start();
+    const uint64_t sleep_duration_us = static_cast<uint64_t>(esp_timer_get_time() - sleep_started_us);
+    const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
+    const uint64_t gpio_wakeup_status = esp_sleep_get_gpio_wakeup_status();
+    ESP_LOGI(kTag, "light sleep returned: status=%s duration=%" PRIu64 " ms causes=0x%08" PRIx32 " gpio=0x%016" PRIx64,
+             esp_err_to_name(status), sleep_duration_us / 1000U, wake_causes, gpio_wakeup_status);
+    if (status == ESP_OK) {
+        state.power_key.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+    }
+
+    const auto restore = RestoreDisplayAfterSleep(state);
+    if (!restore.has_value()) {
+        return restore;
+    }
+    if (status != ESP_OK) {
+        ESP_LOGE(kTag, "light sleep rejected: %s", esp_err_to_name(status));
+        return std::unexpected(device::PowerError::kSleepRejected);
+    }
+    ESP_LOGI(kTag, "light sleep cycle complete");
+    return {};
 }
 
 void ResetHallImageDescriptorsLocked(MetalioClaw4PlatformState& state) {
@@ -1611,6 +1680,41 @@ void ReleaseGuestSnapshotImpl(MetalioClaw4PlatformState& state) {
     state.guest_transition_pixels = nullptr;
     state.guest_snapshot_in_hall = false;
     ESP_LOGI(kTag, "released suspended-App snapshot");
+}
+
+std::expected<void, host_ui::SystemUiError> ShowShutdownImpl(MetalioClaw4PlatformState& state) {
+    if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+
+    state.hall_cover_request_generation.fetch_add(1U, std::memory_order_acq_rel);
+    if (state.hall_cover_job_queue != nullptr) {
+        (void)xQueueReset(state.hall_cover_job_queue);
+    }
+    SetHostPointerEnabledLocked(state, false);
+    state.touch_input.ClearSmokeUi();
+    state.input_router.UnbindTouchSink(&state);
+    state.hall_action_sink = nullptr;
+    state.hall_action_context = nullptr;
+    if (state.host_smoke == nullptr) {
+        state.host_smoke = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(state.host_smoke, 0x08111fU);
+    }
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    lv_obj_set_pos(state.host_smoke, 0, 0);
+    lv_obj_set_style_opa(state.host_smoke, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
+    lv_obj_t* label = lv_label_create(state.host_smoke);
+    lv_label_set_text(label, "Shutting down...");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xeaf4ffU), 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+    lv_obj_move_foreground(state.host_smoke);
+    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    esp_lv_adapter_unlock();
+    ESP_LOGI(kTag, "shutdown screen visible");
+    return {};
 }
 
 std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformState& state,
@@ -2709,10 +2813,12 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
                 }
             },
         .apply_volume = [](void*, uint8_t percent) { ConfiguredAudioBackend().SetMasterVolumePercent(percent); },
+        .show_shutdown =
+            [](void* context) { return ShowShutdownImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
     };
 }
 
-class MetalioClaw4Platform final : public Platform {
+class MetalioClaw4Platform final : public Platform, public device::PowerBackend {
    public:
     MetalioClaw4Platform() : graphics_(MakeGraphicsOperations(state_)), system_ui_(MakeSystemUiOperations(state_)) {
         state_.guest_graphics.SetPresentationHooks({
@@ -2741,7 +2847,20 @@ class MetalioClaw4Platform final : public Platform {
     [[nodiscard]] device::BatteryBackend& battery() override { return state_.battery; }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
+    [[nodiscard]] device::PowerBackend& power() override { return *this; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
+
+    void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {
+        state_.power_key.SetKeyPressSink(sink, context);
+    }
+
+    void SetPowerOffButtonSink(device::PowerOffButtonSink sink, void* context) override {
+        state_.power_key.SetPowerOffSink(sink, context);
+    }
+
+    [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override { return EnterLowPowerImpl(state_); }
+
+    [[noreturn]] void PowerOff() override { state_.power_key.PowerOff(); }
 
    private:
     MetalioClaw4PlatformState state_{};

@@ -1,6 +1,8 @@
+#include <atomic>
 #include <cstdlib>
 #include <expected>
 #include <iostream>
+#include <thread>
 
 #include "host_ui/system_shell.hpp"
 
@@ -125,6 +127,10 @@ class FakeSystemUi final : public SystemUiBackend {
     void UpdatePerformanceOverlay(bool, uint8_t) override {}
     void ApplyBrightness(uint8_t) override {}
     void ApplyVolume(uint8_t) override {}
+    std::expected<void, SystemUiError> ShowShutdown() override {
+        ++show_shutdown_calls;
+        return {};
+    }
 
     void Emit(const SystemUiAction& action) const {
         if (sink_ != nullptr) {
@@ -148,6 +154,7 @@ class FakeSystemUi final : public SystemUiBackend {
     uint32_t leave_wifi_settings_calls{};
     uint32_t leave_status_calls{};
     uint32_t leave_hall_calls{};
+    uint32_t show_shutdown_calls{};
 
    private:
     SystemUiActionSink sink_{};
@@ -262,6 +269,99 @@ void BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges() {
           "pending Battery notification should survive a screen queue reset");
 }
 
+void PowerButtonNotificationsAreCoalescedAndSurviveScreenChanges() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
+
+    Check(shell.NotifyPowerButtonPressed(100U), "first power notification should become the pending request");
+    Check(!shell.NotifyPowerButtonPressed(200U), "a second power notification must not replace a pending request");
+    Check(shell.PowerButtonPressed(), "power request should remain pending until Host consumes it");
+    const auto coalesced = shell.PollAction(0U);
+    Check(coalesced.has_value() && coalesced->type == SystemUiActionType::kPowerButtonPressed &&
+              coalesced->timestamp_us == 100U,
+          "duplicate power notifications should preserve the first request timestamp");
+    Check(!shell.PollAction(0U).has_value(), "coalesced power notification should only be queued once");
+    Check(shell.ConsumePowerButtonPressed(), "Host should consume the pending power request once");
+    Check(!shell.ConsumePowerButtonPressed(), "power request should be clear after consumption");
+
+    Check(shell.NotifyPowerButtonPressed(300U), "a new request should be accepted after consumption");
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "system menu should render after power notification");
+    const auto preserved = shell.PollAction(0U);
+    Check(preserved.has_value() && preserved->type == SystemUiActionType::kPowerButtonPressed,
+          "pending power notification should survive a screen queue reset");
+    Check(shell.ConsumePowerButtonPressed(), "preserved power request should remain consumable");
+
+    Check(shell.NotifyPowerButtonPressed(400U), "a later request should be accepted after consumption");
+    Check(shell.ConsumePowerButtonPressed(), "Host may consume a request before its queue token is polled");
+    Check(!shell.PollAction(0U).has_value(), "a consumed power queue token should be discarded as stale");
+}
+
+void PowerOffNotificationsAreExclusiveAndReachTheShutdownScreen() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
+
+    Check(shell.NotifyPowerOffRequested(500U), "first power-off notification should become pending");
+    Check(!shell.NotifyPowerOffRequested(600U), "duplicate power-off notification should coalesce");
+    Check(!shell.NotifyPowerButtonPressed(700U), "sleep must not replace a pending power-off request");
+    Check(shell.PowerOffRequested() && shell.PowerTransitionRequested(), "power-off should wake Host loops");
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "screen reset should preserve power off");
+    const auto action = shell.PollAction(0U);
+    Check(action.has_value() && action->type == SystemUiActionType::kPowerOffRequested && action->timestamp_us == 500U,
+          "power-off action should preserve its original timestamp");
+    Check(shell.ConsumePowerOffRequested(), "Host should consume power off once");
+    Check(!shell.PowerTransitionRequested(), "power request should clear after consumption");
+
+    Check(shell.NotifyPowerButtonPressed(800U), "sleep request should be accepted after power off is consumed");
+    Check(!shell.NotifyPowerOffRequested(900U), "power off must not replace a pending sleep request");
+    Check(shell.ConsumePowerButtonPressed(), "test should clear the pending sleep request");
+    Check(shell.ShowShutdown().has_value(), "shutdown screen should render");
+    Check(ui.show_shutdown_calls == 1U, "shutdown rendering should reach the backend");
+}
+
+void ConcurrentPowerNotificationsHaveExactlyOneWinner() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    for (uint64_t iteration = 0U; iteration < 64U; ++iteration) {
+        std::atomic_uint ready{};
+        std::atomic_bool start{};
+        bool sleep_accepted = false;
+        bool power_off_accepted = false;
+        std::thread sleep_thread([&] {
+            ready.fetch_add(1U, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            sleep_accepted = shell.NotifyPowerButtonPressed(iteration * 2U);
+        });
+        std::thread power_off_thread([&] {
+            ready.fetch_add(1U, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            power_off_accepted = shell.NotifyPowerOffRequested(iteration * 2U + 1U);
+        });
+        while (ready.load(std::memory_order_acquire) != 2U) {
+            std::this_thread::yield();
+        }
+        start.store(true, std::memory_order_release);
+        sleep_thread.join();
+        power_off_thread.join();
+
+        Check(sleep_accepted != power_off_accepted, "concurrent sleep and power off must have exactly one winner");
+        Check(shell.PowerTransitionRequested(), "the winning concurrent request should remain pending");
+        if (sleep_accepted) {
+            Check(shell.PowerButtonPressed() && !shell.PowerOffRequested(), "only sleep should be pending");
+            Check(shell.ConsumePowerButtonPressed(), "the winning sleep request should be consumable");
+        } else {
+            Check(shell.PowerOffRequested() && !shell.PowerButtonPressed(), "only power off should be pending");
+            Check(shell.ConsumePowerOffRequested(), "the winning power-off request should be consumable");
+        }
+        Check(!shell.PollAction(0U).has_value(), "consumed concurrent request should leave no live queue token");
+    }
+}
+
 void WifiActionsReachTheShell() {
     FakeSystemUi ui;
     SystemShell shell(ui);
@@ -319,8 +419,11 @@ int main() {
     HallStatusBarUpdatesReachTheShell();
     WifiStateNotificationsAreCoalescedAndSurviveScreenChanges();
     BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges();
+    PowerButtonNotificationsAreCoalescedAndSurviveScreenChanges();
+    PowerOffNotificationsAreExclusiveAndReachTheShutdownScreen();
+    ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 8 cases\n";
+    std::cout << "system_shell tests passed: 11 cases\n";
     return 0;
 }

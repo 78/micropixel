@@ -242,6 +242,7 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
     }
     void ApplyBrightness(uint8_t percent) override { (void)percent; }
     void ApplyVolume(uint8_t percent) override { (void)percent; }
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowShutdown() override { return {}; }
 };
 
 class NullPlatform final : public Platform {
@@ -253,13 +254,35 @@ class NullPlatform final : public Platform {
     [[nodiscard]] device::BatteryBackend& battery() override { return battery_; }
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
+    [[nodiscard]] device::PowerBackend& power() override { return power_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
 
    private:
+    class NullPowerBackend final : public device::PowerBackend {
+       public:
+        void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {
+            (void)sink;
+            (void)context;
+        }
+        void SetPowerOffButtonSink(device::PowerOffButtonSink sink, void* context) override {
+            (void)sink;
+            (void)context;
+        }
+        [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override {
+            return std::unexpected(device::PowerError::kUnavailable);
+        }
+        [[noreturn]] void PowerOff() override {
+            for (;;) {
+                vTaskDelay(portMAX_DELAY);
+            }
+        }
+    };
+
     NullGraphicsBackend graphics_{};
     NullInputBackend input_{};
     NullBatteryBackend battery_{};
     NullWifiBackend wifi_{};
+    NullPowerBackend power_{};
     NullSystemUiBackend system_ui_{};
 };
 

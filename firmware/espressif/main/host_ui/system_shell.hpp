@@ -53,6 +53,14 @@ class SystemShell final {
     void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent);
     void ApplyBrightness(uint8_t percent);
     void ApplyVolume(uint8_t percent);
+    [[nodiscard]] std::expected<void, SystemUiError> ShowShutdown();
+    [[nodiscard]] bool NotifyPowerButtonPressed(uint64_t timestamp_us);
+    [[nodiscard]] bool PowerButtonPressed() const;
+    [[nodiscard]] bool ConsumePowerButtonPressed();
+    [[nodiscard]] bool NotifyPowerOffRequested(uint64_t timestamp_us);
+    [[nodiscard]] bool PowerOffRequested() const;
+    [[nodiscard]] bool ConsumePowerOffRequested();
+    [[nodiscard]] bool PowerTransitionRequested() const;
     void NotifyWifiStateChanged();
     void NotifyBatteryStateChanged();
 
@@ -60,6 +68,8 @@ class SystemShell final {
     static constexpr UBaseType_t kActionQueueCapacity = 8U;
 
     static void ReceiveAction(void* context, const SystemUiAction& action);
+    void QueuePendingPowerButton();
+    void QueuePendingPowerOff();
     void QueuePendingWifiStateChange();
     void QueuePendingBatteryStateChange();
     void ResetActionQueue();
@@ -68,6 +78,13 @@ class SystemShell final {
     StaticQueue_t action_queue_storage_{};
     std::array<uint8_t, sizeof(SystemUiAction) * kActionQueueCapacity> action_queue_bytes_{};
     QueueHandle_t action_queue_{};
+    std::atomic_bool power_transition_pending_{};
+    std::atomic_bool power_button_pending_{};
+    std::atomic_bool power_button_queued_{};
+    std::atomic<uint64_t> power_button_timestamp_us_{};
+    std::atomic_bool power_off_pending_{};
+    std::atomic_bool power_off_queued_{};
+    std::atomic<uint64_t> power_off_timestamp_us_{};
     std::atomic_bool wifi_state_change_pending_{};
     std::atomic_bool wifi_state_change_queued_{};
     std::atomic_bool battery_state_change_pending_{};

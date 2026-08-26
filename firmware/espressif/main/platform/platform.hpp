@@ -5,6 +5,7 @@
 #include "device/battery.hpp"
 #include "device/graphics.hpp"
 #include "device/input.hpp"
+#include "device/power.hpp"
 #include "device/random.hpp"
 #include "device/wifi.hpp"
 #include "esp_err.h"
@@ -27,6 +28,7 @@ class Platform {
     [[nodiscard]] virtual device::BatteryBackend& battery() = 0;      // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual device::RandomBackend& random() = 0;        // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual device::WifiBackend& wifi() = 0;            // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::PowerBackend& power() = 0;          // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual host_ui::SystemUiBackend& system_ui() = 0;  // NOLINT(readability-identifier-naming)
 
    protected:

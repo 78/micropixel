@@ -48,6 +48,7 @@ struct SystemUiOperations final {
     void (*update_performance_overlay)(void*, bool, uint8_t){};
     void (*apply_brightness)(void*, uint8_t){};
     void (*apply_volume)(void*, uint8_t){};
+    std::expected<void, host_ui::SystemUiError> (*show_shutdown)(void*){};
 };
 
 class SystemUiAdapter final : public host_ui::SystemUiBackend {
@@ -100,6 +101,7 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
     void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) override;
     void ApplyBrightness(uint8_t percent) override;
     void ApplyVolume(uint8_t percent) override;
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowShutdown() override;
 
    private:
     SystemUiOperations operations_;

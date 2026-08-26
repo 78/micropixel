@@ -376,8 +376,10 @@ enum class SystemUiActionType {
     kSetBrightness,
     kSetVolume,
     kTogglePerformanceOverlay,
-    // Internal Host wake-up signal. SystemUiBackend implementations never emit
-    // this action directly.
+    // Internal Host wake-up signals. SystemUiBackend implementations never emit
+    // these actions directly.
+    kPowerButtonPressed,
+    kPowerOffRequested,
     kWifiStateChanged,
     kBatteryStateChanged,
 };
@@ -452,6 +454,7 @@ class SystemUiBackend {
     virtual void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) = 0;
     virtual void ApplyBrightness(uint8_t percent) = 0;
     virtual void ApplyVolume(uint8_t percent) = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowShutdown() = 0;
 
    protected:
     SystemUiBackend() = default;
