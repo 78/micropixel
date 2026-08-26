@@ -50,7 +50,7 @@ class Button final {
             return {};
         }
 
-        const bool inside = bounds_.contains(event.x(), event.y());
+        const bool inside = bounds_.contains(event.position());
         if (event.phase() == TouchPhase::kDown) {
             if (tracking_ || !inside) {
                 return {};

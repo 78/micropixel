@@ -18,10 +18,37 @@ enum class ErrorCode : int32_t {
     kInternal,
 };
 
+[[nodiscard]] constexpr const char* ErrorCodeName(ErrorCode code) noexcept {
+    switch (code) {
+        case ErrorCode::kInvalidArgument:
+            return "invalid_argument";
+        case ErrorCode::kInvalidState:
+            return "invalid_state";
+        case ErrorCode::kUnsupported:
+            return "unsupported";
+        case ErrorCode::kResourceExhausted:
+            return "resource_exhausted";
+        case ErrorCode::kPermissionDenied:
+            return "permission_denied";
+        case ErrorCode::kNotFound:
+            return "not_found";
+        case ErrorCode::kCancelled:
+            return "cancelled";
+        case ErrorCode::kBufferTooSmall:
+            return "buffer_too_small";
+        case ErrorCode::kRateLimited:
+            return "rate_limited";
+        case ErrorCode::kInternal:
+            return "internal";
+    }
+    return "unknown";
+}
+
 class Error final {
    public:
     explicit constexpr Error(ErrorCode code) : code_(code) {}
     [[nodiscard]] constexpr ErrorCode code() const { return code_; }
+    [[nodiscard]] constexpr const char* name() const noexcept { return ErrorCodeName(code_); }
 
     friend constexpr bool operator==(Error, Error) = default;
 

@@ -116,6 +116,35 @@ DeviceResult<void> AudioService::PlayTone(const micropixel_audio_tone_t& tone) c
     return StatusResult(backend_.PlayTone(tone));
 }
 
+DeviceResult<PcmStreamHandle> AudioService::StartPcm(const PcmSource& source, uint32_t token,
+                                                     uint16_t volume_per_mille) const {
+    PcmStreamHandle handle = 0U;
+    const int32_t status = backend_.StartPcm(source, token, volume_per_mille, handle);
+    return status == MICROPIXEL_STATUS_OK ? DeviceResult<PcmStreamHandle>{handle} : Fail<PcmStreamHandle>(status);
+}
+
+DeviceResult<void> AudioService::PausePcm(PcmStreamHandle handle) const {
+    return StatusResult(backend_.PausePcm(handle));
+}
+
+DeviceResult<void> AudioService::ResumePcm(PcmStreamHandle handle) const {
+    return StatusResult(backend_.ResumePcm(handle));
+}
+
+DeviceResult<void> AudioService::SetPcmVolume(PcmStreamHandle handle, uint16_t volume_per_mille) const {
+    return StatusResult(backend_.SetPcmVolume(handle, volume_per_mille));
+}
+
+DeviceResult<void> AudioService::StopPcm(PcmStreamHandle handle) const {
+    return StatusResult(backend_.StopPcm(handle));
+}
+
+void AudioService::BindPcmCompletionSink(PcmCompletionSink sink, void* context) const {
+    backend_.BindPcmCompletionSink(sink, context);
+}
+
+void AudioService::UnbindPcmCompletionSink(void* context) const { backend_.UnbindPcmCompletionSink(context); }
+
 DeviceResult<void> AudioService::StopAll() const { return StatusResult(backend_.StopAll()); }
 
 DeviceResult<void> AudioService::SuspendAll() const { return StatusResult(backend_.SuspendAll()); }

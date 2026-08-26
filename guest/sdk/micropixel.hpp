@@ -4,6 +4,7 @@
 #include "sdk/application.hpp"
 #include "sdk/audio.hpp"
 #include "sdk/fixed_string.hpp"
+#include "sdk/geometry.hpp"
 #include "sdk/graphics.hpp"
 #include "sdk/input.hpp"
 #include "sdk/localization.hpp"

@@ -1,6 +1,7 @@
 // Audio capability discovery and tone playback for the Demo app. See ../README.md.
 
 #include "apps/demo/demo_page.hpp"
+#include "demo_assets.hpp"
 
 using micropixel::literals::operator""_ms;
 
@@ -36,25 +37,47 @@ class AudioPage final {
             status_ = "Audio capability unavailable";
             context.app.log().Info("demo.audio: Audio capability unavailable");
         }
-        for (uint32_t index = 0U; index < 4U; ++index) {
+        compressed_available_ = available_ && info.value().supports_ogg_opus;
+        if (compressed_available_) {
+            auto loaded = context.app.audio().Load(demo_assets::music_demo);
+            if (loaded) {
+                context.audio_clip = static_cast<micropixel::AudioClip&&>(*loaded);
+            } else {
+                compressed_available_ = false;
+            }
+        }
+        for (uint32_t index = 0U; index < 6U; ++index) {
             buttons_[index].SetBounds(AudioButtonRect(context, index % 2U, index / 2U));
             buttons_[index].SetEnabled(available_);
             buttons_[index].Reset();
         }
-        buttons_[4].SetBounds(BottomButtonRect(context, 0U, 1U));
-        buttons_[4].SetEnabled(available_);
-        buttons_[4].Reset();
+        buttons_[4].SetEnabled(compressed_available_);
     }
 
     void Exit(DemoContext& context) {
         if (available_ && !context.app.audio().StopAll().has_value()) {
             context.app.log().Info("demo.audio: StopAll failed while leaving page");
         }
+        context.audio_playback.Reset();
+        context.audio_clip.Reset();
+        compressed_available_ = false;
+    }
+
+    [[nodiscard]] bool OnEvent(DemoContext& context, const micropixel::Event& event) {
+        const micropixel::AudioPlaybackEvent* finished = event.PlaybackFrom(context.audio_playback);
+        if (finished == nullptr) {
+            return false;
+        }
+        status_ = finished->succeeded() ? "Ogg Opus playback finished" : "Ogg Opus decode failed";
+        context.app.log().Info(finished->succeeded() ? "demo.audio: Ogg playback finished"
+                                                     : "demo.audio: Ogg playback failed");
+        context.audio_playback.Reset();
+        return true;
     }
 
     [[nodiscard]] bool OnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
         bool redraw = false;
-        for (uint32_t index = 0U; index < 5U; ++index) {
+        for (uint32_t index = 0U; index < 6U; ++index) {
             const micropixel::ui::ButtonUpdate update = buttons_[index].OnTouch(event);
             redraw = redraw || update.redraw();
             if (!update.clicked) {
@@ -68,8 +91,19 @@ class AudioPage final {
                 Play(context, micropixel::Waveform::kTriangle, 659U, "Last tone: triangle / 659 Hz");
             } else if (index == 3U) {
                 Play(context, micropixel::Waveform::kNoise, 0U, "Last tone: noise");
+            } else if (index == 4U) {
+                context.audio_playback.Reset();
+                auto played = context.app.audio().Play(
+                    context.audio_clip, micropixel::PlaybackOptions{.volume_per_mille = 500U, .loop = false});
+                if (played) {
+                    context.audio_playback = static_cast<micropixel::Playback&&>(*played);
+                    status_ = "Playing bundled Ogg Opus";
+                } else {
+                    status_ = "Ogg Opus play failed";
+                }
             } else {
                 auto stopped = context.app.audio().StopAll();
+                context.audio_playback.Reset();
                 status_ = stopped.has_value() ? "All voices stopped" : "StopAll failed";
             }
         }
@@ -91,7 +125,8 @@ class AudioPage final {
         DrawButton(commands, buttons_[1], "SQUARE", BlueColor());
         DrawButton(commands, buttons_[2], "TRIANGLE", BlueColor());
         DrawButton(commands, buttons_[3], "NOISE", BlueColor());
-        DrawButton(commands, buttons_[4], "STOP ALL", DangerColor());
+        DrawButton(commands, buttons_[4], "PLAY OGG", AccentColor());
+        DrawButton(commands, buttons_[5], "STOP ALL", DangerColor());
     }
 
    private:
@@ -113,7 +148,8 @@ class AudioPage final {
     uint16_t max_voices_{};
     const char* status_{"Not initialized"};
     bool available_{};
-    micropixel::ui::Button buttons_[5]{};
+    bool compressed_available_{};
+    micropixel::ui::Button buttons_[6]{};
 };
 
 AudioPage audio_page;
@@ -123,6 +159,10 @@ AudioPage audio_page;
 void AudioDemoEnter(DemoContext& context) { audio_page.Enter(context); }
 
 void AudioDemoExit(DemoContext& context) { audio_page.Exit(context); }
+
+bool AudioDemoOnEvent(DemoContext& context, const micropixel::Event& event) {
+    return audio_page.OnEvent(context, event);
+}
 
 bool AudioDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
     return audio_page.OnTouch(context, event);

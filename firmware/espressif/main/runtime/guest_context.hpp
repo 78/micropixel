@@ -8,6 +8,7 @@
 #include "device/device_services.hpp"
 #include "runtime/abi/service_endpoints.hpp"
 #include "runtime/abi/service_registry.hpp"
+#include "runtime/audio/audio_playback_service.hpp"
 #include "runtime/event_queue.hpp"
 #include "runtime/guest_log_sink.hpp"
 #include "runtime/key_event_bridge.hpp"
@@ -32,7 +33,7 @@ class GuestContext final {
     void ForceStop();
 
     [[nodiscard]] bool valid() const {  // NOLINT(readability-identifier-naming)
-        return events_.valid() && timers_.valid() && resources_.valid() && storage_.valid();
+        return events_.valid() && timers_.valid() && resources_.valid() && audio_playback_.valid() && storage_.valid();
     }
     [[nodiscard]] micropixel_app_time_t AppTimeNow() const { return timers_.Now(); }
     [[nodiscard]] EventWaitResult WaitEvent(micropixel_event_t& event, uint64_t timeout_us) {
@@ -99,7 +100,34 @@ class GuestContext final {
     [[nodiscard]] device::DeviceResult<void> AudioPlayTone(const micropixel_audio_tone_t& tone) const {
         return devices_.audio().PlayTone(tone);
     }
-    [[nodiscard]] device::DeviceResult<void> AudioStopAll() const { return devices_.audio().StopAll(); }
+    [[nodiscard]] ServiceResult<micropixel_audio_clip_info_t> AudioLoadClip(uint32_t asset_id) {
+        return audio_playback_.LoadClip(asset_id);
+    }
+    [[nodiscard]] ServiceResult<void> AudioReleaseClip(micropixel_audio_clip_handle_t clip) {
+        return audio_playback_.ReleaseClip(clip);
+    }
+    [[nodiscard]] ServiceResult<micropixel_audio_playback_handle_t> AudioStartPlayback(
+        const micropixel_audio_playback_start_request_t& request) {
+        return audio_playback_.Start(request);
+    }
+    [[nodiscard]] ServiceResult<void> AudioPausePlayback(micropixel_audio_playback_handle_t playback) {
+        return audio_playback_.Pause(playback);
+    }
+    [[nodiscard]] ServiceResult<void> AudioResumePlayback(micropixel_audio_playback_handle_t playback) {
+        return audio_playback_.Resume(playback);
+    }
+    [[nodiscard]] ServiceResult<void> AudioSetPlaybackVolume(micropixel_audio_playback_handle_t playback,
+                                                             uint16_t volume_per_mille) {
+        return audio_playback_.SetVolume(playback, volume_per_mille);
+    }
+    [[nodiscard]] ServiceResult<void> AudioStopPlayback(micropixel_audio_playback_handle_t playback) {
+        return audio_playback_.Stop(playback);
+    }
+    [[nodiscard]] ServiceResult<micropixel_audio_playback_state_response_t> AudioPlaybackState(
+        micropixel_audio_playback_handle_t playback) {
+        return audio_playback_.State(playback);
+    }
+    [[nodiscard]] ServiceResult<void> AudioStopAll() { return audio_playback_.StopAll(); }
     [[nodiscard]] ServiceResult<uint32_t> KvGetU32(const char* key, uint32_t key_length) {
         return storage_.GetU32(key, key_length);
     }
@@ -138,6 +166,7 @@ class GuestContext final {
     EventQueue events_;
     TimerService timers_;
     ResourceService resources_;
+    AudioPlaybackService audio_playback_;
     StorageService storage_;
     TouchEventBridge touch_events_;
     KeyEventBridge key_events_;

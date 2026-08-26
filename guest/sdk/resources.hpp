@@ -24,16 +24,6 @@ class AssetId final {
     uint32_t value_{};
 };
 
-class ResourceRef final {
-   public:
-    [[nodiscard]] static constexpr ResourceRef Package(AssetId asset) { return ResourceRef{asset}; }
-    [[nodiscard]] constexpr AssetId asset() const { return asset_; }
-
-   private:
-    explicit constexpr ResourceRef(AssetId asset) : asset_(asset) {}
-    AssetId asset_{0U};
-};
-
 class Texture final {
    public:
     Texture() = default;
@@ -139,8 +129,8 @@ class TextureUpdateBatch final {
 
 class Resources final {
    public:
-    [[nodiscard]] Result<Texture> LoadTexture(ResourceRef resource) const;
-    [[nodiscard]] Result<Font> LoadFont(ResourceRef resource) const;
+    [[nodiscard]] Result<Texture> LoadTexture(AssetId asset) const;
+    [[nodiscard]] Result<Font> LoadFont(AssetId asset) const;
 
    private:
     struct CapabilityToken {};

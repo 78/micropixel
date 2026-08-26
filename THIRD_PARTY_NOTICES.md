@@ -65,6 +65,18 @@ ESP-IDF, LVGL, and components resolved from the Espressif Component Registry are
 vendored in this repository. Exact resolved versions are recorded in `dependencies.lock` files. Their own license
 terms apply when they are downloaded or redistributed in a binary release.
 
+### micro-opus and libopus
+
+Ogg Opus playback uses `esphome/micro-opus` 0.4.1 from the ESP Component Registry:
+
+- wrapper and Ogg demuxer: <https://github.com/esphome-libs/micro-opus>, Apache-2.0;
+- bundled Xiph.Org libopus: <https://github.com/xiph/opus>, BSD 3-Clause;
+- resolved component source revision: `8354085908683c6130e32a832aeec8a7ca115c51`.
+
+The downloaded managed component contains the complete Apache-2.0 notice and the upstream libopus copyright and
+license files. MicroPixel uses its streaming Ogg Opus decoder with one shared PSRAM-backed pseudostack and does not
+expose the component API to Guest applications.
+
 ## Font Awesome Wi-Fi glyph
 
 `firmware/espressif/main/platform/metalio-claw4/icons/wifi_status_icons.c` contains fixed-size alpha masks derived

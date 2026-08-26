@@ -1,9 +1,16 @@
+#include <type_traits>
+
 #include "sdk/micropixel.hpp"
 
 using micropixel::literals::operator""_ms;
 using micropixel::literals::operator""_s;
 
 namespace {
+
+static_assert(std::is_move_constructible_v<micropixel::AudioClip>);
+static_assert(!std::is_copy_constructible_v<micropixel::AudioClip>);
+static_assert(std::is_move_constructible_v<micropixel::Playback>);
+static_assert(!std::is_copy_constructible_v<micropixel::Playback>);
 
 void WaitFor(micropixel::Application& app, micropixel::Duration delay) {
     micropixel::Timer timer = app.timers().After(delay);
@@ -32,8 +39,15 @@ int main() {
     micropixel::Application app;
     micropixel::Audio audio = app.audio();
     auto info = audio.info();
-    micropixel::Assert(info.has_value(), "audio_synth: Audio 1.0 capability missing");
+    micropixel::Assert(info.has_value(), "audio_synth: Audio 1.1 capability missing");
     micropixel::Assert(info.value().max_voices == 8U, "audio_synth: expected bounded 8-voice mixer");
+    micropixel::Assert(info.value().Supports(micropixel::Waveform::kSine), "audio_synth: sine capability missing");
+    micropixel::Assert(info.value().Supports(micropixel::Waveform::kNoise), "audio_synth: noise capability missing");
+    micropixel::Assert(info.value().supports_ogg_opus, "audio_synth: Ogg Opus capability missing");
+    micropixel::Assert(info.value().max_clips == 16U, "audio_synth: expected 16 clip handles");
+    micropixel::Assert(info.value().max_playbacks == 2U, "audio_synth: expected two playback voices");
+    micropixel::Assert(!audio.Load(micropixel::AssetId{0xfffffffeU}).has_value(),
+                       "audio_synth: missing compressed asset accepted");
     micropixel::Tone invalid = Tone(micropixel::Waveform::kSine, 440U);
     invalid.volume_per_mille = 1001U;
     micropixel::Assert(!audio.Play(invalid).has_value(), "audio_synth: invalid volume accepted");
@@ -42,7 +56,7 @@ int main() {
     invalid = Tone(micropixel::Waveform::kSine, 440U);
     invalid.attack = 300_ms;
     micropixel::Assert(!audio.Play(invalid).has_value(), "audio_synth: invalid envelope accepted");
-    app.log().Info("audio_synth: Audio 1.0 capability ready");
+    app.log().Info("audio_synth: Audio 1.1 capability ready");
 
     // The Metalio-Claw4 codec module needs a short asynchronous power/mode setup. The
     // Service is already callable while it initializes, so wait before the

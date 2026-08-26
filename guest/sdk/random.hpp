@@ -12,6 +12,9 @@ class Application;
 class Random final {
    public:
     [[nodiscard]] uint32_t U32() const;
+    // Returns a uniform value in [0, upper_bound) without modulo bias.
+    // upper_bound must be greater than zero.
+    [[nodiscard]] uint32_t Below(uint32_t upper_bound) const;
 
    private:
     struct CapabilityToken final {

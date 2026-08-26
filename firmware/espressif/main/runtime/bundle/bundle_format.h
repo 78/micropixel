@@ -34,6 +34,7 @@ typedef enum micropixel_bundle_section_format {
     MICROPIXEL_BUNDLE_FORMAT_UTF8 = 6,
     MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON = 7,
     MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 = 8,
+    MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS = 9,
 } micropixel_bundle_section_format_t;
 
 typedef enum micropixel_bundle_package_type {

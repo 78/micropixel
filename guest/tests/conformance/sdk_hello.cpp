@@ -1,6 +1,9 @@
 #include "sdk/micropixel.hpp"
 #include "sdk/result.hpp"
 
+using micropixel::literals::operator""_ms;
+using micropixel::literals::operator""_s;
+
 namespace {
 
 uint32_t constructor_probe;
@@ -30,6 +33,15 @@ class ResultProbe final {
 }  // namespace
 
 int main() {
+    static_assert(1_s == 1000_ms);
+    static_assert(250_ms * 4U == 1_s);
+    static_assert(1_s / 4U == 250_ms);
+    static_assert(1_s - 250_ms == 750_ms);
+    static_assert(micropixel::KVStore::kMaximumKeyBytes == 15U);
+    static_assert(micropixel::KVStore::kMaximumValueBytes == 4096U);
+    static_assert(micropixel::Log::kMaximumMessageBytes == 1023U);
+    static_assert(micropixel::FixedString<5U>::capacity() == 4U);
+
     micropixel::Application app;
     if (constructor_probe != 0x4d455441U) {
         return 10;
@@ -38,6 +50,19 @@ int main() {
         micropixel::unexpected(micropixel::Error{micropixel::ErrorCode::kInvalidArgument});
     if (failed || failed.error().code() != micropixel::ErrorCode::kInvalidArgument) {
         return 11;
+    }
+    if (failed.error().name()[0] != 'i' ||
+        micropixel::ErrorCodeName(micropixel::ErrorCode::kNotFound)[0] != 'n') {
+        return 12;
+    }
+
+    micropixel::FixedString<5U> text;
+    if (!text.Append("1234") || text.Append("5") || !text.truncated() || text.size() != text.capacity()) {
+        return 21;
+    }
+    text.Clear();
+    if (text.truncated() || !text.AppendUint(42U) || text.size() != 2U) {
+        return 22;
     }
 
     micropixel::Result<ResultProbe> original{ResultProbe{42U}};
@@ -66,6 +91,19 @@ int main() {
     micropixel::TimePoint second = same_clock.Now();
     if (second < first) {
         return 15;
+    }
+    if (first + 1_s <= first || (first + 1_s) - 1_s != first) {
+        return 18;
+    }
+
+    micropixel::Random random = app.random();
+    if (random.Below(1U) != 0U) {
+        return 19;
+    }
+    for (uint32_t count = 0U; count < 16U; ++count) {
+        if (random.Below(7U) >= 7U) {
+            return 20;
+        }
     }
 
     micropixel::Timers timers = app.timers();

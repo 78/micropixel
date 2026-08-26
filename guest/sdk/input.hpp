@@ -9,8 +9,6 @@ class Application;
 
 class InputInfo final {
    public:
-    [[nodiscard]] constexpr uint32_t logical_width() const { return logical_width_; }
-    [[nodiscard]] constexpr uint32_t logical_height() const { return logical_height_; }
     [[nodiscard]] constexpr uint16_t max_touch_points() const { return max_touch_points_; }
     [[nodiscard]] constexpr bool supports_pressure() const { return (capabilities_ & kPressureCapability) != 0U; }
     [[nodiscard]] constexpr bool supports_key_events() const { return (capabilities_ & kKeyEventsCapability) != 0U; }
@@ -18,14 +16,9 @@ class InputInfo final {
    private:
     static constexpr uint16_t kPressureCapability = 1U << 0U;
     static constexpr uint16_t kKeyEventsCapability = 1U << 1U;
-    constexpr InputInfo(uint32_t width, uint32_t height, uint16_t max_touch_points, uint16_t capabilities)
-        : logical_width_(width),
-          logical_height_(height),
-          max_touch_points_(max_touch_points),
-          capabilities_(capabilities) {}
+    constexpr InputInfo(uint16_t max_touch_points, uint16_t capabilities)
+        : max_touch_points_(max_touch_points), capabilities_(capabilities) {}
 
-    uint32_t logical_width_{};
-    uint32_t logical_height_{};
     uint16_t max_touch_points_{};
     uint16_t capabilities_{};
 

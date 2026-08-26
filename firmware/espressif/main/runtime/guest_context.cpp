@@ -21,6 +21,7 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       events_{},
       timers_(events_, clock_origin_us_),
       resources_(package),
+      audio_playback_(package, devices_.audio(), events_, clock_origin_us_),
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),
       key_events_(events_, devices_.input(), clock_origin_us_),
@@ -40,11 +41,12 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
 GuestContext::~GuestContext() {
     key_events_.Shutdown();
     touch_events_.Shutdown();
+    events_.Close();
+    audio_playback_.Shutdown();
     (void)devices_.audio().StopAll();
     (void)devices_.audio().ResumeAll();
     devices_.graphics().ReleaseGuestResources();
     resources_.Shutdown();
-    events_.Close();
 }
 
 void GuestContext::WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length) const {

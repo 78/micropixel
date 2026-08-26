@@ -42,6 +42,7 @@
 #include "platform/metalio-claw4/graphics_adapter.hpp"
 #include "platform/metalio-claw4/guest_graphics_engine.hpp"
 #include "platform/metalio-claw4/hall_carousel.hpp"
+#include "platform/metalio-claw4/hall_cover_cache_policy.hpp"
 #include "platform/metalio-claw4/icons/wifi_status_icons.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
 #include "platform/metalio-claw4/input/tca9555_power_key.hpp"
@@ -1239,20 +1240,22 @@ void HallCoverWorker(void* context) {
                                                  return entry.pixels != nullptr && entry.key == job.source.cache_key;
                                              });
                 if (existing == state.hall_cover_cache.end()) {
-                    auto slot = std::find_if(state.hall_cover_cache.begin(), state.hall_cover_cache.end(),
-                                             [](const HallCoverCacheEntry& entry) { return entry.pixels == nullptr; });
-                    if (slot == state.hall_cover_cache.end()) {
-                        slot = std::find_if(state.hall_cover_cache.begin(), state.hall_cover_cache.end(),
-                                            [&](const HallCoverCacheEntry& entry) {
-                                                return entry.app_index < state.hall_cover_window_first ||
-                                                       entry.app_index >= state.hall_cover_window_last;
-                                            });
+                    std::array<metalio_claw4::HallCoverCacheSlot, metalio_claw4::HallCarousel::kMaximumCachedCovers>
+                        slots{};
+                    for (size_t index = 0U; index < slots.size(); ++index) {
+                        slots[index] = {.occupied = state.hall_cover_cache[index].pixels != nullptr,
+                                        .key = state.hall_cover_cache[index].key,
+                                        .app_index = state.hall_cover_cache[index].app_index};
                     }
-                    if (slot != state.hall_cover_cache.end()) {
-                        ReleaseHallCoverCacheEntryLocked(state, *slot);
-                        *slot = {.pixels = pixels, .key = job.source.cache_key, .app_index = job.app_index};
+                    const size_t slot_index = metalio_claw4::HallCoverCachePolicy::ReplacementIndex(
+                        slots, job.source.cache_key, job.app_index, state.hall_cover_window_first,
+                        state.hall_cover_window_last);
+                    if (slot_index != metalio_claw4::HallCoverCachePolicy::kNoSlot) {
+                        auto& slot = state.hall_cover_cache[slot_index];
+                        ReleaseHallCoverCacheEntryLocked(state, slot);
+                        slot = {.pixels = pixels, .key = job.source.cache_key, .app_index = job.app_index};
                         pixels = nullptr;
-                        existing = slot;
+                        existing = state.hall_cover_cache.begin() + static_cast<std::ptrdiff_t>(slot_index);
                     }
                 }
                 if (existing != state.hall_cover_cache.end()) {

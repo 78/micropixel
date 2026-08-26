@@ -11,6 +11,7 @@ list(APPEND micropixel_sources
     "runtime/bundle/app_store.cpp"
     "runtime/app_runtime.cpp"
     "runtime/app_session.cpp"
+    "runtime/audio/audio_playback_service.cpp"
     "runtime/event_queue.cpp"
     "runtime/guest_context.cpp"
     "runtime/key_event_bridge.cpp"
@@ -25,6 +26,6 @@ list(APPEND micropixel_sources
     "runtime/wamr/wamr_runtime.cpp"
 )
 list(APPEND micropixel_requires
-    esp_new_jpeg esp_partition esp_psram esp_timer espressif__libpng
+    esp_new_jpeg esp_partition esp_psram esp_timer esphome__micro-opus espressif__libpng
     heap mbedtls nvs_flash spi_flash wasm-micro-runtime
 )

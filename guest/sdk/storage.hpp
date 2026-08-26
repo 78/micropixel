@@ -13,10 +13,15 @@ class Application;
 // All mutations are synchronously committed by the Host before returning.
 class KVStore final {
    public:
+    // UTF-8 keys are measured in bytes and do not include a terminating NUL.
+    static constexpr uint32_t kMaximumKeyBytes = 15U;
+    static constexpr uint32_t kMaximumValueBytes = 4096U;
+
     [[nodiscard]] Result<uint32_t> GetU32(const char* key) const;
     [[nodiscard]] Result<void> SetU32(const char* key, uint32_t value) const;
     [[nodiscard]] Result<bool> GetBool(const char* key) const;
     [[nodiscard]] Result<void> SetBool(const char* key, bool value) const;
+    [[nodiscard]] Result<uint32_t> GetBytesSize(const char* key) const;
     [[nodiscard]] Result<uint32_t> GetBytes(const char* key, uint8_t* bytes, uint32_t capacity) const;
     [[nodiscard]] Result<void> SetBytes(const char* key, const uint8_t* bytes, uint32_t length) const;
     [[nodiscard]] Result<void> Remove(const char* key) const;

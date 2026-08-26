@@ -1,7 +1,7 @@
 # Guest C++ SDK
 
 状态：**0.9.3，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
-`app.timers().After/Every()` 创建。`WaitEvent()` 只用于需要有限等待或协议级控制的高级代码。
+`app.timers().After/Every()` 创建。`WaitEvent/WaitEventFor/PollEvent` 只用于短期等待或协议级控制。
 
 ## 工具链兼容性
 
@@ -42,6 +42,7 @@ int main() {
 
 - `app.timers().Every(period)` 创建周期 Timer；一次性 Timer 使用 `app.timers().After(delay)`；
 - `app.Run(handler)` 是 Guest 自己的串行事件循环，不是 Host 回调，也不创建 Guest 线程；
+- handler 可以返回 `EventResult::kContinue/kExit` 主动结束应用；返回 `void` 等价于始终 continue；
 - Timer、Touch、Key、Resume、Stop 和未来 Event 全部进入同一个 handler；
 - Timer 通过 `event.TimerFrom(timer)` 匹配，资源身份和 capture 生命周期在代码中可见；
 - `Stop` 会先交给 handler，handler 返回后 `Run()` 返回，应用随后从 `main()` 返回；
@@ -58,9 +59,20 @@ micropixel::Assert(display.width() >= 320U && display.height() >= 320U,
 不能自然写成条件的直接失败仍可使用 `micropixel::Panic(reason)`。不使用 `micropixel::assert` 作为函数名，
 是为了避免它被标准 C/C++ `assert` 宏展开。
 
-需要在一个短函数中只等待某个结果时，可以使用高级接口 `WaitEvent()`；它不应成为长期 App 的第二套
-主循环模板。可运行的 SDK 用法按能力拆在 `guest/apps/demo/pages/`，由同一个 Demo Bundle 导航和测试；
-详细协议验收位于 `guest/tests/conformance/`。
+需要由 Guest 主动结束并返回 App Hall 时，handler 返回明确结果；原有 `void` handler 保持适合长期 App：
+
+```cpp
+app.Run([&](const micropixel::Event& event) {
+    return ShouldExit(event) ? micropixel::EventResult::kExit
+                             : micropixel::EventResult::kContinue;
+});
+```
+
+需要在短函数中读取事件时，可以使用高级接口：`WaitEvent()` 无限等待，
+`WaitEventFor(event, timeout)` 有限等待，`PollEvent(event)` 不阻塞。后两者只在没有事件时返回 false；
+Runtime/ABI 错误仍在调用点 panic。它们不应成为长期 App 的第二套主循环模板。可运行的 SDK 用法按能力
+拆在 `guest/apps/demo/pages/`，由同一个 Demo Bundle 导航和测试；详细协议验收位于
+`guest/tests/conformance/`。
 
 ## Application façade 与 Public 对象分类
 
@@ -82,8 +94,8 @@ micropixel::TimePoint current = same_clock.Now();
 | 分类 | C++ 语义 | 示例 |
 | --- | --- | --- |
 | Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Random`、`Timers`、`Renderer`、`Resources`、`KVStore`、`Audio`、`Localization` |
-| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`StreamingTexture`、`Frame`、`TextureUpdateBatch` |
-| Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`Duration`、`TimerEvent` |
+| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`StreamingTexture`、`Frame`、`TextureUpdateBatch`、`AudioClip`、`Playback` |
+| Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`Duration`、`TimerEvent`、`AudioPlaybackEvent` |
 | Module | 编译、链接或部署单元，不作为 `app.xxx()` 的返回对象 | Renderer SDK、Host Audio backend |
 
 `Application` 只公开生命周期、事件编排和稳定的顶层能力入口。具体动作必须留在对应 Service 或
@@ -103,9 +115,10 @@ micropixel::InputInfo input = app.input().info();
 bool pressure_available = input.supports_pressure();
 ```
 
-`app.audio()` 当前提供 Audio 1.0 的有界短音合成器。Guest 只提交 `Tone` 值；Host 在固定
-8-voice pool 中混音，不接收 Guest PCM 指针，也不暴露 codec/I2S 细节。它适合 UI 音、游戏
-音效及由 Timer 编排的短旋律。长 BGM、压缩音频和 streaming 将作为独立数据面演进：
+`app.audio()` 提供 Audio 1.1。短 UI 音和程序化音效继续提交 `Tone` 值，由 Host 的固定 8-voice
+pool 混音；BGM、对白和较长音效使用 Bundle 中的 `ogg_opus` asset。`AudioClip` 表示可重复播放的
+压缩来源，`Playback` 表示一次可暂停、恢复、调音量和停止的播放，两者都是 move-only RAII 资源。
+Host 负责 Ogg demux、Opus 解码、PCM ring buffer 和设备主音量，Guest 不接触 PCM 指针、codec 或 I2S。
 
 ```cpp
 micropixel::Audio audio = app.audio();
@@ -114,7 +127,25 @@ audio.Play(micropixel::Tone{
     .frequency_hz = 660U,
     .duration = 120_ms,
 });
+
+auto clip = audio.Load(game_assets::music_level_one);
+micropixel::Assert(clip.has_value(), "load BGM failed");
+auto playing = audio.Play(*clip, {.volume_per_mille = 260U, .loop = true});
+micropixel::Assert(playing.has_value(), "play BGM failed");
+
+app.Run([&](const micropixel::Event& event) {
+    if (const auto* finished = event.PlaybackFrom(*playing)) {
+        micropixel::Assert(finished->succeeded(), "BGM decode failed");
+    }
+});
 ```
+
+当前 Host 上限为 16 个 clip handle、2 条同时 compressed playback；实际值应从 `AudioInfo` 查询。
+播放开始后 Host 会 pin clip，所以关卡切换时可以先 `clip.Reset()` 释放 Guest 所有权，仍在播放的实例
+不会失效；`Playback::Stop()`/析构或自然结束会撤销最后的 pin。跨多个关卡持续使用的 BGM 保留在上层
+`AudioClip`/`Playback` 中，关卡专属素材则随关卡对象析构。`Audio::Play(AssetId, options)` 是只播放一次
+时的便利写法。网络 URL、下载进度和缓存生命周期不属于 Audio 1.1，后续由 Resource/Network 加载层
+提供相同的 source/playback 模型。
 
 `Run(handler)` 是 Application 唯一的事件编排入口；Timer 操作归 `timers()`。新增 Camera、Storage
 等能力时可以增加同级 Service View accessor 或 Event，但不得把 `DrawRect()`、`PlayPcm()`、
@@ -132,7 +163,13 @@ micropixel::Duration elapsed = app.clock().Now() - started;
 
 Public API 不允许 `Duration{1000}` 这种隐藏单位的构造。必须写成 `1000_us`、`1_ms` 或
 `Duration::Milliseconds(1)`。非零 `TimePoint` 只能由 Runtime 通过 `Clock::Now()` 或 typed event
-产生，应用不能用整数伪造另一个时间域的时间点。
+产生，应用不能用整数伪造另一个时间域的时间点。`Duration` 支持比较、加减、整数倍乘除；`TimePoint`
+可以加减 `Duration`，溢出、下溢和除零会 trap：
+
+```cpp
+micropixel::Duration animation = 250_ms * 4U;
+micropixel::TimePoint deadline = app.clock().Now() + animation;
+```
 
 Timer 是显式资源，handler 通过来源匹配获得 typed event：
 
@@ -146,15 +183,28 @@ app.Run([&](const micropixel::Event& event) {
 ```
 
 高级事件接口还提供 `TimerEvent::missed_count()`。周期 tick 合并时，`delta()` 累加真实经过时间，
-`missed_count()` 返回未单独投递的 tick 数。`Timer::Cancel()` 只停止后续触发；`Timer::Reset()`
-执行 best-effort cancel + release 并令对象失效，析构和 move assignment 也走 `Reset()`，不会 Panic。
+`missed_count()` 返回未单独投递的 tick 数。`Timer::Cancel()` 是幂等终态操作：停止后续触发、释放
+Host handle 并令对象失效。`Timer::Reset()` 是析构和 move assignment 使用的 best-effort release，
+不会 Panic。需要再次调度时创建新的 Timer。
 
 `TouchEvent::x()/y()` 为 `int32_t`。只有 `InputInfo::supports_pressure()` 为 true 时，
 `TouchEvent::has_pressure()` 才为 true，且 `pressure_per_mille()` 的范围为 0..1000；GT911 返回不支持和 0。
+`TouchEvent::position()` 直接返回与 Renderer 共用逻辑坐标空间的 `Point`；`Point`、`Rect` 和 `Size`
+属于跨输入/图形共用的 geometry value，而不是某个 graphics backend 的类型。
 `InputInfo::supports_key_events()` 表示 Host 可以投递固定语义按键；它不承诺存在物理键盘。handler 可用
-`event.key()` 取得 `KeyEvent`，读取方向、Confirm、Back、Menu、A/B/X/Y 以及 Down、Up、Repeat、Cancel。
-只有 Repeat 的 `repeat_count()` 非零。
-日志完整支持 `Debug()`、`Info()`、`Warning()`、`Error()` 四个等级。
+`event.key()` 取得 `KeyEvent`，读取方向、逻辑动作 Confirm/Back/Menu，以及按物理位置命名的
+South/East/West/North face button。Public API 不定义 A/B/X/Y，应用不得依赖不同手柄的标签布局。
+阶段为 Down、Up、Repeat、Cancel，只有 Repeat 的 `repeat_count()` 非零。
+日志完整支持 `Debug()`、`Info()`、`Warning()`、`Error()` 四个等级；消息 payload 最长为
+`Log::kMaximumMessageBytes`，不包含结尾 NUL。
+
+`Random::U32()` 返回完整 32-bit hardware random；需要 `[0, upper_bound)` 范围时使用
+`Random::Below(upper_bound)`，它使用 rejection sampling 避免 `% upper_bound` 的 modulo bias。
+
+`KVStore::GetBytesSize(key)` 先查询 byte value 的精确大小，再由应用选择固定数组或动态容器并调用
+`GetBytes()`；这样 buffer-too-small 不需要退化成猜测固定上限。Package asset 与 app-private KV storage
+保持为两个不同入口，不向 Guest 暴露文件系统路径。key 与 value 的硬上限分别由
+`KVStore::kMaximumKeyBytes` 和 `KVStore::kMaximumValueBytes` 公开，UTF-8 key 按 bytes 计数且不包含 NUL。
 
 ## Service 演进与 ABI 隔离
 
@@ -175,6 +225,13 @@ command protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。首版资�
 `Resources::LoadTexture()`；未来如需异步加载，会增加独立的任务/请求对象，不改变现有同步方法的语义，
 也不会把完成事件塞回通用 `Event`。
 
+Package 资源已经由生成代码表示为 `AssetId`，直接传给 loader；不再额外包一层只含同一个 ID 的
+`ResourceRef::Package(...)`：
+
+```cpp
+auto texture = app.resources().LoadTexture(my_assets::background);
+```
+
 ## Renderer、Frame 与 Texture
 
 公开图形模型固定为五个对象：
@@ -185,9 +242,9 @@ command protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。首版资�
 - `StreamingTexture`：可写脏矩形的 move-only Host 资源；
 - `TextureUpdateBatch`：把多次 streaming texture 更新合并成一次 compositor 唤醒。
 
-`RendererInfo::width()` / `height()` 是 Guest 逻辑坐标空间的唯一尺寸来源；SDK 不固定设备分辨率。
-当前 Metalio Claw4 Host 返回 720×720，Input 必须报告同一个逻辑坐标空间，物理屏幕映射由 Host 负责。
-应用不得把 720 写成跨设备常量。
+`RendererInfo::width()` / `height()` 是 Guest 逻辑坐标空间的唯一尺寸来源；`InputInfo` 不重复暴露第二份
+宽高。SDK 不固定设备分辨率。当前 Metalio Claw4 Host 返回 720×720，Input event 已由 Host 映射到同一个
+逻辑坐标空间。应用不得把 720 写成跨设备常量。
 
 应用不接触 `Layer`、`Surface`、transport batch 或 retained-compositor capability。需要局部平移时使用
 普通渲染状态；SDK 会在支持的 Host 上自动使用 retained translation 快速路径，否则执行裁剪和平移降级：
@@ -280,8 +337,9 @@ if (const auto update = play_button.OnTouch(touch); update.clicked) {
 micropixel::ui::DrawTextButton(commands, play_button, "START GAME");
 ```
 
-无需动态分配的短文本拼接统一使用 `FixedString<Capacity>`；Demo、Snake 和 conformance 日志共用
-这一实现，不在各 App 内复制字符串类。
+无需动态分配的短文本拼接统一使用 `FixedString<Capacity>`；`Append*()` 返回内容是否完整写入，
+`truncated()` 会在任一拼接被截断后保持 true，直到 `Clear()`。`capacity()` 返回不含 NUL 的最大内容
+长度。Demo、Snake 和 conformance 日志共用这一实现，不在各 App 内复制字符串类。
 
 完整规则见 [Guest–Host ABI](../abi/README.md)。
 
@@ -394,6 +452,10 @@ App 可以在收到 `kResume` 后主动完整重画。
 
 切换或关闭 AppSession 时，handler 收到一次 `EventType::kStop`；handler 返回后 `Run()` 自动返回。
 Host 在 500ms 后仍未完成时才会强制终止，以保证单 App 约束和系统大厅始终可响应。
+应用也可返回 `EventResult::kExit` 主动结束；Host 将成功返回的 `main()` 视为正常退出并返回 App Hall。
+
+`CurrentLocale()` 在 AppSession 启动时确定并在本次运行期间保持不变。用户只能返回 App Hall 后修改
+系统语言；下一次启动 Guest 时获得新的 effective locale，因此 v1 不提供 locale-change 事件。
 
 `Result<T>` 是 freestanding Guest 对 `std::expected<T, Error>` 的兼容子集。应用使用
 `has_value()`/`operator bool()`、`operator*`、`operator->`、`value()`、`error()` 和 `value_or()`；
@@ -437,8 +499,9 @@ v1 已确定 `Application` façade、typed Service View、move-only Resource、V
 `service_call` 控制面和 `service_submit` 数据面。后续能力应沿用这些对象语义和错误策略，不能重新
 把叶子操作或 ABI 状态码堆回 `Application`。
 
-尚未定义的是 Network、Camera、长音频/压缩音频的具体 method/channel/resource 组合，以及是否在
-Public 类型稳定后引入 Typed IDL/binding generator；它们不改变 v1 transport。
+尚未定义的是 Network、Camera、网络资源加载/进度/缓存的具体 method/channel/resource 组合，以及是否在
+Public 类型稳定后引入 Typed IDL/binding generator。Bundle Ogg Opus 已由 Audio 1.1 的
+`AudioClip`/`Playback` 定义；未来网络加载只增加 source 的取得方式，不改变播放实例语义或 v1 transport。
 
 格式、命名、所有权和 Guest 限制见
 [C/C++ 代码风格](../../docs/development/code-style.zh-CN.md)。底层协议见

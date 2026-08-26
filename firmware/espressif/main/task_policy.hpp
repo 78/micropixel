@@ -7,6 +7,7 @@ namespace micropixel::task_policy {
 // Keep MicroPixel below ESP-IDF's high-priority IPC, timer, event and network
 // tasks while preserving the system-over-Guest scheduling boundary.
 constexpr UBaseType_t kAudioPriority = 8U;
+constexpr UBaseType_t kAudioDecodePriority = 7U;
 constexpr UBaseType_t kTouchPriority = 8U;
 constexpr UBaseType_t kHostPriority = 7U;
 constexpr UBaseType_t kDisplayPriority = 6U;
@@ -16,6 +17,8 @@ constexpr UBaseType_t kRemoteControlPriority = 4U;
 constexpr UBaseType_t kAssetWorkerPriority = 3U;
 
 static_assert(kAudioPriority > kHostPriority);
+static_assert(kAudioPriority > kAudioDecodePriority);
+static_assert(kAudioDecodePriority > kGuestPriority);
 static_assert(kHostPriority > kCapturePriority);
 static_assert(kCapturePriority > kGuestPriority);
 static_assert(kTouchPriority > kDisplayPriority);

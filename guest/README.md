@@ -32,6 +32,8 @@ guest/
 所有游戏音效使用 `apps/<game>/audio/sfx.json` 作为唯一参数源，并在正式 Bundle 构建中执行感知分析门禁。
 事件层级、重复暴露、跨游戏对齐和真机 A/B 流程见
 [游戏音频设计与感知校准规范](../docs/development/game-audio.zh-CN.md)。
+录制的 BGM、对白和长音效使用 asset manifest 的 `ogg_opus` 格式；Host 内置 micro-opus 解码，App Bundle
+只携带压缩 Ogg，不需要打包 WAV 或 Guest codec。
 
 日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。`sources`、`localization`、
 `asset_manifest` 和 `audio/sfx.json` 是生成 Catalog、资源绑定、音效 profile、Wasm/AOT 与 Bundle 的

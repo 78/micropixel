@@ -19,7 +19,7 @@ uint32_t ReadBest(micropixel::KVStore storage) {
 }
 
 micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
-    auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(asset));
+    auto result = app.resources().LoadTexture(asset);
     micropixel::Assert(result.has_value(), "blocks: critical texture resource failed");
     return static_cast<micropixel::Texture&&>(result.value());
 }

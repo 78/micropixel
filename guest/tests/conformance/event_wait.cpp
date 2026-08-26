@@ -17,20 +17,33 @@ int main() {
     }
 
     micropixel::Application app;
-    app.log().Info("event_wait: invalid buffer rejected; non-blocking timeout passed");
+    micropixel::Event event;
+    if (app.PollEvent(event)) {
+        return 22;
+    }
+    if (app.WaitEventFor(event, micropixel::Duration::Milliseconds(10U))) {
+        return 23;
+    }
+    app.log().Info("event_wait: raw and typed poll/timeout paths passed");
 
     micropixel::TimePoint previous{};
     for (uint32_t count = 0; count < 3U; ++count) {
-        micropixel::Event event = app.WaitEvent();
+        if (count == 0U) {
+            if (!app.WaitEventFor(event, micropixel::Duration::Milliseconds(500U))) {
+                return 24;
+            }
+        } else {
+            event = app.WaitEvent();
+        }
         if (event.type() != micropixel::EventType::kUnknown) {
-            return 24;
+            return 25;
         }
         if (count > 0U && event.timestamp() < previous) {
-            return 25;
+            return 26;
         }
         previous = event.timestamp();
     }
 
-    app.log().Info("event_wait: 3 ordered events; blocking wait complete");
+    app.log().Info("event_wait: poll, finite wait and 3 ordered events passed");
     return 0;
 }

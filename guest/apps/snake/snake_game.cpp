@@ -229,7 +229,7 @@ void SnakeGame::StartGame() {
     PlayStartSound();
     StartBgm();
     if (audio_available_) {
-        app_.log().Info("snake: Audio 1.0 start cue and BGM scheduled");
+        app_.log().Info("snake: Audio 1.1 start cue and BGM scheduled");
     }
     app_.log().Info("snake: game started from menu");
 }

@@ -610,6 +610,61 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(client.catalog_request, ("GET", "/device/apps"))
         self.assertEqual(json.loads(output.getvalue())["apps"][0]["appId"], "running")
 
+    def test_diagnostics_refreshes_system_and_tasks_then_merges_output(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[tuple[str, str, object]] = []
+                self.waited: list[tuple[dict[str, object], float]] = []
+                self.options: list[dict[str, object]] = []
+
+            def device_path(self, suffix: str = "") -> str:
+                return f"/device{suffix}"
+
+            def json(
+                self, method: str, path: str, body: object = None, timeout: float = 30.0, **options: object
+            ) -> dict[str, object]:
+                self.requests.append((method, path, body))
+                self.options.append(options)
+                if path == "/device/system-info":
+                    return {"memory": {"internalSram": {"freeBytes": 1234}}}
+                if path == "/device/task-diagnostics":
+                    return {"available": True, "taskCount": 2, "tasks": [{"name": "main"}]}
+                return {"id": path}
+
+            def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
+                self.waited.append((job, timeout))
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            command="device",
+            device_command="diagnostics",
+            cached=False,
+            timeout=20.0,
+            idempotency_key="diagnostics-run",
+            command_timeout_ms=10_000,
+        )
+        output = io.StringIO()
+        with redirect_stdout(output):
+            CLI.execute_network(args, client)
+
+        self.assertEqual(
+            client.requests,
+            [
+                ("POST", "/device/system-info/refresh", {}),
+                ("POST", "/device/task-diagnostics/refresh", {}),
+                ("GET", "/device/system-info", None),
+                ("GET", "/device/task-diagnostics", None),
+            ],
+        )
+        self.assertEqual(len(client.waited), 2)
+        self.assertNotEqual(client.options[0]["idempotency_key"], client.options[1]["idempotency_key"])
+        self.assertEqual(client.options[0]["command_timeout_ms"], 10_000)
+        self.assertEqual(client.options[1]["command_timeout_ms"], 10_000)
+        diagnostics = json.loads(output.getvalue())
+        self.assertEqual(diagnostics["memory"]["internalSram"]["freeBytes"], 1234)
+        self.assertEqual(diagnostics["taskDiagnostics"]["taskCount"], 2)
+
     def test_logs_lines_prints_only_latest_retained_entries(self) -> None:
         class Client:
             def __init__(self) -> None:

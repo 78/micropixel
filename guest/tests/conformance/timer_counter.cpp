@@ -40,6 +40,10 @@ int main() {
         previous = tick.timestamp();
     }
     periodic.Cancel();
+    if (periodic.valid()) {
+        return 42;
+    }
+    periodic.Cancel();
 
     /* The guard Timer proves that no event from the cancelled Timer follows. */
     micropixel::Timer guard = app.timers().After(micropixel::Duration::Milliseconds(120));
@@ -63,11 +67,14 @@ int main() {
         return 45;
     }
     coalescing.Cancel();
+    if (coalescing.valid()) {
+        return 44;
+    }
 
     micropixel::Duration elapsed = app.clock().Now() - run_started;
     if (!DurationBetween(elapsed, 350000U, 900000U)) {
         return 46;
     }
-    app.log().Info("timer_counter: one-shot, periodic, missed_count, Cancel, Clock/TimePoint and RAII passed");
+    app.log().Info("timer_counter: terminal Cancel, missed_count, Clock/TimePoint and RAII passed");
     return 0;
 }

@@ -3,11 +3,13 @@
 
 #include <stdint.h>
 
+#include "sdk/geometry.hpp"
 #include "sdk/types.hpp"
 
 namespace micropixel {
 
 class Application;
+class Playback;
 class Timer;
 
 enum class EventType : uint16_t {
@@ -17,6 +19,7 @@ enum class EventType : uint16_t {
     kTimer,
     kTouch,
     kKey,
+    kAudioPlayback,
 };
 
 enum class TouchPhase : uint8_t {
@@ -36,6 +39,7 @@ class TouchEvent final {
     [[nodiscard]] constexpr uint32_t id() const { return id_; }
     [[nodiscard]] constexpr int32_t x() const { return x_; }
     [[nodiscard]] constexpr int32_t y() const { return y_; }
+    [[nodiscard]] constexpr Point position() const { return Point{x_, y_}; }
     [[nodiscard]] constexpr bool has_pressure() const { return has_pressure_; }
     [[nodiscard]] constexpr uint16_t pressure_per_mille() const { return pressure_per_mille_; }
 
@@ -63,6 +67,7 @@ class TouchEvent final {
 };
 
 enum class KeyCode : uint16_t {
+    // Directional controls and logical actions are mapped by the Host.
     kUp = 1,
     kDown = 2,
     kLeft = 3,
@@ -70,10 +75,13 @@ enum class KeyCode : uint16_t {
     kConfirm = 5,
     kBack = 6,
     kMenu = 7,
-    kA = 8,
-    kB = 9,
-    kX = 10,
-    kY = 11,
+
+    // Face buttons are named by physical position so their meaning does not
+    // depend on Xbox/Nintendo/PlayStation label conventions.
+    kSouth = 8,
+    kEast = 9,
+    kWest = 10,
+    kNorth = 11,
 };
 
 enum class KeyPhase : uint8_t {
@@ -130,8 +138,31 @@ class TimerEvent final {
     friend class Timer;
 };
 
+class AudioPlaybackEvent final {
+   public:
+    constexpr AudioPlaybackEvent(const AudioPlaybackEvent&) = default;
+    constexpr AudioPlaybackEvent& operator=(const AudioPlaybackEvent&) = default;
+
+    [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
+    [[nodiscard]] constexpr bool succeeded() const { return succeeded_; }
+
+   private:
+    constexpr AudioPlaybackEvent() = default;
+    constexpr AudioPlaybackEvent(TimePoint timestamp, bool succeeded, uint32_t source)
+        : timestamp_(timestamp), succeeded_(succeeded), source_(source) {}
+
+    TimePoint timestamp_{};
+    bool succeeded_{};
+    uint32_t source_{};
+
+    friend class Application;
+    friend class Event;
+    friend class Playback;
+};
+
 class Event final {
    public:
+    constexpr Event() = default;
     constexpr Event(const Event&) = default;
     constexpr Event& operator=(const Event&) = default;
     constexpr Event(Event&&) = default;
@@ -143,11 +174,15 @@ class Event final {
     // Returns a view only when this is a TimerEvent emitted by source.
     // The pointer remains valid until this Event is destroyed or reassigned.
     [[nodiscard]] const TimerEvent* TimerFrom(const Timer& source) const;
+    [[nodiscard]] const AudioPlaybackEvent* PlaybackFrom(const Playback& source) const;
     [[nodiscard]] constexpr const TouchEvent* touch() const { return type_ == EventType::kTouch ? &touch_ : nullptr; }
     [[nodiscard]] constexpr const KeyEvent* key() const { return type_ == EventType::kKey ? &key_ : nullptr; }
 
    private:
     [[nodiscard]] constexpr const TimerEvent* timer() const { return type_ == EventType::kTimer ? &timer_ : nullptr; }
+    [[nodiscard]] constexpr const AudioPlaybackEvent* audio_playback() const {
+        return type_ == EventType::kAudioPlayback ? &audio_playback_ : nullptr;
+    }
 
     explicit constexpr Event(TimePoint timestamp) : type_(EventType::kUnknown), timestamp_(timestamp) {}
 
@@ -161,11 +196,15 @@ class Event final {
 
     explicit constexpr Event(KeyEvent key) : type_(EventType::kKey), timestamp_(key.timestamp()), key_(key) {}
 
+    explicit constexpr Event(AudioPlaybackEvent playback)
+        : type_(EventType::kAudioPlayback), timestamp_(playback.timestamp()), audio_playback_(playback) {}
+
     EventType type_{EventType::kUnknown};
     TimePoint timestamp_{};
     TimerEvent timer_{};
     TouchEvent touch_{TimePoint{}, TouchPhase::kCancel, 0U, 0, 0, false, 0U};
     KeyEvent key_{TimePoint{}, KeyCode::kConfirm, KeyPhase::kCancel, 0U};
+    AudioPlaybackEvent audio_playback_{};
     friend class Application;
 };
 

@@ -510,10 +510,14 @@ def create_job(
     method: str,
     path: str,
     body: Any | None = None,
+    *,
+    idempotency_scope: str | None = None,
 ) -> dict[str, Any]:
     idempotency_key = getattr(args, "idempotency_key", None)
     if idempotency_key is not None and re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key) is None:
         raise CliError("--idempotency-key must contain 8-128 letters, digits, dot, underscore, colon, or hyphen")
+    if idempotency_key is not None and idempotency_scope is not None:
+        idempotency_key = hashlib.sha256(f"{idempotency_key}:{idempotency_scope}".encode("ascii")).hexdigest()
     command_timeout_ms = getattr(args, "command_timeout_ms", None)
     if command_timeout_ms is not None and not 1_000 <= command_timeout_ms <= 300_000:
         raise CliError("--command-timeout-ms must be between 1000 and 300000")
@@ -1269,9 +1273,27 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
         )
     elif args.command == "device" and args.device_command == "diagnostics":
         if not args.cached:
-            job = create_job(client, args, "POST", client.device_path("/system-info/refresh"), {})
-            client.wait_job(job, args.timeout)
-        print_json(client.json("GET", client.device_path("/system-info")))
+            system_job = create_job(
+                client,
+                args,
+                "POST",
+                client.device_path("/system-info/refresh"),
+                {},
+                idempotency_scope="system-info",
+            )
+            client.wait_job(system_job, args.timeout)
+            task_job = create_job(
+                client,
+                args,
+                "POST",
+                client.device_path("/task-diagnostics/refresh"),
+                {},
+                idempotency_scope="task-diagnostics",
+            )
+            client.wait_job(task_job, args.timeout)
+        system_info = client.json("GET", client.device_path("/system-info"))
+        task_diagnostics = client.json("GET", client.device_path("/task-diagnostics"))
+        print_json({**system_info, "taskDiagnostics": task_diagnostics})
     elif args.command == "device" and args.device_command == "reboot":
         job = create_job(client, args, "POST", client.device_path("/reboot"), {})
         print_json(client.wait_job(job, args.timeout))
@@ -1498,7 +1520,10 @@ def parser() -> argparse.ArgumentParser:
     input_modes = input_command.add_subparsers(dest="input_command", required=True)
 
     press = input_modes.add_parser("press", help="Press and release a device button such as confirm or back")
-    press.add_argument("code", choices=["up", "down", "left", "right", "confirm", "back", "menu", "a", "b", "x", "y"])
+    press.add_argument(
+        "code",
+        choices=["up", "down", "left", "right", "confirm", "back", "menu", "south", "east", "west", "north"],
+    )
     press.add_argument("--hold-ms", type=int, default=80)
     tap = input_modes.add_parser("tap", help="Touch and release a screen coordinate")
     tap.add_argument("x", type=int)

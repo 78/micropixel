@@ -163,8 +163,6 @@ int DemoAppMain() {
     micropixel::RendererInfo display = renderer.info();
     micropixel::InputInfo input = app.input().info();
     micropixel::Assert(display.width() >= 320U && display.height() >= 480U, "demo: display must be at least 320x480");
-    micropixel::Assert(input.logical_width() == display.width() && input.logical_height() == display.height(),
-                       "demo: input and display coordinates must match");
 
     micropixel::Texture atlas_texture = LoadDemoAtlas(app);
     DemoContext context{app, renderer, display, input, atlas_texture};
@@ -189,6 +187,8 @@ int DemoAppMain() {
             redraw = active_page == PageId::kTimer && TimerDemoOnTimer(context, *timer);
         } else if (const micropixel::TimerEvent* timer = event.TimerFrom(atlas_ticker)) {
             redraw = active_page == PageId::kResourceAtlas && ResourceAtlasDemoOnTimer(context, *timer);
+        } else if (active_page == PageId::kAudio && event.type() == micropixel::EventType::kAudioPlayback) {
+            redraw = AudioDemoOnEvent(context, event);
         } else if (const micropixel::TouchEvent* touch = event.touch()) {
             if (active_page != PageId::kHome) {
                 const micropixel::ui::ButtonUpdate back_update = back_button.OnTouch(*touch);

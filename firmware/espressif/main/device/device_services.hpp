@@ -68,6 +68,14 @@ class AudioService final {
 
     [[nodiscard]] DeviceResult<micropixel_audio_info_t> GetInfo() const;
     [[nodiscard]] DeviceResult<void> PlayTone(const micropixel_audio_tone_t& tone) const;
+    [[nodiscard]] DeviceResult<PcmStreamHandle> StartPcm(const PcmSource& source, uint32_t token,
+                                                         uint16_t volume_per_mille) const;
+    [[nodiscard]] DeviceResult<void> PausePcm(PcmStreamHandle handle) const;
+    [[nodiscard]] DeviceResult<void> ResumePcm(PcmStreamHandle handle) const;
+    [[nodiscard]] DeviceResult<void> SetPcmVolume(PcmStreamHandle handle, uint16_t volume_per_mille) const;
+    [[nodiscard]] DeviceResult<void> StopPcm(PcmStreamHandle handle) const;
+    void BindPcmCompletionSink(PcmCompletionSink sink, void* context) const;
+    void UnbindPcmCompletionSink(void* context) const;
     [[nodiscard]] DeviceResult<void> StopAll() const;
     [[nodiscard]] DeviceResult<void> SuspendAll() const;
     [[nodiscard]] DeviceResult<void> ResumeAll() const;

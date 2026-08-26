@@ -91,7 +91,8 @@ app.Run([&](const micropixel::Event& event) {
 - handler 串行执行，不会在一个 handler 中间派发下一个事件；
 - `Stop` 先交给 handler，handler 返回后 `Run()` 返回；
 - Timer 只由 `app.timers().After/Every()` 创建，并作为普通 Event 匹配；
-- `WaitEvent()` 只保留给有限等待和协议测试，不是长期 App 的第二套标准写法；
+- `WaitEvent()`、`WaitEventFor()` 和 `PollEvent()` 只保留给短期等待和协议测试，不是长期 App 的第二套
+  标准写法；
 - Host 暂停 Guest 时通过 Runtime 内部控制消息等待 `event_wait` 安全点，并同时暂停 watchdog；不存在 Guest
   可见的 `Pause` 事件。恢复同一 Session 时只投递 `Resume`；
 - 系统手势由 Host 拦截，不泄漏给 Guest。
@@ -139,14 +140,14 @@ Public C++ SDK 不直接暴露 C ABI。`guest/runtime/sdk.cpp` 将强类型对�
 | Random | 4 | call |
 | Graphics | 16 | call + submit |
 | Input | 17 | call + event |
-| Audio | 18 | call |
+| Audio | 18 | call + event |
 | Network | 19 | 仅预留，未实现 |
 
 三条数据路径的职责不混用：
 
 - `service_call`：低频、有界的控制请求和响应；
 - `service_submit`：Renderer Frame command stream 等高频或批量数据；
-- `event_wait`：Timer、Touch、Resume 和 Stop 等异步通知。
+- `event_wait`：Timer、Touch、Audio playback、Resume 和 Stop 等异步通知。
 
 `micropixel_event_t` 固定为 48 bytes，按 `service_id + event_id` 解码。Service descriptor、handle 和
 设备信息在 Guest 生命周期内缓存；Host 热路径使用固定容量 Registry，不做字符串查找或堆分配。
@@ -167,11 +168,13 @@ Renderer -> StreamingTexture / TextureUpdateBatch
 
 - `Frame` 直接提供 `Clear`、`FillRect`、`DrawText`、`DrawTexture` 和
   `Save/SetClipRect/Translate/Restore`；
+- `Point`、`Rect` 和 `Size` 是 Renderer 与 Input 共用的逻辑坐标 value；显示尺寸只由 `RendererInfo`
+  公开，`InputInfo` 不维护第二份尺寸来源；
 - 一个 Frame 是一次原子场景替换，`Present()` 显式发布；析构不会隐式 Present；
 - SDK 将大 Frame 自动分成有界 batch，应用不感知 transport 或 retained 优化开关；
 - 公开资源概念统一为 `Texture`；Host 内部的 `BitmapView` 只是 CPU 像素内存描述符，
   不是公开资源身份；
-- `Resources::LoadTexture()` 同步返回 `Result<Texture>`，Host 可在内部使用 worker 解码；
+- `Resources::LoadTexture(AssetId)` 同步返回 `Result<Texture>`，Host 可在内部使用 worker 解码；
 - `Texture` 和 `StreamingTexture` 是 move-only RAII 对象，`Reset()` 立即令 Guest 句柄无效；
 - retained scene 持有独立 Texture 引用。Guest `Reset()` 只撤销 Guest 引用，当 scene 引用也归零时
   才释放像素内存；

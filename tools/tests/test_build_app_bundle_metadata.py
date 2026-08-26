@@ -1,4 +1,5 @@
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,52 @@ from tools import build_app_bundle as bundle
 
 
 class PackageMetadataTests(unittest.TestCase):
+    @staticmethod
+    def ogg_page(
+        serial: int,
+        sequence: int,
+        header_type: int,
+        granule: int,
+        packets: list[bytes],
+    ) -> bytes:
+        laces = bytearray()
+        body = bytearray()
+        for packet in packets:
+            remaining = len(packet)
+            cursor = 0
+            while remaining >= 255:
+                laces.append(255)
+                body.extend(packet[cursor : cursor + 255])
+                cursor += 255
+                remaining -= 255
+            laces.append(remaining)
+            body.extend(packet[cursor:])
+        header = bytearray(
+            b"OggS"
+            + bytes((0, header_type))
+            + struct.pack("<QII", granule, serial, sequence)
+            + bytes(4)
+            + bytes((len(laces),))
+            + laces
+        )
+        page = header + body
+        struct.pack_into("<I", page, 22, bundle.ogg_crc32(page))
+        return bytes(page)
+
+    @classmethod
+    def minimal_ogg_opus(cls, channels: int = 1) -> bytes:
+        serial = 0x10203040
+        head = b"OpusHead" + bytes((1, channels)) + struct.pack("<HIhB", 312, 48000, 0, 0)
+        tags = b"OpusTags" + struct.pack("<I", 0) + struct.pack("<I", 0)
+        audio = b"\xf8\xff\xfe"
+        return b"".join(
+            (
+                cls.ogg_page(serial, 0, 0x02, 0, [head]),
+                cls.ogg_page(serial, 1, 0, 0, [tags]),
+                cls.ogg_page(serial, 2, 0x04, 1272, [audio]),
+            )
+        )
+
     def write_manifest(self, root: Path, display_name: object) -> Path:
         path = root / "app.json"
         path.write_text(
@@ -138,6 +185,34 @@ class PackageMetadataTests(unittest.TestCase):
                 "launch",
             )
             self.assertEqual(bundle.build_resource_pack([jpeg_launch], "launch").launch_asset_id, 3)
+
+    def test_ogg_opus_asset_is_validated_and_keeps_zero_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "music.opus"
+            path.write_bytes(self.minimal_ogg_opus(channels=2))
+
+            section = bundle.parse_asset(f"9:ogg_opus:0:0:{path}")
+
+            self.assertEqual(section.format, bundle.FORMATS["ogg_opus"])
+            self.assertEqual((section.width, section.height, section.stride), (0, 0, 0))
+            self.assertEqual(bundle.validate_ogg_opus(section.data), (2, 960))
+
+    def test_ogg_opus_rejects_bad_crc_and_vorbis_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corrupt = bytearray(self.minimal_ogg_opus())
+            corrupt[-1] ^= 0x01
+            corrupt_path = root / "corrupt.ogg"
+            corrupt_path.write_bytes(corrupt)
+            with self.assertRaisesRegex(ValueError, "CRC"):
+                bundle.parse_asset(f"10:ogg_opus:0:0:{corrupt_path}")
+
+            vorbis_path = root / "vorbis.ogg"
+            vorbis_path.write_bytes(
+                self.ogg_page(1, 0, 0x06, 0, [b"\x01vorbis" + bytes(20)])
+            )
+            with self.assertRaisesRegex(ValueError, "OpusHead"):
+                bundle.parse_asset(f"11:ogg_opus:0:0:{vorbis_path}")
 
 
 if __name__ == "__main__":

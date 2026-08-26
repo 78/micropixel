@@ -113,7 +113,7 @@ micropixel::Timer CreateResourceAtlasTicker(micropixel::Application& app) {
 
 micropixel::Texture LoadDemoAtlas(micropixel::Application& app) {
     const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[0];
-    auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(atlas.asset));
+    auto result = app.resources().LoadTexture(atlas.asset);
     if (!result.has_value()) {
         return micropixel::Texture{};
     }

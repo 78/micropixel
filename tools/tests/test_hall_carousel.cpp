@@ -3,10 +3,13 @@
 
 #include "platform/metalio-claw4/display/hall_transition_policy.hpp"
 #include "platform/metalio-claw4/hall_carousel.hpp"
+#include "platform/metalio-claw4/hall_cover_cache_policy.hpp"
 
 namespace {
 
 using micropixel::platform::metalio_claw4::HallCarousel;
+using micropixel::platform::metalio_claw4::HallCoverCachePolicy;
+using micropixel::platform::metalio_claw4::HallCoverCacheSlot;
 using micropixel::platform::metalio_claw4::HallLaunchBackgroundPlan;
 using micropixel::platform::metalio_claw4::HallVelocityTracker;
 using micropixel::platform::metalio_claw4::PlanHallLaunchBackground;
@@ -107,6 +110,27 @@ void BoundedCoverWindow() {
           "decoded Hall cover memory must remain bounded independently of App count");
 }
 
+void CoverCacheReplacementAfterAppUpdate() {
+    constexpr std::array<HallCoverCacheSlot, HallCarousel::kMaximumCachedCovers> kFullCache{{
+        {.occupied = true, .key = 10U, .app_index = 9U},
+        {.occupied = true, .key = 11U, .app_index = 10U},
+        {.occupied = true, .key = 12U, .app_index = 11U},
+        {.occupied = true, .key = 13U, .app_index = 12U},
+        {.occupied = true, .key = 14U, .app_index = 13U},
+        {.occupied = true, .key = 15U, .app_index = 14U},
+    }};
+    Check(HallCoverCachePolicy::ReplacementIndex(kFullCache, 113U, 12U, 9U, 15U) == 3U,
+          "an updated App must replace its stale cover when the visible cache is full");
+
+    auto cache_with_empty_slot = kFullCache;
+    cache_with_empty_slot[5].occupied = false;
+    Check(HallCoverCachePolicy::ReplacementIndex(cache_with_empty_slot, 113U, 12U, 9U, 15U) == 5U,
+          "an empty cover slot must be preferred over evicting stale data");
+
+    Check(HallCoverCachePolicy::ReplacementIndex(kFullCache, 99U, 15U, 10U, 16U) == 0U,
+          "a cover outside the current window must remain the fallback eviction candidate");
+}
+
 void RepeatedThrowMomentum() {
     Check(HallCarousel::InertiaVelocity(2000, 0U) == 2000,
           "interrupted inertia must expose its initial instantaneous velocity");
@@ -141,8 +165,9 @@ int main() {
     ContinuousIndicator();
     CardRevealOffset();
     BoundedCoverWindow();
+    CoverCacheReplacementAfterAppUpdate();
     RepeatedThrowMomentum();
     HallLaunchBackgroundPolicy();
-    std::cout << "hall_carousel tests passed: 8 cases\n";
+    std::cout << "hall_carousel tests passed: 9 cases\n";
     return 0;
 }

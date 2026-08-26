@@ -1,6 +1,8 @@
 #ifndef MICROPIXEL_SDK_APPLICATION_HPP
 #define MICROPIXEL_SDK_APPLICATION_HPP
 
+#include <type_traits>
+
 #include "sdk/audio.hpp"
 #include "sdk/clock.hpp"
 #include "sdk/event.hpp"
@@ -15,6 +17,13 @@
 #include "sdk/types.hpp"
 
 namespace micropixel {
+
+// The result of dispatching one Event through Application::Run(). Returning
+// kExit lets the Guest finish successfully without waiting for a Host Stop.
+enum class EventResult : uint8_t {
+    kContinue,
+    kExit,
+};
 
 // Discoverable capability facade for one Guest application. Service accessors
 // return lightweight views; Application does not own their Host implementations
@@ -44,11 +53,21 @@ class Application final {
         constexpr bool kValidHandler = requires(Handler& candidate, const Event& event) { candidate(event); };
         static_assert(kValidHandler, "Application::Run handler must accept const Event &");
         if constexpr (kValidHandler) {
+            using HandlerResult = std::invoke_result_t<Handler&, const Event&>;
+            constexpr bool kReturnsVoid = std::is_same_v<HandlerResult, void>;
+            constexpr bool kReturnsEventResult = std::is_same_v<HandlerResult, EventResult>;
+            static_assert(kReturnsVoid || kReturnsEventResult,
+                          "Application::Run handler must return void or EventResult");
             BeginRun();
             for (;;) {
                 Event event = WaitEvent();
-                handler(event);
-                if (event.type() == EventType::kStop) {
+                EventResult result = EventResult::kContinue;
+                if constexpr (kReturnsEventResult) {
+                    result = handler(event);
+                } else {
+                    handler(event);
+                }
+                if (result == EventResult::kExit || event.type() == EventType::kStop) {
                     EndRun();
                     return;
                 }
@@ -56,12 +75,16 @@ class Application final {
         }
     }
 
-    // Advanced event access. Runtime/ABI failures Panic at the call site.
+    // Advanced event access. Runtime/ABI failures Panic at the call site;
+    // PollEvent and WaitEventFor return false only when no event arrived.
     [[nodiscard]] Event WaitEvent() const;
+    [[nodiscard]] bool WaitEventFor(Event& event, Duration timeout) const;
+    [[nodiscard]] bool PollEvent(Event& event) const;
 
    private:
     void BeginRun() const;
     void EndRun() const;
+    [[nodiscard]] bool WaitEventInternal(Event& event, uint64_t timeout_us) const;
 
     mutable bool running_{};
 };

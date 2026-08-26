@@ -25,6 +25,40 @@ class Duration final {
     [[nodiscard]] constexpr uint64_t count_microseconds() const { return microseconds_; }
 
     friend constexpr bool operator==(Duration, Duration) = default;
+    friend constexpr bool operator<(Duration lhs, Duration rhs) { return lhs.microseconds_ < rhs.microseconds_; }
+    friend constexpr bool operator<=(Duration lhs, Duration rhs) { return lhs.microseconds_ <= rhs.microseconds_; }
+    friend constexpr bool operator>(Duration lhs, Duration rhs) { return rhs < lhs; }
+    friend constexpr bool operator>=(Duration lhs, Duration rhs) { return rhs <= lhs; }
+
+    friend constexpr Duration operator+(Duration lhs, Duration rhs) {
+        if (rhs.microseconds_ > UINT64_MAX - lhs.microseconds_) {
+            __builtin_trap();
+        }
+        return Microseconds(lhs.microseconds_ + rhs.microseconds_);
+    }
+
+    friend constexpr Duration operator-(Duration lhs, Duration rhs) {
+        if (lhs < rhs) {
+            __builtin_trap();
+        }
+        return Microseconds(lhs.microseconds_ - rhs.microseconds_);
+    }
+
+    friend constexpr Duration operator*(Duration duration, uint64_t multiplier) {
+        if (multiplier != 0U && duration.microseconds_ > UINT64_MAX / multiplier) {
+            __builtin_trap();
+        }
+        return Microseconds(duration.microseconds_ * multiplier);
+    }
+
+    friend constexpr Duration operator*(uint64_t multiplier, Duration duration) { return duration * multiplier; }
+
+    friend constexpr Duration operator/(Duration duration, uint64_t divisor) {
+        if (divisor == 0U) {
+            __builtin_trap();
+        }
+        return Microseconds(duration.microseconds_ / divisor);
+    }
 
    private:
     struct RawMicroseconds {};
@@ -68,6 +102,19 @@ class TimePoint final {
     friend constexpr bool operator<=(TimePoint lhs, TimePoint rhs) { return lhs.microseconds_ <= rhs.microseconds_; }
     friend constexpr bool operator>(TimePoint lhs, TimePoint rhs) { return rhs < lhs; }
     friend constexpr bool operator>=(TimePoint lhs, TimePoint rhs) { return rhs <= lhs; }
+    friend constexpr TimePoint operator+(TimePoint point, Duration duration) {
+        if (duration.count_microseconds() > UINT64_MAX - point.microseconds_) {
+            __builtin_trap();
+        }
+        return TimePoint{point.microseconds_ + duration.count_microseconds()};
+    }
+    friend constexpr TimePoint operator+(Duration duration, TimePoint point) { return point + duration; }
+    friend constexpr TimePoint operator-(TimePoint point, Duration duration) {
+        if (duration.count_microseconds() > point.microseconds_) {
+            __builtin_trap();
+        }
+        return TimePoint{point.microseconds_ - duration.count_microseconds()};
+    }
     friend constexpr Duration operator-(TimePoint lhs, TimePoint rhs) {
         if (lhs < rhs) {
             __builtin_trap();

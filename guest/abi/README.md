@@ -27,7 +27,8 @@ Audio 或 Network 方法通常只新增 Service 内的稳定数字 ID 和 wire s
 当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Random `4`、System `5`、Graphics `16`、
 Input `17`、Audio `18`；Network `19` 只预留 ID，尚未实现。System 1.0 提供最长 31 bytes 的
 BCP 47 locale tag。Host 返回当前 Catalog 和字体确实可用的 effective Locale；基础固件只有 `en`，
-以后安装语言组件并改变设备语言不需要修改 Guest ABI。
+以后安装语言组件并改变设备语言不需要修改 Guest ABI。Locale 在一个 AppSession 内不可变；用户返回
+App Hall 修改语言后，下一次启动 Guest 才会取得新值，v1 不投递 locale-change event。
 
 `service_open` 校验 Service 独立的 major/minor，返回 48-byte `micropixel_service_info_t`：
 
@@ -48,7 +49,7 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
 
 - Timer、Storage、Resource、Audio 控制以及各类 `get_info` 使用 `service_call`。
 - Renderer Frame command stream 使用 `service_submit`，避免逐条绘图跨 ABI。
-- 未来 Audio/Network 流量先使用 `service_submit` 的独立 channel；只有真机基准证明该传输
+- 未来网络下载的数据面优先使用独立 Service channel；只有真机基准证明现有 transport
   无法满足背压或吞吐需求时，才讨论新增 Core import。
 - Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
@@ -63,17 +64,30 @@ destination rectangle 与 source rectangle，因此 1:1、裁剪、缩放及裁�
 文字命令传递稳定的 System Font role handle（Small、Medium、Large、Title），不传具体像素字号。
 Guest 使用逻辑像素定位；Host 可以按设备密度、语言和字体可用性为这些角色选择实际字形与字号。
 
+Audio 1.1 在原有有界 `PLAY_TONE` 基础上增加 Ogg Opus source/playback 分层：
+
+- `CLIP_LOAD/RELEASE` 管理 Bundle asset 的压缩来源 handle；只接受 Bundle format `ogg_opus`；
+- `PLAYBACK_START` 创建一次播放实例，随后可 `PAUSE`、`RESUME`、`SET_VOLUME`、`GET_STATE` 或
+  `STOP`；最多同时两条 compressed playback，clip 与 playback 配额由 `GET_INFO` 返回；
+- playback 独立 pin clip。Guest 释放 clip handle 不会中断已经开始的播放，播放终止后 Host 才撤销 pin；
+- Host 固定输出 16 kHz mono PCM，并拥有设备主音量。每条 playback 只有 0..1000 的相对音量和 loop flag；
+- 自然结束或解码失败投递 `AUDIO_EVENT_PLAYBACK_FINISHED`，`source` 和 payload 都携带 playback handle，
+  `status` 区分成功与失败；主动 `STOP` 不投递完成事件；
+- 压缩数据直接读取当前 App Bundle 的只读映射，Guest 不上传 PCM 或 codec packets。网络 URL、下载进度、
+  缓存与取消以后由 Resource/Network Service 管理，不改变 Audio source/playback 的所有权语义。
+
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、
-Input touch、Input semantic key 和 Core host wake。新增事件不会扩大 Core import 表。
+Input touch、Input semantic key、Audio playback finished 和 Core host wake。新增事件不会扩大 Core import 表。
 
 - 周期 Timer 队列中同一 handle 最多保留一条记录。积压时 `elapsed_us` 累加，`missed_count` 统计未单独
   投递的 tick；队列满导致的 tick 也结转到下一次成功事件。
 - Touch wire 坐标是 `int32_t`。`pressure_per_mille` 仅在 Input 宣告
   `MICROPIXEL_INPUT_CAP_PRESSURE` 时有意义，范围固定为 0..1000。GT911 不宣告该能力并始终写 0。
 - Input 1.1 追加 `MICROPIXEL_INPUT_EVENT_KEY` 与 `MICROPIXEL_INPUT_CAP_KEY_EVENTS`。固定键码为方向、
-  Confirm、Back、Menu 和 A/B/X/Y，阶段为 Down、Up、Repeat、Cancel；Repeat 必须携带非零计数，
-  其他阶段的计数必须为 0。它是 Host 语义输入，不表示设备一定安装了物理键盘。
+  Confirm、Back、Menu 和按位置定义的 gamepad South/East/West/North，阶段为 Down、Up、Repeat、Cancel；
+  Repeat 必须携带非零计数，其他阶段的计数必须为 0。ABI 不定义 A/B/X/Y 标签键码。
+  Host 负责把设备标签与区域性的确认/返回习惯映射为稳定语义；事件不表示设备一定安装了物理键盘。
 
 ## 稳定性与安全规则
 

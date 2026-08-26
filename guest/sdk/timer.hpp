@@ -30,8 +30,10 @@ class Timer final {
     ~Timer();
 
     [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
+    // Terminal, idempotent cancellation. Releases the Host handle and makes
+    // this Timer invalid; create another Timer to schedule again.
     void Cancel();
-    /* Best-effort cancel + release. Safe to call repeatedly and from the destructor. */
+    /* Best-effort release. Safe to call repeatedly and from the destructor. */
     void Reset();
 
    private:

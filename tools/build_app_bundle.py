@@ -42,10 +42,13 @@ FORMATS = {
     "png": 4,
     "raw_argb8888": 5,
     "font_cbin": 8,
+    "ogg_opus": 9,
 }
 ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"], FORMATS["font_cbin"]}
 PNG_TO_RAW_RGB888 = "png_to_raw_rgb888"
 LAUNCH_FORMATS = frozenset({FORMATS["jpeg"], FORMATS["png"]})
+OGG_OPUS_MAX_TAG_BYTES = 64 * 1024
+OGG_OPUS_MAX_PACKET_BYTES = 61_440
 CPP_KEYWORDS = frozenset({
     "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel",
     "atomic_commit", "atomic_noexcept", "auto", "bitand", "bitor", "bool",
@@ -304,6 +307,129 @@ def rgba_to_raw_rgb888(rgba: bytes, background: tuple[int, int, int] | None) -> 
     return bytes(rgb)
 
 
+def ogg_crc32(data: bytes) -> int:
+    """Return the non-reflected CRC used by Ogg pages (RFC 3533)."""
+    crc = 0
+    for value in data:
+        crc ^= value << 24
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if crc & 0x80000000 else (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
+def validate_ogg_opus(data: bytes) -> tuple[int, int]:
+    """Validate the bounded, single-stream Ogg Opus profile accepted by MicroPixel.
+
+    Returns (channels, playable samples at the mandatory 48 kHz granule rate).
+    """
+    offset = 0
+    serial: int | None = None
+    expected_sequence = 0
+    packet = bytearray()
+    packets: list[bytes] = []
+    packet_count = 0
+    pre_skip = 0
+    final_granule: int | None = None
+    eos_seen = False
+
+    while offset < len(data):
+        if eos_seen or offset + 27 > len(data) or data[offset : offset + 4] != b"OggS":
+            raise ValueError("ogg_opus contains a truncated or trailing Ogg page")
+        version = data[offset + 4]
+        header_type = data[offset + 5]
+        granule = struct.unpack_from("<Q", data, offset + 6)[0]
+        page_serial = struct.unpack_from("<I", data, offset + 14)[0]
+        sequence = struct.unpack_from("<I", data, offset + 18)[0]
+        expected_crc = struct.unpack_from("<I", data, offset + 22)[0]
+        segment_count = data[offset + 26]
+        segment_table_end = offset + 27 + segment_count
+        if version != 0 or header_type & ~0x07 or segment_table_end > len(data):
+            raise ValueError("ogg_opus contains an invalid Ogg page header")
+        segments = data[offset + 27 : segment_table_end]
+        page_end = segment_table_end + sum(segments)
+        if page_end > len(data):
+            raise ValueError("ogg_opus contains a truncated Ogg page body")
+        page = bytearray(data[offset:page_end])
+        page[22:26] = bytes(4)
+        if ogg_crc32(page) != expected_crc:
+            raise ValueError("ogg_opus Ogg page CRC failed")
+
+        if serial is None:
+            if header_type & 0x02 == 0 or header_type & 0x01 or sequence != 0:
+                raise ValueError("ogg_opus must begin with a BOS page at sequence zero")
+            serial = page_serial
+        elif page_serial != serial or header_type & 0x02:
+            raise ValueError("ogg_opus must contain exactly one logical stream")
+        if sequence != expected_sequence:
+            raise ValueError("ogg_opus Ogg page sequence is discontinuous")
+        expected_sequence += 1
+        if bool(header_type & 0x01) != bool(packet):
+            raise ValueError("ogg_opus packet continuation flags are inconsistent")
+
+        body_offset = segment_table_end
+        packets_on_page = 0
+        for lace in segments:
+            packet.extend(data[body_offset : body_offset + lace])
+            body_offset += lace
+            if len(packet) > max(OGG_OPUS_MAX_TAG_BYTES, OGG_OPUS_MAX_PACKET_BYTES):
+                raise ValueError("ogg_opus contains an oversized packet")
+            if lace < 255:
+                completed = bytes(packet)
+                packet.clear()
+                packets_on_page += 1
+                packet_count += 1
+                if packet_count <= 2:
+                    packets.append(completed)
+                elif len(completed) == 0 or len(completed) > OGG_OPUS_MAX_PACKET_BYTES:
+                    raise ValueError("ogg_opus contains an invalid audio packet")
+
+        if packet_count == 1:
+            if packets_on_page != 1 or packet or granule != 0:
+                raise ValueError("ogg_opus OpusHead must be isolated on its BOS page")
+            head = packets[0]
+            if len(head) < 19 or head[:8] != b"OpusHead" or head[8] == 0 or head[8] > 15:
+                raise ValueError("ogg_opus has an invalid OpusHead packet")
+            channels = head[9]
+            pre_skip = struct.unpack_from("<H", head, 10)[0]
+            mapping_family = head[18]
+            if channels not in (1, 2) or mapping_family != 0 or len(head) != 19:
+                raise ValueError("ogg_opus supports only mono/stereo mapping-family-0 streams")
+
+        if packet_count >= 2 and len(packets) >= 2:
+            tags = packets[1]
+            if len(tags) < 16 or len(tags) > OGG_OPUS_MAX_TAG_BYTES or tags[:8] != b"OpusTags":
+                raise ValueError("ogg_opus has an invalid or oversized OpusTags packet")
+            vendor_length = struct.unpack_from("<I", tags, 8)[0]
+            comment_count_offset = 12 + vendor_length
+            if comment_count_offset + 4 > len(tags):
+                raise ValueError("ogg_opus has a truncated OpusTags vendor field")
+            comment_count = struct.unpack_from("<I", tags, comment_count_offset)[0]
+            cursor = comment_count_offset + 4
+            if comment_count > 1024:
+                raise ValueError("ogg_opus has too many OpusTags comments")
+            for _ in range(comment_count):
+                if cursor + 4 > len(tags):
+                    raise ValueError("ogg_opus has a truncated OpusTags comment")
+                comment_length = struct.unpack_from("<I", tags, cursor)[0]
+                cursor += 4
+                if cursor + comment_length > len(tags):
+                    raise ValueError("ogg_opus has a truncated OpusTags comment")
+                cursor += comment_length
+
+        if header_type & 0x04:
+            if packet or packet_count < 3 or granule == 0xFFFFFFFFFFFFFFFF:
+                raise ValueError("ogg_opus has an invalid EOS page")
+            final_granule = granule
+            eos_seen = True
+        offset = page_end
+
+    if not eos_seen or packet or len(packets) < 2 or final_granule is None:
+        raise ValueError("ogg_opus stream is incomplete")
+    if final_granule < pre_skip:
+        raise ValueError("ogg_opus final granule precedes pre-skip")
+    return packets[0][9], final_granule - pre_skip
+
+
 def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> InputSection:
     parts = spec.split(":", 4)
     if len(parts) != 5:
@@ -350,6 +476,10 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
     elif format_name == "font_cbin":
         if width != 0 or height != 0 or len(data) < 160 or not data.startswith(b"MPXFCBN\0"):
             raise ValueError("font_cbin must be a wrapped MicroPixel font cbin with zero dimensions")
+    elif format_name == "ogg_opus":
+        if width != 0 or height != 0:
+            raise ValueError("ogg_opus assets must use zero dimensions")
+        validate_ogg_opus(data)
     stride = (
         width * 3
         if output_format_name == "raw_rgb888"

@@ -87,6 +87,8 @@ micropixel::Error ErrorFromStatus(int32_t status) {
         case MICROPIXEL_STATUS_INVALID_ARGUMENT:
         case MICROPIXEL_STATUS_INVALID_MEMORY:
             return Error{ErrorCode::kInvalidArgument};
+        case MICROPIXEL_STATUS_CLOSED:
+            return Error{ErrorCode::kInvalidState};
         case MICROPIXEL_STATUS_UNSUPPORTED:
             return Error{ErrorCode::kUnsupported};
         case MICROPIXEL_STATUS_RESOURCE_EXHAUSTED:
@@ -99,6 +101,8 @@ micropixel::Error ErrorFromStatus(int32_t status) {
             return Error{ErrorCode::kBufferTooSmall};
         case MICROPIXEL_STATUS_RATE_LIMITED:
             return Error{ErrorCode::kRateLimited};
+        case MICROPIXEL_STATUS_CANCELLED:
+            return Error{ErrorCode::kCancelled};
         default:
             return Error{ErrorCode::kInternal};
     }
@@ -166,6 +170,10 @@ const micropixel_input_info_t& LoadInputInfo() {
             cached_input_info.max_touch_points == 0U ||
             cached_input_info.max_touch_points > MICROPIXEL_MAX_TOUCH_POINTS) {
             micropixel::runtime::Panic("input.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
+        }
+        if (graphics_info_loaded && (cached_input_info.logical_width != cached_graphics_info.width ||
+                                     cached_input_info.logical_height != cached_graphics_info.height)) {
+            micropixel::runtime::Panic("input.info.coordinate_space", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         input_info_loaded = true;
     }
@@ -246,10 +254,10 @@ bool StorageKeyLength(const char* key, uint32_t& length_out) {
         return false;
     }
     uint32_t length = 0U;
-    while (length < 16U && key[length] != '\0') {
+    while (length <= micropixel::KVStore::kMaximumKeyBytes && key[length] != '\0') {
         ++length;
     }
-    if (length == 0U || length >= 16U) {
+    if (length == 0U || length > micropixel::KVStore::kMaximumKeyBytes) {
         return false;
     }
     length_out = length;
@@ -275,6 +283,9 @@ static_assert(Frame::kCapacityBytes == MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES,
               "SDK/ABI graphics command byte capacity drifted");
 static_assert(Frame::kCapacityCommands == MICROPIXEL_GRAPHICS_MAX_COMMANDS,
               "SDK/ABI graphics command count capacity drifted");
+static_assert(KVStore::kMaximumKeyBytes == MICROPIXEL_STORAGE_MAX_KEY_BYTES, "SDK/ABI storage key limit drifted");
+static_assert(KVStore::kMaximumValueBytes == MICROPIXEL_STORAGE_MAX_VALUE_BYTES, "SDK/ABI storage value limit drifted");
+static_assert(Log::kMaximumMessageBytes + 1U == MICROPIXEL_ABI_MAX_LOG_BYTES, "SDK/ABI log message limit drifted");
 
 Result<uint32_t> KVStore::GetU32(const char* key) const {
     uint8_t wire[4]{};
@@ -320,6 +331,15 @@ Result<void> KVStore::SetBool(const char* key, bool value) const {
         return unexpected(ErrorFromStatus(status));
     }
     return {};
+}
+
+Result<uint32_t> KVStore::GetBytesSize(const char* key) const {
+    uint32_t size = 0U;
+    const int32_t status = GetStorageValue(key, nullptr, 0U, size);
+    if (status == MICROPIXEL_STATUS_OK || status == MICROPIXEL_STATUS_BUFFER_TOO_SMALL) {
+        return size;
+    }
+    return unexpected(ErrorFromStatus(status));
 }
 
 Result<uint32_t> KVStore::GetBytes(const char* key, uint8_t* bytes, uint32_t capacity) const {
@@ -388,6 +408,21 @@ uint32_t Random::U32() const {
     return response.value;
 }
 
+uint32_t Random::Below(uint32_t upper_bound) const {
+    if (upper_bound == 0U) {
+        runtime::Panic("random.below.upper_bound", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+
+    // Reject the short prefix that would make `% upper_bound` favor some
+    // outcomes when 2^32 is not evenly divisible by upper_bound.
+    const uint32_t rejection_threshold = static_cast<uint32_t>(0U - upper_bound) % upper_bound;
+    uint32_t value = 0U;
+    do {
+        value = U32();
+    } while (value < rejection_threshold);
+    return value % upper_bound;
+}
+
 Locale Localization::CurrentLocale() const {
     Locale locale{};
     RequireOk(OpenService(system_service, MICROPIXEL_SERVICE_SYSTEM, MICROPIXEL_SYSTEM_INTERFACE_MAJOR,
@@ -428,6 +463,9 @@ Result<AudioInfo> Audio::info() const {
         raw.max_voices,
         raw.supported_waveforms,
         Duration::Milliseconds(raw.max_tone_duration_ms),
+        raw.max_clips,
+        raw.max_playbacks,
+        (raw.capabilities & MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS) != 0U,
     };
 }
 
@@ -474,12 +512,199 @@ Result<void> Audio::StopAll() const {
     return {};
 }
 
+AudioClip::AudioClip(AudioClip&& other) noexcept : handle_(other.handle_) { other.handle_ = 0U; }
+
+AudioClip& AudioClip::operator=(AudioClip&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        handle_ = other.handle_;
+        other.handle_ = 0U;
+    }
+    return *this;
+}
+
+AudioClip::~AudioClip() { Reset(); }
+
+void AudioClip::Reset() {
+    if (handle_ == 0U) {
+        return;
+    }
+    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+    if (OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                    MICROPIXEL_AUDIO_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
+        (void)CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_CLIP_RELEASE, &request, sizeof(request));
+    }
+    handle_ = 0U;
+}
+
+Playback::Playback(Playback&& other) noexcept : handle_(other.handle_) { other.handle_ = 0U; }
+
+Playback& Playback::operator=(Playback&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        handle_ = other.handle_;
+        other.handle_ = 0U;
+    }
+    return *this;
+}
+
+Playback::~Playback() { Reset(); }
+
+Result<void> Playback::Pause() {
+    if (handle_ == 0U) {
+        return unexpected(Error{ErrorCode::kInvalidState});
+    }
+    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_PLAYBACK_PAUSE, &request, sizeof(request));
+    }
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
+}
+
+Result<void> Playback::Resume() {
+    if (handle_ == 0U) {
+        return unexpected(Error{ErrorCode::kInvalidState});
+    }
+    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_PLAYBACK_RESUME, &request, sizeof(request));
+    }
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
+}
+
+Result<void> Playback::SetVolume(uint16_t volume_per_mille) {
+    if (handle_ == 0U || volume_per_mille > 1000U) {
+        return unexpected(Error{handle_ == 0U ? ErrorCode::kInvalidState : ErrorCode::kInvalidArgument});
+    }
+    micropixel_audio_playback_volume_request_t request{};
+    request.size = sizeof(request);
+    request.playback = handle_;
+    request.volume_per_mille = volume_per_mille;
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_PLAYBACK_SET_VOLUME, &request, sizeof(request));
+    }
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
+}
+
+Result<PlaybackState> Playback::state() const {
+    if (handle_ == 0U) {
+        return unexpected(Error{ErrorCode::kInvalidState});
+    }
+    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+    micropixel_audio_playback_state_response_t response{};
+    uint32_t response_size = 0U;
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallService(audio_service, MICROPIXEL_AUDIO_METHOD_PLAYBACK_GET_STATE, &request, sizeof(request),
+                             &response, sizeof(response), response_size);
+    }
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.playback != handle_ ||
+        response.state < MICROPIXEL_AUDIO_PLAYBACK_STATE_PLAYING ||
+        response.state > MICROPIXEL_AUDIO_PLAYBACK_STATE_FAILED) {
+        runtime::Panic("audio.playback.state", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return static_cast<PlaybackState>(response.state - MICROPIXEL_AUDIO_PLAYBACK_STATE_PLAYING);
+}
+
+Result<void> Playback::Stop() {
+    if (handle_ == 0U) {
+        return {};
+    }
+    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_PLAYBACK_STOP, &request, sizeof(request));
+    }
+    if (status == MICROPIXEL_STATUS_OK || status == MICROPIXEL_STATUS_NOT_FOUND) {
+        handle_ = 0U;
+        return {};
+    }
+    return unexpected(ErrorFromStatus(status));
+}
+
+void Playback::Reset() {
+    if (handle_ != 0U) {
+        (void)Stop();
+        handle_ = 0U;
+    }
+}
+
+Result<AudioClip> Audio::Load(AssetId asset) const {
+    micropixel_audio_clip_load_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
+    micropixel_audio_clip_info_t response{};
+    uint32_t response_size = 0U;
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallService(audio_service, MICROPIXEL_AUDIO_METHOD_CLIP_LOAD, &request, sizeof(request), &response,
+                             sizeof(response), response_size);
+    }
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) ||
+        response.interface_major != MICROPIXEL_AUDIO_INTERFACE_MAJOR || response.clip == 0U ||
+        response.reserved0 != 0U || response.format != MICROPIXEL_AUDIO_FORMAT_OGG_OPUS) {
+        runtime::Panic("audio.clip.load", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return AudioClip{response.clip};
+}
+
+Result<Playback> Audio::Play(const AudioClip& clip, PlaybackOptions options) const {
+    if (!clip.valid() || options.volume_per_mille > 1000U) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    micropixel_audio_playback_start_request_t request{};
+    request.size = sizeof(request);
+    request.flags = options.loop ? MICROPIXEL_AUDIO_PLAYBACK_LOOP : 0U;
+    request.clip = clip.handle_;
+    request.volume_per_mille = options.volume_per_mille;
+    micropixel_handle_response_t response{};
+    uint32_t response_size = 0U;
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallService(audio_service, MICROPIXEL_AUDIO_METHOD_PLAYBACK_START, &request, sizeof(request),
+                             &response, sizeof(response), response_size);
+    }
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.handle == 0U) {
+        runtime::Panic("audio.playback.start", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return Playback{response.handle};
+}
+
+Result<Playback> Audio::Play(AssetId asset, PlaybackOptions options) const {
+    auto clip = Load(asset);
+    if (!clip) {
+        return unexpected(clip.error());
+    }
+    return Play(*clip, options);
+}
+
 Timer::~Timer() { Reset(); }
 
 void Timer::Cancel() {
+    if (handle_ == 0U) {
+        return;
+    }
     micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
     RequireOk(OpenService(timer_service, MICROPIXEL_SERVICE_TIMER, 1U, 0U), "timer.cancel.open");
-    RequireOk(CallVoid(timer_service, MICROPIXEL_TIMER_METHOD_CANCEL, &request, sizeof(request)), "timer.cancel");
+    RequireOk(CallVoid(timer_service, MICROPIXEL_TIMER_METHOD_RELEASE, &request, sizeof(request)), "timer.cancel");
+    handle_ = 0U;
 }
 
 void Timer::Reset() {
@@ -544,6 +769,10 @@ RendererInfo Renderer::info() const {
             cached_graphics_info.max_commands == 0U || cached_graphics_info.max_draw_operations == 0U ||
             cached_graphics_info.max_frame_commands < cached_graphics_info.max_draw_operations) {
             runtime::Panic("graphics.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
+        }
+        if (input_info_loaded && (cached_graphics_info.width != cached_input_info.logical_width ||
+                                  cached_graphics_info.height != cached_input_info.logical_height)) {
+            runtime::Panic("graphics.info.coordinate_space", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         graphics_info_loaded = true;
     }
@@ -1232,7 +1461,7 @@ Result<TextMetrics> Renderer::MeasureText(const char* text, const Font& font) co
 
 InputInfo Input::info() const {
     const micropixel_input_info_t& raw = LoadInputInfo();
-    return InputInfo{raw.logical_width, raw.logical_height, raw.max_touch_points, raw.capabilities};
+    return InputInfo{raw.max_touch_points, raw.capabilities};
 }
 
 Texture::Texture(Texture&& other) noexcept : handle_(other.handle_), width_(other.width_), height_(other.height_) {
@@ -1379,13 +1608,12 @@ Result<void> TextureUpdateBatch::Finish() {
     return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
 }
 
-Result<Texture> Resources::LoadTexture(ResourceRef resource) const {
+Result<Texture> Resources::LoadTexture(AssetId asset) const {
     int32_t status = OpenResourceService();
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    micropixel_resource_load_texture_request_t request{static_cast<uint16_t>(sizeof(request)), 0U,
-                                                       resource.asset().value()};
+    micropixel_resource_load_texture_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
     micropixel_texture_info_t response{};
     uint32_t response_size = 0U;
     status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_TEXTURE, &request, sizeof(request),
@@ -1404,13 +1632,12 @@ Result<Texture> Resources::LoadTexture(ResourceRef resource) const {
     return Texture{response.texture, response.width, response.height};
 }
 
-Result<Font> Resources::LoadFont(ResourceRef resource) const {
+Result<Font> Resources::LoadFont(AssetId asset) const {
     int32_t status = OpenResourceService();
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    micropixel_resource_load_font_request_t request{static_cast<uint16_t>(sizeof(request)), 0U,
-                                                    resource.asset().value()};
+    micropixel_resource_load_font_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
     micropixel_font_info_t response{};
     uint32_t response_size = 0U;
     status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_FONT, &request, sizeof(request), &response,
@@ -1475,25 +1702,60 @@ void Application::BeginRun() const {
 void Application::EndRun() const { running_ = false; }
 
 Event Application::WaitEvent() const {
+    Event event;
+    if (!WaitEventInternal(event, UINT64_MAX)) {
+        runtime::Panic("application.wait_event.timeout", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return event;
+}
+
+bool Application::WaitEventFor(Event& event, Duration timeout) const {
+    if (timeout.count_microseconds() == UINT64_MAX) {
+        runtime::Panic("application.wait_event_for.timeout", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    return WaitEventInternal(event, timeout.count_microseconds());
+}
+
+bool Application::PollEvent(Event& event) const { return WaitEventInternal(event, 0U); }
+
+bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
     micropixel_event_t raw{};
-    RequireOk(micropixel_event_wait(&raw, sizeof(raw), UINT64_MAX), "application.WaitEvent");
+    const int32_t status = micropixel_event_wait(&raw, sizeof(raw), timeout_us);
+    if (status == MICROPIXEL_STATUS_TIMEOUT) {
+        return false;
+    }
+    RequireOk(status, "application.wait_event");
     if (raw.size != sizeof(raw)) {
         runtime::Panic("application.wait_event.size", MICROPIXEL_STATUS_INTERNAL);
     }
 
     TimePoint timestamp{raw.timestamp_us};
     if (raw.service_id == 0U && raw.event_id == MICROPIXEL_CORE_EVENT_RESUME) {
-        return Event{EventType::kResume, timestamp};
+        event = Event{EventType::kResume, timestamp};
+        return true;
     }
     if (raw.service_id == 0U && raw.event_id == MICROPIXEL_CORE_EVENT_STOP) {
-        return Event{EventType::kStop, timestamp};
+        event = Event{EventType::kStop, timestamp};
+        return true;
     }
 
     if (raw.service_id == MICROPIXEL_SERVICE_TIMER && raw.event_id == MICROPIXEL_TIMER_EVENT_EXPIRED) {
         micropixel_timer_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        return Event{
-            TimerEvent{timestamp, Duration::Microseconds(payload.elapsed_us), payload.missed_count, raw.source}};
+        event =
+            Event{TimerEvent{timestamp, Duration::Microseconds(payload.elapsed_us), payload.missed_count, raw.source}};
+        return true;
+    }
+
+    if (raw.service_id == MICROPIXEL_SERVICE_AUDIO && raw.event_id == MICROPIXEL_AUDIO_EVENT_PLAYBACK_FINISHED) {
+        micropixel_audio_event_payload_t payload{};
+        CopyBytes(&payload, raw.payload, sizeof(payload));
+        if (payload.playback == 0U || payload.playback != raw.source || payload.reserved[0] != 0U ||
+            payload.reserved[1] != 0U || payload.reserved[2] != 0U || raw.status > MICROPIXEL_STATUS_OK) {
+            runtime::Panic("application.wait_event.audio_payload", MICROPIXEL_STATUS_INTERNAL);
+        }
+        event = Event{AudioPlaybackEvent{timestamp, raw.status == MICROPIXEL_STATUS_OK, raw.source}};
+        return true;
     }
 
     if (raw.service_id == MICROPIXEL_SERVICE_INPUT && raw.event_id == MICROPIXEL_INPUT_EVENT_TOUCH) {
@@ -1521,15 +1783,16 @@ Event Application::WaitEvent() const {
         if (has_pressure && payload.pressure_per_mille > 1000U) {
             runtime::Panic("application.wait_event.touch_pressure", MICROPIXEL_STATUS_INTERNAL);
         }
-        return Event{TouchEvent{timestamp, phase, raw.source, payload.x, payload.y, has_pressure,
-                                static_cast<uint16_t>(has_pressure ? payload.pressure_per_mille : 0U)}};
+        event = Event{TouchEvent{timestamp, phase, raw.source, payload.x, payload.y, has_pressure,
+                                 static_cast<uint16_t>(has_pressure ? payload.pressure_per_mille : 0U)}};
+        return true;
     }
 
     if (raw.service_id == MICROPIXEL_SERVICE_INPUT && raw.event_id == MICROPIXEL_INPUT_EVENT_KEY) {
         micropixel_key_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        if (payload.code < MICROPIXEL_KEY_UP || payload.code > MICROPIXEL_KEY_Y || payload.modifiers != 0U ||
-            payload.reserved0 != 0U) {
+        if (payload.code < MICROPIXEL_KEY_UP || payload.code > MICROPIXEL_KEY_GAMEPAD_NORTH ||
+            payload.modifiers != 0U || payload.reserved0 != 0U) {
             runtime::Panic("application.wait_event.key_payload", MICROPIXEL_STATUS_INTERNAL);
         }
         KeyPhase phase = KeyPhase::kCancel;
@@ -1552,10 +1815,12 @@ Event Application::WaitEvent() const {
         if ((phase == KeyPhase::kRepeat) != (payload.repeat_count != 0U)) {
             runtime::Panic("application.wait_event.key_repeat", MICROPIXEL_STATUS_INTERNAL);
         }
-        return Event{KeyEvent{timestamp, static_cast<KeyCode>(payload.code), phase, payload.repeat_count}};
+        event = Event{KeyEvent{timestamp, static_cast<KeyCode>(payload.code), phase, payload.repeat_count}};
+        return true;
     }
 
-    return Event{timestamp};
+    event = Event{timestamp};
+    return true;
 }
 
 }  // namespace micropixel

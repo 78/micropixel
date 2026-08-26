@@ -287,14 +287,14 @@ bool ParseKeyCode(const char* text, device::KeyCode& code_out) {
         code_out = device::KeyCode::kBack;
     } else if (std::strcmp(text, "menu") == 0) {
         code_out = device::KeyCode::kMenu;
-    } else if (std::strcmp(text, "a") == 0) {
-        code_out = device::KeyCode::kA;
-    } else if (std::strcmp(text, "b") == 0) {
-        code_out = device::KeyCode::kB;
-    } else if (std::strcmp(text, "x") == 0) {
-        code_out = device::KeyCode::kX;
-    } else if (std::strcmp(text, "y") == 0) {
-        code_out = device::KeyCode::kY;
+    } else if (std::strcmp(text, "south") == 0) {
+        code_out = device::KeyCode::kSouth;
+    } else if (std::strcmp(text, "east") == 0) {
+        code_out = device::KeyCode::kEast;
+    } else if (std::strcmp(text, "west") == 0) {
+        code_out = device::KeyCode::kWest;
+    } else if (std::strcmp(text, "north") == 0) {
+        code_out = device::KeyCode::kNorth;
     } else {
         return false;
     }
@@ -1222,19 +1222,72 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     cJSON* runtime = cJSON_GetObjectItemCaseSensitive(result, "runtime");
     if (cJSON_IsObject(runtime)) (void)cJSON_AddNumberToObject(runtime, "uptimeMs", esp_timer_get_time() / 1000);
 
-    cJSON* task_diagnostics = cJSON_AddObjectToObject(result, "taskDiagnostics");
+    const device::WifiSnapshot wifi = wifi_.Snapshot();
+    cJSON* network = cJSON_AddObjectToObject(result, "network");
+    if (network != nullptr) {
+        (void)cJSON_AddBoolToObject(network, "available", wifi.available);
+        (void)cJSON_AddBoolToObject(network, "enabled", wifi.enabled);
+        (void)cJSON_AddBoolToObject(network, "connected", wifi.connected);
+        for (uint32_t index = 0U; index < wifi.saved_network_count; ++index) {
+            if (wifi.saved_networks[index].connected) {
+                (void)cJSON_AddStringToObject(network, "ssid", wifi.saved_networks[index].ssid.data());
+                (void)cJSON_AddNumberToObject(network, "rssi", wifi.saved_networks[index].rssi);
+                break;
+            }
+        }
+        uint8_t station_mac[6]{};
+        if (esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
+            char mac_text[18]{};
+            std::snprintf(mac_text, sizeof(mac_text), "%02X:%02X:%02X:%02X:%02X:%02X", station_mac[0], station_mac[1],
+                          station_mac[2], station_mac[3], station_mac[4], station_mac[5]);
+            (void)cJSON_AddStringToObject(network, "macAddress", mac_text);
+        }
+        esp_netif_t* station = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t ip_info{};
+        if (station != nullptr && esp_netif_get_ip_info(station, &ip_info) == ESP_OK) {
+            char ip_address[16]{};
+            char gateway[16]{};
+            char netmask[16]{};
+            std::snprintf(ip_address, sizeof(ip_address), IPSTR, IP2STR(&ip_info.ip));
+            std::snprintf(gateway, sizeof(gateway), IPSTR, IP2STR(&ip_info.gw));
+            std::snprintf(netmask, sizeof(netmask), IPSTR, IP2STR(&ip_info.netmask));
+            (void)cJSON_AddStringToObject(network, "ipAddress", ip_address);
+            (void)cJSON_AddStringToObject(network, "gateway", gateway);
+            (void)cJSON_AddStringToObject(network, "netmask", netmask);
+            const char* hostname = nullptr;
+            if (esp_netif_get_hostname(station, &hostname) == ESP_OK && hostname != nullptr) {
+                (void)cJSON_AddStringToObject(network, "hostname", hostname);
+            }
+            esp_netif_dns_info_t dns{};
+            if (esp_netif_get_dns_info(station, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK &&
+                dns.ip.type == ESP_IPADDR_TYPE_V4) {
+                char dns_address[16]{};
+                std::snprintf(dns_address, sizeof(dns_address), IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+                (void)cJSON_AddStringToObject(network, "dns", dns_address);
+            }
+        }
+    }
+
+    return PostCommandResult(client, identity, command_id, true, result);
+}
+
+bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& identity, const char* command_id) {
+    cJSON* result = cJSON_CreateObject();
+    if (result == nullptr) {
+        return false;
+    }
 #if configUSE_TRACE_FACILITY == 1
     std::array<TaskStatus_t, kTaskDiagnosticCapacity> task_status{};
     configRUN_TIME_COUNTER_TYPE total_runtime{};
     const UBaseType_t total_task_count = uxTaskGetNumberOfTasks();
     const UBaseType_t task_count =
         uxTaskGetSystemState(task_status.data(), static_cast<UBaseType_t>(task_status.size()), &total_runtime);
-    if (task_diagnostics != nullptr) {
-        (void)cJSON_AddBoolToObject(task_diagnostics, "available", true);
-        (void)cJSON_AddNumberToObject(task_diagnostics, "taskCount", total_task_count);
-        (void)cJSON_AddBoolToObject(task_diagnostics, "truncated", total_task_count > task_status.size());
-        (void)cJSON_AddNumberToObject(task_diagnostics, "totalRuntimeCounter", total_runtime);
-        cJSON* tasks = cJSON_AddArrayToObject(task_diagnostics, "tasks");
+    (void)cJSON_AddBoolToObject(result, "available", true);
+    (void)cJSON_AddNumberToObject(result, "taskCount", total_task_count);
+    (void)cJSON_AddBoolToObject(result, "truncated", total_task_count > task_status.size());
+    (void)cJSON_AddNumberToObject(result, "totalRuntimeCounter", total_runtime);
+    cJSON* tasks = cJSON_AddArrayToObject(result, "tasks");
+    {
         const uint64_t current_total_runtime = static_cast<uint64_t>(total_runtime);
         const uint64_t total_delta = previous_total_runtime_ != 0U && current_total_runtime >= previous_total_runtime_
                                          ? current_total_runtime - previous_total_runtime_
@@ -1283,57 +1336,9 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
         previous_total_runtime_ = current_total_runtime;
     }
 #else
-    if (task_diagnostics != nullptr) {
-        (void)cJSON_AddBoolToObject(task_diagnostics, "available", false);
-        (void)cJSON_AddStringToObject(task_diagnostics, "reason", "freertos_trace_facility_disabled");
-    }
+    (void)cJSON_AddBoolToObject(result, "available", false);
+    (void)cJSON_AddStringToObject(result, "reason", "freertos_trace_facility_disabled");
 #endif
-
-    const device::WifiSnapshot wifi = wifi_.Snapshot();
-    cJSON* network = cJSON_AddObjectToObject(result, "network");
-    if (network != nullptr) {
-        (void)cJSON_AddBoolToObject(network, "available", wifi.available);
-        (void)cJSON_AddBoolToObject(network, "enabled", wifi.enabled);
-        (void)cJSON_AddBoolToObject(network, "connected", wifi.connected);
-        for (uint32_t index = 0U; index < wifi.saved_network_count; ++index) {
-            if (wifi.saved_networks[index].connected) {
-                (void)cJSON_AddStringToObject(network, "ssid", wifi.saved_networks[index].ssid.data());
-                (void)cJSON_AddNumberToObject(network, "rssi", wifi.saved_networks[index].rssi);
-                break;
-            }
-        }
-        uint8_t station_mac[6]{};
-        if (esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
-            char mac_text[18]{};
-            std::snprintf(mac_text, sizeof(mac_text), "%02X:%02X:%02X:%02X:%02X:%02X", station_mac[0], station_mac[1],
-                          station_mac[2], station_mac[3], station_mac[4], station_mac[5]);
-            (void)cJSON_AddStringToObject(network, "macAddress", mac_text);
-        }
-        esp_netif_t* station = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        esp_netif_ip_info_t ip_info{};
-        if (station != nullptr && esp_netif_get_ip_info(station, &ip_info) == ESP_OK) {
-            char ip_address[16]{};
-            char gateway[16]{};
-            char netmask[16]{};
-            std::snprintf(ip_address, sizeof(ip_address), IPSTR, IP2STR(&ip_info.ip));
-            std::snprintf(gateway, sizeof(gateway), IPSTR, IP2STR(&ip_info.gw));
-            std::snprintf(netmask, sizeof(netmask), IPSTR, IP2STR(&ip_info.netmask));
-            (void)cJSON_AddStringToObject(network, "ipAddress", ip_address);
-            (void)cJSON_AddStringToObject(network, "gateway", gateway);
-            (void)cJSON_AddStringToObject(network, "netmask", netmask);
-            const char* hostname = nullptr;
-            if (esp_netif_get_hostname(station, &hostname) == ESP_OK && hostname != nullptr) {
-                (void)cJSON_AddStringToObject(network, "hostname", hostname);
-            }
-            esp_netif_dns_info_t dns{};
-            if (esp_netif_get_dns_info(station, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK &&
-                dns.ip.type == ESP_IPADDR_TYPE_V4) {
-                char dns_address[16]{};
-                std::snprintf(dns_address, sizeof(dns_address), IPSTR, IP2STR(&dns.ip.u_addr.ip4));
-                (void)cJSON_AddStringToObject(network, "dns", dns_address);
-            }
-        }
-    }
     return PostCommandResult(client, identity, command_id, true, result);
 }
 
@@ -2151,9 +2156,9 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
                 const esp_app_desc_t* description = esp_app_get_description();
                 (void)cJSON_AddStringToObject(hello, "firmwareVersion",
                                               description != nullptr ? description->version : "unknown");
-                for (const char* command :
-                     {"device.get_info", "device.reboot", "firmware.update", "app.list", "app.install", "app.uninstall",
-                      "app.start", "app.stop", "logs.read", "screen.capture", "input.sequence"}) {
+                for (const char* command : {"device.get_system_info", "device.get_task_diagnostics", "device.reboot",
+                                            "firmware.update", "app.list", "app.install", "app.uninstall", "app.start",
+                                            "app.stop", "logs.read", "screen.capture", "input.sequence"}) {
                     std::array<char, 80U> capability{};
                     std::snprintf(capability.data(), capability.size(), "command:%s", command);
                     cJSON_AddItemToArray(capabilities, cJSON_CreateString(capability.data()));
@@ -2195,8 +2200,10 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
             if (!PostCommandAccepted(client, identity, command_id)) {
                 ESP_LOGW(kTag, "Unable to acknowledge command %s; continuing execution", command_id);
             }
-            if (name != nullptr && std::strcmp(name, "device.get_info") == 0) {
+            if (name != nullptr && std::strcmp(name, "device.get_system_info") == 0) {
                 (void)PostSystemInformation(client, identity, command_id);
+            } else if (name != nullptr && std::strcmp(name, "device.get_task_diagnostics") == 0) {
+                (void)PostTaskDiagnostics(client, identity, command_id);
             } else if (name != nullptr && std::strcmp(name, "app.list") == 0) {
                 (void)PostInstalledApps(client, identity, command_id);
             } else if (name != nullptr && std::strcmp(name, "firmware.update") == 0) {

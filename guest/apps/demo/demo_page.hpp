@@ -20,6 +20,8 @@ struct DemoContext final {
     micropixel::RendererInfo display;
     micropixel::InputInfo input;
     micropixel::Texture& atlas_texture;
+    micropixel::AudioClip audio_clip{};
+    micropixel::Playback audio_playback{};
 };
 
 using Line = micropixel::FixedString<96U>;
@@ -83,6 +85,7 @@ void ResourceAtlasDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 void AudioDemoEnter(DemoContext& context);
 void AudioDemoExit(DemoContext& context);
+[[nodiscard]] bool AudioDemoOnEvent(DemoContext& context, const micropixel::Event& event);
 [[nodiscard]] bool AudioDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
 void AudioDemoRender(DemoContext& context, micropixel::Frame& commands);
 

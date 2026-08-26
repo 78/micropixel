@@ -94,14 +94,14 @@ menu "MicroPixel board backends"
             backend and is not exposed through the Guest ABI.
 
     config MICROPIXEL_METALIO_CLAW4_AUDIO
-        bool "Enable the Metalio-Claw4 bounded synth audio backend"
+        bool "Enable the Metalio-Claw4 game audio backend"
         depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND && IDF_TARGET_ESP32P4
         default n
         help
             Power the board audio module and amplifier, mix up to eight
-            bounded sine/square/triangle/noise voices, and expose the generic
-            Audio 1.0 tone service to the active Guest. PCM streaming and
-            compressed music remain a separate future data-plane decision.
+            bounded sine/square/triangle/noise voices plus two Host-decoded
+            Ogg Opus playback streams, and expose Audio 1.1 to the active Guest.
+            The Guest never receives PCM, codec, I2S, or master-volume access.
 
     config MICROPIXEL_LVGL_PPA_ACCEL
         bool "Use ESP32-P4 PPA for eligible LVGL RGB888 draw operations"

@@ -33,10 +33,10 @@ enum class KeyCode : uint16_t {
     kConfirm = MICROPIXEL_KEY_CONFIRM,
     kBack = MICROPIXEL_KEY_BACK,
     kMenu = MICROPIXEL_KEY_MENU,
-    kA = MICROPIXEL_KEY_A,
-    kB = MICROPIXEL_KEY_B,
-    kX = MICROPIXEL_KEY_X,
-    kY = MICROPIXEL_KEY_Y,
+    kSouth = MICROPIXEL_KEY_GAMEPAD_SOUTH,
+    kEast = MICROPIXEL_KEY_GAMEPAD_EAST,
+    kWest = MICROPIXEL_KEY_GAMEPAD_WEST,
+    kNorth = MICROPIXEL_KEY_GAMEPAD_NORTH,
 };
 
 enum class KeyPhase : uint8_t {

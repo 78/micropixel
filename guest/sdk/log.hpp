@@ -1,6 +1,8 @@
 #ifndef MICROPIXEL_SDK_LOG_HPP
 #define MICROPIXEL_SDK_LOG_HPP
 
+#include <stdint.h>
+
 namespace micropixel {
 
 class Application;
@@ -9,6 +11,9 @@ class Application;
 // same service and do not own a logging resource.
 class Log final {
    public:
+    // Maximum message payload, excluding the terminating NUL.
+    static constexpr uint32_t kMaximumMessageBytes = 1023U;
+
     constexpr Log(const Log&) noexcept = default;
     constexpr Log& operator=(const Log&) noexcept = default;
 

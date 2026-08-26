@@ -28,6 +28,11 @@
           {"region": [2, 306, 132, 148], "canvas_position": [32, 44]}
         ]
       }
+    },
+    {
+      "name": "music.demo",
+      "format": "ogg_opus",
+      "path": "demo_music.ogg"
     }
   ]
 }

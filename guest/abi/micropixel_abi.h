@@ -24,7 +24,7 @@
 #define MICROPIXEL_RESOURCE_INTERFACE_MINOR 1U
 #define MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES 4096U
 #define MICROPIXEL_AUDIO_INTERFACE_MAJOR 1U
-#define MICROPIXEL_AUDIO_INTERFACE_MINOR 0U
+#define MICROPIXEL_AUDIO_INTERFACE_MINOR 1U
 #define MICROPIXEL_RANDOM_INTERFACE_MAJOR 1U
 #define MICROPIXEL_RANDOM_INTERFACE_MINOR 0U
 #define MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS 5000U
@@ -57,6 +57,8 @@ typedef uint32_t micropixel_service_handle_t;
 typedef uint32_t micropixel_timer_handle_t;
 typedef uint32_t micropixel_texture_handle_t;
 typedef uint16_t micropixel_font_handle_t;
+typedef uint32_t micropixel_audio_clip_handle_t;
+typedef uint32_t micropixel_audio_playback_handle_t;
 
 typedef enum micropixel_service_id {
     MICROPIXEL_SERVICE_TIMER = 1,
@@ -141,7 +143,38 @@ typedef enum micropixel_audio_method {
     MICROPIXEL_AUDIO_METHOD_GET_INFO = 1,
     MICROPIXEL_AUDIO_METHOD_PLAY_TONE = 2,
     MICROPIXEL_AUDIO_METHOD_STOP_ALL = 3,
+    MICROPIXEL_AUDIO_METHOD_CLIP_LOAD = 4,
+    MICROPIXEL_AUDIO_METHOD_CLIP_RELEASE = 5,
+    MICROPIXEL_AUDIO_METHOD_PLAYBACK_START = 6,
+    MICROPIXEL_AUDIO_METHOD_PLAYBACK_PAUSE = 7,
+    MICROPIXEL_AUDIO_METHOD_PLAYBACK_RESUME = 8,
+    MICROPIXEL_AUDIO_METHOD_PLAYBACK_SET_VOLUME = 9,
+    MICROPIXEL_AUDIO_METHOD_PLAYBACK_STOP = 10,
+    MICROPIXEL_AUDIO_METHOD_PLAYBACK_GET_STATE = 11,
 } micropixel_audio_method_t;
+
+typedef enum micropixel_audio_capability {
+    MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS = 1U << 0U,
+} micropixel_audio_capability_t;
+
+typedef enum micropixel_audio_format {
+    MICROPIXEL_AUDIO_FORMAT_OGG_OPUS = 1,
+} micropixel_audio_format_t;
+
+typedef enum micropixel_audio_playback_flag {
+    MICROPIXEL_AUDIO_PLAYBACK_LOOP = 1U << 0U,
+} micropixel_audio_playback_flag_t;
+
+typedef enum micropixel_audio_playback_state {
+    MICROPIXEL_AUDIO_PLAYBACK_STATE_PLAYING = 1,
+    MICROPIXEL_AUDIO_PLAYBACK_STATE_PAUSED = 2,
+    MICROPIXEL_AUDIO_PLAYBACK_STATE_FINISHED = 3,
+    MICROPIXEL_AUDIO_PLAYBACK_STATE_FAILED = 4,
+} micropixel_audio_playback_state_t;
+
+typedef enum micropixel_audio_event_id {
+    MICROPIXEL_AUDIO_EVENT_PLAYBACK_FINISHED = 1,
+} micropixel_audio_event_id_t;
 
 typedef struct micropixel_service_info {
     uint16_t size;
@@ -239,7 +272,9 @@ typedef struct micropixel_audio_info {
     uint32_t capabilities;
     uint32_t supported_waveforms;
     uint32_t max_tone_duration_ms;
-    uint32_t reserved[2];
+    uint16_t max_clips;
+    uint16_t max_playbacks;
+    uint32_t reserved;
 } micropixel_audio_info_t;
 
 typedef struct micropixel_audio_tone {
@@ -253,6 +288,49 @@ typedef struct micropixel_audio_tone {
     uint16_t release_ms;
     uint32_t reserved[3];
 } micropixel_audio_tone_t;
+
+typedef struct micropixel_audio_clip_load_request {
+    uint16_t size;
+    uint16_t reserved0;
+    uint32_t asset_id;
+} micropixel_audio_clip_load_request_t;
+
+typedef struct micropixel_audio_clip_info {
+    uint16_t size;
+    uint16_t interface_major;
+    uint16_t interface_minor;
+    uint16_t reserved0;
+    micropixel_audio_clip_handle_t clip;
+    uint32_t format;
+} micropixel_audio_clip_info_t;
+
+typedef struct micropixel_audio_playback_start_request {
+    uint16_t size;
+    uint16_t flags;
+    micropixel_audio_clip_handle_t clip;
+    uint16_t volume_per_mille;
+    uint16_t reserved0;
+    uint32_t reserved1;
+} micropixel_audio_playback_start_request_t;
+
+typedef struct micropixel_audio_playback_volume_request {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_audio_playback_handle_t playback;
+    uint16_t volume_per_mille;
+    uint16_t reserved1;
+} micropixel_audio_playback_volume_request_t;
+
+typedef struct micropixel_audio_playback_state_response {
+    uint16_t size;
+    uint16_t state;
+    micropixel_audio_playback_handle_t playback;
+} micropixel_audio_playback_state_response_t;
+
+typedef struct micropixel_audio_event_payload {
+    micropixel_audio_playback_handle_t playback;
+    uint32_t reserved[3];
+} micropixel_audio_event_payload_t;
 
 typedef enum micropixel_pixel_format {
     /* Canonical byte order in Guest memory: B, G, R. */
@@ -476,10 +554,10 @@ typedef enum micropixel_key_code {
     MICROPIXEL_KEY_CONFIRM = 5,
     MICROPIXEL_KEY_BACK = 6,
     MICROPIXEL_KEY_MENU = 7,
-    MICROPIXEL_KEY_A = 8,
-    MICROPIXEL_KEY_B = 9,
-    MICROPIXEL_KEY_X = 10,
-    MICROPIXEL_KEY_Y = 11,
+    MICROPIXEL_KEY_GAMEPAD_SOUTH = 8,
+    MICROPIXEL_KEY_GAMEPAD_EAST = 9,
+    MICROPIXEL_KEY_GAMEPAD_WEST = 10,
+    MICROPIXEL_KEY_GAMEPAD_NORTH = 11,
 } micropixel_key_code_t;
 
 typedef enum micropixel_key_phase {
@@ -582,6 +660,16 @@ static_assert(sizeof(micropixel_streaming_texture_update_request_t) == 32U,
 static_assert(sizeof(micropixel_input_info_t) == 32U, "micropixel_input_info_t ABI size changed");
 static_assert(sizeof(micropixel_audio_info_t) == 32U, "micropixel_audio_info_t ABI size changed");
 static_assert(sizeof(micropixel_audio_tone_t) == 32U, "micropixel_audio_tone_t ABI size changed");
+static_assert(sizeof(micropixel_audio_clip_load_request_t) == 8U,
+              "micropixel_audio_clip_load_request_t ABI size changed");
+static_assert(sizeof(micropixel_audio_clip_info_t) == 16U, "micropixel_audio_clip_info_t ABI size changed");
+static_assert(sizeof(micropixel_audio_playback_start_request_t) == 16U,
+              "micropixel_audio_playback_start_request_t ABI size changed");
+static_assert(sizeof(micropixel_audio_playback_volume_request_t) == 12U,
+              "micropixel_audio_playback_volume_request_t ABI size changed");
+static_assert(sizeof(micropixel_audio_playback_state_response_t) == 8U,
+              "micropixel_audio_playback_state_response_t ABI size changed");
+static_assert(sizeof(micropixel_audio_event_payload_t) == 16U, "micropixel_audio_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_service_info_t) == 48U, "micropixel_service_info_t ABI size changed");
 static_assert(sizeof(micropixel_handle_request_t) == 8U, "micropixel_handle_request_t ABI size changed");
 static_assert(sizeof(micropixel_handle_response_t) == 8U, "micropixel_handle_response_t ABI size changed");
@@ -621,6 +709,16 @@ _Static_assert(sizeof(micropixel_streaming_texture_update_request_t) == 32U,
 _Static_assert(sizeof(micropixel_input_info_t) == 32U, "micropixel_input_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_audio_info_t) == 32U, "micropixel_audio_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_audio_tone_t) == 32U, "micropixel_audio_tone_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_clip_load_request_t) == 8U,
+               "micropixel_audio_clip_load_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_clip_info_t) == 16U, "micropixel_audio_clip_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_playback_start_request_t) == 16U,
+               "micropixel_audio_playback_start_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_playback_volume_request_t) == 12U,
+               "micropixel_audio_playback_volume_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_playback_state_response_t) == 8U,
+               "micropixel_audio_playback_state_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_event_payload_t) == 16U, "micropixel_audio_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_service_info_t) == 48U, "micropixel_service_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_handle_request_t) == 8U, "micropixel_handle_request_t ABI size changed");
 _Static_assert(sizeof(micropixel_handle_response_t) == 8U, "micropixel_handle_response_t ABI size changed");

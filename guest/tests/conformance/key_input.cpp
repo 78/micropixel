@@ -5,6 +5,11 @@
 extern "C" __attribute__((export_name("__micropixel_test_key_input"))) void __micropixel_test_key_input(void) {}
 
 int main() {
+    static_assert(static_cast<uint16_t>(micropixel::KeyCode::kSouth) == 8U);
+    static_assert(static_cast<uint16_t>(micropixel::KeyCode::kEast) == 9U);
+    static_assert(static_cast<uint16_t>(micropixel::KeyCode::kWest) == 10U);
+    static_assert(static_cast<uint16_t>(micropixel::KeyCode::kNorth) == 11U);
+
     micropixel::Application app;
     if (!app.input().info().supports_key_events()) {
         return 110;

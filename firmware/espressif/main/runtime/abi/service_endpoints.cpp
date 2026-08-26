@@ -394,7 +394,7 @@ ServiceDescriptor AudioServiceEndpoint::Describe() const {
         .service_id = MICROPIXEL_SERVICE_AUDIO,
         .interface_major = MICROPIXEL_AUDIO_INTERFACE_MAJOR,
         .interface_minor = MICROPIXEL_AUDIO_INTERFACE_MINOR,
-        .flags = MICROPIXEL_SERVICE_FLAG_CALL,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_EVENTS,
         .capabilities = capabilities,
         .max_request_bytes = sizeof(micropixel_audio_tone_t),
         .max_response_bytes = sizeof(micropixel_audio_info_t),
@@ -423,6 +423,50 @@ int32_t AudioServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, u
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         return ResultStatus(context_.AudioStopAll());
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_CLIP_LOAD) {
+        micropixel_audio_clip_load_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.asset_id == 0U || wire.reserved0 != 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_audio_clip_info_t>(context_.AudioLoadClip(wire.asset_id), response,
+                                                         response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_START) {
+        micropixel_audio_playback_start_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.clip == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        auto result = context_.AudioStartPlayback(wire);
+        return result ? WriteHandle(*result, response, response_capacity, response_size_out) : result.error().status;
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_SET_VOLUME) {
+        micropixel_audio_playback_volume_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.playback == 0U || wire.reserved0 != 0U ||
+            wire.reserved1 != 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return ResultStatus(context_.AudioSetPlaybackVolume(wire.playback, wire.volume_per_mille));
+    }
+    uint32_t handle = 0U;
+    if (!ReadHandle(request, request_size, handle)) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_CLIP_RELEASE) {
+        return ResultStatus(context_.AudioReleaseClip(handle));
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_PAUSE) {
+        return ResultStatus(context_.AudioPausePlayback(handle));
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_RESUME) {
+        return ResultStatus(context_.AudioResumePlayback(handle));
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_STOP) {
+        return ResultStatus(context_.AudioStopPlayback(handle));
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_GET_STATE) {
+        return WriteResult<micropixel_audio_playback_state_response_t>(context_.AudioPlaybackState(handle), response,
+                                                                       response_capacity, response_size_out);
     }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }

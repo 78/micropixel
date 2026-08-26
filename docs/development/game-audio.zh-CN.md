@@ -4,6 +4,9 @@
 也必须继续通过相同的自动分析和真机验收。目标是让音效参数可审查、可计算、可回归，并保持不同游戏在
 同一设备上的主观响度连续性。
 
+短促、程序化反馈使用 `Tone`/`sfx.json`；BGM、对白和较长的录制音效使用 Bundle `ogg_opus` asset。
+两条路径最终进入同一个 Host mixer 和系统主音量，不允许 Guest 自建 master volume。
+
 算法指标是工程代理，不是校准声压测量，也不能单独证明“听起来舒服”。自动门禁负责发现数字响度、
 尖锐度、瞬态和重复暴露回归，最终判断必须包含目标设备上的 A/B 试听。
 
@@ -122,3 +125,35 @@ schema v2 的默认 limits 使用模板中的当前项目基线：
 
 设备 profile 当前若标记为 `uncalibrated-flat`，报告只能用于相对数字比较。得到校准麦克风扫频数据后，
 应更新或替换设备频响曲线，再复跑所有游戏；任何情况下都不要把这些指标表述为绝对声压或医学听力安全结论。
+
+## 7. Ogg Opus 长音频
+
+素材 manifest 使用稳定语义名，并将尺寸保持为零：
+
+```json
+{
+  "name": "music.level-one",
+  "format": "ogg_opus",
+  "path": "music/level-one.ogg"
+}
+```
+
+打包器会校验 Ogg CRC、单一 logical stream、`OpusHead`/`OpusTags`、packet 上限和 EOS；Vorbis、裸 Opus、
+损坏或 chained Ogg 会在构建时拒绝。P4 音频输出是 16 kHz mono，Host 解码器会重采样并下混，因此发布
+素材建议直接编码为 mono。语音通常从 20–32 kbit/s 开始试听，BGM 从 32–48 kbit/s 开始；码率不是质量
+保证，循环边界、底噪和复杂音乐仍须在目标设备上试听。示例命令：
+
+```sh
+ffmpeg -i input.wav -c:a libopus -application audio -ac 1 -b:a 40k -vbr on output.ogg
+```
+
+SDK 把来源与播放实例分开：`AudioClip` 可重复播放，`Playback` 代表一次播放并支持 pause/resume、单实例
+`volume_per_mille`、loop 和 stop。二者都 move-only；不要用 `shared_ptr` 包装 Host handle。播放会 pin clip，
+所以切换关卡时可以销毁上一关的 `AudioClip`，已经开始的播放仍安全；通常应先停止上一关的 `Playback`，
+使 decoder state 和 PCM ring 立即释放。跨关卡 BGM 放在关卡对象之上的 session/game state 中，不属于任何
+单关卡资源集合。
+
+当前上限是 16 个 clip handle 和两条同时 compressed playback，应用必须以 `AudioInfo` 返回值为准。
+Tone 的 8 voices 与 compressed playback 在 Host 统一混音，但分别计数。完成事件只表示自然结束或解码
+失败；主动 stop 是同步终态，不再投递事件。网络素材、进度条和关卡预加载以后由 Resource/Network 层负责，
+下载完成后仍交给同样的 clip/playback API。

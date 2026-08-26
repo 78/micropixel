@@ -894,9 +894,11 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
             }
             aot_section = section;
         } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_ASSET) {
+            const bool audio = section->format == MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS;
             if (section->id == 0U || section->format < MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 ||
-                section->format > MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 || section->width == 0U ||
-                section->height == 0U ||
+                (section->format > MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 && !audio) ||
+                (audio && (section->width != 0U || section->height != 0U || section->stride != 0U)) ||
+                (!audio && (section->width == 0U || section->height == 0U)) ||
                 (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
                  (section->stride != section->width * 3U ||
                   (uint64_t)section->stride * section->height != section->size)) ||

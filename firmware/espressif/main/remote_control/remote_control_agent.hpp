@@ -215,6 +215,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     [[nodiscard]] bool PostFirmwareUpdateStatus(void* client, const Identity& identity);
     void PublishRuntimeSnapshotIfChanged(void* client, const Identity& identity);
     [[nodiscard]] bool PostSystemInformation(void* client, const Identity& identity, const char* command_id);
+    [[nodiscard]] bool PostTaskDiagnostics(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostInstalledApps(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostGuestLogs(void* client, const Identity& identity, const char* command_id,
                                      uint64_t after_sequence);

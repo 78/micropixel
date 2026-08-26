@@ -19,7 +19,7 @@ uint32_t ReadU32OrDefault(micropixel::KVStore storage, const char* key, uint32_t
 }
 
 micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
-    auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(asset));
+    auto result = app.resources().LoadTexture(asset);
     micropixel::Assert(result.has_value(), "snake: critical texture resource failed");
     return static_cast<micropixel::Texture&&>(result.value());
 }
@@ -67,7 +67,7 @@ int SnakeAppMain() {
     micropixel::Audio audio = app.audio();
     auto audio_info = audio.info();
     bool audio_available = audio_info.has_value();
-    app.log().Info(audio_available ? "snake: Audio 1.0 ready; BGM and bounded SFX enabled"
+    app.log().Info(audio_available ? "snake: Audio 1.1 ready; BGM and bounded SFX enabled"
                                    : "snake: Audio unavailable; visual gameplay continues");
     if (audio_available) {
         Line audio_format;

@@ -21,6 +21,20 @@ class NullAudioBackend final : public InitializableAudioBackend {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
 
+    [[nodiscard]] int32_t StartPcm(const device::PcmSource&, uint32_t, uint16_t,
+                                   device::PcmStreamHandle& handle_out) override {
+        handle_out = 0U;
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t PausePcm(device::PcmStreamHandle) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t ResumePcm(device::PcmStreamHandle) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t SetPcmVolume(device::PcmStreamHandle, uint16_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t StopPcm(device::PcmStreamHandle) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    void BindPcmCompletionSink(device::PcmCompletionSink, void*) override {}
+    void UnbindPcmCompletionSink(void*) override {}
+
     [[nodiscard]] int32_t StopAll() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
     [[nodiscard]] int32_t SuspendAll() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
     [[nodiscard]] int32_t ResumeAll() override { return MICROPIXEL_STATUS_UNSUPPORTED; }

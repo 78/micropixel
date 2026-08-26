@@ -98,6 +98,16 @@ CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
 # and bounded dirty-region coalescing.
 CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND=y
 CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=y
+# All Ogg Opus decoders run serially on MicroPixel's one audio decode worker,
+# so one PSRAM-backed pseudostack is sufficient for every playback instance.
+CONFIG_OPUS_NONTHREADSAFE_PSEUDOSTACK=y
+CONFIG_OPUS_PSEUDOSTACK_SIZE=120000
+CONFIG_OPUS_STATE_PREFER_PSRAM=y
+CONFIG_OPUS_PSEUDOSTACK_PREFER_PSRAM=y
+CONFIG_OPUS_OGG_DECODER_PREFER_PSRAM=y
+# ESP32-P4 uses the portable fixed-point RISC-V decoder path.
+# CONFIG_OPUS_FLOATING_POINT is not set
+# CONFIG_OPUS_ENABLE_XTENSA_OPTIMIZATIONS is not set
 # The TCA9555 power-key wake ISR disables its GPIO interrupt through the
 # esp-iot-solution button driver. PPA/PSRAM activity can temporarily disable
 # the flash cache, so the GPIO control path must remain callable from IRAM.

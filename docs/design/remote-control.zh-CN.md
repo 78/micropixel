@@ -438,6 +438,11 @@ ESP-IDF 6.1 当前解析到的 `esp_hosted` 2.12.12 使用 `ESP_HOSTED_PRIV_SDIO
 
 MAC、IP 和 reset detail 等敏感字段默认脱敏；只有适当 scope 才返回完整值。
 
+设备协议将诊断拆成两个只读指令：`device.get_system_info` 返回 Firmware、硬件、内存、存储、运行状态和网络快照；
+`device.get_task_diagnostics` 按需采集 FreeRTOS 任务、区间 CPU、优先级、Core affinity 和最低剩余栈。
+任务采样不附带在常规系统信息中，避免 Console 的常规轮询反复暂停调度器并构造较大的 JSON。CLI 的
+`micropixel device diagnostics` 依次执行两个指令并合并展示，保持单一的开发者入口。
+
 ### 11.2 App 列表与生命周期
 
 App 列表中的所有条目都来自统一 App Store；设备没有预置 App，所有 Bundle 具有相同的启动、升级和卸载语义。
@@ -488,7 +493,7 @@ Remote Control 只调用硬件无关的 Input Service。虚拟触摸先经过 Pl
 ```
 
 当前支持 `down | move | up | cancel` 原始触摸、`down | up | repeat | cancel` 语义按键和带 ID 截图；
-固定键码为 `up/down/left/right/confirm/back/menu/a/b/x/y`。每个序列最多 16 步、4 张截图、单步延迟
+固定键码为 `up/down/left/right/confirm/back/menu/south/east/west/north`。每个序列最多 16 步、4 张截图、单步延迟
 5 秒、总延迟 10 秒。成功、失败或 deadline 到期后，Host 都对仍处于按下状态的触点和按键补发
 `cancel`。tap/swipe 可由这些底层步骤组合。Host 使用跨循环的有界序列状态机，每次只推进一个步骤，让
 System UI 或 Guest 在步骤之间消费输入；状态机会跨 Remote Control、System Settings、App Hall 和
@@ -699,7 +704,7 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 UTC 时间；这些字段只作为 Control 协议的补充观测，不参与设备校时。大厅在 localization 配置落地前固定
 按 UTC+8 显示 `HH:MM`；TLS 不依赖该时间，产品关闭 `CONFIG_MBEDTLS_HAVE_TIME_DATE` 并忽略证书
 `notBefore`/`notAfter`。
-连接建立时 Console 自动请求系统信息、App 列表和一批日志，服务端 heartbeat 主动
+连接建立时 Console 自动请求系统信息、App 列表和一批日志，任务诊断仅在 Tasks 对话框打开时请求；服务端 heartbeat 主动
 结算超时 Job。无对话框时，浏览器活跃状态每 10 秒同步系统与 App 信息，不活跃时降为每 60 秒；屏幕、任务、
 应用或日志对话框打开时每 3 秒同步对应数据，日志 `hasMore` 时不等待并立即续拉。浏览器连续 5 分钟无活动会
 自动关闭这些高频对话框。
