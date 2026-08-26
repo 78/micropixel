@@ -71,6 +71,17 @@ void SystemUiAdapter::UpdateSystemInformation(const host_ui::SystemInformationMo
 
 void SystemUiAdapter::LeaveSystemInformation() { operations_.leave_system_information(operations_.context); }
 
+std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowPowerManagement(
+    const host_ui::PowerManagementModel& model, host_ui::SystemUiActionSink action_sink, void* action_context) {
+    return operations_.show_power_management(operations_.context, model, action_sink, action_context);
+}
+
+void SystemUiAdapter::UpdatePowerManagement(const host_ui::PowerManagementModel& model) {
+    operations_.update_power_management(operations_.context, model);
+}
+
+void SystemUiAdapter::LeavePowerManagement() { operations_.leave_power_management(operations_.context); }
+
 std::expected<void, host_ui::SystemUiError> SystemUiAdapter::ShowRemoteControl(const host_ui::RemoteControlModel& model,
                                                                                host_ui::SystemUiActionSink action_sink,
                                                                                void* action_context) {

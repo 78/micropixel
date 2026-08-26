@@ -2,17 +2,20 @@
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace micropixel::host_ui {
 namespace {
 
 constexpr char kTag[] = "micropixel_shell";
+constexpr uint32_t kMillisecondsPerMinute = 60U * 1000U;
 
 }  // namespace
 
 SystemShell::SystemShell(SystemUiBackend& ui) : ui_(ui) {
     action_queue_ = xQueueCreateStatic(kActionQueueCapacity, sizeof(SystemUiAction), action_queue_bytes_.data(),
                                        &action_queue_storage_);
+    RecordUserActivity();
 }
 
 SystemShell::~SystemShell() {
@@ -22,6 +25,7 @@ SystemShell::~SystemShell() {
     ui_.LeaveAppManagement();
     ui_.LeaveRemoteControl();
     ui_.LeaveSystemInformation();
+    ui_.LeavePowerManagement();
     ui_.LeaveSystemMenu();
     ui_.LeaveHall();
 }
@@ -37,10 +41,14 @@ std::expected<void, SystemUiError> SystemShell::ShowHall(const HallModel& model)
 void SystemShell::UpdateHallStatusBar(const HallStatusBarModel& model) { ui_.UpdateHallStatusBar(model); }
 
 std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
-    TickType_t receive_timeout = timeout;
+    TickType_t receive_timeout = AutoSleepAwareTimeout(timeout);
     for (;;) {
         SystemUiAction action{};
         if (action_queue_ == nullptr || xQueueReceive(action_queue_, &action, receive_timeout) != pdTRUE) {
+            if (RequestAutoSleepIfDue()) {
+                receive_timeout = 0U;
+                continue;
+            }
             return std::nullopt;
         }
         if (action.type == SystemUiActionType::kPowerButtonPressed) {
@@ -63,14 +71,22 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
         } else if (action.type == SystemUiActionType::kBatteryStateChanged) {
             battery_state_change_pending_.store(false, std::memory_order_release);
             battery_state_change_queued_.store(false, std::memory_order_release);
+            RefreshExternalPowerState();
+        } else if (action.type == SystemUiActionType::kUserActivity) {
+            user_activity_pending_.store(false, std::memory_order_release);
+            user_activity_queued_.store(false, std::memory_order_release);
         }
         QueuePendingWifiStateChange();
         QueuePendingBatteryStateChange();
+        QueuePendingUserActivity();
         if (action.type != SystemUiActionType::kPowerButtonPressed) {
             QueuePendingPowerButton();
         }
         if (action.type != SystemUiActionType::kPowerOffRequested) {
             QueuePendingPowerOff();
+        }
+        if (action.type == SystemUiActionType::kUserActivity) {
+            return std::nullopt;
         }
         return action;
     }
@@ -124,6 +140,18 @@ std::expected<void, SystemUiError> SystemShell::ShowSystemInformation(const Syst
 void SystemShell::UpdateSystemInformation(const SystemInformationModel& model) { ui_.UpdateSystemInformation(model); }
 
 void SystemShell::LeaveSystemInformation() { ui_.LeaveSystemInformation(); }
+
+std::expected<void, SystemUiError> SystemShell::ShowPowerManagement(const PowerManagementModel& model) {
+    if (action_queue_ == nullptr) {
+        return std::unexpected(SystemUiError::kUnavailable);
+    }
+    ResetActionQueue();
+    return ui_.ShowPowerManagement(model, ReceiveAction, this);
+}
+
+void SystemShell::UpdatePowerManagement(const PowerManagementModel& model) { ui_.UpdatePowerManagement(model); }
+
+void SystemShell::LeavePowerManagement() { ui_.LeavePowerManagement(); }
 
 std::expected<void, SystemUiError> SystemShell::ShowRemoteControl(const RemoteControlModel& model) {
     if (action_queue_ == nullptr) {
@@ -255,6 +283,30 @@ void SystemShell::NotifyBatteryStateChanged() {
     QueuePendingBatteryStateChange();
 }
 
+void SystemShell::NotifyUserActivity() {
+    if (action_queue_ == nullptr) {
+        return;
+    }
+    RecordUserActivity();
+    user_activity_pending_.store(true, std::memory_order_release);
+    QueuePendingUserActivity();
+}
+
+void SystemShell::ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query,
+                                     void* power_context) {
+    external_power_query_ = power_query;
+    external_power_context_ = power_context;
+    SetAutoSleepTimeout(timeout_minutes);
+    RefreshExternalPowerState();
+}
+
+void SystemShell::SetAutoSleepTimeout(uint8_t timeout_minutes) {
+    auto_sleep_timeout_minutes_.store(timeout_minutes, std::memory_order_release);
+    RecordUserActivity();
+}
+
+void SystemShell::NotifyPowerCycleCompleted() { RecordUserActivity(); }
+
 void SystemShell::QueuePendingPowerButton() {
     if (action_queue_ == nullptr || !power_button_pending_.load(std::memory_order_acquire) ||
         power_button_queued_.exchange(true, std::memory_order_acq_rel)) {
@@ -305,6 +357,66 @@ void SystemShell::QueuePendingBatteryStateChange() {
     }
 }
 
+void SystemShell::QueuePendingUserActivity() {
+    if (action_queue_ == nullptr || !user_activity_pending_.load(std::memory_order_acquire) ||
+        user_activity_queued_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const SystemUiAction action{.type = SystemUiActionType::kUserActivity};
+    if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
+        user_activity_queued_.store(false, std::memory_order_release);
+    }
+}
+
+void SystemShell::RefreshExternalPowerState() {
+    bool connected = false;
+    const bool available =
+        external_power_query_ != nullptr && external_power_query_(external_power_context_, connected);
+    const bool began_running_on_battery =
+        available && !connected && (!external_power_available_ || external_power_connected_);
+    external_power_available_ = available;
+    external_power_connected_ = connected;
+    if (began_running_on_battery) {
+        RecordUserActivity();
+    }
+}
+
+TickType_t SystemShell::AutoSleepAwareTimeout(TickType_t requested_timeout) const {
+    const uint8_t timeout_minutes = auto_sleep_timeout_minutes_.load(std::memory_order_acquire);
+    if (timeout_minutes == 0U || !external_power_available_ || external_power_connected_) {
+        return requested_timeout;
+    }
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(static_cast<uint32_t>(timeout_minutes) * kMillisecondsPerMinute);
+    const TickType_t elapsed_ticks = xTaskGetTickCount() - last_user_activity_ticks_.load(std::memory_order_acquire);
+    if (elapsed_ticks >= timeout_ticks) {
+        return 0U;
+    }
+    const TickType_t remaining_ticks = timeout_ticks - elapsed_ticks;
+    return requested_timeout < remaining_ticks ? requested_timeout : remaining_ticks;
+}
+
+bool SystemShell::RequestAutoSleepIfDue() {
+    const uint8_t timeout_minutes = auto_sleep_timeout_minutes_.load(std::memory_order_acquire);
+    if (timeout_minutes == 0U || !external_power_available_ || external_power_connected_) {
+        return false;
+    }
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(static_cast<uint32_t>(timeout_minutes) * kMillisecondsPerMinute);
+    const TickType_t now_ticks = xTaskGetTickCount();
+    const TickType_t elapsed_ticks = now_ticks - last_user_activity_ticks_.load(std::memory_order_acquire);
+    if (elapsed_ticks < timeout_ticks) {
+        return false;
+    }
+    if (NotifyPowerButtonPressed(static_cast<uint64_t>(now_ticks) * portTICK_PERIOD_MS * 1000U)) {
+        ESP_LOGI(kTag, "auto sleep requested after %u minutes without interaction",
+                 static_cast<unsigned>(timeout_minutes));
+    }
+    return PowerTransitionRequested();
+}
+
+void SystemShell::RecordUserActivity() {
+    last_user_activity_ticks_.store(xTaskGetTickCount(), std::memory_order_release);
+}
+
 void SystemShell::ResetActionQueue() {
     if (action_queue_ == nullptr) {
         return;
@@ -314,10 +426,12 @@ void SystemShell::ResetActionQueue() {
     power_off_queued_.store(false, std::memory_order_release);
     wifi_state_change_queued_.store(false, std::memory_order_release);
     battery_state_change_queued_.store(false, std::memory_order_release);
+    user_activity_queued_.store(false, std::memory_order_release);
     QueuePendingPowerButton();
     QueuePendingPowerOff();
     QueuePendingWifiStateChange();
     QueuePendingBatteryStateChange();
+    QueuePendingUserActivity();
 }
 
 void SystemShell::ReceiveAction(void* context, const SystemUiAction& action) {

@@ -54,6 +54,7 @@ struct KeySample final {
 };
 
 using KeySink = bool (*)(void* context, const KeySample& sample);
+using InputActivitySink = void (*)(void* context);
 
 class InputBackend {
    public:
@@ -67,6 +68,10 @@ class InputBackend {
         (void)context;
     }
     virtual void UnbindKeySink(void* context) { (void)context; }
+    virtual void SetActivitySink(InputActivitySink sink, void* context) {
+        (void)sink;
+        (void)context;
+    }
     [[nodiscard]] virtual bool InjectTouch(const TouchSample& sample) {
         (void)sample;
         return false;

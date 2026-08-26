@@ -90,7 +90,30 @@ void SystemGestureRouter::UnbindKeySink(void* context) {
     }
 }
 
-bool SystemGestureRouter::InjectKey(const device::KeySample& sample) { return ForwardKey(sample); }
+bool SystemGestureRouter::InjectKey(const device::KeySample& sample) {
+    NotifyActivity();
+    return ForwardKey(sample);
+}
+
+void SystemGestureRouter::SetActivitySink(device::InputActivitySink sink, void* context) {
+    portENTER_CRITICAL(&sink_lock_);
+    activity_sink_ = sink;
+    activity_context_ = context;
+    portEXIT_CRITICAL(&sink_lock_);
+
+    if (sink != nullptr) {
+        return;
+    }
+    for (;;) {
+        portENTER_CRITICAL(&sink_lock_);
+        const uint32_t inflight = activity_inflight_;
+        portEXIT_CRITICAL(&sink_lock_);
+        if (inflight == 0U) {
+            break;
+        }
+        vTaskDelay(1U);
+    }
+}
 
 void SystemGestureRouter::BindSystemActionSink(SystemUiActionSink sink, void* context) {
     portENTER_CRITICAL(&sink_lock_);
@@ -113,6 +136,7 @@ bool SystemGestureRouter::Receive(void* context, const device::TouchSample& samp
 }
 
 bool SystemGestureRouter::Route(const device::TouchSample& sample) {
+    NotifyActivity();
     if (!candidate_.active && sample.timestamp_us < quarantine_until_us_) {
         return true;
     }
@@ -205,6 +229,25 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
     const bool move_forwarded = !replay_latest_move || Forward(latest_move);
     const bool sample_forwarded = Forward(sample);
     return initial_forwarded && move_forwarded && sample_forwarded;
+}
+
+void SystemGestureRouter::NotifyActivity() {
+    device::InputActivitySink sink = nullptr;
+    void* context = nullptr;
+    portENTER_CRITICAL(&sink_lock_);
+    if (activity_sink_ != nullptr) {
+        sink = activity_sink_;
+        context = activity_context_;
+        ++activity_inflight_;
+    }
+    portEXIT_CRITICAL(&sink_lock_);
+    if (sink == nullptr) {
+        return;
+    }
+    sink(context);
+    portENTER_CRITICAL(&sink_lock_);
+    --activity_inflight_;
+    portEXIT_CRITICAL(&sink_lock_);
 }
 
 bool SystemGestureRouter::Forward(const device::TouchSample& sample) {

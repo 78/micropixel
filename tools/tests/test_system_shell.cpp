@@ -11,6 +11,7 @@ namespace {
 using micropixel::host_ui::AppManagementModel;
 using micropixel::host_ui::HallCoverModel;
 using micropixel::host_ui::HallModel;
+using micropixel::host_ui::PowerManagementModel;
 using micropixel::host_ui::RemoteControlModel;
 using micropixel::host_ui::StatusLayerModel;
 using micropixel::host_ui::SystemInformationModel;
@@ -82,6 +83,15 @@ class FakeSystemUi final : public SystemUiBackend {
 
     void LeaveSystemInformation() override { ++leave_system_information_calls; }
 
+    std::expected<void, SystemUiError> ShowPowerManagement(const PowerManagementModel&, SystemUiActionSink sink,
+                                                           void* context) override {
+        sink_ = sink;
+        context_ = context;
+        return {};
+    }
+    void UpdatePowerManagement(const PowerManagementModel&) override { ++update_power_management_calls; }
+    void LeavePowerManagement() override { ++leave_power_management_calls; }
+
     std::expected<void, SystemUiError> ShowRemoteControl(const RemoteControlModel&, SystemUiActionSink sink,
                                                          void* context) override {
         sink_ = sink;
@@ -149,6 +159,8 @@ class FakeSystemUi final : public SystemUiBackend {
     uint32_t leave_remote_control_calls{};
     uint32_t leave_system_menu_calls{};
     uint32_t leave_system_information_calls{};
+    uint32_t update_power_management_calls{};
+    uint32_t leave_power_management_calls{};
     uint32_t leave_app_management_calls{};
     uint32_t update_wifi_settings_calls{};
     uint32_t leave_wifi_settings_calls{};
@@ -195,6 +207,7 @@ void DestructorUnbindsCallbacks() {
     Check(ui.leave_status_calls == 1U, "shell destructor should leave status layer");
     Check(ui.leave_system_menu_calls == 1U, "shell destructor should leave system menu");
     Check(ui.leave_system_information_calls == 1U, "shell destructor should leave system information");
+    Check(ui.leave_power_management_calls == 1U, "shell destructor should leave Power Management");
     Check(ui.leave_app_management_calls == 1U, "shell destructor should leave App Management");
     Check(ui.leave_wifi_settings_calls == 1U, "shell destructor should leave Wi-Fi settings");
     Check(ui.leave_hall_calls == 1U, "shell destructor should leave hall");
@@ -388,6 +401,14 @@ void DetailScreenActionsReachTheShell() {
     const auto close_info = shell.PollAction(0U);
     Check(close_info.has_value() && close_info->type == SystemUiActionType::kCloseSystemInformation,
           "system information close should be retained");
+
+    Check(shell.ShowPowerManagement(PowerManagementModel{}).has_value(), "Power Management should render");
+    ui.Emit({.type = SystemUiActionType::kSetAutoSleepTimeout, .value = 10U});
+    const auto timeout = shell.PollAction(0U);
+    Check(timeout.has_value() && timeout->type == SystemUiActionType::kSetAutoSleepTimeout && timeout->value == 10U,
+          "Power Management timeout changes should be retained");
+    shell.UpdatePowerManagement(PowerManagementModel{.auto_sleep_timeout_minutes = 10U});
+    Check(ui.update_power_management_calls == 1U, "Power Management updates should reach the backend");
 
     Check(shell.ShowRemoteControl(RemoteControlModel{}).has_value(), "Remote Control should render");
     ui.Emit({.type = SystemUiActionType::kSetRemoteControlEnabled, .value = 1U});

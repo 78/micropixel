@@ -6,7 +6,7 @@
 #include <expected>
 
 #include "host_ui/system_ui.hpp"
-#include "lvgl.h"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 
@@ -26,6 +26,14 @@ class SystemDetailUi final {
     void LeaveSystemInformation();
     [[nodiscard]] bool SystemInformationVisible() const;
     [[nodiscard]] void* SystemInformationActionContext() const;
+
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowPowerManagementLocked(
+        lv_obj_t* root, const host_ui::PowerManagementModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context);
+    void UpdatePowerManagementLocked(const host_ui::PowerManagementModel& model);
+    void LeavePowerManagement();
+    [[nodiscard]] bool PowerManagementVisible() const;
+    [[nodiscard]] void* PowerManagementActionContext() const;
 
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowRemoteControlLocked(
         lv_obj_t* root, const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
@@ -54,6 +62,7 @@ class SystemDetailUi final {
     enum class Screen : uint8_t {
         kNone,
         kSystemInformation,
+        kPowerManagement,
         kRemoteControl,
         kAppManagement,
     };
@@ -61,6 +70,9 @@ class SystemDetailUi final {
     static void DetailScrollEvent(lv_event_t* event);
     static void SystemInformationBackEvent(lv_event_t* event);
     static void SystemInformationUpdateEvent(lv_event_t* event);
+    static void PowerManagementBackEvent(lv_event_t* event);
+    static void PowerManagementSwitchEvent(lv_event_t* event);
+    static void PowerManagementTimeoutEvent(lv_event_t* event);
     static void RemoteControlBackEvent(lv_event_t* event);
     static void RemoteControlToggleEvent(lv_event_t* event);
     static void RemoteControlPairingEvent(lv_event_t* event);
@@ -94,6 +106,12 @@ class SystemDetailUi final {
     std::array<lv_obj_t*, host_ui::kMaxHallApps> app_management_rows_{};
     host_ui::SystemUiActionSink system_information_action_sink_{};
     void* system_information_action_context_{};
+    host_ui::SystemUiActionSink power_management_action_sink_{};
+    void* power_management_action_context_{};
+    lv_obj_t* power_management_switch_{};
+    lv_obj_t* power_management_timeout_dropdown_{};
+    AnimatedDisplayRefresh power_management_animation_refresh_{};
+    bool power_management_updating_{};
     host_ui::SystemUiActionSink remote_control_action_sink_{};
     void* remote_control_action_context_{};
     host_ui::RemoteControlModel remote_control_model_{};

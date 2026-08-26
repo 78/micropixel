@@ -8,6 +8,7 @@
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "freertos/idf_additions.h"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 #include "task_policy.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -205,7 +206,7 @@ void Gt911Input::UpdateSmokeUi(const esp_lcd_touch_point_data_t* points, uint8_t
                           points[0].track_id, static_cast<unsigned long>(interrupts_.load(std::memory_order_relaxed)));
             lv_label_set_text(smoke_status_, text);
         }
-        lv_timer_ready(lv_display_get_refr_timer(display_));
+        RequestDisplayRefresh(display_);
     }
     esp_lv_adapter_unlock();
 }

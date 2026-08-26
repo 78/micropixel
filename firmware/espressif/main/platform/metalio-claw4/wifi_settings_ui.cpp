@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 #include "src/widgets/buttonmatrix/lv_buttonmatrix_private.h"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -757,7 +758,7 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
     }
     lv_obj_move_foreground(state.root);
     RaiseOverlayLocked(state);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    RequestDisplayRefresh(state.display);
 }
 
 void WifiSettingsUiAccess::EmitWifiNetworkAction(WifiSettingsUi& state, host_ui::SystemUiActionType type,
@@ -815,7 +816,7 @@ void WifiSettingsUiAccess::WifiScrollEvent(lv_event_t* event) {
         QueueWifiSettingsRender(*state);
     }
     if (state->display != nullptr) {
-        lv_timer_ready(lv_display_get_refr_timer(state->display));
+        RequestDisplayRefresh(state->display);
     }
 }
 

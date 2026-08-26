@@ -28,6 +28,8 @@ constexpr int kI2cTimeoutMs = 20;
 constexpr uint64_t kPowerClickGuardUs = 2000000U;
 constexpr uint16_t kPowerOffLongPressMs = 2000U;
 constexpr TickType_t kPowerOffPulseHalfPeriod = pdMS_TO_TICKS(100U);
+constexpr uint32_t kWakeLineDrainAttempts = 4U;
+constexpr TickType_t kWakeLineSettleDelay = 1U;
 
 esp_err_t ReadRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t& value) {
     return i2c_master_transmit_receive(device, &address, sizeof(address), &value, sizeof(value), kI2cTimeoutMs);
@@ -144,8 +146,46 @@ void Tca9555PowerKey::SetPowerOffSink(PowerOffSink sink, void* context) {
 }
 
 esp_err_t Tca9555PowerKey::PrepareForLightSleep() {
-    esp_err_t status = esp_sleep_enable_gpio_wakeup();
-    return status == ESP_OK ? EnterPowerSave() : status;
+    esp_err_t status = ExitPowerSave();
+    if (status != ESP_OK) {
+        return status;
+    }
+
+    for (uint32_t attempt = 0U; attempt < kWakeLineDrainAttempts; ++attempt) {
+        uint8_t port0 = 0U;
+        uint8_t port1 = 0U;
+        status = ReadPorts(port0, port1);
+        if (status != ESP_OK) {
+            (void)EnterPowerSave();
+            return status;
+        }
+        if ((port0 & kPowerKeyMask) == 0U) {
+            (void)EnterPowerSave();
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        if (gpio_get_level(kTcaInterrupt) != 0) {
+            status = esp_sleep_enable_gpio_wakeup();
+            if (status == ESP_OK) {
+                status = EnterPowerSave();
+            }
+            if (status != ESP_OK) {
+                return status;
+            }
+            if (gpio_get_level(kTcaInterrupt) != 0) {
+                return ESP_OK;
+            }
+            (void)ExitPowerSave();
+        }
+
+        if (attempt + 1U < kWakeLineDrainAttempts) {
+            vTaskDelay(kWakeLineSettleDelay);
+        }
+    }
+
+    ESP_LOGW(kTag, "TCA9555 interrupt remained asserted while arming light-sleep wake");
+    (void)EnterPowerSave();
+    return ESP_ERR_TIMEOUT;
 }
 
 bool Tca9555PowerKey::IsPressed() {
@@ -172,6 +212,7 @@ void Tca9555PowerKey::GuardWakeButtonUntilRelease(uint64_t click_deadline_us) {
     }
     if ((port0 & kPowerKeyMask) != 0U) {
         wake_key_release_required_.store(false, std::memory_order_release);
+        power_request_generation_.store(press_generation_.load(std::memory_order_acquire), std::memory_order_release);
         ESP_LOGI(kTag, "wake key already released; guarded clicks remain suppressed");
         return;
     }
@@ -286,6 +327,10 @@ uint8_t Tca9555PowerKey::RecordRawLevel(uint8_t port0, uint8_t port1, int interr
     }
     raw_level_known_ = true;
     last_key_level_ = key_level;
+    if (key_level == BUTTON_INACTIVE && wake_key_release_required_.exchange(false, std::memory_order_acq_rel)) {
+        power_request_generation_.store(press_generation_.load(std::memory_order_acquire), std::memory_order_release);
+        ESP_LOGI(kTag, "wake key release observed at raw input; power requests rearmed");
+    }
     const bool power_inputs_changed = power_inputs_known_ && power_inputs != last_power_inputs_;
     power_inputs_known_ = true;
     last_power_inputs_ = power_inputs;
@@ -348,6 +393,11 @@ void Tca9555PowerKey::ButtonEvent(void* button, void* context) {
         ESP_LOGI(kTag, "event %s, pressed=%" PRIu32 " ms", iot_button_get_event_str(event),
                  iot_button_get_pressed_time(button_handle));
         if (owner != nullptr && owner->wake_key_release_required_.exchange(false, std::memory_order_acq_rel)) {
+            // This press was consumed as the wake source. Make it the new
+            // baseline so a later automatic-sleep request does not mistake it
+            // for a press that happened during that new transition.
+            owner->power_request_generation_.store(owner->press_generation_.load(std::memory_order_acquire),
+                                                   std::memory_order_release);
             ESP_LOGI(kTag, "wake key released; power requests rearmed");
         }
         return;

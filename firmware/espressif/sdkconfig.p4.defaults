@@ -23,6 +23,13 @@ CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 
+# Let an idle Host scale down to the XTAL frequency. The LVGL adapter holds its
+# PM lock while active and releases it after its event-driven idle timeout.
+# Automatic light sleep remains disabled until display/Wi-Fi retention has
+# completed board-level validation.
+CONFIG_PM_ENABLE=y
+CONFIG_PM_DFS_INIT_AUTO=y
+
 # Metalio-Claw4 routes Wi-Fi through its ESP32-C5 coprocessor. The board does
 # not use the ESP32-P4 Function-EV default SDIO pins.
 CONFIG_SLAVE_IDF_TARGET_ESP32C5=y

@@ -80,6 +80,10 @@ void InputService::UnbindKeySink(void* context) const { backend_.UnbindKeySink(c
 
 bool InputService::InjectKey(const KeySample& sample) const { return backend_.InjectKey(sample); }
 
+void InputService::SetActivitySink(InputActivitySink sink, void* context) const {
+    backend_.SetActivitySink(sink, context);
+}
+
 DeviceResult<micropixel_audio_info_t> AudioService::GetInfo() const {
     micropixel_audio_info_t info{};
     int32_t status = backend_.GetInfo(info);

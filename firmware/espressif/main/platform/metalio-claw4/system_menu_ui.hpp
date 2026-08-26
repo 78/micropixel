@@ -1,9 +1,10 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 
-#include "device/input.hpp"
 #include "host_ui/system_ui.hpp"
 #include "lvgl.h"
 
@@ -20,40 +21,30 @@ class SystemMenuUi final {
 
     [[nodiscard]] void* ActionContext() const { return action_context_; }
     [[nodiscard]] bool Active() const { return action_sink_ != nullptr || action_context_ != nullptr; }
-    static bool TouchSink(void* context, const device::TouchSample& sample);
 
    private:
-    friend struct SystemMenuUiAccess;
-
-    enum class TouchTarget : uint8_t {
-        kNone,
-        kBack,
-        kWifi,
-        kRemoteControl,
-        kLanguage,
-        kSystemInformation,
-        kManageApps,
+    struct RowBinding final {
+        SystemMenuUi* ui{};
+        host_ui::SystemMenuItem item{host_ui::SystemMenuItem::kWifi};
     };
 
-    [[nodiscard]] bool HandleTouch(const device::TouchSample& sample);
-    void SetTargetPressed(TouchTarget target, bool pressed);
+    void DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuItem item, const char* icon_text, const char* name,
+                 const char* detail, uint32_t icon_color, bool emphasized_border = false);
     void ResetObjectPointers();
+    static void BackEvent(lv_event_t* event);
+    static void RowEvent(lv_event_t* event);
+    static void ScrollEvent(lv_event_t* event);
 
     lv_display_t* display_{};
+    lv_obj_t* scroll_content_{};
     lv_obj_t* wifi_detail_label_{};
     lv_obj_t* remote_control_detail_label_{};
     lv_obj_t* system_information_detail_label_{};
+    lv_obj_t* power_management_detail_label_{};
     lv_obj_t* firmware_update_dot_{};
-    lv_obj_t* press_overlays_[6]{};
+    std::array<RowBinding, 6> row_bindings_{};
     host_ui::SystemUiActionSink action_sink_{};
     void* action_context_{};
-    uint32_t touch_id_{};
-    TouchTarget touch_target_{TouchTarget::kNone};
-    int32_t touch_down_x_{};
-    int32_t touch_down_y_{};
-    uint64_t touch_down_us_{};
-    bool touch_active_{};
-    bool button_pressed_{};
 };
 
 }  // namespace micropixel::platform::metalio_claw4

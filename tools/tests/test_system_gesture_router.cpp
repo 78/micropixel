@@ -53,6 +53,7 @@ struct Capture final {
     std::vector<TouchSample> guest_samples;
     std::vector<KeySample> guest_keys;
     std::vector<SystemUiAction> system_actions;
+    uint32_t activity_count{};
 };
 
 bool CaptureGuest(void* context, const TouchSample& sample) {
@@ -68,6 +69,8 @@ bool CaptureGuestKey(void* context, const KeySample& sample) {
 void CaptureSystem(void* context, const SystemUiAction& action) {
     static_cast<Capture*>(context)->system_actions.push_back(action);
 }
+
+void CaptureActivity(void* context) { ++static_cast<Capture*>(context)->activity_count; }
 
 TouchSample Sample(TouchPhase phase, uint16_t x, uint16_t y, uint64_t timestamp_us, uint32_t id = 1U) {
     return TouchSample{
@@ -135,6 +138,22 @@ bool SemanticKeyReachesGuest() {
            Check(injected, "semantic key must be accepted while a Guest sink is bound") &&
            Check(capture.guest_keys.size() == 1U && capture.guest_keys[0].code == KeyCode::kConfirm,
                  "semantic key must reach the Guest key sink");
+}
+
+bool TouchAndKeyInputReportUserActivity() {
+    FakeInputBackend input;
+    SystemGestureRouter router(input, 720U, 720U);
+    Capture capture;
+    router.SetActivitySink(CaptureActivity, &capture);
+
+    (void)input.Emit(Sample(TouchPhase::kDown, 100U, 100U, 1U));
+    (void)router.InjectKey(KeySample{.timestamp_us = 2U, .code = KeyCode::kConfirm, .phase = KeyPhase::kDown});
+    if (!Check(capture.activity_count == 2U, "touch and semantic key input must both report user activity")) {
+        return false;
+    }
+    router.SetActivitySink(nullptr, nullptr);
+    (void)input.Emit(Sample(TouchPhase::kUp, 100U, 100U, 3U));
+    return Check(capture.activity_count == 2U, "clearing the activity sink must stop notifications");
 }
 
 bool TopGestureIsReserved() {
@@ -302,13 +321,14 @@ bool TimedOutCandidateReturnsToGuest() {
 
 int main() {
     const bool passed = NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() &&
-                        SemanticKeyReachesGuest() && TopGestureIsReserved() && BottomGestureIsReserved() &&
-                        BottomGestureRejectsIncidentalMovement() && RecognizedGestureQuarantinesReplacementTrack() &&
+                        SemanticKeyReachesGuest() && TouchAndKeyInputReportUserActivity() && TopGestureIsReserved() &&
+                        BottomGestureIsReserved() && BottomGestureRejectsIncidentalMovement() &&
+                        RecognizedGestureQuarantinesReplacementTrack() &&
                         RejectedEdgeGestureReplaysCompleteSequence() && ReleasedEdgeTapReplaysDownAndUp() &&
                         RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
     if (!passed) {
         return 1;
     }
-    std::puts("SystemGestureRouter host tests passed (11 cases).");
+    std::puts("SystemGestureRouter host tests passed (12 cases).");
     return 0;
 }

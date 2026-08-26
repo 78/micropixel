@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
@@ -182,7 +183,7 @@ void StatusLayerUi::SetButtonPressed(TouchTarget target, bool pressed) {
         return;
     }
     SetButtonPressedLocked(target, pressed);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+    RequestDisplayRefresh(lv_obj_get_display(status_layer_));
     esp_lv_adapter_unlock();
 }
 
@@ -211,7 +212,7 @@ void StatusLayerUi::UpdateSlider(TouchTarget target, uint8_t percent, bool press
         return;
     }
     UpdateSliderLocked(target, percent, pressed);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+    RequestDisplayRefresh(lv_obj_get_display(status_layer_));
     esp_lv_adapter_unlock();
 }
 
@@ -591,7 +592,7 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
 
     lv_obj_move_foreground(status_layer_);
     RaisePerformanceOverlayLocked();
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+    RequestDisplayRefresh(lv_obj_get_display(status_layer_));
 }
 
 std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host_ui::StatusLayerModel& model,
@@ -616,7 +617,7 @@ void StatusLayerUi::UpdateLocked(const host_ui::StatusLayerModel& model) {
         return;
     }
     UpdateControlsLocked(model);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+    RequestDisplayRefresh(lv_obj_get_display(status_layer_));
 }
 
 void StatusLayerUi::SetTransitionProgressLocked(uint16_t progress_per_mille) {
@@ -634,7 +635,7 @@ void StatusLayerUi::SetTransitionProgressLocked(uint16_t progress_per_mille) {
     // though the CPU meter remains low while the panel pipeline is blocked.
     lv_obj_set_style_bg_opa(status_layer_, kStatusScrimOpacity, 0);
     RaisePerformanceOverlayLocked();
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+    RequestDisplayRefresh(lv_obj_get_display(status_layer_));
 }
 
 void StatusLayerUi::Deactivate() {
@@ -653,7 +654,7 @@ void StatusLayerUi::LeaveLocked() {
     lv_obj_clean(status_layer_);
     ResetObjectPointers();
     lv_obj_add_flag(status_layer_, LV_OBJ_FLAG_HIDDEN);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(status_layer_)));
+    RequestDisplayRefresh(lv_obj_get_display(status_layer_));
     ESP_LOGI(kTag, "status layer hidden");
 }
 
@@ -674,7 +675,7 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
     if (!enabled) {
         if (performance_overlay_ != nullptr) {
             lv_obj_add_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
-            lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(performance_overlay_)));
+            RequestDisplayRefresh(lv_obj_get_display(performance_overlay_));
         }
         performance_last_frame_sequence_ = display_refresh_sequence;
         performance_last_sample_us_ = 0;
@@ -715,7 +716,7 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
                         static_cast<unsigned>(cpu_percent), performance_fps_);
     lv_label_set_text(performance_label_, performance_text);
     RaisePerformanceOverlayLocked();
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(performance_overlay_)));
+    RequestDisplayRefresh(lv_obj_get_display(performance_overlay_));
 }
 
 }  // namespace micropixel::platform::metalio_claw4

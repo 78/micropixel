@@ -20,6 +20,7 @@ enum class HallStatus {
 
 constexpr uint32_t kMaxHallApps = 50U;
 constexpr uint8_t kMinimumBrightnessPercent = 0U;
+constexpr uint8_t kDefaultAutoSleepTimeoutMinutes = 5U;
 constexpr uint32_t kMaxWifiSsidLength = 32U;
 constexpr uint32_t kMaxWifiPasswordLength = 64U;
 constexpr uint32_t kMaxSavedWifiNetworks = 8U;
@@ -180,6 +181,7 @@ struct StatusLayerModel final {
     uint8_t battery_percent{};
     uint8_t brightness_percent{80U};
     uint8_t volume_percent{70U};
+    uint8_t auto_sleep_timeout_minutes{kDefaultAutoSleepTimeoutMinutes};
     bool wifi_available{};
     bool wifi_enabled{};
     bool wifi_connected{};
@@ -199,6 +201,7 @@ struct StatusLayerModel final {
 enum class SystemMenuItem : uint32_t {
     kWifi,
     kRemoteControl,
+    kPowerManagement,
     kLanguage,
     kSystemInformation,
     kManageApps,
@@ -207,6 +210,7 @@ enum class SystemMenuItem : uint32_t {
 struct SystemMenuModel final {
     const char* language{"English"};
     uint32_t installed_app_count{};
+    uint8_t auto_sleep_timeout_minutes{kDefaultAutoSleepTimeoutMinutes};
     bool wifi_available{};
     bool wifi_enabled{};
     bool wifi_connected{};
@@ -217,6 +221,10 @@ struct SystemMenuModel final {
     std::array<char, kFirmwareVersionTextCapacity> latest_firmware_version{};
     std::array<char, kFirmwareUpdateMessageCapacity> firmware_update_message{};
     FirmwareUpdateState firmware_update_state{FirmwareUpdateState::kUnknown};
+};
+
+struct PowerManagementModel final {
+    uint8_t auto_sleep_timeout_minutes{kDefaultAutoSleepTimeoutMinutes};
 };
 
 enum class RemoteControlConnectionState : uint8_t {
@@ -356,6 +364,9 @@ enum class SystemUiActionType {
     kSelectSystemMenuItem,
     kCloseSystemInformation,
     kInstallFirmwareUpdate,
+    kClosePowerManagement,
+    kSetAutoSleepEnabled,
+    kSetAutoSleepTimeout,
     kCloseRemoteControl,
     kSetRemoteControlEnabled,
     kGenerateRemoteControlPairingCode,
@@ -382,6 +393,7 @@ enum class SystemUiActionType {
     kPowerOffRequested,
     kWifiStateChanged,
     kBatteryStateChanged,
+    kUserActivity,
 };
 
 struct SystemUiAction final {
@@ -431,6 +443,11 @@ class SystemUiBackend {
                                                                                    void* action_context) = 0;
     virtual void UpdateSystemInformation(const SystemInformationModel&) {}
     virtual void LeaveSystemInformation() = 0;
+    [[nodiscard]] virtual std::expected<void, SystemUiError> ShowPowerManagement(const PowerManagementModel& model,
+                                                                                 SystemUiActionSink action_sink,
+                                                                                 void* action_context) = 0;
+    virtual void UpdatePowerManagement(const PowerManagementModel& model) = 0;
+    virtual void LeavePowerManagement() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowRemoteControl(const RemoteControlModel& model,
                                                                                SystemUiActionSink action_sink,
                                                                                void* action_context) = 0;

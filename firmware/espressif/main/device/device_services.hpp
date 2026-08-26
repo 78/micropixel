@@ -52,6 +52,7 @@ class InputService final {
     void BindKeySink(KeySink sink, void* context) const;
     void UnbindKeySink(void* context) const;
     [[nodiscard]] bool InjectKey(const KeySample& sample) const;
+    void SetActivitySink(InputActivitySink sink, void* context) const;
 
    private:
     InputBackend& backend_;

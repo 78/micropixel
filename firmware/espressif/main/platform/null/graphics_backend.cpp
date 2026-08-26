@@ -195,6 +195,13 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
         return {};
     }
     void LeaveSystemInformation() override {}
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowPowerManagement(const host_ui::PowerManagementModel&,
+                                                                                  host_ui::SystemUiActionSink,
+                                                                                  void*) override {
+        return {};
+    }
+    void UpdatePowerManagement(const host_ui::PowerManagementModel&) override {}
+    void LeavePowerManagement() override {}
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowRemoteControl(
         const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
         void* action_context) override {

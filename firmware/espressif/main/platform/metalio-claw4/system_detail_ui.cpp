@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "esp_log.h"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
@@ -17,6 +18,7 @@ constexpr int32_t kAppManagementRowTop = 90;
 constexpr int32_t kAppManagementRowStep = 116;
 constexpr int32_t kAppManagementRowHeight = 104;
 constexpr uint32_t kAppManagementRowOverscan = 1U;
+constexpr std::array<uint8_t, 4> kAutoSleepTimeoutMinutes{1U, 5U, 10U, 30U};
 
 struct Bounds final {
     int32_t x{};
@@ -332,6 +334,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     }
     LeaveRemoteControl();
     LeaveAppManagement();
+    LeavePowerManagement();
     root_ = root;
     system_information_action_sink_ = action_sink;
     system_information_action_context_ = action_context;
@@ -340,7 +343,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     if (model.firmware_update_view) {
         DrawFirmwareUpdateView(root_, model, SystemInformationBackEvent, SystemInformationUpdateEvent, this);
         lv_obj_move_foreground(root_);
-        lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(root_)));
+        RequestDisplayRefresh(lv_obj_get_display(root_));
         ESP_LOGI(kTag, "Firmware Update visible: state=%u progress=%u%%",
                  static_cast<unsigned>(model.firmware_update_state),
                  static_cast<unsigned>(model.firmware_progress_percent));
@@ -411,7 +414,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
 
     lv_obj_update_layout(scroll_content);
     lv_obj_move_foreground(root_);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(root_)));
+    RequestDisplayRefresh(lv_obj_get_display(root_));
     ESP_LOGI(kTag, "System Information visible: chip=%s firmware=%s", model.host_chip.data(),
              model.firmware_version.data());
     return {};
@@ -447,7 +450,7 @@ void SystemDetailUi::DetailScrollEvent(lv_event_t* event) {
         if (ui->AppManagementVisible()) {
             ui->RefreshAppManagementRowsLocked();
         }
-        lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(ui->root_)));
+        RequestDisplayRefresh(lv_obj_get_display(ui->root_));
     }
 }
 
@@ -469,6 +472,141 @@ void SystemDetailUi::SystemInformationUpdateEvent(lv_event_t* event) {
     }
 }
 
+std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowPowerManagementLocked(
+    lv_obj_t* root, const host_ui::PowerManagementModel& model, host_ui::SystemUiActionSink action_sink,
+    void* action_context) {
+    if (root == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    LeaveSystemInformation();
+    LeaveRemoteControl();
+    LeaveAppManagement();
+    root_ = root;
+    power_management_action_sink_ = action_sink;
+    power_management_action_context_ = action_context;
+    active_screen_ = Screen::kPowerManagement;
+    lv_obj_set_style_bg_color(root_, lv_color_hex(0x08111fU), 0);
+    (void)DrawDetailHeader(root_, "Power Management", "Battery and idle behavior", PowerManagementBackEvent, this);
+
+    lv_obj_t* auto_sleep =
+        CreatePanel(root_, Bounds{.x = 40, .y = 138, .width = 640, .height = 154}, 0x111f32U, 0x2e4562U, 22);
+    (void)CreateLabel(auto_sleep, "Auto sleep", &lv_font_montserrat_24, 0xf2f7ffU, 24, 23);
+    lv_obj_t* description = CreateLabel(auto_sleep, "Sleep after no interaction while on battery power",
+                                        &lv_font_montserrat_18, 0x91a4bdU, 24, 63);
+    lv_obj_set_width(description, 480);
+    lv_label_set_long_mode(description, LV_LABEL_LONG_WRAP);
+    power_management_switch_ = lv_switch_create(auto_sleep);
+    lv_obj_set_pos(power_management_switch_, 526, 43);
+    lv_obj_set_size(power_management_switch_, 82, 44);
+    lv_obj_add_event_cb(power_management_switch_, PowerManagementSwitchEvent, LV_EVENT_VALUE_CHANGED, this);
+
+    lv_obj_t* timeout =
+        CreatePanel(root_, Bounds{.x = 40, .y = 316, .width = 640, .height = 170}, 0x111f32U, 0x2e4562U, 22);
+    (void)CreateLabel(timeout, "Idle timeout", &lv_font_montserrat_24, 0xf2f7ffU, 24, 22);
+    (void)CreateLabel(timeout, "Choose how long the device waits before sleeping", &lv_font_montserrat_18, 0x91a4bdU,
+                      24, 61);
+    power_management_timeout_dropdown_ = lv_dropdown_create(timeout);
+    lv_obj_set_pos(power_management_timeout_dropdown_, 24, 101);
+    lv_obj_set_size(power_management_timeout_dropdown_, 592, 52);
+    lv_dropdown_set_options(power_management_timeout_dropdown_, "1 minute\n5 minutes\n10 minutes\n30 minutes");
+    lv_obj_set_style_text_font(power_management_timeout_dropdown_, &lv_font_montserrat_18, 0);
+    lv_obj_add_event_cb(power_management_timeout_dropdown_, PowerManagementTimeoutEvent, LV_EVENT_VALUE_CHANGED, this);
+
+    lv_obj_t* note = CreateLabel(root_, "External power pauses the idle timer. Unplugging starts a fresh countdown.",
+                                 &lv_font_montserrat_18, 0x748aa5U, 52, 520);
+    lv_obj_set_width(note, 616);
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+    UpdatePowerManagementLocked(model);
+    lv_obj_move_foreground(root_);
+    RequestDisplayRefresh(lv_obj_get_display(root_));
+    ESP_LOGI(kTag, "Power Management visible: auto-sleep=%u min",
+             static_cast<unsigned>(model.auto_sleep_timeout_minutes));
+    return {};
+}
+
+void SystemDetailUi::UpdatePowerManagementLocked(const host_ui::PowerManagementModel& model) {
+    if (!PowerManagementVisible() || power_management_switch_ == nullptr ||
+        power_management_timeout_dropdown_ == nullptr) {
+        return;
+    }
+    power_management_updating_ = true;
+    const bool enabled = model.auto_sleep_timeout_minutes != 0U;
+    if (enabled) {
+        lv_obj_add_state(power_management_switch_, LV_STATE_CHECKED);
+        lv_obj_remove_state(power_management_timeout_dropdown_, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(power_management_timeout_dropdown_, LV_OPA_COVER, 0);
+    } else {
+        lv_obj_remove_state(power_management_switch_, LV_STATE_CHECKED);
+        lv_obj_add_state(power_management_timeout_dropdown_, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(power_management_timeout_dropdown_, LV_OPA_40, 0);
+    }
+    const uint8_t selected_minutes =
+        enabled ? model.auto_sleep_timeout_minutes : host_ui::kDefaultAutoSleepTimeoutMinutes;
+    uint32_t selected = 1U;
+    for (uint32_t index = 0U; index < kAutoSleepTimeoutMinutes.size(); ++index) {
+        if (kAutoSleepTimeoutMinutes[index] == selected_minutes) {
+            selected = index;
+            break;
+        }
+    }
+    lv_dropdown_set_selected(power_management_timeout_dropdown_, selected);
+    power_management_updating_ = false;
+    RequestDisplayRefresh(lv_obj_get_display(root_));
+}
+
+void SystemDetailUi::LeavePowerManagement() {
+    power_management_animation_refresh_.Stop();
+    power_management_action_sink_ = nullptr;
+    power_management_action_context_ = nullptr;
+    power_management_switch_ = nullptr;
+    power_management_timeout_dropdown_ = nullptr;
+    power_management_updating_ = false;
+    if (active_screen_ == Screen::kPowerManagement) {
+        active_screen_ = Screen::kNone;
+        root_ = nullptr;
+    }
+}
+
+bool SystemDetailUi::PowerManagementVisible() const { return active_screen_ == Screen::kPowerManagement; }
+
+void* SystemDetailUi::PowerManagementActionContext() const { return power_management_action_context_; }
+
+void SystemDetailUi::PowerManagementBackEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui != nullptr && ui->power_management_action_sink_ != nullptr) {
+        ui->power_management_action_sink_(
+            ui->power_management_action_context_,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kClosePowerManagement});
+    }
+}
+
+void SystemDetailUi::PowerManagementSwitchEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr || ui->power_management_updating_ || ui->power_management_action_sink_ == nullptr) {
+        return;
+    }
+    lv_obj_t* target = lv_event_get_target_obj(event);
+    ui->power_management_animation_refresh_.Start(lv_obj_get_display(target));
+    const bool enabled = lv_obj_has_state(target, LV_STATE_CHECKED);
+    ui->power_management_action_sink_(
+        ui->power_management_action_context_,
+        host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSetAutoSleepEnabled, .value = enabled ? 1U : 0U});
+}
+
+void SystemDetailUi::PowerManagementTimeoutEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr || ui->power_management_updating_ || ui->power_management_action_sink_ == nullptr) {
+        return;
+    }
+    const uint32_t selected = lv_dropdown_get_selected(lv_event_get_target_obj(event));
+    if (selected < kAutoSleepTimeoutMinutes.size()) {
+        ui->power_management_action_sink_(
+            ui->power_management_action_context_,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kSetAutoSleepTimeout,
+                                    .value = kAutoSleepTimeoutMinutes[selected]});
+    }
+}
+
 std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowRemoteControlLocked(
     lv_obj_t* root, const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
     void* action_context) {
@@ -477,6 +615,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowRemoteControlLoc
     }
     LeaveSystemInformation();
     LeaveAppManagement();
+    LeavePowerManagement();
     root_ = root;
     remote_control_action_sink_ = action_sink;
     remote_control_action_context_ = action_context;
@@ -611,7 +750,7 @@ void SystemDetailUi::RenderRemoteControlLocked() {
         DrawRemoteControlOffConfirmationLocked();
     }
     lv_obj_move_foreground(root_);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(root_)));
+    RequestDisplayRefresh(lv_obj_get_display(root_));
 }
 
 void SystemDetailUi::LeaveRemoteControl() {
@@ -724,6 +863,7 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
     }
     LeaveSystemInformation();
     LeaveRemoteControl();
+    LeavePowerManagement();
     root_ = root;
     app_management_action_sink_ = action_sink;
     app_management_action_context_ = action_context;
@@ -1059,7 +1199,7 @@ void SystemDetailUi::RenderAppManagementLocked(bool clean_root) {
             break;
     }
     lv_obj_move_foreground(root_);
-    lv_timer_ready(lv_display_get_refr_timer(lv_obj_get_display(root_)));
+    RequestDisplayRefresh(lv_obj_get_display(root_));
 }
 
 }  // namespace micropixel::platform::metalio_claw4

@@ -43,6 +43,7 @@
 #include "platform/metalio-claw4/icons/wifi_status_icons.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
 #include "platform/metalio-claw4/input/tca9555_power_key.hpp"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 #include "platform/metalio-claw4/perceptual_control.hpp"
 #include "platform/metalio-claw4/status_layer_ui.hpp"
 #include "platform/metalio-claw4/system_detail_ui.hpp"
@@ -53,6 +54,10 @@
 #include "platform/platform.hpp"
 #include "task_policy.hpp"
 
+#if !defined(CONFIG_PM_ENABLE)
+#error "Metalio-Claw4 LVGL idle pause requires CONFIG_PM_ENABLE"
+#endif
+
 namespace micropixel::platform {
 namespace {
 
@@ -61,6 +66,9 @@ constexpr int kWidth = 720;
 constexpr int kHeight = 720;
 constexpr BaseType_t kLvglTaskCore = 1;
 constexpr uint32_t kRefreshPeriodMs = 1000;
+constexpr uint32_t kLvglIdleTimeoutMs = 1000;
+constexpr uint32_t kLvglMaximumWaitMs = 120U * 1000U;
+constexpr uint32_t kLightSleepEntryAttempts = 3U;
 constexpr uint32_t kLvglTaskMinDelayMs = portTICK_PERIOD_MS;
 constexpr uint32_t kHostPointerQueueCapacity = 32U;
 constexpr uint32_t kThemeAccentColor = 0x287ee8U;
@@ -378,7 +386,7 @@ void RunUiTransition(MetalioClaw4PlatformState& state, bool entering, Apply&& ap
             break;
         }
         apply(progress);
-        lv_timer_ready(lv_display_get_refr_timer(state.display));
+        metalio_claw4::RequestDisplayRefresh(state.display);
         esp_lv_adapter_unlock();
         if (frame != kUiTransitionFrameCount) {
             vTaskDelayUntil(&next_frame, frame_period);
@@ -418,7 +426,7 @@ void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
     data->continue_reading = state->host_pointer_queue_tail != state->host_pointer_queue_head;
     portEXIT_CRITICAL(&state->host_pointer_lock);
     if (pointer_sample_read && state->display != nullptr) {
-        lv_timer_ready(lv_display_get_refr_timer(state->display));
+        metalio_claw4::RequestDisplayRefresh(state->display);
     }
     if (pointer_released) {
         state->wifi_settings_ui.PointerReleased();
@@ -453,6 +461,15 @@ bool HostPointerTouchSink(void* context, const device::TouchSample& sample) {
         state->host_pointer_release_queued = true;
     }
     portEXIT_CRITICAL(&state->host_pointer_lock);
+    if (state->host_pointer_indev != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+        lv_timer_t* read_timer = lv_indev_get_read_timer(state->host_pointer_indev);
+        if (read_timer != nullptr) {
+            lv_timer_resume(read_timer);
+            lv_timer_ready(read_timer);
+        }
+        esp_lv_adapter_unlock();
+    }
+    (void)esp_lv_adapter_request_wake();
     return true;
 }
 
@@ -466,6 +483,7 @@ void SetHostPointerEnabledLocked(MetalioClaw4PlatformState& state, bool enabled)
     state.host_pointer_enabled = enabled;
     portEXIT_CRITICAL(&state.host_pointer_lock);
     if (state.host_pointer_indev != nullptr) {
+        lv_indev_set_mode(state.host_pointer_indev, LV_INDEV_MODE_EVENT);
         lv_indev_enable(state.host_pointer_indev, enabled);
         lv_indev_reset(state.host_pointer_indev, nullptr);
     }
@@ -514,15 +532,15 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     adapter_config.stack_in_psram = false;
     adapter_config.task_priority = task_policy::kDisplayPriority;
     adapter_config.task_core_id = kLvglTaskCore;
-    adapter_config.tick_period_ms = ESP_LV_ADAPTER_DEFAULT_TICK_PERIOD_MS;
+    adapter_config.tick_mode = ESP_LV_ADAPTER_TICK_MODE_MONOTONIC;
     // A sub-tick timeout is rounded down to zero by pdMS_TO_TICKS().  LVGL's
     // animation timer can then keep this high-priority task in a busy loop and
     // starve IDLE1 until the task watchdog fires.
     adapter_config.task_min_delay_ms = kLvglTaskMinDelayMs;
-    adapter_config.task_max_delay_ms = ESP_LV_ADAPTER_DEFAULT_TASK_MAX_DELAY_MS;
-    adapter_config.auto_sleep.enable = false;
-    adapter_config.auto_sleep.mode = ESP_LV_ADAPTER_AUTO_SLEEP_MODE_DISABLED;
-    adapter_config.auto_sleep.idle_timeout_ms = ESP_LV_ADAPTER_DEFAULT_AUTO_SLEEP_TIMEOUT_MS;
+    adapter_config.task_max_delay_ms = kLvglMaximumWaitMs;
+    adapter_config.auto_sleep.enable = true;
+    adapter_config.auto_sleep.mode = ESP_LV_ADAPTER_AUTO_SLEEP_MODE_PAUSE;
+    adapter_config.auto_sleep.idle_timeout_ms = kLvglIdleTimeoutMs;
     esp_err_t status = esp_lv_adapter_init(&adapter_config);
     if (status != ESP_OK) {
         return status;
@@ -573,6 +591,7 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
         return ESP_ERR_NO_MEM;
     }
     lv_indev_set_type(state.host_pointer_indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_mode(state.host_pointer_indev, LV_INDEV_MODE_EVENT);
     lv_indev_set_read_cb(state.host_pointer_indev, HostPointerRead);
     lv_indev_set_user_data(state.host_pointer_indev, &state);
     lv_indev_set_display(state.host_pointer_indev, state.display);
@@ -583,7 +602,7 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
         return status;
     }
     CreateStartingScreen(state);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    metalio_claw4::RequestDisplayRefresh(state.display);
     status = esp_lv_adapter_start();
     if (status == ESP_OK) {
         status = metalio_claw4::InitializeScreenCapture(state.display, state.touch_input, kWidth, kHeight);
@@ -651,13 +670,7 @@ std::expected<void, device::PowerError> RestoreDisplayAfterSleep(MetalioClaw4Pla
 }
 
 std::expected<void, device::PowerError> EnterLowPowerImpl(MetalioClaw4PlatformState& state) {
-    esp_err_t status = state.power_key.PrepareForLightSleep();
-    if (status != ESP_OK) {
-        ESP_LOGE(kTag, "power-key wake source preparation failed: %s", esp_err_to_name(status));
-        return std::unexpected(device::PowerError::kWakeSource);
-    }
-
-    status = esp_lv_adapter_sleep_prepare();
+    esp_err_t status = esp_lv_adapter_sleep_prepare();
     if (status != ESP_OK) {
         ESP_LOGE(kTag, "LVGL sleep preparation failed: %s", esp_err_to_name(status));
         return std::unexpected(device::PowerError::kDisplayPrepare);
@@ -670,22 +683,61 @@ std::expected<void, device::PowerError> EnterLowPowerImpl(MetalioClaw4PlatformSt
         return std::unexpected(device::PowerError::kDisplayShutdown);
     }
 
-    if (state.power_key.PowerPressOccurredAfterRequest() || state.power_key.IsPressed()) {
+    const auto power_press_pending = [&state] {
+        return state.power_key.PowerPressOccurredAfterRequest() || state.power_key.IsPressed();
+    };
+    const auto cancel_sleep_entry = [&state]() -> std::expected<void, device::PowerError> {
         ESP_LOGI(kTag, "light sleep canceled by a power press during the entry transition");
-        state.power_key.SuppressSingleClicksUntil(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+        state.power_key.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
         return RestoreDisplayAfterSleep(state);
+    };
+
+    if (power_press_pending()) {
+        return cancel_sleep_entry();
     }
 
-    ESP_LOGI(kTag, "entering light sleep; power key is the wake source");
-    const int64_t sleep_started_us = esp_timer_get_time();
-    status = esp_light_sleep_start();
-    const uint64_t sleep_duration_us = static_cast<uint64_t>(esp_timer_get_time() - sleep_started_us);
-    const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
-    const uint64_t gpio_wakeup_status = esp_sleep_get_gpio_wakeup_status();
-    ESP_LOGI(kTag, "light sleep returned: status=%s duration=%" PRIu64 " ms causes=0x%08" PRIx32 " gpio=0x%016" PRIx64,
-             esp_err_to_name(status), sleep_duration_us / 1000U, wake_causes, gpio_wakeup_status);
-    if (status == ESP_OK) {
-        state.power_key.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+    for (uint32_t attempt = 1U; attempt <= kLightSleepEntryAttempts; ++attempt) {
+        status = state.power_key.PrepareForLightSleep();
+        if (status != ESP_OK) {
+            if (power_press_pending()) {
+                return cancel_sleep_entry();
+            }
+            ESP_LOGE(kTag, "power-key wake source preparation failed: %s", esp_err_to_name(status));
+            const auto restore = RestoreDisplayAfterSleep(state);
+            if (!restore.has_value()) {
+                return restore;
+            }
+            return std::unexpected(device::PowerError::kWakeSource);
+        }
+        if (power_press_pending()) {
+            return cancel_sleep_entry();
+        }
+
+        ESP_LOGI(kTag, "entering light sleep; power key is the wake source (attempt=%" PRIu32 ")", attempt);
+        const int64_t sleep_started_us = esp_timer_get_time();
+        status = esp_light_sleep_start();
+        const uint64_t sleep_duration_us = static_cast<uint64_t>(esp_timer_get_time() - sleep_started_us);
+        if (status == ESP_OK) {
+            const uint32_t wake_causes = esp_sleep_get_wakeup_causes();
+            const uint64_t gpio_wakeup_status = esp_sleep_get_gpio_wakeup_status();
+            ESP_LOGI(kTag,
+                     "light sleep returned: status=ESP_OK duration=%" PRIu64 " ms causes=0x%08" PRIx32
+                     " gpio=0x%016" PRIx64,
+                     sleep_duration_us / 1000U, wake_causes, gpio_wakeup_status);
+            state.power_key.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+            break;
+        }
+
+        ESP_LOGW(kTag, "light sleep entry rejected: attempt=%" PRIu32 " status=%s duration=%" PRIu64 " ms", attempt,
+                 status == ESP_ERR_SLEEP_REJECT ? "ESP_ERR_SLEEP_REJECT" : esp_err_to_name(status),
+                 sleep_duration_us / 1000U);
+        if (power_press_pending()) {
+            return cancel_sleep_entry();
+        }
+        if (status != ESP_ERR_SLEEP_REJECT || attempt == kLightSleepEntryAttempts) {
+            break;
+        }
+        ESP_LOGI(kTag, "retrying light sleep after clearing a transient wake condition");
     }
 
     const auto restore = RestoreDisplayAfterSleep(state);
@@ -787,7 +839,7 @@ int32_t ShowLaunchBitmapImpl(MetalioClaw4PlatformState& state, const device::Bit
     lv_obj_set_style_text_color(label, lv_color_hex(0xeaf4ff), 0);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
     lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -70);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    metalio_claw4::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
     ESP_LOGI(kTag, "Bundle launch bitmap visible: %" PRIu32 "x%" PRIu32 " format=%s source=%s:%p bytes=%" PRIu32,
              bitmap.width, bitmap.height,
@@ -806,7 +858,7 @@ void DismissLaunchBitmapImpl(MetalioClaw4PlatformState& state) {
     // descriptor; otherwise stopping the suspended Guest would tear down the
     // newly rendered Hall just before the replacement App starts.
     if (state.launch_image_descriptor.data != nullptr && DismissHostSmokeLocked(state)) {
-        lv_timer_ready(lv_display_get_refr_timer(state.display));
+        metalio_claw4::RequestDisplayRefresh(state.display);
     }
     esp_lv_adapter_unlock();
 }
@@ -1195,7 +1247,7 @@ void HallCoverWorker(void* context) {
                                                                   .height = kHallCoverNativeSize,
                                                                   .stride = kHallCoverNativeStride});
                     lv_obj_invalidate(state.hall_cover_images[job.app_index]);
-                    lv_timer_ready(lv_display_get_refr_timer(state.display));
+                    metalio_claw4::RequestDisplayRefresh(state.display);
                 }
             }
             esp_lv_adapter_unlock();
@@ -1494,7 +1546,7 @@ void HallCarouselEvent(lv_event_t* event) {
         }
     }
     if (state->display != nullptr) {
-        lv_timer_ready(lv_display_get_refr_timer(state->display));
+        metalio_claw4::RequestDisplayRefresh(state->display);
     }
 }
 
@@ -1711,7 +1763,7 @@ std::expected<void, host_ui::SystemUiError> ShowShutdownImpl(MetalioClaw4Platfor
     lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
     lv_obj_center(label);
     lv_obj_move_foreground(state.host_smoke);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    metalio_claw4::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
     ESP_LOGI(kTag, "shutdown screen visible");
     return {};
@@ -2031,7 +2083,7 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
         state.status_layer_ui.RaisePerformanceOverlayLocked();
     }
     if (!transition_ready) {
-        lv_timer_ready(lv_display_get_refr_timer(state.display));
+        metalio_claw4::RequestDisplayRefresh(state.display);
     }
     SetHostPointerEnabledLocked(state, true);
     esp_lv_adapter_unlock();
@@ -2052,7 +2104,7 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
             if (state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
                 state.status_layer_ui.RaisePerformanceOverlayLocked();
             }
-            lv_timer_ready(lv_display_get_refr_timer(state.display));
+            metalio_claw4::RequestDisplayRefresh(state.display);
             esp_lv_adapter_unlock();
         }
         if (!animated) {
@@ -2088,7 +2140,7 @@ void UpdateHallStatusBarImpl(MetalioClaw4PlatformState& state, const host_ui::Ha
         return;
     }
     UpdateHallStatusBarLocked(state, model);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    metalio_claw4::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
 }
 
@@ -2151,7 +2203,7 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     lv_obj_set_style_opa(state.host_smoke, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    metalio_claw4::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
 
     // Retire the LVGL descriptors before FirmwareApp unmaps Flash covers. The
@@ -2244,7 +2296,7 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
     state.host_smoke = nullptr;
     state.launch_image_descriptor = {};
     lv_obj_move_foreground(guest_frame);
-    lv_timer_ready(lv_display_get_refr_timer(state.display));
+    metalio_claw4::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
 
     state.guest_graphics.WaitForRefreshReady();
@@ -2274,8 +2326,6 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
-    SetHostPointerEnabledLocked(state, false);
-
     if (state.host_smoke == nullptr) {
         state.host_smoke = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(state.host_smoke, 0x08111fU);
@@ -2288,13 +2338,14 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
     if (result.has_value() && state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
         state.status_layer_ui.RaisePerformanceOverlayLocked();
     }
+    SetHostPointerEnabledLocked(state, result.has_value());
     esp_lv_adapter_unlock();
     if (!result.has_value()) {
         state.system_menu_ui.Deactivate();
         return result;
     }
 
-    state.input_router.BindTouchSink(metalio_claw4::SystemMenuUi::TouchSink, &state.system_menu_ui);
+    state.input_router.BindTouchSink(HostPointerTouchSink, &state);
     state.input_router.BindSystemActionSink(action_sink, action_context);
     return {};
 }
@@ -2308,8 +2359,12 @@ void LeaveSystemMenuImpl(MetalioClaw4PlatformState& state) {
         return;
     }
     void* action_context = state.system_menu_ui.ActionContext();
-    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(action_context);
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        SetHostPointerEnabledLocked(state, false);
+        esp_lv_adapter_unlock();
+    }
     state.system_menu_ui.Deactivate();
 }
 
@@ -2321,7 +2376,7 @@ std::expected<void, host_ui::SystemUiError> ShowSystemInformationImpl(MetalioCla
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     void* menu_action_context = state.system_menu_ui.ActionContext();
-    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(menu_action_context);
     state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
@@ -2371,6 +2426,64 @@ void LeaveSystemInformationImpl(MetalioClaw4PlatformState& state) {
     state.system_detail_ui.LeaveSystemInformation();
 }
 
+std::expected<void, host_ui::SystemUiError> ShowPowerManagementImpl(MetalioClaw4PlatformState& state,
+                                                                    const host_ui::PowerManagementModel& model,
+                                                                    host_ui::SystemUiActionSink action_sink,
+                                                                    void* action_context) {
+    if (state.display == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    void* menu_action_context = state.system_menu_ui.ActionContext();
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(menu_action_context);
+    state.system_menu_ui.Deactivate();
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return std::unexpected(host_ui::SystemUiError::kRenderFailed);
+    }
+    if (state.host_smoke == nullptr) {
+        state.host_smoke = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(state.host_smoke, 0x08111fU);
+    }
+    lv_obj_clean(state.host_smoke);
+    ResetHallImageDescriptorsLocked(state);
+    state.hall_settings_press_overlay = nullptr;
+    state.hall_update_press_overlay = nullptr;
+    auto result =
+        state.system_detail_ui.ShowPowerManagementLocked(state.host_smoke, model, action_sink, action_context);
+    if (!result.has_value()) {
+        state.system_detail_ui.LeavePowerManagement();
+        esp_lv_adapter_unlock();
+        return result;
+    }
+    SetHostPointerEnabledLocked(state, true);
+    esp_lv_adapter_unlock();
+    state.input_router.BindTouchSink(HostPointerTouchSink, &state);
+    state.input_router.BindSystemActionSink(action_sink, action_context);
+    return {};
+}
+
+void UpdatePowerManagementImpl(MetalioClaw4PlatformState& state, const host_ui::PowerManagementModel& model) {
+    if (!state.system_detail_ui.PowerManagementVisible() || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    state.system_detail_ui.UpdatePowerManagementLocked(model);
+    esp_lv_adapter_unlock();
+}
+
+void LeavePowerManagementImpl(MetalioClaw4PlatformState& state) {
+    if (!state.system_detail_ui.PowerManagementVisible()) {
+        return;
+    }
+    void* action_context = state.system_detail_ui.PowerManagementActionContext();
+    state.input_router.UnbindTouchSink(&state);
+    state.input_router.ClearSystemActionSink(action_context);
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        SetHostPointerEnabledLocked(state, false);
+        esp_lv_adapter_unlock();
+    }
+    state.system_detail_ui.LeavePowerManagement();
+}
+
 std::expected<void, host_ui::SystemUiError> ShowRemoteControlImpl(MetalioClaw4PlatformState& state,
                                                                   const host_ui::RemoteControlModel& model,
                                                                   host_ui::SystemUiActionSink action_sink,
@@ -2379,7 +2492,7 @@ std::expected<void, host_ui::SystemUiError> ShowRemoteControlImpl(MetalioClaw4Pl
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     void* menu_action_context = state.system_menu_ui.ActionContext();
-    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(menu_action_context);
     state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
@@ -2436,7 +2549,7 @@ std::expected<void, host_ui::SystemUiError> ShowAppManagementImpl(MetalioClaw4Pl
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     void* menu_action_context = state.system_menu_ui.ActionContext();
-    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(menu_action_context);
     state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
@@ -2485,7 +2598,7 @@ std::expected<void, host_ui::SystemUiError> ShowWifiSettingsImpl(MetalioClaw4Pla
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     void* menu_action_context = state.system_menu_ui.ActionContext();
-    state.input_router.UnbindTouchSink(&state.system_menu_ui);
+    state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(menu_action_context);
     state.system_menu_ui.Deactivate();
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
@@ -2752,6 +2865,18 @@ metalio_claw4::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformSta
             },
         .leave_system_information =
             [](void* context) { LeaveSystemInformationImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
+        .show_power_management =
+            [](void* context, const host_ui::PowerManagementModel& model, host_ui::SystemUiActionSink action_sink,
+               void* action_context) {
+                return ShowPowerManagementImpl(*static_cast<MetalioClaw4PlatformState*>(context), model, action_sink,
+                                               action_context);
+            },
+        .update_power_management =
+            [](void* context, const host_ui::PowerManagementModel& model) {
+                UpdatePowerManagementImpl(*static_cast<MetalioClaw4PlatformState*>(context), model);
+            },
+        .leave_power_management =
+            [](void* context) { LeavePowerManagementImpl(*static_cast<MetalioClaw4PlatformState*>(context)); },
         .show_remote_control =
             [](void* context, const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
                void* action_context) {

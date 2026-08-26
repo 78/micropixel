@@ -12,6 +12,7 @@ constexpr UBaseType_t configMAX_PRIORITIES = 25U;
 constexpr BaseType_t pdFALSE = 0;
 constexpr BaseType_t pdTRUE = 1;
 constexpr TickType_t portMAX_DELAY = UINT32_MAX;
+constexpr uint32_t portTICK_PERIOD_MS = 1U;
 
 #define pdMS_TO_TICKS(milliseconds) static_cast<TickType_t>(milliseconds)
 

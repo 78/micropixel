@@ -115,6 +115,7 @@ void RunBasicPowerCycle(host_ui::SystemShell& shell, const host_ui::StatusLayerM
     if (!power_state.MarkAsleep()) {
         power_state.RecoverAwake();
         FadeBrightness(shell, 0U, status_model.brightness_percent);
+        shell.NotifyPowerCycleCompleted();
         return;
     }
     const auto sleep_result = power.EnterLowPower();
@@ -128,6 +129,7 @@ void RunBasicPowerCycle(host_ui::SystemShell& shell, const host_ui::StatusLayerM
     if (!power_state.FinishWake()) {
         power_state.RecoverAwake();
     }
+    shell.NotifyPowerCycleCompleted();
 }
 
 template <typename T>
@@ -458,6 +460,7 @@ host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& st
     return host_ui::SystemMenuModel{
         .language = "English",
         .installed_app_count = catalog.count,
+        .auto_sleep_timeout_minutes = status.auto_sleep_timeout_minutes,
         .wifi_available = status.wifi_available,
         .wifi_enabled = status.wifi_enabled,
         .wifi_connected = status.wifi_connected,
@@ -1229,6 +1232,59 @@ bool RunRemoteControlSettings(host_ui::SystemShell& shell, host_ui::SystemSettin
     }
 }
 
+bool SupportedAutoSleepTimeout(uint32_t minutes) {
+    return minutes == 1U || minutes == 5U || minutes == 10U || minutes == 30U;
+}
+
+bool RunPowerManagement(host_ui::SystemShell& shell, host_ui::StatusLayerModel& status_model,
+                        host_ui::SystemSettingsStore& settings_store, RemoteCommandPump* command_pump) {
+    auto model = host_ui::PowerManagementModel{
+        .auto_sleep_timeout_minutes = status_model.auto_sleep_timeout_minutes,
+    };
+    const auto show_result = shell.ShowPowerManagement(model);
+    if (!show_result) {
+        ESP_LOGE(kTag, "failed to show Power Management: error=%u", static_cast<unsigned>(show_result.error()));
+        return false;
+    }
+    for (;;) {
+        const auto action = shell.PollAction(RemoteAwareTimeout(portMAX_DELAY, command_pump));
+        if (command_pump != nullptr && command_pump->Process()) {
+            shell.LeavePowerManagement();
+            return true;
+        }
+        if (!action.has_value()) {
+            continue;
+        }
+        if (action->type == host_ui::SystemUiActionType::kClosePowerManagement ||
+            action->type == host_ui::SystemUiActionType::kSuspendToHall) {
+            shell.LeavePowerManagement();
+            return true;
+        }
+
+        uint8_t next_timeout = status_model.auto_sleep_timeout_minutes;
+        if (action->type == host_ui::SystemUiActionType::kSetAutoSleepEnabled) {
+            next_timeout = action->value != 0U ? host_ui::kDefaultAutoSleepTimeoutMinutes : 0U;
+        } else if (action->type == host_ui::SystemUiActionType::kSetAutoSleepTimeout &&
+                   SupportedAutoSleepTimeout(action->value)) {
+            next_timeout = static_cast<uint8_t>(action->value);
+        } else {
+            ESP_LOGW(kTag, "ignored action=%u while Power Management is visible", static_cast<unsigned>(action->type));
+            continue;
+        }
+
+        if (next_timeout == status_model.auto_sleep_timeout_minutes) {
+            continue;
+        }
+        status_model.auto_sleep_timeout_minutes = next_timeout;
+        model.auto_sleep_timeout_minutes = next_timeout;
+        shell.SetAutoSleepTimeout(next_timeout);
+        shell.UpdatePowerManagement(model);
+        if (settings_store.ready() && !settings_store.Save(status_model)) {
+            ESP_LOGW(kTag, "Auto sleep setting changed but could not be persisted");
+        }
+    }
+}
+
 bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCatalog& catalog, bool launch_available,
                       const AppManagementUninstallHandler* uninstall_handler, std::optional<uint32_t>& launch_request,
                       RemoteCommandPump* command_pump) {
@@ -1358,6 +1414,21 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                         shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Remote Control: error=%u",
+                                 static_cast<unsigned>(show_result.error()));
+                        return false;
+                    }
+                } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kPowerManagement)) {
+                    shell.LeaveSystemMenu();
+                    if (!RunPowerManagement(shell, status_model, settings_store, command_pump)) {
+                        return false;
+                    }
+                    if (command_pump != nullptr && command_pump->unwind_requested) {
+                        return true;
+                    }
+                    show_result =
+                        shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                    if (!show_result) {
+                        ESP_LOGE(kTag, "failed to restore System Settings after Power Management: error=%u",
                                  static_cast<unsigned>(show_result.error()));
                         return false;
                     }
@@ -2549,6 +2620,7 @@ class ActiveHost final {
     void RunPowerCycle() {
         if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
             (void)shell_.ConsumePowerButtonPressed();
+            shell_.NotifyPowerCycleCompleted();
             ESP_LOGW(kTag, "power button ignored while firmware update is in progress");
             return;
         }
@@ -2620,6 +2692,7 @@ class ActiveHost final {
                 (void)app_controller_.Resume();
             }
             FadeBrightness(shell_, 0U, status_model_.brightness_percent);
+            shell_.NotifyPowerCycleCompleted();
             return;
         }
 
@@ -2656,6 +2729,7 @@ class ActiveHost final {
         if (!power_state_.FinishWake()) {
             power_state_.RecoverAwake();
         }
+        shell_.NotifyPowerCycleCompleted();
     }
 
     void SuspendToHall(uint64_t trigger_timestamp_us) {
@@ -2743,6 +2817,8 @@ HostController::HostController(device::DeviceServices& devices, device::BatteryB
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
     wifi_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyWifiStateChanged(); }, &shell_);
+    devices_.input().SetActivitySink(
+        [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyUserActivity(); }, &shell_);
     power_.SetPowerButtonSink(
         [](void* context, uint64_t timestamp_us) {
             auto* controller = static_cast<HostController*>(context);
@@ -2765,6 +2841,7 @@ HostController::HostController(device::DeviceServices& devices, device::BatteryB
 }
 
 HostController::~HostController() {
+    devices_.input().SetActivitySink(nullptr, nullptr);
     remote_control_.Stop();
     battery_.SetStateChangeSink(nullptr, nullptr);
     wifi_.SetStateChangeSink(nullptr, nullptr);
@@ -2784,6 +2861,15 @@ void HostController::Run() {
     if (settings_store.ready() && !settings_store.Load(status_model)) {
         ESP_LOGW(kTag, "Host settings could not be restored; using safe defaults");
     }
+    shell_.ConfigureAutoSleep(
+        status_model.auto_sleep_timeout_minutes,
+        [](void* context, bool& connected) {
+            auto* controller = static_cast<HostController*>(context);
+            const device::BatterySnapshot snapshot = controller->battery_.Snapshot();
+            connected = snapshot.external_power_connected;
+            return snapshot.external_power_available;
+        },
+        this);
     host_ui::RemoteControlModel remote_control_settings = remote_control_.Snapshot();
     if (settings_store.ready() && !settings_store.LoadRemoteControl(remote_control_settings)) {
         ESP_LOGW(kTag, "Remote Control settings could not be restored; using disabled default");

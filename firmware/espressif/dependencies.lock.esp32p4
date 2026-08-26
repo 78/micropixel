@@ -164,7 +164,7 @@ dependencies:
     source:
       path: components/esp-iot-solution/components/display/tools/esp_lvgl_adapter
       type: local
-    version: 0.6.3
+    version: 0.6.4
   espressif/esp_mmap_assets:
     component_hash: b7c559238d9f4c11048b1d7302f5474e4f4f590902433efd792bd0cbf5324f2a
     dependencies:

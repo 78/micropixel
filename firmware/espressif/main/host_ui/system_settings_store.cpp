@@ -16,7 +16,7 @@ constexpr char kNamespace[] = "system";
 constexpr char kControlNamespace[] = "control";
 constexpr char kSettingsKey[] = "ui";
 constexpr char kControlSettingsKey[] = "settings";
-constexpr uint8_t kSettingsVersion = 1U;
+constexpr uint8_t kSettingsVersion = 2U;
 constexpr uint8_t kControlSettingsVersion = 1U;
 constexpr uint8_t kPerformanceOverlayFlag = 1U << 0U;
 
@@ -25,10 +25,11 @@ struct SettingsRecord final {
     uint8_t brightness_percent{};
     uint8_t volume_percent{};
     uint8_t flags{};
-    uint8_t reserved[4]{};
+    uint8_t auto_sleep_timeout_minutes{};
+    uint8_t reserved[3]{};
 };
 
-static_assert(sizeof(SettingsRecord) == 8U, "System settings v1 record size changed");
+static_assert(sizeof(SettingsRecord) == 8U, "System settings record size changed");
 
 struct ControlSettingsRecord final {
     uint8_t version{};
@@ -40,7 +41,23 @@ static_assert(sizeof(ControlSettingsRecord) == 8U, "Remote Control settings v1 r
 
 bool ValidRecord(const SettingsRecord& record) {
     if (record.version != kSettingsVersion || record.brightness_percent > 100U || record.volume_percent > 100U ||
-        (record.flags & ~kPerformanceOverlayFlag) != 0U) {
+        (record.flags & ~kPerformanceOverlayFlag) != 0U ||
+        (record.auto_sleep_timeout_minutes != 0U && record.auto_sleep_timeout_minutes != 1U &&
+         record.auto_sleep_timeout_minutes != 5U && record.auto_sleep_timeout_minutes != 10U &&
+         record.auto_sleep_timeout_minutes != 30U)) {
+        return false;
+    }
+    for (uint8_t byte : record.reserved) {
+        if (byte != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ValidLegacyRecord(const SettingsRecord& record) {
+    if (record.version != 1U || record.brightness_percent > 100U || record.volume_percent > 100U ||
+        (record.flags & ~kPerformanceOverlayFlag) != 0U || record.auto_sleep_timeout_minutes != 0U) {
         return false;
     }
     for (uint8_t byte : record.reserved) {
@@ -124,16 +141,18 @@ bool SystemSettingsStore::Load(StatusLayerModel& model) const {
     }
     SettingsRecord record{};
     error = nvs_get_blob(handle_, kSettingsKey, &record, &size);
-    if (error != ESP_OK || size != sizeof(record) || !ValidRecord(record)) {
-        ESP_LOGW(kTag, "ignored invalid Host settings v1 record");
+    const bool legacy = ValidLegacyRecord(record);
+    if (error != ESP_OK || size != sizeof(record) || (!legacy && !ValidRecord(record))) {
+        ESP_LOGW(kTag, "ignored invalid Host settings record");
         return false;
     }
     model.brightness_percent = record.brightness_percent;
     model.volume_percent = record.volume_percent;
     model.performance_overlay_enabled = (record.flags & kPerformanceOverlayFlag) != 0U;
-    ESP_LOGI(kTag, "restored Host settings: brightness=%u volume=%u performance=%s",
+    model.auto_sleep_timeout_minutes = legacy ? kDefaultAutoSleepTimeoutMinutes : record.auto_sleep_timeout_minutes;
+    ESP_LOGI(kTag, "restored Host settings: brightness=%u volume=%u performance=%s auto-sleep=%u min",
              static_cast<unsigned>(model.brightness_percent), static_cast<unsigned>(model.volume_percent),
-             model.performance_overlay_enabled ? "on" : "off");
+             model.performance_overlay_enabled ? "on" : "off", static_cast<unsigned>(model.auto_sleep_timeout_minutes));
     return true;
 }
 
@@ -145,7 +164,8 @@ bool SystemSettingsStore::Save(const StatusLayerModel& model) const {
         .version = kSettingsVersion,
         .brightness_percent = model.brightness_percent,
         .volume_percent = model.volume_percent,
-        .flags = static_cast<uint8_t>(model.performance_overlay_enabled ? kPerformanceOverlayFlag : 0U)};
+        .flags = static_cast<uint8_t>(model.performance_overlay_enabled ? kPerformanceOverlayFlag : 0U),
+        .auto_sleep_timeout_minutes = model.auto_sleep_timeout_minutes};
     esp_err_t error = nvs_set_blob(handle_, kSettingsKey, &record, sizeof(record));
     if (error == ESP_OK) {
         error = nvs_commit(handle_);
@@ -154,9 +174,9 @@ bool SystemSettingsStore::Save(const StatusLayerModel& model) const {
         ESP_LOGE(kTag, "failed to persist Host settings: %s", esp_err_to_name(error));
         return false;
     }
-    ESP_LOGI(kTag, "saved Host settings: brightness=%u volume=%u performance=%s",
+    ESP_LOGI(kTag, "saved Host settings: brightness=%u volume=%u performance=%s auto-sleep=%u min",
              static_cast<unsigned>(model.brightness_percent), static_cast<unsigned>(model.volume_percent),
-             model.performance_overlay_enabled ? "on" : "off");
+             model.performance_overlay_enabled ? "on" : "off", static_cast<unsigned>(model.auto_sleep_timeout_minutes));
     return true;
 }
 

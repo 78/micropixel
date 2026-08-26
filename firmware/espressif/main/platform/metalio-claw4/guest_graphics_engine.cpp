@@ -8,6 +8,7 @@
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "platform/graphics/command_stream.hpp"
+#include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
@@ -279,7 +280,7 @@ int32_t GuestGraphicsEngine::ApplyFrameLocked(const uint8_t* bytes, uint32_t len
     scene_texture_count_ = retained_count;
     scene_texture_access_ = retained_count == 0U ? device::TextureAccess{} : textures;
     if (needs_present) {
-        lv_timer_ready(lv_display_get_refr_timer(display_));
+        RequestDisplayRefresh(display_);
     }
     return MICROPIXEL_STATUS_OK;
 }
@@ -292,7 +293,7 @@ void GuestGraphicsEngine::Release() {
         retained_scene_.ForgetObjects();
         lv_obj_delete(guest_frame_);
         guest_frame_ = nullptr;
-        lv_timer_ready(lv_display_get_refr_timer(display_));
+        RequestDisplayRefresh(display_);
         ESP_LOGI(kTag, "Guest graphics tree released before Bitmap teardown");
     }
     ReleaseTextures(scene_texture_access_, scene_textures_, scene_texture_count_);
@@ -498,7 +499,7 @@ int32_t GuestGraphicsEngine::UpdateBitmap(const device::BitmapView& bitmap, uint
     } else {
         const bool invalidated = retained_scene_.InvalidateBitmap(bitmap.data, x, y, width, height);
         if (invalidated) {
-            lv_timer_ready(lv_display_get_refr_timer(display_));
+            RequestDisplayRefresh(display_);
         }
     }
     esp_lv_adapter_unlock();
@@ -525,7 +526,7 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
         }
     }
     if (invalidated) {
-        lv_timer_ready(lv_display_get_refr_timer(display_));
+        RequestDisplayRefresh(display_);
     }
 
     const uint32_t updates = bitmap_frame_updates_;

@@ -30,6 +30,10 @@ struct SystemUiOperations final {
                                                                            host_ui::SystemUiActionSink, void*){};
     void (*update_system_information)(void*, const host_ui::SystemInformationModel&){};
     void (*leave_system_information)(void*){};
+    std::expected<void, host_ui::SystemUiError> (*show_power_management)(void*, const host_ui::PowerManagementModel&,
+                                                                         host_ui::SystemUiActionSink, void*){};
+    void (*update_power_management)(void*, const host_ui::PowerManagementModel&){};
+    void (*leave_power_management)(void*){};
     std::expected<void, host_ui::SystemUiError> (*show_remote_control)(void*, const host_ui::RemoteControlModel&,
                                                                        host_ui::SystemUiActionSink, void*){};
     void (*update_remote_control)(void*, const host_ui::RemoteControlModel&){};
@@ -78,6 +82,11 @@ class SystemUiAdapter final : public host_ui::SystemUiBackend {
         void* action_context) override;
     void UpdateSystemInformation(const host_ui::SystemInformationModel& model) override;
     void LeaveSystemInformation() override;
+    [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowPowerManagement(
+        const host_ui::PowerManagementModel& model, host_ui::SystemUiActionSink action_sink,
+        void* action_context) override;
+    void UpdatePowerManagement(const host_ui::PowerManagementModel& model) override;
+    void LeavePowerManagement() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowRemoteControl(
         const host_ui::RemoteControlModel& model, host_ui::SystemUiActionSink action_sink,
         void* action_context) override;

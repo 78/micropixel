@@ -245,7 +245,7 @@ prepare_host_config() {
         awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
             -v lv_mem_size_kib="$lv_mem_size_kib" '
-            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0 }
+            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_pm = 0; saw_pm_dfs = 0 }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
@@ -302,6 +302,16 @@ prepare_host_config() {
                 saw_lv_mem_expand = 1
                 next
             }
+            /^CONFIG_PM_ENABLE=/ || /^# CONFIG_PM_ENABLE is not set$/ {
+                print "CONFIG_PM_ENABLE=y"
+                saw_pm = 1
+                next
+            }
+            /^CONFIG_PM_DFS_INIT_AUTO=/ || /^# CONFIG_PM_DFS_INIT_AUTO is not set$/ {
+                print "CONFIG_PM_DFS_INIT_AUTO=y"
+                saw_pm_dfs = 1
+                next
+            }
             { print }
             END {
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
@@ -317,6 +327,8 @@ prepare_host_config() {
                 if (!saw_ota_rollback) print "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y"
                 if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
                 if (!saw_lv_mem_expand) print "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0"
+                if (!saw_pm) print "CONFIG_PM_ENABLE=y"
+                if (!saw_pm_dfs) print "CONFIG_PM_DFS_INIT_AUTO=y"
             }
         ' "$sdkconfig_path" >"$updated"
         if ! cmp -s "$updated" "$sdkconfig_path"; then

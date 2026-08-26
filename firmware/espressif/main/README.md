@@ -200,7 +200,12 @@ main/
   Session 首先收到 `Resume`。500ms 内未到安全点时走现有强制 Stop，唤醒后显示大厅；OTA 正在写入时忽略
   电源键。进入低功耗的过渡期若再次检测到物理按下，则取消本次入睡并恢复显示；非 `Awake` 状态拒绝新的
   入睡请求。按键唤醒后必须先确认物理释放才重新开放电源请求，同时用 click guard 防止快速连按或释放事件
-  在显示恢复后立即触发再次休眠。
+  在显示恢复后立即触发再次休眠。平台在真正入睡前排空 TCA9555 共享中断并确认中断线释放；ESP-IDF 因
+  瞬态唤醒条件返回 `ESP_ERR_SLEEP_REJECT` 时保持显示关闭并原地重试，不执行一次伪唤醒恢复。
+- System Settings 的 Power Management 页面使用 LVGL switch/dropdown 配置自动休眠（Off 或 1/5/10/30
+  分钟，默认 5 分钟）。Host 只在外接电源状态明确为未连接时累计无交互时间；触摸、系统手势和远控注入输入
+  都会刷新 deadline，插电暂停，拔电和唤醒重新计时。到期请求复用上述短按电源键状态机，不新增另一条平台
+  sleep 路径；旧 `sys_store/system` v1 设置记录兼容迁移到包含自动休眠字段的 v2。
 - 亮屏且处于 `Awake` 时，新一轮电源键长按满 2 秒进入终态 `ShuttingDown`；唤醒所用且尚未释放的同一轮
   长按始终被拒绝。Host 停止当前 App、取消远控输入并静音后显示 `Shutting down...`，然后立即由
   Metalio-Claw4 backend 按板级 `PWR_KEY_PULSE` 协议持续驱动 TCA9555 P0.4（高/低各 100ms）。关机画面
