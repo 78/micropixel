@@ -1535,7 +1535,13 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::BatteryBackend& bat
             }
         }
         if (shell.PowerButtonPressed()) {
-            RunBasicPowerCycle(shell, status_model, power, power_state);
+            if (FirmwareUpdateInProgress(remote_control.Snapshot().firmware_update_state)) {
+                (void)shell.ConsumePowerButtonPressed();
+                shell.NotifyPowerCycleCompleted();
+                ESP_LOGW(kTag, "power button ignored while firmware update is in progress");
+            } else {
+                RunBasicPowerCycle(shell, status_model, power, power_state);
+            }
             power_pump.unwind_requested = false;
         }
         if (FirmwareUpdateInProgress(remote_control.Snapshot().firmware_update_state)) {

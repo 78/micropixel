@@ -1349,8 +1349,9 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const Hall
 
     lv_obj_t* cover_mark = lv_obj_create(cover);
     state.hall_cover_placeholders[index] = cover_mark;
-    lv_obj_set_size(cover_mark, 126, 96);
-    lv_obj_set_style_radius(cover_mark, 28, 0);
+    lv_obj_set_pos(cover_mark, 0, 0);
+    lv_obj_set_size(cover_mark, bounds.width, bounds.width);
+    lv_obj_set_style_radius(cover_mark, kHallCardRadius, 0);
     lv_obj_set_style_border_width(cover_mark, 0, 0);
     lv_obj_set_style_bg_color(cover_mark, lv_color_hex(kCoverColors[index % std::size(kCoverColors)]), 0);
     lv_obj_remove_flag(cover_mark, LV_OBJ_FLAG_SCROLLABLE);
@@ -1598,6 +1599,15 @@ void HallCardEvent(lv_event_t* event) {
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         SetHallPressOverlayLocked(state->hall_card_press_overlays[index], false);
     } else if (code == LV_EVENT_SHORT_CLICKED && state->hall_launch_enabled && state->hall_action_sink != nullptr) {
+        const int32_t reveal_offset =
+            metalio_claw4::HallCarousel::RevealOffset(state->hall_app_count, state->hall_scroll_offset, index);
+        if (reveal_offset != state->hall_scroll_offset && state->hall_carousel_viewport != nullptr) {
+            // The transition compositor requires the complete square cover to
+            // be on-screen. Preserve that fully revealed position as the Hall
+            // baseline before handing the launch request to FirmwareApp.
+            lv_obj_scroll_to_x(state->hall_carousel_viewport, reveal_offset, LV_ANIM_OFF);
+            UpdateHallCarouselLocked(*state, lv_obj_get_scroll_x(state->hall_carousel_viewport));
+        }
         ESP_LOGI(kTag, "App Hall accepted native card tap: card=%" PRIu32, index);
         state->hall_action_sink(
             state->hall_action_context,

@@ -260,6 +260,22 @@ struct HallCarousel final {
         return kLeft + static_cast<int32_t>(index) * kCardStep - offset;
     }
 
+    [[nodiscard]] static constexpr int32_t RevealOffset(uint32_t app_count, int32_t offset, uint32_t index) {
+        const int32_t clamped = ClampOffset(app_count, offset);
+        if (index >= app_count) {
+            return clamped;
+        }
+        const int32_t card_x = CardX(index, clamped);
+        const int32_t viewport_right = kLeft + kViewportWidth;
+        if (card_x < kLeft) {
+            return ClampOffset(app_count, clamped - (kLeft - card_x));
+        }
+        if (card_x + kCardWidth > viewport_right) {
+            return ClampOffset(app_count, clamped + card_x + kCardWidth - viewport_right);
+        }
+        return clamped;
+    }
+
     [[nodiscard]] static constexpr uint32_t CoverWindowFirst(uint32_t app_count, int32_t offset) {
         if (app_count == 0U) {
             return 0U;

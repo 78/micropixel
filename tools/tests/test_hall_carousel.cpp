@@ -85,6 +85,16 @@ void ContinuousIndicator() {
           "the scroll thumb must reach the right edge continuously");
 }
 
+void CardRevealOffset() {
+    Check(HallCarousel::RevealOffset(7U, 0, 3U) == 179,
+          "a tapped card clipped by the right edge must be fully revealed");
+    Check(HallCarousel::RevealOffset(20U, 10 * HallCarousel::kCardStep + 40, 10U) == 10 * HallCarousel::kCardStep,
+          "a tapped card clipped by the left edge must be fully revealed");
+    Check(HallCarousel::RevealOffset(7U, 123, 2U) == 123,
+          "a fully visible tapped card must preserve the free-pixel offset");
+    Check(HallCarousel::RevealOffset(7U, 123, 7U) == 123, "an invalid card index must not move the carousel");
+}
+
 void BoundedCoverWindow() {
     Check(HallCarousel::CoverWindowFirst(50U, 0) == 0U && HallCarousel::CoverWindowLast(50U, 0) == 5U,
           "the first viewport must load only visible covers plus one forward prefetch");
@@ -129,9 +139,10 @@ int main() {
     DragClampingAndDirection();
     VelocityAndFreeInertia();
     ContinuousIndicator();
+    CardRevealOffset();
     BoundedCoverWindow();
     RepeatedThrowMomentum();
     HallLaunchBackgroundPolicy();
-    std::cout << "hall_carousel tests passed: 7 cases\n";
+    std::cout << "hall_carousel tests passed: 8 cases\n";
     return 0;
 }
