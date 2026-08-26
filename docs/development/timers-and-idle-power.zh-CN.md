@@ -16,7 +16,7 @@
 1 s auto-sleep deadline 约束，进入 idle pause 后无限阻塞，直到触摸 IRQ、Guest frame、Host UI 更新或其他
 显式 wake。GT911 IRQ 只唤醒输入读取任务；确认得到有效触摸样本后，Host 输入路径才唤醒 LVGL，避免空 IRQ
 造成 adapter 的 idle pause 反复退出。产品启用 ESP-IDF PM 和启动时 DFS：任务活跃时仍可运行在 360 MHz，空闲时降到 XTAL 频率。
-当前没有启用 FreeRTOS tickless automatic light sleep。
+FreeRTOS tickless idle 已启用，所有可运行任务阻塞时可停止周期 tick；运行时 PM 未启用 automatic light sleep。
 
 ## 用户可配置的自动休眠
 
@@ -62,7 +62,7 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 | Wi-Fi 扫描页 | retry 1 s，刷新 10 s | 只在扫描页面可见时按下一个 deadline 等待；Wi-Fi driver 状态变化仍走事件 |
 | Remote agent 离线状态 | 旧实现 Poll 1 s | 已改为 task notification；命令与 Wi-Fi 状态变化显式唤醒，disabled 状态仅等待 15 min 固件检查 deadline |
 | Remote agent 已连接 control stream | 旧实现 Read timeout 250 ms | 已改为 HTTP/3 stream/异步完成、Host result、命令和 Runtime snapshot 事件唤醒；醒来后用 `TryRead()` 排空数据，无事件和 deadline 时无限等待 |
-| 音频 I2S mixer | 旧实现每 128 帧写一次，16 kHz 下约 8 ms | 已改为 task notification 事件唤醒；无 active voice 时关闭 PA 和 I2S 并无限阻塞。唤醒 PA 后先发送 32 ms 静音预滚，避免吞掉短音效；播放结束保留 10 s 静音 grace，避免游戏操作间频繁关开 |
+| 音频 I2S mixer | 旧实现每 128 帧写一次，16 kHz 下约 8 ms | 已改为 task notification 事件唤醒；无 active voice 时关闭 PA 和 I2S 并无限阻塞。唤醒 PA 后先发送 64 ms 静音预滚，等待冷启动链路稳定；播放结束保留 10 s 静音 grace，避免游戏操作间频繁关开 |
 | 前台 App completion | 20 ms | 仅 Guest 前台期间，用于 completion、远控和系统动作编排；不是大厅空闲来源 |
 | 固件更新页面 | 100 ms | 仅更新页面/更新流程期间刷新进度；可在 Remote model change event 完整接入后删除 |
 | 亮度与系统转场 | 15–17 ms，约 100–180 ms 总时长 | 有限帧瞬态任务，结束后不再唤醒 |
@@ -86,11 +86,11 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 ESP-Hosted SDIO、GT911 和电源键在自动睡眠中的 retention/wake 行为。Remote agent 的常态轮询已经移除；
 下一阶段应先把固件更新页等剩余 UI 状态刷新改成 Remote model event，再评估 tickless light sleep。
 
-后续可单独评估把 `CONFIG_FREERTOS_HZ` 从 100 提升到 1000，以获得 1 ms 的阻塞和 deadline 粒度；这不是
-LVGL 动画流畅度修复的前置条件。若采用 1000 Hz，应同时启用并验证 tickless idle，并把 LVGL 动画显示提交
-独立限制在约 16–20 ms（50–60 FPS），避免当前 4 ms animation timer 实际触发约 250 次/秒的无效刷新。
-验收必须包含活动态 Tick ISR/CPU 开销、大厅待机功耗、ESP-Hosted SDIO 抖动，以及显式 light sleep 的进入和
-唤醒稳定性。
+当前产品基线已将 `CONFIG_FREERTOS_HZ` 设为 1000，以获得 1 ms 的阻塞和 deadline 粒度，并启用
+`CONFIG_FREERTOS_USE_TICKLESS_IDLE`；这不会代替 LVGL 独立的帧率限制，也不会自动启用 light sleep。后续启用 automatic light sleep 时，
+仍需要把 LVGL 动画显示提交独立限制在约 16–20 ms（50–60 FPS），避免 4 ms animation timer 实际触发
+约 250 次/秒的无效刷新。验收必须包含活动态 Tick ISR/CPU 开销、大厅待机功耗、ESP-Hosted SDIO 抖动，
+以及显式 light sleep 的进入和唤醒稳定性。
 
 ## 真机验收
 

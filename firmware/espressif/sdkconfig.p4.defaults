@@ -30,6 +30,12 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 CONFIG_PM_ENABLE=y
 CONFIG_PM_DFS_INIT_AUTO=y
 
+# Use 1 ms FreeRTOS tick granularity for bounded waits and service deadlines.
+CONFIG_FREERTOS_HZ=1000
+# Suppress periodic ticks while every runnable task is blocked. Runtime PM does
+# not enable automatic light sleep; explicit Host sleep remains authoritative.
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+
 # Metalio-Claw4 routes Wi-Fi through its ESP32-C5 coprocessor. The board does
 # not use the ESP32-P4 Function-EV default SDIO pins.
 CONFIG_SLAVE_IDF_TARGET_ESP32C5=y

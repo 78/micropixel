@@ -32,7 +32,7 @@ constexpr uint32_t kSineTableSize = 256U;
 constexpr uint32_t kAudioTaskStackSize = 4096U;
 constexpr BaseType_t kAudioTaskCore = 0;
 constexpr uint32_t kMetalioClaw4AudioSampleRate = 16000U;
-constexpr uint32_t kAudioOutputWakeupMs = 32U;
+constexpr uint32_t kAudioOutputWakeupMs = 64U;
 constexpr uint32_t kAudioOutputWakeupChunks =
     (kAudioOutputWakeupMs * kMetalioClaw4AudioSampleRate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
 constexpr uint32_t kAudioIdleGraceMs = 10000U;

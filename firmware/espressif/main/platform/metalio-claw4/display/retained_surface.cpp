@@ -350,8 +350,20 @@ bool RetainedSurface::Update(const micropixel_graphics_push_state_command_t* req
     }
 
     if (!active_) {
+        // Present pending retained-object changes before taking ownership of
+        // the panel framebuffers. RequestDisplayRefresh() is asynchronous, so
+        // a fast Guest timer can otherwise enter dummy draw first and capture
+        // the previously displayed frame, making the scene briefly regress.
+        const int64_t base_started_us = esp_timer_get_time();
+        esp_err_t status = esp_lv_adapter_refresh_now(display_);
+        const int64_t base_completed_us = esp_timer_get_time();
+        if (status != ESP_OK) {
+            ESP_LOGE(kTag, "retained surface could not present capture base: %s", esp_err_to_name(status));
+            return false;
+        }
+
         const int64_t enable_started_us = esp_timer_get_time();
-        esp_err_t status = esp_lv_adapter_set_dummy_draw(display_, true);
+        status = esp_lv_adapter_set_dummy_draw(display_, true);
         const int64_t enable_completed_us = esp_timer_get_time();
         if (status != ESP_OK) {
             ESP_LOGE(kTag, "retained surface compositor enable failed: %s", esp_err_to_name(status));
@@ -400,9 +412,9 @@ bool RetainedSurface::Update(const micropixel_graphics_push_state_command_t* req
                  "retained surface compositor #%" PRIu32 ": bytes=%" PRIu32 " surface=%" PRId64 " us base=%" PRId64
                  " us enable=%" PRId64 " us acquire=%" PRIu32 " us restore=%" PRIu32 " us layer=%" PRIu32
                  " us flush=%" PRIu32 " us psram-free=%zu",
-                 capture_count_, surface_bytes_, surface_completed_us - surface_started_us, static_cast<int64_t>(0),
-                 enable_completed_us - enable_started_us, acquire_us, restore_us, surface_copy_us, flush_us,
-                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                 capture_count_, surface_bytes_, surface_completed_us - surface_started_us,
+                 base_completed_us - base_started_us, enable_completed_us - enable_started_us, acquire_us, restore_us,
+                 surface_copy_us, flush_us, heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         if (!composed) {
             (void)esp_lv_adapter_set_dummy_draw(display_, false);
             active_ = false;

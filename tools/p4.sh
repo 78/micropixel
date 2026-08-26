@@ -247,7 +247,7 @@ prepare_host_config() {
         awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
             -v lv_mem_size_kib="$lv_mem_size_kib" '
-            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_lv_examples = 0; saw_lv_demos = 0; saw_pm = 0; saw_pm_dfs = 0 }
+            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_lv_examples = 0; saw_lv_demos = 0; saw_pm = 0; saw_pm_dfs = 0; saw_freertos_hz = 0; saw_freertos_tickless = 0 }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
@@ -324,6 +324,16 @@ prepare_host_config() {
                 saw_pm_dfs = 1
                 next
             }
+            /^CONFIG_FREERTOS_HZ=/ {
+                print "CONFIG_FREERTOS_HZ=1000"
+                saw_freertos_hz = 1
+                next
+            }
+            /^CONFIG_FREERTOS_USE_TICKLESS_IDLE=/ || /^# CONFIG_FREERTOS_USE_TICKLESS_IDLE is not set$/ {
+                print "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
+                saw_freertos_tickless = 1
+                next
+            }
             { print }
             END {
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
@@ -343,6 +353,8 @@ prepare_host_config() {
                 if (!saw_lv_demos) print "# CONFIG_LV_BUILD_DEMOS is not set"
                 if (!saw_pm) print "CONFIG_PM_ENABLE=y"
                 if (!saw_pm_dfs) print "CONFIG_PM_DFS_INIT_AUTO=y"
+                if (!saw_freertos_hz) print "CONFIG_FREERTOS_HZ=1000"
+                if (!saw_freertos_tickless) print "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
             }
         ' "$sdkconfig_path" >"$updated"
         if ! cmp -s "$updated" "$sdkconfig_path"; then
