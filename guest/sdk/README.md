@@ -1,11 +1,11 @@
 # Guest C++ SDK
 
-状态：**0.9.3，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
+状态：**0.9.4，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
 `app.timers().After/Every()` 创建。`WaitEvent/WaitEventFor/PollEvent` 只用于短期等待或协议级控制。
 
 ## 工具链兼容性
 
-SDK 0.9.3 生成的 Guest 必须使用公开的
+SDK 0.9.4 生成的 Guest 必须使用公开的
 [MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime) 固定 commit
 `482b17e07fc46e80ffd23e5290871d42c49748e7` 编译为 AOT format v6。该编译器当前仍自报
 `wamrc 2.4.3`，但上游 WAMR 2.4.3、2.4.4 和 2.4.5 Release 都生成不兼容的 AOT v5；因此
@@ -353,7 +353,7 @@ frame.DrawText({24, 24}, "Hello", micropixel::Color::White(),
 ```
 
 `SystemFont::{kSmall,kMedium,kLarge,kTitle}` 的实际字体和像素大小由 Host 决定。这样 Host 后续可在不改变
-应用或 wire schema 的情况下选择不同语言字体；SDK 0.9.3 暂不提供翻译目录或语言包 API。
+应用或 wire schema 的情况下选择不同语言字体；SDK 0.9.4 暂不提供翻译目录或语言包 API。
 
 需要维护棋盘、画布或其他动态像素时，创建 `StreamingTexture`。格式名直接描述 Guest 内存字节顺序：
 `kBgr888` 为 B/G/R，`kBgra8888` 为 B/G/R/A。

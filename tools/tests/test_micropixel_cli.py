@@ -472,9 +472,9 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(client.request, ("GET", "/device/app-errors/latest", None))
         rendered = json.loads(output.getvalue())
         self.assertEqual(rendered["code"], "guest_trap")
-        self.assertIn("rebuild this App with SDK 0.9.3", rendered["recommendation"])
+        self.assertIn("rebuild this App with SDK 0.9.4", rendered["recommendation"])
 
-    def test_firmware_preflight_requires_0_2_1_before_install_or_start(self) -> None:
+    def test_firmware_preflight_requires_0_2_2_before_install_or_start(self) -> None:
         class Client:
             def __init__(self, version: str, online: bool = True) -> None:
                 self.version = version
@@ -487,14 +487,14 @@ class MicroPixelCliTest(unittest.TestCase):
                 self.request = (method, path, body)
                 return {"online": self.online, "status": {"firmwareVersion": self.version}}
 
-        current = Client("0.2.1")
+        current = Client("0.2.2")
         CLI.require_compatible_firmware(current)
         self.assertEqual(current.request, ("GET", "/device", None))
 
-        with self.assertRaisesRegex(CLI.CliError, "Upgrade the device to firmware 0.2.1 or later"):
-            CLI.require_compatible_firmware(Client("0.2.0"))
+        with self.assertRaisesRegex(CLI.CliError, "Upgrade the device to firmware 0.2.2 or later"):
+            CLI.require_compatible_firmware(Client("0.2.1"))
         with self.assertRaisesRegex(CLI.CliError, "device is offline"):
-            CLI.require_compatible_firmware(Client("0.2.1", online=False))
+            CLI.require_compatible_firmware(Client("0.2.2", online=False))
 
     def test_reboot_and_firmware_commands_use_explicit_endpoints(self) -> None:
         class Client:
@@ -509,9 +509,9 @@ class MicroPixelCliTest(unittest.TestCase):
             ) -> dict[str, object]:
                 self.requests.append((method, path, body))
                 if path == "/device":
-                    return {"online": True, "status": {"firmwareVersion": "0.2.1"}}
+                    return {"online": True, "status": {"firmwareVersion": "0.2.2"}}
                 if method == "GET":
-                    return {"currentVersion": "0.2.1", "latestVersion": "0.2.2"}
+                    return {"currentVersion": "0.2.2", "latestVersion": "0.2.3"}
                 return {"id": "job-id"}
 
             def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
@@ -531,9 +531,9 @@ class MicroPixelCliTest(unittest.TestCase):
             CLI.execute_network(argparse.Namespace(command="firmware", firmware_command="status"), client)
         self.assertEqual(
             client.requests,
-            [("GET", "/device", None), ("GET", "/device/firmware/latest?currentVersion=0.2.1", None)],
+            [("GET", "/device", None), ("GET", "/device/firmware/latest?currentVersion=0.2.2", None)],
         )
-        self.assertEqual(json.loads(output.getvalue())["latestVersion"], "0.2.2")
+        self.assertEqual(json.loads(output.getvalue())["latestVersion"], "0.2.3")
 
         client = Client()
         with redirect_stdout(io.StringIO()):
@@ -542,7 +542,7 @@ class MicroPixelCliTest(unittest.TestCase):
             )
         self.assertEqual(
             client.requests,
-            [("GET", "/device", None), ("POST", "/device/firmware/update", {"currentVersion": "0.2.1"})],
+            [("GET", "/device", None), ("POST", "/device/firmware/update", {"currentVersion": "0.2.2"})],
         )
         self.assertEqual(client.waited, ({"id": "job-id"}, 45.0))
 
