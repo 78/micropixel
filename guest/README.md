@@ -80,7 +80,7 @@ Guest 代码不得直接依赖 ESP-IDF 或具体开发板。需要访问设备�
 copyable Service View，Service 创建的 Host Resource 才使用 move-only RAII。
 
 Guest AOT 的兼容性基线是 MicroPixel WAMR fork commit
-`77eb0f2ceb331e96ceab9737cc37f0b4a492781b` 和 AOT format v6，不是 `wamrc 2.4.3` 版本字符串。
+`482b17e07fc46e80ffd23e5290871d42c49748e7` 和 AOT format v6，不是 `wamrc 2.4.3` 版本字符串。
 上游 WAMR 2.4.3 至 2.4.5 生成的 AOT v5 不能用于当前固件。
 
 项目自有 C/C++ 代码遵循

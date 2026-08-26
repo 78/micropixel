@@ -743,7 +743,7 @@ Agent 页面既要能读，也要能被工具稳定解析：
 发布一个锁定版本的容器或 devcontainer，包含：
 
 - 与项目匹配的 WASI SDK/Clang；
-- MicroPixel WAMR fork commit `77eb0f2ceb331e96ceab9737cc37f0b4a492781b`，AOT format v6；
+- MicroPixel WAMR fork commit `482b17e07fc46e80ffd23e5290871d42c49748e7`，AOT format v6；
 - `wasm32` C++23 编译参数；
 - RISC-V 32-bit AOT target、ABI、CPU feature 参数；
 - Bundle/Package 构建和签名工具；
