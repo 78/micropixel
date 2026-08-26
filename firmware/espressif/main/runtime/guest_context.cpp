@@ -14,13 +14,17 @@ constexpr char kTag[] = "micropixel_guest";
 }
 
 GuestContext::GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
-                           std::string_view effective_locale, GuestLogSink* log_sink)
+                           work::BackgroundExecutor& background_executor, std::string_view effective_locale,
+                           GuestLogSink* log_sink)
     : devices_(devices),
       log_sink_(log_sink),
       clock_origin_us_(esp_timer_get_time()),
       events_{},
       timers_(events_, clock_origin_us_),
-      resources_(package),
+      sensors_(devices_.sensors(), timers_),
+      gpio_(devices_.gpio(), events_, timers_),
+      haptics_(devices_.haptics(), events_, timers_),
+      resources_(package, background_executor),
       audio_playback_(package, devices_.audio(), events_, clock_origin_us_),
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),
@@ -33,15 +37,24 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       graphics_endpoint_(*this),
       input_endpoint_(*this),
       audio_endpoint_(*this),
+      devices_endpoint_(*this),
+      sensors_endpoint_(*this),
+      gpio_endpoint_(*this),
+      haptics_endpoint_(*this),
+      power_info_endpoint_(*this),
       service_registry_(timer_endpoint_, system_endpoint_, storage_endpoint_, resource_endpoint_, random_endpoint_,
-                        graphics_endpoint_, input_endpoint_, audio_endpoint_) {
+                        graphics_endpoint_, input_endpoint_, audio_endpoint_, devices_endpoint_, sensors_endpoint_,
+                        gpio_endpoint_, haptics_endpoint_, power_info_endpoint_) {
     (void)std::snprintf(app_id_.data(), app_id_.size(), "%s", reinterpret_cast<const char*>(package.app_id));
 }
 
 GuestContext::~GuestContext() {
+    events_.Close();
     key_events_.Shutdown();
     touch_events_.Shutdown();
-    events_.Close();
+    sensors_.Shutdown();
+    gpio_.Shutdown();
+    haptics_.Shutdown();
     audio_playback_.Shutdown();
     (void)devices_.audio().StopAll();
     (void)devices_.audio().ResumeAll();
@@ -61,12 +74,17 @@ bool GuestContext::Suspend(TickType_t timeout) {
     }
     touch_events_.Suspend();
     key_events_.Suspend();
+    sensors_.Suspend();
+    gpio_.Suspend();
+    haptics_.Suspend();
     const bool timers_suspended = timers_.Suspend();
     auto audio_result = devices_.audio().SuspendAll();
     const bool audio_suspended = audio_result || audio_result.error().status == MICROPIXEL_STATUS_UNSUPPORTED;
     if (!timers_suspended || !audio_suspended || !events_.Suspend(timeout)) {
         (void)timers_.Resume();
         (void)devices_.audio().ResumeAll();
+        (void)sensors_.Resume();
+        (void)gpio_.Resume();
         touch_events_.Resume();
         key_events_.Resume();
         events_.Resume();
@@ -99,6 +117,14 @@ bool GuestContext::Resume() {
         events_.Resume();
         return false;
     }
+    const bool sensors_resumed = sensors_.Resume();
+    const bool gpio_resumed = sensors_resumed && gpio_.Resume();
+    if (!sensors_resumed || !gpio_resumed) {
+        sensors_.Suspend();
+        gpio_.Suspend();
+        events_.Resume();
+        return false;
+    }
     touch_events_.Resume();
     key_events_.Resume();
     events_.Resume();
@@ -110,6 +136,9 @@ bool GuestContext::Resume() {
 bool GuestContext::RequestStop() {
     touch_events_.Suspend();
     key_events_.Suspend();
+    sensors_.Suspend();
+    gpio_.Suspend();
+    haptics_.Suspend();
     (void)timers_.Suspend();
     (void)devices_.audio().SuspendAll();
     micropixel_event_t stop_event{};
@@ -128,6 +157,9 @@ bool GuestContext::RequestStop() {
 void GuestContext::ForceStop() {
     touch_events_.Suspend();
     key_events_.Suspend();
+    sensors_.Suspend();
+    gpio_.Suspend();
+    haptics_.Suspend();
     (void)timers_.Suspend();
     (void)devices_.audio().SuspendAll();
     events_.Close();

@@ -5,47 +5,25 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "runtime/resources/bitmap_decoder.hpp"
-#include "task_policy.hpp"
+#include "work/background_executor.hpp"
 
 namespace micropixel::runtime {
 namespace {
 
 constexpr char kTag[] = "micropixel_resource";
-constexpr uint32_t kWorkerStackBytes = 8U * 1024U;
-constexpr BaseType_t kWorkerCore = 0;
-
 }  // namespace
 
-ResourceService::ResourceService(const micropixel_aot_package_t& package)
-    : package_(package),
-      work_queue_(xQueueCreate(1U, sizeof(Work))),
-      work_done_(xSemaphoreCreateBinary()),
-      worker_stopped_(xSemaphoreCreateBinary()) {
-    if (work_queue_ == nullptr || work_done_ == nullptr || worker_stopped_ == nullptr) {
-        return;
-    }
-    if (xTaskCreatePinnedToCore(WorkerEntry, "micropixel_assets", kWorkerStackBytes, this,
-                                task_policy::kAssetWorkerPriority, &worker_, kWorkerCore) != pdPASS) {
-        worker_ = nullptr;
-    }
-}
+ResourceService::ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor)
+    : package_(package), background_executor_(background_executor), work_done_(xSemaphoreCreateBinary()) {}
 
 ResourceService::~ResourceService() {
     Shutdown();
-    if (work_queue_ != nullptr) {
-        vQueueDelete(work_queue_);
-    }
     if (work_done_ != nullptr) {
         vSemaphoreDelete(work_done_);
     }
-    if (worker_stopped_ != nullptr) {
-        vSemaphoreDelete(worker_stopped_);
-    }
 }
 
-bool ResourceService::valid() const {
-    return work_queue_ != nullptr && work_done_ != nullptr && worker_stopped_ != nullptr && worker_ != nullptr;
-}
+bool ResourceService::valid() const { return work_done_ != nullptr && background_executor_.valid(); }
 
 micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle_t texture,
                                                        const device::BitmapView& view) const {
@@ -90,10 +68,14 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
         return result;
     }
 
-    Work work{asset};
+    // Guest service calls are serialized. This stack context remains valid
+    // because the call waits for Process() to signal completion below.
+    Work work{this, asset};
     completed_texture_ = 0U;
     completed_status_ = MICROPIXEL_STATUS_INTERNAL;
-    if (xQueueSend(work_queue_, &work, 0U) != pdTRUE) {
+    while (xSemaphoreTake(work_done_, 0U) == pdTRUE) {
+    }
+    if (!background_executor_.Submit(ProcessEntry, &work)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     ESP_LOGI(kTag, "loading compressed asset=%" PRIu32 " format=%" PRIu32 " bytes=%" PRIu32, asset_id, asset.format,
@@ -175,21 +157,11 @@ void ResourceService::ReleaseSceneTexture(micropixel_texture_handle_t texture) {
     bitmaps_.ReleaseSceneReference(texture);
 }
 
-void ResourceService::WorkerEntry(void* argument) { static_cast<ResourceService*>(argument)->WorkerLoop(); }
-
-void ResourceService::WorkerLoop() {
-    for (;;) {
-        Work work{};
-        if (xQueueReceive(work_queue_, &work, portMAX_DELAY) != pdTRUE) {
-            continue;
-        }
-        if (stopping_.load(std::memory_order_acquire) || work.asset.data == nullptr) {
-            break;
-        }
-        Process(work);
+void ResourceService::ProcessEntry(void* argument) {
+    auto* work = static_cast<Work*>(argument);
+    if (work != nullptr && work->service != nullptr) {
+        work->service->Process(*work);
     }
-    xSemaphoreGive(worker_stopped_);
-    vTaskDelete(nullptr);
 }
 
 void ResourceService::Process(const Work& work) {
@@ -220,15 +192,9 @@ void ResourceService::Shutdown() {
         return;
     }
     stopping_.store(true, std::memory_order_release);
-    if (worker_ != nullptr && worker_stopped_ != nullptr) {
-        const Work stop{};
-        (void)xQueueOverwrite(work_queue_, &stop);
-        (void)xSemaphoreTake(worker_stopped_, pdMS_TO_TICKS(2000));
-        worker_ = nullptr;
-    }
     bitmaps_.ReleaseAll();
     shutdown_complete_ = true;
-    ESP_LOGI(kTag, "resource worker stopped; textures released");
+    ESP_LOGI(kTag, "resource textures released");
 }
 
 }  // namespace micropixel::runtime

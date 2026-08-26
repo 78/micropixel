@@ -37,6 +37,7 @@
 #include "runtime/wamr/diagnostics.h"
 #include "system_time.hpp"
 #include "task_policy.hpp"
+#include "work/background_executor.hpp"
 
 namespace micropixel::firmware {
 namespace {
@@ -2845,8 +2846,15 @@ class ActiveHost final {
 
 HostController::HostController(device::DeviceServices& devices, device::BatteryBackend& battery,
                                device::WifiBackend& wifi, device::PowerBackend& power, host_ui::SystemShell& shell,
-                               remote_control::RemoteControlAgent& remote_control)
-    : devices_(devices), battery_(battery), wifi_(wifi), power_(power), shell_(shell), remote_control_(remote_control) {
+                               remote_control::RemoteControlAgent& remote_control,
+                               work::BackgroundExecutor& background_executor)
+    : devices_(devices),
+      battery_(battery),
+      wifi_(wifi),
+      power_(power),
+      shell_(shell),
+      remote_control_(remote_control),
+      background_executor_(background_executor) {
     battery_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
     wifi_.SetStateChangeSink(
@@ -2949,7 +2957,8 @@ void HostController::Run() {
     UpdateRemoteControlCatalog(remote_control_, *catalog);
     remote_control_.UpdateAppLifecycle(nullptr, "not_running");
 
-    auto runtime_result = runtime::AppRuntime::Initialize(devices_, locale.effective(), &remote_control_);
+    auto runtime_result =
+        runtime::AppRuntime::Initialize(devices_, background_executor_, locale.effective(), &remote_control_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
         RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, *catalog,

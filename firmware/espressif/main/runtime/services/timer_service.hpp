@@ -25,6 +25,7 @@ class TimerService final {
         return mutex_ != nullptr;
     }
     [[nodiscard]] micropixel_app_time_t Now() const;
+    [[nodiscard]] micropixel_app_time_t FromGlobalTime(uint64_t timestamp_us) const;
 
     [[nodiscard]] ServiceResult<micropixel_timer_handle_t> Create();
     [[nodiscard]] ServiceResult<void> Start(micropixel_timer_handle_t handle, uint64_t initial_delay_us,

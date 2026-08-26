@@ -43,6 +43,21 @@ bool IsTouchMove(const micropixel_event_t& event) {
     return payload.phase == MICROPIXEL_TOUCH_MOVE;
 }
 
+bool IsGpioEdge(const micropixel_event_t& event) {
+    return event.service_id == MICROPIXEL_SERVICE_GPIO && event.event_id == MICROPIXEL_GPIO_EVENT_EDGE;
+}
+
+bool DecodeGpioEdge(const micropixel_event_t& event, micropixel_gpio_event_payload_t& payload_out) {
+    if (!IsGpioEdge(event) || event.size != sizeof(event) || event.flags != 0U ||
+        event.status != MICROPIXEL_STATUS_OK) {
+        return false;
+    }
+    std::memcpy(&payload_out, event.payload, sizeof(payload_out));
+    return payload_out.value <= 1U &&
+           (payload_out.edge == MICROPIXEL_GPIO_EDGE_RISING || payload_out.edge == MICROPIXEL_GPIO_EDGE_FALLING) &&
+           payload_out.reserved0 == 0U;
+}
+
 uint64_t SaturatingAdd(uint64_t left, uint64_t right) { return right > UINT64_MAX - left ? UINT64_MAX : left + right; }
 
 uint32_t SaturatingAdd(uint32_t left, uint32_t right) { return right > UINT32_MAX - left ? UINT32_MAX : left + right; }
@@ -136,6 +151,24 @@ EventWaitResult EventQueue::Wait(micropixel_event_t& event, uint64_t timeout_us)
             }
         }
         portEXIT_CRITICAL(&touch_lock_);
+    } else if (IsGpioEdge(event)) {
+        const uint32_t encoded_index = event.source & 0xffU;
+        if (encoded_index > 0U && encoded_index <= limits::kMaxGpioHandles) {
+            const uint32_t slot = encoded_index - 1U;
+            portENTER_CRITICAL(&gpio_lock_);
+            const GpioEventSnapshot snapshot = gpio_latest_[slot];
+            if (snapshot.source == event.source) {
+                micropixel_gpio_event_payload_t payload{};
+                payload.device = snapshot.device;
+                payload.value = snapshot.value;
+                payload.edge = snapshot.edge;
+                event.timestamp_us = snapshot.timestamp_us;
+                event.sequence = snapshot.sequence;
+                std::memcpy(event.payload, &payload, sizeof(payload));
+                gpio_latest_[slot] = {};
+            }
+            portEXIT_CRITICAL(&gpio_lock_);
+        }
     }
     ESP_LOGD(kTag, "Guest woke: service=%" PRIu32 " event=%u sequence=%" PRIu32, event.service_id,
              static_cast<unsigned>(event.event_id), event.sequence);
@@ -289,6 +322,48 @@ TouchPushResult EventQueue::PushTouchMove(const micropixel_event_t& event) {
     }
     portEXIT_CRITICAL(&touch_lock_);
     return TouchPushResult::kFailed;
+}
+
+GpioPushResult EventQueue::PushGpioCoalesced(const micropixel_event_t& event) {
+    const uint32_t encoded_index = event.source & 0xffU;
+    micropixel_gpio_event_payload_t payload{};
+    if (queue_ == nullptr || !accepting_.load(std::memory_order_acquire) || !DecodeGpioEdge(event, payload) ||
+        encoded_index == 0U || encoded_index > limits::kMaxGpioHandles) {
+        return GpioPushResult::kFailed;
+    }
+    const uint32_t slot = encoded_index - 1U;
+    portENTER_CRITICAL(&gpio_lock_);
+    if (gpio_latest_[slot].source == event.source) {
+        gpio_latest_[slot] = GpioEventSnapshot{event.timestamp_us,
+                                               event.source,
+                                               event.sequence,
+                                               payload.device,
+                                               static_cast<uint8_t>(payload.value),
+                                               static_cast<uint8_t>(payload.edge)};
+        portEXIT_CRITICAL(&gpio_lock_);
+        return GpioPushResult::kCoalesced;
+    }
+    if (gpio_latest_[slot].source != 0U) {
+        portEXIT_CRITICAL(&gpio_lock_);
+        return GpioPushResult::kFailed;
+    }
+    gpio_latest_[slot] = GpioEventSnapshot{event.timestamp_us,
+                                           event.source,
+                                           event.sequence,
+                                           payload.device,
+                                           static_cast<uint8_t>(payload.value),
+                                           static_cast<uint8_t>(payload.edge)};
+    portEXIT_CRITICAL(&gpio_lock_);
+
+    if (xQueueSend(queue_, &event, 0U) == pdTRUE) {
+        return GpioPushResult::kEnqueued;
+    }
+    portENTER_CRITICAL(&gpio_lock_);
+    if (gpio_latest_[slot].source == event.source) {
+        gpio_latest_[slot] = {};
+    }
+    portEXIT_CRITICAL(&gpio_lock_);
+    return GpioPushResult::kFailed;
 }
 
 bool EventQueue::PushControl(TickType_t timeout) {

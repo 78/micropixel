@@ -7,17 +7,13 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
-#include "freertos/idf_additions.h"
 #include "platform/metalio-claw4/lvgl_wakeup.hpp"
-#include "task_policy.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_touch";
 constexpr int kI2cSpeedHz = 400000;
-constexpr uint32_t kTaskStackSize = 4096;
-constexpr BaseType_t kTaskCore = 1;
 
 }  // namespace
 
@@ -41,7 +37,22 @@ uint8_t Gt911Input::ProbeAddress(i2c_master_bus_handle_t i2c_bus) const {
     return ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS;
 }
 
-esp_err_t Gt911Input::Initialize(i2c_master_bus_handle_t i2c_bus) {
+esp_err_t Gt911Input::Initialize(i2c_master_bus_handle_t i2c_bus, I2cExecutor& i2c_executor) {
+    struct Request final {
+        Gt911Input* input;
+        i2c_master_bus_handle_t bus;
+    } request{this, i2c_bus};
+    i2c_executor_ = &i2c_executor;
+    return i2c_executor.Invoke(
+        I2cExecutor::Priority::kHigh,
+        [](void* context) {
+            auto& requested = *static_cast<Request*>(context);
+            return requested.input->InitializeOnWorker(requested.bus);
+        },
+        &request);
+}
+
+esp_err_t Gt911Input::InitializeOnWorker(i2c_master_bus_handle_t i2c_bus) {
     esp_lcd_panel_io_i2c_config_t io_config{};
     io_config.dev_addr = ProbeAddress(i2c_bus);
     io_config.control_phase_bytes = 1;
@@ -76,13 +87,11 @@ esp_err_t Gt911Input::Start(lv_display_t* display) {
     }
     display_ = display;
     active_instance = this;
-    BaseType_t task_status = xTaskCreatePinnedToCore(TaskEntry, "micropixel_touch", kTaskStackSize, this,
-                                                     task_policy::kTouchPriority, &task_, kTaskCore);
-    if (task_status != pdPASS) {
+    const esp_err_t status = esp_lcd_touch_register_interrupt_callback(touch_, InterruptEntry);
+    if (status != ESP_OK) {
         active_instance = nullptr;
-        return ESP_ERR_NO_MEM;
     }
-    return esp_lcd_touch_register_interrupt_callback(touch_, InterruptEntry);
+    return status;
 }
 
 int32_t Gt911Input::GetInfo(micropixel_input_info_t& info) {
@@ -175,23 +184,32 @@ void IRAM_ATTR Gt911Input::InterruptEntry(esp_lcd_touch_handle_t) {
         return;
     }
     instance->interrupts_.fetch_add(1, std::memory_order_relaxed);
-    if (instance->task_ == nullptr) {
+    if (instance->i2c_executor_ == nullptr || instance->work_pending_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
     BaseType_t higher_priority_task_woken = pdFALSE;
-    vTaskNotifyGiveFromISR(instance->task_, &higher_priority_task_woken);
+    if (!instance->i2c_executor_->PostFromIsr(I2cExecutor::Priority::kHigh, ProcessEntry, instance,
+                                              &higher_priority_task_woken)) {
+        instance->work_pending_.store(false, std::memory_order_release);
+    }
     if (higher_priority_task_woken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
 }
 
-void Gt911Input::TaskEntry(void* context) { static_cast<Gt911Input*>(context)->Run(); }
+esp_err_t Gt911Input::ProcessEntry(void* context) {
+    if (context == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    static_cast<Gt911Input*>(context)->ProcessInterrupt();
+    return ESP_OK;
+}
 
 void Gt911Input::UpdateSmokeUi(const esp_lcd_touch_point_data_t* points, uint8_t point_count) {
     portENTER_CRITICAL(&sink_lock_);
     bool has_sink = sink_ != nullptr;
     portEXIT_CRITICAL(&sink_lock_);
-    if (has_sink || esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (has_sink || esp_lv_adapter_lock(0) != ESP_OK) {
         return;
     }
     if (smoke_root_ != nullptr && smoke_marker_ != nullptr && smoke_status_ != nullptr) {
@@ -211,67 +229,71 @@ void Gt911Input::UpdateSmokeUi(const esp_lcd_touch_point_data_t* points, uint8_t
     esp_lv_adapter_unlock();
 }
 
-void Gt911Input::Run() {
-    while (true) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        esp_err_t read_status = esp_lcd_touch_read_data(touch_);
-        if (read_status != ESP_OK) {
-            ESP_LOGW(kTag, "GT911 sample read failed: %s", esp_err_to_name(read_status));
-            continue;
-        }
+void Gt911Input::ProcessInterrupt() {
+    const uint32_t observed_interrupts = interrupts_.load(std::memory_order_acquire);
+    esp_err_t read_status = esp_lcd_touch_read_data(touch_);
+    if (read_status != ESP_OK) {
+        ESP_LOGW(kTag, "GT911 sample read failed: %s", esp_err_to_name(read_status));
+    } else {
         esp_lcd_touch_point_data_t points[MICROPIXEL_MAX_TOUCH_POINTS]{};
         uint8_t point_count = 0U;
         esp_err_t data_status = esp_lcd_touch_get_data(touch_, points, &point_count, MICROPIXEL_MAX_TOUCH_POINTS);
         if (data_status != ESP_OK) {
             ESP_LOGW(kTag, "GT911 sample decode failed: %s", esp_err_to_name(data_status));
-            continue;
-        }
-
-        uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
-        bool previous_seen[MICROPIXEL_MAX_TOUCH_POINTS]{};
-        for (uint8_t point_index = 0U; point_index < point_count; ++point_index) {
-            const auto& point = points[point_index];
-            int32_t previous_index = -1;
-            for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
-                if (active_touches_[index].active && active_touches_[index].point.track_id == point.track_id) {
-                    previous_index = static_cast<int32_t>(index);
-                    previous_seen[index] = true;
-                    break;
+        } else {
+            uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
+            bool previous_seen[MICROPIXEL_MAX_TOUCH_POINTS]{};
+            for (uint8_t point_index = 0U; point_index < point_count; ++point_index) {
+                const auto& point = points[point_index];
+                int32_t previous_index = -1;
+                for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+                    if (active_touches_[index].active && active_touches_[index].point.track_id == point.track_id) {
+                        previous_index = static_cast<int32_t>(index);
+                        previous_seen[index] = true;
+                        break;
+                    }
                 }
+
+                device::TouchSample sample{};
+                sample.timestamp_us = timestamp_us;
+                sample.id = point.track_id;
+                sample.x = point.x;
+                sample.y = point.y;
+                sample.pressure_per_mille = 0U;
+                sample.phase = previous_index >= 0 ? device::TouchPhase::kMove : device::TouchPhase::kDown;
+                Emit(sample);
             }
 
-            device::TouchSample sample{};
-            sample.timestamp_us = timestamp_us;
-            sample.id = point.track_id;
-            sample.x = point.x;
-            sample.y = point.y;
-            sample.pressure_per_mille = 0U;
-            sample.phase = previous_index >= 0 ? device::TouchPhase::kMove : device::TouchPhase::kDown;
-            Emit(sample);
-        }
-
-        for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
-            if (!active_touches_[index].active || previous_seen[index]) {
-                continue;
+            for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+                if (!active_touches_[index].active || previous_seen[index]) {
+                    continue;
+                }
+                const auto& point = active_touches_[index].point;
+                device::TouchSample sample{};
+                sample.timestamp_us = timestamp_us;
+                sample.id = point.track_id;
+                sample.x = point.x;
+                sample.y = point.y;
+                sample.phase = device::TouchPhase::kUp;
+                Emit(sample);
             }
-            const auto& point = active_touches_[index].point;
-            device::TouchSample sample{};
-            sample.timestamp_us = timestamp_us;
-            sample.id = point.track_id;
-            sample.x = point.x;
-            sample.y = point.y;
-            sample.phase = device::TouchPhase::kUp;
-            Emit(sample);
-        }
 
-        for (auto& active : active_touches_) {
-            active = {};
+            for (auto& active : active_touches_) {
+                active = {};
+            }
+            for (uint8_t index = 0U; index < point_count; ++index) {
+                active_touches_[index].active = true;
+                active_touches_[index].point = points[index];
+            }
+            UpdateSmokeUi(points, point_count);
         }
-        for (uint8_t index = 0U; index < point_count; ++index) {
-            active_touches_[index].active = true;
-            active_touches_[index].point = points[index];
-        }
-        UpdateSmokeUi(points, point_count);
+    }
+
+    work_pending_.store(false, std::memory_order_release);
+    if (interrupts_.load(std::memory_order_acquire) != observed_interrupts &&
+        !work_pending_.exchange(true, std::memory_order_acq_rel) &&
+        !i2c_executor_->Post(I2cExecutor::Priority::kHigh, ProcessEntry, this)) {
+        work_pending_.store(false, std::memory_order_release);
     }
 }
 

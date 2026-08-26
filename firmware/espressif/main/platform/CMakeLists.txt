@@ -18,6 +18,11 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
     list(APPEND micropixel_sources
         "platform/metalio-claw4/battery_backend.cpp"
         "platform/metalio-claw4/board_hardware.cpp"
+        "platform/metalio-claw4/device_catalog.cpp"
+        "platform/metalio-claw4/gpio_backend.cpp"
+        "platform/metalio-claw4/haptics_backend.cpp"
+        "platform/metalio-claw4/i2c_executor.cpp"
+        "platform/metalio-claw4/sensor_backend.cpp"
         "platform/metalio-claw4/display/esp_lcd_nv3051f.c"
         "platform/metalio-claw4/display/dirty_region_coalescer.cpp"
         "platform/metalio-claw4/display/jpeg_cover_decoder.cpp"

@@ -1,0 +1,8 @@
+#ifndef MICROPIXEL_TEST_WATCHDOG_STUB_FREERTOS_H
+#define MICROPIXEL_TEST_WATCHDOG_STUB_FREERTOS_H
+
+#include <stdint.h>
+
+#define portMAX_DELAY UINT32_MAX
+
+#endif

@@ -15,6 +15,10 @@ namespace micropixel::device {
 class DeviceServices;
 }
 
+namespace micropixel::work {
+class BackgroundExecutor;
+}
+
 namespace micropixel::runtime {
 
 class GuestLogSink;
@@ -52,9 +56,9 @@ class AppRuntime final {
     AppRuntime& operator=(AppRuntime&& other) = delete;
     ~AppRuntime();
 
-    [[nodiscard]] static std::expected<AppRuntime, AppRuntimeError> Initialize(device::DeviceServices& devices,
-                                                                               std::string_view effective_locale,
-                                                                               GuestLogSink* log_sink = nullptr);
+    [[nodiscard]] static std::expected<AppRuntime, AppRuntimeError> Initialize(
+        device::DeviceServices& devices, work::BackgroundExecutor& background_executor,
+        std::string_view effective_locale, GuestLogSink* log_sink = nullptr);
     [[nodiscard]] bool SetEffectiveLocale(std::string_view effective_locale);
     [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app, AppSessionReadySink ready_sink = nullptr,
                                        void* ready_context = nullptr);
@@ -64,12 +68,13 @@ class AppRuntime final {
     [[nodiscard]] bool ForceStop();
 
    private:
-    AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex,
-               std::string_view effective_locale, GuestLogSink* log_sink);
+    AppRuntime(device::DeviceServices& devices, work::BackgroundExecutor& background_executor, WamrRuntime wamr,
+               SemaphoreHandle_t session_mutex, std::string_view effective_locale, GuestLogSink* log_sink);
     [[nodiscard]] bool TakeSessionLock();
     void GiveSessionLock();
 
     device::DeviceServices& devices_;
+    work::BackgroundExecutor& background_executor_;
     GuestLogSink* log_sink_{};
     WamrRuntime wamr_;
     SemaphoreHandle_t session_mutex_{};

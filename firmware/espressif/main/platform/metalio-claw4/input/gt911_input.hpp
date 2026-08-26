@@ -10,8 +10,8 @@
 #include "esp_err.h"
 #include "esp_lcd_touch.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "lvgl.h"
+#include "platform/metalio-claw4/i2c_executor.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 
@@ -19,7 +19,7 @@ class Gt911Input final : public device::InputBackend {
    public:
     Gt911Input(int32_t width, int32_t height, gpio_num_t interrupt_pin);
 
-    [[nodiscard]] esp_err_t Initialize(i2c_master_bus_handle_t i2c_bus);
+    [[nodiscard]] esp_err_t Initialize(i2c_master_bus_handle_t i2c_bus, I2cExecutor& i2c_executor);
     [[nodiscard]] esp_err_t Start(lv_display_t* display);
     [[nodiscard]] bool Available() const { return touch_ != nullptr; }
 
@@ -38,11 +38,12 @@ class Gt911Input final : public device::InputBackend {
     };
 
     [[nodiscard]] uint8_t ProbeAddress(i2c_master_bus_handle_t i2c_bus) const;
+    [[nodiscard]] esp_err_t InitializeOnWorker(i2c_master_bus_handle_t i2c_bus);
     void Emit(const device::TouchSample& sample);
-    void Run();
+    void ProcessInterrupt();
     void UpdateSmokeUi(const esp_lcd_touch_point_data_t* points, uint8_t point_count);
     static void IRAM_ATTR InterruptEntry(esp_lcd_touch_handle_t touch);
-    static void TaskEntry(void* context);
+    static esp_err_t ProcessEntry(void* context);
 
     static Gt911Input* active_instance;
 
@@ -51,8 +52,9 @@ class Gt911Input final : public device::InputBackend {
     gpio_num_t interrupt_pin_{GPIO_NUM_NC};
     esp_lcd_touch_handle_t touch_{};
     lv_display_t* display_{};
-    TaskHandle_t task_{};
+    I2cExecutor* i2c_executor_{};
     std::atomic<uint32_t> interrupts_{};
+    std::atomic<bool> work_pending_{};
     portMUX_TYPE sink_lock_ = portMUX_INITIALIZER_UNLOCKED;
     device::TouchSink sink_{};
     void* sink_context_{};

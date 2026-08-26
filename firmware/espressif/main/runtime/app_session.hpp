@@ -15,6 +15,10 @@ namespace micropixel::device {
 class DeviceServices;
 }
 
+namespace micropixel::work {
+class BackgroundExecutor;
+}
+
 namespace micropixel::runtime {
 
 class GuestContext;
@@ -58,10 +62,9 @@ class AppSession final {
     AppSession& operator=(AppSession&& other) = delete;
     ~AppSession();
 
-    [[nodiscard]] static std::expected<AppSession, AppSessionFailure> Create(device::DeviceServices& devices,
-                                                                             const bundlefs_file_t& file,
-                                                                             std::string_view effective_locale,
-                                                                             GuestLogSink* log_sink = nullptr);
+    [[nodiscard]] static std::expected<AppSession, AppSessionFailure> Create(
+        device::DeviceServices& devices, work::BackgroundExecutor& background_executor, const bundlefs_file_t& file,
+        std::string_view effective_locale, GuestLogSink* log_sink = nullptr);
     [[nodiscard]] std::expected<void, AppSessionFailure> Run();
     [[nodiscard]] bool Suspend(TickType_t timeout);
     [[nodiscard]] bool Resume();

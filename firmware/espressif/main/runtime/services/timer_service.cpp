@@ -54,6 +54,12 @@ micropixel_app_time_t TimerService::Now() const {
     return elapsed > 0 ? static_cast<micropixel_app_time_t>(elapsed) : 0U;
 }
 
+micropixel_app_time_t TimerService::FromGlobalTime(uint64_t timestamp_us) const {
+    const int64_t elapsed =
+        static_cast<int64_t>(timestamp_us) - clock_origin_us_ - suspended_total_us_.load(std::memory_order_acquire);
+    return elapsed > 0 ? static_cast<micropixel_app_time_t>(elapsed) : 0U;
+}
+
 bool TimerService::TakeLock() { return mutex_ != nullptr && xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE; }
 
 void TimerService::GiveLock() { (void)xSemaphoreGive(mutex_); }

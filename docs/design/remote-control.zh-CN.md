@@ -440,6 +440,8 @@ MAC、IP 和 reset detail 等敏感字段默认脱敏；只有适当 scope 才�
 
 设备协议将诊断拆成两个只读指令：`device.get_system_info` 返回 Firmware、硬件、内存、存储、运行状态和网络快照；
 `device.get_task_diagnostics` 按需采集 FreeRTOS 任务、区间 CPU、优先级、Core affinity 和最低剩余栈。
+每个任务用 `coreId` 表示亲和性：`0` 或 `1` 表示固定到对应 Core，`null` 表示未绑定、可在所有 Core
+运行；字段缺失表示当前 Firmware 未采集该信息，调用方不得把它解释成未绑定。
 任务采样不附带在常规系统信息中，避免 Console 的常规轮询反复暂停调度器并构造较大的 JSON。CLI 的
 `micropixel device diagnostics` 依次执行两个指令并合并展示，保持单一的开发者入口。
 

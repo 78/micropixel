@@ -45,6 +45,7 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 | LVGL adapter | 产品模式为 0 个 | LVGL tick 改成按需读取单调时钟 | 已删除产品的 1 ms periodic tick；adapter 默认 periodic 模式仍为其他项目和 LVGL 8 保持兼容 |
 | Guest `TimerService` | 每 Session 最多 8 个，Guest 指定 one-shot/periodic | 将 Timer 到期转换成统一 Guest event | 保留。App suspend 时全部停止，periodic event 会合并，且设置 `skip_unhandled_events` |
 | Wi-Fi discovery | 1 个 one-shot | 用户扫描后 20 s holdoff；失败后按 60 s、120 s、300 s、900 s退避发现已保存网络 | 保留。它本身就是 deadline/event 模型，不是固定轮询，并设置 `skip_unhandled_events` |
+| USB Local Control | 1 个 one-shot，仅安装会话期间运行 | 120 s无安装数据后唤醒 `micropixel_usb`，在其所属任务中终止会话并返回超时 | 保留。每个有效 chunk 都重置 deadline，空闲且无安装会话时不运行 |
 
 集成 Guest 的周期定时器只在对应 App 前台运行：Blocks 与 Snake 为 16,667 us（约 60 Hz），Demo Timer 页为
 100 ms，Demo atlas 页为 20 ms。它们负责游戏推进或演示，不影响 App Hall 空闲。
@@ -57,6 +58,7 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 | 性能浮层 | CPU sample 1 s | 仅用户显式打开浮层时启用；等待 UI/远程事件或下一采样 deadline，不再 20 ms 轮询 |
 | Remote Host command | 旧实现 Poll 250 ms | 已改为入队时通知 `SystemShell`；仅远控 input sequence 执行期间保留 250 ms deadline 推进 |
 | Resource decode worker | 旧实现 Queue Poll 20 ms | 已改为 `portMAX_DELAY` 阻塞；shutdown 通过队列 sentinel 唤醒 |
+| USB Local Control | 旧实现 USB Read timeout 20 ms | 已改为无限等待 task notification；USB RX ISR、Host 响应入队和安装 one-shot 到期显式唤醒 `micropixel_usb` |
 | Wi-Fi 扫描页 | retry 1 s，刷新 10 s | 只在扫描页面可见时按下一个 deadline 等待；Wi-Fi driver 状态变化仍走事件 |
 | Remote agent 离线状态 | 1 s | 仍存在；用于未配置、无网络和 disabled 状态的重试/固件检查，是下一阶段事件化候选 |
 | Remote agent 已连接 control stream | Read timeout 250 ms | 仍存在；用于同时推进网络流、Host result 和本地控制命令。应给 HTTP/3 stream 增加可由本地队列打断的等待，再把常态 timeout 放大或改成无限等待 |
@@ -75,7 +77,8 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 4. 远控命令从 250 ms轮询改为队列事件；
 5. 大厅状态兜底采样从 1 s调整到 30 s；
 6. Guest resource worker 从 20 ms轮询改为阻塞队列；
-7. 音频 mixer 从持续发送静音改为首个 tone 事件启动、最后一个 tone 结束后自动关闭 I2S/PA。
+7. 音频 mixer 从持续发送静音改为首个 tone 事件启动、最后一个 tone 结束后自动关闭 I2S/PA；
+8. USB Local Control 从 20 ms read timeout 改为 USB RX、响应队列和安装 deadline 事件唤醒。
 
 暂不启用 tickless automatic light sleep。启用前必须在 Metalio-Claw4 真机逐项验证 MIPI-DSI、PPA、PSRAM、
 ESP-Hosted SDIO、GT911 和电源键在自动睡眠中的 retention/wake 行为。下一阶段应先把 Remote agent 的

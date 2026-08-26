@@ -3,14 +3,22 @@
 
 #include "device/audio.hpp"
 #include "device/battery.hpp"
+#include "device/devices.hpp"
+#include "device/gpio.hpp"
 #include "device/graphics.hpp"
+#include "device/haptics.hpp"
 #include "device/input.hpp"
 #include "device/local_control.hpp"
 #include "device/power.hpp"
 #include "device/random.hpp"
+#include "device/sensors.hpp"
 #include "device/wifi.hpp"
 #include "esp_err.h"
 #include "host_ui/system_ui.hpp"
+
+namespace micropixel::work {
+class BackgroundExecutor;
+}
 
 namespace micropixel::platform {
 
@@ -31,7 +39,12 @@ class Platform {
     [[nodiscard]] virtual device::WifiBackend& wifi() = 0;                   // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual device::PowerBackend& power() = 0;                 // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual device::LocalControlBackend& local_control() = 0;  // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::DeviceCatalogBackend& devices() = 0;       // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::SensorBackend& sensors() = 0;              // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::GpioBackend& gpio() = 0;                   // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::HapticsBackend& haptics() = 0;             // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual host_ui::SystemUiBackend& system_ui() = 0;         // NOLINT(readability-identifier-naming)
+    virtual void BindBackgroundExecutor(work::BackgroundExecutor& executor) = 0;
 
    protected:
     Platform() = default;

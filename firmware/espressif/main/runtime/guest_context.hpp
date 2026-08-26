@@ -13,16 +13,24 @@
 #include "runtime/guest_log_sink.hpp"
 #include "runtime/key_event_bridge.hpp"
 #include "runtime/resources/resource_service.hpp"
+#include "runtime/services/gpio_service.hpp"
+#include "runtime/services/haptics_service.hpp"
+#include "runtime/services/sensor_service.hpp"
 #include "runtime/services/storage_service.hpp"
 #include "runtime/services/timer_service.hpp"
 #include "runtime/touch_event_bridge.hpp"
+
+namespace micropixel::work {
+class BackgroundExecutor;
+}
 
 namespace micropixel::runtime {
 
 class GuestContext final {
    public:
     GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
-                 std::string_view effective_locale, GuestLogSink* log_sink);
+                 work::BackgroundExecutor& background_executor, std::string_view effective_locale,
+                 GuestLogSink* log_sink);
     GuestContext(const GuestContext&) = delete;
     GuestContext& operator=(const GuestContext&) = delete;
     ~GuestContext();
@@ -33,7 +41,8 @@ class GuestContext final {
     void ForceStop();
 
     [[nodiscard]] bool valid() const {  // NOLINT(readability-identifier-naming)
-        return events_.valid() && timers_.valid() && resources_.valid() && audio_playback_.valid() && storage_.valid();
+        return events_.valid() && timers_.valid() && sensors_.valid() && gpio_.valid() && haptics_.valid() &&
+               resources_.valid() && audio_playback_.valid() && storage_.valid();
     }
     [[nodiscard]] micropixel_app_time_t AppTimeNow() const { return timers_.Now(); }
     [[nodiscard]] EventWaitResult WaitEvent(micropixel_event_t& event, uint64_t timeout_us) {
@@ -97,6 +106,61 @@ class GuestContext final {
     [[nodiscard]] device::DeviceResult<micropixel_input_info_t> InputInfo() const { return devices_.input().GetInfo(); }
     [[nodiscard]] device::DeviceResult<micropixel_audio_info_t> AudioInfo() const { return devices_.audio().GetInfo(); }
     [[nodiscard]] device::DeviceResult<uint32_t> RandomU32() const { return devices_.random().U32(); }
+    [[nodiscard]] device::DeviceResult<micropixel_devices_list_response_t> DevicesList(uint16_t kind) const {
+        return devices_.devices().List(kind);
+    }
+    [[nodiscard]] device::DeviceResult<micropixel_device_info_t> DeviceInfo(micropixel_device_id_t device) const {
+        return devices_.devices().GetInfo(device);
+    }
+    [[nodiscard]] device::DeviceResult<micropixel_sensor_info_t> SensorInfo(micropixel_device_id_t device) const {
+        return devices_.sensors().GetInfo(device);
+    }
+    [[nodiscard]] ServiceResult<micropixel_sensor_open_response_t> SensorOpen(micropixel_device_id_t device,
+                                                                              uint16_t expected_kind) {
+        return sensors_.Open(device, expected_kind);
+    }
+    [[nodiscard]] ServiceResult<micropixel_sensor_reading_t> SensorRead(micropixel_sensor_handle_t sensor) {
+        return sensors_.Read(sensor);
+    }
+    [[nodiscard]] ServiceResult<void> SensorSetSampleInterval(micropixel_sensor_handle_t sensor, uint64_t interval_us) {
+        return sensors_.SetSampleInterval(sensor, interval_us);
+    }
+    [[nodiscard]] ServiceResult<void> SensorRelease(micropixel_sensor_handle_t sensor) {
+        return sensors_.Release(sensor);
+    }
+    [[nodiscard]] device::DeviceResult<micropixel_gpio_info_t> GpioInfo(micropixel_device_id_t device) const {
+        return devices_.gpio().GetInfo(device);
+    }
+    [[nodiscard]] ServiceResult<micropixel_gpio_open_response_t> GpioOpen(
+        const micropixel_gpio_open_request_t& request) {
+        return gpio_.Open(request);
+    }
+    [[nodiscard]] ServiceResult<micropixel_gpio_value_response_t> GpioRead(micropixel_gpio_handle_t gpio) {
+        return gpio_.Read(gpio);
+    }
+    [[nodiscard]] ServiceResult<void> GpioWrite(micropixel_gpio_handle_t gpio, bool value) {
+        return gpio_.Write(gpio, value);
+    }
+    [[nodiscard]] ServiceResult<void> GpioSetPwmDuty(micropixel_gpio_handle_t gpio, uint16_t duty_per_mille) {
+        return gpio_.SetPwmDuty(gpio, duty_per_mille);
+    }
+    [[nodiscard]] ServiceResult<void> GpioRelease(micropixel_gpio_handle_t gpio) { return gpio_.Release(gpio); }
+    [[nodiscard]] device::DeviceResult<micropixel_haptics_info_t> HapticsInfo(micropixel_device_id_t device) const {
+        return devices_.haptics().GetInfo(device);
+    }
+    [[nodiscard]] ServiceResult<micropixel_handle_response_t> HapticsOpen(micropixel_device_id_t device) {
+        return haptics_.Open(device);
+    }
+    [[nodiscard]] ServiceResult<void> HapticsPlay(const micropixel_haptics_play_request_t& request) {
+        return haptics_.Play(request);
+    }
+    [[nodiscard]] ServiceResult<void> HapticsStop(micropixel_haptic_handle_t haptic) { return haptics_.Stop(haptic); }
+    [[nodiscard]] ServiceResult<void> HapticsRelease(micropixel_haptic_handle_t haptic) {
+        return haptics_.Release(haptic);
+    }
+    [[nodiscard]] device::DeviceResult<micropixel_power_info_response_t> PowerInfo(micropixel_device_id_t device) {
+        return devices_.power_info().Get(device);
+    }
     [[nodiscard]] device::DeviceResult<void> AudioPlayTone(const micropixel_audio_tone_t& tone) const {
         return devices_.audio().PlayTone(tone);
     }
@@ -165,6 +229,9 @@ class GuestContext final {
     int64_t clock_origin_us_{};
     EventQueue events_;
     TimerService timers_;
+    SensorService sensors_;
+    GpioService gpio_;
+    HapticsService haptics_;
     ResourceService resources_;
     AudioPlaybackService audio_playback_;
     StorageService storage_;
@@ -178,6 +245,11 @@ class GuestContext final {
     GraphicsServiceEndpoint graphics_endpoint_;
     InputServiceEndpoint input_endpoint_;
     AudioServiceEndpoint audio_endpoint_;
+    DevicesServiceEndpoint devices_endpoint_;
+    SensorsServiceEndpoint sensors_endpoint_;
+    GpioServiceEndpoint gpio_endpoint_;
+    HapticsServiceEndpoint haptics_endpoint_;
+    PowerInfoServiceEndpoint power_info_endpoint_;
     ServiceRegistry service_registry_;
     uint32_t core_sequence_{};
     bool suspended_{};

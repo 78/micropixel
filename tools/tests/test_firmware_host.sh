@@ -4,9 +4,14 @@ set -euo pipefail
 workspace_root="$(cd "$(dirname "$0")/../.." && pwd)"
 test_output_dir="$workspace_root/build/host-tests"
 cxx="${CXX:-/usr/bin/clang++}"
+cc="${CC:-/usr/bin/clang}"
 
 if [[ ! -x "$cxx" ]]; then
     echo "C++ compiler not found: $cxx" >&2
+    exit 2
+fi
+if [[ ! -x "$cc" ]]; then
+    echo "C compiler not found: $cc" >&2
     exit 2
 fi
 
@@ -27,11 +32,41 @@ build_and_run() {
     "$test_binary"
 }
 
+build_and_run_c() {
+    local name="$1"
+    shift
+    local test_binary="$test_output_dir/${name}_test"
+
+    "$cc" \
+        -std=c17 \
+        -Wall -Wextra -Werror \
+        -I "$workspace_root/tools/tests/watchdog_stubs" \
+        -I "$workspace_root/firmware/espressif/main" \
+        "$@" \
+        -o "$test_binary"
+    "$test_binary"
+}
+
 build_and_run app_controller \
     -pthread \
     -include "$workspace_root/tools/tests/firmware_stubs/runtime/app_runtime.hpp" \
     "$workspace_root/tools/tests/test_app_controller.cpp" \
     "$workspace_root/firmware/espressif/main/app_controller.cpp"
+
+build_and_run background_executor \
+    -pthread \
+    "$workspace_root/tools/tests/test_background_executor.cpp" \
+    "$workspace_root/firmware/espressif/main/work/background_executor.cpp"
+
+build_and_run i2c_executor \
+    -pthread \
+    "$workspace_root/tools/tests/test_i2c_executor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/i2c_executor.cpp"
+
+build_and_run_c watchdog_timer \
+    -pthread \
+    "$workspace_root/tools/tests/test_watchdog_timer.c" \
+    "$workspace_root/firmware/espressif/main/runtime/wamr/watchdog.c"
 
 build_and_run system_gesture_router \
     -I "$workspace_root/guest" \
@@ -70,6 +105,42 @@ build_and_run font_cbin_loader \
 
 build_and_run host_power_state \
     "$workspace_root/tools/tests/test_host_power_state.cpp"
+
+build_and_run device_services \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_device_services.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp"
+
+build_and_run sensor_service \
+    -pthread \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_sensor_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/sensor_service.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp"
+
+build_and_run gpio_service \
+    -pthread \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_gpio_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/gpio_service.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp"
+
+"$cxx" \
+    -std=c++23 \
+    -Wall -Wextra -Werror \
+    -pthread \
+    -I "$workspace_root/firmware/espressif/main" \
+    -I "$workspace_root/guest" \
+    -I "$workspace_root/tools/tests/firmware_stubs" \
+    "$workspace_root/tools/tests/test_event_queue.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/event_queue.cpp" \
+    -o "$test_output_dir/event_queue_test"
+"$test_output_dir/event_queue_test"
+
+build_and_run device_catalog \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_device_catalog.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/device_catalog.cpp"
 
 build_and_run app_store \
     "$workspace_root/tools/tests/test_app_store.cpp" \

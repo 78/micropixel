@@ -2,7 +2,6 @@
 #define MICROPIXEL_RUNTIME_WAMR_WATCHDOG_H
 
 #include <stdbool.h>
-#include <stddef.h>
 #include <stdint.h>
 
 #include "wasm_export.h"
@@ -11,7 +10,6 @@
 extern "C" {
 #endif
 
-size_t micropixel_watchdog_stack_min_free(void);
 void micropixel_watchdog_checkpoint(void);
 void micropixel_watchdog_pause(void);
 void micropixel_watchdog_resume(void);

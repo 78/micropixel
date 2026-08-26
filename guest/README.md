@@ -21,7 +21,7 @@ guest/
 的转换。Public SDK 头文件不直接包含 ABI 头。
 
 [`apps/demo/`](apps/demo/) 是 SDK 用法和真机手工检查的统一入口。它只生成一个 Bundle，运行后可从
-同一界面进入 Timer/Clock/Log、Input/Random、Storage、Resource/Atlas 和 Audio 页面。每项能力的
+同一界面进入 Timer/Clock/Log、Input/Random、Storage、Resource/Atlas、Audio 和 Devices/Hardware 页面。每项能力的
 实现位于命名明确的独立 CPP，AI 可以按功能直接定位；Renderer 由首页和所有页面共同使用，不再维护
 单独的静态绘图程序。
 

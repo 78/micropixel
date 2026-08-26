@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "platform/audio_backend.hpp"
+#include "platform/metalio-claw4/i2c_executor.hpp"
 #include "platform/metalio-claw4/perceptual_control.hpp"
 #include "task_policy.hpp"
 
@@ -82,6 +83,7 @@ struct AudioBackendState final {
     PcmVoice pcm_voices[kMaxPcmStreams]{};
     device::PcmCompletionSink pcm_completion_sink{};
     void* pcm_completion_context{};
+    metalio_claw4::I2cExecutor* i2c_executor{};
     int16_t sine_table[kSineTableSize]{};
 };
 
@@ -103,20 +105,31 @@ PcmVoice* FindPcmVoiceLocked(device::PcmStreamHandle handle) {
     return voice.active && PcmHandle(encoded_index - 1U, voice.generation) == handle ? &voice : nullptr;
 }
 
-esp_err_t ReadRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t& value) {
-    return i2c_master_transmit_receive(device, &address, sizeof(address), &value, sizeof(value), 1000);
-}
-
-esp_err_t WriteRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t value) {
-    const uint8_t transaction[] = {address, value};
-    return i2c_master_transmit(device, transaction, sizeof(transaction), 1000);
-}
-
 esp_err_t UpdateRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t set_mask, uint8_t clear_mask) {
-    uint8_t value = 0U;
-    ESP_RETURN_ON_ERROR(ReadRegister(device, address, value), kTag, "read TCA9555 register 0x%02x", address);
-    value = static_cast<uint8_t>((value | set_mask) & ~clear_mask);
-    return WriteRegister(device, address, value);
+    if (State().i2c_executor == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    struct Request final {
+        i2c_master_dev_handle_t device;
+        uint8_t address;
+        uint8_t set_mask;
+        uint8_t clear_mask;
+    } request{device, address, set_mask, clear_mask};
+    return State().i2c_executor->Invoke(
+        metalio_claw4::I2cExecutor::Priority::kHigh,
+        [](void* context) {
+            auto& requested = *static_cast<Request*>(context);
+            uint8_t value = 0U;
+            esp_err_t status = i2c_master_transmit_receive(requested.device, &requested.address,
+                                                           sizeof(requested.address), &value, sizeof(value), 1000);
+            if (status != ESP_OK) {
+                return status;
+            }
+            const uint8_t transaction[] = {requested.address,
+                                           static_cast<uint8_t>((value | requested.set_mask) & ~requested.clear_mask)};
+            return i2c_master_transmit(requested.device, transaction, sizeof(transaction), 1000);
+        },
+        &request);
 }
 
 esp_err_t ConfigureAudioRails(i2c_master_dev_handle_t device) {
@@ -489,7 +502,8 @@ bool ValidTone(const micropixel_audio_tone_t& tone) {
 
 class MetalioClaw4AudioBackend final : public InitializableAudioBackend {
    public:
-    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander) override;
+    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander,
+                                       metalio_claw4::I2cExecutor& i2c_executor) override;
     void SetMasterVolumePercent(uint8_t percent) override;
     [[nodiscard]] int32_t GetInfo(micropixel_audio_info_t& info) override;
     [[nodiscard]] int32_t PlayTone(const micropixel_audio_tone_t& tone) override;
@@ -506,7 +520,8 @@ class MetalioClaw4AudioBackend final : public InitializableAudioBackend {
     [[nodiscard]] int32_t ResumeAll() override;
 };
 
-esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expander) {
+esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expander,
+                                               metalio_claw4::I2cExecutor& i2c_executor) {
     if (io_expander == nullptr || State().backend_state.load(std::memory_order_acquire) != BackendState::kStopped) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -514,6 +529,7 @@ esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expand
     if (State().voices_mutex == nullptr) {
         return ESP_ERR_NO_MEM;
     }
+    State().i2c_executor = &i2c_executor;
     for (uint32_t index = 0U; index < kSineTableSize; ++index) {
         constexpr double kTau = 6.28318530717958647692;
         State().sine_table[index] =

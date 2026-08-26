@@ -7,6 +7,7 @@
 
 #include "device/battery.hpp"
 #include "driver/i2c_master.h"
+#include "platform/metalio-claw4/i2c_executor.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 
@@ -14,13 +15,15 @@ class BatteryBackend final : public device::BatteryBackend {
    public:
     BatteryBackend() = default;
 
-    void Initialize(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t io_expander);
+    void Initialize(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t io_expander, I2cExecutor& i2c_executor);
     [[nodiscard]] device::BatterySnapshot Snapshot() override;
     void SetStateChangeSink(device::BatteryStateChangeSink sink, void* context) override;
     void NotifyExternalPowerChanged();
 
    private:
     [[nodiscard]] bool Attach();
+    void InitializeOnWorker();
+    [[nodiscard]] device::BatterySnapshot RefreshOnWorker();
     [[nodiscard]] bool ReadRegister(uint8_t address, uint16_t& value);
     [[nodiscard]] bool ConfigurePowerDetectionInputs();
     [[nodiscard]] bool ReadExternalPower(bool& connected);
@@ -32,6 +35,7 @@ class BatteryBackend final : public device::BatteryBackend {
     i2c_master_bus_handle_t bus_{};
     i2c_master_dev_handle_t device_{};
     i2c_master_dev_handle_t io_expander_{};
+    I2cExecutor* i2c_executor_{};
     std::array<uint8_t, kFilterCapacity> filter_{};
     uint32_t filter_sum_{};
     uint32_t filter_index_{};

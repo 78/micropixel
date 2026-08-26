@@ -31,18 +31,9 @@ constexpr TickType_t kPowerOffPulseHalfPeriod = pdMS_TO_TICKS(100U);
 constexpr uint32_t kWakeLineDrainAttempts = 4U;
 constexpr TickType_t kWakeLineSettleDelay = 1U;
 
-esp_err_t ReadRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t& value) {
-    return i2c_master_transmit_receive(device, &address, sizeof(address), &value, sizeof(value), kI2cTimeoutMs);
-}
-
-esp_err_t WriteRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t value) {
-    const uint8_t transaction[] = {address, value};
-    return i2c_master_transmit(device, transaction, sizeof(transaction), kI2cTimeoutMs);
-}
-
 }  // namespace
 
-esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander) {
+esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander, I2cExecutor& i2c_executor) {
     if (io_expander == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -50,6 +41,7 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander) {
         return ESP_ERR_INVALID_STATE;
     }
     io_expander_ = io_expander;
+    i2c_executor_ = &i2c_executor;
 
     gpio_config_t interrupt_config{};
     interrupt_config.pin_bit_mask = 1ULL << kTcaInterrupt;
@@ -124,6 +116,42 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander) {
 
     ESP_LOGI(kTag, "ready: TCA9555 P0.5 active-low, TCA_INT GPIO%d low-level wake", kTcaInterrupt);
     return ESP_OK;
+}
+
+esp_err_t Tca9555PowerKey::ReadRegister(uint8_t address, uint8_t& value) const {
+    if (i2c_executor_ == nullptr || io_expander_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    struct Request final {
+        i2c_master_dev_handle_t device;
+        uint8_t address;
+        uint8_t* value;
+    } request{io_expander_, address, &value};
+    return i2c_executor_->Invoke(
+        I2cExecutor::Priority::kHigh,
+        [](void* context) {
+            auto& requested = *static_cast<Request*>(context);
+            return i2c_master_transmit_receive(requested.device, &requested.address, sizeof(requested.address),
+                                               requested.value, sizeof(*requested.value), kI2cTimeoutMs);
+        },
+        &request);
+}
+
+esp_err_t Tca9555PowerKey::WriteRegister(uint8_t address, uint8_t value) const {
+    if (i2c_executor_ == nullptr || io_expander_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    struct Request final {
+        i2c_master_dev_handle_t device;
+        uint8_t bytes[2];
+    } request{io_expander_, {address, value}};
+    return i2c_executor_->Invoke(
+        I2cExecutor::Priority::kHigh,
+        [](void* context) {
+            auto& requested = *static_cast<Request*>(context);
+            return i2c_master_transmit(requested.device, requested.bytes, sizeof(requested.bytes), kI2cTimeoutMs);
+        },
+        &request);
 }
 
 void Tca9555PowerKey::SetPowerInputChangeSink(PowerInputChangeSink sink, void* context) {
@@ -230,17 +258,17 @@ void Tca9555PowerKey::SuppressSingleClicksUntil(uint64_t deadline_us) {
     uint8_t output = 0U;
     uint8_t configuration = 0U;
     for (;;) {
-        esp_err_t status = ReadRegister(io_expander_, kOutputPort0, output);
+        esp_err_t status = ReadRegister(kOutputPort0, output);
         if (status == ESP_OK) {
             output = static_cast<uint8_t>(output & ~kPowerKeyPulseMask);
-            status = WriteRegister(io_expander_, kOutputPort0, output);
+            status = WriteRegister(kOutputPort0, output);
         }
         if (status == ESP_OK) {
-            status = ReadRegister(io_expander_, kConfigurationPort0, configuration);
+            status = ReadRegister(kConfigurationPort0, configuration);
         }
         if (status == ESP_OK) {
             configuration = static_cast<uint8_t>(configuration & ~kPowerKeyPulseMask);
-            status = WriteRegister(io_expander_, kConfigurationPort0, configuration);
+            status = WriteRegister(kConfigurationPort0, configuration);
         }
         if (status == ESP_OK) {
             break;
@@ -251,12 +279,12 @@ void Tca9555PowerKey::SuppressSingleClicksUntil(uint64_t deadline_us) {
 
     ESP_LOGI(kTag, "pulsing TCA9555 P0.4 until the power-management IC cuts power");
     for (;;) {
-        const esp_err_t high_status = WriteRegister(io_expander_, kOutputPort0, output | kPowerKeyPulseMask);
+        const esp_err_t high_status = WriteRegister(kOutputPort0, output | kPowerKeyPulseMask);
         if (high_status != ESP_OK) {
             ESP_LOGE(kTag, "power-off pulse high failed: %s", esp_err_to_name(high_status));
         }
         vTaskDelay(kPowerOffPulseHalfPeriod);
-        const esp_err_t low_status = WriteRegister(io_expander_, kOutputPort0, output);
+        const esp_err_t low_status = WriteRegister(kOutputPort0, output);
         if (low_status != ESP_OK) {
             ESP_LOGE(kTag, "power-off pulse low failed: %s", esp_err_to_name(low_status));
         }
@@ -266,12 +294,12 @@ void Tca9555PowerKey::SuppressSingleClicksUntil(uint64_t deadline_us) {
 
 esp_err_t Tca9555PowerKey::ConfigurePowerKeyInput() {
     uint8_t configuration = 0U;
-    esp_err_t status = ReadRegister(io_expander_, kConfigurationPort0, configuration);
+    esp_err_t status = ReadRegister(kConfigurationPort0, configuration);
     if (status != ESP_OK || (configuration & kPowerKeyMask) != 0U) {
         return status;
     }
     configuration |= kPowerKeyMask;
-    return WriteRegister(io_expander_, kConfigurationPort0, configuration);
+    return WriteRegister(kConfigurationPort0, configuration);
 }
 
 esp_err_t Tca9555PowerKey::ConfigureInterrupt() {
@@ -292,11 +320,11 @@ esp_err_t Tca9555PowerKey::ConfigureInterrupt() {
 }
 
 esp_err_t Tca9555PowerKey::ReadPorts(uint8_t& port0, uint8_t& port1) const {
-    esp_err_t status = ReadRegister(io_expander_, kInputPort0, port0);
+    esp_err_t status = ReadRegister(kInputPort0, port0);
     if (status != ESP_OK) {
         return status;
     }
-    return ReadRegister(io_expander_, kInputPort1, port1);
+    return ReadRegister(kInputPort1, port1);
 }
 
 uint8_t Tca9555PowerKey::ReadKeyLevel() {

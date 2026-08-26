@@ -6,18 +6,20 @@
 
 #include "device/graphics.hpp"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
 #include "runtime/bundle/bundle_reader.h"
 #include "runtime/resources/bitmap_store.hpp"
 #include "runtime/services/service_result.hpp"
+
+namespace micropixel::work {
+class BackgroundExecutor;
+}
 
 namespace micropixel::runtime {
 
 class ResourceService final {
    public:
-    explicit ResourceService(const micropixel_aot_package_t& package);
+    ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor);
     ResourceService(const ResourceService&) = delete;
     ResourceService& operator=(const ResourceService&) = delete;
     ~ResourceService();
@@ -36,11 +38,11 @@ class ResourceService final {
 
    private:
     struct Work final {
+        ResourceService* service{};
         micropixel_bundle_asset_view_t asset{};
     };
 
-    static void WorkerEntry(void* argument);
-    void WorkerLoop();
+    static void ProcessEntry(void* argument);
     void Process(const Work& work);
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> AddAsset(const micropixel_bundle_asset_view_t& asset);
     [[nodiscard]] micropixel_texture_info_t TextureInfo(micropixel_texture_handle_t texture,
@@ -48,10 +50,8 @@ class ResourceService final {
 
     // AotPackage owns the mapping for the complete AppSession.
     micropixel_aot_package_t package_{};
-    QueueHandle_t work_queue_{};
+    work::BackgroundExecutor& background_executor_;
     SemaphoreHandle_t work_done_{};
-    SemaphoreHandle_t worker_stopped_{};
-    TaskHandle_t worker_{};
     micropixel_texture_handle_t completed_texture_{};
     int32_t completed_status_{MICROPIXEL_STATUS_INTERNAL};
     BitmapStore bitmaps_;

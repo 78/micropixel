@@ -10,6 +10,7 @@
 #include "runtime/guest_log_sink.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
+#include "work/background_executor.hpp"
 
 namespace micropixel::runtime {
 namespace {
@@ -22,9 +23,13 @@ void CopyAppId(const char* source, std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX
 
 }  // namespace
 
-AppRuntime::AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex,
-                       std::string_view effective_locale, GuestLogSink* log_sink)
-    : devices_(devices), log_sink_(log_sink), wamr_(std::move(wamr)), session_mutex_(session_mutex) {
+AppRuntime::AppRuntime(device::DeviceServices& devices, work::BackgroundExecutor& background_executor, WamrRuntime wamr,
+                       SemaphoreHandle_t session_mutex, std::string_view effective_locale, GuestLogSink* log_sink)
+    : devices_(devices),
+      background_executor_(background_executor),
+      log_sink_(log_sink),
+      wamr_(std::move(wamr)),
+      session_mutex_(session_mutex) {
     if (effective_locale.empty() || effective_locale.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES) {
         effective_locale = "en";
     }
@@ -33,6 +38,7 @@ AppRuntime::AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, Semaph
 
 AppRuntime::AppRuntime(AppRuntime&& other) noexcept
     : devices_(other.devices_),
+      background_executor_(other.background_executor_),
       log_sink_(other.log_sink_),
       wamr_(std::move(other.wamr_)),
       session_mutex_(std::exchange(other.session_mutex_, nullptr)),
@@ -59,6 +65,7 @@ void AppRuntime::GiveSessionLock() {
 }
 
 std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::DeviceServices& devices,
+                                                                  work::BackgroundExecutor& background_executor,
                                                                   std::string_view effective_locale,
                                                                   GuestLogSink* log_sink) {
     auto runtime_result = WamrRuntime::Initialize();
@@ -82,7 +89,7 @@ std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::Device
         return std::unexpected(AppRuntimeError::kSynchronization);
     }
     ESP_LOGI(kTag, "process-wide WAMR runtime ready");
-    return AppRuntime(devices, std::move(wamr), session_mutex, effective_locale, log_sink);
+    return AppRuntime(devices, background_executor, std::move(wamr), session_mutex, effective_locale, log_sink);
 }
 
 bool AppRuntime::SetEffectiveLocale(std::string_view effective_locale) {
@@ -121,7 +128,8 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
     GiveSessionLock();
 
     micropixel_log_heap_state("AppSession create begin");
-    auto session_result = AppSession::Create(devices_, app.file, effective_locale_.data(), log_sink_);
+    auto session_result =
+        AppSession::Create(devices_, background_executor_, app.file, effective_locale_.data(), log_sink_);
     if (!session_result) {
         if (session_result.error().app_id[0] != '\0') {
             outcome.app_id = session_result.error().app_id;

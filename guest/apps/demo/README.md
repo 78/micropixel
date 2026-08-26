@@ -12,6 +12,7 @@ test，也不为每项能力生成独立 AOT；协议、错误和边界验证继
 | Storage | `KVStore::GetU32()`、`KVStore::SetU32()` | `pages/storage_demo.cpp` |
 | Resource / Atlas | 同步 `Resources::LoadTexture()`、`Frame::DrawTexture()` source rect、生成的 atlas metadata | `pages/resource_atlas_demo.cpp` |
 | Audio | `Audio::info()`、`AudioClip`、`Playback`、`Audio::Play()`、`Audio::StopAll()` | `pages/audio_demo.cpp` |
+| Devices / Hardware | `Devices::List()`、typed `Sensor<T>`、`GpioInput`、`Haptic`、`PowerInfo` | `pages/device_demo.cpp` |
 
 `main.cpp` 只进入应用；`demo_app.cpp` 负责首页、返回按钮、显式页面表和唯一事件循环；
 `demo_page.hpp` 只定义页面契约和少量共享 UI 工具。每个功能页直接调用 Public SDK，便于 AI 按文件名
@@ -21,6 +22,12 @@ test，也不为每项能力生成独立 AOT；协议、错误和边界验证继
 首页、返回按钮和各页面操作按钮共用 `sdk/ui/button.hpp`：按下时用带 opacity 的 `FillRect()` 叠加反馈，
 移出按钮会撤销按下态，只有移回并在按钮内松开才触发动作。这个应用也因此直接覆盖 Renderer
 alpha blend 的实际交互路径，不需要为 Graphics 再单独做一页。
+
+Devices 页不写死板型设备：它先用 `Devices::List()` 获得固定容量快照，再用不透明 `DeviceId` 调用
+对应能力对象。PREV/NEXT 可以遍历全部设备；加速度计和磁力计显示 typed event；选中 GPIO 后会以下拉
+输入方式租用引脚，通过边沿事件和 100 ms 轮询显示真实电平，READ 按钮可以立即刷新；Haptics 会播放
+300 ms 震动，PowerInfo 显示电池与外部供电状态。
+离开页面时所有已打开对象通过 move-only RAII 自动释放。
 
 Resource 页使用 `assets/manifest.json` 描述一张 12 帧 PNG atlas；同一个 manifest 还把
 `demo_music.ogg` 声明为 `ogg_opus` asset，Audio 页用它验收 Host 内置的 Ogg demux 和 micro-opus 解码。

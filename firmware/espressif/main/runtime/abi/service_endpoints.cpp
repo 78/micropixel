@@ -34,7 +34,10 @@ int32_t WriteResult(const Result& result, uint8_t* response, uint32_t response_c
 
 template <typename Result>
 int32_t ResultStatus(const Result& result) {
-    return result ? static_cast<int32_t>(MICROPIXEL_STATUS_OK) : result.error().status;
+    if (result) {
+        return MICROPIXEL_STATUS_OK;
+    }
+    return result.error().status;
 }
 
 template <typename Value>
@@ -71,6 +74,225 @@ bool ReadHandle(const uint8_t* request, uint32_t request_size, uint32_t& handle_
 }
 
 }  // namespace
+
+ServiceDescriptor DevicesServiceEndpoint::Describe() const {
+    return ServiceDescriptor{
+        .service_id = MICROPIXEL_SERVICE_DEVICES,
+        .interface_major = MICROPIXEL_DEVICES_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_DEVICES_INTERFACE_MINOR,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL,
+        .max_request_bytes = sizeof(micropixel_devices_list_request_t),
+        .max_response_bytes = sizeof(micropixel_devices_list_response_t),
+    };
+}
+
+int32_t DevicesServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size,
+                                     uint8_t* response, uint32_t response_capacity, uint32_t& response_size_out) {
+    if (method_id == MICROPIXEL_DEVICES_METHOD_LIST) {
+        micropixel_devices_list_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_devices_list_response_t>(context_.DevicesList(wire.kind), response,
+                                                               response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_DEVICES_METHOD_GET_INFO) {
+        micropixel_device_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.device == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_device_info_t>(context_.DeviceInfo(wire.device), response, response_capacity,
+                                                     response_size_out);
+    }
+    return MICROPIXEL_STATUS_UNSUPPORTED;
+}
+
+ServiceDescriptor SensorsServiceEndpoint::Describe() const {
+    return ServiceDescriptor{
+        .service_id = MICROPIXEL_SERVICE_SENSORS,
+        .interface_major = MICROPIXEL_SENSORS_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_SENSORS_INTERFACE_MINOR,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL,
+        .max_request_bytes = sizeof(micropixel_sensor_sample_interval_request_t),
+        .max_response_bytes = sizeof(micropixel_sensor_reading_t),
+    };
+}
+
+int32_t SensorsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size,
+                                     uint8_t* response, uint32_t response_capacity, uint32_t& response_size_out) {
+    if (method_id == MICROPIXEL_SENSORS_METHOD_GET_INFO) {
+        micropixel_device_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.device == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_sensor_info_t>(context_.SensorInfo(wire.device), response, response_capacity,
+                                                     response_size_out);
+    }
+    if (method_id == MICROPIXEL_SENSORS_METHOD_OPEN) {
+        micropixel_sensor_open_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.device == 0U ||
+            wire.expected_kind == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_sensor_open_response_t>(context_.SensorOpen(wire.device, wire.expected_kind),
+                                                              response, response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_SENSORS_METHOD_SET_SAMPLE_INTERVAL) {
+        micropixel_sensor_sample_interval_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.sensor == 0U || wire.interval_us == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return ResultStatus(context_.SensorSetSampleInterval(wire.sensor, wire.interval_us));
+    }
+    uint32_t handle = 0U;
+    if (!ReadHandle(request, request_size, handle)) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (method_id == MICROPIXEL_SENSORS_METHOD_READ) {
+        return WriteResult<micropixel_sensor_reading_t>(context_.SensorRead(handle), response, response_capacity,
+                                                        response_size_out);
+    }
+    if (method_id == MICROPIXEL_SENSORS_METHOD_RELEASE) {
+        return ResultStatus(context_.SensorRelease(handle));
+    }
+    return MICROPIXEL_STATUS_UNSUPPORTED;
+}
+
+ServiceDescriptor GpioServiceEndpoint::Describe() const {
+    return ServiceDescriptor{
+        .service_id = MICROPIXEL_SERVICE_GPIO,
+        .interface_major = MICROPIXEL_GPIO_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_GPIO_INTERFACE_MINOR,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_EVENTS,
+        .max_request_bytes = sizeof(micropixel_gpio_open_request_t),
+        .max_response_bytes = sizeof(micropixel_gpio_info_t),
+    };
+}
+
+int32_t GpioServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                                  uint32_t response_capacity, uint32_t& response_size_out) {
+    if (method_id == MICROPIXEL_GPIO_METHOD_GET_INFO) {
+        micropixel_device_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.device == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_gpio_info_t>(context_.GpioInfo(wire.device), response, response_capacity,
+                                                   response_size_out);
+    }
+    if (method_id == MICROPIXEL_GPIO_METHOD_OPEN) {
+        micropixel_gpio_open_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.device == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_gpio_open_response_t>(context_.GpioOpen(wire), response, response_capacity,
+                                                            response_size_out);
+    }
+    if (method_id == MICROPIXEL_GPIO_METHOD_WRITE || method_id == MICROPIXEL_GPIO_METHOD_SET_PWM_DUTY) {
+        micropixel_gpio_value_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.gpio == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        if (method_id == MICROPIXEL_GPIO_METHOD_WRITE) {
+            if (wire.value > 1U) {
+                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+            }
+            return ResultStatus(context_.GpioWrite(wire.gpio, wire.value != 0U));
+        }
+        if (wire.value > 1000U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return ResultStatus(context_.GpioSetPwmDuty(wire.gpio, static_cast<uint16_t>(wire.value)));
+    }
+    uint32_t handle = 0U;
+    if (!ReadHandle(request, request_size, handle)) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (method_id == MICROPIXEL_GPIO_METHOD_READ) {
+        return WriteResult<micropixel_gpio_value_response_t>(context_.GpioRead(handle), response, response_capacity,
+                                                             response_size_out);
+    }
+    if (method_id == MICROPIXEL_GPIO_METHOD_RELEASE) {
+        return ResultStatus(context_.GpioRelease(handle));
+    }
+    return MICROPIXEL_STATUS_UNSUPPORTED;
+}
+
+ServiceDescriptor HapticsServiceEndpoint::Describe() const {
+    return ServiceDescriptor{
+        .service_id = MICROPIXEL_SERVICE_HAPTICS,
+        .interface_major = MICROPIXEL_HAPTICS_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_HAPTICS_INTERFACE_MINOR,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_EVENTS,
+        .max_request_bytes = sizeof(micropixel_haptics_play_request_t),
+        .max_response_bytes = sizeof(micropixel_haptics_info_t),
+    };
+}
+
+int32_t HapticsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size,
+                                     uint8_t* response, uint32_t response_capacity, uint32_t& response_size_out) {
+    if (method_id == MICROPIXEL_HAPTICS_METHOD_GET_INFO || method_id == MICROPIXEL_HAPTICS_METHOD_OPEN) {
+        micropixel_device_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.device == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        if (method_id == MICROPIXEL_HAPTICS_METHOD_GET_INFO) {
+            return WriteResult<micropixel_haptics_info_t>(context_.HapticsInfo(wire.device), response,
+                                                          response_capacity, response_size_out);
+        }
+        return WriteResult<micropixel_handle_response_t>(context_.HapticsOpen(wire.device), response, response_capacity,
+                                                         response_size_out);
+    }
+    if (method_id == MICROPIXEL_HAPTICS_METHOD_PLAY) {
+        micropixel_haptics_play_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.haptic == 0U ||
+            wire.reserved0 != 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return ResultStatus(context_.HapticsPlay(wire));
+    }
+    uint32_t handle = 0U;
+    if (!ReadHandle(request, request_size, handle)) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (method_id == MICROPIXEL_HAPTICS_METHOD_STOP) {
+        return ResultStatus(context_.HapticsStop(handle));
+    }
+    if (method_id == MICROPIXEL_HAPTICS_METHOD_RELEASE) {
+        return ResultStatus(context_.HapticsRelease(handle));
+    }
+    return MICROPIXEL_STATUS_UNSUPPORTED;
+}
+
+ServiceDescriptor PowerInfoServiceEndpoint::Describe() const {
+    return ServiceDescriptor{
+        .service_id = MICROPIXEL_SERVICE_POWER_INFO,
+        .interface_major = MICROPIXEL_POWER_INFO_INTERFACE_MAJOR,
+        .interface_minor = MICROPIXEL_POWER_INFO_INTERFACE_MINOR,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL,
+        .max_request_bytes = sizeof(micropixel_device_request_t),
+        .max_response_bytes = sizeof(micropixel_power_info_response_t),
+    };
+}
+
+int32_t PowerInfoServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, uint32_t request_size,
+                                       uint8_t* response, uint32_t response_capacity, uint32_t& response_size_out) {
+    micropixel_device_request_t wire{};
+    if (method_id != MICROPIXEL_POWER_INFO_METHOD_GET) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+        wire.device == 0U) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    return WriteResult<micropixel_power_info_response_t>(context_.PowerInfo(wire.device), response, response_capacity,
+                                                         response_size_out);
+}
 
 SystemServiceEndpoint::SystemServiceEndpoint(std::string_view effective_locale) {
     if (effective_locale.empty() || effective_locale.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES) {

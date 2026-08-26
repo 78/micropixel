@@ -1,11 +1,13 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
 #include "device/local_control.hpp"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "remote_control/remote_control_agent.hpp"
@@ -43,6 +45,7 @@ class UsbLocalControlAgent final {
     static void ReceiveCommand(void* context, const char* command);
     static bool ProvideResponse(void* context, char* response, size_t capacity);
     static bool ReceiveHostResult(void* context, const remote_control::RemoteControlHostResult& result);
+    static void InstallTimeoutElapsed(void* context);
 
     void HandleCommand(const char* command);
     [[nodiscard]] bool PollResponse(char* response, size_t capacity);
@@ -55,6 +58,8 @@ class UsbLocalControlAgent final {
     void HandleInstallChunk(uint32_t request_id, std::string_view arguments);
     void HandleInstallCommit(uint32_t request_id, std::string_view arguments);
     void HandleInstallAbort(uint32_t request_id, std::string_view arguments);
+    [[nodiscard]] bool ArmInstallTimeout(uint64_t delay_us);
+    void DisarmInstallTimeout();
     void AbortInstall();
     void ExpireInstallIfNeeded();
 
@@ -65,6 +70,8 @@ class UsbLocalControlAgent final {
     QueueHandle_t response_queue_{};
     remote_control::RemoteControlLocalSnapshot snapshot_workspace_{};
     InstallSession install_{};
+    esp_timer_handle_t install_timer_{};
+    std::atomic<bool> install_timeout_due_{};
     bool started_{};
 };
 

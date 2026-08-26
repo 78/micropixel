@@ -59,10 +59,12 @@ enum class PageId : uint8_t {
     kStorage,
     kResourceAtlas,
     kAudio,
+    kDevices,
 };
 
 [[nodiscard]] micropixel::Timer CreateDemoTicker(micropixel::Application& app);
 [[nodiscard]] micropixel::Timer CreateResourceAtlasTicker(micropixel::Application& app);
+[[nodiscard]] micropixel::Timer CreateDeviceTicker(micropixel::Application& app);
 [[nodiscard]] micropixel::Texture LoadDemoAtlas(micropixel::Application& app);
 
 void TimerDemoEnter(DemoContext& context);
@@ -88,6 +90,13 @@ void AudioDemoExit(DemoContext& context);
 [[nodiscard]] bool AudioDemoOnEvent(DemoContext& context, const micropixel::Event& event);
 [[nodiscard]] bool AudioDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
 void AudioDemoRender(DemoContext& context, micropixel::Frame& commands);
+
+void DeviceDemoEnter(DemoContext& context);
+void DeviceDemoExit(DemoContext& context);
+[[nodiscard]] bool DeviceDemoOnTimer(DemoContext& context, const micropixel::TimerEvent& event);
+[[nodiscard]] bool DeviceDemoOnEvent(DemoContext& context, const micropixel::Event& event);
+[[nodiscard]] bool DeviceDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
+void DeviceDemoRender(DemoContext& context, micropixel::Frame& commands);
 
 }  // namespace demo
 

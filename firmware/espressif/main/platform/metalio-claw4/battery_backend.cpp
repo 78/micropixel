@@ -49,9 +49,24 @@ uint8_t EstimatePercent(uint16_t voltage_mv) {
 
 }  // namespace
 
-void BatteryBackend::Initialize(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t io_expander) {
+void BatteryBackend::Initialize(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t io_expander,
+                                I2cExecutor& i2c_executor) {
     bus_ = bus;
     io_expander_ = io_expander;
+    i2c_executor_ = &i2c_executor;
+    const esp_err_t status = i2c_executor.Invoke(
+        I2cExecutor::Priority::kLow,
+        [](void* context) {
+            static_cast<BatteryBackend*>(context)->InitializeOnWorker();
+            return ESP_OK;
+        },
+        this);
+    if (status != ESP_OK) {
+        ESP_LOGW(kTag, "battery initialization could not run on the shared I2C executor: %s", esp_err_to_name(status));
+    }
+}
+
+void BatteryBackend::InitializeOnWorker() {
     if (!ConfigurePowerDetectionInputs()) {
         ESP_LOGW(kTag, "external-power inputs could not be configured");
     }
@@ -59,6 +74,25 @@ void BatteryBackend::Initialize(i2c_master_bus_handle_t bus, i2c_master_dev_hand
 }
 
 device::BatterySnapshot BatteryBackend::Snapshot() {
+    if (i2c_executor_ == nullptr) {
+        return {};
+    }
+    struct Request final {
+        BatteryBackend* backend;
+        device::BatterySnapshot snapshot;
+    } request{this, {}};
+    const esp_err_t status = i2c_executor_->Invoke(
+        I2cExecutor::Priority::kLow,
+        [](void* context) {
+            auto& requested = *static_cast<Request*>(context);
+            requested.snapshot = requested.backend->RefreshOnWorker();
+            return ESP_OK;
+        },
+        &request);
+    return status == ESP_OK ? request.snapshot : device::BatterySnapshot{};
+}
+
+device::BatterySnapshot BatteryBackend::RefreshOnWorker() {
     bool external_power_connected = false;
     if (ReadExternalPower(external_power_connected)) {
         external_power_connected_ = external_power_connected;

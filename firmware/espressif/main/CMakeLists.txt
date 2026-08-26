@@ -12,6 +12,7 @@ set(micropixel_sources
     "remote_control/control_protocol.cpp"
     "remote_control/remote_control_agent.cpp"
     "system_time.cpp"
+    "work/background_executor.cpp"
 )
 set(micropixel_builtin_font_output_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/fonts")
 set(micropixel_builtin_font_sources

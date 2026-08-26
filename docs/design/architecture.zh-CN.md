@@ -32,11 +32,11 @@ Camera Service 或通用 Widget Server。Remote Control 的开发版在线安装
 app_main
     └── FirmwareApp                         # 唯一组合根
         ├── Platform
-        │   ├── Metalio-Claw4                # display/input/audio/system UI
+        │   ├── Metalio-Claw4                # display/input/audio/sensors/GPIO/system UI
         │   └── Null                          # 硬件无关编译基线
         ├── DeviceServices
-        │   ├── Graphics / Input / Audio
-        │   └── Random
+        │   ├── Graphics / Input / Audio / Random
+        │   └── Devices / Sensors / GPIO / Haptics / PowerInfo
         ├── AppRuntime                            # 长驻 WAMR
         │   └── AppSession (0..1)
         │       ├── Bundle / module / instance / exec env
@@ -138,10 +138,16 @@ Public C++ SDK 不直接暴露 C ABI。`guest/runtime/sdk.cpp` 将强类型对�
 | Storage | 2 | call |
 | Resource | 3 | call |
 | Random | 4 | call |
+| System | 5 | call |
+| Devices | 6 | call；为热插拔保留 event |
 | Graphics | 16 | call + submit |
 | Input | 17 | call + event |
 | Audio | 18 | call + event |
 | Network | 19 | 仅预留，未实现 |
+| Sensors | 20 | call |
+| GPIO | 21 | call + event |
+| Haptics | 22 | call + event |
+| PowerInfo | 23 | call |
 
 三条数据路径的职责不混用：
 
@@ -155,6 +161,40 @@ Public C++ SDK 不直接暴露 C ABI。`guest/runtime/sdk.cpp` 将强类型对�
 版本兼容规则为：Service major 必须相同，Host minor 必须不低于 Guest 的最低要求。已发布的
 Service、method、channel、event、capability 和 opcode ID 不得改义或复用。新能力优先增加
 method/channel/event，其次增加 Service，只有真机证据证明现有传输不足时才增加 Core import。
+
+### 4.1 设备发现与组合设备
+
+Devices Service 是类似操作系统设备目录的发现面，但不把 Linux device tree、ACPI、ESP-IDF driver 或
+板级地址暴露给 Guest。Platform 构造固定容量 catalog；应用枚举 opaque `DeviceId`，读取 kind、parent、
+capabilities 和显示名称，再把同一个 ID 交给 Sensors、GPIO、Haptics、PowerInfo 等能力 Service。
+
+`DeviceId` 与枚举 index 分离。parent 支持组合设备：未来外接两个手柄时，每个手柄有独立身份，手柄内的
+传感器是带 parent 的独立 device；Camera、Location 和更多 SensorKind 可以扩展 catalog 与对应 Service，
+不修改现有应用的枚举流程。第一阶段 catalog 是 Session 内静态快照，但 ABI 已保留 generation 与
+added/removed event。
+
+Metalio-Claw4 第一阶段暴露内置加速度计、磁力计、震动马达、电源信息和 14 根板上确认可开放的 GPIO。
+GPIO 不要求出厂 binding：每根引脚以物理 line number 和 capability 枚举，应用选择任意一根后直接打开。
+打开形成 Session 内独占 lease；关闭或 Session teardown 后恢复 input/无上下拉安全状态。板级已占用引脚
+根本不进入 catalog。
+
+Sensors 使用 `Sensor<Reading>` typed resource；Acceleration 和 MagneticField 有各自单位与 value type，
+温度、光照、压力等以后增加独立 reading type，而不是扩张一个万能对象。没有 sensor handle 时芯片保持
+suspend，也没有专属 sensor task；第一个 `Open` 只向板级共享 I²C executor 注册周期采样，最后一个 handle
+释放后注销采样并让芯片休眠。Platform 固定槽位维护最新值缓存，Guest `Read` 自主读取缓存，不产生 Sensor
+event。`Open` 表示 App 正在使用传感器，默认采样为游戏可用的 100 Hz；Guest 可在 `SensorInfo` 宣告范围
+内配置采样间隔，Host 将硬件 ODR 映射到不慢于请求频率的档位。低功耗边界是无 handle 或 App Suspend，
+不是已打开的传感器。
+
+Metalio-Claw4 的一条物理 I²C bus 只保留一个 4 KiB `micropixel_i2c` executor。它使用固定容量的
+high/normal/low 队列：GT911 和电源控制优先，Sensor 周期采样与电池刷新可合并且处于低优先级。Touch ISR
+和 Sensor timer callback 只做无阻塞投递，实际总线事务都在 executor task 中串行执行；同步调用者提交固定
+槽位请求并等待完成。音频实时 I²S mixer 和 GPIO 不属于 I²C executor，仍保持各自的实时/中断边界。
+
+GPIO 主动 `Read`、output 和 PWM 不需要 Host worker。只有第一个订阅 rising/falling/both edge 的 input
+`Open` 才创建 4 KiB `micropixel_gpio` bridge；ISR 只把固定 POD 写入有界队列，worker 在任务上下文转换为
+Guest event。最后一个 edge input 释放或 App Suspend 时卸载对应 ISR handler 并停止 worker；Resume 只在仍
+有 edge handle 时恢复。该 worker 不轮询，也不与 I²C executor 合并。
 
 ## 5. Graphics 与 Resource
 
@@ -190,6 +230,8 @@ Renderer -> StreamingTexture / TextureUpdateBatch
   证明生命周期；
 - ISR 只记录最小 POD 状态并唤醒任务，不调用 WAMR、Guest 或 LVGL；
 - 跨任务状态使用固定容量队列、数组和对象池，实时路径不隐式扩容；
+- App Hall 封面与 Guest 压缩图片解码共享一个固定容量、低优先级后台执行器；watchdog 复用 ESP Timer
+  task，通过单调时钟 deadline、阻塞停止和回调状态检查保证续期与销毁边界，不为每次 Guest 调用创建线程；
 - shutdown 顺序是停止接收、唤醒 worker、join，再释放队列和底层句柄；
 - Guest 可恢复失败返回 `Result<T>`；无效句柄、SDK/Host 自相矛盾或 ABI 安全失败进入
   panic/fault policy；

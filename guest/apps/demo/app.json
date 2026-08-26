@@ -10,7 +10,8 @@
     "pages/input_demo.cpp",
     "pages/storage_demo.cpp",
     "pages/resource_atlas_demo.cpp",
-    "pages/audio_demo.cpp"
+    "pages/audio_demo.cpp",
+    "pages/device_demo.cpp"
   ],
   "asset_manifest": "assets/manifest.json",
   "launch_asset": "launch"

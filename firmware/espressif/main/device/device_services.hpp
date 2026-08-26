@@ -6,9 +6,14 @@
 
 #include "abi/micropixel_abi.h"
 #include "device/audio.hpp"
+#include "device/battery.hpp"
+#include "device/devices.hpp"
+#include "device/gpio.hpp"
 #include "device/graphics.hpp"
+#include "device/haptics.hpp"
 #include "device/input.hpp"
 #include "device/random.hpp"
+#include "device/sensors.hpp"
 
 namespace micropixel::device {
 
@@ -18,6 +23,74 @@ struct DeviceFailure final {
 
 template <typename Value>
 using DeviceResult = std::expected<Value, DeviceFailure>;
+
+class DevicesService final {
+   public:
+    explicit DevicesService(DeviceCatalogBackend& backend) : backend_(backend) {}
+
+    [[nodiscard]] DeviceResult<micropixel_devices_list_response_t> List(uint16_t kind) const;
+    [[nodiscard]] DeviceResult<micropixel_device_info_t> GetInfo(micropixel_device_id_t device) const;
+
+   private:
+    DeviceCatalogBackend& backend_;
+};
+
+class SensorsService final {
+   public:
+    explicit SensorsService(SensorBackend& backend) : backend_(backend) {}
+
+    [[nodiscard]] DeviceResult<micropixel_sensor_info_t> GetInfo(micropixel_device_id_t device) const;
+    [[nodiscard]] DeviceResult<void> Start(micropixel_device_id_t device, uint32_t interval_us) const;
+    [[nodiscard]] DeviceResult<SensorValues> Read(micropixel_device_id_t device) const;
+    void Stop(micropixel_device_id_t device) const;
+
+   private:
+    SensorBackend& backend_;
+};
+
+class GpioService final {
+   public:
+    explicit GpioService(GpioBackend& backend) : backend_(backend) {}
+
+    [[nodiscard]] DeviceResult<micropixel_gpio_info_t> GetInfo(micropixel_device_id_t device) const;
+    [[nodiscard]] DeviceResult<void> Open(micropixel_device_id_t device, uint16_t mode, uint16_t pull, uint16_t edge,
+                                          uint32_t initial_value, uint32_t pwm_frequency_hz, GpioEdgeSink edge_sink,
+                                          void* edge_context) const;
+    [[nodiscard]] DeviceResult<bool> Read(micropixel_device_id_t device) const;
+    [[nodiscard]] DeviceResult<void> Write(micropixel_device_id_t device, bool value) const;
+    [[nodiscard]] DeviceResult<void> SetPwmDuty(micropixel_device_id_t device, uint16_t duty_per_mille) const;
+    void SuspendEvents() const;
+    [[nodiscard]] DeviceResult<void> ResumeEvents() const;
+    void Close(micropixel_device_id_t device) const;
+
+   private:
+    GpioBackend& backend_;
+};
+
+class HapticsService final {
+   public:
+    explicit HapticsService(HapticsBackend& backend) : backend_(backend) {}
+
+    [[nodiscard]] DeviceResult<micropixel_haptics_info_t> GetInfo(micropixel_device_id_t device) const;
+    [[nodiscard]] DeviceResult<void> Play(micropixel_device_id_t device, uint16_t strength_per_mille,
+                                          uint32_t duration_ms) const;
+    [[nodiscard]] DeviceResult<void> Stop(micropixel_device_id_t device) const;
+    void SetCompletionSink(HapticCompletionSink sink, void* context) const;
+
+   private:
+    HapticsBackend& backend_;
+};
+
+class PowerInfoService final {
+   public:
+    PowerInfoService(DeviceCatalogBackend& devices, BatteryBackend& battery) : devices_(devices), battery_(battery) {}
+
+    [[nodiscard]] DeviceResult<micropixel_power_info_response_t> Get(micropixel_device_id_t device);
+
+   private:
+    DeviceCatalogBackend& devices_;
+    BatteryBackend& battery_;
+};
 
 class GraphicsService final {
    public:
@@ -98,8 +171,18 @@ class RandomService final {
 // Guest runtime session. Platform handles remain private to the board backend.
 class DeviceServices final {
    public:
-    DeviceServices(GraphicsBackend& graphics, InputBackend& input, AudioBackend& audio, RandomBackend& random)
-        : graphics_(graphics), input_(input), audio_(audio), random_(random) {}
+    DeviceServices(GraphicsBackend& graphics, InputBackend& input, AudioBackend& audio, RandomBackend& random,
+                   DeviceCatalogBackend& devices, SensorBackend& sensors, GpioBackend& gpio, HapticsBackend& haptics,
+                   BatteryBackend& battery)
+        : graphics_(graphics),
+          input_(input),
+          audio_(audio),
+          random_(random),
+          devices_(devices),
+          sensors_(sensors),
+          gpio_(gpio),
+          haptics_(haptics),
+          power_info_(devices, battery) {}
     DeviceServices(const DeviceServices&) = delete;
     DeviceServices& operator=(const DeviceServices&) = delete;
 
@@ -115,12 +198,32 @@ class DeviceServices final {
     [[nodiscard]] RandomService& random() {  // NOLINT(readability-identifier-naming)
         return random_;
     }
+    [[nodiscard]] DevicesService& devices() {  // NOLINT(readability-identifier-naming)
+        return devices_;
+    }
+    [[nodiscard]] SensorsService& sensors() {  // NOLINT(readability-identifier-naming)
+        return sensors_;
+    }
+    [[nodiscard]] GpioService& gpio() {  // NOLINT(readability-identifier-naming)
+        return gpio_;
+    }
+    [[nodiscard]] HapticsService& haptics() {  // NOLINT(readability-identifier-naming)
+        return haptics_;
+    }
+    [[nodiscard]] PowerInfoService& power_info() {  // NOLINT(readability-identifier-naming)
+        return power_info_;
+    }
 
    private:
     GraphicsService graphics_;
     InputService input_;
     AudioService audio_;
     RandomService random_;
+    DevicesService devices_;
+    SensorsService sensors_;
+    GpioService gpio_;
+    HapticsService haptics_;
+    PowerInfoService power_info_;
 };
 
 }  // namespace micropixel::device

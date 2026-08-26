@@ -119,6 +119,7 @@ CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT=y
 # run-time accounting available; drawing and sampling remain off until enabled.
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
 # Keep the RGB888 scratch buffer in internal SRAM for render speed, but limit
 # it to 60 rows (129600 bytes). This returns another 129600 bytes of contiguous
 # internal SRAM compared with the previous 120-row buffer.

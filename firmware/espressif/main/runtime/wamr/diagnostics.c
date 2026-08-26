@@ -8,8 +8,6 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "runtime/wamr/watchdog.h"
-#include "sdkconfig.h"
 
 #define WAMR_TASK_STACK_SIZE (16U * 1024U)
 
@@ -39,11 +37,6 @@ void micropixel_log_heap_state(const char* label) {
 }
 
 void micropixel_log_stack_profiles(void) {
-    size_t watchdog_minimum_free = micropixel_watchdog_stack_min_free();
-    if (watchdog_minimum_free != SIZE_MAX) {
-        log_native_stack_profile("watchdog pthread", CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT, watchdog_minimum_free);
-    }
-
     size_t host_minimum_free = (size_t)uxTaskGetStackHighWaterMark2(NULL);
     log_native_stack_profile("WAMR Host pthread", WAMR_TASK_STACK_SIZE, host_minimum_free);
 }

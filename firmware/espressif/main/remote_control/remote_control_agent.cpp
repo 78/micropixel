@@ -51,7 +51,7 @@ constexpr char kPartition[] = "sys_store";
 constexpr char kNamespace[] = "control";
 constexpr char kIdentityKey[] = "identity";
 constexpr uint8_t kIdentityVersion = 1U;
-constexpr uint32_t kTaskStackBytes = 16U * 1024U;
+constexpr uint32_t kTaskStackBytes = 8U * 1024U;
 constexpr uint32_t kRequestTimeoutMs = 10000U;
 constexpr uint32_t kControlReadTimeoutMs = 250U;
 constexpr size_t kMaxConcurrentAuxiliaryRequests = 10U;
@@ -65,7 +65,6 @@ constexpr size_t kGuestLogMessageCapacity = MICROPIXEL_ABI_MAX_LOG_BYTES + 1U;
 constexpr size_t kMaxEventBodyBytes = 64U * 1024U;
 constexpr size_t kMaxPackageBytes = 8U * 1024U * 1024U;
 constexpr size_t kMaxFirmwareBytes = 0x380000U;
-constexpr size_t kTaskDiagnosticCapacity = 48U;
 constexpr uint32_t kPackageDownloadTimeoutMs = 60000U;
 constexpr uint32_t kDefaultCommandTimeoutMs = 60000U;
 constexpr uint32_t kMinCommandTimeoutMs = 1000U;
@@ -438,6 +437,20 @@ struct RemoteControlAgent::GuestLogBuffer final {
     uint64_t next_sequence{1U};
 };
 
+struct RemoteControlAgent::TaskContext final {
+    Identity identity{};
+    IdentityRecord identity_record{};
+    std::array<uint8_t, 1024U> control_read_buffer{};
+    std::array<uint8_t, 4096U> firmware_response_bytes{};
+    RemoteControlCatalogSnapshot catalog_snapshot{};
+    std::array<TaskStatus_t, kTaskDiagnosticCapacity> task_status{};
+    std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> current_task_runtime{};
+    RemoteControlHostCommand host_command{};
+    RemoteControlHostResult host_result{};
+    host_ui::RemoteControlModel control_snapshot{};
+    device::WifiSnapshot wifi_snapshot{};
+};
+
 static_assert(sizeof(GuestLogEntry) * kGuestLogCapacity < 2U * 1024U * 1024U,
               "Guest log ring must remain a bounded PSRAM allocation");
 
@@ -488,6 +501,7 @@ RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) 
 
 RemoteControlAgent::~RemoteControlAgent() {
     Stop();
+    ReleaseTaskContext();
     ClearPendingResults();
     for (PendingResultBody& cached : recent_command_results_) {
         heap_caps_free(cached.data);
@@ -511,6 +525,29 @@ RemoteControlAgent::~RemoteControlAgent() {
     host_result_queue_bytes_ = nullptr;
 }
 
+bool RemoteControlAgent::AllocateTaskContext() {
+    if (task_context_ != nullptr) {
+        return true;
+    }
+    void* storage = heap_caps_malloc(sizeof(TaskContext), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (storage == nullptr) {
+        ESP_LOGE(kTag, "Remote Control task context requires %zu bytes of PSRAM", sizeof(TaskContext));
+        return false;
+    }
+    task_context_ = std::construct_at(static_cast<TaskContext*>(storage));
+    ESP_LOGI(kTag, "Remote Control task context allocated in PSRAM: bytes=%zu", sizeof(TaskContext));
+    return true;
+}
+
+void RemoteControlAgent::ReleaseTaskContext() {
+    if (task_context_ == nullptr) {
+        return;
+    }
+    std::destroy_at(task_context_);
+    heap_caps_free(task_context_);
+    task_context_ = nullptr;
+}
+
 bool RemoteControlAgent::Start(bool enabled) {
 #if !CONFIG_MICROPIXEL_REMOTE_CONTROL_AGENT
     (void)enabled;
@@ -528,9 +565,15 @@ bool RemoteControlAgent::Start(bool enabled) {
     }
     (void)xSemaphoreTake(stopped_semaphore_, 0U);
     shutdown_requested_ = false;
+    if (!AllocateTaskContext()) {
+        SetConnectionState(host_ui::RemoteControlConnectionState::kBackoff,
+                           "Unable to allocate Remote Control task context in PSRAM");
+        return false;
+    }
     if (xTaskCreate(TaskEntry, "micropixel_remote", kTaskStackBytes, this, task_policy::kRemoteControlPriority,
                     &task_) != pdPASS) {
         task_ = nullptr;
+        ReleaseTaskContext();
         SetConnectionState(host_ui::RemoteControlConnectionState::kBackoff, "Unable to start Remote Control task");
         return false;
     }
@@ -543,6 +586,7 @@ void RemoteControlAgent::Stop() { Stop(pdMS_TO_TICKS(kShutdownTimeoutMs)); }
 void RemoteControlAgent::Stop(TickType_t timeout) {
     TaskHandle_t task = task_;
     if (task == nullptr) {
+        ReleaseTaskContext();
         return;
     }
     if (!QueueCommand(Command{.type = CommandType::kShutdown})) {
@@ -555,6 +599,7 @@ void RemoteControlAgent::Stop(TickType_t timeout) {
         vTaskDelete(task_);
     }
     task_ = nullptr;
+    ReleaseTaskContext();
 }
 
 bool RemoteControlAgent::SetEnabled(bool enabled) {
@@ -818,11 +863,16 @@ void RemoteControlAgent::RefreshPairingDeadline() {
 }
 
 bool RemoteControlAgent::LoadIdentity(Identity& identity) const {
+    if (task_context_ == nullptr) {
+        return false;
+    }
     nvs_handle_t handle{};
     if (nvs_open_from_partition(kPartition, kNamespace, NVS_READONLY, &handle) != ESP_OK) {
         return false;
     }
-    IdentityRecord record{};
+    IdentityRecord& record = task_context_->identity_record;
+    std::destroy_at(&record);
+    std::construct_at(&record);
     size_t size = sizeof(record);
     const esp_err_t error = nvs_get_blob(handle, kIdentityKey, &record, &size);
     nvs_close(handle);
@@ -836,7 +886,14 @@ bool RemoteControlAgent::LoadIdentity(Identity& identity) const {
 }
 
 bool RemoteControlAgent::SaveIdentity(const Identity& identity) const {
-    IdentityRecord record{.version = kIdentityVersion, .auth_epoch = identity.auth_epoch};
+    if (task_context_ == nullptr) {
+        return false;
+    }
+    IdentityRecord& record = task_context_->identity_record;
+    std::destroy_at(&record);
+    std::construct_at(&record);
+    record.version = kIdentityVersion;
+    record.auth_epoch = identity.auth_epoch;
     std::snprintf(record.device_id, sizeof(record.device_id), "%s", identity.device_id.data());
     std::snprintf(record.credential, sizeof(record.credential), "%s", identity.credential.data());
     nvs_handle_t handle{};
@@ -1116,6 +1173,9 @@ bool RemoteControlAgent::PostRestartResult(void* client, const Identity& identit
 }
 
 bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& identity) {
+    if (task_context_ == nullptr) {
+        return false;
+    }
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         return false;
@@ -1130,7 +1190,11 @@ bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& 
         lifecycle = app_lifecycle_;
     }
     (void)AddRuntimeSnapshotJson(root, active_app.data(), app_session.data(), lifecycle.data());
-    AddFirmwareUpdateJson(root, Snapshot());
+    {
+        std::lock_guard<std::mutex> lock(model_mutex_);
+        task_context_->control_snapshot = model_;
+    }
+    AddFirmwareUpdateJson(root, task_context_->control_snapshot);
     return PostEvent(client, identity, root, "device.snapshot");
 }
 
@@ -1147,6 +1211,9 @@ void RemoteControlAgent::PublishRuntimeSnapshotIfChanged(void* client, const Ide
 }
 
 bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& identity, const char* command_id) {
+    if (task_context_ == nullptr) {
+        return false;
+    }
     cJSON* result = cJSON_CreateObject();
     if (result == nullptr) {
         return false;
@@ -1162,8 +1229,11 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
         (void)esp_app_get_elf_sha256(elf_sha, sizeof(elf_sha));
         (void)cJSON_AddStringToObject(firmware, "buildId", elf_sha);
     }
-    const host_ui::RemoteControlModel control = Snapshot();
-    AddFirmwareUpdateJson(result, control);
+    {
+        std::lock_guard<std::mutex> lock(model_mutex_);
+        task_context_->control_snapshot = model_;
+    }
+    AddFirmwareUpdateJson(result, task_context_->control_snapshot);
 
     cJSON* hardware = cJSON_AddObjectToObject(result, "hardware");
     if (hardware != nullptr) {
@@ -1194,13 +1264,15 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
         AddMemoryStatistics(memory, "psram", MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
 
-    RemoteControlCatalogSnapshot catalog{};
     std::array<char, kRemoteControlAppIdCapacity> active_app{};
     std::array<char, kRemoteControlCommandIdCapacity> app_session{};
     std::array<char, 24U> lifecycle{};
+    uint32_t store_total_bytes = 0U;
+    uint32_t store_used_bytes = 0U;
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-        catalog = installed_apps_;
+        store_total_bytes = installed_apps_.store_total_bytes;
+        store_used_bytes = installed_apps_.store_used_bytes;
         active_app = active_app_id_;
         app_session = app_session_id_;
         lifecycle = app_lifecycle_;
@@ -1209,12 +1281,11 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     if (storage != nullptr) {
         cJSON* app_store = cJSON_AddObjectToObject(storage, "appStore");
         if (app_store != nullptr) {
-            (void)cJSON_AddNumberToObject(app_store, "totalBytes", catalog.store_total_bytes);
-            (void)cJSON_AddNumberToObject(app_store, "usedBytes", catalog.store_used_bytes);
-            (void)cJSON_AddNumberToObject(app_store, "freeBytes",
-                                          catalog.store_total_bytes >= catalog.store_used_bytes
-                                              ? catalog.store_total_bytes - catalog.store_used_bytes
-                                              : 0U);
+            (void)cJSON_AddNumberToObject(app_store, "totalBytes", store_total_bytes);
+            (void)cJSON_AddNumberToObject(app_store, "usedBytes", store_used_bytes);
+            (void)cJSON_AddNumberToObject(
+                app_store, "freeBytes",
+                store_total_bytes >= store_used_bytes ? store_total_bytes - store_used_bytes : 0U);
         }
     }
 
@@ -1222,7 +1293,8 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     cJSON* runtime = cJSON_GetObjectItemCaseSensitive(result, "runtime");
     if (cJSON_IsObject(runtime)) (void)cJSON_AddNumberToObject(runtime, "uptimeMs", esp_timer_get_time() / 1000);
 
-    const device::WifiSnapshot wifi = wifi_.Snapshot();
+    task_context_->wifi_snapshot = wifi_.Snapshot();
+    const device::WifiSnapshot& wifi = task_context_->wifi_snapshot;
     cJSON* network = cJSON_AddObjectToObject(result, "network");
     if (network != nullptr) {
         (void)cJSON_AddBoolToObject(network, "available", wifi.available);
@@ -1272,12 +1344,16 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
 }
 
 bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& identity, const char* command_id) {
+    if (task_context_ == nullptr) {
+        return false;
+    }
     cJSON* result = cJSON_CreateObject();
     if (result == nullptr) {
         return false;
     }
 #if configUSE_TRACE_FACILITY == 1
-    std::array<TaskStatus_t, kTaskDiagnosticCapacity> task_status{};
+    auto& task_status = task_context_->task_status;
+    task_status.fill({});
     configRUN_TIME_COUNTER_TYPE total_runtime{};
     const UBaseType_t total_task_count = uxTaskGetNumberOfTasks();
     const UBaseType_t task_count =
@@ -1292,7 +1368,8 @@ bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& ident
         const uint64_t total_delta = previous_total_runtime_ != 0U && current_total_runtime >= previous_total_runtime_
                                          ? current_total_runtime - previous_total_runtime_
                                          : 0U;
-        std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> current_samples{};
+        auto& current_samples = task_context_->current_task_runtime;
+        current_samples.fill({});
         for (UBaseType_t index = 0U; index < task_count; ++index) {
             const TaskStatus_t& task = task_status[index];
             const uint64_t current_runtime = static_cast<uint64_t>(task.ulRunTimeCounter);
@@ -1327,8 +1404,12 @@ bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& ident
                                           one_core_percent / static_cast<double>(portNUM_PROCESSORS));
             (void)cJSON_AddNumberToObject(item, "stackHighWaterMarkBytes",
                                           static_cast<uint64_t>(task.usStackHighWaterMark) * sizeof(StackType_t));
-#if (configUSE_CORE_AFFINITY == 1) && (configNUMBER_OF_CORES > 1)
-            (void)cJSON_AddNumberToObject(item, "coreAffinityMask", task.uxCoreAffinityMask);
+#if defined(configTASKLIST_INCLUDE_COREID) && (configTASKLIST_INCLUDE_COREID == 1)
+            if (task.xCoreID == tskNO_AFFINITY) {
+                (void)cJSON_AddNullToObject(item, "coreId");
+            } else {
+                (void)cJSON_AddNumberToObject(item, "coreId", task.xCoreID);
+            }
 #endif
             cJSON_AddItemToArray(tasks, item);
         }
@@ -1343,7 +1424,10 @@ bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& ident
 }
 
 bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identity, const char* command_id) {
-    RemoteControlCatalogSnapshot catalog{};
+    if (task_context_ == nullptr) {
+        return false;
+    }
+    RemoteControlCatalogSnapshot& catalog = task_context_->catalog_snapshot;
     std::array<char, kRemoteControlAppIdCapacity> active_app{};
     std::array<char, 24U> lifecycle{};
     {
@@ -1464,11 +1548,14 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         }
         return PostCommandResult(client, identity, command_id, false, result);
     };
-    if (name == nullptr || command_id == nullptr || std::strlen(command_id) >= kRemoteControlCommandIdCapacity) {
+    if (task_context_ == nullptr || name == nullptr || command_id == nullptr ||
+        std::strlen(command_id) >= kRemoteControlCommandIdCapacity) {
         return reject("invalid_command");
     }
 
-    RemoteControlHostCommand command{};
+    RemoteControlHostCommand& command = task_context_->host_command;
+    std::destroy_at(&command);
+    std::construct_at(&command);
     CopyText(command.command_id, command_id);
     command.deadline_ticks = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
     const cJSON* params = cJSON_GetObjectItemCaseSensitive(root, "params");
@@ -1677,7 +1764,7 @@ bool RemoteControlAgent::DownloadPackage(void* client, const Identity& identity,
 
 bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     const esp_app_desc_t* current = esp_app_get_description();
-    if (client == nullptr || current == nullptr) {
+    if (client == nullptr || current == nullptr || task_context_ == nullptr) {
         return false;
     }
     {
@@ -1699,7 +1786,7 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
         CopyText(model_.firmware_update_message, "Update service unavailable");
         return false;
     }
-    std::array<uint8_t, 4096U> response_bytes{};
+    auto& response_bytes = task_context_->firmware_response_bytes;
     size_t received = 0U;
     for (;;) {
         if (received == response_bytes.size()) {
@@ -1985,7 +2072,12 @@ bool RemoteControlAgent::UploadArtifact(void* client, const Identity& identity, 
 }
 
 void RemoteControlAgent::DrainHostResults(void* client, const Identity& identity) {
-    RemoteControlHostResult host_result{};
+    if (task_context_ == nullptr) {
+        return;
+    }
+    RemoteControlHostResult& host_result = task_context_->host_result;
+    std::destroy_at(&host_result);
+    std::construct_at(&host_result);
     while (pending_result_count_ < pending_results_.size() && host_result_queue_ != nullptr &&
            xQueueReceive(host_result_queue_, &host_result, 0U) == pdTRUE) {
         cJSON* result = cJSON_CreateObject();
@@ -2238,7 +2330,12 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
 }
 
 void RemoteControlAgent::TaskMain() {
-    Identity identity{};
+    if (task_context_ == nullptr) {
+        ESP_LOGE(kTag, "Remote Control task started without its PSRAM context");
+        return;
+    }
+    TaskContext& task_context = *task_context_;
+    Identity& identity = task_context.identity;
     if (LoadIdentity(identity)) {
         SetIdentityInSnapshot(identity);
     }
@@ -2249,13 +2346,18 @@ void RemoteControlAgent::TaskMain() {
     Http3AsyncRequestHandle status_request{};
     Http3AsyncRequestHandle pairing_request{};
     Http3AsyncRequestHandle pairing_cancel_request{};
-    std::array<uint8_t, 1024U> read_buffer{};
+    auto& read_buffer = task_context.control_read_buffer;
     TickType_t next_firmware_check_ticks = 0U;
     bool credential_refresh_attempted = false;
     ReconnectBackoff reconnect_backoff;
 
     auto close_transport = [&]() {
-        const bool retry_pairing = pairing_request.valid() && Snapshot().pairing_code_pending;
+        bool pairing_code_pending = false;
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            pairing_code_pending = model_.pairing_code_pending;
+        }
+        const bool retry_pairing = pairing_request.valid() && pairing_code_pending;
         if (async_client) {
             async_client->Stop();
         }
@@ -2388,7 +2490,12 @@ void RemoteControlAgent::TaskMain() {
             Command command{};
             if (xQueueReceive(command_queue_, &command, static_cast<TickType_t>(remaining_ticks)) == pdTRUE) {
                 process_command(command);
-                if (!Snapshot().enabled) {
+                bool enabled = false;
+                {
+                    std::lock_guard<std::mutex> lock(model_mutex_);
+                    enabled = model_.enabled;
+                }
+                if (!enabled) {
                     break;
                 }
             }
@@ -2400,7 +2507,11 @@ void RemoteControlAgent::TaskMain() {
             return;
         }
         firmware_update_requested_ = false;
-        host_ui::RemoteControlModel update = Snapshot();
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            task_context.control_snapshot = model_;
+        }
+        const host_ui::RemoteControlModel& update = task_context.control_snapshot;
         if (update.firmware_update_installable && firmware_download_path_[0] != '\0' && firmware_size_ != 0U) {
             std::array<char, 65U> sha256{};
             for (size_t index = 0U; index < firmware_sha256_.size(); ++index) {
@@ -2432,7 +2543,11 @@ void RemoteControlAgent::TaskMain() {
         }
 
         RefreshPairingDeadline();
-        const host_ui::RemoteControlModel snapshot = Snapshot();
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            task_context.control_snapshot = model_;
+        }
+        const host_ui::RemoteControlModel& snapshot = task_context.control_snapshot;
         if (CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST[0] == '\0') {
             if (snapshot.enabled) {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kBackoff,
@@ -2449,7 +2564,8 @@ void RemoteControlAgent::TaskMain() {
             vTaskDelay(kOfflinePollTicks);
             continue;
         }
-        const device::WifiSnapshot wifi = wifi_.Snapshot();
+        task_context.wifi_snapshot = wifi_.Snapshot();
+        const device::WifiSnapshot& wifi = task_context.wifi_snapshot;
         if (!wifi.connected) {
             close_transport();
             if (snapshot.enabled) {

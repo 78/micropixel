@@ -10,6 +10,61 @@ namespace micropixel::runtime {
 
 class GuestContext;
 
+class DevicesServiceEndpoint final : public ServiceHandler {
+   public:
+    explicit DevicesServiceEndpoint(GuestContext& context) : context_(context) {}
+    [[nodiscard]] ServiceDescriptor Describe() const override;
+    [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                               uint32_t response_capacity, uint32_t& response_size_out) override;
+
+   private:
+    GuestContext& context_;
+};
+
+class SensorsServiceEndpoint final : public ServiceHandler {
+   public:
+    explicit SensorsServiceEndpoint(GuestContext& context) : context_(context) {}
+    [[nodiscard]] ServiceDescriptor Describe() const override;
+    [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                               uint32_t response_capacity, uint32_t& response_size_out) override;
+
+   private:
+    GuestContext& context_;
+};
+
+class GpioServiceEndpoint final : public ServiceHandler {
+   public:
+    explicit GpioServiceEndpoint(GuestContext& context) : context_(context) {}
+    [[nodiscard]] ServiceDescriptor Describe() const override;
+    [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                               uint32_t response_capacity, uint32_t& response_size_out) override;
+
+   private:
+    GuestContext& context_;
+};
+
+class HapticsServiceEndpoint final : public ServiceHandler {
+   public:
+    explicit HapticsServiceEndpoint(GuestContext& context) : context_(context) {}
+    [[nodiscard]] ServiceDescriptor Describe() const override;
+    [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                               uint32_t response_capacity, uint32_t& response_size_out) override;
+
+   private:
+    GuestContext& context_;
+};
+
+class PowerInfoServiceEndpoint final : public ServiceHandler {
+   public:
+    explicit PowerInfoServiceEndpoint(GuestContext& context) : context_(context) {}
+    [[nodiscard]] ServiceDescriptor Describe() const override;
+    [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
+                               uint32_t response_capacity, uint32_t& response_size_out) override;
+
+   private:
+    GuestContext& context_;
+};
+
 class SystemServiceEndpoint final : public ServiceHandler {
    public:
     explicit SystemServiceEndpoint(std::string_view effective_locale);

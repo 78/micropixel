@@ -15,7 +15,8 @@ FirmwareApp (组合根) ────┼─ creates ─ DeviceServices ── inj
 
 `device/` 和 `platform/` 在文件系统中同层，但职责不是平行重复：
 
-- `device/` 定义与硬件无关的 Graphics、Input、Audio、Random、Battery 能力契约和 Runtime 使用的 façade；
+- `device/` 定义与硬件无关的 Graphics、Input、Audio、Random、Battery、Devices、Sensors、GPIO、
+  Haptics 能力契约和 Runtime 使用的 façade；
 - `platform/` 实现这些契约，并持有开发板、驱动、LVGL 与外设生命周期；
 - `runtime/` 只依赖 `device/`，不得 include `platform/`；
 - `host_ui/` 定义 Host 原生 System Shell 与平台无关的 System UI model；
@@ -42,6 +43,9 @@ main/
 ├── host_controller.cpp
 ├── host_controller.hpp
 ├── host_power_state.hpp
+├── work/
+│   ├── background_executor.cpp
+│   └── background_executor.hpp
 ├── host_ui/
 │   ├── system_shell.cpp
 │   ├── system_shell.hpp
@@ -61,10 +65,14 @@ main/
 │   ├── CMakeLists.txt
 │   ├── audio.hpp
 │   ├── battery.hpp
+│   ├── devices.hpp
+│   ├── gpio.hpp
 │   ├── graphics.hpp
+│   ├── haptics.hpp
 │   ├── input.hpp
 │   ├── power.hpp
 │   ├── random.hpp
+│   ├── sensors.hpp
 │   ├── device_services.cpp
 │   └── device_services.hpp
 ├── platform/
@@ -79,7 +87,18 @@ main/
 │   ├── metalio-claw4/
 │   │   ├── battery_backend.cpp
 │   │   ├── battery_backend.hpp
+│   │   ├── device_catalog.cpp
+│   │   ├── device_catalog.hpp
+│   │   ├── gpio_backend.cpp
+│   │   ├── gpio_backend.hpp
+│   │   ├── haptics_backend.cpp
+│   │   ├── haptics_backend.hpp
+│   │   ├── i2c_executor.cpp
+│   │   ├── i2c_executor.hpp
+│   │   ├── peripheral_ids.hpp
 │   │   ├── platform.cpp
+│   │   ├── sensor_backend.cpp
+│   │   ├── sensor_backend.hpp
 │   │   ├── graphics_adapter.cpp
 │   │   ├── graphics_adapter.hpp
 │   │   ├── system_ui_adapter.cpp
@@ -153,6 +172,12 @@ main/
     │   ├── resource_service.cpp
     │   └── resource_service.hpp
     ├── services/
+    │   ├── gpio_service.cpp
+    │   ├── gpio_service.hpp
+    │   ├── haptics_service.cpp
+    │   ├── haptics_service.hpp
+    │   ├── sensor_service.cpp
+    │   ├── sensor_service.hpp
     │   ├── service_result.hpp
     │   ├── storage_service.cpp
     │   ├── storage_service.hpp
@@ -177,11 +202,19 @@ main/
   使用四个 16 KiB Catalog Bank 环形提交，最多保存 50 个 App，并兼容读取和迁移旧 v1 的四个 4 KiB
   Bank。它提供不透明的 read/mmap/replace/remove 接口；Catalog 不使用 NVS，不扫描或安装预置 App；完整格式见
   [`docs/design/bundlefs.zh-CN.md`](../../../docs/design/bundlefs.zh-CN.md)。
-- `runtime/resources/` 负责异步资源请求、图片解码和 Bitmap handle/PSRAM 配额。Guest PNG 由 libpng
+- `work/` 提供一个固定容量、低优先级的后台执行器；App Hall 封面、Guest 压缩图片解码与 Wi-Fi NVS
+  持久化共享它，避免为同类串行工作分别保留任务栈，也避免在 `sys_evt` 中执行 flash 写入。作业上下文由
+  提交方持有，提交方必须等待完成或通过 shutdown protocol 证明其生命周期。
+- `platform/metalio-claw4/i2c_executor.*` 为板上的单条物理 I²C bus 提供一个 4 KiB 固定容量优先级
+  executor。Touch/电源、同步控制、Sensor/电池分别进入 high/normal/low 队列；ISR 和 timer callback 只投递
+  作业。Sensor 与 GT911 不再各自保留任务栈，GPIO 和实时 I²S 不进入该 executor。
+- `runtime/resources/` 负责资源请求、图片解码和 Bitmap handle/PSRAM 配额。Guest PNG 由 libpng
   逐行直接写入最终 ARGB8888 PSRAM buffer，避免整图 inflate 临时副本和第二遍整图颜色转换干扰显示
-  framebuffer scanout。
-- `runtime/services/` 放 Runtime 自己提供的 Timer、Storage 业务；它们不是物理设备 backend。
-- `runtime/wamr/` 负责 WAMR 初始化、module/instance/exec-env RAII、watchdog 和运行期诊断。
+  framebuffer scanout；压缩图片解码提交到共享后台执行器，Guest 调用仍同步等待结果。
+- `runtime/services/` 放 Runtime 自己提供的 Timer、Storage，以及为 Sensors、GPIO、Haptics 管理
+  Guest-local handle、事件与 Session 生命周期的业务；它们不是物理设备 backend。
+- `runtime/wamr/` 负责 WAMR 初始化、module/instance/exec-env RAII、watchdog 和运行期诊断。Guest watchdog
+  使用单调时钟 deadline 和共享的 ESP Timer task，不为每次 WAMR 调用创建 pthread。
 - `runtime/app_runtime.*` 持有长驻 WAMR，并同步创建最多一个 `AppSession`；`runtime/app_session.*` 持有一次
   Guest 的 Bundle、module、instance、exec-env 与 `GuestContext` 销毁边界。
 - `host_ui/` 是 Host 原生 App Hall/状态层的控制边界；具体绘制仍由所选 Platform 的 `SystemUiBackend` 完成，FPS 开关、亮度与音量保存到独立的 `sys_store` NVS。
@@ -214,7 +247,7 @@ main/
   惯性滚动，不强制按卡片位置吸附。卡片作为一个裁剪内容带移动，每帧只 invalidates 大厅视口；面板
   partial-buffer 通过 DMA2D 传输，较大的 LVGL fill/blend 使用 PPA。Catalog 变化时回到最左侧，使新安装在
   index 0 的 App 立即可见。大厅只保留与视口相交项及左右各一个预取项，最多 6 套卡片控件和 6 张
-  202x202 RGB888 解码封面；快速滑动时先显示占位图，后台任务只为当前窗口解码，并丢弃已经滑过的结果。
+  202x202 RGB888 解码封面；快速滑动时先显示占位图，共享后台执行器只为当前窗口解码，并丢弃已经滑过的结果。
   压缩 PNG 保持 Flash mmap，不复制到 PSRAM。唯一挂起 App 的卡片改用窗口截图，并由
   ESP32-P4 PPA 完成 720x720 ↔ 卡片区域的硬件缩放动画；全尺寸截图只在切换期间存在，不做软件缩放
   fallback。过渡合成器分别维护无运行卡片的静态大厅 baseline 和当前动画工作背景；从挂起 App 切换到

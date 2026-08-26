@@ -2,6 +2,7 @@
 #define MICROPIXEL_PLATFORM_METALIO_CLAW4_WIFI_BACKEND_HPP
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -15,11 +16,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+namespace micropixel::work {
+class BackgroundExecutor;
+}
+
 namespace micropixel::platform::metalio_claw4 {
 
 class WifiBackend final : public device::WifiBackend {
    public:
     WifiBackend() = default;
+    void BindBackgroundExecutor(work::BackgroundExecutor& executor);
 
     [[nodiscard]] std::expected<void, device::WifiError> Initialize() override;
     [[nodiscard]] device::WifiSnapshot Snapshot() const override;
@@ -61,6 +67,7 @@ class WifiBackend final : public device::WifiBackend {
 
     static void WifiEventHandler(void* context, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void DiscoveryTimerHandler(void* context);
+    static void SaveSettingsEntry(void* context);
     void HandleWifiEvent(int32_t event_id, void* event_data);
     void HandleGotIp();
     void HandleScanDone();
@@ -78,11 +85,15 @@ class WifiBackend final : public device::WifiBackend {
     [[nodiscard]] bool BuildDiscoveryChannelsLocked();
     [[nodiscard]] bool LoadSettings();
     [[nodiscard]] bool SaveSettings() const;
+    void QueueSaveSettings();
+    void ProcessPendingSettingsSaves();
     void RebuildSnapshotLocked();
     void UpdateScanResultsLocked(const void* records, uint16_t count);
     void MergeDiscoveryScanResultsLocked(const void* records, uint16_t count);
 
     mutable SemaphoreHandle_t mutex_{};
+    mutable SemaphoreHandle_t persistence_mutex_{};
+    work::BackgroundExecutor* background_executor_{};
     esp_timer_handle_t discovery_timer_{};
     esp_netif_t* station_netif_{};
     esp_event_handler_instance_t wifi_event_instance_{};
@@ -101,6 +112,8 @@ class WifiBackend final : public device::WifiBackend {
     uint8_t reconnect_attempts_{};
     uint8_t discovery_backoff_index_{};
     int64_t last_user_scan_request_us_{};
+    std::atomic_uint32_t save_request_generation_{};
+    std::atomic_bool save_job_scheduled_{};
     bool initialized_{};
     bool enabled_{true};
     bool associated_{};

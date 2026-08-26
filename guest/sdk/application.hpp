@@ -5,13 +5,18 @@
 
 #include "sdk/audio.hpp"
 #include "sdk/clock.hpp"
+#include "sdk/devices.hpp"
 #include "sdk/event.hpp"
+#include "sdk/gpio.hpp"
 #include "sdk/graphics.hpp"
+#include "sdk/haptics.hpp"
 #include "sdk/input.hpp"
 #include "sdk/localization.hpp"
 #include "sdk/log.hpp"
+#include "sdk/power_info.hpp"
 #include "sdk/random.hpp"
 #include "sdk/resources.hpp"
+#include "sdk/sensors.hpp"
 #include "sdk/storage.hpp"
 #include "sdk/timer.hpp"
 #include "sdk/types.hpp"
@@ -47,6 +52,11 @@ class Application final {
     [[nodiscard]] constexpr Localization localization() const noexcept {
         return Localization{Localization::CapabilityToken{}};
     }
+    [[nodiscard]] constexpr Devices devices() const noexcept { return Devices{Devices::CapabilityToken{}}; }
+    [[nodiscard]] constexpr Sensors sensors() const noexcept { return Sensors{Sensors::CapabilityToken{}}; }
+    [[nodiscard]] constexpr Gpio gpio() const noexcept { return Gpio{Gpio::CapabilityToken{}}; }
+    [[nodiscard]] constexpr Haptics haptics() const noexcept { return Haptics{Haptics::CapabilityToken{}}; }
+    [[nodiscard]] constexpr PowerInfo power_info() const noexcept { return PowerInfo{PowerInfo::CapabilityToken{}}; }
 
     template <typename Handler>
     void Run(Handler&& handler) const {

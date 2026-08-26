@@ -13,6 +13,7 @@
 #include "esp_attr.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
+#include "platform/metalio-claw4/i2c_executor.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 
@@ -22,7 +23,7 @@ class Tca9555PowerKey final {
     using KeyPressSink = bool (*)(void* context, uint64_t timestamp_us);
     using PowerOffSink = bool (*)(void* context, uint64_t timestamp_us);
 
-    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander);
+    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander, I2cExecutor& i2c_executor);
     void SetPowerInputChangeSink(PowerInputChangeSink sink, void* context);
     void SetKeyPressSink(KeyPressSink sink, void* context);
     void SetPowerOffSink(PowerOffSink sink, void* context);
@@ -41,6 +42,8 @@ class Tca9555PowerKey final {
 
     [[nodiscard]] esp_err_t ConfigurePowerKeyInput();
     [[nodiscard]] esp_err_t ConfigureInterrupt();
+    [[nodiscard]] esp_err_t ReadRegister(uint8_t address, uint8_t& value) const;
+    [[nodiscard]] esp_err_t WriteRegister(uint8_t address, uint8_t value) const;
     [[nodiscard]] esp_err_t ReadPorts(uint8_t& port0, uint8_t& port1) const;
     [[nodiscard]] uint8_t ReadKeyLevel();
     [[nodiscard]] uint8_t RecordRawLevel(uint8_t port0, uint8_t port1, int interrupt_level);
@@ -57,6 +60,7 @@ class Tca9555PowerKey final {
 
     DriverContext driver_{};
     i2c_master_dev_handle_t io_expander_{};
+    I2cExecutor* i2c_executor_{};
     button_handle_t button_{};
     uint32_t read_error_count_{};
     uint8_t last_key_level_{BUTTON_INACTIVE};

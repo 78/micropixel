@@ -5,6 +5,9 @@
 
 namespace micropixel {
 
+template <typename Reading>
+class Sensor;
+
 class Duration final {
    public:
     constexpr Duration() = default;
@@ -129,6 +132,8 @@ class TimePoint final {
 
     friend class Application;
     friend class Clock;
+    template <typename Reading>
+    friend class Sensor;
 };
 
 }  // namespace micropixel

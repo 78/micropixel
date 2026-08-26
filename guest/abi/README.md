@@ -24,8 +24,9 @@ Audio 或 Network 方法通常只新增 Service 内的稳定数字 ID 和 wire s
 
 ## Service 模型
 
-当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Random `4`、System `5`、Graphics `16`、
-Input `17`、Audio `18`；Network `19` 只预留 ID，尚未实现。System 1.0 提供最长 31 bytes 的
+当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Random `4`、System `5`、Devices `6`、
+Graphics `16`、Input `17`、Audio `18`、Sensors `20`、GPIO `21`、Haptics `22`、PowerInfo `23`；
+Network `19` 只预留 ID，尚未实现。System 1.0 提供最长 31 bytes 的
 BCP 47 locale tag。Host 返回当前 Catalog 和字体确实可用的 effective Locale；基础固件只有 `en`，
 以后安装语言组件并改变设备语言不需要修改 Guest ABI。Locale 在一个 AppSession 内不可变；用户返回
 App Hall 修改语言后，下一次启动 Guest 才会取得新值，v1 不投递 locale-change event。
@@ -76,9 +77,35 @@ Audio 1.1 在原有有界 `PLAY_TONE` 基础上增加 Ogg Opus source/playback �
 - 压缩数据直接读取当前 App Bundle 的只读映射，Guest 不上传 PCM 或 codec packets。网络 URL、下载进度、
   缓存与取消以后由 Resource/Network Service 管理，不改变 Audio source/playback 的所有权语义。
 
+### 设备发现与外设 Service
+
+Devices 1.0 是设备目录，不替代具体能力 Service。`LIST(kind)` 返回不超过 64 个不透明
+`device_id` 和 catalog generation，`GET_INFO(device_id)` 返回 kind、parent、capabilities 与显示名称。
+应用必须保存并传递 `device_id`，不能把枚举 index、GPIO 号、I2C 地址或 Host 指针当作设备身份。
+未来热插拔设备用 Devices added/removed event 和新 generation 通知；第一阶段 Metalio-Claw4 目录在
+一次 Session 中保持不变。
+
+- Sensors 1.0 按 `device_id` 查询类型和单位，再创建独立 handle。加速度与磁场使用不同的 typed reading，
+  不是一个不断增加可选字段的万能 Sensor 对象。第一个 handle 启动 Host 最新值缓存，最后一个 handle
+  释放后停止；应用按自己的节奏调用 `READ`，实际维数由 `SensorInfo::value_count` 和 sensor kind 决定。
+  method 4 配置缓存采样间隔，Host 不宣告 Sensor events；event 1 继续保留且不得复用。一个手柄以后可
+  作为 parent device，其按键和子传感器仍分别走对应 Service。
+- GPIO 1.0 把每根可开放物理引脚列为 `GPIO_LINE` device。应用枚举后可直接将任意一根以 input、output
+  或 PWM 模式打开；打开即取得 Session 内独占 lease，release/Session teardown 恢复安全输入状态。
+  第一阶段没有出厂 binding、用途命名或权限声明流程。input 只有配置 rising/falling/both edge 时才订阅
+  event；主动 `READ`、output 和 PWM 不需要 GPIO event worker。
+- Haptics 1.0 使用 move-only handle 播放/停止有界时长的震动，自然结束投递 finished event。
+- PowerInfo 1.0 用 power device id 读取电池百分比、充放电与外部供电快照。
+
+所有 handle 都包含 generation 并由 Host 验证所属 Guest。Sensor、GPIO 与 Haptics 的运行时槽位分别固定为
+8、16、2；事件继续使用统一的固定容量 EventQueue。Sensor 最新值留在 Platform backend 的固定槽位中；GPIO event
+按 handle 合并，只保留最新状态。第一个 edge handle 懒启动 worker，最后一个释放或 App Suspend 时停止；
+GPIO ISR 只写入最小 POD 队列，由任务上下文转换为 Guest event。
+
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、
-Input touch、Input semantic key、Audio playback finished 和 Core host wake。新增事件不会扩大 Core import 表。
+Input touch、Input semantic key、Audio playback finished、Devices added/removed、GPIO edge、
+Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表。
 
 - 周期 Timer 队列中同一 handle 最多保留一条记录。积压时 `elapsed_us` 累加，`missed_count` 统计未单独
   投递的 tick；队列满导致的 tick 也结转到下一次成功事件。

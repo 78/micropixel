@@ -33,6 +33,21 @@
 #define MICROPIXEL_SYSTEM_INTERFACE_MAJOR 1U
 #define MICROPIXEL_SYSTEM_INTERFACE_MINOR 0U
 #define MICROPIXEL_LOCALE_TAG_MAX_BYTES 31U
+#define MICROPIXEL_DEVICES_INTERFACE_MAJOR 1U
+#define MICROPIXEL_DEVICES_INTERFACE_MINOR 0U
+#define MICROPIXEL_SENSORS_INTERFACE_MAJOR 1U
+#define MICROPIXEL_SENSORS_INTERFACE_MINOR 0U
+#define MICROPIXEL_GPIO_INTERFACE_MAJOR 1U
+#define MICROPIXEL_GPIO_INTERFACE_MINOR 0U
+#define MICROPIXEL_HAPTICS_INTERFACE_MAJOR 1U
+#define MICROPIXEL_HAPTICS_INTERFACE_MINOR 0U
+#define MICROPIXEL_POWER_INFO_INTERFACE_MAJOR 1U
+#define MICROPIXEL_POWER_INFO_INTERFACE_MINOR 0U
+#define MICROPIXEL_MAX_DEVICES 64U
+#define MICROPIXEL_DEVICE_NAME_MAX_BYTES 39U
+#define MICROPIXEL_MAX_SENSOR_HANDLES 8U
+#define MICROPIXEL_MAX_GPIO_HANDLES 16U
+#define MICROPIXEL_MAX_HAPTIC_HANDLES 2U
 
 typedef enum micropixel_status {
     MICROPIXEL_STATUS_OK = 0,
@@ -59,6 +74,10 @@ typedef uint32_t micropixel_texture_handle_t;
 typedef uint16_t micropixel_font_handle_t;
 typedef uint32_t micropixel_audio_clip_handle_t;
 typedef uint32_t micropixel_audio_playback_handle_t;
+typedef uint32_t micropixel_device_id_t;
+typedef uint32_t micropixel_sensor_handle_t;
+typedef uint32_t micropixel_gpio_handle_t;
+typedef uint32_t micropixel_haptic_handle_t;
 
 typedef enum micropixel_service_id {
     MICROPIXEL_SERVICE_TIMER = 1,
@@ -66,10 +85,15 @@ typedef enum micropixel_service_id {
     MICROPIXEL_SERVICE_RESOURCE = 3,
     MICROPIXEL_SERVICE_RANDOM = 4,
     MICROPIXEL_SERVICE_SYSTEM = 5,
+    MICROPIXEL_SERVICE_DEVICES = 6,
     MICROPIXEL_SERVICE_GRAPHICS = 16,
     MICROPIXEL_SERVICE_INPUT = 17,
     MICROPIXEL_SERVICE_AUDIO = 18,
     MICROPIXEL_SERVICE_NETWORK = 19,
+    MICROPIXEL_SERVICE_SENSORS = 20,
+    MICROPIXEL_SERVICE_GPIO = 21,
+    MICROPIXEL_SERVICE_HAPTICS = 22,
+    MICROPIXEL_SERVICE_POWER_INFO = 23,
 } micropixel_service_id_t;
 
 typedef enum micropixel_service_flag {
@@ -122,6 +146,313 @@ typedef struct micropixel_system_locale_response {
     uint16_t tag_length;
     char tag[MICROPIXEL_LOCALE_TAG_MAX_BYTES + 1U];
 } micropixel_system_locale_response_t;
+
+typedef enum micropixel_device_kind {
+    MICROPIXEL_DEVICE_KIND_ANY = 0,
+    MICROPIXEL_DEVICE_KIND_DISPLAY = 1,
+    MICROPIXEL_DEVICE_KIND_TOUCH = 2,
+    MICROPIXEL_DEVICE_KIND_AUDIO_INPUT = 3,
+    MICROPIXEL_DEVICE_KIND_AUDIO_OUTPUT = 4,
+    MICROPIXEL_DEVICE_KIND_SENSOR = 5,
+    MICROPIXEL_DEVICE_KIND_GPIO_LINE = 6,
+    MICROPIXEL_DEVICE_KIND_HAPTICS = 7,
+    MICROPIXEL_DEVICE_KIND_POWER = 8,
+    MICROPIXEL_DEVICE_KIND_GAMEPAD = 9,
+    MICROPIXEL_DEVICE_KIND_CAMERA = 10,
+    MICROPIXEL_DEVICE_KIND_LOCATION = 11,
+    MICROPIXEL_DEVICE_KIND_STORAGE = 12,
+    MICROPIXEL_DEVICE_KIND_NETWORK = 13,
+} micropixel_device_kind_t;
+
+typedef enum micropixel_device_capability {
+    MICROPIXEL_DEVICE_CAP_READ = 1ULL << 0U,
+    MICROPIXEL_DEVICE_CAP_WRITE = 1ULL << 1U,
+    MICROPIXEL_DEVICE_CAP_EVENTS = 1ULL << 2U,
+    MICROPIXEL_DEVICE_CAP_HOTPLUGGABLE = 1ULL << 3U,
+} micropixel_device_capability_t;
+
+typedef enum micropixel_devices_method {
+    MICROPIXEL_DEVICES_METHOD_LIST = 1,
+    MICROPIXEL_DEVICES_METHOD_GET_INFO = 2,
+} micropixel_devices_method_t;
+
+typedef enum micropixel_devices_event_id {
+    MICROPIXEL_DEVICES_EVENT_ADDED = 1,
+    MICROPIXEL_DEVICES_EVENT_REMOVED = 2,
+} micropixel_devices_event_id_t;
+
+typedef struct micropixel_devices_list_request {
+    uint16_t size;
+    uint16_t kind;
+    uint32_t reserved0;
+} micropixel_devices_list_request_t;
+
+typedef struct micropixel_devices_list_response {
+    uint16_t size;
+    uint16_t count;
+    uint32_t generation;
+    micropixel_device_id_t devices[MICROPIXEL_MAX_DEVICES];
+} micropixel_devices_list_response_t;
+
+typedef struct micropixel_device_request {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_device_id_t device;
+} micropixel_device_request_t;
+
+typedef struct micropixel_device_info {
+    uint16_t size;
+    uint16_t kind;
+    micropixel_device_id_t device;
+    micropixel_device_id_t parent;
+    uint32_t reserved0;
+    uint64_t capabilities;
+    uint16_t name_length;
+    uint16_t reserved1;
+    char name[MICROPIXEL_DEVICE_NAME_MAX_BYTES + 1U];
+} micropixel_device_info_t;
+
+typedef struct micropixel_device_event_payload {
+    micropixel_device_id_t device;
+    uint16_t kind;
+    uint16_t reserved0;
+    uint32_t generation;
+    uint32_t reserved1;
+} micropixel_device_event_payload_t;
+
+typedef enum micropixel_sensor_kind {
+    MICROPIXEL_SENSOR_ACCELERATION = 1,
+    MICROPIXEL_SENSOR_ANGULAR_VELOCITY = 2,
+    MICROPIXEL_SENSOR_MAGNETIC_FIELD = 3,
+    MICROPIXEL_SENSOR_TEMPERATURE = 4,
+    MICROPIXEL_SENSOR_ILLUMINANCE = 5,
+    MICROPIXEL_SENSOR_PRESSURE = 6,
+    MICROPIXEL_SENSOR_RELATIVE_HUMIDITY = 7,
+    MICROPIXEL_SENSOR_PROXIMITY = 8,
+    MICROPIXEL_SENSOR_ORIENTATION = 9,
+} micropixel_sensor_kind_t;
+
+typedef enum micropixel_sensor_placement {
+    MICROPIXEL_SENSOR_PLACEMENT_UNKNOWN = 0,
+    MICROPIXEL_SENSOR_PLACEMENT_BUILT_IN = 1,
+    MICROPIXEL_SENSOR_PLACEMENT_EXTERNAL = 2,
+    MICROPIXEL_SENSOR_PLACEMENT_LEFT = 3,
+    MICROPIXEL_SENSOR_PLACEMENT_RIGHT = 4,
+} micropixel_sensor_placement_t;
+
+typedef enum micropixel_sensors_method {
+    MICROPIXEL_SENSORS_METHOD_GET_INFO = 1,
+    MICROPIXEL_SENSORS_METHOD_OPEN = 2,
+    MICROPIXEL_SENSORS_METHOD_READ = 3,
+    MICROPIXEL_SENSORS_METHOD_SET_SAMPLE_INTERVAL = 4,
+    MICROPIXEL_SENSORS_METHOD_SET_UPDATE_INTERVAL = MICROPIXEL_SENSORS_METHOD_SET_SAMPLE_INTERVAL,
+    MICROPIXEL_SENSORS_METHOD_RELEASE = 5,
+} micropixel_sensors_method_t;
+
+typedef enum micropixel_sensors_event_id {
+    MICROPIXEL_SENSORS_EVENT_READING = 1,
+} micropixel_sensors_event_id_t;
+
+typedef struct micropixel_sensor_info {
+    uint16_t size;
+    uint16_t kind;
+    micropixel_device_id_t device;
+    micropixel_device_id_t parent;
+    uint16_t placement;
+    uint16_t value_count;
+    uint32_t minimum_interval_us;
+    uint32_t maximum_interval_us;
+    uint32_t reserved[2];
+} micropixel_sensor_info_t;
+
+typedef struct micropixel_sensor_open_request {
+    uint16_t size;
+    uint16_t expected_kind;
+    micropixel_device_id_t device;
+} micropixel_sensor_open_request_t;
+
+typedef struct micropixel_sensor_open_response {
+    uint16_t size;
+    uint16_t kind;
+    micropixel_sensor_handle_t sensor;
+    micropixel_device_id_t device;
+    uint32_t reserved0;
+} micropixel_sensor_open_response_t;
+
+typedef struct micropixel_sensor_reading {
+    uint16_t size;
+    uint16_t kind;
+    micropixel_sensor_handle_t sensor;
+    micropixel_device_id_t device;
+    uint32_t reserved0;
+    micropixel_app_time_t timestamp_us;
+    float values[4];
+} micropixel_sensor_reading_t;
+
+typedef struct micropixel_sensor_update_request {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_sensor_handle_t sensor;
+    uint64_t interval_us;
+} micropixel_sensor_update_request_t;
+
+typedef micropixel_sensor_update_request_t micropixel_sensor_sample_interval_request_t;
+
+typedef struct micropixel_sensor_event_payload {
+    float values[4];
+} micropixel_sensor_event_payload_t;
+
+typedef enum micropixel_gpio_capability {
+    MICROPIXEL_GPIO_CAP_INPUT = 1U << 0U,
+    MICROPIXEL_GPIO_CAP_OUTPUT = 1U << 1U,
+    MICROPIXEL_GPIO_CAP_PULL_UP = 1U << 2U,
+    MICROPIXEL_GPIO_CAP_PULL_DOWN = 1U << 3U,
+    MICROPIXEL_GPIO_CAP_EDGE_EVENTS = 1U << 4U,
+    MICROPIXEL_GPIO_CAP_PWM = 1U << 5U,
+} micropixel_gpio_capability_t;
+
+typedef enum micropixel_gpio_mode {
+    MICROPIXEL_GPIO_MODE_INPUT = 1,
+    MICROPIXEL_GPIO_MODE_OUTPUT = 2,
+    MICROPIXEL_GPIO_MODE_PWM = 3,
+} micropixel_gpio_mode_t;
+
+typedef enum micropixel_gpio_pull {
+    MICROPIXEL_GPIO_PULL_NONE = 0,
+    MICROPIXEL_GPIO_PULL_UP = 1,
+    MICROPIXEL_GPIO_PULL_DOWN = 2,
+} micropixel_gpio_pull_t;
+
+typedef enum micropixel_gpio_edge {
+    MICROPIXEL_GPIO_EDGE_NONE = 0,
+    MICROPIXEL_GPIO_EDGE_RISING = 1,
+    MICROPIXEL_GPIO_EDGE_FALLING = 2,
+    MICROPIXEL_GPIO_EDGE_BOTH = 3,
+} micropixel_gpio_edge_t;
+
+typedef enum micropixel_gpio_method {
+    MICROPIXEL_GPIO_METHOD_GET_INFO = 1,
+    MICROPIXEL_GPIO_METHOD_OPEN = 2,
+    MICROPIXEL_GPIO_METHOD_READ = 3,
+    MICROPIXEL_GPIO_METHOD_WRITE = 4,
+    MICROPIXEL_GPIO_METHOD_SET_PWM_DUTY = 5,
+    MICROPIXEL_GPIO_METHOD_RELEASE = 6,
+} micropixel_gpio_method_t;
+
+typedef enum micropixel_gpio_event_id {
+    MICROPIXEL_GPIO_EVENT_EDGE = 1,
+} micropixel_gpio_event_id_t;
+
+typedef struct micropixel_gpio_info {
+    uint16_t size;
+    uint16_t line_number;
+    micropixel_device_id_t device;
+    uint32_t capabilities;
+    uint32_t maximum_pwm_frequency_hz;
+    uint32_t reserved[3];
+} micropixel_gpio_info_t;
+
+typedef struct micropixel_gpio_open_request {
+    uint16_t size;
+    uint16_t mode;
+    micropixel_device_id_t device;
+    uint16_t pull;
+    uint16_t edge;
+    uint32_t initial_value;
+    uint32_t pwm_frequency_hz;
+} micropixel_gpio_open_request_t;
+
+typedef struct micropixel_gpio_open_response {
+    uint16_t size;
+    uint16_t mode;
+    micropixel_gpio_handle_t gpio;
+    micropixel_device_id_t device;
+    uint32_t reserved0;
+} micropixel_gpio_open_response_t;
+
+typedef struct micropixel_gpio_value_request {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_gpio_handle_t gpio;
+    uint32_t value;
+} micropixel_gpio_value_request_t;
+
+typedef struct micropixel_gpio_value_response {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_gpio_handle_t gpio;
+    uint32_t value;
+} micropixel_gpio_value_response_t;
+
+typedef struct micropixel_gpio_event_payload {
+    micropixel_device_id_t device;
+    uint32_t value;
+    uint32_t edge;
+    uint32_t reserved0;
+} micropixel_gpio_event_payload_t;
+
+typedef enum micropixel_haptics_capability {
+    MICROPIXEL_HAPTICS_CAP_VARIABLE_STRENGTH = 1U << 0U,
+} micropixel_haptics_capability_t;
+
+typedef enum micropixel_haptics_method {
+    MICROPIXEL_HAPTICS_METHOD_GET_INFO = 1,
+    MICROPIXEL_HAPTICS_METHOD_OPEN = 2,
+    MICROPIXEL_HAPTICS_METHOD_PLAY = 3,
+    MICROPIXEL_HAPTICS_METHOD_STOP = 4,
+    MICROPIXEL_HAPTICS_METHOD_RELEASE = 5,
+} micropixel_haptics_method_t;
+
+typedef enum micropixel_haptics_event_id {
+    MICROPIXEL_HAPTICS_EVENT_FINISHED = 1,
+} micropixel_haptics_event_id_t;
+
+typedef struct micropixel_haptics_info {
+    uint16_t size;
+    uint16_t capabilities;
+    micropixel_device_id_t device;
+    uint32_t maximum_duration_ms;
+    uint32_t reserved[2];
+} micropixel_haptics_info_t;
+
+typedef struct micropixel_haptics_play_request {
+    uint16_t size;
+    uint16_t strength_per_mille;
+    micropixel_haptic_handle_t haptic;
+    uint32_t duration_ms;
+    uint32_t reserved0;
+} micropixel_haptics_play_request_t;
+
+typedef enum micropixel_power_source {
+    MICROPIXEL_POWER_SOURCE_UNKNOWN = 0,
+    MICROPIXEL_POWER_SOURCE_BATTERY = 1,
+    MICROPIXEL_POWER_SOURCE_EXTERNAL = 2,
+} micropixel_power_source_t;
+
+typedef enum micropixel_power_state_flag {
+    MICROPIXEL_POWER_STATE_HAS_BATTERY = 1U << 0U,
+    MICROPIXEL_POWER_STATE_CHARGING = 1U << 1U,
+    MICROPIXEL_POWER_STATE_DISCHARGING = 1U << 2U,
+    MICROPIXEL_POWER_STATE_EXTERNAL_CONNECTED = 1U << 3U,
+} micropixel_power_state_flag_t;
+
+typedef enum micropixel_power_info_method {
+    MICROPIXEL_POWER_INFO_METHOD_GET = 1,
+} micropixel_power_info_method_t;
+
+typedef enum micropixel_power_info_event_id {
+    MICROPIXEL_POWER_INFO_EVENT_CHANGED = 1,
+} micropixel_power_info_event_id_t;
+
+typedef struct micropixel_power_info_response {
+    uint16_t size;
+    uint16_t source;
+    micropixel_device_id_t device;
+    uint32_t flags;
+    uint8_t battery_percent;
+    uint8_t reserved0[3];
+    uint32_t reserved1[2];
+} micropixel_power_info_response_t;
 
 typedef enum micropixel_graphics_method {
     MICROPIXEL_GRAPHICS_METHOD_GET_INFO = 1,
@@ -632,6 +963,27 @@ typedef struct micropixel_event {
 
 #if defined(__cplusplus)
 static_assert(sizeof(micropixel_event_t) == 48U, "micropixel_event_t ABI size changed");
+static_assert(sizeof(micropixel_devices_list_request_t) == 8U, "micropixel_devices_list_request_t ABI size changed");
+static_assert(sizeof(micropixel_devices_list_response_t) == 264U,
+              "micropixel_devices_list_response_t ABI size changed");
+static_assert(sizeof(micropixel_device_request_t) == 8U, "micropixel_device_request_t ABI size changed");
+static_assert(sizeof(micropixel_device_info_t) == 72U, "micropixel_device_info_t ABI size changed");
+static_assert(sizeof(micropixel_device_event_payload_t) == 16U, "micropixel_device_event_payload_t ABI size changed");
+static_assert(sizeof(micropixel_sensor_info_t) == 32U, "micropixel_sensor_info_t ABI size changed");
+static_assert(sizeof(micropixel_sensor_open_request_t) == 8U, "micropixel_sensor_open_request_t ABI size changed");
+static_assert(sizeof(micropixel_sensor_open_response_t) == 16U, "micropixel_sensor_open_response_t ABI size changed");
+static_assert(sizeof(micropixel_sensor_reading_t) == 40U, "micropixel_sensor_reading_t ABI size changed");
+static_assert(sizeof(micropixel_sensor_update_request_t) == 16U, "micropixel_sensor_update_request_t ABI size changed");
+static_assert(sizeof(micropixel_sensor_event_payload_t) == 16U, "micropixel_sensor_event_payload_t ABI size changed");
+static_assert(sizeof(micropixel_gpio_info_t) == 28U, "micropixel_gpio_info_t ABI size changed");
+static_assert(sizeof(micropixel_gpio_open_request_t) == 20U, "micropixel_gpio_open_request_t ABI size changed");
+static_assert(sizeof(micropixel_gpio_open_response_t) == 16U, "micropixel_gpio_open_response_t ABI size changed");
+static_assert(sizeof(micropixel_gpio_value_request_t) == 12U, "micropixel_gpio_value_request_t ABI size changed");
+static_assert(sizeof(micropixel_gpio_value_response_t) == 12U, "micropixel_gpio_value_response_t ABI size changed");
+static_assert(sizeof(micropixel_gpio_event_payload_t) == 16U, "micropixel_gpio_event_payload_t ABI size changed");
+static_assert(sizeof(micropixel_haptics_info_t) == 20U, "micropixel_haptics_info_t ABI size changed");
+static_assert(sizeof(micropixel_haptics_play_request_t) == 16U, "micropixel_haptics_play_request_t ABI size changed");
+static_assert(sizeof(micropixel_power_info_response_t) == 24U, "micropixel_power_info_response_t ABI size changed");
 static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
@@ -681,6 +1033,28 @@ static_assert(sizeof(micropixel_resource_load_texture_request_t) == 8U,
 static_assert(sizeof(micropixel_random_u32_response_t) == 8U, "micropixel_random_u32_response_t ABI size changed");
 #else
 _Static_assert(sizeof(micropixel_event_t) == 48U, "micropixel_event_t ABI size changed");
+_Static_assert(sizeof(micropixel_devices_list_request_t) == 8U, "micropixel_devices_list_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_devices_list_response_t) == 264U,
+               "micropixel_devices_list_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_device_request_t) == 8U, "micropixel_device_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_device_info_t) == 72U, "micropixel_device_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_device_event_payload_t) == 16U, "micropixel_device_event_payload_t ABI size changed");
+_Static_assert(sizeof(micropixel_sensor_info_t) == 32U, "micropixel_sensor_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_sensor_open_request_t) == 8U, "micropixel_sensor_open_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_sensor_open_response_t) == 16U, "micropixel_sensor_open_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_sensor_reading_t) == 40U, "micropixel_sensor_reading_t ABI size changed");
+_Static_assert(sizeof(micropixel_sensor_update_request_t) == 16U,
+               "micropixel_sensor_update_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_sensor_event_payload_t) == 16U, "micropixel_sensor_event_payload_t ABI size changed");
+_Static_assert(sizeof(micropixel_gpio_info_t) == 28U, "micropixel_gpio_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_gpio_open_request_t) == 20U, "micropixel_gpio_open_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_gpio_open_response_t) == 16U, "micropixel_gpio_open_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_gpio_value_request_t) == 12U, "micropixel_gpio_value_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_gpio_value_response_t) == 12U, "micropixel_gpio_value_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_gpio_event_payload_t) == 16U, "micropixel_gpio_event_payload_t ABI size changed");
+_Static_assert(sizeof(micropixel_haptics_info_t) == 20U, "micropixel_haptics_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_haptics_play_request_t) == 16U, "micropixel_haptics_play_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_power_info_response_t) == 24U, "micropixel_power_info_response_t ABI size changed");
 _Static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");

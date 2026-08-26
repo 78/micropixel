@@ -20,6 +20,7 @@ constexpr std::string_view kPrefix = "MPX1 ";
 constexpr size_t kMaximumPackageBytes = 8U * 1024U * 1024U;
 constexpr size_t kMaximumChunkBytes = 3072U;
 constexpr TickType_t kInstallTimeout = pdMS_TO_TICKS(120U * 1000U);
+constexpr uint64_t kInstallTimeoutUs = 120ULL * 1000ULL * 1000ULL;
 constexpr TickType_t kHostCommandTimeout = pdMS_TO_TICKS(5U * 60U * 1000U);
 constexpr uint32_t kAppsPerPage = 4U;
 
@@ -94,11 +95,30 @@ UsbLocalControlAgent::UsbLocalControlAgent(device::LocalControlBackend& backend,
                                          &response_queue_storage_);
 }
 
-UsbLocalControlAgent::~UsbLocalControlAgent() { Stop(); }
+UsbLocalControlAgent::~UsbLocalControlAgent() {
+    Stop();
+    if (install_timer_ != nullptr) {
+        (void)esp_timer_stop_blocking(install_timer_, portMAX_DELAY);
+        (void)esp_timer_delete(install_timer_);
+        install_timer_ = nullptr;
+    }
+}
 
 bool UsbLocalControlAgent::Start() {
     if (started_ || response_queue_ == nullptr) {
         return started_;
+    }
+    if (install_timer_ == nullptr) {
+        esp_timer_create_args_t timer_arguments{};
+        timer_arguments.callback = InstallTimeoutElapsed;
+        timer_arguments.arg = this;
+        timer_arguments.dispatch_method = ESP_TIMER_TASK;
+        timer_arguments.name = "usb_install";
+        timer_arguments.skip_unhandled_events = true;
+        if (esp_timer_create(&timer_arguments, &install_timer_) != ESP_OK) {
+            ESP_LOGE(kTag, "USB install timeout timer is unavailable");
+            return false;
+        }
     }
     host_commands_.SetLocalHostResultSink(ReceiveHostResult, this);
     backend_.Bind(ReceiveCommand, ProvideResponse, this);
@@ -129,6 +149,12 @@ bool UsbLocalControlAgent::ReceiveHostResult(void* context, const remote_control
     return static_cast<UsbLocalControlAgent*>(context)->HandleHostResult(result);
 }
 
+void UsbLocalControlAgent::InstallTimeoutElapsed(void* context) {
+    auto* agent = static_cast<UsbLocalControlAgent*>(context);
+    agent->install_timeout_due_.store(true, std::memory_order_release);
+    agent->backend_.RequestResponsePoll();
+}
+
 bool UsbLocalControlAgent::QueueResponse(uint32_t request_id, const char* status, const char* detail) {
     if (response_queue_ == nullptr || status == nullptr || detail == nullptr) {
         return false;
@@ -139,7 +165,11 @@ bool UsbLocalControlAgent::QueueResponse(uint32_t request_id, const char* status
     if (length <= 0 || static_cast<size_t>(length) >= response.text.size()) {
         return false;
     }
-    return xQueueSend(response_queue_, &response, 0U) == pdTRUE;
+    if (xQueueSend(response_queue_, &response, 0U) != pdTRUE) {
+        return false;
+    }
+    backend_.RequestResponsePoll();
+    return true;
 }
 
 bool UsbLocalControlAgent::PollResponse(char* response, size_t capacity) {
@@ -263,6 +293,11 @@ void UsbLocalControlAgent::HandleInstallBegin(uint32_t request_id, std::string_v
     install_.sha256 = sha256;
     std::snprintf(install_.app_id.data(), install_.app_id.size(), "%.*s", static_cast<int>(app_id.size()),
                   app_id.data());
+    if (!ArmInstallTimeout(kInstallTimeoutUs)) {
+        AbortInstall();
+        (void)QueueResponse(request_id, "ERROR", "install_timer_failed");
+        return;
+    }
     (void)QueueResponse(request_id, "OK", "INSTALL_READY 3072");
 }
 
@@ -290,6 +325,11 @@ void UsbLocalControlAgent::HandleInstallChunk(uint32_t request_id, std::string_v
     }
     install_.received += decoded_size;
     install_.last_activity = xTaskGetTickCount();
+    if (!ArmInstallTimeout(kInstallTimeoutUs)) {
+        AbortInstall();
+        (void)QueueResponse(request_id, "ERROR", "install_timer_failed");
+        return;
+    }
     std::array<char, 64U> detail{};
     std::snprintf(detail.data(), detail.size(), "INSTALL_CHUNK %zu", install_.received);
     (void)QueueResponse(request_id, "OK", detail.data());
@@ -316,6 +356,7 @@ void UsbLocalControlAgent::HandleInstallCommit(uint32_t request_id, std::string_
         (void)QueueResponse(request_id, "ERROR", "device_busy");
         return;
     }
+    DisarmInstallTimeout();
     install_ = {};
 }
 
@@ -328,7 +369,27 @@ void UsbLocalControlAgent::HandleInstallAbort(uint32_t request_id, std::string_v
     (void)QueueResponse(request_id, "OK", "INSTALL_ABORTED");
 }
 
+bool UsbLocalControlAgent::ArmInstallTimeout(uint64_t delay_us) {
+    if (install_timer_ == nullptr || delay_us == 0U) {
+        return false;
+    }
+    install_timeout_due_.store(false, std::memory_order_release);
+    const esp_err_t stop_status = esp_timer_stop(install_timer_);
+    if (stop_status != ESP_OK && stop_status != ESP_ERR_INVALID_STATE) {
+        return false;
+    }
+    return esp_timer_start_once(install_timer_, delay_us) == ESP_OK;
+}
+
+void UsbLocalControlAgent::DisarmInstallTimeout() {
+    install_timeout_due_.store(false, std::memory_order_release);
+    if (install_timer_ != nullptr) {
+        (void)esp_timer_stop(install_timer_);
+    }
+}
+
 void UsbLocalControlAgent::AbortInstall() {
+    DisarmInstallTimeout();
     if (install_.data != nullptr) {
         heap_caps_free(install_.data);
     }
@@ -336,13 +397,21 @@ void UsbLocalControlAgent::AbortInstall() {
 }
 
 void UsbLocalControlAgent::ExpireInstallIfNeeded() {
-    if (install_.data == nullptr ||
-        static_cast<TickType_t>(xTaskGetTickCount() - install_.last_activity) < kInstallTimeout) {
+    if (!install_timeout_due_.exchange(false, std::memory_order_acq_rel) || install_.data == nullptr) {
         return;
+    }
+    const TickType_t elapsed = static_cast<TickType_t>(xTaskGetTickCount() - install_.last_activity);
+    if (elapsed < kInstallTimeout) {
+        const TickType_t remaining = kInstallTimeout - elapsed;
+        const uint64_t remaining_us = static_cast<uint64_t>(remaining) * portTICK_PERIOD_MS * 1000ULL;
+        if (ArmInstallTimeout(remaining_us)) {
+            return;
+        }
+        ESP_LOGE(kTag, "USB install timeout timer could not be rearmed");
     }
     const uint32_t request_id = install_.request_id;
     AbortInstall();
-    (void)QueueResponse(request_id, "ERROR", "install_timeout");
+    (void)QueueResponse(request_id, "ERROR", elapsed < kInstallTimeout ? "install_timer_failed" : "install_timeout");
 }
 
 void UsbLocalControlAgent::HandleCommand(const char* command) {

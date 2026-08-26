@@ -23,6 +23,12 @@ enum class TouchPushResult {
     kFailed,
 };
 
+enum class GpioPushResult {
+    kEnqueued,
+    kCoalesced,
+    kFailed,
+};
+
 enum class EventWaitResult {
     kReceived,
     kTimeout,
@@ -55,9 +61,21 @@ class EventQueue final {
      * PushRequired() and retain strict queue ordering. */
     [[nodiscard]] TouchPushResult PushTouchMove(const micropixel_event_t& event);
 
+    /* GPIO streams keep only the newest edge for each open GPIO handle. */
+    [[nodiscard]] GpioPushResult PushGpioCoalesced(const micropixel_event_t& event);
+
     void Close();
 
    private:
+    struct GpioEventSnapshot final {
+        uint64_t timestamp_us{};
+        uint32_t source{};
+        uint32_t sequence{};
+        micropixel_device_id_t device{};
+        uint8_t value{};
+        uint8_t edge{};
+    };
+
     [[nodiscard]] bool PushControl(TickType_t timeout);
     [[nodiscard]] bool TakeStop(micropixel_event_t& event);
     [[nodiscard]] static bool IsControl(const micropixel_event_t& event);
@@ -77,6 +95,8 @@ class EventQueue final {
     micropixel_event_t touch_latest_[MICROPIXEL_MAX_TOUCH_POINTS]{};
     micropixel_event_t stop_event_{};
     uint32_t touch_pending_id_[MICROPIXEL_MAX_TOUCH_POINTS]{};
+    portMUX_TYPE gpio_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    GpioEventSnapshot gpio_latest_[limits::kMaxGpioHandles]{};
 };
 
 }  // namespace micropixel::runtime

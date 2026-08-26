@@ -5,8 +5,10 @@ namespace {
 
 class NullAudioBackend final : public InitializableAudioBackend {
    public:
-    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander) override {
+    [[nodiscard]] esp_err_t Initialize(i2c_master_dev_handle_t io_expander,
+                                       metalio_claw4::I2cExecutor& i2c_executor) override {
         (void)io_expander;
+        (void)i2c_executor;
         return ESP_OK;
     }
     void SetMasterVolumePercent(uint8_t percent) override { (void)percent; }

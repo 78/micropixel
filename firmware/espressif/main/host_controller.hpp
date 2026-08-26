@@ -14,6 +14,10 @@ namespace micropixel::host_ui {
 class SystemShell;
 }
 
+namespace micropixel::work {
+class BackgroundExecutor;
+}
+
 namespace micropixel::firmware {
 namespace remote_control {
 class RemoteControlAgent;
@@ -26,7 +30,7 @@ class HostController final {
    public:
     HostController(device::DeviceServices& devices, device::BatteryBackend& battery, device::WifiBackend& wifi,
                    device::PowerBackend& power, host_ui::SystemShell& shell,
-                   remote_control::RemoteControlAgent& remote_control);
+                   remote_control::RemoteControlAgent& remote_control, work::BackgroundExecutor& background_executor);
     ~HostController();
     HostController(const HostController&) = delete;
     HostController& operator=(const HostController&) = delete;
@@ -40,6 +44,7 @@ class HostController final {
     device::PowerBackend& power_;
     host_ui::SystemShell& shell_;
     remote_control::RemoteControlAgent& remote_control_;
+    work::BackgroundExecutor& background_executor_;
     HostPowerStateMachine power_state_{};
 };
 

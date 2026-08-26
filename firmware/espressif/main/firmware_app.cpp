@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 #include "platform/platform.hpp"
 #include "remote_control/remote_control_agent.hpp"
+#include "work/background_executor.hpp"
 
 namespace micropixel::firmware {
 namespace {
@@ -23,6 +24,15 @@ void FirmwareApp::Run() {
     if (!InitializePlatform()) {
         return;
     }
+
+    // Bind shared work before Wi-Fi starts posting events so connection
+    // persistence never runs on the system event task.
+    static work::BackgroundExecutor background_executor;
+    if (!background_executor.valid()) {
+        ESP_LOGE(kTag, "shared background executor is unavailable");
+        return;
+    }
+    platform_.BindBackgroundExecutor(background_executor);
 
     auto wifi_result = platform_.wifi().Initialize();
     if (!wifi_result) {
@@ -39,14 +49,17 @@ void FirmwareApp::Run() {
     // several fixed-capacity protocol buffers even when remote control is
     // disabled.
     static device::DeviceServices devices(platform_.graphics(), platform_.input(), platform_.audio(),
-                                          platform_.random());
+                                          platform_.random(), platform_.devices(), platform_.sensors(),
+                                          platform_.gpio(), platform_.haptics(), platform_.battery());
     static host_ui::SystemShell shell(platform_.system_ui());
     static remote_control::RemoteControlAgent remote_control(platform_.wifi());
     static local_control::UsbLocalControlAgent local_control(platform_.local_control(), remote_control);
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "USB local control is unavailable for this boot");
     }
-    HostController(devices, platform_.battery(), platform_.wifi(), platform_.power(), shell, remote_control).Run();
+    HostController(devices, platform_.battery(), platform_.wifi(), platform_.power(), shell, remote_control,
+                   background_executor)
+        .Run();
 }
 
 std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform() {

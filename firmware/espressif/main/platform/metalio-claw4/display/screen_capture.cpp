@@ -11,6 +11,7 @@
 
 #include "driver/jpeg_encode.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_select.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_log.h"
@@ -30,7 +31,7 @@ namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_capture";
-constexpr uint32_t kTaskStackSize = 8U * 1024U;
+constexpr uint32_t kTaskStackSize = 6U * 1024U;
 constexpr BaseType_t kTaskCore = 0;
 constexpr char kCaptureCommand[] = "MICROPIXEL_CAPTURE";
 constexpr char kTouchCommand[] = "MICROPIXEL_TOUCH";
@@ -179,10 +180,15 @@ class ScreenCapture final : public device::LocalControlBackend {
                 return status;
             }
         }
-        if (xTaskCreatePinnedToCore(TaskEntry, "micropixel_capture", kTaskStackSize, this,
-                                    task_policy::kCapturePriority, &task_, kTaskCore) != pdPASS) {
+        if (xTaskCreatePinnedToCore(TaskEntry, "micropixel_usb", kTaskStackSize, this,
+                                    task_policy::kUsbLocalControlPriority, &task_, kTaskCore) != pdPASS) {
             return ESP_ERR_NO_MEM;
         }
+        usb_task_.store(task_, std::memory_order_release);
+        // This backend is the sole USB Serial/JTAG RX owner. The driver's
+        // select hook lets the task sleep until either RX or Host work exists.
+        usb_serial_jtag_set_select_notif_callback(UsbDriverEvent);
+        xTaskNotifyGive(task_);
         return ESP_OK;
     }
 
@@ -202,37 +208,59 @@ class ScreenCapture final : public device::LocalControlBackend {
         command_context_.store(nullptr, std::memory_order_release);
     }
 
+    void RequestResponsePoll() override {
+        TaskHandle_t task = usb_task_.load(std::memory_order_acquire);
+        if (task != nullptr) {
+            xTaskNotifyGive(task);
+        }
+    }
+
    private:
     static void TaskEntry(void* context) { static_cast<ScreenCapture*>(context)->Run(); }
+
+    static void UsbDriverEvent(usj_select_notif_t event, int* task_woken) {
+        if (event != USJ_SELECT_READ_NOTIF) {
+            return;
+        }
+        TaskHandle_t task = usb_task_.load(std::memory_order_acquire);
+        if (task == nullptr) {
+            return;
+        }
+        BaseType_t higher_priority_task_woken = pdFALSE;
+        vTaskNotifyGiveFromISR(task, &higher_priority_task_woken);
+        if (task_woken != nullptr && higher_priority_task_woken == pdTRUE) {
+            *task_woken = pdTRUE;
+        }
+    }
 
     void Run() {
         ESP_LOGI(kTag, "screen capture ready; commands=%s, %s <phase> <id> <x> <y> <pressure>", kCaptureCommand,
                  kTouchCommand);
+        std::array<uint8_t, 512U> bytes{};
         for (;;) {
-            std::array<uint8_t, 512U> bytes{};
-            int received = usb_serial_jtag_read_bytes(bytes.data(), bytes.size(), pdMS_TO_TICKS(20U));
-            if (received <= 0) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            int received = 0;
+            do {
+                received = usb_serial_jtag_read_bytes(bytes.data(), bytes.size(), 0U);
+                for (int index = 0; index < received; ++index) {
+                    const uint8_t byte = bytes[static_cast<size_t>(index)];
+                    if (byte == '\r') {
+                        continue;
+                    }
+                    if (byte == '\n') {
+                        command_[command_length_] = '\0';
+                        ProcessCommand();
+                        command_length_ = 0U;
+                        continue;
+                    }
+                    if (byte >= 0x20U && byte <= 0x7eU && command_length_ + 1U < sizeof(command_)) {
+                        command_[command_length_++] = static_cast<char>(byte);
+                    } else {
+                        command_length_ = 0U;
+                    }
+                }
                 DrainControlResponses();
-                continue;
-            }
-            for (int index = 0; index < received; ++index) {
-                const uint8_t byte = bytes[static_cast<size_t>(index)];
-                if (byte == '\r') {
-                    continue;
-                }
-                if (byte == '\n') {
-                    command_[command_length_] = '\0';
-                    ProcessCommand();
-                    command_length_ = 0U;
-                    continue;
-                }
-                if (byte >= 0x20U && byte <= 0x7eU && command_length_ + 1U < sizeof(command_)) {
-                    command_[command_length_++] = static_cast<char>(byte);
-                } else {
-                    command_length_ = 0U;
-                }
-            }
-            DrainControlResponses();
+            } while (received > 0);
         }
     }
 
@@ -368,6 +396,7 @@ class ScreenCapture final : public device::LocalControlBackend {
     uint32_t sequence_{};
     uint32_t width_{};
     uint32_t height_{};
+    inline static std::atomic<TaskHandle_t> usb_task_{};
 };
 
 ScreenCapture& Instance() {

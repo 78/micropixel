@@ -33,21 +33,26 @@
 #include "platform/configured_backends.hpp"
 #include "platform/metalio-claw4/battery_backend.hpp"
 #include "platform/metalio-claw4/board_hardware.hpp"
+#include "platform/metalio-claw4/device_catalog.hpp"
 #include "platform/metalio-claw4/display/hall_transition_policy.hpp"
 #include "platform/metalio-claw4/display/jpeg_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
 #include "platform/metalio-claw4/display/system_transition_compositor.hpp"
 #include "platform/metalio-claw4/fonts/font_registry.hpp"
+#include "platform/metalio-claw4/gpio_backend.hpp"
 #include "platform/metalio-claw4/graphics_adapter.hpp"
 #include "platform/metalio-claw4/guest_graphics_engine.hpp"
 #include "platform/metalio-claw4/hall_carousel.hpp"
 #include "platform/metalio-claw4/hall_cover_cache_policy.hpp"
+#include "platform/metalio-claw4/haptics_backend.hpp"
+#include "platform/metalio-claw4/i2c_executor.hpp"
 #include "platform/metalio-claw4/icons/wifi_status_icons.hpp"
 #include "platform/metalio-claw4/input/gt911_input.hpp"
 #include "platform/metalio-claw4/input/tca9555_power_key.hpp"
 #include "platform/metalio-claw4/lvgl_wakeup.hpp"
 #include "platform/metalio-claw4/perceptual_control.hpp"
+#include "platform/metalio-claw4/sensor_backend.hpp"
 #include "platform/metalio-claw4/status_layer_ui.hpp"
 #include "platform/metalio-claw4/system_detail_ui.hpp"
 #include "platform/metalio-claw4/system_menu_ui.hpp"
@@ -56,6 +61,7 @@
 #include "platform/metalio-claw4/wifi_settings_ui.hpp"
 #include "platform/platform.hpp"
 #include "task_policy.hpp"
+#include "work/background_executor.hpp"
 
 #if !defined(CONFIG_PM_ENABLE)
 #error "Metalio-Claw4 LVGL idle pause requires CONFIG_PM_ENABLE"
@@ -83,7 +89,6 @@ constexpr uint32_t kHallCoverNativeSize = static_cast<uint32_t>(kHallCardWidth);
 constexpr uint32_t kHallCoverNativeStride = kHallCoverNativeSize * kHallCoverBytesPerPixel;
 constexpr uint32_t kHallCoverNativeBytes = kHallCoverNativeStride * kHallCoverNativeSize;
 constexpr uint32_t kHallCoverJobQueueCapacity = 8U;
-constexpr uint32_t kHallCoverWorkerStackBytes = 8192U;
 constexpr int32_t kHallScrollTrackWidth = 140;
 constexpr int32_t kHallScrollTrackHeight = 6;
 constexpr uint32_t kGuestTransitionStride = static_cast<uint32_t>(kWidth) * kHallCoverBytesPerPixel;
@@ -290,7 +295,12 @@ struct HallAppPresentation final {
 // file-level aliases.
 struct MetalioClaw4PlatformState final {
     metalio_claw4::BoardHardware hardware{kWidth, kHeight};
+    metalio_claw4::I2cExecutor i2c_executor{};
     metalio_claw4::BatteryBackend battery{};
+    metalio_claw4::SensorBackend sensors{};
+    metalio_claw4::GpioBackend gpio{};
+    metalio_claw4::HapticsBackend haptics{};
+    metalio_claw4::DeviceCatalog devices{};
     lv_display_t* display{};
     lv_obj_t* host_smoke{};
     lv_obj_t* hall_time_status_label{};
@@ -322,7 +332,8 @@ struct MetalioClaw4PlatformState final {
     QueueHandle_t hall_cover_job_queue{};
     StaticQueue_t hall_cover_job_queue_storage{};
     std::array<uint8_t, sizeof(HallCoverJob) * kHallCoverJobQueueCapacity> hall_cover_job_queue_bytes{};
-    TaskHandle_t hall_cover_worker_task{};
+    work::BackgroundExecutor* background_executor{};
+    std::atomic_bool hall_cover_dispatch_scheduled{};
     std::atomic_uint32_t hall_cover_request_generation{1U};
     std::atomic_bool hall_cover_worker_active{};
     uint32_t hall_cover_window_first{};
@@ -622,15 +633,28 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
     ESP_LOGI(kTag, "initializing Metalio-Claw4 LVGL backend");
     esp_err_t status = state.hardware.Initialize();
     if (status == ESP_OK) {
-        state.battery.Initialize(state.hardware.I2cBus(), state.hardware.IoExpander());
+        status = state.i2c_executor.Initialize();
+    }
+    if (status == ESP_OK) {
+        state.battery.Initialize(state.hardware.I2cBus(), state.hardware.IoExpander(), state.i2c_executor);
         state.power_key.SetPowerInputChangeSink(
             [](void* context) { static_cast<metalio_claw4::BatteryBackend*>(context)->NotifyExternalPowerChanged(); },
             &state.battery);
-        status = state.power_key.Initialize(state.hardware.IoExpander());
+        status = state.power_key.Initialize(state.hardware.IoExpander(), state.i2c_executor);
+    }
+    if (status == ESP_OK) {
+        state.sensors.Initialize(state.hardware.I2cBus(), state.i2c_executor);
+        status = state.gpio.Initialize();
+    }
+    if (status == ESP_OK) {
+        status = state.haptics.Initialize();
+    }
+    if (status == ESP_OK) {
+        state.devices.Initialize(state.sensors.acceleration_available(), state.sensors.magnetic_field_available());
     }
     if (status == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(100));
-        status = state.touch_input.Initialize(state.hardware.I2cBus());
+        status = state.touch_input.Initialize(state.hardware.I2cBus(), state.i2c_executor);
     }
     if (status == ESP_OK) {
         status = InitializeLvgl(state);
@@ -639,7 +663,7 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
         status = state.hardware.SetBacklight(true);
     }
     if (status == ESP_OK) {
-        status = ConfiguredAudioBackend().Initialize(state.hardware.IoExpander());
+        status = ConfiguredAudioBackend().Initialize(state.hardware.IoExpander(), state.i2c_executor);
     }
     if (status != ESP_OK) {
         ESP_LOGE(kTag, "Metalio-Claw4 LVGL backend failed: %s", esp_err_to_name(status));
@@ -1200,108 +1224,120 @@ void ReleaseHallCoverCacheEntryLocked(MetalioClaw4PlatformState& state, HallCove
     entry = {};
 }
 
-void HallCoverWorker(void* context) {
+void ProcessHallCoverJob(MetalioClaw4PlatformState& state, const HallCoverJob& job) {
+    const uint32_t current_generation = state.hall_cover_request_generation.load(std::memory_order_acquire);
+    if (job.request_generation != current_generation) {
+        return;
+    }
+    constexpr uint32_t kCacheAlignment = 64U;
+    constexpr uint32_t kAllocationBytes =
+        (kHallCoverNativeBytes + kCacheAlignment - 1U) / kCacheAlignment * kCacheAlignment;
+    auto* pixels = static_cast<uint8_t*>(
+        heap_caps_aligned_calloc(kCacheAlignment, kAllocationBytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    const int64_t started_us = esp_timer_get_time();
+    const bool decoded = pixels != nullptr && DecodeNativeHallCover(job.source, pixels);
+    if (decoded) {
+        lv_draw_buf_t draw_buf{};
+        if (lv_draw_buf_init(&draw_buf, kHallCoverNativeSize, kHallCoverNativeSize, LV_COLOR_FORMAT_RGB888,
+                             kHallCoverNativeStride, pixels, kHallCoverNativeBytes) == LV_RESULT_OK) {
+            lv_draw_buf_flush_cache(&draw_buf, nullptr);
+        }
+    }
+    if (decoded && esp_lv_adapter_lock(-1) == ESP_OK) {
+        const bool current =
+            job.request_generation == state.hall_cover_request_generation.load(std::memory_order_acquire) &&
+            job.catalog_signature == state.hall_catalog_signature && job.app_index >= state.hall_cover_window_first &&
+            job.app_index < state.hall_cover_window_last && job.app_index < state.hall_app_count &&
+            state.hall_cover_sources[job.app_index].cache_key == job.source.cache_key;
+        if (current) {
+            auto existing = std::find_if(state.hall_cover_cache.begin(), state.hall_cover_cache.end(),
+                                         [&](const HallCoverCacheEntry& entry) {
+                                             return entry.pixels != nullptr && entry.key == job.source.cache_key;
+                                         });
+            if (existing == state.hall_cover_cache.end()) {
+                std::array<metalio_claw4::HallCoverCacheSlot, metalio_claw4::HallCarousel::kMaximumCachedCovers>
+                    slots{};
+                for (size_t index = 0U; index < slots.size(); ++index) {
+                    slots[index] = {.occupied = state.hall_cover_cache[index].pixels != nullptr,
+                                    .key = state.hall_cover_cache[index].key,
+                                    .app_index = state.hall_cover_cache[index].app_index};
+                }
+                const size_t slot_index = metalio_claw4::HallCoverCachePolicy::ReplacementIndex(
+                    slots, job.source.cache_key, job.app_index, state.hall_cover_window_first,
+                    state.hall_cover_window_last);
+                if (slot_index != metalio_claw4::HallCoverCachePolicy::kNoSlot) {
+                    auto& slot = state.hall_cover_cache[slot_index];
+                    ReleaseHallCoverCacheEntryLocked(state, slot);
+                    slot = {.pixels = pixels, .key = job.source.cache_key, .app_index = job.app_index};
+                    pixels = nullptr;
+                    existing = state.hall_cover_cache.begin() + static_cast<std::ptrdiff_t>(slot_index);
+                }
+            }
+            if (existing != state.hall_cover_cache.end()) {
+                existing->app_index = job.app_index;
+                AttachHallCoverLocked(state, job.app_index,
+                                      host_ui::HallCoverModel{.data = existing->pixels,
+                                                              .size = kHallCoverNativeBytes,
+                                                              .width = kHallCoverNativeSize,
+                                                              .height = kHallCoverNativeSize,
+                                                              .stride = kHallCoverNativeStride});
+                lv_obj_invalidate(state.hall_cover_images[job.app_index]);
+                metalio_claw4::RequestDisplayRefresh(state.display);
+            }
+        }
+        esp_lv_adapter_unlock();
+    }
+    heap_caps_free(pixels);
+    const uint32_t elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - started_us);
+    ESP_LOGI(
+        kTag, "Hall cover worker: app=%" PRIu32 " current=%s cpu=%" PRIu32 " us", job.app_index,
+        job.request_generation == state.hall_cover_request_generation.load(std::memory_order_acquire) ? "yes" : "no",
+        elapsed_us);
+}
+
+void HallCoverDispatch(void* context);
+
+bool ScheduleHallCoverDispatch(MetalioClaw4PlatformState& state) {
+    if (state.background_executor == nullptr || !state.background_executor->valid()) {
+        return false;
+    }
+    bool expected = false;
+    if (!state.hall_cover_dispatch_scheduled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return true;
+    }
+    if (!state.background_executor->Submit(HallCoverDispatch, &state)) {
+        state.hall_cover_dispatch_scheduled.store(false, std::memory_order_release);
+        return false;
+    }
+    return true;
+}
+
+void HallCoverDispatch(void* context) {
     auto& state = *static_cast<MetalioClaw4PlatformState*>(context);
     HallCoverJob job{};
-    for (;;) {
-        if (xQueueReceive(state.hall_cover_job_queue, &job, portMAX_DELAY) != pdTRUE) {
-            continue;
-        }
-        const uint32_t current_generation = state.hall_cover_request_generation.load(std::memory_order_acquire);
-        if (job.request_generation != current_generation) {
-            state.hall_cover_worker_active.store(false, std::memory_order_release);
-            continue;
-        }
+    if (xQueueReceive(state.hall_cover_job_queue, &job, 0U) == pdTRUE) {
         state.hall_cover_worker_active.store(true, std::memory_order_release);
-        constexpr uint32_t kCacheAlignment = 64U;
-        constexpr uint32_t kAllocationBytes =
-            (kHallCoverNativeBytes + kCacheAlignment - 1U) / kCacheAlignment * kCacheAlignment;
-        auto* pixels = static_cast<uint8_t*>(
-            heap_caps_aligned_calloc(kCacheAlignment, kAllocationBytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        const int64_t started_us = esp_timer_get_time();
-        const bool decoded = pixels != nullptr && DecodeNativeHallCover(job.source, pixels);
-        if (decoded) {
-            lv_draw_buf_t draw_buf{};
-            if (lv_draw_buf_init(&draw_buf, kHallCoverNativeSize, kHallCoverNativeSize, LV_COLOR_FORMAT_RGB888,
-                                 kHallCoverNativeStride, pixels, kHallCoverNativeBytes) == LV_RESULT_OK) {
-                lv_draw_buf_flush_cache(&draw_buf, nullptr);
-            }
-        }
-        if (decoded && esp_lv_adapter_lock(-1) == ESP_OK) {
-            const bool current =
-                job.request_generation == state.hall_cover_request_generation.load(std::memory_order_acquire) &&
-                job.catalog_signature == state.hall_catalog_signature &&
-                job.app_index >= state.hall_cover_window_first && job.app_index < state.hall_cover_window_last &&
-                job.app_index < state.hall_app_count &&
-                state.hall_cover_sources[job.app_index].cache_key == job.source.cache_key;
-            if (current) {
-                auto existing = std::find_if(state.hall_cover_cache.begin(), state.hall_cover_cache.end(),
-                                             [&](const HallCoverCacheEntry& entry) {
-                                                 return entry.pixels != nullptr && entry.key == job.source.cache_key;
-                                             });
-                if (existing == state.hall_cover_cache.end()) {
-                    std::array<metalio_claw4::HallCoverCacheSlot, metalio_claw4::HallCarousel::kMaximumCachedCovers>
-                        slots{};
-                    for (size_t index = 0U; index < slots.size(); ++index) {
-                        slots[index] = {.occupied = state.hall_cover_cache[index].pixels != nullptr,
-                                        .key = state.hall_cover_cache[index].key,
-                                        .app_index = state.hall_cover_cache[index].app_index};
-                    }
-                    const size_t slot_index = metalio_claw4::HallCoverCachePolicy::ReplacementIndex(
-                        slots, job.source.cache_key, job.app_index, state.hall_cover_window_first,
-                        state.hall_cover_window_last);
-                    if (slot_index != metalio_claw4::HallCoverCachePolicy::kNoSlot) {
-                        auto& slot = state.hall_cover_cache[slot_index];
-                        ReleaseHallCoverCacheEntryLocked(state, slot);
-                        slot = {.pixels = pixels, .key = job.source.cache_key, .app_index = job.app_index};
-                        pixels = nullptr;
-                        existing = state.hall_cover_cache.begin() + static_cast<std::ptrdiff_t>(slot_index);
-                    }
-                }
-                if (existing != state.hall_cover_cache.end()) {
-                    existing->app_index = job.app_index;
-                    AttachHallCoverLocked(state, job.app_index,
-                                          host_ui::HallCoverModel{.data = existing->pixels,
-                                                                  .size = kHallCoverNativeBytes,
-                                                                  .width = kHallCoverNativeSize,
-                                                                  .height = kHallCoverNativeSize,
-                                                                  .stride = kHallCoverNativeStride});
-                    lv_obj_invalidate(state.hall_cover_images[job.app_index]);
-                    metalio_claw4::RequestDisplayRefresh(state.display);
-                }
-            }
-            esp_lv_adapter_unlock();
-        }
-        heap_caps_free(pixels);
-        const uint32_t elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - started_us);
-        ESP_LOGI(kTag, "Hall cover worker: app=%" PRIu32 " current=%s cpu=%" PRIu32 " us", job.app_index,
-                 job.request_generation == state.hall_cover_request_generation.load(std::memory_order_acquire) ? "yes"
-                                                                                                               : "no",
-                 elapsed_us);
+        ProcessHallCoverJob(state, job);
         state.hall_cover_worker_active.store(false, std::memory_order_release);
+    }
+    state.hall_cover_dispatch_scheduled.store(false, std::memory_order_release);
+    if (uxQueueMessagesWaiting(state.hall_cover_job_queue) != 0U) {
+        (void)ScheduleHallCoverDispatch(state);
     }
 }
 
-bool EnsureHallCoverWorker(MetalioClaw4PlatformState& state) {
+bool EnsureHallCoverDispatcher(MetalioClaw4PlatformState& state) {
     if (state.hall_cover_job_queue == nullptr) {
         state.hall_cover_job_queue =
             xQueueCreateStatic(kHallCoverJobQueueCapacity, sizeof(HallCoverJob),
                                state.hall_cover_job_queue_bytes.data(), &state.hall_cover_job_queue_storage);
     }
-    if (state.hall_cover_job_queue == nullptr) {
-        return false;
-    }
-    if (state.hall_cover_worker_task == nullptr) {
-        if (xTaskCreatePinnedToCore(HallCoverWorker, "hall_cover", kHallCoverWorkerStackBytes, &state,
-                                    task_policy::kAssetWorkerPriority, &state.hall_cover_worker_task, 0) != pdPASS) {
-            state.hall_cover_worker_task = nullptr;
-        }
-    }
-    return state.hall_cover_worker_task != nullptr;
+    return state.hall_cover_job_queue != nullptr && state.background_executor != nullptr &&
+           state.background_executor->valid();
 }
 
 void RequestHallCoverWindowLocked(MetalioClaw4PlatformState& state, bool force) {
-    if (state.hall_app_count == 0U || state.hall_carousel_content == nullptr || !EnsureHallCoverWorker(state)) {
+    if (state.hall_app_count == 0U || state.hall_carousel_content == nullptr || !EnsureHallCoverDispatcher(state)) {
         return;
     }
     const uint32_t first =
@@ -1319,6 +1355,7 @@ void RequestHallCoverWindowLocked(MetalioClaw4PlatformState& state, bool force) 
             ShowHallCoverPlaceholderLocked(state, index);
         }
     }
+    bool queued = false;
     for (uint32_t index = first; index < last; ++index) {
         const host_ui::HallCoverModel& source = state.hall_cover_sources[index];
         if (!ValidHallCover(source)) {
@@ -1334,7 +1371,10 @@ void RequestHallCoverWindowLocked(MetalioClaw4PlatformState& state, bool force) 
                                .catalog_signature = state.hall_catalog_signature,
                                .app_index = index,
                                .request_generation = generation};
-        (void)xQueueSend(state.hall_cover_job_queue, &job, 0U);
+        queued = xQueueSend(state.hall_cover_job_queue, &job, 0U) == pdTRUE || queued;
+    }
+    if (queued) {
+        (void)ScheduleHallCoverDispatch(state);
     }
 }
 
@@ -3038,7 +3078,15 @@ class MetalioClaw4Platform final : public Platform, public device::PowerBackend 
     [[nodiscard]] device::LocalControlBackend& local_control() override {
         return metalio_claw4::UsbLocalControlBackend();
     }
+    [[nodiscard]] device::DeviceCatalogBackend& devices() override { return state_.devices; }
+    [[nodiscard]] device::SensorBackend& sensors() override { return state_.sensors; }
+    [[nodiscard]] device::GpioBackend& gpio() override { return state_.gpio; }
+    [[nodiscard]] device::HapticsBackend& haptics() override { return state_.haptics; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
+    void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
+        state_.background_executor = &executor;
+        wifi_.BindBackgroundExecutor(executor);
+    }
 
     void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {
         state_.power_key.SetKeyPressSink(sink, context);

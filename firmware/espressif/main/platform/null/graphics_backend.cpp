@@ -4,6 +4,8 @@
 #include "device/graphics.hpp"
 #include "device/input.hpp"
 #include "device/wifi.hpp"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "host_ui/system_ui.hpp"
 #include "platform/audio_backend.hpp"
 #include "platform/configured_backends.hpp"
@@ -263,6 +265,61 @@ class NullSystemUiBackend final : public host_ui::SystemUiBackend {
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowShutdown() override { return {}; }
 };
 
+class NullDeviceCatalogBackend final : public device::DeviceCatalogBackend {
+   public:
+    [[nodiscard]] uint32_t Generation() const override { return 1U; }
+    [[nodiscard]] uint32_t Count() const override { return 0U; }
+    [[nodiscard]] int32_t GetByIndex(uint32_t, micropixel_device_info_t&) const override {
+        return MICROPIXEL_STATUS_NOT_FOUND;
+    }
+    [[nodiscard]] int32_t GetById(micropixel_device_id_t, micropixel_device_info_t&) const override {
+        return MICROPIXEL_STATUS_NOT_FOUND;
+    }
+};
+
+class NullSensorBackend final : public device::SensorBackend {
+   public:
+    [[nodiscard]] int32_t GetInfo(micropixel_device_id_t, micropixel_sensor_info_t&) const override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t Start(micropixel_device_id_t, uint32_t) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t Read(micropixel_device_id_t, device::SensorValues&) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    void Stop(micropixel_device_id_t) override {}
+};
+
+class NullGpioBackend final : public device::GpioBackend {
+   public:
+    [[nodiscard]] int32_t GetInfo(micropixel_device_id_t, micropixel_gpio_info_t&) const override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t Open(micropixel_device_id_t, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t,
+                               device::GpioEdgeSink, void*) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t Read(micropixel_device_id_t, bool&) const override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t Write(micropixel_device_id_t, bool) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    [[nodiscard]] int32_t SetPwmDuty(micropixel_device_id_t, uint16_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    void SuspendEvents() override {}
+    [[nodiscard]] int32_t ResumeEvents() override { return MICROPIXEL_STATUS_OK; }
+    void Close(micropixel_device_id_t) override {}
+};
+
+class NullHapticsBackend final : public device::HapticsBackend {
+   public:
+    [[nodiscard]] int32_t GetInfo(micropixel_device_id_t, micropixel_haptics_info_t&) const override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t Play(micropixel_device_id_t, uint16_t, uint32_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t Stop(micropixel_device_id_t) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+    void SetCompletionSink(device::HapticCompletionSink, void*) override {}
+};
+
 class NullPlatform final : public Platform {
    public:
     [[nodiscard]] esp_err_t Initialize() override { return ESP_OK; }
@@ -274,7 +331,12 @@ class NullPlatform final : public Platform {
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] device::PowerBackend& power() override { return power_; }
     [[nodiscard]] device::LocalControlBackend& local_control() override { return local_control_; }
+    [[nodiscard]] device::DeviceCatalogBackend& devices() override { return devices_; }
+    [[nodiscard]] device::SensorBackend& sensors() override { return sensors_; }
+    [[nodiscard]] device::GpioBackend& gpio() override { return gpio_; }
+    [[nodiscard]] device::HapticsBackend& haptics() override { return haptics_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
+    void BindBackgroundExecutor(work::BackgroundExecutor&) override {}
 
    private:
     class NullPowerBackend final : public device::PowerBackend {
@@ -306,6 +368,7 @@ class NullPlatform final : public Platform {
             (void)context;
         }
         void Unbind(void* context) override { (void)context; }
+        void RequestResponsePoll() override {}
     };
 
     NullGraphicsBackend graphics_{};
@@ -314,6 +377,10 @@ class NullPlatform final : public Platform {
     NullWifiBackend wifi_{};
     NullPowerBackend power_{};
     NullLocalControlBackend local_control_{};
+    NullDeviceCatalogBackend devices_{};
+    NullSensorBackend sensors_{};
+    NullGpioBackend gpio_{};
+    NullHapticsBackend haptics_{};
     NullSystemUiBackend system_ui_{};
 };
 

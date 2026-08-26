@@ -78,7 +78,8 @@ Runtime/ABI 错误仍在调用点 panic。它们不应成为长期 App 的第二
 
 `Application` 是可通过自动补全逐层发现能力的 façade/capability root，不是实现所有能力的
 “上帝对象”。`app.clock()`、`app.random()`、`app.log()`、`app.timers()`、`app.renderer()`、`app.input()`、
-`app.resources()`、`app.storage()`、`app.audio()` 和 `app.localization()` 都按值返回轻量 **Service View**；它们不包含对应 Host Service 的
+`app.resources()`、`app.storage()`、`app.audio()`、`app.localization()`、`app.devices()`、
+`app.sensors()`、`app.gpio()`、`app.haptics()` 和 `app.power_info()` 都按值返回轻量 **Service View**；它们不包含对应 Host Service 的
 实现和资源状态。同类 Service View 的多个副本访问同一个 Guest Service：
 
 ```cpp
@@ -93,9 +94,9 @@ micropixel::TimePoint current = same_clock.Now();
 
 | 分类 | C++ 语义 | 示例 |
 | --- | --- | --- |
-| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Random`、`Timers`、`Renderer`、`Resources`、`KVStore`、`Audio`、`Localization` |
-| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`StreamingTexture`、`Frame`、`TextureUpdateBatch`、`AudioClip`、`Playback` |
-| Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`Duration`、`TimerEvent`、`AudioPlaybackEvent` |
+| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Devices`、`Sensors`、`Gpio`、`Haptics`、`PowerInfo` 等 |
+| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`Playback`、`Sensor<T>`、`GpioInput/Output/Pwm`、`Haptic` 等 |
+| Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`DeviceInfo`、`SensorInfo`、`PowerState` 和 typed event 等 |
 | Module | 编译、链接或部署单元，不作为 `app.xxx()` 的返回对象 | Renderer SDK、Host Audio backend |
 
 `Application` 只公开生命周期、事件编排和稳定的顶层能力入口。具体动作必须留在对应 Service 或
@@ -150,6 +151,67 @@ app.Run([&](const micropixel::Event& event) {
 `Run(handler)` 是 Application 唯一的事件编排入口；Timer 操作归 `timers()`。新增 Camera、Storage
 等能力时可以增加同级 Service View accessor 或 Event，但不得把 `DrawRect()`、`PlayPcm()`、
 `TouchPosition()` 等叶子操作堆到 `Application`。
+
+## 设备发现、传感器与 GPIO
+
+应用不知道最终运行在哪块板上时，先枚举设备，再把不透明 `DeviceId` 交给对应能力 Service。枚举位置
+不是身份，也不需要厂家预先给 GPIO 绑定用途：
+
+```cpp
+auto listed = app.devices().List();
+micropixel::Assert(listed.has_value(), "device discovery failed");
+
+for (micropixel::DeviceId id : *listed) {
+    auto info = app.devices().GetInfo(id);
+    if (!info) {
+        continue;  // 热插拔设备可能已离开
+    }
+    if (info->kind == micropixel::DeviceKind::kGpioLine) {
+        auto output = app.gpio().OpenOutput(id);
+        if (output) {
+            micropixel::Assert(output->Write(true).has_value(), "GPIO write failed");
+        }
+    }
+}
+```
+
+`DeviceInfo::parent` 表达组合设备关系。例如未来两个无线手柄各有自己的 gamepad `DeviceId`，手柄里的
+陀螺仪和加速度计可以作为独立 Sensor device，并把 parent 指向所属手柄；应用因此不会混淆两个手柄的
+按键和传感器。设备目录只回答“有什么”，具体读取、配置与生命周期由 Sensors、GPIO、Haptics
+等 Service 负责。
+
+Sensor 按 reading 类型打开，后续温度、光照和压力会增加各自的 value type 与 `SensorTraits`，不会向
+`Acceleration` 塞入无关字段：
+
+```cpp
+using micropixel::literals::operator""_ms;
+
+auto opened = app.sensors().Open<micropixel::Acceleration>(sensor_id);
+micropixel::Assert(opened.has_value(), "accelerometer open failed");
+micropixel::Accelerometer accelerometer = static_cast<micropixel::Accelerometer&&>(*opened);
+auto configured = accelerometer.SetSampleInterval(10_ms);  // 100 Hz game sampling
+micropixel::Assert(configured.has_value(), "sensor sampling rate unavailable");
+auto sample = accelerometer.Read();
+if (sample) {
+    (void)sample->value.meters_per_second_squared.x;
+}
+```
+
+第一个 Sensor `Open` 才让 Host 以游戏可用的 100 Hz 默认值向板级共享 I²C executor 注册周期采样；应用可通过
+`SetSampleInterval()` 提升或降低采样率，允许范围由 `SensorInfo::minimum_interval` 和 `maximum_interval` 给出。
+Host 将硬件 ODR 选择为不慢于请求值的档位，并按请求间隔刷新最新快照；返回的 `Duration` 是实际缓存
+刷新间隔。低功耗边界是最后一个 handle 释放或 App Suspend，而不是已经打开的传感器。`Read()` 只复制
+缓存，不等待 I2C 转换。刚打开、改频率或从 Suspend 恢复后的第一个采样周期内，
+`Read()` 可以返回 `WouldBlock`。最后一个 Sensor handle `Reset()` 或析构后，周期采样被注销，芯片回到
+suspend；Sensor 不创建独立任务。
+
+`Sensor<T>`、`GpioInput/Output/Pwm` 和 `Haptic` 都是 move-only RAII resource。GPIO 打开即租用该引脚，
+同一 Session 内其他 open 返回 `ResourceExhausted`；`Reset()`、析构或 Session teardown 释放并恢复安全
+输入状态。PWM duty 与 Haptics strength 使用 0..1000，持续时间必须用 `Duration` 表达。
+
+`GpioInputOptions::edge` 为 rising、falling 或 both 时，Guest 可用 `event.EdgeFrom(input)` 接收变化事件；
+`edge = none` 时只支持主动 `Read()`。Host 只在至少存在一个 edge input 时运行 GPIO bridge task，不对引脚
+轮询；output 和 PWM 不会启动该任务。
 
 ## 时间与 Event 来源类型安全
 

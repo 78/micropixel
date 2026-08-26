@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <array>
+#include <optional>
 #include <span>
 
 #include "apps/demo/demo.hpp"
@@ -15,12 +16,13 @@ struct PageEntry final {
     const char* label;
 };
 
-constexpr std::array<PageEntry, 5U> kPages{{
+constexpr std::array<PageEntry, 6U> kPages{{
     {PageId::kTimer, "TIMER / CLOCK / LOG"},
     {PageId::kInput, "INPUT / RANDOM"},
     {PageId::kStorage, "STORAGE"},
     {PageId::kResourceAtlas, "RESOURCE / ATLAS"},
     {PageId::kAudio, "AUDIO"},
+    {PageId::kDevices, "DEVICES / SENSORS / GPIO"},
 }};
 
 constexpr uint32_t kPageCount = static_cast<uint32_t>(kPages.size());
@@ -37,6 +39,8 @@ constexpr uint32_t kPageCount = static_cast<uint32_t>(kPages.size());
             return "RESOURCE / ATLAS";
         case PageId::kAudio:
             return "AUDIO";
+        case PageId::kDevices:
+            return "DEVICES / HARDWARE";
         case PageId::kHome:
             return "MICROPIXEL SDK DEMO";
     }
@@ -60,6 +64,9 @@ void EnterPage(PageId page, DemoContext& context) {
         case PageId::kAudio:
             AudioDemoEnter(context);
             return;
+        case PageId::kDevices:
+            DeviceDemoEnter(context);
+            return;
         case PageId::kHome:
             return;
     }
@@ -68,6 +75,8 @@ void EnterPage(PageId page, DemoContext& context) {
 void ExitPage(PageId page, DemoContext& context) {
     if (page == PageId::kAudio) {
         AudioDemoExit(context);
+    } else if (page == PageId::kDevices) {
+        DeviceDemoExit(context);
     }
 }
 
@@ -83,6 +92,8 @@ void ExitPage(PageId page, DemoContext& context) {
             return ResourceAtlasDemoOnTouch(context, event);
         case PageId::kAudio:
             return AudioDemoOnTouch(context, event);
+        case PageId::kDevices:
+            return DeviceDemoOnTouch(context, event);
         case PageId::kHome:
             return false;
     }
@@ -105,6 +116,9 @@ void RenderPageContent(PageId page, DemoContext& context, micropixel::Frame& com
             return;
         case PageId::kAudio:
             AudioDemoRender(context, commands);
+            return;
+        case PageId::kDevices:
+            DeviceDemoRender(context, commands);
             return;
         case PageId::kHome:
             return;
@@ -129,7 +143,7 @@ void RenderHome(DemoContext& context, std::span<const micropixel::ui::Button> me
     commands.Clear(BackgroundColor());
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 34, "MICROPIXEL SDK DEMO",
                               micropixel::Color::White(), micropixel::SystemFont::kTitle);
-    commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 82, "One app / five focused modules",
+    commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 82, "One app / six focused modules",
                               MutedColor(), micropixel::SystemFont::kMedium);
     for (uint32_t index = 0U; index < menu_buttons.size(); ++index) {
         const micropixel::ui::Button& button = menu_buttons[index];
@@ -168,6 +182,7 @@ int DemoAppMain() {
     DemoContext context{app, renderer, display, input, atlas_texture};
     micropixel::Timer ticker = CreateDemoTicker(app);
     micropixel::Timer atlas_ticker = CreateResourceAtlasTicker(app);
+    std::optional<micropixel::Timer> device_ticker{};
     PageId active_page = PageId::kHome;
     std::array<micropixel::ui::Button, kPageCount> menu_buttons{};
     for (uint32_t index = 0U; index < kPageCount; ++index) {
@@ -180,21 +195,33 @@ int DemoAppMain() {
     app.Run([&](const micropixel::Event& event) {
         if (event.type() == micropixel::EventType::kStop) {
             ExitPage(active_page, context);
+            device_ticker.reset();
             return;
         }
         bool redraw = false;
         if (const micropixel::TimerEvent* timer = event.TimerFrom(ticker)) {
-            redraw = active_page == PageId::kTimer && TimerDemoOnTimer(context, *timer);
+            if (active_page == PageId::kTimer) {
+                redraw = TimerDemoOnTimer(context, *timer);
+            }
         } else if (const micropixel::TimerEvent* timer = event.TimerFrom(atlas_ticker)) {
             redraw = active_page == PageId::kResourceAtlas && ResourceAtlasDemoOnTimer(context, *timer);
+        } else if (const micropixel::TimerEvent* timer =
+                       device_ticker.has_value() ? event.TimerFrom(*device_ticker) : nullptr) {
+            redraw = active_page == PageId::kDevices && DeviceDemoOnTimer(context, *timer);
         } else if (active_page == PageId::kAudio && event.type() == micropixel::EventType::kAudioPlayback) {
             redraw = AudioDemoOnEvent(context, event);
+        } else if (active_page == PageId::kDevices && (event.type() == micropixel::EventType::kGpioEdge ||
+                                                       event.type() == micropixel::EventType::kHapticFinished ||
+                                                       event.type() == micropixel::EventType::kDeviceAdded ||
+                                                       event.type() == micropixel::EventType::kDeviceRemoved)) {
+            redraw = DeviceDemoOnEvent(context, event);
         } else if (const micropixel::TouchEvent* touch = event.touch()) {
             if (active_page != PageId::kHome) {
                 const micropixel::ui::ButtonUpdate back_update = back_button.OnTouch(*touch);
                 redraw = back_update.redraw();
                 if (back_update.clicked) {
                     ExitPage(active_page, context);
+                    device_ticker.reset();
                     active_page = PageId::kHome;
                     back_button.Reset();
                     for (micropixel::ui::Button& button : menu_buttons) {
@@ -215,6 +242,9 @@ int DemoAppMain() {
                         }
                         back_button.Reset();
                         EnterPage(active_page, context);
+                        if (active_page == PageId::kDevices) {
+                            device_ticker.emplace(CreateDeviceTicker(app));
+                        }
                         redraw = true;
                         break;
                     }

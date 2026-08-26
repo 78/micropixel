@@ -17,6 +17,7 @@
 #include "runtime/wamr/watchdog.h"
 #include "sdkconfig.h"
 #include "wasm_export.h"
+#include "work/background_executor.hpp"
 
 namespace micropixel::runtime {
 namespace {
@@ -124,6 +125,7 @@ AppSession::~AppSession() {
 }
 
 std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceServices& devices,
+                                                                work::BackgroundExecutor& background_executor,
                                                                 const bundlefs_file_t& file,
                                                                 std::string_view effective_locale,
                                                                 GuestLogSink* log_sink) {
@@ -180,8 +182,8 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceSe
                                            "AOT module does not export __micropixel_start"));
     }
 
-    auto context = std::unique_ptr<GuestContext>(new (std::nothrow)
-                                                     GuestContext(package.raw(), devices, effective_locale, log_sink));
+    auto context = std::unique_ptr<GuestContext>(
+        new (std::nothrow) GuestContext(package.raw(), devices, background_executor, effective_locale, log_sink));
     if (context == nullptr || !context->valid()) {
         ESP_LOGE(kTag, "unable to initialize bounded Guest services");
         return std::unexpected(

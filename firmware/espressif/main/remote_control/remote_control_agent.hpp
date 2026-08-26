@@ -176,6 +176,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     };
 
     struct GuestLogBuffer;
+    struct TaskContext;
 
     struct TaskRuntimeSample final {
         TaskHandle_t handle{};
@@ -191,6 +192,8 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
 
     static void TaskEntry(void* context);
     void TaskMain();
+    [[nodiscard]] bool AllocateTaskContext();
+    void ReleaseTaskContext();
     [[nodiscard]] bool QueueCommand(const Command& command);
     void SetConnectionState(host_ui::RemoteControlConnectionState state, const char* message);
     void SetIdentityInSnapshot(const Identity& identity);
@@ -277,6 +280,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     StaticSemaphore_t stopped_semaphore_storage_{};
     SemaphoreHandle_t stopped_semaphore_{};
     TaskHandle_t task_{};
+    TaskContext* task_context_{};
     std::array<char, kControlLineCapacity> control_line_{};
     size_t control_line_size_{};
     bool control_line_overflow_{};

@@ -52,6 +52,15 @@ class FixedString final {
         return true;
     }
 
+    bool AppendInt(int64_t value) {
+        if (value >= 0) {
+            return AppendUint(static_cast<uint64_t>(value));
+        }
+        bool complete = Append("-");
+        const uint64_t magnitude = static_cast<uint64_t>(-(value + 1)) + 1U;
+        return AppendUint(magnitude) && complete;
+    }
+
     bool AppendPadded4(uint32_t value) {
         uint32_t digits = 1U;
         for (uint32_t remaining = value; remaining >= 10U; remaining /= 10U) {

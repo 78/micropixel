@@ -1,0 +1,6 @@
+#ifndef MICROPIXEL_TEST_STUB_ESP_ATTR_H
+#define MICROPIXEL_TEST_STUB_ESP_ATTR_H
+
+#define IRAM_ATTR
+
+#endif

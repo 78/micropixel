@@ -16,6 +16,7 @@ enum class ErrorCode : int32_t {
     kBufferTooSmall,
     kRateLimited,
     kInternal,
+    kWouldBlock,
 };
 
 [[nodiscard]] constexpr const char* ErrorCodeName(ErrorCode code) noexcept {
@@ -40,6 +41,8 @@ enum class ErrorCode : int32_t {
             return "rate_limited";
         case ErrorCode::kInternal:
             return "internal";
+        case ErrorCode::kWouldBlock:
+            return "would_block";
     }
     return "unknown";
 }

@@ -12,6 +12,7 @@
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "nvs.h"
+#include "work/background_executor.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 namespace {
@@ -196,12 +197,15 @@ void LogCoprocessorInfo() {
 
 void WifiBackend::HeapCapsDeleter::operator()(std::byte* value) const { heap_caps_free(value); }
 
+void WifiBackend::BindBackgroundExecutor(work::BackgroundExecutor& executor) { background_executor_ = &executor; }
+
 std::expected<void, device::WifiError> WifiBackend::Initialize() {
     if (initialized_) {
         return {};
     }
     mutex_ = xSemaphoreCreateMutex();
-    if (mutex_ == nullptr) {
+    persistence_mutex_ = xSemaphoreCreateMutex();
+    if (mutex_ == nullptr || persistence_mutex_ == nullptr) {
         return std::unexpected(device::WifiError::kOperationFailed);
     }
     auto* scan_record_workspace =
@@ -385,7 +389,7 @@ std::expected<void, device::WifiError> WifiBackend::SetEnabled(bool enabled) {
         RebuildSnapshotLocked();
         return std::unexpected(WifiErrorFor(status));
     }
-    (void)SaveSettings();
+    QueueSaveSettings();
     return {};
 }
 
@@ -728,7 +732,7 @@ void WifiBackend::HandleWifiEvent(int32_t event_id, void* event_data) {
             snapshot_.connection_state = device::WifiConnectionState::kConnecting;
             RebuildSnapshotLocked();
         }
-        (void)SaveSettings();
+        QueueSaveSettings();
         return;
     }
     if (event_id != WIFI_EVENT_STA_DISCONNECTED) {
@@ -1139,6 +1143,10 @@ bool WifiBackend::LoadSettings() {
 }
 
 bool WifiBackend::SaveSettings() const {
+    ScopedLock persistence_lock(persistence_mutex_);
+    if (!persistence_lock.locked()) {
+        return false;
+    }
     StoredState stored{};
     {
         ScopedLock lock(mutex_);
@@ -1175,6 +1183,45 @@ bool WifiBackend::SaveSettings() const {
         ESP_LOGW(kTag, "could not save Wi-Fi state: %s", esp_err_to_name(status));
     }
     return status == ESP_OK;
+}
+
+void WifiBackend::QueueSaveSettings() {
+    save_request_generation_.fetch_add(1U, std::memory_order_release);
+    bool expected = false;
+    if (!save_job_scheduled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+    if (background_executor_ == nullptr || !background_executor_->Submit(SaveSettingsEntry, this)) {
+        save_job_scheduled_.store(false, std::memory_order_release);
+        ESP_LOGW(kTag, "could not queue Wi-Fi settings persistence");
+    }
+}
+
+void WifiBackend::SaveSettingsEntry(void* context) {
+    auto* backend = static_cast<WifiBackend*>(context);
+    if (backend != nullptr) {
+        backend->ProcessPendingSettingsSaves();
+    }
+}
+
+void WifiBackend::ProcessPendingSettingsSaves() {
+    for (;;) {
+        const uint32_t target_generation = save_request_generation_.load(std::memory_order_acquire);
+        (void)SaveSettings();
+        if (save_request_generation_.load(std::memory_order_acquire) != target_generation) {
+            continue;
+        }
+
+        save_job_scheduled_.store(false, std::memory_order_release);
+        if (save_request_generation_.load(std::memory_order_acquire) == target_generation) {
+            return;
+        }
+
+        bool expected = false;
+        if (!save_job_scheduled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+    }
 }
 
 void WifiBackend::RebuildSnapshotLocked() {
