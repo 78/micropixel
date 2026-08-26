@@ -60,7 +60,7 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 | Wi-Fi 扫描页 | retry 1 s，刷新 10 s | 只在扫描页面可见时按下一个 deadline 等待；Wi-Fi driver 状态变化仍走事件 |
 | Remote agent 离线状态 | 1 s | 仍存在；用于未配置、无网络和 disabled 状态的重试/固件检查，是下一阶段事件化候选 |
 | Remote agent 已连接 control stream | Read timeout 250 ms | 仍存在；用于同时推进网络流、Host result 和本地控制命令。应给 HTTP/3 stream 增加可由本地队列打断的等待，再把常态 timeout 放大或改成无限等待 |
-| 音频 I2S mixer | 旧实现每 128 帧写一次，16 kHz 下约 8 ms | 已改为 task notification 事件唤醒；无 active voice 时关闭 PA 和 I2S 并无限阻塞，播放结束只保留 80 ms 静音 grace |
+| 音频 I2S mixer | 旧实现每 128 帧写一次，16 kHz 下约 8 ms | 已改为 task notification 事件唤醒；无 active voice 时关闭 PA 和 I2S 并无限阻塞。唤醒 PA 后先发送 32 ms 静音预滚，避免吞掉短音效；播放结束保留 10 s 静音 grace，避免游戏操作间频繁关开 |
 | 前台 App completion | 20 ms | 仅 Guest 前台期间，用于 completion、远控和系统动作编排；不是大厅空闲来源 |
 | 固件更新页面 | 100 ms | 仅更新页面/更新流程期间刷新进度；可在 Remote model change event 完整接入后删除 |
 | 亮度与系统转场 | 15–17 ms，约 100–180 ms 总时长 | 有限帧瞬态任务，结束后不再唤醒 |

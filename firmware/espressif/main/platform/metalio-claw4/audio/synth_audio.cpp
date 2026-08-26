@@ -30,7 +30,10 @@ constexpr uint32_t kSineTableSize = 256U;
 constexpr uint32_t kAudioTaskStackSize = 4096U;
 constexpr BaseType_t kAudioTaskCore = 0;
 constexpr uint32_t kMetalioClaw4AudioSampleRate = 16000U;
-constexpr uint32_t kAudioIdleGraceMs = 80U;
+constexpr uint32_t kAudioOutputWakeupMs = 32U;
+constexpr uint32_t kAudioOutputWakeupChunks =
+    (kAudioOutputWakeupMs * kMetalioClaw4AudioSampleRate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
+constexpr uint32_t kAudioIdleGraceMs = 10000U;
 constexpr uint32_t kAudioIdleGraceChunks =
     (kAudioIdleGraceMs * kMetalioClaw4AudioSampleRate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
 
@@ -248,25 +251,45 @@ void NotifyAudioTask() {
     }
 }
 
-esp_err_t StartAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx, int32_t* frames) {
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), kTag, "enable idle-gated I2S output");
-
+esp_err_t WriteSilentAudioChunk(i2s_chan_handle_t tx, int32_t* frames) {
     std::memset(frames, 0, kFramesPerChunk * 2U * sizeof(*frames));
     size_t bytes_written = 0U;
     const size_t bytes = kFramesPerChunk * 2U * sizeof(*frames);
-    const esp_err_t write_status = i2s_channel_write(tx, frames, bytes, &bytes_written, pdMS_TO_TICKS(500));
-    if (write_status != ESP_OK || bytes_written != bytes) {
+    const esp_err_t status = i2s_channel_write(tx, frames, bytes, &bytes_written, pdMS_TO_TICKS(500));
+    if (status != ESP_OK) {
+        return status;
+    }
+    return bytes_written == bytes ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t StartAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx, int32_t* frames) {
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), kTag, "enable idle-gated I2S output");
+
+    const esp_err_t prefill_status = WriteSilentAudioChunk(tx, frames);
+    if (prefill_status != ESP_OK) {
         (void)i2s_channel_disable(tx);
-        ESP_LOGE(kTag, "I2S silent prefill failed: %s, wrote=%zu/%zu", esp_err_to_name(write_status), bytes_written,
-                 bytes);
-        return write_status != ESP_OK ? write_status : ESP_FAIL;
+        ESP_LOGE(kTag, "I2S silent prefill failed: %s", esp_err_to_name(prefill_status));
+        return prefill_status;
     }
 
     const esp_err_t amplifier_status = UpdateRegister(expander, kOutputPort1, kPaEnableMask, 0U);
     if (amplifier_status != ESP_OK) {
         (void)i2s_channel_disable(tx);
+        return amplifier_status;
     }
-    return amplifier_status;
+
+    // Keep real voice frames out of the amplifier wake-up interval. Without this
+    // pre-roll, a short gameplay effect can finish before the PA becomes audible.
+    for (uint32_t chunk = 0U; chunk < kAudioOutputWakeupChunks; ++chunk) {
+        const esp_err_t wakeup_status = WriteSilentAudioChunk(tx, frames);
+        if (wakeup_status != ESP_OK) {
+            (void)UpdateRegister(expander, kOutputPort1, 0U, kPaEnableMask);
+            (void)i2s_channel_disable(tx);
+            ESP_LOGE(kTag, "I2S amplifier wake-up pre-roll failed: %s", esp_err_to_name(wakeup_status));
+            return wakeup_status;
+        }
+    }
+    return ESP_OK;
 }
 
 esp_err_t StopAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx) {
