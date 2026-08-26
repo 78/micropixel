@@ -137,7 +137,8 @@ host_ui::HallWifiModel MakeHallWifiModel(const device::WifiSnapshot& wifi) {
 }
 
 host_ui::HallBatteryModel MakeHallBatteryModel(const device::BatterySnapshot& battery) {
-    return {.percent = battery.percent, .available = battery.available, .charging = battery.charging};
+    const bool charging = battery.external_power_available ? battery.external_power_connected : battery.charging;
+    return {.percent = battery.percent, .available = battery.available, .charging = charging};
 }
 
 host_ui::HallStatusBarModel MakeHallStatusBarModel(const device::WifiSnapshot& wifi,
@@ -732,13 +733,10 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
         }
         shell.StopWatchingGuestActions();
     }
-    battery.SetStateChangeSink(
-        [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell);
     RefreshStatusMetrics(model, catalog, battery);
     RefreshWifiStatus(model, wifi.Snapshot());
     auto show_result = shell.ShowStatusLayer(model, trigger_timestamp_us);
     if (!show_result) {
-        battery.SetStateChangeSink(nullptr, nullptr);
         ESP_LOGE(kTag, "failed to show status layer: error=%u", static_cast<unsigned>(show_result.error()));
         if (controller == nullptr) {
             return false;
@@ -841,7 +839,6 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
         }
     }
 
-    battery.SetStateChangeSink(nullptr, nullptr);
     shell.LeaveStatusLayer(close_trigger_timestamp_us);
     if (settings_changed && settings_store.ready() && !settings_store.Save(model)) {
         ESP_LOGW(kTag, "Host settings changed but could not be persisted");
@@ -2386,12 +2383,15 @@ HostController::HostController(device::DeviceServices& devices, device::BatteryB
                                device::WifiBackend& wifi, host_ui::SystemShell& shell,
                                remote_control::RemoteControlAgent& remote_control)
     : devices_(devices), battery_(battery), wifi_(wifi), shell_(shell), remote_control_(remote_control) {
+    battery_.SetStateChangeSink(
+        [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
     wifi_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyWifiStateChanged(); }, &shell_);
 }
 
 HostController::~HostController() {
     remote_control_.Stop();
+    battery_.SetStateChangeSink(nullptr, nullptr);
     wifi_.SetStateChangeSink(nullptr, nullptr);
 }
 

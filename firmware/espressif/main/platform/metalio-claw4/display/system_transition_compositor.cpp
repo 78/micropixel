@@ -84,7 +84,13 @@ esp_err_t SystemTransitionCompositor::Initialize(lv_display_t* display, esp_lcd_
     return ESP_OK;
 }
 
-bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) {
+bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) { return CaptureBackgroundLocked(root, true); }
+
+bool SystemTransitionCompositor::RefreshBackgroundLocked(lv_obj_t* root) {
+    return CaptureBackgroundLocked(root, false);
+}
+
+bool SystemTransitionCompositor::CaptureBackgroundLocked(lv_obj_t* root, bool preserve_as_baseline) {
     if (display_ == nullptr || srm_client_ == nullptr || root == nullptr) {
         return false;
     }
@@ -96,7 +102,7 @@ bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) {
             return false;
         }
     }
-    if (baseline_background_pixels_ == nullptr) {
+    if (preserve_as_baseline && baseline_background_pixels_ == nullptr) {
         baseline_background_pixels_ = static_cast<uint8_t*>(
             heap_caps_aligned_alloc(kPpaBufferAlignment, frame_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (baseline_background_pixels_ == nullptr) {
@@ -113,12 +119,14 @@ bool SystemTransitionCompositor::PrepareBackgroundLocked(lv_obj_t* root) {
                           lv_snapshot_take_to_draw_buf(root, LV_COLOR_FORMAT_RGB888, &snapshot) == LV_RESULT_OK;
     if (!captured || snapshot.header.w != width_ || snapshot.header.h != height_ || snapshot.header.stride != stride) {
         ESP_LOGE(kTag, "could not render Hall transition background");
-        ClearBackground();
+        if (preserve_as_baseline || !ResetBackgroundToBaseline()) {
+            ClearBackground();
+        }
         return false;
     }
     lv_draw_buf_flush_cache(&snapshot, nullptr);
-    if (!CopyRgb888(background_pixels_, width_, height_, 0U, 0U, baseline_background_pixels_, width_, height_, 0U, 0U,
-                    width_, height_)) {
+    if (preserve_as_baseline && !CopyRgb888(background_pixels_, width_, height_, 0U, 0U, baseline_background_pixels_,
+                                            width_, height_, 0U, 0U, width_, height_)) {
         ESP_LOGE(kTag, "could not preserve baseline Hall background");
         ClearBackground();
         return false;

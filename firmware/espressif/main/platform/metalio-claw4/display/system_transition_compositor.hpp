@@ -37,6 +37,10 @@ class SystemTransitionCompositor final {
                                        uint32_t height);
     [[nodiscard]] bool HasBackground() const { return background_pixels_ != nullptr; }
     [[nodiscard]] bool PrepareBackgroundLocked(lv_obj_t* root);
+    // Refresh only the working animation background. The preserved Hall
+    // baseline remains unchanged so a running-card view cannot become the
+    // starting point for a later Guest-to-Hall transition.
+    [[nodiscard]] bool RefreshBackgroundLocked(lv_obj_t* root);
     [[nodiscard]] bool ResetBackgroundToBaseline();
     [[nodiscard]] bool UpdateBackgroundRegionLocked(lv_obj_t* root, const SystemTransitionRect& region);
     [[nodiscard]] bool UpdateBackgroundPixels(const uint8_t* pixels, const SystemTransitionRect& region);
@@ -59,6 +63,7 @@ class SystemTransitionCompositor final {
     void Release();
 
    private:
+    [[nodiscard]] bool CaptureBackgroundLocked(lv_obj_t* root, bool preserve_as_baseline);
     [[nodiscard]] bool BlitRgb888(const uint8_t* source, uint32_t source_width, uint32_t source_height,
                                   uint32_t source_x, uint32_t source_y, uint32_t source_block_width,
                                   uint32_t source_block_height, uint8_t* destination, uint32_t destination_width,

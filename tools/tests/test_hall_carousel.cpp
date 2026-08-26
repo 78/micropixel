@@ -1,12 +1,15 @@
 #include <cstdlib>
 #include <iostream>
 
+#include "platform/metalio-claw4/display/hall_transition_policy.hpp"
 #include "platform/metalio-claw4/hall_carousel.hpp"
 
 namespace {
 
 using micropixel::platform::metalio_claw4::HallCarousel;
+using micropixel::platform::metalio_claw4::HallLaunchBackgroundPlan;
 using micropixel::platform::metalio_claw4::HallVelocityTracker;
+using micropixel::platform::metalio_claw4::PlanHallLaunchBackground;
 
 void Check(bool condition, const char* message) {
     if (!condition) {
@@ -109,6 +112,16 @@ void RepeatedThrowMomentum() {
           "repeated throws must remain bounded by the maximum velocity");
 }
 
+void HallLaunchBackgroundPolicy() {
+    Check(PlanHallLaunchBackground(false, false) == HallLaunchBackgroundPlan::kCaptureVisibleHall &&
+              PlanHallLaunchBackground(false, true) == HallLaunchBackgroundPlan::kCaptureVisibleHall,
+          "a Hall without a running App may refresh its visible launch baseline");
+    Check(PlanHallLaunchBackground(true, true) == HallLaunchBackgroundPlan::kReuseCleanBaseline,
+          "an App switch must reuse the clean baseline instead of capturing the RUNNING card");
+    Check(PlanHallLaunchBackground(true, false) == HallLaunchBackgroundPlan::kPrepareCleanBaseline,
+          "an App switch without a cached baseline must render a clean fallback");
+}
+
 }  // namespace
 
 int main() {
@@ -118,6 +131,7 @@ int main() {
     ContinuousIndicator();
     BoundedCoverWindow();
     RepeatedThrowMomentum();
-    std::cout << "hall_carousel tests passed: 6 cases\n";
+    HallLaunchBackgroundPolicy();
+    std::cout << "hall_carousel tests passed: 7 cases\n";
     return 0;
 }

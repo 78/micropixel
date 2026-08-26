@@ -32,6 +32,7 @@
 #include "platform/configured_backends.hpp"
 #include "platform/metalio-claw4/battery_backend.hpp"
 #include "platform/metalio-claw4/board_hardware.hpp"
+#include "platform/metalio-claw4/display/hall_transition_policy.hpp"
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
 #include "platform/metalio-claw4/display/system_transition_compositor.hpp"
@@ -298,6 +299,10 @@ struct MetalioClaw4PlatformState final {
     lv_image_dsc_t hall_cover_descriptors[host_ui::kMaxHallApps]{};
     std::array<HallCoverCacheEntry, metalio_claw4::HallCarousel::kMaximumCachedCovers> hall_cover_cache{};
     std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> hall_cover_sources{};
+    // The visible source for a suspended App is its Guest snapshot. Retain the
+    // installed cover separately so transition baselines can always render a
+    // Hall with no running cards.
+    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> hall_idle_cover_sources{};
     std::array<HallAppPresentation, host_ui::kMaxHallApps> hall_app_presentations{};
     lv_obj_t* hall_cover_images[host_ui::kMaxHallApps]{};
     lv_obj_t* hall_cover_placeholders[host_ui::kMaxHallApps]{};
@@ -783,6 +788,9 @@ const lv_image_dsc_t* HallWifiImage(const host_ui::HallWifiModel& model) {
 }
 
 const char* HallBatterySymbol(const host_ui::HallBatteryModel& model) {
+    if (model.charging) {
+        return LV_SYMBOL_CHARGE;
+    }
     if (model.percent <= 10U) {
         return LV_SYMBOL_BATTERY_EMPTY;
     }
@@ -826,8 +834,13 @@ void UpdateHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::
         lv_obj_add_flag(state.hall_wifi_status_image, LV_OBJ_FLAG_HIDDEN);
     }
 
-    lv_label_set_text(state.hall_battery_status_label,
-                      model.battery.available ? HallBatterySymbol(model.battery) : LV_SYMBOL_BATTERY_EMPTY);
+    lv_label_set_text(state.hall_battery_status_label, model.battery.available || model.battery.charging
+                                                           ? HallBatterySymbol(model.battery)
+                                                           : LV_SYMBOL_BATTERY_EMPTY);
+    lv_obj_set_y(state.hall_battery_status_label, model.battery.charging ? 10 : 7);
+    lv_obj_set_style_text_font(state.hall_battery_status_label,
+                               model.battery.charging ? &lv_font_montserrat_18 : &lv_font_montserrat_24, 0);
+    lv_obj_set_style_transform_scale_x(state.hall_battery_status_label, model.battery.charging ? 256 : 282, 0);
     char battery_text[8]{};
     if (model.battery.available) {
         (void)std::snprintf(battery_text, sizeof(battery_text), "%u%%", static_cast<unsigned>(model.battery.percent));
@@ -835,8 +848,9 @@ void UpdateHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::
         (void)std::snprintf(battery_text, sizeof(battery_text), "--");
     }
     lv_label_set_text(state.hall_battery_percent_label, battery_text);
-    lv_obj_set_style_text_color(state.hall_battery_status_label, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_set_style_text_color(state.hall_battery_percent_label, lv_color_hex(0xf2f7ffU), 0);
+    const uint32_t battery_color = model.battery.charging ? 0x4dd6a4U : 0xf2f7ffU;
+    lv_obj_set_style_text_color(state.hall_battery_status_label, lv_color_hex(battery_color), 0);
+    lv_obj_set_style_text_color(state.hall_battery_percent_label, lv_color_hex(battery_color), 0);
 }
 
 void DrawHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::HallStatusBarModel& model) {
@@ -1315,6 +1329,40 @@ void DestroyHallCardLocked(MetalioClaw4PlatformState& state, uint32_t index) {
     state.hall_cover_placeholders[index] = nullptr;
 }
 
+uint32_t RunningHallAppIndex(const MetalioClaw4PlatformState& state) {
+    for (uint32_t index = 0U; index < state.hall_app_count; ++index) {
+        if (state.hall_app_running[index]) {
+            return index;
+        }
+    }
+    return host_ui::kMaxHallApps;
+}
+
+bool PrepareCleanHallBackgroundLocked(MetalioClaw4PlatformState& state, uint32_t running_index) {
+    if (running_index >= host_ui::kMaxHallApps || state.hall_cards[running_index] == nullptr ||
+        state.hall_carousel_content == nullptr) {
+        return state.system_transition.PrepareBackgroundLocked(state.host_smoke);
+    }
+
+    const host_ui::HallCoverModel running_cover = state.hall_cover_sources[running_index];
+    DestroyHallCardLocked(state, running_index);
+    state.hall_cover_sources[running_index] = state.hall_idle_cover_sources[running_index];
+    state.hall_app_presentations[running_index].running = false;
+    DrawHallCard(state, state.hall_carousel_content, state.hall_app_presentations[running_index], running_index);
+
+    const bool prepared = state.system_transition.PrepareBackgroundLocked(state.host_smoke);
+
+    DestroyHallCardLocked(state, running_index);
+    state.hall_cover_sources[running_index] = running_cover;
+    state.hall_app_presentations[running_index].running = true;
+    DrawHallCard(state, state.hall_carousel_content, state.hall_app_presentations[running_index], running_index);
+    return prepared;
+}
+
+bool PrepareCleanHallBackgroundLocked(MetalioClaw4PlatformState& state) {
+    return PrepareCleanHallBackgroundLocked(state, RunningHallAppIndex(state));
+}
+
 void SyncHallCardWindowLocked(MetalioClaw4PlatformState& state) {
     if (state.hall_carousel_content == nullptr) {
         return;
@@ -1369,6 +1417,12 @@ void HallCarouselEvent(lv_event_t* event) {
     UpdateHallCarouselLocked(*state, lv_obj_get_scroll_x(viewport));
     if (lv_event_get_code(event) == LV_EVENT_SCROLL_END) {
         RequestHallCoverWindowLocked(*state, true);
+        if (RunningHallAppIndex(*state) < state->hall_app_count) {
+            const int64_t started_us = esp_timer_get_time();
+            const bool prepared = PrepareCleanHallBackgroundLocked(*state);
+            ESP_LOGI(kTag, "clean Hall transition baseline refreshed after scroll: ready=%s elapsed=%" PRIu32 " us",
+                     prepared ? "yes" : "no", static_cast<uint32_t>(esp_timer_get_time() - started_us));
+        }
     }
     if (state->display != nullptr) {
         lv_timer_ready(lv_display_get_refr_timer(state->display));
@@ -1575,12 +1629,16 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     if (catalog_signature != state.hall_catalog_signature) {
         state.hall_catalog_signature = catalog_signature;
         state.hall_scroll_offset = 0;
+        state.hall_idle_cover_sources.fill({});
     }
     state.hall_app_count = visible_count;
     state.hall_cover_sources.fill({});
     state.hall_app_presentations.fill({});
     for (uint32_t index = 0U; index < visible_count; ++index) {
         state.hall_cover_sources[index] = model.apps[index].cover;
+        if (!model.apps[index].running) {
+            state.hall_idle_cover_sources[index] = model.apps[index].cover;
+        }
         HallAppPresentation& presentation = state.hall_app_presentations[index];
         (void)std::snprintf(presentation.app_id.data(), presentation.app_id.size(), "%s",
                             model.apps[index].app_id != nullptr ? model.apps[index].app_id : "");
@@ -1838,7 +1896,16 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
             state.hall_cards[running_index], {.x = card.x, .y = card.y, .width = card.width, .height = card.height});
         background_updated_region = background_ready;
     }
-    if (!background_ready) {
+    if (!background_ready && running_index < visible_count) {
+        background_ready = PrepareCleanHallBackgroundLocked(state);
+        if (background_ready && state.hall_cards[running_index] != nullptr) {
+            const HallCardBounds card = HallCard(running_index, state.hall_scroll_offset);
+            background_ready = state.system_transition.UpdateBackgroundRegionLocked(
+                state.hall_cards[running_index],
+                {.x = card.x, .y = card.y, .width = card.width, .height = card.height});
+            background_updated_region = background_ready;
+        }
+    } else if (!background_ready) {
         background_ready = state.system_transition.PrepareBackgroundLocked(state.host_smoke);
     }
     const uint32_t background_elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - background_started_us);
@@ -1933,30 +2000,48 @@ void PauseHallCoverLoadingImpl(MetalioClaw4PlatformState& state) {
 
 void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     PauseHallCoverLoadingImpl(state);
+    const uint32_t running_index = RunningHallAppIndex(state);
+    const uint32_t hall_app_count = state.hall_app_count;
     state.input_router.UnbindTouchSink(&state);
     state.input_router.ClearSystemActionSink(state.hall_action_context);
     state.hall_action_sink = nullptr;
     state.hall_action_context = nullptr;
-    state.hall_app_count = 0U;
     state.hall_launch_enabled = false;
     state.hall_settings_press_overlay = nullptr;
     state.hall_update_press_overlay = nullptr;
     if (state.display == nullptr || state.host_smoke == nullptr ||
         !state.guest_graphics.RefreshSynchronizationAvailable()) {
+        state.hall_app_count = 0U;
         return;
     }
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        state.hall_app_count = 0U;
         return;
     }
     SetHostPointerEnabledLocked(state, false);
     state.guest_graphics.DrainRefreshReady();
-    const int64_t background_started_us = esp_timer_get_time();
-    if (state.system_transition.PrepareBackgroundLocked(state.host_smoke)) {
-        ESP_LOGI(kTag, "Hall transition background refreshed before App launch: elapsed=%" PRIu32 " us",
-                 static_cast<uint32_t>(esp_timer_get_time() - background_started_us));
+    const metalio_claw4::HallLaunchBackgroundPlan background_plan = metalio_claw4::PlanHallLaunchBackground(
+        running_index < hall_app_count, state.system_transition.HasBackground());
+    if (background_plan == metalio_claw4::HallLaunchBackgroundPlan::kReuseCleanBaseline) {
+        // The clean baseline was preserved when this suspended App entered the
+        // Hall (and refreshed after scrolling). Do not synchronously snapshot
+        // its RUNNING card on the A-to-B launch path.
+        ESP_LOGI(kTag, "reusing clean Hall transition baseline before App switch: running=%" PRIu32, running_index);
     } else {
-        ESP_LOGW(kTag, "could not refresh Hall transition background before App launch");
+        const int64_t background_started_us = esp_timer_get_time();
+        const bool prepared = background_plan == metalio_claw4::HallLaunchBackgroundPlan::kPrepareCleanBaseline
+                                  ? PrepareCleanHallBackgroundLocked(state, running_index)
+                                  : state.system_transition.PrepareBackgroundLocked(state.host_smoke);
+        if (prepared) {
+            ESP_LOGI(
+                kTag, "Hall transition background refreshed before App launch: mode=%s elapsed=%" PRIu32 " us",
+                background_plan == metalio_claw4::HallLaunchBackgroundPlan::kPrepareCleanBaseline ? "clean" : "visible",
+                static_cast<uint32_t>(esp_timer_get_time() - background_started_us));
+        } else {
+            ESP_LOGW(kTag, "could not refresh Hall transition background before App launch");
+        }
     }
+    state.hall_app_count = 0U;
     lv_obj_clean(state.host_smoke);
     lv_obj_set_pos(state.host_smoke, 0, 0);
     lv_obj_set_style_opa(state.host_smoke, LV_OPA_COVER, 0);
@@ -2019,7 +2104,7 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
         if (transition_ready) {
             lv_draw_buf_flush_cache(&transition_snapshot, nullptr);
             const int64_t background_started_us = esp_timer_get_time();
-            transition_ready = state.system_transition.PrepareBackgroundLocked(state.host_smoke);
+            transition_ready = state.system_transition.RefreshBackgroundLocked(state.host_smoke);
             if (transition_ready) {
                 ESP_LOGI(kTag, "Hall transition background refreshed before App resume: elapsed=%" PRIu32 " us",
                          static_cast<uint32_t>(esp_timer_get_time() - background_started_us));
