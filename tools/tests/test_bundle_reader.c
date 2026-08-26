@@ -96,10 +96,41 @@ static bool validate_bundle(void) {
     memcpy(&header, test_bundle, sizeof(header));
     const bool has_launch_asset = header.launch_asset_id != 0U;
     micropixel_bundle_metadata_t metadata;
-    if (!check(micropixel_read_bundle_metadata(&file, &metadata), "Bundle metadata must validate") ||
+    const char* test_locale = getenv("MICROPIXEL_TEST_LOCALE");
+    const bool metadata_valid = test_locale == NULL
+                                    ? micropixel_read_bundle_metadata(&file, &metadata)
+                                    : micropixel_read_bundle_metadata_for_locale(&file, test_locale, &metadata);
+    const char* expected_name = getenv("MICROPIXEL_EXPECT_DISPLAY_NAME");
+    const char* expected_version = getenv("MICROPIXEL_EXPECT_METADATA_SCHEMA");
+    const char* expected_type = getenv("MICROPIXEL_EXPECT_PACKAGE_TYPE");
+    if (!check(metadata_valid, "Bundle metadata must validate") ||
         !check(metadata.bundle_size == test_bundle_size, "metadata must expose the Bundle logical size") ||
-        !check(metadata.app_id[0] != 0U && metadata.display_name[0] != 0U, "metadata must contain App identity")) {
+        !check(metadata.app_id[0] != 0U && metadata.display_name[0] != 0U, "metadata must contain App identity") ||
+        !check(expected_name == NULL || strcmp((const char*)metadata.display_name, expected_name) == 0,
+               "metadata must select the expected localized display name") ||
+        !check(expected_version == NULL ||
+                   metadata.metadata_schema_version == (uint32_t)strtoul(expected_version, NULL, 10),
+               "metadata must expose the expected metadata schema") ||
+        !check(expected_type == NULL || (strcmp(expected_type, "component") == 0
+                                             ? metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT
+                                             : metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_APP),
+               "metadata must expose the expected package type")) {
         return false;
+    }
+
+    if (metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT) {
+        micropixel_bundle_metadata_t validated;
+        if (!check(!has_launch_asset, "Component Package must not have a launch asset") ||
+            !check(micropixel_validate_component_package(&file, &validated),
+                   "font Component Package must pass semantic validation") ||
+            !check(validated.component_type == MICROPIXEL_BUNDLE_COMPONENT_FONT && validated.language_count > 0U,
+                   "validated font Component must expose its type and languages")) {
+            return false;
+        }
+        micropixel_aot_package_t component_aot;
+        return check(!micropixel_open_aot_package(&file, &component_aot),
+                     "Component Package must never open as executable AOT") &&
+               check(active_mappings == 0U, "Component validation must release its Bundle mapping");
     }
 
     micropixel_bundle_asset_mapping_t cover;

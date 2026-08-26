@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <string_view>
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -15,8 +17,10 @@ constexpr char kPartition[] = "sys_store";
 constexpr char kNamespace[] = "system";
 constexpr char kControlNamespace[] = "control";
 constexpr char kSettingsKey[] = "ui";
+constexpr char kLocaleSettingsKey[] = "locale";
 constexpr char kControlSettingsKey[] = "settings";
 constexpr uint8_t kSettingsVersion = 2U;
+constexpr uint8_t kLocaleSettingsVersion = 1U;
 constexpr uint8_t kControlSettingsVersion = 1U;
 constexpr uint8_t kPerformanceOverlayFlag = 1U << 0U;
 
@@ -30,6 +34,15 @@ struct SettingsRecord final {
 };
 
 static_assert(sizeof(SettingsRecord) == 8U, "System settings record size changed");
+
+struct LocaleSettingsRecord final {
+    uint8_t version{};
+    uint8_t requested_length{};
+    uint8_t reserved[2]{};
+    char requested[MICROPIXEL_LOCALE_TAG_MAX_BYTES + 1U]{};
+};
+
+static_assert(sizeof(LocaleSettingsRecord) == 36U, "Locale settings v1 record size changed");
 
 struct ControlSettingsRecord final {
     uint8_t version{};
@@ -78,6 +91,22 @@ bool ValidControlRecord(const ControlSettingsRecord& record) {
         }
     }
     return true;
+}
+
+bool ValidLocaleRecord(const LocaleSettingsRecord& record) {
+    if (record.version != kLocaleSettingsVersion || record.requested_length == 0U ||
+        record.requested_length > MICROPIXEL_LOCALE_TAG_MAX_BYTES || record.reserved[0] != 0U ||
+        record.reserved[1] != 0U || record.requested[record.requested_length] != '\0') {
+        return false;
+    }
+    for (size_t index = static_cast<size_t>(record.requested_length) + 1U; index < sizeof(record.requested); ++index) {
+        if (record.requested[index] != '\0') {
+            return false;
+        }
+    }
+    LocaleTagBuffer normalized{};
+    const std::string_view requested(record.requested, record.requested_length);
+    return NormalizeLocaleTag(requested, normalized) && std::string_view(normalized.data()) == requested;
 }
 
 }  // namespace
@@ -177,6 +206,53 @@ bool SystemSettingsStore::Save(const StatusLayerModel& model) const {
     ESP_LOGI(kTag, "saved Host settings: brightness=%u volume=%u performance=%s auto-sleep=%u min",
              static_cast<unsigned>(model.brightness_percent), static_cast<unsigned>(model.volume_percent),
              model.performance_overlay_enabled ? "on" : "off", static_cast<unsigned>(model.auto_sleep_timeout_minutes));
+    return true;
+}
+
+bool SystemSettingsStore::LoadLocale(SystemLocaleState& locale) const {
+    if (handle_ == 0U) {
+        return false;
+    }
+    size_t size = 0U;
+    esp_err_t error = nvs_get_blob(handle_, kLocaleSettingsKey, nullptr, &size);
+    if (error == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(kTag, "no saved Locale; using %s", locale.requested_c_str());
+        return true;
+    }
+    if (error != ESP_OK || size != sizeof(LocaleSettingsRecord)) {
+        ESP_LOGW(kTag, "ignored unreadable Locale settings record");
+        return false;
+    }
+    LocaleSettingsRecord record{};
+    error = nvs_get_blob(handle_, kLocaleSettingsKey, &record, &size);
+    if (error != ESP_OK || size != sizeof(record) || !ValidLocaleRecord(record) ||
+        !locale.SetRequested(std::string_view(record.requested, record.requested_length))) {
+        ESP_LOGW(kTag, "ignored invalid Locale settings v1 record");
+        return false;
+    }
+    ESP_LOGI(kTag, "restored requested Locale: %s", locale.requested_c_str());
+    return true;
+}
+
+bool SystemSettingsStore::SaveLocale(const SystemLocaleState& locale) const {
+    if (handle_ == 0U) {
+        return false;
+    }
+    const std::string_view requested = locale.requested();
+    LocaleSettingsRecord record{
+        .version = kLocaleSettingsVersion,
+        .requested_length = static_cast<uint8_t>(requested.size()),
+    };
+    std::memcpy(record.requested, requested.data(), requested.size());
+    esp_err_t error = nvs_set_blob(handle_, kLocaleSettingsKey, &record, sizeof(record));
+    if (error == ESP_OK) {
+        error = nvs_commit(handle_);
+    }
+    if (error != ESP_OK) {
+        ESP_LOGE(kTag, "failed to persist requested Locale: %s", esp_err_to_name(error));
+        return false;
+    }
+    ESP_LOGI(kTag, "saved requested Locale: %s", locale.requested_c_str());
     return true;
 }
 

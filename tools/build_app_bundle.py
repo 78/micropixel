@@ -21,6 +21,9 @@ FRAMEWORK_ABI_VERSION = 1
 EXTENT_ALIGNMENT = 64 * 1024
 APP_ID_MAX_LENGTH = 64
 DISPLAY_NAME_MAX_LENGTH = 64
+LOCALE_MAX_LENGTH = 31
+PACKAGE_METADATA_VERSION = 1
+FORMAT_PACKAGE_METADATA_JSON = 7
 HEADER = struct.Struct("<8sIIII64sIIIIIIIIII")
 SECTION = struct.Struct("<IIIIIIIIIIII")
 RESOURCE_PACK_MAGIC = b"MPXRPAK\0"
@@ -30,6 +33,7 @@ RESOURCE_PACK_ALIGNMENT = 64
 KIND_AOT = 1
 KIND_ASSET = 2
 KIND_APP_METADATA = 3
+KIND_FONT = 4
 FORMAT_UTF8 = 6
 FORMATS = {
     "aot": 1,
@@ -37,8 +41,9 @@ FORMATS = {
     "jpeg": 3,
     "png": 4,
     "raw_argb8888": 5,
+    "font_cbin": 8,
 }
-ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"]}
+ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"], FORMATS["font_cbin"]}
 PNG_TO_RAW_RGB888 = "png_to_raw_rgb888"
 LAUNCH_FORMATS = frozenset({FORMATS["raw_rgb888"], FORMATS["png"]})
 CPP_KEYWORDS = frozenset({
@@ -97,6 +102,26 @@ class ResourcePack:
     sections: list[InputSection]
     launch_asset_id: int
     digest: bytes
+
+
+@dataclass(frozen=True)
+class LocalizedDisplayNames:
+    default_locale: str
+    values: dict[str, str]
+
+
+@dataclass(frozen=True)
+class PackageManifest:
+    package_id: str
+    display_names: LocalizedDisplayNames
+    launch_asset: str
+    package_type: str = "app"
+    component_type: str = ""
+    version: str = ""
+    languages: tuple[str, ...] = ()
+    font_bundle: str = ""
+    charset: str = ""
+    font_roles: dict[str, dict[str, object]] | None = None
 
 
 def align(value: int, alignment: int) -> int:
@@ -322,6 +347,9 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
     elif format_name == "raw_argb8888":
         if width <= 0 or height <= 0 or len(data) != width * height * 4:
             raise ValueError("raw_argb8888 size must equal WIDTH*HEIGHT*4")
+    elif format_name == "font_cbin":
+        if width != 0 or height != 0 or len(data) < 160 or not data.startswith(b"MPXFCBN\0"):
+            raise ValueError("font_cbin must be a wrapped MicroPixel font cbin with zero dimensions")
     stride = (
         width * 3
         if output_format_name == "raw_rgb888"
@@ -329,7 +357,8 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
         if output_format_name == "raw_argb8888"
         else 0
     )
-    return InputSection(KIND_ASSET, section_id, FORMATS[output_format_name], width, height, stride, data)
+    kind = KIND_FONT if output_format_name == "font_cbin" else KIND_ASSET
+    return InputSection(kind, section_id, FORMATS[output_format_name], width, height, stride, data)
 
 
 def validate_asset_name(value: object, index: int) -> str:
@@ -464,21 +493,169 @@ def validate_display_name(value: object) -> str:
     return value
 
 
-def load_app_manifest(path: Path) -> tuple[str, str, str]:
+def normalize_locale_tag(value: object) -> str:
+    if not isinstance(value, str) or not value or len(value.encode("utf-8")) > LOCALE_MAX_LENGTH:
+        raise ValueError("Locale tag must be a non-empty ASCII string of at most 31 bytes")
+    if value.startswith("-") or value.endswith("-") or "--" in value:
+        raise ValueError(f"invalid Locale tag: {value!r}")
+    subtags = value.split("-")
+    if not 2 <= len(subtags[0]) <= 3 or not subtags[0].isascii() or not subtags[0].isalpha():
+        raise ValueError(f"invalid Locale language subtag: {value!r}")
+    normalized = [subtags[0].lower()]
+    has_script = False
+    has_region = False
+    for subtag in subtags[1:]:
+        if not has_script and not has_region and len(subtag) == 4 and subtag.isascii() and subtag.isalpha():
+            normalized.append(subtag.title())
+            has_script = True
+            continue
+        is_region = (
+            len(subtag) == 2 and subtag.isascii() and subtag.isalpha()
+        ) or (
+            len(subtag) == 3 and subtag.isascii() and subtag.isdigit()
+        )
+        if not has_region and is_region:
+            normalized.append(subtag.upper() if subtag.isalpha() else subtag)
+            has_region = True
+            continue
+        raise ValueError(f"unsupported Locale subtag in {value!r}")
+    return "-".join(normalized)
+
+
+def parse_display_names(value: object, fallback_default: object = "en") -> LocalizedDisplayNames:
+    if isinstance(value, str):
+        default_locale = normalize_locale_tag(fallback_default)
+        return LocalizedDisplayNames(default_locale, {default_locale: validate_display_name(value)})
+    if not isinstance(value, dict):
+        raise ValueError("display_name must be a string or localized display-name object")
+    default_locale = normalize_locale_tag(value.get("default"))
+    raw_values = value.get("values")
+    if not isinstance(raw_values, dict) or not raw_values:
+        raise ValueError("display_name.values must be a non-empty object")
+    values: dict[str, str] = {}
+    for raw_locale, raw_name in raw_values.items():
+        locale = normalize_locale_tag(raw_locale)
+        if raw_locale != locale:
+            raise ValueError(f"display_name Locale must use canonical spelling: {raw_locale!r} -> {locale!r}")
+        if locale in values:
+            raise ValueError(f"duplicate display_name Locale: {locale}")
+        values[locale] = validate_display_name(raw_name)
+    if default_locale not in values:
+        raise ValueError(f"display_name default Locale {default_locale!r} has no value")
+    return LocalizedDisplayNames(default_locale, values)
+
+
+def serialize_package_metadata(display_names: LocalizedDisplayNames) -> bytes:
+    payload = {
+        "schema_version": PACKAGE_METADATA_VERSION,
+        "package_type": "app",
+        "display_name": {
+            "default": display_names.default_locale,
+            "values": display_names.values,
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def validate_component_identifier(value: object, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*", value):
+        raise ValueError(f"{label} must be a lowercase dotted identifier")
+    if len(value.encode("ascii")) > 63:
+        raise ValueError(f"{label} must be at most 63 ASCII bytes")
+    return value
+
+
+def load_package_manifest(path: Path) -> PackageManifest:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema_version") != 1:
-        raise ValueError("app manifest must use schema_version 1")
+        raise ValueError("package manifest must use schema_version 1")
+    package_type = value.get("package_type", "app")
+    if package_type == "app":
+        try:
+            app_id = value["app_id"]
+            if not isinstance(app_id, str):
+                raise TypeError
+            localization = value.get("localization")
+            fallback_default = localization.get("default", "en") if isinstance(localization, dict) else "en"
+            display_name = parse_display_names(value["display_name"], fallback_default)
+            launch_asset = str(value.get("launch_asset", ""))
+            if launch_asset:
+                validate_asset_name(launch_asset, 0)
+            return PackageManifest(app_id, display_name, launch_asset)
+        except (KeyError, TypeError) as error:
+            raise ValueError("app manifest requires app_id, display_name and a valid launch_asset name") from error
+    if package_type != "component" or value.get("component_type") != "font":
+        raise ValueError("only package_type=component with component_type=font is supported")
     try:
-        app_id = value["app_id"]
-        if not isinstance(app_id, str):
-            raise TypeError
-        display_name = validate_display_name(value["display_name"])
-        launch_asset = str(value.get("launch_asset", ""))
-        if launch_asset:
-            validate_asset_name(launch_asset, 0)
-        return app_id, display_name, launch_asset
-    except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("app manifest requires app_id, display_name and a valid launch_asset name") from error
+        package_id = validate_component_identifier(value["id"], "component id")
+        display_names = parse_display_names(value["display_name"])
+        version = str(value["version"])
+        if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
+            raise ValueError("component version must be canonical major.minor.patch")
+        raw_languages = value["languages"]
+        if not isinstance(raw_languages, list) or not raw_languages or len(raw_languages) > 16:
+            raise ValueError("font component languages must contain 1..16 Locale tags")
+        languages: list[str] = []
+        for raw_locale in raw_languages:
+            locale = normalize_locale_tag(raw_locale)
+            if raw_locale != locale or locale in languages:
+                raise ValueError("font component languages must be canonical and unique")
+            languages.append(locale)
+        font_bundle = validate_component_identifier(value["font_bundle"], "font_bundle")
+        charset = validate_component_identifier(value["charset"], "charset")
+        raw_fonts = value["fonts"]
+        role_names = ("small", "medium", "large", "title")
+        if not isinstance(raw_fonts, dict) or set(raw_fonts) != set(role_names):
+            raise ValueError("font component fonts must define small, medium, large and title")
+        font_roles: dict[str, dict[str, object]] = {}
+        asset_names: set[str] = set()
+        for role in role_names:
+            record = raw_fonts[role]
+            if not isinstance(record, dict):
+                raise ValueError(f"font component role {role} must be an object")
+            asset = validate_asset_name(record.get("asset"), 0)
+            style = record.get("style")
+            size = record.get("size")
+            bpp = record.get("bpp")
+            if style != "regular" or not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 4096:
+                raise ValueError(f"font component role {role} has invalid style or size")
+            if not isinstance(bpp, int) or isinstance(bpp, bool) or bpp not in (1, 2, 4, 8):
+                raise ValueError(f"font component role {role} has invalid bpp")
+            if asset in asset_names:
+                raise ValueError("font component roles must reference distinct assets")
+            asset_names.add(asset)
+            font_roles[role] = {"asset": asset, "style": style, "size": size, "bpp": bpp}
+        return PackageManifest(package_id, display_names, "", "component", "font", version, tuple(languages),
+                               font_bundle, charset, font_roles)
+    except KeyError as error:
+        raise ValueError(f"font component manifest is missing {error.args[0]}") from error
+
+
+def serialize_component_metadata(manifest: PackageManifest) -> bytes:
+    if manifest.package_type != "component" or manifest.component_type != "font" or manifest.font_roles is None:
+        raise ValueError("component metadata requires a validated font component manifest")
+    payload = {
+        "schema_version": PACKAGE_METADATA_VERSION,
+        "package_type": "component",
+        "component_type": "font",
+        "version": manifest.version,
+        "display_name": {
+            "default": manifest.display_names.default_locale,
+            "values": manifest.display_names.values,
+        },
+        "languages": list(manifest.languages),
+        "font_bundle": manifest.font_bundle,
+        "charset": manifest.charset,
+        "fonts": manifest.font_roles,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def load_app_manifest(path: Path) -> tuple[str, LocalizedDisplayNames, str]:
+    manifest = load_package_manifest(path)
+    if manifest.package_type != "app":
+        raise ValueError("app manifest cannot describe a Component Package")
+    return manifest.package_id, manifest.display_names, manifest.launch_asset
 
 
 def resource_pack_digest(sections: list[InputSection], launch_asset_id: int) -> bytes:
@@ -523,7 +700,7 @@ def serialize_resource_pack(resource_pack: ResourcePack) -> bytes:
     for section in resource_pack.sections:
         cursor = align(cursor, RESOURCE_PACK_ALIGNMENT)
         entries.append(SECTION.pack(
-            KIND_ASSET, section.section_id, cursor, len(section.data),
+            section.kind, section.section_id, cursor, len(section.data),
             fnv1a32(section.data), section.format, section.width, section.height,
             section.stride, 0, 0, 0,
         ))
@@ -571,10 +748,12 @@ def load_resource_pack(path: Path) -> ResourcePack:
         (kind, section_id, offset, size, content_hash, format_id, width,
          height, stride, reserved0, reserved1, reserved2) = fields
         if (
-            kind != KIND_ASSET
+            kind not in (KIND_ASSET, KIND_FONT)
             or section_id == 0
             or size == 0
-            or format_id not in ASSET_FORMAT_IDS
+            or (kind == KIND_ASSET and format_id not in ASSET_FORMAT_IDS)
+            or (kind == KIND_FONT and format_id != FORMATS["font_cbin"])
+            or (kind == KIND_FONT and (width != 0 or height != 0 or stride != 0))
         ):
             raise ValueError("resource pack contains an invalid section")
         if reserved0 != 0 or reserved1 != 0 or reserved2 != 0:
@@ -586,7 +765,7 @@ def load_resource_pack(path: Path) -> ResourcePack:
             raise ValueError("resource pack section content hash failed")
         occupied.append((offset, offset + size))
         sections.append(InputSection(
-            KIND_ASSET, section_id, format_id, width, height, stride, data,
+            kind, section_id, format_id, width, height, stride, data,
         ))
 
     ids = [section.section_id for section in sections]
@@ -836,19 +1015,28 @@ def main() -> None:
     parser.add_argument("--emit-cpp-header", type=Path, help="generated AssetId bindings for prepare mode")
     parser.add_argument("--cpp-namespace", help="namespace for generated AssetId bindings")
     parser.add_argument("--output", type=Path, help="final Bundle output")
+    parser.add_argument(
+        "--legacy-metadata-v1",
+        action="store_true",
+        help="emit the legacy single UTF-8 display name for compatibility tests",
+    )
     args = parser.parse_args()
 
     if args.app_manifest is not None and args.app_id is not None:
         raise SystemExit("use either --app-id or --app-manifest, not both")
     if args.app_manifest is not None:
         try:
-            app_id_text, display_name_text, manifest_launch_asset = load_app_manifest(args.app_manifest)
+            package_manifest = load_package_manifest(args.app_manifest)
+            app_id_text = package_manifest.package_id
+            display_names = package_manifest.display_names
+            manifest_launch_asset = package_manifest.launch_asset
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
     else:
         app_id_text = args.app_id or ""
-        display_name_text = app_id_text
+        display_names = parse_display_names(app_id_text)
         manifest_launch_asset = ""
+        package_manifest = PackageManifest(app_id_text, display_names, "")
     launch_asset = (
         args.launch_asset if args.launch_asset is not None else manifest_launch_asset
     )
@@ -859,6 +1047,8 @@ def main() -> None:
             raise SystemExit(str(error)) from error
 
     if args.prepare_resource_pack is not None:
+        if args.legacy_metadata_v1:
+            raise SystemExit("--legacy-metadata-v1 is only valid for final Bundle builds")
         if args.aot is not None or args.output is not None or args.resource_pack is not None:
             raise SystemExit("resource preparation cannot also build a final Bundle")
         if (
@@ -902,8 +1092,8 @@ def main() -> None:
         or args.cpp_namespace is not None
     ):
         raise SystemExit("final Bundle builds consume --resource-pack, not an asset manifest")
-    if args.aot is None or args.output is None:
-        raise SystemExit("final Bundle builds require --aot and --output")
+    if args.output is None:
+        raise SystemExit("final Bundle builds require --output")
     if not app_id_text:
         raise SystemExit("one of --app-id or --app-manifest is required")
 
@@ -912,18 +1102,32 @@ def main() -> None:
         raise SystemExit(
             f"--app-id must be 1..{APP_ID_MAX_LENGTH} ASCII letters, digits, '.', '_' or '-'"
         )
-    try:
-        display_name = validate_display_name(display_name_text).encode("utf-8")
-    except ValueError as error:
-        raise SystemExit(str(error)) from error
-    aot = args.aot.read_bytes()
-    if not aot:
-        raise SystemExit("AOT input is empty")
+    default_display_name = display_names.values[display_names.default_locale]
+    if package_manifest.package_type == "component" and args.legacy_metadata_v1:
+        raise SystemExit("Component Packages require typed metadata schema v1")
+    if args.legacy_metadata_v1:
+        metadata_format = FORMAT_UTF8
+        metadata_payload = default_display_name.encode("utf-8")
+        metadata_version = 1
+    elif package_manifest.package_type == "component":
+        metadata_format = FORMAT_PACKAGE_METADATA_JSON
+        metadata_payload = serialize_component_metadata(package_manifest)
+        metadata_version = PACKAGE_METADATA_VERSION
+    else:
+        metadata_format = FORMAT_PACKAGE_METADATA_JSON
+        metadata_payload = serialize_package_metadata(display_names)
+        metadata_version = PACKAGE_METADATA_VERSION
 
-    sections = [
-        InputSection(KIND_AOT, 0, FORMATS["aot"], 0, 0, 0, aot),
-        InputSection(KIND_APP_METADATA, 0, FORMAT_UTF8, 0, 0, 0, display_name),
-    ]
+    sections = [InputSection(KIND_APP_METADATA, 0, metadata_format, 0, 0, 0, metadata_payload)]
+    if package_manifest.package_type == "app":
+        if args.aot is None:
+            raise SystemExit("App Bundle builds require --aot")
+        aot = args.aot.read_bytes()
+        if not aot:
+            raise SystemExit("AOT input is empty")
+        sections.insert(0, InputSection(KIND_AOT, 0, FORMATS["aot"], 0, 0, 0, aot))
+    elif args.aot is not None:
+        raise SystemExit("Component Packages cannot contain AOT/Wasm")
     launch_asset_id = 0
     resource_digest = bytes(32)
     if args.resource_pack is not None:
@@ -939,6 +1143,15 @@ def main() -> None:
         resource_digest = resource_pack.digest
     elif launch_asset:
         raise SystemExit("app manifest names a launch asset but no --resource-pack was supplied")
+    if package_manifest.package_type == "component":
+        if args.resource_pack is None or package_manifest.font_roles is None:
+            raise SystemExit("font Component Packages require a prepared resource pack")
+        expected_font_ids = {
+            fnv1a32(str(record["asset"]).encode("ascii")) for record in package_manifest.font_roles.values()
+        }
+        actual_font_ids = {section.section_id for section in resource_pack.sections if section.kind == KIND_FONT}
+        if expected_font_ids != actual_font_ids or len(resource_pack.sections) != len(actual_font_ids):
+            raise SystemExit("font Component resource pack must contain exactly its four declared font_cbin assets")
 
     toc_offset = HEADER.size
     cursor = align(toc_offset + len(sections) * SECTION.size, 64)
@@ -976,9 +1189,12 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(image)
     print(
-        f"Bundle v{VERSION}: app={app_id_text} title={display_name_text!r} sections={len(sections)} "
+        f"Bundle v{VERSION}: type={package_manifest.package_type} id={app_id_text} "
+        f"title={default_display_name!r} metadata=v{metadata_version} "
+        f"locales={len(display_names.values)} sections={len(sections)} "
         f"content={cursor} extent={bundle_size} launch={launch_asset}({launch_asset_id}) "
-        f"resources={len(sections) - 2} digest={resource_digest.hex()} "
+        f"resources={len(sections) - (2 if package_manifest.package_type == 'app' else 1)} "
+        f"digest={resource_digest.hex()} "
         f"-> {args.output}"
     )
 

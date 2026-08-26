@@ -60,8 +60,12 @@ void StyleFullscreenContainer(lv_obj_t* container, int32_t width, int32_t height
 
 }  // namespace
 
-GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height)
-    : width_(width), height_(height), retained_scene_(width, height) {}
+GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts)
+    : width_(width), height_(height), fonts_(fonts), retained_scene_(width, height, fonts) {}
+
+bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_handle_t font) {
+    return context != nullptr && static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font) != nullptr;
+}
 
 bool GuestGraphicsEngine::AccumulateDamage(BitmapDamage* damages, uint32_t capacity, uint32_t& damage_count,
                                            const uint8_t* data, uint32_t x, uint32_t y, uint32_t width,
@@ -315,6 +319,7 @@ void GuestGraphicsEngine::Release() {
     scene_textures_ = nullptr;
     scratch_textures_ = nullptr;
     retained_scene_.Release();
+    fonts_.ReleaseGuestFonts();
     esp_lv_adapter_unlock();
 }
 
@@ -356,8 +361,8 @@ int32_t GuestGraphicsEngine::Submit(const uint8_t* bytes, uint32_t length, const
     if (lvgl_locked && esp_lv_adapter_lock(-1) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
-    const int32_t validation_status =
-        graphics::ValidateCommandStream(bytes, length, width_, height_, textures.resolve, textures.context);
+    const int32_t validation_status = graphics::ValidateCommandStream(bytes, length, width_, height_, textures.resolve,
+                                                                      textures.context, ValidateFontHandle, this);
     if (validation_status != MICROPIXEL_STATUS_OK) {
         if (lvgl_locked) {
             esp_lv_adapter_unlock();
@@ -449,6 +454,38 @@ int32_t GuestGraphicsEngine::CancelFrame() {
     graphics_frame_length_ = 0U;
     graphics_frame_commands_ = 0U;
     ClearPendingFrameTextures(true);
+    return MICROPIXEL_STATUS_OK;
+}
+
+int32_t GuestGraphicsEngine::LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out) {
+    if (resource.data == nullptr || resource.size == 0U) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    return fonts_.LoadFont(std::span<const uint8_t>(resource.data, resource.size), info_out);
+}
+
+int32_t GuestGraphicsEngine::ReleaseFont(micropixel_font_handle_t font) { return fonts_.ReleaseFont(font); }
+
+int32_t GuestGraphicsEngine::MeasureText(micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
+                                         micropixel_text_metrics_t& metrics_out) {
+    if (text == nullptr || text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES ||
+        fonts_.ResolveGuestHandle(font_handle) == nullptr) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    char terminated[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+    std::memcpy(terminated, text, text_length);
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+    const lv_font_t* font = fonts_.ResolveGuestHandle(font_handle);
+    lv_point_t size{};
+    lv_text_get_size(&size, terminated, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    metrics_out = {};
+    metrics_out.size = sizeof(metrics_out);
+    metrics_out.width = size.x < 0 ? 0U : static_cast<uint32_t>(size.x);
+    metrics_out.height = size.y < 0 ? 0U : static_cast<uint32_t>(size.y);
+    metrics_out.baseline = font->line_height - font->base_line;
+    esp_lv_adapter_unlock();
     return MICROPIXEL_STATUS_OK;
 }
 

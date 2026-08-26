@@ -14,7 +14,7 @@ constexpr char kTag[] = "micropixel_guest";
 }
 
 GuestContext::GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
-                           GuestLogSink* log_sink)
+                           std::string_view effective_locale, GuestLogSink* log_sink)
     : devices_(devices),
       log_sink_(log_sink),
       clock_origin_us_(esp_timer_get_time()),
@@ -25,7 +25,7 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       touch_events_(events_, devices_.input(), clock_origin_us_),
       key_events_(events_, devices_.input(), clock_origin_us_),
       timer_endpoint_(*this),
-      system_endpoint_{},
+      system_endpoint_(effective_locale),
       storage_endpoint_(*this),
       resource_endpoint_(*this),
       random_endpoint_(*this),
@@ -173,6 +173,28 @@ device::DeviceResult<void> GuestContext::GraphicsCommitFrame() {
 }
 
 device::DeviceResult<void> GuestContext::GraphicsCancelFrame() { return devices_.graphics().CancelFrame(); }
+
+ServiceResult<micropixel_font_info_t> GuestContext::LoadFont(uint32_t resource_id) {
+    auto resource = resources_.FindFont(resource_id);
+    if (!resource) {
+        return FailService<micropixel_font_info_t>(resource.error().status);
+    }
+    auto result = devices_.graphics().LoadFont(*resource);
+    return result ? ServiceResult<micropixel_font_info_t>{*result}
+                  : FailService<micropixel_font_info_t>(result.error().status);
+}
+
+ServiceResult<void> GuestContext::ReleaseFont(micropixel_font_handle_t font) {
+    auto result = devices_.graphics().ReleaseFont(font);
+    return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
+}
+
+ServiceResult<micropixel_text_metrics_t> GuestContext::MeasureText(micropixel_font_handle_t font, const char* text,
+                                                                   uint32_t text_length) {
+    auto result = devices_.graphics().MeasureText(font, text, text_length);
+    return result ? ServiceResult<micropixel_text_metrics_t>{*result}
+                  : FailService<micropixel_text_metrics_t>(result.error().status);
+}
 
 ServiceResult<void> GuestContext::UpdateStreamingTexture(const micropixel_streaming_texture_update_request_t& update,
                                                          const uint8_t* pixels) {

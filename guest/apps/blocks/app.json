@@ -1,7 +1,18 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.blocks",
-  "display_name": "Juicy Blocks",
+  "display_name": {
+    "default": "en",
+    "values": {
+      "en": "Juicy Blocks"
+    }
+  },
+  "localization": {
+    "default": "en",
+    "translations": {
+      "en": "i18n/en.json"
+    }
+  },
   "source": "main.cpp",
   "sources": [
     "main.cpp",

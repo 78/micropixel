@@ -5,6 +5,7 @@
 #include <atomic>
 #include <expected>
 #include <memory>
+#include <string_view>
 
 #include "freertos/FreeRTOS.h"
 #include "runtime/bundle/aot_package.hpp"
@@ -59,6 +60,7 @@ class AppSession final {
 
     [[nodiscard]] static std::expected<AppSession, AppSessionFailure> Create(device::DeviceServices& devices,
                                                                              const bundlefs_file_t& file,
+                                                                             std::string_view effective_locale,
                                                                              GuestLogSink* log_sink = nullptr);
     [[nodiscard]] std::expected<void, AppSessionFailure> Run();
     [[nodiscard]] bool Suspend(TickType_t timeout);

@@ -756,10 +756,10 @@ micropixel new
 micropixel build
 micropixel package
 micropixel validate
-micropixel upload
-micropixel install --device ...
-micropixel run --device ... --logs
-micropixel test --device ... --sequence ...
+micropixel install
+micropixel app start <app-id>
+micropixel logs --follow
+micropixel input sequence <file> --screenshot <jpeg>
 ```
 
 CLI 最终调用仓库现有 guest build 和 package 逻辑，避免维护第二套参数。

@@ -38,6 +38,25 @@ DeviceResult<void> GraphicsService::CommitFrame(const TextureAccess& textures) c
 
 DeviceResult<void> GraphicsService::CancelFrame() const { return StatusResult(backend_.CancelFrame()); }
 
+DeviceResult<micropixel_font_info_t> GraphicsService::LoadFont(const FontResourceView& resource) const {
+    micropixel_font_info_t info{};
+    const int32_t status = backend_.LoadFont(resource, info);
+    return status == MICROPIXEL_STATUS_OK ? DeviceResult<micropixel_font_info_t>{info}
+                                          : Fail<micropixel_font_info_t>(status);
+}
+
+DeviceResult<void> GraphicsService::ReleaseFont(micropixel_font_handle_t font) const {
+    return StatusResult(backend_.ReleaseFont(font));
+}
+
+DeviceResult<micropixel_text_metrics_t> GraphicsService::MeasureText(micropixel_font_handle_t font, const char* text,
+                                                                     uint32_t text_length) const {
+    micropixel_text_metrics_t metrics{};
+    const int32_t status = backend_.MeasureText(font, text, text_length, metrics);
+    return status == MICROPIXEL_STATUS_OK ? DeviceResult<micropixel_text_metrics_t>{metrics}
+                                          : Fail<micropixel_text_metrics_t>(status);
+}
+
 DeviceResult<void> GraphicsService::BeginBitmapUpdateFrame() const {
     return StatusResult(backend_.BeginBitmapUpdateFrame());
 }

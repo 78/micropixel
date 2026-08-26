@@ -231,21 +231,22 @@ void BlocksGame::RenderMiniPiece(micropixel::Frame& commands, Tetromino type, in
 }
 
 void BlocksGame::RenderHeader(micropixel::Frame& commands, const Theme& theme) const {
-    commands.DrawText(micropixel::Point{24, 8}, "Juicy Blocks", AsColor(theme.text), micropixel::SystemFont::kTitle);
-    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U),
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{24, 8}, strings_.Get(blocks_strings::Id::kAppTitle), AsColor(theme.text),
+                      micropixel::SystemFont::kTitle);
+    commands.DrawText(micropixel::Point{24, 47}, strings_.Get(blocks_strings::Id::kBrandEdition),
+                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line status;
-    status.Append("LVL ");
+    status.Append(strings_.Get(blocks_strings::Id::kLabelLevelShort));
     status.AppendUint(model_.level());
     commands.DrawText(micropixel::Point{172, 47}, status.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
-    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U),
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{545, 12}, strings_.Get(blocks_strings::Id::kLabelScore),
+                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line score;
     score.AppendPadded4(model_.score());
     commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(),
                       micropixel::SystemFont::kLarge);
-    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U),
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{645, 12}, strings_.Get(blocks_strings::Id::kLabelBest),
+                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line best;
     best.AppendPadded4(best_score_ > model_.score() ? best_score_ : model_.score());
     commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(kBestScoreColor),
@@ -255,24 +256,24 @@ void BlocksGame::RenderHeader(micropixel::Frame& commands, const Theme& theme) c
 void BlocksGame::RenderSidebar(micropixel::Frame& commands, const Theme& theme) const {
     const int32_t sidebar_left = kBoardX + kSidebarX;
     const micropixel::Color muted = micropixel::Color::Rgb(115U, 115U, 115U);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 14}, "HOLD",
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 14}, strings_.Get(blocks_strings::Id::kLabelHold),
                       model_.hold_available() ? AsColor(theme.text) : muted, micropixel::SystemFont::kMedium);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 156}, "NEXT", AsColor(theme.text),
-                      micropixel::SystemFont::kMedium);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 156}, strings_.Get(blocks_strings::Id::kLabelNext),
+                      AsColor(theme.text), micropixel::SystemFont::kMedium);
     Line level;
-    level.Append("LEVEL ");
+    level.Append(strings_.Get(blocks_strings::Id::kLabelLevelPrefix));
     level.AppendUint(model_.level());
     commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 310}, level.c_str(), AsColor(theme.text),
                       micropixel::SystemFont::kLarge);
     Line lines;
-    lines.Append("LINES ");
+    lines.Append(strings_.Get(blocks_strings::Id::kLabelLinesPrefix));
     lines.AppendUint(model_.lines());
     commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 426}, lines.c_str(), AsColor(theme.text),
                       micropixel::SystemFont::kLarge);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 548}, "TAP TO ROTATE", muted,
-                      micropixel::SystemFont::kSmall);
-    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 574}, "SWIPE ANYWHERE", muted,
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 548},
+                      strings_.Get(blocks_strings::Id::kHintTapRotate), muted, micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 574},
+                      strings_.Get(blocks_strings::Id::kHintSwipeAnywhere), muted, micropixel::SystemFont::kSmall);
 }
 
 void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const {
@@ -285,7 +286,7 @@ void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& th
             }
         }
         Line points;
-        points.Append("LINE CLEAR  +");
+        points.Append(strings_.Get(blocks_strings::Id::kEffectLineClearPrefix));
         points.AppendUint(clear_points_);
         commands.DrawTextCentered(kBoardX + kPlayfieldWidth / 2, first_row_y - 34, points.c_str(), AsColor(theme.text),
                                   micropixel::SystemFont::kLarge);
@@ -297,7 +298,7 @@ void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& th
         commands.FillRect(micropixel::Rect{380, 54, static_cast<int32_t>(width), 4},
                           micropixel::Color::Rgb(251U, 191U, 36U));
         Line combo;
-        combo.Append("COMBO x");
+        combo.Append(strings_.Get(blocks_strings::Id::kEffectComboPrefix));
         combo.AppendUint(model_.combo());
         commands.DrawTextCentered(428, 31, combo.c_str(), micropixel::Color::Rgb(251U, 191U, 36U),
                                   micropixel::SystemFont::kSmall);
@@ -324,22 +325,24 @@ void BlocksGame::RenderOverlay(micropixel::Frame& commands) const {
                          screen_button_.pressed() ? 160U : 255U);
 
     if (screen_ == Screen::kMenu) {
-        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "START GAME",
-                                  micropixel::Color::Black(), kActionButtonFont);
+        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect),
+                                  strings_.Get(blocks_strings::Id::kActionStart), micropixel::Color::Black(),
+                                  kActionButtonFont);
     } else if (screen_ == Screen::kPaused) {
-        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect), "CONTINUE",
-                                  micropixel::Color::Black(), kActionButtonFont);
+        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kStartButtonRect),
+                                  strings_.Get(blocks_strings::Id::kActionContinue), micropixel::Color::Black(),
+                                  kActionButtonFont);
     } else {
-        commands.DrawTextCentered(kScreenCenterX, 260, "STACK OVERFLOW", micropixel::Color::Rgb(244U, 63U, 94U),
-                                  micropixel::SystemFont::kLarge);
+        commands.DrawTextCentered(kScreenCenterX, 260, strings_.Get(blocks_strings::Id::kGameOverTitle),
+                                  micropixel::Color::Rgb(244U, 63U, 94U), micropixel::SystemFont::kLarge);
         Line score;
         score.AppendPadded4(model_.score());
         commands.DrawTextCentered(kScreenCenterX, 312, score.c_str(), micropixel::Color::White(),
                                   micropixel::SystemFont::kLarge);
-        commands.DrawTextCentered(kScreenCenterX - 55, 360, "LINES", micropixel::Color::Rgb(115U, 115U, 115U),
-                                  micropixel::SystemFont::kSmall);
-        commands.DrawTextCentered(kScreenCenterX + 55, 360, "LEVEL", micropixel::Color::Rgb(115U, 115U, 115U),
-                                  micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kScreenCenterX - 55, 360, strings_.Get(blocks_strings::Id::kLabelLines),
+                                  micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kScreenCenterX + 55, 360, strings_.Get(blocks_strings::Id::kLabelLevel),
+                                  micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
         Line lines;
         lines.AppendUint(model_.lines());
         commands.DrawTextCentered(kScreenCenterX - 55, 382, lines.c_str(), micropixel::Color::White(),
@@ -348,7 +351,8 @@ void BlocksGame::RenderOverlay(micropixel::Frame& commands) const {
         level.AppendUint(model_.level());
         commands.DrawTextCentered(kScreenCenterX + 55, 382, level.c_str(), micropixel::Color::White(),
                                   micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kRestartButtonRect), "RESTART",
+        commands.DrawTextCentered(kScreenCenterX, ActionButtonTextY(kRestartButtonRect),
+                                  strings_.Get(blocks_strings::Id::kActionRestart),
                                   micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
     }
 }

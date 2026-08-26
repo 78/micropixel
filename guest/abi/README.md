@@ -26,7 +26,8 @@ Audio 或 Network 方法通常只新增 Service 内的稳定数字 ID 和 wire s
 
 当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Random `4`、System `5`、Graphics `16`、
 Input `17`、Audio `18`；Network `19` 只预留 ID，尚未实现。System 1.0 提供最长 31 bytes 的
-BCP 47 locale tag；当前 Host 返回 `en`，以后改变设备语言不需要修改 Guest ABI。
+BCP 47 locale tag。Host 返回当前 Catalog 和字体确实可用的 effective Locale；基础固件只有 `en`，
+以后安装语言组件并改变设备语言不需要修改 Guest ABI。
 
 `service_open` 校验 Service 独立的 major/minor，返回 48-byte `micropixel_service_info_t`：
 

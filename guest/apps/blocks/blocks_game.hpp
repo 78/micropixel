@@ -3,6 +3,7 @@
 
 #include "apps/blocks/blocks_model.hpp"
 #include "blocks_sfx_profiles.hpp"
+#include "blocks_strings.hpp"
 #include "sdk/ui/button.hpp"
 
 namespace blocks {
@@ -60,6 +61,7 @@ class BlocksGame final {
     void PlayGameOverSound();
 
     micropixel::Application& app_;
+    blocks_strings::Catalog strings_;
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
     micropixel::Audio audio_;

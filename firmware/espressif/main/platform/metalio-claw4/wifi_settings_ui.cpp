@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 #include "platform/metalio-claw4/lvgl_wakeup.hpp"
 #include "src/widgets/buttonmatrix/lv_buttonmatrix_private.h"
 
@@ -260,7 +261,8 @@ lv_obj_t* DrawWifiNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& 
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(row, lv_color_hex(0x091522U), kPressed);
     DrawWifiSignal(row, network.rssi);
-    lv_obj_t* name = CreateWifiLabel(row, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 70, 13);
+    lv_obj_t* name =
+        CreateWifiLabel(row, network.ssid.data(), BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 70, 13);
     lv_obj_set_width(name, network.connected ? 350 : 430);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
 
@@ -275,11 +277,11 @@ lv_obj_t* DrawWifiNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& 
         std::snprintf(detail, sizeof(detail), "%s   %s   %d dBm", WifiBandText(network.band),
                       network.secured ? "Secured" : "Open", static_cast<int>(network.rssi));
     }
-    lv_obj_t* metadata = CreateWifiLabel(row, detail, &lv_font_montserrat_18, 0x91a4bdU, 70, 44);
+    lv_obj_t* metadata = CreateWifiLabel(row, detail, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 70, 44);
     lv_obj_set_width(metadata, 450);
     lv_label_set_long_mode(metadata, LV_LABEL_LONG_DOT);
     if (network.connected) {
-        (void)CreateWifiLabel(row, "Connected", &lv_font_montserrat_18, 0x4dd6a4U, 454, 27);
+        (void)CreateWifiLabel(row, "Connected", BuiltinLatinFont(SystemFontRole::kMedium), 0x4dd6a4U, 454, 27);
     }
     if (saved) {
         DrawWifiMoreIndicator(row);
@@ -297,7 +299,7 @@ lv_obj_t* DrawWifiButton(lv_obj_t* parent, const WifiBounds& bounds, const char*
     lv_obj_set_style_bg_color(button, lv_color_hex(0x0b1726U), kPressed);
     lv_obj_t* label = lv_label_create(button);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(label, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_center(label);
     return button;
@@ -517,7 +519,7 @@ void WifiSettingsUiAccess::DrawWifiKeyboard(WifiSettingsUi& state, lv_obj_t* par
     lv_obj_set_style_border_width(state.wifi_keyboard, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x0b1625U), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(state.wifi_keyboard, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_text_font(state.wifi_keyboard, &lv_font_montserrat_18, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(state.wifi_keyboard, BuiltinLatinFont(SystemFontRole::kMedium), LV_PART_ITEMS);
     lv_obj_set_style_text_color(state.wifi_keyboard, lv_color_hex(0xf2f7ffU), LV_PART_ITEMS);
     lv_obj_set_style_bg_color(state.wifi_keyboard, lv_color_hex(0x16263aU), LV_PART_ITEMS);
     lv_obj_set_style_bg_opa(state.wifi_keyboard, LV_OPA_COVER, LV_PART_ITEMS);
@@ -566,8 +568,9 @@ void WifiSettingsUiAccess::DrawWifiPasswordOverlayLocked(WifiSettingsUi& state) 
         default:
             break;
     }
-    (void)CreateWifiLabel(dialog, heading, &lv_font_montserrat_24, heading_color, 26, 22);
-    lv_obj_t* ssid = CreateWifiLabel(dialog, network.ssid.data(), &lv_font_montserrat_32, 0xf2f7ffU, 26, 58);
+    (void)CreateWifiLabel(dialog, heading, BuiltinLatinFont(SystemFontRole::kLarge), heading_color, 26, 22);
+    lv_obj_t* ssid =
+        CreateWifiLabel(dialog, network.ssid.data(), BuiltinLatinFont(SystemFontRole::kTitle), 0xf2f7ffU, 26, 58);
     lv_obj_set_width(ssid, 620);
     lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
 
@@ -584,7 +587,7 @@ void WifiSettingsUiAccess::DrawWifiPasswordOverlayLocked(WifiSettingsUi& state) 
     lv_obj_set_style_pad_left(state.wifi_password_textarea, 20, LV_PART_MAIN);
     lv_obj_set_style_pad_right(state.wifi_password_textarea, 20, LV_PART_MAIN);
     lv_obj_set_style_pad_top(state.wifi_password_textarea, 15, LV_PART_MAIN);
-    lv_obj_set_style_text_font(state.wifi_password_textarea, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(state.wifi_password_textarea, BuiltinLatinFont(SystemFontRole::kLarge), LV_PART_MAIN);
     lv_obj_set_style_text_color(state.wifi_password_textarea, lv_color_hex(0xf2f7ffU), LV_PART_MAIN);
     lv_obj_set_style_text_color(state.wifi_password_textarea, lv_color_hex(0x6f849fU), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_set_style_bg_color(state.wifi_password_textarea, lv_color_hex(0x08111fU), LV_PART_MAIN);
@@ -606,9 +609,10 @@ void WifiSettingsUiAccess::DrawWifiActionSheetLocked(WifiSettingsUi& state) {
     CreateWifiDismissibleScrim(state.root, WifiSheetCancelEvent, &state);
     lv_obj_t* sheet = CreateWifiPanel(state.root, WifiBounds{.x = 28, .y = 304, .width = 664, .height = 388}, 0x101c2cU,
                                       0x42607fU, 24);
-    (void)CreateWifiLabel(sheet, "SAVED NETWORK", &lv_font_montserrat_18, 0x91a4bdU, 24, 20);
+    (void)CreateWifiLabel(sheet, "SAVED NETWORK", BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 20);
     const auto& network = state.wifi_model.saved_networks[state.wifi_selected_index];
-    lv_obj_t* ssid = CreateWifiLabel(sheet, network.ssid.data(), &lv_font_montserrat_24, 0xf2f7ffU, 24, 48);
+    lv_obj_t* ssid =
+        CreateWifiLabel(sheet, network.ssid.data(), BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 48);
     lv_obj_set_width(ssid, 616);
     lv_label_set_long_mode(ssid, LV_LABEL_LONG_DOT);
     lv_obj_t* connect = DrawWifiButton(sheet, WifiBounds{.x = 20, .y = 102, .width = 624, .height = 72},
@@ -656,17 +660,17 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
     lv_obj_add_event_cb(back, WifiBackEvent, LV_EVENT_SHORT_CLICKED, &state);
     lv_obj_t* back_icon = lv_label_create(back);
     lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(back_icon, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_center(back_icon);
     if (state.wifi_scan_view) {
-        (void)CreateWifiLabel(state.wifi_scroll_content, "Connect to New Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116,
-                              28);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "Connect to New Wi-Fi",
+                              BuiltinLatinFont(SystemFontRole::kTitle), 0xf2f7ffU, 116, 28);
         (void)CreateWifiLabel(state.wifi_scroll_content,
                               state.wifi_model.scanning ? "Scanning nearby networks..." : "Nearby networks",
-                              &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
-        (void)CreateWifiLabel(state.wifi_scroll_content, "AVAILABLE NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42,
-                              layout.available_heading);
+                              BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 116, 70);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "AVAILABLE NETWORKS",
+                              BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 42, layout.available_heading);
         if (!state.wifi_model.enabled || state.wifi_model.available_network_count == 0U) {
             lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
                                               WifiBounds{.x = kWifiContentLeft,
@@ -677,7 +681,7 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
             const char* message = !state.wifi_model.enabled   ? "Turn on Wi-Fi to see networks"
                                   : state.wifi_model.scanning ? "Looking for nearby networks..."
                                                               : "No nearby networks found";
-            (void)CreateWifiLabel(empty, message, &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
+            (void)CreateWifiLabel(empty, message, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 22, 27);
         } else {
             for (uint32_t index = 0U; index < state.wifi_model.available_network_count; ++index) {
                 state.wifi_available_rows[index] = DrawWifiNetworkRow(
@@ -688,9 +692,10 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
             }
         }
     } else {
-        (void)CreateWifiLabel(state.wifi_scroll_content, "Wi-Fi", &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
-        (void)CreateWifiLabel(state.wifi_scroll_content, "Manage connections", &lv_font_montserrat_18, 0x91a4bdU, 116,
-                              70);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "Wi-Fi", BuiltinLatinFont(SystemFontRole::kTitle), 0xf2f7ffU,
+                              116, 28);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "Manage connections",
+                              BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 116, 70);
 
         lv_obj_t* toggle =
             CreateWifiPanel(state.wifi_scroll_content, WifiBounds{.x = 40, .y = 116, .width = 640, .height = 86},
@@ -698,9 +703,9 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
         lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_color(toggle, lv_color_hex(0x0a1726U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
         lv_obj_add_event_cb(toggle, WifiSwitchEvent, LV_EVENT_SHORT_CLICKED, &state);
-        (void)CreateWifiLabel(toggle, "Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU, 20, 14);
-        (void)CreateWifiLabel(toggle, WifiConnectionDetail(state.wifi_model), &lv_font_montserrat_18, 0x91a4bdU, 20,
-                              48);
+        (void)CreateWifiLabel(toggle, "Wi-Fi", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 20, 14);
+        (void)CreateWifiLabel(toggle, WifiConnectionDetail(state.wifi_model), BuiltinLatinFont(SystemFontRole::kMedium),
+                              0x91a4bdU, 20, 48);
         lv_obj_t* switch_track = CreateWifiPanel(toggle, WifiBounds{.x = 532, .y = 19, .width = 84, .height = 48},
                                                  state.wifi_model.enabled ? kThemeAccentColor : 0x31506bU, 0U, 24);
         (void)CreateWifiPanel(switch_track,
@@ -716,13 +721,14 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
             lv_obj_set_style_bg_color(state.wifi_open_scan_row, lv_color_hex(0x091522U),
                                       static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
             lv_obj_add_event_cb(state.wifi_open_scan_row, WifiOpenScanEvent, LV_EVENT_SHORT_CLICKED, &state);
-            (void)CreateWifiLabel(state.wifi_open_scan_row, "Connect to New Wi-Fi", &lv_font_montserrat_24, 0xf2f7ffU,
-                                  20, 24);
-            (void)CreateWifiLabel(state.wifi_open_scan_row, LV_SYMBOL_RIGHT, &lv_font_montserrat_24, 0x91a4bdU, 592,
-                                  24);
+            (void)CreateWifiLabel(state.wifi_open_scan_row, "Connect to New Wi-Fi",
+                                  BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 20, 24);
+            (void)CreateWifiLabel(state.wifi_open_scan_row, LV_SYMBOL_RIGHT, BuiltinLatinFont(SystemFontRole::kLarge),
+                                  0x91a4bdU, 592, 24);
         }
 
-        (void)CreateWifiLabel(state.wifi_scroll_content, "SAVED NETWORKS", &lv_font_montserrat_18, 0x91a4bdU, 42, 326);
+        (void)CreateWifiLabel(state.wifi_scroll_content, "SAVED NETWORKS", BuiltinLatinFont(SystemFontRole::kMedium),
+                              0x91a4bdU, 42, 326);
         if (state.wifi_model.saved_network_count == 0U) {
             lv_obj_t* empty = CreateWifiPanel(state.wifi_scroll_content,
                                               WifiBounds{.x = kWifiContentLeft,
@@ -730,7 +736,8 @@ void WifiSettingsUiAccess::RenderWifiSettingsLocked(WifiSettingsUi& state) {
                                                          .width = kWifiContentWidth,
                                                          .height = kWifiRowHeight},
                                               0x111f32U, 0x2e4562U, 20);
-            (void)CreateWifiLabel(empty, "No saved networks", &lv_font_montserrat_18, 0x91a4bdU, 22, 27);
+            (void)CreateWifiLabel(empty, "No saved networks", BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 22,
+                                  27);
         } else {
             for (uint32_t index = 0U; index < state.wifi_model.saved_network_count; ++index) {
                 state.wifi_saved_rows[index] = DrawWifiNetworkRow(

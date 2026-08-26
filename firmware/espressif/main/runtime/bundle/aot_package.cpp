@@ -7,8 +7,9 @@
 
 namespace micropixel::runtime {
 
-std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out) {
-    if (!LoadAppStoreCatalog(catalog_out)) {
+std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out,
+                                                       std::string_view effective_locale) {
+    if (!LoadAppStoreCatalog(catalog_out, effective_locale)) {
         return std::unexpected(AotPackageError::kOpenFailed);
     }
     return {};

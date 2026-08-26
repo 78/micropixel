@@ -303,42 +303,29 @@ finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新�
 `Frame::DrawTexture(position, texture, source_rect)` 选择帧；切帧只更新 command 中的 source rect，
 不触发资源查找、图片解码或 Texture 分配。
 
-```sh
-python3 tools/build_app_bundle.py \
-    --app-manifest path/to/app.json \
-    --asset-manifest path/to/assets/manifest.json \
-    --prepare-resource-pack build/assets/resources.pack \
-    --emit-cpp-header build/assets/app_assets.hpp \
-    --cpp-namespace app_assets
-# 使用 app_assets.hpp 编译 Guest 后：
-python3 tools/build_app_bundle.py \
-    --aot build/guest-p4/app.aot \
-    --app-manifest path/to/app.json \
-    --resource-pack build/assets/resources.pack \
-    --output build/bundles/app.bundle.bin
-```
-
-生成源码后，P4 的单应用开发构建入口只需要源码路径。Bundle builder 会加入稳定 AppId、AOT、
-资源 TOC 并补齐到 64 KiB extent：
+日常构建只把项目目录交给统一 CLI。它从 `app.json` 读取 sources、localization 和 asset manifest，生成
+绑定头、编译 Guest，并把稳定 AppId、AOT 和资源 TOC 写入补齐到 64 KiB extent 的 Bundle v1：
 
 ```sh
-bash tools/build_guest_app_p4.sh path/to/app.cpp
-python3 tools/build_app_bundle.py --aot build/guest-p4/app.aot \
-    --app-id vendor.app --output build/bundles/app.bundle.bin
+python3 tools/micropixel build path/to/app
+python3 tools/micropixel package path/to/app
+python3 tools/micropixel install path/to/app
 ```
 
-默认在 `build/guest-p4/` 产生同名 `.wasm` 和 `.aot`，最终可烧录产物只有 App Bundle。构建脚本
-固定 Restricted C++23、警告即错误、共享 Wasm memory 和 AOT 回跳中断点。开发 profile 使用
-`-O1 -g` 并生成 AOT 调用栈；production `release` profile 使用 Clang `-O2` 和 WAMR AOT
-opt level 3。只有明确以体积优先时才使用 `MICROPIXEL_GUEST_PROFILE=size`（Clang `-Oz`）：
+在包含 `app.json` 的目录中，安装后的 CLI 可直接运行 `micropixel build/package/install`，不需要 App
+专用脚本。默认输出在项目的 `build/`；仓库集成 App 输出在 `build/apps/<name>/`。构建固定 Restricted
+C++23、警告即错误、共享 Wasm memory 和 AOT 回跳中断点。`build` 默认 development（`-O1 -g`），
+`package/install` 默认 release（Clang `-O2`、WAMR AOT opt level 3）；只有明确以体积优先时才使用：
+
+```sh
+python3 tools/micropixel package path/to/app --profile size
+```
+
+`tools/build_guest_app_p4.sh` 与 `tools/build_app_bundle.py` 仍是 conformance、底层调试和打包器测试使用的
+内部构件，不是普通 App 的公开工作流。
 
 USB 调试统一使用 `bash tools/p4.sh flash-apps` 写入 Blocks、Snake 和 Demo。自定义 Bundle 不再绕过
 安装事务直接覆写分区，应通过 Remote Control 安装。
-
-```sh
-MICROPIXEL_GUEST_PROFILE=release \
-    bash tools/build_guest_app_p4.sh path/to/app.cpp
-```
 
 所有 import 必须在 `guest/abi/allowed_imports.txt` 中声明；未授权 import 和拼写错误在链接时
 失败。AI 不应自行拼接工具链命令。

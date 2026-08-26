@@ -5,6 +5,8 @@
 
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "host_strings.hpp"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 #include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -31,16 +33,18 @@ lv_obj_t* CreateLabel(lv_obj_t* parent, const char* text, const lv_font_t* font,
     return label;
 }
 
-const char* WifiDetail(const host_ui::SystemMenuModel& model) {
-    return !model.wifi_available   ? "Not available"
-           : model.wifi_connected  ? "Connected"
-           : model.wifi_connecting ? "Connecting..."
-           : model.wifi_enabled    ? "Not connected"
-                                   : "Off";
+const char* WifiDetail(const host_ui::SystemMenuModel& model, const host_strings::Catalog& strings) {
+    return !model.wifi_available   ? strings.Get(host_strings::Id::kCommonNotAvailable)
+           : model.wifi_connected  ? strings.Get(host_strings::Id::kCommonConnected)
+           : model.wifi_connecting ? strings.Get(host_strings::Id::kCommonConnecting)
+           : model.wifi_enabled    ? strings.Get(host_strings::Id::kCommonNotConnected)
+                                   : strings.Get(host_strings::Id::kCommonOff);
 }
 
-const char* RemoteControlDetail(const host_ui::SystemMenuModel& model) {
-    return model.remote_control_connected ? "Connected" : model.remote_control_enabled ? "Not connected" : "Off";
+const char* RemoteControlDetail(const host_ui::SystemMenuModel& model, const host_strings::Catalog& strings) {
+    return model.remote_control_connected ? strings.Get(host_strings::Id::kCommonConnected)
+           : model.remote_control_enabled ? strings.Get(host_strings::Id::kCommonNotConnected)
+                                          : strings.Get(host_strings::Id::kCommonOff);
 }
 
 const char* PowerManagementDetail(const host_ui::SystemMenuModel& model) {
@@ -113,13 +117,13 @@ void SystemMenuUi::DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuIt
 
     lv_obj_t* icon = lv_label_create(panel);
     lv_label_set_text(icon, icon_text);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(icon, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(icon, lv_color_hex(icon_color), 0);
     lv_obj_set_size(icon, 56, 38);
     lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(icon, 26, 28);
-    (void)CreateLabel(panel, name, &lv_font_montserrat_24, 0xf2f7ffU, 104, 17);
-    lv_obj_t* detail_label = CreateLabel(panel, detail, &lv_font_montserrat_18, 0x91a4bdU, 104, 54);
+    (void)CreateLabel(panel, name, BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 104, 17);
+    lv_obj_t* detail_label = CreateLabel(panel, detail, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 104, 54);
     switch (item) {
         case host_ui::SystemMenuItem::kWifi:
             wifi_detail_label_ = detail_label;
@@ -148,7 +152,7 @@ void SystemMenuUi::DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuIt
     }
     lv_obj_t* chevron = lv_label_create(panel);
     lv_label_set_text(chevron, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(chevron, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(chevron, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(chevron, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_set_pos(chevron, kRowWidth - 46, 34);
 }
@@ -159,8 +163,9 @@ void SystemMenuUi::Update(const host_ui::SystemMenuModel& model) {
         firmware_update_dot_ == nullptr || display_ == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    lv_label_set_text(wifi_detail_label_, WifiDetail(model));
-    lv_label_set_text(remote_control_detail_label_, RemoteControlDetail(model));
+    const host_strings::Catalog strings = host_strings::ForTag(model.locale);
+    lv_label_set_text(wifi_detail_label_, WifiDetail(model, strings));
+    lv_label_set_text(remote_control_detail_label_, RemoteControlDetail(model, strings));
     lv_label_set_text(power_management_detail_label_, PowerManagementDetail(model));
     const auto firmware_detail = FirmwareDetail(model);
     lv_label_set_text(system_information_detail_label_, firmware_detail.data());
@@ -208,6 +213,7 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     action_sink_ = action_sink;
     action_context_ = action_context;
     ResetObjectPointers();
+    const host_strings::Catalog strings = host_strings::ForTag(model.locale);
 
     lv_obj_t* back = lv_obj_create(root);
     lv_obj_set_pos(back, 40, 32);
@@ -224,12 +230,14 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     lv_obj_add_event_cb(back, BackEvent, LV_EVENT_SHORT_CLICKED, this);
     lv_obj_t* back_label = lv_label_create(back);
     lv_label_set_text(back_label, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(back_label, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(back_label, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_center(back_label);
 
-    (void)CreateLabel(root, "System Settings", &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
-    (void)CreateLabel(root, "Configure this device", &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
+    (void)CreateLabel(root, strings.Get(host_strings::Id::kSystemSettingsTitle),
+                      BuiltinLatinFont(SystemFontRole::kTitle), 0xf2f7ffU, 116, 28);
+    (void)CreateLabel(root, strings.Get(host_strings::Id::kSystemSettingsSubtitle),
+                      BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 116, 70);
 
     scroll_content_ = lv_obj_create(root);
     lv_obj_set_pos(scroll_content_, 0, kHeaderHeight);
@@ -250,21 +258,24 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     lv_obj_set_style_bg_color(scroll_content_, lv_color_hex(0x42607fU), LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_opa(scroll_content_, LV_OPA_COVER, LV_PART_SCROLLBAR);
 
-    DrawRow(scroll_content_, 0U, host_ui::SystemMenuItem::kWifi, LV_SYMBOL_WIFI, "Wi-Fi", WifiDetail(model), 0x69a7ffU,
+    DrawRow(scroll_content_, 0U, host_ui::SystemMenuItem::kWifi, LV_SYMBOL_WIFI,
+            strings.Get(host_strings::Id::kSystemSettingsWifi), WifiDetail(model, strings), 0x69a7ffU, true);
+    DrawRow(scroll_content_, 1U, host_ui::SystemMenuItem::kRemoteControl, LV_SYMBOL_REFRESH,
+            strings.Get(host_strings::Id::kSystemSettingsRemoteControl), RemoteControlDetail(model, strings), 0xc5f36dU,
             true);
-    DrawRow(scroll_content_, 1U, host_ui::SystemMenuItem::kRemoteControl, LV_SYMBOL_REFRESH, "Remote Control",
-            RemoteControlDetail(model), 0xc5f36dU, true);
     const auto firmware_detail = FirmwareDetail(model);
-    DrawRow(scroll_content_, 2U, host_ui::SystemMenuItem::kSystemInformation, "i", "System Information",
-            firmware_detail.data(), 0x69a7ffU);
+    DrawRow(scroll_content_, 2U, host_ui::SystemMenuItem::kSystemInformation, "i",
+            strings.Get(host_strings::Id::kSystemSettingsSystemInformation), firmware_detail.data(), 0x69a7ffU);
     if (firmware_update_dot_ != nullptr && !model.firmware_update_available) {
         lv_obj_add_flag(firmware_update_dot_, LV_OBJ_FLAG_HIDDEN);
     }
-    DrawRow(scroll_content_, 3U, host_ui::SystemMenuItem::kLanguage, "A", "Language",
-            model.language != nullptr ? model.language : "English", 0x4dd6a4U);
-    DrawRow(scroll_content_, 4U, host_ui::SystemMenuItem::kPowerManagement, LV_SYMBOL_POWER, "Power Management",
-            PowerManagementDetail(model), 0xf4c86aU);
-    DrawRow(scroll_content_, 5U, host_ui::SystemMenuItem::kManageApps, LV_SYMBOL_LIST, "Manage Apps",
+    DrawRow(scroll_content_, 3U, host_ui::SystemMenuItem::kLanguage, "A",
+            strings.Get(host_strings::Id::kSystemSettingsLanguage),
+            model.language != nullptr ? model.language : strings.Get(host_strings::Id::kLanguageEnglish), 0x4dd6a4U);
+    DrawRow(scroll_content_, 4U, host_ui::SystemMenuItem::kPowerManagement, LV_SYMBOL_POWER,
+            strings.Get(host_strings::Id::kSystemSettingsPowerManagement), PowerManagementDetail(model), 0xf4c86aU);
+    DrawRow(scroll_content_, 5U, host_ui::SystemMenuItem::kManageApps, LV_SYMBOL_LIST,
+            strings.Get(host_strings::Id::kSystemSettingsManageApps),
             model.installed_app_count == 1U ? "1 installed app" : "Installed apps", 0xff9f43U);
 
     lv_obj_t* bottom_spacer = lv_obj_create(scroll_content_);

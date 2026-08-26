@@ -105,8 +105,13 @@ bool IsTextOpcode(uint16_t opcode) {
     return opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXT || opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXT_CENTERED;
 }
 
+bool IsValidUtf8(const uint8_t* text, uint32_t length) {
+    return text != nullptr && length != 0U && ValidUtf8(text, length);
+}
+
 int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t logical_width, int32_t logical_height,
-                              device::BitmapResolver resolver, void* resolver_context, uint32_t max_commands) {
+                              device::BitmapResolver resolver, void* resolver_context,
+                              device::FontValidator font_validator, void* font_context, uint32_t max_commands) {
     micropixel_graphics_command_header_t header{};
     if (!ReadStruct(bytes, length, 0U, header) || header.magic != MICROPIXEL_GRAPHICS_COMMAND_MAGIC ||
         header.total_size != length || header.command_count > max_commands) {
@@ -190,8 +195,8 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
         } else if (IsTextOpcode(record.opcode)) {
             micropixel_graphics_draw_text_command_t command{};
             if (!ReadStruct(bytes, length, offset, command) || command.x < 0 || command.x >= logical_width ||
-                command.y < 0 || command.y >= logical_height || command.font_handle < MICROPIXEL_SYSTEM_FONT_SMALL ||
-                command.font_handle > MICROPIXEL_SYSTEM_FONT_TITLE || command.text_length == 0U ||
+                command.y < 0 || command.y >= logical_height || font_validator == nullptr ||
+                !font_validator(font_context, command.font_handle) || command.text_length == 0U ||
                 command.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES || !ValidRgb888(command.rgb888)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }

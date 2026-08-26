@@ -119,6 +119,17 @@ ServiceResult<void> ResourceService::ReleaseTexture(micropixel_texture_handle_t 
     return {};
 }
 
+ServiceResult<device::FontResourceView> ResourceService::FindFont(uint32_t resource_id) const {
+    if (resource_id == 0U || stopping_.load(std::memory_order_acquire)) {
+        return FailService<device::FontResourceView>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    micropixel_bundle_font_view_t font{};
+    if (!micropixel_bundle_find_font(&package_, resource_id, &font)) {
+        return FailService<device::FontResourceView>(MICROPIXEL_STATUS_NOT_FOUND);
+    }
+    return device::FontResourceView{font.data, font.size};
+}
+
 ServiceResult<micropixel_texture_info_t> ResourceService::CreateStreamingTexture(uint32_t width, uint32_t height,
                                                                                  uint32_t pixel_format) {
     if (stopping_.load(std::memory_order_acquire) || width == 0U || height == 0U || width > 720U || height > 720U ||

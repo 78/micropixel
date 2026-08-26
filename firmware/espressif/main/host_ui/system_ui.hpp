@@ -208,6 +208,7 @@ enum class SystemMenuItem : uint32_t {
 };
 
 struct SystemMenuModel final {
+    const char* locale{"en"};
     const char* language{"English"};
     uint32_t installed_app_count{};
     uint8_t auto_sleep_timeout_minutes{kDefaultAutoSleepTimeoutMinutes};

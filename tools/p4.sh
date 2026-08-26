@@ -227,6 +227,8 @@ prepare_host_config() {
         printf '# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set\n'
         printf 'CONFIG_LV_MEM_SIZE_KILOBYTES=%s\n' "$lv_mem_size_kib"
         printf 'CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0\n'
+        printf '# CONFIG_LV_BUILD_EXAMPLES is not set\n'
+        printf '# CONFIG_LV_BUILD_DEMOS is not set\n'
     } >"$env_defaults_updated"
     if [[ ! -f "$env_defaults" ]] || ! cmp -s "$env_defaults_updated" "$env_defaults"; then
         mv "$env_defaults_updated" "$env_defaults"
@@ -245,7 +247,7 @@ prepare_host_config() {
         awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
             -v lv_mem_size_kib="$lv_mem_size_kib" '
-            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_pm = 0; saw_pm_dfs = 0 }
+            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_lv_examples = 0; saw_lv_demos = 0; saw_pm = 0; saw_pm_dfs = 0 }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
@@ -302,6 +304,16 @@ prepare_host_config() {
                 saw_lv_mem_expand = 1
                 next
             }
+            /^CONFIG_LV_BUILD_EXAMPLES=/ || /^# CONFIG_LV_BUILD_EXAMPLES is not set$/ {
+                print "# CONFIG_LV_BUILD_EXAMPLES is not set"
+                saw_lv_examples = 1
+                next
+            }
+            /^CONFIG_LV_BUILD_DEMOS=/ || /^# CONFIG_LV_BUILD_DEMOS is not set$/ {
+                print "# CONFIG_LV_BUILD_DEMOS is not set"
+                saw_lv_demos = 1
+                next
+            }
             /^CONFIG_PM_ENABLE=/ || /^# CONFIG_PM_ENABLE is not set$/ {
                 print "CONFIG_PM_ENABLE=y"
                 saw_pm = 1
@@ -327,6 +339,8 @@ prepare_host_config() {
                 if (!saw_ota_rollback) print "CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y"
                 if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
                 if (!saw_lv_mem_expand) print "CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0"
+                if (!saw_lv_examples) print "# CONFIG_LV_BUILD_EXAMPLES is not set"
+                if (!saw_lv_demos) print "# CONFIG_LV_BUILD_DEMOS is not set"
                 if (!saw_pm) print "CONFIG_PM_ENABLE=y"
                 if (!saw_pm_dfs) print "CONFIG_PM_DFS_INIT_AUTO=y"
             }
@@ -602,7 +616,10 @@ run_tests() {
     bash "$workspace_root/tools/check_firmware_style.sh" --format-only
     bash "$workspace_root/tools/tests/test_firmware_host.sh"
     PYTHONPATH="$workspace_root${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m unittest tools.tests.test_build_app_store_image tools.tests.test_analyze_sfx -v
+        python3 -m unittest tools.tests.test_build_app_store_image tools.tests.test_analyze_sfx \
+            tools.tests.test_build_app_bundle_metadata tools.tests.test_build_font_cbin \
+            tools.tests.test_generate_builtin_fonts \
+            tools.tests.test_generate_localization -v
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \

@@ -10,6 +10,7 @@
 #include "lvgl.h"
 #include "platform/metalio-claw4/display/dirty_region_coalescer.hpp"
 #include "platform/metalio-claw4/display/retained_scene.hpp"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 
@@ -23,7 +24,7 @@ struct GuestPresentationHooks final {
 
 class GuestGraphicsEngine final {
    public:
-    GuestGraphicsEngine(int32_t width, int32_t height);
+    GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts);
 
     void SetPresentationHooks(GuestPresentationHooks hooks) { presentation_hooks_ = hooks; }
     [[nodiscard]] esp_err_t Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel);
@@ -35,6 +36,10 @@ class GuestGraphicsEngine final {
     [[nodiscard]] int32_t Submit(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures);
     [[nodiscard]] int32_t CommitFrame(const device::TextureAccess& textures);
     [[nodiscard]] int32_t CancelFrame();
+    [[nodiscard]] int32_t LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out);
+    [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t font);
+    [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
+                                      micropixel_text_metrics_t& metrics_out);
     [[nodiscard]] int32_t BeginBitmapUpdateFrame();
     [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                        uint32_t height, const uint8_t* pixels, uint32_t stride);
@@ -50,6 +55,7 @@ class GuestGraphicsEngine final {
    private:
     static void DisplayRefreshStartEvent(lv_event_t* event);
     static void DisplayRefreshReadyEvent(lv_event_t* event);
+    static bool ValidateFontHandle(void* context, micropixel_font_handle_t font);
 
     [[nodiscard]] int32_t ApplyFrameLocked(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures,
                                            const micropixel_texture_handle_t* retained_textures,
@@ -79,6 +85,7 @@ class GuestGraphicsEngine final {
     lv_display_t* display_{};
     lv_obj_t* guest_frame_{};
     DirtyRegionCoalescer dirty_region_coalescer_{};
+    FontRegistry& fonts_;
     RetainedScene retained_scene_;
     GuestPresentationHooks presentation_hooks_{};
     BitmapDamage bitmap_damage_[kBitmapDamageCapacity]{};

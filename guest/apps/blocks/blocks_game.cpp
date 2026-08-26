@@ -6,6 +6,7 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
                        micropixel::RendererInfo renderer_info, micropixel::Audio audio, bool audio_available,
                        uint32_t best_score)
     : app_(app),
+      strings_(blocks_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
       audio_(audio),

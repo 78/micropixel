@@ -896,7 +896,21 @@ void Frame::FillRect(Rect rect, Color color, uint8_t opacity) {
 
 void Frame::DrawText(Point position, const char* text, Color color, SystemFont font) {
     const uint16_t font_handle = static_cast<uint16_t>(font);
-    if (text == nullptr || font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
+    if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
+        runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    DrawTextWithHandle(position, text, color, font_handle);
+}
+
+void Frame::DrawText(Point position, const char* text, Color color, const Font& font) {
+    if (!font.valid()) {
+        runtime::Panic("graphics.draw_text.font", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    DrawTextWithHandle(position, text, color, font.handle_);
+}
+
+void Frame::DrawTextWithHandle(Point position, const char* text, Color color, uint16_t font_handle) {
+    if (text == nullptr || font_handle == 0U) {
         runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     if (state_depth_ != 0U) {
@@ -935,7 +949,22 @@ void Frame::DrawText(Point position, const char* text, Color color, SystemFont f
 
 void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, SystemFont font) {
     const uint16_t font_handle = static_cast<uint16_t>(font);
-    if (text == nullptr || font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
+    if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
+        runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    DrawTextCenteredWithHandle(center_x, y, text, color, font_handle);
+}
+
+void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, const Font& font) {
+    if (!font.valid()) {
+        runtime::Panic("graphics.draw_text_centered.font", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    DrawTextCenteredWithHandle(center_x, y, text, color, font.handle_);
+}
+
+void Frame::DrawTextCenteredWithHandle(int32_t center_x, int32_t y, const char* text, Color color,
+                                       uint16_t font_handle) {
+    if (text == nullptr || font_handle == 0U) {
         runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     if (state_depth_ != 0U) {
@@ -1142,6 +1171,65 @@ void Frame::Cancel() {
 
 Frame Renderer::BeginFrame() const { return Frame{Frame::CapabilityToken{}, info()}; }
 
+namespace {
+
+Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle) {
+    if (text == nullptr || font_handle == 0U) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    uint32_t text_length = 0U;
+    while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
+        ++text_length;
+    }
+    if (text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+
+    int32_t status = OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
+                                 MICROPIXEL_GRAPHICS_INTERFACE_MINOR);
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    alignas(4)
+        uint8_t request[sizeof(micropixel_graphics_measure_text_request_t) + MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES]{};
+    const uint32_t request_size = sizeof(micropixel_graphics_measure_text_request_t) + text_length;
+    micropixel_graphics_measure_text_request_t header{};
+    header.size = static_cast<uint16_t>(request_size);
+    header.font = font_handle;
+    header.text_length = static_cast<uint16_t>(text_length);
+    CopyBytes(request, &header, sizeof(header));
+    CopyBytes(request + sizeof(header), text, text_length);
+
+    micropixel_text_metrics_t response{};
+    uint32_t response_size = 0U;
+    status = CallService(graphics_service, MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT, request, request_size, &response,
+                         sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.reserved0 != 0U) {
+        runtime::Panic("graphics.measure_text.response", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return TextMetrics{response.width, response.height, response.baseline};
+}
+
+}  // namespace
+
+Result<TextMetrics> Renderer::MeasureText(const char* text, SystemFont font) const {
+    const uint16_t font_handle = static_cast<uint16_t>(font);
+    if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    return MeasureTextWithHandle(text, font_handle);
+}
+
+Result<TextMetrics> Renderer::MeasureText(const char* text, const Font& font) const {
+    if (!font.valid()) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    return MeasureTextWithHandle(text, font.handle_);
+}
+
 InputInfo Input::info() const {
     const micropixel_input_info_t& raw = LoadInputInfo();
     return InputInfo{raw.logical_width, raw.logical_height, raw.max_touch_points, raw.capabilities};
@@ -1173,6 +1261,44 @@ void Texture::Reset() {
         handle_ = 0U;
         width_ = 0U;
         height_ = 0U;
+    }
+}
+
+Font::Font(Font&& other) noexcept
+    : handle_(other.handle_),
+      size_(other.size_),
+      line_height_(other.line_height_),
+      ascent_(other.ascent_),
+      descent_(other.descent_) {
+    other.handle_ = 0U;
+}
+
+Font& Font::operator=(Font&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        handle_ = other.handle_;
+        size_ = other.size_;
+        line_height_ = other.line_height_;
+        ascent_ = other.ascent_;
+        descent_ = other.descent_;
+        other.handle_ = 0U;
+    }
+    return *this;
+}
+
+Font::~Font() { Reset(); }
+
+void Font::Reset() {
+    if (handle_ != 0U) {
+        micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+        if (OpenResourceService() == MICROPIXEL_STATUS_OK) {
+            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_FONT_RELEASE, &request, sizeof(request));
+        }
+        handle_ = 0U;
+        size_ = 0U;
+        line_height_ = 0U;
+        ascent_ = 0;
+        descent_ = 0;
     }
 }
 
@@ -1276,6 +1402,29 @@ Result<Texture> Resources::LoadTexture(ResourceRef resource) const {
         runtime::Panic("resources.load_texture.response", MICROPIXEL_STATUS_INTERNAL);
     }
     return Texture{response.texture, response.width, response.height};
+}
+
+Result<Font> Resources::LoadFont(ResourceRef resource) const {
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    micropixel_resource_load_font_request_t request{static_cast<uint16_t>(sizeof(request)), 0U,
+                                                    resource.asset().value()};
+    micropixel_font_info_t response{};
+    uint32_t response_size = 0U;
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_FONT, &request, sizeof(request), &response,
+                         sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) ||
+        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.font == 0U ||
+        response.font_size == 0U || response.line_height == 0U || response.ascent <= 0 || response.descent < 0 ||
+        response.reserved[0] != 0U || response.reserved[1] != 0U) {
+        runtime::Panic("resources.load_font.response", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return Font{response.font, response.font_size, response.line_height, response.ascent, response.descent};
 }
 
 Result<StreamingTexture> Renderer::CreateStreamingTexture(Size size, PixelFormat pixel_format) const {

@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "esp_log.h"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 #include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -69,7 +70,7 @@ lv_obj_t* CreateActionButton(lv_obj_t* parent, const Bounds& bounds, const char*
     lv_obj_set_style_bg_color(button, lv_color_hex(0x0b1726U), kPressed);
     lv_obj_t* label = lv_label_create(button);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(label, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_center(label);
     return button;
@@ -126,26 +127,27 @@ lv_obj_t* DrawDetailHeader(lv_obj_t* root, const char* title, const char* subtit
     lv_obj_add_event_cb(back, back_callback, LV_EVENT_SHORT_CLICKED, user_data);
     lv_obj_t* back_icon = lv_label_create(back);
     lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(back_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(back_icon, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(back_icon, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_center(back_icon);
-    (void)CreateLabel(root, title, &lv_font_montserrat_32, 0xf2f7ffU, 116, 28);
+    (void)CreateLabel(root, title, BuiltinLatinFont(SystemFontRole::kTitle), 0xf2f7ffU, 116, 28);
     if (subtitle != nullptr && subtitle[0] != '\0') {
-        (void)CreateLabel(root, subtitle, &lv_font_montserrat_18, 0x91a4bdU, 116, 70);
+        (void)CreateLabel(root, subtitle, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 116, 70);
     }
     return back;
 }
 
 void DrawInformationSectionLabel(lv_obj_t* parent, const char* text, int32_t y) {
-    (void)CreateLabel(parent, text, &lv_font_montserrat_18, 0x748aa5U, 42, y);
+    (void)CreateLabel(parent, text, BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, 42, y);
 }
 
 void DrawInformationRow(lv_obj_t* panel, int32_t y, const char* label, const char* value) {
     if (y > 0) {
         (void)CreatePanel(panel, Bounds{.x = 20, .y = y, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
     }
-    (void)CreateLabel(panel, label, &lv_font_montserrat_18, 0x91a4bdU, 22, y + 18);
-    lv_obj_t* value_label = CreateLabel(panel, value, &lv_font_montserrat_18, 0xf2f7ffU, 260, y + 18);
+    (void)CreateLabel(panel, label, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 22, y + 18);
+    lv_obj_t* value_label =
+        CreateLabel(panel, value, BuiltinLatinFont(SystemFontRole::kMedium), 0xf2f7ffU, 260, y + 18);
     lv_obj_set_width(value_label, 356);
     lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_long_mode(value_label, LV_LABEL_LONG_DOT);
@@ -154,8 +156,8 @@ void DrawInformationRow(lv_obj_t* panel, int32_t y, const char* label, const cha
 void DrawMemoryMetric(lv_obj_t* panel, int32_t x, int32_t y, const char* name, uint32_t kib, uint32_t color) {
     char value[24]{};
     FormatInformationSize(kib, value, sizeof(value));
-    (void)CreateLabel(panel, name, &lv_font_montserrat_18, 0x748aa5U, x, y);
-    lv_obj_t* label = CreateLabel(panel, value, &lv_font_montserrat_18, color, x, y + 30);
+    (void)CreateLabel(panel, name, BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, x, y);
+    lv_obj_t* label = CreateLabel(panel, value, BuiltinLatinFont(SystemFontRole::kMedium), color, x, y + 30);
     lv_obj_set_width(label, 106);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
 }
@@ -165,7 +167,7 @@ void DrawMemoryStatisticsRow(lv_obj_t* panel, int32_t y, const char* name,
     if (y > 0) {
         (void)CreatePanel(panel, Bounds{.x = 20, .y = y, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
     }
-    (void)CreateLabel(panel, name, &lv_font_montserrat_18, 0xf2f7ffU, 22, y + 35);
+    (void)CreateLabel(panel, name, BuiltinLatinFont(SystemFontRole::kMedium), 0xf2f7ffU, 22, y + 35);
     DrawMemoryMetric(panel, 176, y + 17, "TOTAL", memory.total_kib, 0xf2f7ffU);
     DrawMemoryMetric(panel, 288, y + 17, "FREE", memory.free_kib, 0xf2f7ffU);
     DrawMemoryMetric(panel, 400, y + 17, "MINIMUM", memory.minimum_free_kib, 0x69a7ffU);
@@ -257,27 +259,28 @@ void DrawFirmwareUpdateView(lv_obj_t* root, const host_ui::SystemInformationMode
     lv_obj_t* panel =
         CreatePanel(root, Bounds{.x = 40, .y = 138, .width = 640, .height = 500}, 0x111f32U, 0x2e4562U, 26);
     lv_obj_t* icon = CreateLabel(
-        panel, LV_SYMBOL_REFRESH, &lv_font_montserrat_32,
+        panel, LV_SYMBOL_REFRESH, BuiltinLatinFont(SystemFontRole::kTitle),
         model.firmware_update_state == host_ui::FirmwareUpdateState::kFailed ? 0xff6b74U : 0x69a7ffU, 292, 38);
     lv_obj_set_width(icon, 56);
     lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
 
     const char* stage = FirmwareUpdateStageText(model.firmware_update_state);
-    lv_obj_t* stage_label = CreateLabel(panel, stage, &lv_font_montserrat_24, 0xf2f7ffU, 40, 99);
+    lv_obj_t* stage_label = CreateLabel(panel, stage, BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 40, 99);
     lv_obj_set_width(stage_label, 560);
     lv_obj_set_style_text_align(stage_label, LV_TEXT_ALIGN_CENTER, 0);
 
     char versions[160]{};
     const char* latest = DisplayText(model.latest_firmware_version.data(), model.firmware_version.data());
     std::snprintf(versions, sizeof(versions), "%s  %s  %s", model.firmware_version.data(), LV_SYMBOL_RIGHT, latest);
-    lv_obj_t* version_label = CreateLabel(panel, versions, &lv_font_montserrat_18, 0x91a4bdU, 40, 141);
+    lv_obj_t* version_label =
+        CreateLabel(panel, versions, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 40, 141);
     lv_obj_set_width(version_label, 560);
     lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, 0);
 
     const uint8_t progress = std::min<uint8_t>(model.firmware_progress_percent, 100U);
     char percent[16]{};
     std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
-    lv_obj_t* percent_label = CreateLabel(panel, percent, &lv_font_montserrat_32, 0xf2f7ffU, 40, 190);
+    lv_obj_t* percent_label = CreateLabel(panel, percent, BuiltinLatinFont(SystemFontRole::kTitle), 0xf2f7ffU, 40, 190);
     lv_obj_set_width(percent_label, 560);
     lv_obj_set_style_text_align(percent_label, LV_TEXT_ALIGN_CENTER, 0);
 
@@ -301,14 +304,14 @@ void DrawFirmwareUpdateView(lv_obj_t* root, const host_ui::SystemInformationMode
             static_cast<uint32_t>((static_cast<uint64_t>(model.firmware_size_bytes) * 10U) / (1024U * 1024U));
         std::snprintf(size, sizeof(size), "%" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB", shown_tenths / 10U,
                       shown_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
-        lv_obj_t* size_label = CreateLabel(panel, size, &lv_font_montserrat_18, 0x91a4bdU, 40, 281);
+        lv_obj_t* size_label = CreateLabel(panel, size, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 40, 281);
         lv_obj_set_width(size_label, 560);
         lv_obj_set_style_text_align(size_label, LV_TEXT_ALIGN_CENTER, 0);
     }
 
     const char* message = DisplayText(model.firmware_update_message.data(), stage);
     lv_obj_t* message_label = CreateLabel(
-        panel, message, &lv_font_montserrat_18,
+        panel, message, BuiltinLatinFont(SystemFontRole::kMedium),
         model.firmware_update_state == host_ui::FirmwareUpdateState::kFailed ? 0xff8a91U : 0x91a4bdU, 40, 326);
     lv_obj_set_width(message_label, 560);
     lv_obj_set_style_text_align(message_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -355,20 +358,21 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformatio
     lv_obj_t* scroll_content = CreateDetailScrollContent(root_, kContentHeight, DetailScrollEvent, this);
     lv_obj_t* firmware =
         CreatePanel(scroll_content, Bounds{.x = 40, .y = 14, .width = 640, .height = 190}, 0x111f32U, 0x2e4562U, 22);
-    (void)CreateLabel(firmware, "MicroPixel Firmware", &lv_font_montserrat_18, 0x91a4bdU, 24, 18);
+    (void)CreateLabel(firmware, "MicroPixel Firmware", BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 18);
     char version[96]{};
     std::snprintf(version, sizeof(version), "Version %s", model.firmware_version.data());
-    (void)CreateLabel(firmware, version, &lv_font_montserrat_24, 0xf2f7ffU, 24, 49);
+    (void)CreateLabel(firmware, version, BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 49);
     char build[224]{};
     std::snprintf(build, sizeof(build), "Build %s   %s %s", model.build_id.data(), model.build_date.data(),
                   model.build_time.data());
-    lv_obj_t* build_label = CreateLabel(firmware, build, &lv_font_montserrat_18, 0x69a7ffU, 24, 88);
+    lv_obj_t* build_label = CreateLabel(firmware, build, BuiltinLatinFont(SystemFontRole::kMedium), 0x69a7ffU, 24, 88);
     lv_obj_set_width(build_label, 592);
     lv_label_set_long_mode(build_label, LV_LABEL_LONG_DOT);
 
     const char* update_status = model.firmware_update_message[0] != '\0' ? model.firmware_update_message.data()
                                                                          : "Connect to Control to check for updates";
-    lv_obj_t* update_status_label = CreateLabel(firmware, update_status, &lv_font_montserrat_18, 0x91a4bdU, 24, 139);
+    lv_obj_t* update_status_label =
+        CreateLabel(firmware, update_status, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 139);
     lv_obj_set_width(update_status_label, model.firmware_update_installable ? 382 : 592);
     lv_label_set_long_mode(update_status_label, LV_LABEL_LONG_DOT);
     if (model.firmware_update_installable) {
@@ -490,9 +494,9 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowPowerManagementL
 
     lv_obj_t* auto_sleep =
         CreatePanel(root_, Bounds{.x = 40, .y = 138, .width = 640, .height = 154}, 0x111f32U, 0x2e4562U, 22);
-    (void)CreateLabel(auto_sleep, "Auto sleep", &lv_font_montserrat_24, 0xf2f7ffU, 24, 23);
+    (void)CreateLabel(auto_sleep, "Auto sleep", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 23);
     lv_obj_t* description = CreateLabel(auto_sleep, "Sleep after no interaction while on battery power",
-                                        &lv_font_montserrat_18, 0x91a4bdU, 24, 63);
+                                        BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 63);
     lv_obj_set_width(description, 480);
     lv_label_set_long_mode(description, LV_LABEL_LONG_WRAP);
     power_management_switch_ = lv_switch_create(auto_sleep);
@@ -502,18 +506,18 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowPowerManagementL
 
     lv_obj_t* timeout =
         CreatePanel(root_, Bounds{.x = 40, .y = 316, .width = 640, .height = 170}, 0x111f32U, 0x2e4562U, 22);
-    (void)CreateLabel(timeout, "Idle timeout", &lv_font_montserrat_24, 0xf2f7ffU, 24, 22);
-    (void)CreateLabel(timeout, "Choose how long the device waits before sleeping", &lv_font_montserrat_18, 0x91a4bdU,
-                      24, 61);
+    (void)CreateLabel(timeout, "Idle timeout", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 22);
+    (void)CreateLabel(timeout, "Choose how long the device waits before sleeping",
+                      BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 61);
     power_management_timeout_dropdown_ = lv_dropdown_create(timeout);
     lv_obj_set_pos(power_management_timeout_dropdown_, 24, 101);
     lv_obj_set_size(power_management_timeout_dropdown_, 592, 52);
     lv_dropdown_set_options(power_management_timeout_dropdown_, "1 minute\n5 minutes\n10 minutes\n30 minutes");
-    lv_obj_set_style_text_font(power_management_timeout_dropdown_, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(power_management_timeout_dropdown_, BuiltinLatinFont(SystemFontRole::kMedium), 0);
     lv_obj_add_event_cb(power_management_timeout_dropdown_, PowerManagementTimeoutEvent, LV_EVENT_VALUE_CHANGED, this);
 
     lv_obj_t* note = CreateLabel(root_, "External power pauses the idle timer. Unplugging starts a fresh countdown.",
-                                 &lv_font_montserrat_18, 0x748aa5U, 52, 520);
+                                 BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, 52, 520);
     lv_obj_set_width(note, 616);
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
     UpdatePowerManagementLocked(model);
@@ -651,12 +655,12 @@ void SystemDetailUi::RenderRemoteControlLocked() {
         CreatePanel(root_, Bounds{.x = 40, .y = 126, .width = 640, .height = 128}, 0x111f32U, 0x2e4562U, 22);
     (void)CreatePanel(status, Bounds{.x = 24, .y = 24, .width = 13, .height = 13},
                       RemoteControlStateColor(remote_control_model_.connection_state), 0U, LV_RADIUS_CIRCLE);
-    (void)CreateLabel(status, RemoteControlStateText(remote_control_model_.connection_state), &lv_font_montserrat_24,
-                      0xf2f7ffU, 54, 16);
+    (void)CreateLabel(status, RemoteControlStateText(remote_control_model_.connection_state),
+                      BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 54, 16);
     (void)CreatePanel(status, Bounds{.x = 20, .y = 61, .width = 600, .height = 1}, 0x21364eU, 0U, 0);
-    (void)CreateLabel(status, "Service", &lv_font_montserrat_18, 0x91a4bdU, 22, 82);
+    (void)CreateLabel(status, "Service", BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 22, 82);
     lv_obj_t* service = CreateLabel(status, DisplayText(remote_control_model_.service.data(), "Not configured"),
-                                    &lv_font_montserrat_18, 0xf2f7ffU, 260, 82);
+                                    BuiltinLatinFont(SystemFontRole::kMedium), 0xf2f7ffU, 260, 82);
     lv_obj_set_width(service, 356);
     lv_obj_set_style_text_align(service, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_long_mode(service, LV_LABEL_LONG_DOT);
@@ -670,13 +674,14 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     lv_obj_t* pairing =
         CreatePanel(root_, Bounds{.x = 40, .y = 278, .width = 640, .height = pairing_height}, 0x111f32U, 0x2e4562U, 22);
     if (code_available) {
-        lv_obj_t* eyebrow = CreateLabel(pairing, "CONNECTION CODE", &lv_font_montserrat_18, 0xc5f36dU, 24, 24);
+        lv_obj_t* eyebrow =
+            CreateLabel(pairing, "CONNECTION CODE", BuiltinLatinFont(SystemFontRole::kMedium), 0xc5f36dU, 24, 24);
         lv_obj_set_width(eyebrow, 592);
         lv_obj_set_style_text_align(eyebrow, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_t* code_panel =
             CreatePanel(pairing, Bounds{.x = 22, .y = 64, .width = 596, .height = 112}, 0x0d1929U, 0xc5f36dU, 16);
         lv_obj_t* code = CreateLabel(code_panel, DisplayText(remote_control_model_.pairing_code.data(), "---- ----"),
-                                     &lv_font_montserrat_32, 0xc5f36dU, 0, 36);
+                                     BuiltinLatinFont(SystemFontRole::kTitle), 0xc5f36dU, 0, 36);
         lv_obj_set_width(code, 596);
         lv_obj_set_style_text_align(code, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_letter_space(code, 6, 0);
@@ -684,17 +689,18 @@ void SystemDetailUi::RenderRemoteControlLocked() {
         const uint32_t minutes = remote_control_model_.pairing_expires_seconds / 60U;
         const uint32_t seconds = remote_control_model_.pairing_expires_seconds % 60U;
         std::snprintf(expiry, sizeof(expiry), "Expires in %02" PRIu32 ":%02" PRIu32, minutes, seconds);
-        lv_obj_t* expiry_label = CreateLabel(pairing, expiry, &lv_font_montserrat_18, 0x91a4bdU, 24, 198);
+        lv_obj_t* expiry_label =
+            CreateLabel(pairing, expiry, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 198);
         lv_obj_set_width(expiry_label, 592);
         lv_obj_set_style_text_align(expiry_label, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_t* note = CreateLabel(pairing, "Connection codes are single-use and expire after 5 minutes",
-                                     &lv_font_montserrat_18, 0x748aa5U, 24, 252);
+                                     BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, 24, 252);
         lv_obj_set_width(note, 592);
         lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
     } else {
-        (void)CreateLabel(pairing, "Connect this device", &lv_font_montserrat_24, 0xf2f7ffU, 24, 22);
-        (void)CreateLabel(pairing, "Use a one-time code to add this device.", &lv_font_montserrat_18, 0x91a4bdU, 24,
-                          61);
+        (void)CreateLabel(pairing, "Connect this device", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 22);
+        (void)CreateLabel(pairing, "Use a one-time code to add this device.", BuiltinLatinFont(SystemFontRole::kMedium),
+                          0x91a4bdU, 24, 61);
         lv_obj_t* pairing_button = CreateActionButton(pairing, Bounds{.x = 22, .y = 104, .width = 596, .height = 70},
                                                       code_pending        ? "Getting connection code..."
                                                       : pairing_available ? "Generate Connection Code"
@@ -712,12 +718,12 @@ void SystemDetailUi::RenderRemoteControlLocked() {
             lv_obj_set_style_arc_width(spinner, 4, LV_PART_INDICATOR);
             lv_obj_set_style_arc_color(spinner, lv_color_hex(0x69a7ffU), LV_PART_INDICATOR);
             lv_obj_remove_flag(pairing_button, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_t* waiting =
-                CreateLabel(pairing, "Waiting for Control service", &lv_font_montserrat_18, 0x69a7ffU, 24, 190);
+            lv_obj_t* waiting = CreateLabel(pairing, "Waiting for Control service",
+                                            BuiltinLatinFont(SystemFontRole::kMedium), 0x69a7ffU, 24, 190);
             lv_obj_set_width(waiting, 592);
             lv_obj_set_style_text_align(waiting, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_t* note = CreateLabel(pairing, "Connection codes are single-use and expire after 5 minutes",
-                                         &lv_font_montserrat_18, 0x748aa5U, 24, 226);
+                                         BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, 24, 226);
             lv_obj_set_width(note, 592);
             lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
         } else {
@@ -727,7 +733,7 @@ void SystemDetailUi::RenderRemoteControlLocked() {
                 lv_obj_remove_flag(pairing_button, LV_OBJ_FLAG_CLICKABLE);
             }
             lv_obj_t* note = CreateLabel(pairing, "Connection codes are single-use and expire after 5 minutes",
-                                         &lv_font_montserrat_18, 0x748aa5U, 24, 190);
+                                         BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, 24, 190);
             lv_obj_set_width(note, 592);
             lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
         }
@@ -738,13 +744,13 @@ void SystemDetailUi::RenderRemoteControlLocked() {
         CreatePanel(root_, Bounds{.x = 40, .y = 610, .width = 640, .height = 82}, 0x0d1929U, 0x2e4562U, 18);
     lv_obj_add_flag(toggle, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(toggle, RemoteControlToggleEvent, LV_EVENT_SHORT_CLICKED, this);
-    (void)CreateLabel(toggle, LV_SYMBOL_POWER, &lv_font_montserrat_24,
+    (void)CreateLabel(toggle, LV_SYMBOL_POWER, BuiltinLatinFont(SystemFontRole::kLarge),
                       remote_control_model_.enabled ? 0xff6b74U : 0x69a7ffU, 24, 27);
     (void)CreateLabel(toggle, remote_control_model_.enabled ? "Turn Remote Control Off" : "Turn Remote Control On",
-                      &lv_font_montserrat_18, 0xf2f7ffU, 74, 16);
+                      BuiltinLatinFont(SystemFontRole::kMedium), 0xf2f7ffU, 74, 16);
     (void)CreateLabel(toggle, remote_control_model_.enabled ? "Requires confirmation" : "Remote access is disabled",
-                      &lv_font_montserrat_18, 0x748aa5U, 74, 46);
-    (void)CreateLabel(toggle, LV_SYMBOL_RIGHT, &lv_font_montserrat_18, 0x91a4bdU, 594, 31);
+                      BuiltinLatinFont(SystemFontRole::kMedium), 0x748aa5U, 74, 46);
+    (void)CreateLabel(toggle, LV_SYMBOL_RIGHT, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 594, 31);
 
     if (remote_control_off_confirmation_visible_) {
         DrawRemoteControlOffConfirmationLocked();
@@ -842,9 +848,9 @@ void SystemDetailUi::DrawRemoteControlOffConfirmationLocked() {
     CreateDismissibleScrim(root_, RemoteControlConfirmationCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 390, .width = 664, .height = 302}, 0x101c2cU, 0x653c48U, 24);
-    (void)CreateLabel(sheet, "Turn Off Remote Control?", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    (void)CreateLabel(sheet, "Turn Off Remote Control?", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 20);
     lv_obj_t* detail = CreateLabel(sheet, "Remote access and active connection codes will stop.",
-                                   &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
+                                   BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 64);
     lv_obj_set_size(detail, 616, 52);
     lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
     lv_obj_t* turn_off = CreateActionButton(sheet, Bounds{.x = 20, .y = 128, .width = 624, .height = 58}, "Turn Off",
@@ -991,7 +997,7 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
     CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 330, .width = 664, .height = 362}, 0x101c2cU, 0x42607fU, 24);
-    lv_obj_t* title = CreateLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    lv_obj_t* title = CreateLabel(sheet, app.display_name, BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 20);
     lv_obj_set_width(title, 616);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_t* open = CreateActionButton(sheet, Bounds{.x = 20, .y = 72, .width = 624, .height = 58},
@@ -1018,7 +1024,7 @@ void SystemDetailUi::DrawAppManagementInformationLocked() {
     CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 352, .width = 664, .height = 340}, 0x101c2cU, 0x42607fU, 24);
-    lv_obj_t* title = CreateLabel(sheet, app.display_name, &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    lv_obj_t* title = CreateLabel(sheet, app.display_name, BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 20);
     lv_obj_set_width(title, 616);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_t* details =
@@ -1037,9 +1043,9 @@ void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
     CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 420, .width = 664, .height = 272}, 0x101c2cU, 0x42607fU, 24);
-    (void)CreateLabel(sheet, "Uninstall unavailable", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
+    (void)CreateLabel(sheet, "Uninstall unavailable", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 20);
     lv_obj_t* detail = CreateLabel(sheet, "Close the running App from the Hall before uninstalling Apps.",
-                                   &lv_font_montserrat_18, 0x91a4bdU, 24, 64);
+                                   BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 64);
     lv_obj_set_size(detail, 616, 92);
     lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
     lv_obj_t* done =
@@ -1052,8 +1058,8 @@ void SystemDetailUi::DrawAppManagementUninstallConfirmationLocked() {
     CreateDismissibleScrim(root_, AppManagementCancelEvent, this);
     lv_obj_t* sheet =
         CreatePanel(root_, Bounds{.x = 28, .y = 390, .width = 664, .height = 302}, 0x101c2cU, 0x653c48U, 24);
-    (void)CreateLabel(sheet, "Uninstall App?", &lv_font_montserrat_24, 0xf2f7ffU, 24, 20);
-    lv_obj_t* name = CreateLabel(sheet, app.display_name, &lv_font_montserrat_18, 0x91a4bdU, 24, 61);
+    (void)CreateLabel(sheet, "Uninstall App?", BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 24, 20);
+    lv_obj_t* name = CreateLabel(sheet, app.display_name, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 24, 61);
     lv_obj_set_width(name, 616);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_t* uninstall = CreateActionButton(sheet, Bounds{.x = 20, .y = 112, .width = 624, .height = 58}, "Uninstall",
@@ -1087,18 +1093,18 @@ void SystemDetailUi::DrawAppManagementRowLocked(uint32_t index) {
     }
     lv_obj_t* initial_label = lv_label_create(icon);
     lv_label_set_text(initial_label, initial);
-    lv_obj_set_style_text_font(initial_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(initial_label, BuiltinLatinFont(SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(initial_label, lv_color_white(), 0);
     lv_obj_center(initial_label);
     lv_obj_t* name = CreateLabel(row, app.display_name != nullptr ? app.display_name : "Unknown App",
-                                 &lv_font_montserrat_24, 0xf2f7ffU, 98, 20);
+                                 BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 98, 20);
     lv_obj_set_width(name, 438);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     char metadata[128]{};
     char size[24]{};
     FormatInformationSize(app.bundle_size_kib, size, sizeof(size));
     std::snprintf(metadata, sizeof(metadata), "%s   %s", app.app_id != nullptr ? app.app_id : "Unknown", size);
-    lv_obj_t* metadata_label = CreateLabel(row, metadata, &lv_font_montserrat_18, 0x91a4bdU, 98, 59);
+    lv_obj_t* metadata_label = CreateLabel(row, metadata, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 98, 59);
     lv_obj_set_width(metadata_label, 438);
     lv_label_set_long_mode(metadata_label, LV_LABEL_LONG_DOT);
     DrawAppMoreIndicator(row);
@@ -1155,8 +1161,9 @@ void SystemDetailUi::RenderAppManagementLocked(bool clean_root) {
     } else {
         std::snprintf(count, sizeof(count), "%" PRIu32 " Apps", app_management_model_.app_count);
     }
-    (void)CreateLabel(scroll_content, count, &lv_font_montserrat_24, 0xf2f7ffU, 42, 14);
-    (void)CreateLabel(scroll_content, "Installed on this device", &lv_font_montserrat_18, 0x91a4bdU, 42, 49);
+    (void)CreateLabel(scroll_content, count, BuiltinLatinFont(SystemFontRole::kLarge), 0xf2f7ffU, 42, 14);
+    (void)CreateLabel(scroll_content, "Installed on this device", BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU,
+                      42, 49);
     char used[24]{};
     char total[24]{};
     char storage[56]{};
@@ -1167,14 +1174,15 @@ void SystemDetailUi::RenderAppManagementLocked(bool clean_root) {
     } else {
         std::snprintf(storage, sizeof(storage), "%s used", used);
     }
-    lv_obj_t* used_label = CreateLabel(scroll_content, storage, &lv_font_montserrat_18, 0x91a4bdU, 448, 27);
+    lv_obj_t* used_label =
+        CreateLabel(scroll_content, storage, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 448, 27);
     lv_obj_set_width(used_label, 230);
     lv_obj_set_style_text_align(used_label, LV_TEXT_ALIGN_RIGHT, 0);
 
     if (app_management_model_.app_count == 0U) {
         lv_obj_t* empty = CreatePanel(scroll_content, Bounds{.x = 40, .y = 90, .width = 640, .height = 104}, 0x111f32U,
                                       0x2e4562U, 22);
-        (void)CreateLabel(empty, "No installed Apps", &lv_font_montserrat_18, 0x91a4bdU, 22, 39);
+        (void)CreateLabel(empty, "No installed Apps", BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 22, 39);
     }
     lv_obj_update_layout(scroll_content);
     if (app_management_scroll_y_ != 0) {

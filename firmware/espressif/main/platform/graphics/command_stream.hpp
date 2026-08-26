@@ -8,10 +8,12 @@
 namespace micropixel::platform::graphics {
 
 [[nodiscard]] bool IsTextOpcode(uint16_t opcode);
+[[nodiscard]] bool IsValidUtf8(const uint8_t* text, uint32_t length);
 
 [[nodiscard]] int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t logical_width,
                                             int32_t logical_height, device::BitmapResolver resolver,
-                                            void* resolver_context,
+                                            void* resolver_context, device::FontValidator font_validator = nullptr,
+                                            void* font_context = nullptr,
                                             uint32_t max_commands = MICROPIXEL_GRAPHICS_MAX_COMMANDS);
 
 // Extracts each unique Texture handle referenced by a previously validated

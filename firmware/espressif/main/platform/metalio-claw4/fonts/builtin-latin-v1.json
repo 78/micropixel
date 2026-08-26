@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "profile": "builtin-latin-v1",
+  "converter": "lv_font_conv@1.5.3",
+  "bpp": 4,
+  "ranges": [
+    [32, 126],
+    [160, 255],
+    [65533, 65533]
+  ],
+  "symbols": [
+    61451,
+    61457,
+    61459,
+    61473,
+    61523,
+    61524,
+    61671,
+    61931,
+    62016,
+    62017,
+    62018,
+    62019,
+    62020,
+    62810
+  ],
+  "profiles": [
+    {"role": "small", "size": 14},
+    {"role": "medium", "size": 18},
+    {"role": "large", "size": 24},
+    {"role": "title", "size": 32}
+  ]
+}

@@ -13,6 +13,7 @@ class Frame;
 class Texture;
 class StreamingTexture;
 class TextureUpdateBatch;
+class Font;
 
 class Color final {
    public:
@@ -58,6 +59,12 @@ struct Point final {
 struct Size final {
     uint32_t width{};
     uint32_t height{};
+};
+
+struct TextMetrics final {
+    uint32_t width{};
+    uint32_t height{};
+    int32_t baseline{};
 };
 
 struct Rect final {
@@ -171,8 +178,10 @@ class Frame final {
     void Clear(Color color);
     void FillRect(Rect rect, Color color, uint8_t opacity = 255U);
     void DrawText(Point position, const char* text, Color color, SystemFont font = SystemFont::kMedium);
+    void DrawText(Point position, const char* text, Color color, const Font& font);
     void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color,
                           SystemFont font = SystemFont::kMedium);
+    void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, const Font& font);
     void DrawTexture(Point position, const Texture& texture, uint8_t opacity = 255U);
     void DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity = 255U);
     void DrawTexture(Rect destination, const Texture& texture, uint8_t opacity = 255U);
@@ -209,6 +218,8 @@ class Frame final {
     [[nodiscard]] Rect StateClip() const;
     [[nodiscard]] Rect EffectiveClip() const;
     [[nodiscard]] Point EffectiveTranslation() const;
+    void DrawTextWithHandle(Point position, const char* text, Color color, uint16_t font_handle);
+    void DrawTextCenteredWithHandle(int32_t center_x, int32_t y, const char* text, Color color, uint16_t font_handle);
 
     struct State final {
         Rect clip{};
@@ -253,6 +264,8 @@ class Renderer final {
     [[nodiscard]] Frame BeginFrame() const;
     [[nodiscard]] Result<StreamingTexture> CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
     [[nodiscard]] TextureUpdateBatch BeginTextureUpdateBatch() const;
+    [[nodiscard]] Result<TextMetrics> MeasureText(const char* text, SystemFont font = SystemFont::kMedium) const;
+    [[nodiscard]] Result<TextMetrics> MeasureText(const char* text, const Font& font) const;
 
    private:
     struct CapabilityToken {};

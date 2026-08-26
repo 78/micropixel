@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 #include "platform/metalio-claw4/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -371,9 +372,9 @@ void StatusLayerUi::DrawQuickCard(lv_obj_t* root, TouchTarget target, const char
     const int32_t index = QuickIndex(target);
     lv_obj_t* panel = CreatePanel(root, DialogRelative(TargetBounds(target)), color);
     lv_obj_set_style_bg_opa(panel, available && !active ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
-    (void)CreateLabel(panel, name, &lv_font_montserrat_24, available ? 0xf4f8ffU : 0x708198U, 18, 20);
-    lv_obj_t* detail_label =
-        CreateLabel(panel, detail, &lv_font_montserrat_18, active && available ? 0xf4f8ffU : 0x91a4bdU, 18, 67);
+    (void)CreateLabel(panel, name, BuiltinLatinFont(SystemFontRole::kLarge), available ? 0xf4f8ffU : 0x708198U, 18, 20);
+    lv_obj_t* detail_label = CreateLabel(panel, detail, BuiltinLatinFont(SystemFontRole::kMedium),
+                                         active && available ? 0xf4f8ffU : 0x91a4bdU, 18, 67);
     if (index < 0) {
         return;
     }
@@ -397,11 +398,11 @@ void StatusLayerUi::DrawSlider(lv_obj_t* root, TouchTarget target, const char* n
     const Bounds bounds = DialogRelative(TargetBounds(target));
     const int32_t index = SliderIndex(target);
     const uint8_t clamped_percent = ClampSliderValue(target, percent);
-    (void)CreateLabel(root, name, &lv_font_montserrat_18, 0xf4f8ffU, bounds.x + 20, bounds.y + 4);
+    (void)CreateLabel(root, name, BuiltinLatinFont(SystemFontRole::kMedium), 0xf4f8ffU, bounds.x + 20, bounds.y + 4);
     char value[8]{};
     (void)std::snprintf(value, sizeof(value), "%u%%", static_cast<unsigned>(clamped_percent));
-    lv_obj_t* value_label =
-        CreateLabel(root, value, &lv_font_montserrat_18, 0x91a4bdU, bounds.x + bounds.width - 62, bounds.y + 4);
+    lv_obj_t* value_label = CreateLabel(root, value, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU,
+                                        bounds.x + bounds.width - 62, bounds.y + 4);
 
     constexpr int32_t kTrackLeftInset = 20;
     constexpr int32_t kTrackWidth = 584;
@@ -453,8 +454,8 @@ StatusLayerUi::MetricObjects StatusLayerUi::DrawMetric(lv_obj_t* root, int32_t x
     constexpr int32_t kDialogY = 36;
     const Bounds bounds{.x = x - kDialogX, .y = 390 - kDialogY, .width = 192, .height = 124};
     lv_obj_t* panel = CreatePanel(root, bounds, 0x142235U);
-    (void)CreateLabel(panel, name, &lv_font_montserrat_18, 0x91a4bdU, 16, 15);
-    lv_obj_t* value_label = CreateLabel(panel, value, &lv_font_montserrat_18, 0xf4f8ffU, 16, 47);
+    (void)CreateLabel(panel, name, BuiltinLatinFont(SystemFontRole::kMedium), 0x91a4bdU, 16, 15);
+    lv_obj_t* value_label = CreateLabel(panel, value, BuiltinLatinFont(SystemFontRole::kMedium), 0xf4f8ffU, 16, 47);
     lv_obj_t* track = lv_obj_create(panel);
     lv_obj_set_pos(track, 16, 90);
     lv_obj_set_size(track, 160, 10);
@@ -696,7 +697,8 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
         lv_obj_set_style_bg_opa(performance_overlay_, 176, 0);
         lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_CLICKABLE);
-        performance_label_ = CreateLabel(performance_overlay_, "", &lv_font_montserrat_14, 0xf4f8ffU, 0, 7);
+        performance_label_ =
+            CreateLabel(performance_overlay_, "", BuiltinLatinFont(SystemFontRole::kSmall), 0xf4f8ffU, 0, 7);
         lv_obj_set_width(performance_label_, 150);
         lv_obj_set_style_text_align(performance_label_, LV_TEXT_ALIGN_CENTER, 0);
     }

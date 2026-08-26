@@ -13,6 +13,7 @@ class Frame;
 class Renderer;
 class Resources;
 class StreamingTexture;
+class Font;
 
 class AssetId final {
    public:
@@ -59,6 +60,37 @@ class Texture final {
     friend class Renderer;
     friend class Resources;
     friend class StreamingTexture;
+};
+
+class Font final {
+   public:
+    Font() = default;
+    Font(const Font&) = delete;
+    Font& operator=(const Font&) = delete;
+    Font(Font&& other) noexcept;
+    Font& operator=(Font&& other) noexcept;
+    ~Font();
+
+    [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
+    [[nodiscard]] constexpr uint16_t size() const { return size_; }
+    [[nodiscard]] constexpr uint16_t line_height() const { return line_height_; }
+    [[nodiscard]] constexpr int16_t ascent() const { return ascent_; }
+    [[nodiscard]] constexpr int16_t descent() const { return descent_; }
+    void Reset();
+
+   private:
+    constexpr Font(uint16_t handle, uint16_t size, uint16_t line_height, int16_t ascent, int16_t descent)
+        : handle_(handle), size_(size), line_height_(line_height), ascent_(ascent), descent_(descent) {}
+
+    uint16_t handle_{};
+    uint16_t size_{};
+    uint16_t line_height_{};
+    int16_t ascent_{};
+    int16_t descent_{};
+
+    friend class Frame;
+    friend class Renderer;
+    friend class Resources;
 };
 
 class StreamingTexture final {
@@ -108,6 +140,7 @@ class TextureUpdateBatch final {
 class Resources final {
    public:
     [[nodiscard]] Result<Texture> LoadTexture(ResourceRef resource) const;
+    [[nodiscard]] Result<Font> LoadFont(ResourceRef resource) const;
 
    private:
     struct CapabilityToken {};

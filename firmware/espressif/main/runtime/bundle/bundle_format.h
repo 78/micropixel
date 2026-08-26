@@ -9,6 +9,12 @@
 #define MICROPIXEL_BUNDLE_MAX_SECTIONS 128U
 #define MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH 64U
 #define MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH 64U
+#define MICROPIXEL_BUNDLE_LOCALE_MAX_LENGTH 31U
+#define MICROPIXEL_BUNDLE_METADATA_MAX_LENGTH 4096U
+#define MICROPIXEL_BUNDLE_METADATA_MAX_LOCALES 16U
+#define MICROPIXEL_BUNDLE_PACKAGE_VERSION_MAX_LENGTH 31U
+#define MICROPIXEL_BUNDLE_FONT_ROLE_COUNT 4U
+#define MICROPIXEL_BUNDLE_METADATA_SCHEMA_VERSION 1U
 
 static const uint8_t MICROPIXEL_BUNDLE_MAGIC[8] = {'M', 'P', 'X', 'B', 'N', 'D', 'L', '\0'};
 
@@ -16,6 +22,7 @@ typedef enum micropixel_bundle_section_kind {
     MICROPIXEL_BUNDLE_SECTION_AOT = 1,
     MICROPIXEL_BUNDLE_SECTION_ASSET = 2,
     MICROPIXEL_BUNDLE_SECTION_APP_METADATA = 3,
+    MICROPIXEL_BUNDLE_SECTION_FONT = 4,
 } micropixel_bundle_section_kind_t;
 
 typedef enum micropixel_bundle_section_format {
@@ -25,7 +32,26 @@ typedef enum micropixel_bundle_section_format {
     MICROPIXEL_BUNDLE_FORMAT_PNG = 4,
     MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 = 5,
     MICROPIXEL_BUNDLE_FORMAT_UTF8 = 6,
+    MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON = 7,
+    MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 = 8,
 } micropixel_bundle_section_format_t;
+
+typedef enum micropixel_bundle_package_type {
+    MICROPIXEL_BUNDLE_PACKAGE_APP = 1,
+    MICROPIXEL_BUNDLE_PACKAGE_COMPONENT = 2,
+} micropixel_bundle_package_type_t;
+
+typedef enum micropixel_bundle_component_type {
+    MICROPIXEL_BUNDLE_COMPONENT_NONE = 0,
+    MICROPIXEL_BUNDLE_COMPONENT_FONT = 1,
+} micropixel_bundle_component_type_t;
+
+typedef enum micropixel_bundle_font_role {
+    MICROPIXEL_BUNDLE_FONT_ROLE_SMALL = 0,
+    MICROPIXEL_BUNDLE_FONT_ROLE_MEDIUM = 1,
+    MICROPIXEL_BUNDLE_FONT_ROLE_LARGE = 2,
+    MICROPIXEL_BUNDLE_FONT_ROLE_TITLE = 3,
+} micropixel_bundle_font_role_t;
 
 typedef struct __attribute__((packed)) micropixel_bundle_header {
     uint8_t magic[8];

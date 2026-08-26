@@ -3,7 +3,9 @@
 
 #include <array>
 #include <expected>
+#include <string_view>
 
+#include "abi/micropixel_abi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "runtime/app_session.hpp"
@@ -51,7 +53,9 @@ class AppRuntime final {
     ~AppRuntime();
 
     [[nodiscard]] static std::expected<AppRuntime, AppRuntimeError> Initialize(device::DeviceServices& devices,
+                                                                               std::string_view effective_locale,
                                                                                GuestLogSink* log_sink = nullptr);
+    [[nodiscard]] bool SetEffectiveLocale(std::string_view effective_locale);
     [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app, AppSessionReadySink ready_sink = nullptr,
                                        void* ready_context = nullptr);
     [[nodiscard]] bool RequestSuspend(TickType_t timeout);
@@ -61,7 +65,7 @@ class AppRuntime final {
 
    private:
     AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex,
-               GuestLogSink* log_sink);
+               std::string_view effective_locale, GuestLogSink* log_sink);
     [[nodiscard]] bool TakeSessionLock();
     void GiveSessionLock();
 
@@ -70,6 +74,7 @@ class AppRuntime final {
     WamrRuntime wamr_;
     SemaphoreHandle_t session_mutex_{};
     AppSession* active_session_{};
+    std::array<char, MICROPIXEL_LOCALE_TAG_MAX_BYTES + 1U> effective_locale_{};
     bool session_active_{};
     bool stop_requested_{};
 };

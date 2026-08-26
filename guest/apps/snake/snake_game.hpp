@@ -5,6 +5,7 @@
 #include "apps/snake/gamekit/swipe_gesture.hpp"
 #include "apps/snake/snake_model.hpp"
 #include "snake_sfx_profiles.hpp"
+#include "snake_strings.hpp"
 
 namespace snake {
 
@@ -144,6 +145,7 @@ class SnakeGame final {
     void ResetGameModel();
 
     micropixel::Application& app_;
+    snake_strings::Catalog strings_;
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
     micropixel::Audio audio_;

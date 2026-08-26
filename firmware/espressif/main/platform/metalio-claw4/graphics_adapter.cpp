@@ -20,6 +20,19 @@ int32_t GraphicsAdapter::CommitFrame(const device::TextureAccess& textures) {
 
 int32_t GraphicsAdapter::CancelFrame() { return operations_.cancel_frame(operations_.context); }
 
+int32_t GraphicsAdapter::LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out) {
+    return operations_.load_font(operations_.context, resource, info_out);
+}
+
+int32_t GraphicsAdapter::ReleaseFont(micropixel_font_handle_t font) {
+    return operations_.release_font(operations_.context, font);
+}
+
+int32_t GraphicsAdapter::MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
+                                     micropixel_text_metrics_t& metrics_out) {
+    return operations_.measure_text(operations_.context, font, text, text_length, metrics_out);
+}
+
 int32_t GraphicsAdapter::BeginBitmapUpdateFrame() { return operations_.begin_bitmap_update_frame(operations_.context); }
 
 int32_t GraphicsAdapter::UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,

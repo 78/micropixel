@@ -28,8 +28,10 @@ snake/
 构建输出统一写入 `build/apps/snake/`：
 
 ```sh
-bash tools/build_snake_bundle.sh
+python3 tools/micropixel package guest/apps/snake
 ```
+
+兼容脚本 `bash tools/build_snake_bundle.sh` 只转发到同一条 manifest 驱动的命令。
 
 `gamekit/` 仍是 Snake 内部实现；只有第二个游戏出现相同需求且语义稳定后，才移动到公共 SDK。
 通用的按钮、固定字符串和 Renderer/Frame helper 已放在 `guest/sdk/`。

@@ -46,6 +46,17 @@ class CliError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class ProjectManifest:
+    path: Path
+    value: dict[str, Any]
+    package_id: str
+    package_type: str
+    name: str
+    sources: tuple[Path, ...]
+    asset_manifest: Path | None
+
+
 def sdk_root() -> Path:
     script_directory = Path(__file__).resolve().parent
     return script_directory if (script_directory / "guest").is_dir() else script_directory.parent
@@ -425,7 +436,7 @@ def run_auth_login(args: argparse.Namespace) -> None:
         )
 
 
-def run_build(args: argparse.Namespace) -> None:
+def _run_build_sources(args: argparse.Namespace) -> None:
     root = sdk_root()
     name = args.name or Path(args.source).stem
     if re.fullmatch(r"[A-Za-z0-9_-]+", name) is None:
@@ -468,10 +479,20 @@ def run_build(args: argparse.Namespace) -> None:
     if version != "wamrc 2.4.3":
         raise CliError(f"WAMRC must report 'wamrc 2.4.3', got {version!r}")
 
-    generated_include = environment.get("MICROPIXEL_GUEST_GENERATED_INCLUDE_DIR", "").strip()
+    generated_include_override = getattr(args, "generated_include_override", None)
+    generated_include = (
+        str(generated_include_override)
+        if generated_include_override is not None
+        else environment.get("MICROPIXEL_GUEST_GENERATED_INCLUDE_DIR", "").strip()
+    )
     if generated_include and not Path(generated_include).is_dir():
         raise CliError(f"Generated Guest include directory not found: {generated_include}")
-    output_dir = Path(environment.get("P4_GUEST_OUTPUT_DIR", str(Path.cwd() / "build/guest-p4")))
+    output_dir_override = getattr(args, "output_dir_override", None) or getattr(args, "output_dir", None)
+    output_dir = Path(
+        output_dir_override
+        if output_dir_override is not None
+        else environment.get("P4_GUEST_OUTPUT_DIR", str(Path.cwd() / "build/guest-p4"))
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     profiles = {
@@ -545,18 +566,277 @@ def run_build(args: argparse.Namespace) -> None:
     print(f"P4 Guest built ({args.profile}):\n{wasm_output}\n{aot_output}")
 
 
-def run_package(args: argparse.Namespace) -> None:
-    arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
-    if not arguments:
-        raise CliError("package requires Bundle arguments; see https://micropixel.ai/docs/assets-and-bundles/")
+def _tool_path(name: str) -> Path:
+    path = sdk_root() / "tools" / name
+    if not path.is_file():
+        raise CliError(f"This development copy does not contain {name}")
+    return path
+
+
+def _bundle_builder_command(arguments: list[str]) -> list[str]:
     local_builder = sdk_root() / "tools/build_app_bundle.py"
     if local_builder.is_file():
-        command = [sys.executable, str(local_builder), *arguments]
-    elif EMBEDDED_BUNDLE_BUILDER is not None:
-        command = [sys.executable, "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
-    else:
-        raise CliError("This development copy does not contain the Bundle builder")
-    subprocess.run(command, check=True)
+        return [sys.executable, str(local_builder), *arguments]
+    if EMBEDDED_BUNDLE_BUILDER is not None:
+        return [sys.executable, "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
+    raise CliError("This development copy does not contain the Bundle builder")
+
+
+def _run_bundle_builder(arguments: list[str]) -> None:
+    subprocess.run(_bundle_builder_command(arguments), check=True)
+
+
+def _manifest_child(root: Path, value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value or Path(value).is_absolute():
+        raise CliError(f"{label} must be a non-empty path relative to app.json")
+    path = (root / value).resolve()
+    if not path.is_relative_to(root):
+        raise CliError(f"{label} escapes the project directory: {value}")
+    return path
+
+
+def resolve_project_manifest(target: str | Path) -> Path | None:
+    path = Path(target).expanduser()
+    if path.is_dir():
+        manifest = path / "app.json"
+        return manifest.resolve() if manifest.is_file() else None
+    if path.is_file() and path.name == "app.json":
+        return path.resolve()
+    return None
+
+
+def load_project_manifest(path: Path) -> ProjectManifest:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise CliError(f"Cannot read project manifest {path}: {error}") from error
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise CliError("app.json must be an object using schema_version 1")
+
+    package_type = value.get("package_type", "app")
+    if package_type not in {"app", "component"}:
+        raise CliError("app.json package_type must be app or component")
+    package_id_value = value.get("app_id") if package_type == "app" else value.get("id")
+    if not isinstance(package_id_value, str) or re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", package_id_value) is None:
+        raise CliError("app.json requires a 1..64 byte ASCII app_id or component id")
+    name = package_id_value.rsplit(".", 1)[-1]
+    if re.fullmatch(r"[A-Za-z0-9_-]+", name) is None:
+        raise CliError("The final package ID segment must be usable as a build name")
+
+    project_root = path.resolve().parent
+    sources: list[Path] = []
+    raw_sources = value.get("sources")
+    if package_type == "app":
+        if raw_sources is None:
+            raw_source = value.get("source")
+            raw_sources = [raw_source] if raw_source is not None else None
+        if (
+            not isinstance(raw_sources, list)
+            or not raw_sources
+            or not all(isinstance(item, str) for item in raw_sources)
+        ):
+            raise CliError("App project requires a non-empty string sources list")
+        if value.get("source") is not None and raw_sources[0] != value.get("source"):
+            raise CliError("app.json source must be the first sources entry")
+        for index, raw_source in enumerate(raw_sources):
+            source = _manifest_child(project_root, raw_source, f"sources[{index}]")
+            if not source.is_file():
+                raise CliError(f"Guest source not found: {source}")
+            sources.append(source)
+    elif raw_sources not in (None, []):
+        raise CliError("Component projects cannot contain Guest sources")
+
+    asset_manifest = None
+    if value.get("asset_manifest") is not None:
+        asset_manifest = _manifest_child(project_root, value["asset_manifest"], "asset_manifest")
+        if not asset_manifest.is_file():
+            raise CliError(f"Asset manifest not found: {asset_manifest}")
+
+    return ProjectManifest(
+        path=path.resolve(),
+        value=value,
+        package_id=package_id_value,
+        package_type=package_type,
+        name=name,
+        sources=tuple(sources),
+        asset_manifest=asset_manifest,
+    )
+
+
+def project_output_directory(project: ProjectManifest, override: str | None) -> Path:
+    if override:
+        return Path(override).expanduser().resolve()
+    repository_apps = (sdk_root() / "guest/apps").resolve()
+    if project.path.parent.is_relative_to(repository_apps):
+        return (sdk_root() / "build/apps" / project.name).resolve()
+    return (project.path.parent / "build").resolve()
+
+
+def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, Path | None]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated_dir = output_dir / "generated"
+    generated_dir.mkdir(parents=True, exist_ok=True)
+
+    if project.value.get("localization") is not None:
+        subprocess.run(
+            [
+                sys.executable,
+                str(_tool_path("generate_localization.py")),
+                "--app-manifest",
+                str(project.path),
+                "--cpp-namespace",
+                f"{project.name.replace('-', '_')}_strings",
+                "--output-header",
+                str(generated_dir / f"{project.name}_strings.hpp"),
+                "--report",
+                str(output_dir / "localization-report.json"),
+            ],
+            check=True,
+        )
+
+    sfx_manifest = project.path.parent / "audio/sfx.json"
+    if sfx_manifest.is_file():
+        environment = project_environment(Path.cwd())
+        default_profile = (
+            sdk_root()
+            / "firmware/espressif/main/platform/metalio-claw4/audio/perceptual_profile.json"
+        )
+        profile = Path(environment.get("MICROPIXEL_SFX_DEVICE_PROFILE", str(default_profile))).expanduser()
+        subprocess.run(
+            [
+                sys.executable,
+                str(_tool_path("analyze_sfx.py")),
+                "--manifest",
+                str(sfx_manifest),
+                "--device-profile",
+                str(profile),
+                "--emit-cpp-header",
+                str(generated_dir / f"{project.name}_sfx_profiles.hpp"),
+                "--report",
+                str(output_dir / "sfx-report.json"),
+                "--check",
+            ],
+            check=True,
+        )
+
+    resource_pack = None
+    if project.asset_manifest is not None:
+        resource_pack = generated_dir / "resources.pack"
+        _run_bundle_builder(
+            [
+                "--app-manifest",
+                str(project.path),
+                "--asset-manifest",
+                str(project.asset_manifest),
+                "--prepare-resource-pack",
+                str(resource_pack),
+                "--emit-cpp-header",
+                str(generated_dir / f"{project.name}_assets.hpp"),
+                "--cpp-namespace",
+                f"{project.name.replace('-', '_')}_assets",
+            ]
+        )
+    return generated_dir, resource_pack
+
+
+def build_project(project: ProjectManifest, profile: str, output_dir: Path) -> Path | None:
+    generated_dir, _ = prepare_project(project, output_dir)
+    if project.package_type == "component":
+        print(f"Component resources prepared: {output_dir}")
+        return None
+    build_args = argparse.Namespace(
+        source=str(project.sources[0]),
+        extra_source=[str(source) for source in project.sources[1:]],
+        name=project.name,
+        profile=profile,
+        generated_include_override=generated_dir,
+        output_dir_override=output_dir,
+    )
+    _run_build_sources(build_args)
+    return output_dir / f"{project.name}.aot"
+
+
+def package_project(
+    project: ProjectManifest,
+    profile: str,
+    output_dir: Path,
+    output: str | None,
+) -> Path:
+    generated_dir, resource_pack = prepare_project(project, output_dir)
+    aot_output: Path | None = None
+    if project.package_type == "app":
+        build_args = argparse.Namespace(
+            source=str(project.sources[0]),
+            extra_source=[str(source) for source in project.sources[1:]],
+            name=project.name,
+            profile=profile,
+            generated_include_override=generated_dir,
+            output_dir_override=output_dir,
+        )
+        _run_build_sources(build_args)
+        aot_output = output_dir / f"{project.name}.aot"
+
+    bundle_output = (
+        Path(output).expanduser().resolve()
+        if output
+        else output_dir / f"{project.name}.bundle.bin"
+    )
+    arguments = ["--app-manifest", str(project.path), "--output", str(bundle_output)]
+    if aot_output is not None:
+        arguments.extend(["--aot", str(aot_output)])
+    if resource_pack is not None:
+        arguments.extend(["--resource-pack", str(resource_pack)])
+    _run_bundle_builder(arguments)
+    print(f"Package ready: {bundle_output}")
+    return bundle_output
+
+
+def run_build(args: argparse.Namespace) -> None:
+    manifest_path = resolve_project_manifest(args.source)
+    if manifest_path is None:
+        if args.source == ".":
+            raise CliError("No app.json found in the current directory")
+        _run_build_sources(args)
+        return
+    if args.extra_source:
+        raise CliError("Extra source arguments are not allowed when building an app.json project")
+    project = load_project_manifest(manifest_path)
+    build_project(project, args.profile, project_output_directory(project, args.output_dir))
+
+
+def run_package(args: argparse.Namespace) -> Path:
+    if args.raw is not None:
+        if not args.raw:
+            raise CliError("package --raw requires build_app_bundle.py arguments")
+        _run_bundle_builder(args.raw)
+        return Path(args.output).resolve() if args.output else Path()
+    manifest_path = resolve_project_manifest(args.project)
+    if manifest_path is None:
+        raise CliError("package requires a project directory or app.json")
+    project = load_project_manifest(manifest_path)
+    return package_project(
+        project,
+        args.profile,
+        project_output_directory(project, args.output_dir),
+        args.output,
+    )
+
+
+def install_input(args: argparse.Namespace) -> Path:
+    target = Path(args.project_or_bundle).expanduser()
+    manifest_path = resolve_project_manifest(target)
+    if manifest_path is not None:
+        project = load_project_manifest(manifest_path)
+        return package_project(
+            project,
+            args.profile,
+            project_output_directory(project, args.output_dir),
+            args.output,
+        )
+    if not target.is_file():
+        raise CliError("install requires a project directory, app.json, or Bundle v1 file")
+    validate_bundle(target)
+    return target.resolve()
 
 
 def upload(client: ControlClient, bundle_path: Path) -> dict[str, Any]:
@@ -860,14 +1140,31 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--version", action="version", version=f"micropixel {VERSION}")
     commands = result.add_subparsers(dest="command", required=True)
 
-    build = commands.add_parser("build", help="Build Guest C++ into Wasm and AOT")
-    build.add_argument("source")
+    build = commands.add_parser("build", help="Build an app.json project into Wasm and AOT")
+    build.add_argument("source", nargs="?", default=".", help="Project directory, app.json, or legacy C++ source")
     build.add_argument("extra_source", nargs="*")
     build.add_argument("--name")
     build.add_argument("--profile", choices=["development", "release", "size"], default="development")
+    build.add_argument("--output-dir", help="Build output directory")
 
-    package = commands.add_parser("package", help="Create an installable Bundle v1 from AOT and resources")
-    package.add_argument("arguments", nargs=argparse.REMAINDER)
+    package = commands.add_parser("package", help="Build an app.json project into an installable Bundle v1")
+    package.add_argument("project", nargs="?", default=".", help="Project directory or app.json (default: .)")
+    package.add_argument("--profile", choices=["development", "release", "size"], default="release")
+    package.add_argument("--output-dir", help="Build output directory")
+    package.add_argument("--output", help="Bundle output path")
+    package.add_argument(
+        "--raw",
+        nargs=argparse.REMAINDER,
+        help=argparse.SUPPRESS,
+    )
+
+    install_project = commands.add_parser("install", help="Build, upload, and install a project or existing Bundle")
+    install_project.add_argument(
+        "project_or_bundle", nargs="?", default=".", help="Project directory, app.json, or Bundle v1 (default: .)"
+    )
+    install_project.add_argument("--profile", choices=["development", "release", "size"], default="release")
+    install_project.add_argument("--output-dir", help="Build output directory")
+    install_project.add_argument("--output", help="Bundle output path when building a project")
     validate = commands.add_parser("validate", help="Validate a Bundle v1 header")
     validate.add_argument("bundle")
 
@@ -964,7 +1261,18 @@ def parser() -> argparse.ArgumentParser:
     for mode in (press, tap, swipe, sequence):
         mode.add_argument("--screenshot", metavar="JPEG", help="Append a screenshot to the same device Job")
         add_job_options(mode)
-    for command in (diagnostics, reboot, firmware_update, app_list, install, start, stop, uninstall, screenshot):
+    for command in (
+        diagnostics,
+        reboot,
+        firmware_update,
+        app_list,
+        install_project,
+        install,
+        start,
+        stop,
+        uninstall,
+        screenshot,
+    ):
         add_job_options(command)
     logs.add_argument("--wait-timeout", "--timeout", dest="timeout", type=float, default=300.0)
     logs.add_argument("--command-timeout-ms", type=int)
@@ -984,6 +1292,13 @@ def main() -> int:
             run_build(args)
         elif args.command == "package":
             run_package(args)
+        elif args.command == "install":
+            bundle = install_input(args)
+            install_args = argparse.Namespace(**vars(args))
+            install_args.command = "app"
+            install_args.app_command = "install"
+            install_args.bundle = str(bundle)
+            execute_network(install_args, ControlClient(ControlConfig.load(Path.cwd())))
         elif args.command == "validate":
             print_json(validate_bundle(Path(args.bundle)))
         elif args.command == "auth" and args.auth_command == "login":

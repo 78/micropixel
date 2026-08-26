@@ -13,6 +13,9 @@ struct GraphicsOperations final {
     int32_t (*submit)(void*, const uint8_t*, uint32_t, const device::TextureAccess&){};
     int32_t (*commit_frame)(void*, const device::TextureAccess&){};
     int32_t (*cancel_frame)(void*){};
+    int32_t (*load_font)(void*, const device::FontResourceView&, micropixel_font_info_t&){};
+    int32_t (*release_font)(void*, micropixel_font_handle_t){};
+    int32_t (*measure_text)(void*, micropixel_font_handle_t, const char*, uint32_t, micropixel_text_metrics_t&){};
     int32_t (*begin_bitmap_update_frame)(void*){};
     int32_t (*update_bitmap)(void*, const device::BitmapView&, uint32_t, uint32_t, uint32_t, uint32_t, const uint8_t*,
                              uint32_t){};
@@ -32,6 +35,10 @@ class GraphicsAdapter final : public device::GraphicsBackend {
     [[nodiscard]] int32_t Submit(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) override;
     [[nodiscard]] int32_t CommitFrame(const device::TextureAccess& textures) override;
     [[nodiscard]] int32_t CancelFrame() override;
+    [[nodiscard]] int32_t LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out) override;
+    [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t font) override;
+    [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
+                                      micropixel_text_metrics_t& metrics_out) override;
     [[nodiscard]] int32_t BeginBitmapUpdateFrame() override;
     [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                        uint32_t height, const uint8_t* pixels, uint32_t stride) override;

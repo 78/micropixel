@@ -55,6 +55,16 @@ python3 -m pip install -r requirements-dev.txt
 
 ## 构建与测试
 
+单个 Guest App 由统一 CLI 直接读取 `app.json`，不需要 App 专用构建脚本：
+
+```sh
+python3 tools/micropixel build guest/apps/demo
+python3 tools/micropixel package guest/apps/demo
+python3 tools/micropixel install guest/apps/demo
+```
+
+安装后的 CLI 可在项目目录直接运行 `micropixel build/package/install`。仓库级 Host 与集成构建仍使用：
+
 ```sh
 # 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
 bash tools/p4.sh build-host

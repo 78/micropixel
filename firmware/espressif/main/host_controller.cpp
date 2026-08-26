@@ -10,6 +10,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "app_controller.hpp"
@@ -52,6 +53,7 @@ constexpr TickType_t kPowerSuspendTimeout = pdMS_TO_TICKS(500U);
 constexpr TickType_t kShutdownRemoteStopTimeout = pdMS_TO_TICKS(500U);
 constexpr uint32_t kBrightnessFadeSteps = 12U;
 constexpr TickType_t kBrightnessFadeStepDelay = pdMS_TO_TICKS(15U);
+constexpr std::array<std::string_view, 1U> kBuiltinLocales{"en"};
 
 const char* PowerErrorText(device::PowerError error) {
     switch (error) {
@@ -457,8 +459,10 @@ bool SameWifiSnapshot(const device::WifiSnapshot& left, const device::WifiSnapsh
 
 host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& status,
                                              const runtime::InstalledAppCatalog& catalog,
-                                             const host_ui::RemoteControlModel& remote_control) {
+                                             const host_ui::RemoteControlModel& remote_control,
+                                             const char* effective_locale = "en") {
     return host_ui::SystemMenuModel{
+        .locale = effective_locale,
         .language = "English",
         .installed_app_count = catalog.count,
         .auto_sleep_timeout_minutes = status.auto_sleep_timeout_minutes,
@@ -732,6 +736,10 @@ const char* AppStoreErrorText(runtime::AppStoreError error) {
             return "app_store_write_failed";
         case runtime::AppStoreError::kCommitFailed:
             return "app_catalog_commit_failed";
+        case runtime::AppStoreError::kUntrustedComponent:
+            return "component_signature_required";
+        case runtime::AppStoreError::kComponentActive:
+            return "component_active";
         case runtime::AppStoreError::kNotFound:
         default:
             return "app_not_found";
@@ -1348,10 +1356,14 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                    host_ui::StatusLayerModel& status_model, const runtime::InstalledAppCatalog& catalog,
                    host_ui::SystemSettingsStore& settings_store, remote_control::RemoteControlAgent& remote_control,
                    bool launch_available, const AppManagementUninstallHandler* uninstall_handler,
-                   std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump) {
+                   std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump,
+                   const char* effective_locale = "en") {
     RefreshWifiStatus(status_model, wifi.Snapshot());
     host_ui::RemoteControlModel remote_control_model = remote_control.Snapshot();
-    auto show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+    const auto make_model = [&]() {
+        return MakeSystemMenuModel(status_model, catalog, remote_control_model, effective_locale);
+    };
+    auto show_result = shell.ShowSystemMenu(make_model());
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show System Settings: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1378,7 +1390,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
         const host_ui::RemoteControlModel latest_remote_control = remote_control.Snapshot();
         if (!SameRemoteControlModel(remote_control_model, latest_remote_control)) {
             remote_control_model = latest_remote_control;
-            shell.UpdateSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+            shell.UpdateSystemMenu(make_model());
         }
         if (!action.has_value()) {
             continue;
@@ -1390,7 +1402,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                 return true;
             case host_ui::SystemUiActionType::kWifiStateChanged:
                 RefreshWifiStatus(status_model, wifi.Snapshot());
-                shell.UpdateSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                shell.UpdateSystemMenu(make_model());
                 break;
             case host_ui::SystemUiActionType::kSelectSystemMenuItem:
                 if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kWifi)) {
@@ -1402,8 +1414,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                         return true;
                     }
                     RefreshWifiStatus(status_model, wifi.Snapshot());
-                    show_result =
-                        shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                    show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Wi-Fi: error=%u",
                                  static_cast<unsigned>(show_result.error()));
@@ -1420,8 +1431,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                     }
                     RefreshWifiStatus(status_model, wifi.Snapshot());
                     remote_control_model = remote_control.Snapshot();
-                    show_result =
-                        shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                    show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Remote Control: error=%u",
                                  static_cast<unsigned>(show_result.error()));
@@ -1435,8 +1445,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    show_result =
-                        shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                    show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Power Management: error=%u",
                                  static_cast<unsigned>(show_result.error()));
@@ -1451,8 +1460,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                         return true;
                     }
                     RefreshWifiStatus(status_model, wifi.Snapshot());
-                    show_result =
-                        shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                    show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after System Information: error=%u",
                                  static_cast<unsigned>(show_result.error()));
@@ -1471,8 +1479,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                         return true;
                     }
                     RefreshWifiStatus(status_model, wifi.Snapshot());
-                    show_result =
-                        shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                    show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after App Management: error=%u",
                                  static_cast<unsigned>(show_result.error()));
@@ -1493,7 +1500,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::BatteryBackend& battery,
                     return true;
                 }
                 RefreshWifiStatus(status_model, wifi.Snapshot());
-                show_result = shell.ShowSystemMenu(MakeSystemMenuModel(status_model, catalog, remote_control_model));
+                show_result = shell.ShowSystemMenu(make_model());
                 if (!show_result) {
                     ESP_LOGE(kTag, "failed to restore System Settings after status layer: error=%u",
                              static_cast<unsigned>(show_result.error()));
@@ -1658,7 +1665,8 @@ class ActiveHost final {
     ActiveHost(runtime::InstalledAppCatalog&& catalog, runtime::AppRuntime& runtime, device::DeviceServices& devices,
                host_ui::SystemShell& shell, device::BatteryBackend& battery, device::WifiBackend& wifi,
                device::PowerBackend& power, HostPowerStateMachine& power_state, host_ui::StatusLayerModel& status_model,
-               host_ui::SystemSettingsStore& settings_store, remote_control::RemoteControlAgent& remote_control)
+               host_ui::SystemSettingsStore& settings_store, remote_control::RemoteControlAgent& remote_control,
+               std::string_view effective_locale)
         : catalog_(std::move(catalog)),
           covers_(OpenHallCovers(catalog_)),
           app_controller_(runtime),
@@ -1672,6 +1680,8 @@ class ActiveHost final {
           settings_store_(settings_store),
           remote_control_(remote_control),
           hall_status_(catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady) {
+        std::snprintf(effective_locale_.data(), effective_locale_.size(), "%.*s",
+                      static_cast<int>(effective_locale.size()), effective_locale.data());
         UpdateRemoteControlCatalog(remote_control_, catalog_);
         remote_control_.UpdateAppLifecycle(nullptr, "not_running");
     }
@@ -1776,7 +1786,7 @@ class ActiveHost final {
         // Preserve the active catalog if scanning fails without placing the
         // 3456-byte replacement catalog on the Host supervisor stack.
         auto reloaded_catalog = MakePsramObject<runtime::InstalledAppCatalog>();
-        if (reloaded_catalog == nullptr || !runtime::ScanInstalledApps(*reloaded_catalog)) {
+        if (reloaded_catalog == nullptr || !runtime::ScanInstalledApps(*reloaded_catalog, effective_locale_.data())) {
             return false;
         }
         catalog_ = std::move(*reloaded_catalog);
@@ -2088,7 +2098,7 @@ class ActiveHost final {
                     .expected_app_id = command.app_id.data(),
                     .expected_sha256 = command.package_sha256,
                 };
-                auto install_result = runtime::InstallApp(request);
+                auto install_result = runtime::InstallApp(request, effective_locale_.data());
                 heap_caps_free(command.package_data);
                 if (!install_result) {
                     RestoreHallCovers();
@@ -2313,7 +2323,8 @@ class ActiveHost final {
                     .available = app_controller_.state() == AppLifecycleState::kNotRunning,
                 };
                 if (!RunSystemMenu(shell_, battery_, wifi_, status_model_, catalog_, settings_store_, remote_control_,
-                                   CanLaunch(), &uninstall_handler, launch_request, &command_pump)) {
+                                   CanLaunch(), &uninstall_handler, launch_request, &command_pump,
+                                   effective_locale_.data())) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
                 if (command_pump.unwind_requested) {
@@ -2811,6 +2822,7 @@ class ActiveHost final {
     host_ui::StatusLayerModel& status_model_;
     host_ui::SystemSettingsStore& settings_store_;
     remote_control::RemoteControlAgent& remote_control_;
+    std::array<char, MICROPIXEL_BUNDLE_LOCALE_MAX_LENGTH + 1U> effective_locale_{};
     State state_{State::kHall};
     runtime::AppRunOutcome last_outcome_{};
     const runtime::AppRunOutcome* outcome_{};
@@ -2884,6 +2896,17 @@ void HostController::Run() {
     if (settings_store.ready() && !settings_store.Load(status_model)) {
         ESP_LOGW(kTag, "Host settings could not be restored; using safe defaults");
     }
+    host_ui::SystemLocaleState locale;
+    if (settings_store.ready() && !settings_store.LoadLocale(locale)) {
+        ESP_LOGW(kTag, "requested Locale could not be restored; using %s", host_ui::kDefaultLocale.data());
+    }
+    locale.ResolveEffective(kBuiltinLocales);
+    if (locale.requested() != locale.effective()) {
+        ESP_LOGW(kTag, "requested Locale %s is unavailable; effective Locale is %s", locale.requested_c_str(),
+                 locale.effective_c_str());
+    } else {
+        ESP_LOGI(kTag, "effective Locale: %s", locale.effective_c_str());
+    }
     shell_.ConfigureAutoSleep(
         status_model.auto_sleep_timeout_minutes,
         [](void* context, bool& connected) {
@@ -2910,7 +2933,7 @@ void HostController::Run() {
         ESP_LOGE(kTag, "failed to allocate App Store catalog");
         return;
     }
-    auto catalog_result = runtime::ScanInstalledApps(*catalog);
+    auto catalog_result = runtime::ScanInstalledApps(*catalog, locale.effective());
     if (!catalog_result) {
         ESP_LOGE(kTag, "App Store catalog scan failed");
         *catalog = {};
@@ -2924,7 +2947,7 @@ void HostController::Run() {
     UpdateRemoteControlCatalog(remote_control_, *catalog);
     remote_control_.UpdateAppLifecycle(nullptr, "not_running");
 
-    auto runtime_result = runtime::AppRuntime::Initialize(devices_, &remote_control_);
+    auto runtime_result = runtime::AppRuntime::Initialize(devices_, locale.effective(), &remote_control_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
         RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, *catalog,
@@ -2934,8 +2957,9 @@ void HostController::Run() {
     }
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
-    auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_runtime, devices_, shell_, battery_, wifi_,
-                                                   power_, power_state_, status_model, settings_store, remote_control_);
+    auto active_host =
+        MakePsramObject<ActiveHost>(std::move(*catalog), app_runtime, devices_, shell_, battery_, wifi_, power_,
+                                    power_state_, status_model, settings_store, remote_control_, locale.effective());
     if (active_host == nullptr) {
         ESP_LOGE(kTag, "failed to allocate ActiveHost state");
         RunUnavailableHall(

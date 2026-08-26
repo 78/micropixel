@@ -27,20 +27,6 @@ lv_color_format_t BitmapLvColorFormat(uint32_t pixel_format) {
     return pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
 }
 
-const lv_font_t* SystemFontForHandle(uint16_t handle) {
-    switch (handle) {
-        case MICROPIXEL_SYSTEM_FONT_TITLE:
-            return &lv_font_montserrat_32;
-        case MICROPIXEL_SYSTEM_FONT_LARGE:
-            return &lv_font_montserrat_24;
-        case MICROPIXEL_SYSTEM_FONT_MEDIUM:
-            return &lv_font_montserrat_18;
-        case MICROPIXEL_SYSTEM_FONT_SMALL:
-        default:
-            return &lv_font_montserrat_14;
-    }
-}
-
 uint16_t RetainedObjectOpcode(uint16_t opcode) {
     if (opcode == MICROPIXEL_GRAPHICS_OP_BLEND_RECT) {
         return MICROPIXEL_GRAPHICS_OP_FILL_RECT;
@@ -86,6 +72,9 @@ void RetainedScene::Release() {
     // clients reserved across Guest sessions and release only per-App pixels.
     surface_.Reset();
 #endif
+    for (uint32_t index = 0U; index < object_count_; ++index) {
+        ReleaseObjectFont(objects_[index]);
+    }
     heap_caps_free(objects_);
     objects_ = nullptr;
     object_count_ = 0U;
@@ -133,7 +122,16 @@ void RetainedScene::DiscardObject(RetainedObject& slot) {
     if (slot.object != nullptr) {
         lv_obj_delete(slot.object);
     }
+    ReleaseObjectFont(slot);
     slot = {};
+}
+
+void RetainedScene::ReleaseObjectFont(RetainedObject& slot) {
+    if (slot.font_handle != 0U) {
+        fonts_.ReleaseSceneFont(slot.font_handle);
+        slot.font_handle = 0U;
+        slot.font = nullptr;
+    }
 }
 
 void RetainedScene::ForgetObjects() {
@@ -142,6 +140,7 @@ void RetainedScene::ForgetObjects() {
     }
     for (uint32_t index = 0U; index < object_count_; ++index) {
         RetainedObject& slot = objects_[index];
+        ReleaseObjectFont(slot);
         if ((slot.opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE ||
              slot.opcode == MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE) &&
             slot.image.data != nullptr) {
@@ -355,6 +354,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                 PrepareObject(used++, record.opcode, target_frame, target_width, changed, order_dirty);
             const char* text = reinterpret_cast<const char*>(bytes + offset + sizeof(command));
             if (IsTextPlaceholder(command, text)) {
+                ReleaseObjectFont(slot);
                 SetObjectVisible(slot, false, changed);
             } else {
                 if (slot.text_length != command.text_length || std::memcmp(slot.text, text, command.text_length) != 0) {
@@ -378,8 +378,23 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                     slot.rgb888 = command.rgb888;
                     changed = true;
                 }
-                const lv_font_t* font = SystemFontForHandle(command.font_handle);
-                if (!slot.state_valid || slot.font != font) {
+                const lv_font_t* font = fonts_.ResolveRetainedHandle(command.font_handle);
+                if (slot.font_handle != command.font_handle) {
+                    if (!fonts_.RetainSceneFont(command.font_handle)) {
+                        return {MICROPIXEL_STATUS_RESOURCE_EXHAUSTED, false, SurfaceActive()};
+                    }
+                    font = fonts_.ResolveRetainedHandle(command.font_handle);
+                    if (font == nullptr) {
+                        fonts_.ReleaseSceneFont(command.font_handle);
+                        return {MICROPIXEL_STATUS_INVALID_ARGUMENT, false, SurfaceActive()};
+                    }
+                    const micropixel_font_handle_t previous_font = slot.font_handle;
+                    lv_obj_set_style_text_font(slot.object, font, 0);
+                    slot.font = font;
+                    slot.font_handle = command.font_handle;
+                    fonts_.ReleaseSceneFont(previous_font);
+                    changed = true;
+                } else if (!slot.state_valid || slot.font != font) {
                     lv_obj_set_style_text_font(slot.object, font, 0);
                     slot.font = font;
                     changed = true;
@@ -502,6 +517,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
 
     for (uint32_t index = used; index < object_count_; ++index) {
         RetainedObject& slot = objects_[index];
+        ReleaseObjectFont(slot);
         if (slot.visible) {
             bool changed = false;
             SetObjectVisible(slot, false, changed);

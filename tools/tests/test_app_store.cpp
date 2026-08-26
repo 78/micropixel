@@ -167,6 +167,30 @@ void TestNewestInstallIsListedFirst() {
           "updating an App must preserve its catalog position");
 }
 
+void TestComponentTrustVisibilityAndProtection() {
+    Reset();
+    auto component = MakeBundle("fonts.fixture", 0x68U);
+    auto request = Request(component, "fonts.fixture");
+    Check(micropixel::runtime::InstallApp(request).error() == micropixel::runtime::AppStoreError::kUntrustedComponent,
+          "Component install must require a verified publisher signature");
+    request.trusted_component_signature = true;
+    auto installed = micropixel::runtime::InstallApp(request);
+    Check(installed.has_value() && installed->package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT,
+          "trusted Component must install as a non-App package");
+
+    micropixel::runtime::InstalledAppCatalog catalog{};
+    Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 0U &&
+              catalog.component_count == 1U,
+          "Component must count toward Storage without appearing in the App catalog");
+    Check(micropixel::runtime::UninstallApp("fonts.fixture").error() == micropixel::runtime::AppStoreError::kNotFound,
+          "App uninstall path must not remove a Component");
+    Check(micropixel::runtime::UninstallComponent("fonts.fixture", "fonts.fixture").error() ==
+              micropixel::runtime::AppStoreError::kComponentActive,
+          "active Component must be protected from uninstall");
+    Check(micropixel::runtime::UninstallComponent("fonts.fixture").has_value(),
+          "inactive Component must uninstall through its explicit path");
+}
+
 }  // namespace
 
 extern "C" {
@@ -335,20 +359,39 @@ bool micropixel_read_bundle_metadata(const bundlefs_file_t* file, micropixel_bun
         header.app_id_length == 0U || header.app_id_length > MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH) {
         return false;
     }
-    *metadata_out = {.bundle_size = header.bundle_size};
+    *metadata_out = {
+        .bundle_size = header.bundle_size,
+        .metadata_schema_version = MICROPIXEL_BUNDLE_METADATA_SCHEMA_VERSION,
+        .package_type = MICROPIXEL_BUNDLE_PACKAGE_APP,
+    };
     std::memcpy(metadata_out->app_id, header.app_id, header.app_id_length);
+    if (std::strncmp(reinterpret_cast<const char*>(metadata_out->app_id), "fonts.", 6U) == 0) {
+        metadata_out->package_type = MICROPIXEL_BUNDLE_PACKAGE_COMPONENT;
+        metadata_out->component_type = MICROPIXEL_BUNDLE_COMPONENT_FONT;
+    }
     constexpr char kDisplayName[] = "Test App";
     std::memcpy(metadata_out->display_name, kDisplayName, sizeof(kDisplayName));
     return true;
 }
 
+bool micropixel_read_bundle_metadata_for_locale(const bundlefs_file_t* file, const char*,
+                                                micropixel_bundle_metadata_t* metadata_out) {
+    return micropixel_read_bundle_metadata(file, metadata_out);
+}
+
 bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_package_t* package_out) {
     micropixel_bundle_metadata_t metadata{};
-    if (package_out == nullptr || !micropixel_read_bundle_metadata(file, &metadata)) {
+    if (package_out == nullptr || !micropixel_read_bundle_metadata(file, &metadata) ||
+        metadata.package_type != MICROPIXEL_BUNDLE_PACKAGE_APP) {
         return false;
     }
     *package_out = {};
     return true;
+}
+
+bool micropixel_validate_component_package(const bundlefs_file_t* file, micropixel_bundle_metadata_t* metadata_out) {
+    return metadata_out != nullptr && micropixel_read_bundle_metadata(file, metadata_out) &&
+           metadata_out->package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT;
 }
 
 void micropixel_close_aot_package(micropixel_aot_package_t* package) {
@@ -363,6 +406,7 @@ int main() {
     TestEmptyInstallUpdateAndRemove();
     TestIdentityAndCapacityErrors();
     TestNewestInstallIsListedFirst();
+    TestComponentTrustVisibilityAndProtection();
     std::printf("App Store tests passed (%u checks).\n", checks);
     return 0;
 }

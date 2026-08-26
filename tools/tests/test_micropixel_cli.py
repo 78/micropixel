@@ -37,6 +37,79 @@ def api_token(device_id: str) -> str:
 
 
 class MicroPixelCliTest(unittest.TestCase):
+    def test_manifest_driven_package_generates_catalog_and_bundle_v1(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "i18n").mkdir()
+            (root / "main.cpp").write_text("int fixture = 1;\n", encoding="utf-8")
+            (root / "i18n/en.json").write_text('{"app.title":"Fixture"}\n', encoding="utf-8")
+            (root / "app.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "app_id": "vendor.fixture",
+                        "display_name": {"default": "en", "values": {"en": "Fixture"}},
+                        "localization": {
+                            "default": "en",
+                            "translations": {"en": "i18n/en.json"},
+                        },
+                        "source": "main.cpp",
+                        "sources": ["main.cpp"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_dir = root / "out"
+
+            def fake_build(args: argparse.Namespace) -> None:
+                Path(args.output_dir_override).mkdir(parents=True, exist_ok=True)
+                (Path(args.output_dir_override) / "fixture.aot").write_bytes(b"fixture-aot")
+
+            args = argparse.Namespace(
+                project=str(root),
+                profile="release",
+                output_dir=str(output_dir),
+                output=None,
+                raw=None,
+            )
+            with patch.object(CLI, "_run_build_sources", side_effect=fake_build):
+                with redirect_stdout(io.StringIO()):
+                    bundle = CLI.run_package(args)
+
+            self.assertEqual(CLI.validate_bundle(bundle)["appId"], "vendor.fixture")
+            self.assertTrue((output_dir / "generated/fixture_strings.hpp").is_file())
+            self.assertEqual(
+                json.loads((output_dir / "localization-report.json").read_text(encoding="utf-8"))["schema_version"],
+                1,
+            )
+
+    def test_project_manifest_rejects_paths_outside_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "outside.cpp").write_text("int outside;\n", encoding="utf-8")
+            project = root / "project"
+            project.mkdir()
+            manifest = project / "app.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "app_id": "vendor.fixture",
+                        "display_name": "Fixture",
+                        "source": "../outside.cpp",
+                        "sources": ["../outside.cpp"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CLI.CliError, "escapes the project directory"):
+                CLI.load_project_manifest(manifest)
+
+    def test_build_package_and_install_default_to_current_project(self) -> None:
+        self.assertEqual(CLI.parser().parse_args(["build"]).source, ".")
+        self.assertEqual(CLI.parser().parse_args(["package"]).project, ".")
+        self.assertEqual(CLI.parser().parse_args(["install"]).project_or_bundle, ".")
+
     def test_process_environment_overrides_local_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

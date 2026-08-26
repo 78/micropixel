@@ -29,6 +29,10 @@ class GraphicsService final {
     [[nodiscard]] DeviceResult<void> Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const;
     [[nodiscard]] DeviceResult<void> CommitFrame(const TextureAccess& textures) const;
     [[nodiscard]] DeviceResult<void> CancelFrame() const;
+    [[nodiscard]] DeviceResult<micropixel_font_info_t> LoadFont(const FontResourceView& resource) const;
+    [[nodiscard]] DeviceResult<void> ReleaseFont(micropixel_font_handle_t font) const;
+    [[nodiscard]] DeviceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font, const char* text,
+                                                                      uint32_t text_length) const;
     [[nodiscard]] DeviceResult<void> BeginBitmapUpdateFrame() const;
     [[nodiscard]] DeviceResult<void> UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                                   uint32_t height, const uint8_t* pixels, uint32_t stride) const;

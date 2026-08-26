@@ -1,6 +1,9 @@
 #ifndef MICROPIXEL_RUNTIME_ABI_SERVICE_ENDPOINTS_HPP
 #define MICROPIXEL_RUNTIME_ABI_SERVICE_ENDPOINTS_HPP
 
+#include <array>
+#include <string_view>
+
 #include "runtime/abi/service_registry.hpp"
 
 namespace micropixel::runtime {
@@ -9,9 +12,14 @@ class GuestContext;
 
 class SystemServiceEndpoint final : public ServiceHandler {
    public:
+    explicit SystemServiceEndpoint(std::string_view effective_locale);
     [[nodiscard]] ServiceDescriptor Describe() const override;
     [[nodiscard]] int32_t Call(uint32_t method_id, const uint8_t* request, uint32_t request_size, uint8_t* response,
                                uint32_t response_capacity, uint32_t& response_size_out) override;
+
+   private:
+    std::array<char, MICROPIXEL_LOCALE_TAG_MAX_BYTES + 1U> effective_locale_{};
+    uint16_t effective_locale_length_{};
 };
 
 class TimerServiceEndpoint final : public ServiceHandler {

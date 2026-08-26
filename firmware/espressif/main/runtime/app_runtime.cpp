@@ -1,5 +1,6 @@
 #include "runtime/app_runtime.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <utility>
 
@@ -22,8 +23,13 @@ void CopyAppId(const char* source, std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX
 }  // namespace
 
 AppRuntime::AppRuntime(device::DeviceServices& devices, WamrRuntime wamr, SemaphoreHandle_t session_mutex,
-                       GuestLogSink* log_sink)
-    : devices_(devices), log_sink_(log_sink), wamr_(std::move(wamr)), session_mutex_(session_mutex) {}
+                       std::string_view effective_locale, GuestLogSink* log_sink)
+    : devices_(devices), log_sink_(log_sink), wamr_(std::move(wamr)), session_mutex_(session_mutex) {
+    if (effective_locale.empty() || effective_locale.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES) {
+        effective_locale = "en";
+    }
+    std::copy(effective_locale.begin(), effective_locale.end(), effective_locale_.begin());
+}
 
 AppRuntime::AppRuntime(AppRuntime&& other) noexcept
     : devices_(other.devices_),
@@ -31,6 +37,7 @@ AppRuntime::AppRuntime(AppRuntime&& other) noexcept
       wamr_(std::move(other.wamr_)),
       session_mutex_(std::exchange(other.session_mutex_, nullptr)),
       active_session_(std::exchange(other.active_session_, nullptr)),
+      effective_locale_(other.effective_locale_),
       session_active_(std::exchange(other.session_active_, false)),
       stop_requested_(std::exchange(other.stop_requested_, false)) {}
 
@@ -52,6 +59,7 @@ void AppRuntime::GiveSessionLock() {
 }
 
 std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::DeviceServices& devices,
+                                                                  std::string_view effective_locale,
                                                                   GuestLogSink* log_sink) {
     auto runtime_result = WamrRuntime::Initialize();
     if (!runtime_result) {
@@ -73,7 +81,21 @@ std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::Device
         return std::unexpected(AppRuntimeError::kSynchronization);
     }
     ESP_LOGI(kTag, "process-wide WAMR runtime ready");
-    return AppRuntime(devices, std::move(wamr), session_mutex, log_sink);
+    return AppRuntime(devices, std::move(wamr), session_mutex, effective_locale, log_sink);
+}
+
+bool AppRuntime::SetEffectiveLocale(std::string_view effective_locale) {
+    if (effective_locale.empty() || effective_locale.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES || !TakeSessionLock()) {
+        return false;
+    }
+    if (session_active_) {
+        GiveSessionLock();
+        return false;
+    }
+    effective_locale_.fill('\0');
+    std::copy(effective_locale.begin(), effective_locale.end(), effective_locale_.begin());
+    GiveSessionLock();
+    return true;
 }
 
 AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink ready_sink, void* ready_context) {
@@ -98,7 +120,7 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
     GiveSessionLock();
 
     micropixel_log_heap_state("AppSession create begin");
-    auto session_result = AppSession::Create(devices_, app.file, log_sink_);
+    auto session_result = AppSession::Create(devices_, app.file, effective_locale_.data(), log_sink_);
     if (!session_result) {
         if (session_result.error().app_id[0] != '\0') {
             outcome.app_id = session_result.error().app_id;

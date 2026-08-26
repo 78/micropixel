@@ -1,0 +1,19 @@
+{
+  "action.continue": "CONTINUE",
+  "action.restart": "RESTART",
+  "action.start": "START GAME",
+  "app.title": "Juicy Snake",
+  "brand.edition": "TERMINAL EDITION",
+  "game_over.title": "CRITICAL FAILURE",
+  "label.best": "BEST",
+  "label.food": "FOOD",
+  "label.level": "LEVEL",
+  "label.level_short": "LVL ",
+  "label.max_combo": "MAX COMBO",
+  "label.score": "SCORE",
+  "status.combo_prefix": "COMBO x",
+  "status.seconds_suffix": "s",
+  "status.shield_prefix": "SHIELD ",
+  "upgrade.reached_suffix": " REACHED",
+  "upgrade.title": "SYSTEM UPGRADE"
+}

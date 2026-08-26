@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "esp_log.h"
+#include "platform/graphics/command_stream.hpp"
 #include "runtime/guest_context.hpp"
 #include "sdkconfig.h"
 
@@ -71,6 +72,14 @@ bool ReadHandle(const uint8_t* request, uint32_t request_size, uint32_t& handle_
 
 }  // namespace
 
+SystemServiceEndpoint::SystemServiceEndpoint(std::string_view effective_locale) {
+    if (effective_locale.empty() || effective_locale.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES) {
+        effective_locale = "en";
+    }
+    effective_locale_length_ = static_cast<uint16_t>(effective_locale.size());
+    std::memcpy(effective_locale_.data(), effective_locale.data(), effective_locale.size());
+}
+
 ServiceDescriptor SystemServiceEndpoint::Describe() const {
     return ServiceDescriptor{
         .service_id = MICROPIXEL_SERVICE_SYSTEM,
@@ -91,9 +100,8 @@ int32_t SystemServiceEndpoint::Call(uint32_t method_id, const uint8_t*, uint32_t
     }
     micropixel_system_locale_response_t locale{};
     locale.size = sizeof(locale);
-    locale.tag_length = 2U;
-    locale.tag[0] = 'e';
-    locale.tag[1] = 'n';
+    locale.tag_length = effective_locale_length_;
+    std::memcpy(locale.tag, effective_locale_.data(), effective_locale_length_);
     return WriteValue(locale, response, response_capacity, response_size_out);
 }
 
@@ -193,7 +201,9 @@ ServiceDescriptor ResourceServiceEndpoint::Describe() const {
         .interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL,
         .max_request_bytes = MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES,
-        .max_response_bytes = sizeof(micropixel_texture_info_t),
+        .max_response_bytes = sizeof(micropixel_texture_info_t) > sizeof(micropixel_font_info_t)
+                                  ? sizeof(micropixel_texture_info_t)
+                                  : sizeof(micropixel_font_info_t),
     };
 }
 
@@ -206,6 +216,15 @@ int32_t ResourceServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
         }
         return WriteResult<micropixel_texture_info_t>(context_.LoadTexture(wire.asset_id), response, response_capacity,
                                                       response_size_out);
+    }
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_LOAD_FONT) {
+        micropixel_resource_load_font_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.resource_id == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_font_info_t>(context_.LoadFont(wire.resource_id), response, response_capacity,
+                                                   response_size_out);
     }
     if (method_id == MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_CREATE) {
         micropixel_streaming_texture_create_request_t wire{};
@@ -248,6 +267,9 @@ int32_t ResourceServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
     if (method_id == MICROPIXEL_RESOURCE_METHOD_TEXTURE_RELEASE) {
         return ResultStatus(context_.ReleaseTexture(handle));
     }
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_FONT_RELEASE && handle <= UINT16_MAX) {
+        return ResultStatus(context_.ReleaseFont(static_cast<micropixel_font_handle_t>(handle)));
+    }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }
 
@@ -289,7 +311,7 @@ ServiceDescriptor GraphicsServiceEndpoint::Describe() const {
         .interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_SUBMIT,
         .capabilities = capabilities,
-        .max_request_bytes = 0U,
+        .max_request_bytes = sizeof(micropixel_graphics_measure_text_request_t) + MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES,
         .max_response_bytes = sizeof(micropixel_graphics_info_t),
         .max_submit_bytes = max_submit_bytes,
     };
@@ -321,6 +343,18 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         return ResultStatus(context_.GraphicsCancelFrame());
+    }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT) {
+        micropixel_graphics_measure_text_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size || wire.font == 0U ||
+            wire.reserved0 != 0U || wire.text_length == 0U || wire.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES ||
+            sizeof(wire) + wire.text_length != request_size ||
+            !platform::graphics::IsValidUtf8(request + sizeof(wire), wire.text_length)) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_text_metrics_t>(
+            context_.MeasureText(wire.font, reinterpret_cast<const char*>(request + sizeof(wire)), wire.text_length),
+            response, response_capacity, response_size_out);
     }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }

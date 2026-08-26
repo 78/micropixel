@@ -25,6 +25,7 @@ class ResourceService final {
     [[nodiscard]] bool valid() const;  // NOLINT(readability-identifier-naming)
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id);
     [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture);
+    [[nodiscard]] ServiceResult<device::FontResourceView> FindFont(uint32_t resource_id) const;
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateStreamingTexture(uint32_t width, uint32_t height,
                                                                                   uint32_t pixel_format);
     [[nodiscard]] ServiceResult<device::BitmapView> MutableTexture(micropixel_texture_handle_t texture) const;

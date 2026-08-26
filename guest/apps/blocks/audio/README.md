@@ -24,7 +24,7 @@ Guest 不再定义 App master，历史的 45% 统一衰减已移除；设备整�
 `sfx.json` 中的边界，构建都会失败：
 
 ```sh
-bash tools/build_blocks_bundle.sh
+python3 tools/micropixel package guest/apps/blocks
 ```
 
 独立运行、导出可试听 WAV 和执行算法回归：
@@ -45,7 +45,7 @@ python3 -m unittest tools.tests.test_analyze_sfx -v
 
 ```sh
 MICROPIXEL_SFX_DEVICE_PROFILE=/absolute/path/measured-speaker-response.json \
-  bash tools/build_blocks_bundle.sh
+  python3 tools/micropixel package guest/apps/blocks
 ```
 
 快速落地是跨游戏参考音，50 ms RMS 固定为 `-14 dBFS`；移动/软降短时层级低 14 dB，自然落地低 8 dB。

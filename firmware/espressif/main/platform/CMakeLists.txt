@@ -25,6 +25,8 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
         "platform/metalio-claw4/display/system_transition_compositor.cpp"
         "platform/metalio-claw4/graphics_adapter.cpp"
         "platform/metalio-claw4/guest_graphics_engine.cpp"
+        "platform/metalio-claw4/fonts/font_cbin_loader.cpp"
+        "platform/metalio-claw4/fonts/font_registry.cpp"
         "platform/metalio-claw4/platform.cpp"
         "platform/metalio-claw4/icons/wifi_status_icons.c"
         "platform/metalio-claw4/status_layer_ui.cpp"

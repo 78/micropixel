@@ -1,6 +1,7 @@
 #ifndef MICROPIXEL_HOST_UI_SYSTEM_SETTINGS_STORE_HPP
 #define MICROPIXEL_HOST_UI_SYSTEM_SETTINGS_STORE_HPP
 
+#include "host_ui/system_locale.hpp"
 #include "host_ui/system_ui.hpp"
 #include "nvs.h"
 
@@ -18,6 +19,8 @@ class SystemSettingsStore final {
     [[nodiscard]] bool Initialize();
     [[nodiscard]] bool Load(StatusLayerModel& model) const;
     [[nodiscard]] bool Save(const StatusLayerModel& model) const;
+    [[nodiscard]] bool LoadLocale(SystemLocaleState& locale) const;
+    [[nodiscard]] bool SaveLocale(const SystemLocaleState& locale) const;
     [[nodiscard]] bool LoadRemoteControl(RemoteControlModel& model) const;
     [[nodiscard]] bool SaveRemoteControl(const RemoteControlModel& model) const;
     [[nodiscard]] bool ready() const {  // NOLINT(readability-identifier-naming)

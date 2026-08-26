@@ -1,0 +1,21 @@
+{
+  "action.continue": "CONTINUE",
+  "action.restart": "RESTART",
+  "action.start": "START GAME",
+  "app.title": "Juicy Blocks",
+  "brand.edition": "TERMINAL EDITION",
+  "effect.combo_prefix": "COMBO x",
+  "effect.line_clear_prefix": "LINE CLEAR  +",
+  "game_over.title": "STACK OVERFLOW",
+  "hint.swipe_anywhere": "SWIPE ANYWHERE",
+  "hint.tap_rotate": "TAP TO ROTATE",
+  "label.best": "BEST",
+  "label.hold": "HOLD",
+  "label.level": "LEVEL",
+  "label.level_prefix": "LEVEL ",
+  "label.level_short": "LVL ",
+  "label.lines": "LINES",
+  "label.lines_prefix": "LINES ",
+  "label.next": "NEXT",
+  "label.score": "SCORE"
+}

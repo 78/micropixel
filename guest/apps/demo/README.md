@@ -23,14 +23,18 @@ test，也不为每项能力生成独立 AOT；协议、错误和边界验证继
 alpha blend 的实际交互路径，不需要为 Graphics 再单独做一页。
 
 Resource 页使用 `assets/manifest.json` 描述一张 12 帧 PNG atlas。构建阶段只生成
-`build/apps/demo/assets/demo_assets.hpp`，页面从这个头文件取得 `AssetId` 和帧布局。
+`build/apps/demo/generated/demo_assets.hpp`，页面从这个头文件取得 `AssetId` 和帧布局。Demo 面向
+SDK 初次使用者，界面文案直接使用英文字符串，避免给最小 App 引入不必要的 Localization 样板。
+Blocks 和 Snake 展示完整的静态 Catalog 国际化方式。
 
 ## 构建与烧录
 
 ```sh
-bash tools/build_demo_bundle.sh
+python3 tools/micropixel package guest/apps/demo
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
+
+兼容脚本 `bash tools/build_demo_bundle.sh` 只转发到同一条 manifest 驱动的命令。
 
 `flash-apps` 会清空 App Store 并写入 Blocks、Snake 和 Demo 三个示例 App。
 

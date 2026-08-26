@@ -26,8 +26,10 @@ blocks/
 构建 App Bundle：
 
 ```sh
-bash tools/build_blocks_bundle.sh
+python3 tools/micropixel package guest/apps/blocks
 ```
+
+兼容脚本 `bash tools/build_blocks_bundle.sh` 只转发到同一条 manifest 驱动的命令。
 
 触控操作覆盖整个 720×720 屏幕：任意位置点击旋转、水平拖动、慢速下拖软降、快速下划硬降、上划换块；
 轻点 HOLD 换块，轻点左上角标题区域暂停。从 HOLD 或标题区域起手的滑动仍按游戏手势处理，不会被按钮截断。

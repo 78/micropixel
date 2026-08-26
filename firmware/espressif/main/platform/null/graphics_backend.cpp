@@ -54,6 +54,17 @@ class NullGraphicsBackend final : public device::GraphicsBackend {
         return MICROPIXEL_STATUS_OK;
     }
 
+    [[nodiscard]] int32_t LoadFont(const device::FontResourceView&, micropixel_font_info_t&) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+
+    [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
+
+    [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t, const char*, uint32_t,
+                                      micropixel_text_metrics_t&) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+
     [[nodiscard]] int32_t BeginBitmapUpdateFrame() override {
         if (bitmap_update_frame_active_) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;

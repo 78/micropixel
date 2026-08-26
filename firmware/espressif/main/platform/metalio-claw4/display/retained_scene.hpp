@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "device/graphics.hpp"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 #include "sdkconfig.h"
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
 #include "platform/metalio-claw4/display/retained_surface.hpp"
@@ -18,8 +19,8 @@ struct RetainedFrameResult final {
 
 class RetainedScene final {
    public:
-    RetainedScene(int32_t logical_width, int32_t logical_height)
-        : logical_width_(logical_width), logical_height_(logical_height) {}
+    RetainedScene(int32_t logical_width, int32_t logical_height, FontRegistry& fonts)
+        : logical_width_(logical_width), logical_height_(logical_height), fonts_(fonts) {}
 
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
     void BindSurface(lv_display_t* display, esp_lcd_panel_handle_t panel);
@@ -55,11 +56,13 @@ class RetainedScene final {
         uint32_t rgb888{};
         uint8_t opacity{};
         const lv_font_t* font{};
+        micropixel_font_handle_t font_handle{};
         bool state_valid{};
         bool visible{};
     };
 
     void DiscardObject(RetainedObject& slot);
+    void ReleaseObjectFont(RetainedObject& slot);
     void DiscardAllObjects();
     [[nodiscard]] bool TopologyChanged(const uint8_t* bytes, uint32_t length,
                                        const micropixel_graphics_command_header_t& header) const;
@@ -72,6 +75,7 @@ class RetainedScene final {
 
     int32_t logical_width_{};
     int32_t logical_height_{};
+    FontRegistry& fonts_;
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
     RetainedSurface surface_{};
 #endif

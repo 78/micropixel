@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <string_view>
 
 #include "runtime/bundle/bundle_reader.h"
 
@@ -26,11 +27,13 @@ struct InstalledApp final {
 struct InstalledAppCatalog final {
     std::array<InstalledApp, kMaxInstalledApps> apps{};
     uint32_t count{};
+    uint32_t component_count{};
     uint32_t store_total_bytes{};
     uint32_t store_used_bytes{};
 };
 
-[[nodiscard]] std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out);
+[[nodiscard]] std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out,
+                                                                     std::string_view effective_locale = "en");
 
 // Owns one Flash-mapped launch asset used as the first App Hall cover.
 // Unlike AotPackage, it never maps the complete Bundle.

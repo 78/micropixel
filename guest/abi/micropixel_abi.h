@@ -10,7 +10,7 @@
 #define MICROPIXEL_ABI_MAX_LOG_BYTES 1024U
 #define MICROPIXEL_MAX_TOUCH_POINTS 5U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
-#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 1U
+#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 2U
 #define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
 #define MICROPIXEL_GRAPHICS_COMMAND_MAGIC 0x4652474dU
@@ -21,7 +21,7 @@
 #define MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS 272U
 #define MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES 128U
 #define MICROPIXEL_RESOURCE_INTERFACE_MAJOR 1U
-#define MICROPIXEL_RESOURCE_INTERFACE_MINOR 0U
+#define MICROPIXEL_RESOURCE_INTERFACE_MINOR 1U
 #define MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES 4096U
 #define MICROPIXEL_AUDIO_INTERFACE_MAJOR 1U
 #define MICROPIXEL_AUDIO_INTERFACE_MINOR 0U
@@ -56,6 +56,7 @@ typedef uint64_t micropixel_app_time_t;
 typedef uint32_t micropixel_service_handle_t;
 typedef uint32_t micropixel_timer_handle_t;
 typedef uint32_t micropixel_texture_handle_t;
+typedef uint16_t micropixel_font_handle_t;
 
 typedef enum micropixel_service_id {
     MICROPIXEL_SERVICE_TIMER = 1,
@@ -102,6 +103,8 @@ typedef enum micropixel_resource_method {
     MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_UPDATE = 4,
     MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_BEGIN = 5,
     MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_FINISH = 6,
+    MICROPIXEL_RESOURCE_METHOD_LOAD_FONT = 7,
+    MICROPIXEL_RESOURCE_METHOD_FONT_RELEASE = 8,
 } micropixel_resource_method_t;
 
 typedef enum micropixel_random_method {
@@ -123,6 +126,7 @@ typedef enum micropixel_graphics_method {
     MICROPIXEL_GRAPHICS_METHOD_FRAME_BEGIN = 2,
     MICROPIXEL_GRAPHICS_METHOD_FRAME_COMMIT = 3,
     MICROPIXEL_GRAPHICS_METHOD_FRAME_CANCEL = 4,
+    MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT = 5,
 } micropixel_graphics_method_t;
 
 typedef enum micropixel_graphics_channel {
@@ -194,6 +198,24 @@ typedef struct micropixel_resource_load_texture_request {
     uint16_t reserved0;
     uint32_t asset_id;
 } micropixel_resource_load_texture_request_t;
+
+typedef struct micropixel_resource_load_font_request {
+    uint16_t size;
+    uint16_t reserved0;
+    uint32_t resource_id;
+} micropixel_resource_load_font_request_t;
+
+typedef struct micropixel_font_info {
+    uint16_t size;
+    uint16_t interface_major;
+    uint16_t interface_minor;
+    micropixel_font_handle_t font;
+    uint16_t font_size;
+    uint16_t line_height;
+    int16_t ascent;
+    int16_t descent;
+    uint32_t reserved[2];
+} micropixel_font_info_t;
 
 typedef struct micropixel_random_u32_response {
     uint16_t size;
@@ -315,6 +337,22 @@ typedef struct micropixel_graphics_info {
     uint16_t max_draw_operations;
 } micropixel_graphics_info_t;
 
+/* Followed by text_length UTF-8 bytes without a trailing NUL. */
+typedef struct micropixel_graphics_measure_text_request {
+    uint16_t size;
+    micropixel_font_handle_t font;
+    uint16_t text_length;
+    uint16_t reserved0;
+} micropixel_graphics_measure_text_request_t;
+
+typedef struct micropixel_text_metrics {
+    uint16_t size;
+    uint16_t reserved0;
+    uint32_t width;
+    uint32_t height;
+    int32_t baseline;
+} micropixel_text_metrics_t;
+
 typedef struct micropixel_graphics_command_header {
     uint32_t magic;
     uint16_t interface_major;
@@ -358,7 +396,7 @@ typedef struct micropixel_graphics_draw_text_command {
     int32_t x;
     int32_t y;
     uint32_t rgb888;
-    uint16_t font_handle;
+    micropixel_font_handle_t font_handle;
     uint16_t text_length;
 } micropixel_graphics_draw_text_command_t;
 

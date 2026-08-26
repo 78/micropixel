@@ -37,6 +37,7 @@
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
 #include "platform/metalio-claw4/display/system_transition_compositor.hpp"
+#include "platform/metalio-claw4/fonts/font_registry.hpp"
 #include "platform/metalio-claw4/graphics_adapter.hpp"
 #include "platform/metalio-claw4/guest_graphics_engine.hpp"
 #include "platform/metalio-claw4/hall_carousel.hpp"
@@ -296,7 +297,8 @@ struct MetalioClaw4PlatformState final {
     lv_obj_t* hall_wifi_status_image{};
     lv_obj_t* hall_battery_status_label{};
     lv_obj_t* hall_battery_percent_label{};
-    metalio_claw4::GuestGraphicsEngine guest_graphics{kWidth, kHeight};
+    metalio_claw4::FontRegistry fonts{};
+    metalio_claw4::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts};
     metalio_claw4::SystemTransitionCompositor system_transition{};
     lv_obj_t* hall_settings_press_overlay{};
     lv_obj_t* hall_update_press_overlay{};
@@ -522,7 +524,7 @@ void CreateStartingScreen(MetalioClaw4PlatformState& state) {
     lv_obj_t* label = lv_label_create(state.host_smoke);
     lv_label_set_text(label, "Starting...");
     lv_obj_set_style_text_color(label, lv_color_hex(0xeaf4ff), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(label, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kTitle), 0);
     lv_obj_center(label);
 }
 
@@ -837,7 +839,7 @@ int32_t ShowLaunchBitmapImpl(MetalioClaw4PlatformState& state, const device::Bit
     lv_obj_t* label = lv_label_create(state.host_smoke);
     lv_label_set_text(label, "Loading...");
     lv_obj_set_style_text_color(label, lv_color_hex(0xeaf4ff), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(label, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge), 0);
     lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -70);
     metalio_claw4::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
@@ -960,7 +962,10 @@ void UpdateHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::
                                                            : LV_SYMBOL_BATTERY_EMPTY);
     lv_obj_set_y(state.hall_battery_status_label, model.battery.charging ? 10 : 7);
     lv_obj_set_style_text_font(state.hall_battery_status_label,
-                               model.battery.charging ? &lv_font_montserrat_18 : &lv_font_montserrat_24, 0);
+                               model.battery.charging
+                                   ? metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium)
+                                   : metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge),
+                               0);
     lv_obj_set_style_transform_scale_x(state.hall_battery_status_label, model.battery.charging ? 256 : 282, 0);
     char battery_text[8]{};
     if (model.battery.available) {
@@ -976,7 +981,8 @@ void UpdateHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::
 
 void DrawHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::HallStatusBarModel& model) {
     state.hall_time_status_label =
-        CreateHallLabel(state.host_smoke, model.time_text.data(), &lv_font_montserrat_18, 0xf2f7ffU, 40, 8);
+        CreateHallLabel(state.host_smoke, model.time_text.data(),
+                        metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium), 0xf2f7ffU, 40, 8);
     lv_obj_set_width(state.hall_time_status_label, 72);
 
     state.hall_cellular_status_container = lv_obj_create(state.host_smoke);
@@ -1005,13 +1011,16 @@ void DrawHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::Ha
     lv_obj_set_style_image_recolor(state.hall_wifi_status_image, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_set_style_image_recolor_opa(state.hall_wifi_status_image, LV_OPA_COVER, 0);
 
-    state.hall_battery_status_label = CreateHallLabel(state.host_smoke, "", &lv_font_montserrat_24, 0xf2f7ffU, 622, 7);
+    state.hall_battery_status_label =
+        CreateHallLabel(state.host_smoke, "", metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge),
+                        0xf2f7ffU, 622, 7);
     lv_obj_set_width(state.hall_battery_status_label, 30);
     lv_obj_set_style_text_align(state.hall_battery_status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_transform_scale_x(state.hall_battery_status_label, 282, 0);
 
     state.hall_battery_percent_label =
-        CreateHallLabel(state.host_smoke, "", &lv_font_montserrat_14, 0xf2f7ffU, 657, 12);
+        CreateHallLabel(state.host_smoke, "", metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kSmall),
+                        0xf2f7ffU, 657, 12);
     lv_obj_set_width(state.hall_battery_percent_label, 38);
     lv_obj_set_style_text_align(state.hall_battery_percent_label, LV_TEXT_ALIGN_RIGHT, 0);
     UpdateHallStatusBarLocked(state, model);
@@ -1359,7 +1368,7 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const Hall
     lv_obj_center(cover_mark);
     lv_obj_t* cover_label = lv_label_create(cover_mark);
     lv_label_set_text(cover_label, AppShortName(app.app_id.data()));
-    lv_obj_set_style_text_font(cover_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(cover_label, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(cover_label, lv_color_hex(0x08111fU), 0);
     lv_obj_center(cover_label);
 
@@ -1375,7 +1384,9 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const Hall
     }
 
     const char* display_name = app.display_name[0] != '\0' ? app.display_name.data() : app.app_id.data();
-    lv_obj_t* app_label = CreateHallLabel(card, display_name, &lv_font_montserrat_18, 0xf2f7ffU, 12, bounds.width + 12);
+    lv_obj_t* app_label =
+        CreateHallLabel(card, display_name, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium),
+                        0xf2f7ffU, 12, bounds.width + 12);
     lv_obj_set_width(app_label, bounds.width - 24);
     lv_obj_set_height(app_label, 24);
     lv_obj_set_style_text_align(app_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -1393,7 +1404,8 @@ void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const Hall
         lv_obj_remove_flag(running, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_t* running_label = lv_label_create(running);
         lv_label_set_text(running_label, "RUNNING");
-        lv_obj_set_style_text_font(running_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(running_label,
+                                   metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kSmall), 0);
         lv_obj_set_style_text_color(running_label, lv_color_hex(0x4dd6a4U), 0);
         lv_obj_set_style_text_opa(running_label, LV_OPA_COVER, 0);
         lv_obj_center(running_label);
@@ -1770,7 +1782,7 @@ std::expected<void, host_ui::SystemUiError> ShowShutdownImpl(MetalioClaw4Platfor
     lv_obj_t* label = lv_label_create(state.host_smoke);
     lv_label_set_text(label, "Shutting down...");
     lv_obj_set_style_text_color(label, lv_color_hex(0xeaf4ffU), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(label, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kTitle), 0);
     lv_obj_center(label);
     lv_obj_move_foreground(state.host_smoke);
     metalio_claw4::RequestDisplayRefresh(state.display);
@@ -1844,18 +1856,21 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     lv_obj_remove_flag(brand, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(brand, LV_OBJ_FLAG_CLICKABLE);
 
-    (void)CreateHallLabel(state.host_smoke, "App Hall", &lv_font_montserrat_32, 0xf2f7ffU, 76, 56);
+    (void)CreateHallLabel(state.host_smoke, "App Hall",
+                          metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kTitle), 0xf2f7ffU, 76, 56);
     (void)CreateHallLabel(state.host_smoke,
                           visible_count > metalio_claw4::HallCarousel::kFullyVisibleCards
                               ? "Swipe to browse - tap to launch"
                               : "Tap a card to launch",
-                          &lv_font_montserrat_18, 0x91a4bdU, 76, 98);
-    (void)CreateHallLabel(state.host_smoke, "INSTALLED APPS", &lv_font_montserrat_18, 0x91a4bdU, 40, 148);
+                          metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium), 0x91a4bdU, 76, 98);
+    (void)CreateHallLabel(state.host_smoke, "INSTALLED APPS",
+                          metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium), 0x91a4bdU, 40, 148);
     char app_count_text[24]{};
     (void)std::snprintf(app_count_text, sizeof(app_count_text), "%" PRIu32 " %s", visible_count,
                         visible_count == 1U ? "app" : "apps");
     lv_obj_t* app_count_label =
-        CreateHallLabel(state.host_smoke, app_count_text, &lv_font_montserrat_18, 0x91a4bdU, 560, 148);
+        CreateHallLabel(state.host_smoke, app_count_text,
+                        metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium), 0x91a4bdU, 560, 148);
     lv_obj_set_width(app_count_label, 120);
     lv_obj_set_style_text_align(app_count_label, LV_TEXT_ALIGN_RIGHT, 0);
     DrawHallStatusBarLocked(state, model.status_bar);
@@ -1878,11 +1893,13 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
 
     lv_obj_t* settings_icon = lv_label_create(settings_button);
     lv_label_set_text(settings_icon, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_text_font(settings_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_icon, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge),
+                               0);
     lv_obj_set_style_text_color(settings_icon, lv_color_hex(0xf2f7ffU), 0);
     lv_obj_t* settings_label = lv_label_create(settings_button);
     lv_label_set_text(settings_label, "Settings");
-    lv_obj_set_style_text_font(settings_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(settings_label, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge),
+                               0);
     lv_obj_set_style_text_color(settings_label, lv_color_hex(0xf2f7ffU), 0);
     state.hall_settings_press_overlay = lv_obj_create(settings_button);
     lv_obj_set_pos(state.hall_settings_press_overlay, 0, 0);
@@ -1913,12 +1930,14 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
 
         lv_obj_t* update_icon = lv_label_create(update_button);
         lv_label_set_text(update_icon, LV_SYMBOL_REFRESH);
-        lv_obj_set_style_text_font(update_icon, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(update_icon, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge),
+                                   0);
         lv_obj_set_style_text_color(update_icon, lv_color_hex(0xcdf5c6U), 0);
         lv_obj_align(update_icon, LV_ALIGN_LEFT_MID, 18, 0);
         lv_obj_t* update_label = lv_label_create(update_button);
         lv_label_set_text(update_label, "Update");
-        lv_obj_set_style_text_font(update_label, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(update_label, metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge),
+                                   0);
         lv_obj_set_style_text_color(update_label, lv_color_hex(0xcdf5c6U), 0);
         lv_obj_align(update_label, LV_ALIGN_LEFT_MID, 50, 0);
         lv_obj_t* update_dot = lv_obj_create(update_button);
@@ -2000,16 +2019,19 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     lv_obj_scroll_to_x(state.hall_carousel_viewport, state.hall_scroll_offset, LV_ANIM_OFF);
     UpdateHallCarouselLocked(state, lv_obj_get_scroll_x(state.hall_carousel_viewport));
     if (visible_count == 0U) {
-        (void)CreateHallLabel(state.host_smoke, "No readable Bundle in App Store", &lv_font_montserrat_24, 0xf2f7ffU,
-                              40, 210);
+        (void)CreateHallLabel(state.host_smoke, "No readable Bundle in App Store",
+                              metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kLarge), 0xf2f7ffU, 40,
+                              210);
     }
 
     if (model.status == host_ui::HallStatus::kAppFailed) {
-        (void)CreateHallLabel(state.host_smoke, HallStatusText(model.status), &lv_font_montserrat_18,
+        (void)CreateHallLabel(state.host_smoke, HallStatusText(model.status),
+                              metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium),
                               HallStatusColor(model.status), 40, 560);
         if (model.status_app_id != nullptr && model.status_app_id[0] != '\0') {
-            lv_obj_t* app_id =
-                CreateHallLabel(state.host_smoke, model.status_app_id, &lv_font_montserrat_14, 0x91a4bdU, 40, 592);
+            lv_obj_t* app_id = CreateHallLabel(state.host_smoke, model.status_app_id,
+                                               metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kSmall),
+                                               0x91a4bdU, 40, 592);
             lv_obj_set_width(app_id, 640);
             lv_label_set_long_mode(app_id, LV_LABEL_LONG_DOT);
         }
@@ -2023,22 +2045,27 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
             (void)std::snprintf(error_identity, sizeof(error_identity), "%s / %s", phase, code);
         }
         lv_obj_t* identity =
-            CreateHallLabel(state.host_smoke, error_identity, &lv_font_montserrat_14, 0xffb29fU, 40, 618);
+            CreateHallLabel(state.host_smoke, error_identity,
+                            metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kSmall), 0xffb29fU, 40, 618);
         lv_obj_set_width(identity, 640);
         lv_label_set_long_mode(identity, LV_LABEL_LONG_DOT);
         if (model.status_error_detail != nullptr && model.status_error_detail[0] != '\0') {
-            lv_obj_t* detail = CreateHallLabel(state.host_smoke, model.status_error_detail, &lv_font_montserrat_14,
+            lv_obj_t* detail = CreateHallLabel(state.host_smoke, model.status_error_detail,
+                                               metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kSmall),
                                                0xc8d5e5U, 40, 646);
             lv_obj_set_width(detail, 640);
             lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
         }
     } else {
         if (model.status != host_ui::HallStatus::kReady) {
-            (void)CreateHallLabel(state.host_smoke, HallStatusText(model.status), &lv_font_montserrat_18,
+            (void)CreateHallLabel(state.host_smoke, HallStatusText(model.status),
+                                  metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium),
                                   HallStatusColor(model.status), 40, 604);
         }
         if (model.status_app_id != nullptr && model.status_app_id[0] != '\0') {
-            (void)CreateHallLabel(state.host_smoke, model.status_app_id, &lv_font_montserrat_18, 0x91a4bdU, 40, 638);
+            (void)CreateHallLabel(state.host_smoke, model.status_app_id,
+                                  metalio_claw4::BuiltinLatinFont(metalio_claw4::SystemFontRole::kMedium), 0x91a4bdU,
+                                  40, 638);
         }
     }
 
@@ -2786,6 +2813,20 @@ metalio_claw4::GraphicsOperations MakeGraphicsOperations(MetalioClaw4PlatformSta
         .cancel_frame =
             [](void* context) {
                 return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.CancelFrame();
+            },
+        .load_font =
+            [](void* context, const device::FontResourceView& resource, micropixel_font_info_t& info) {
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.LoadFont(resource, info);
+            },
+        .release_font =
+            [](void* context, micropixel_font_handle_t font) {
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.ReleaseFont(font);
+            },
+        .measure_text =
+            [](void* context, micropixel_font_handle_t font, const char* text, uint32_t text_length,
+               micropixel_text_metrics_t& metrics) {
+                return static_cast<MetalioClaw4PlatformState*>(context)->guest_graphics.MeasureText(
+                    font, text, text_length, metrics);
             },
         .begin_bitmap_update_frame =
             [](void* context) {

@@ -463,36 +463,37 @@ void SnakeGame::RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, 
 }
 
 void SnakeGame::RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const {
-    commands.DrawText(micropixel::Point{24, 8}, "Juicy Snake", AsColor(theme.text), micropixel::SystemFont::kTitle);
-    commands.DrawText(micropixel::Point{24, 47}, "TERMINAL EDITION", micropixel::Color::Rgb(115U, 115U, 115U),
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{24, 8}, strings_.Get(snake_strings::Id::kAppTitle), AsColor(theme.text),
+                      micropixel::SystemFont::kTitle);
+    commands.DrawText(micropixel::Point{24, 47}, strings_.Get(snake_strings::Id::kBrandEdition),
+                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line level;
-    level.Append("LVL ");
+    level.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
     level.AppendUint(model_.level());
     commands.DrawText(micropixel::Point{172, 47}, level.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
-    commands.DrawText(micropixel::Point{545, 12}, "SCORE", micropixel::Color::Rgb(115U, 115U, 115U),
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{545, 12}, strings_.Get(snake_strings::Id::kLabelScore),
+                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line score;
     score.AppendPadded4(model_.score());
     commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(),
                       micropixel::SystemFont::kLarge);
-    commands.DrawText(micropixel::Point{645, 12}, "BEST", micropixel::Color::Rgb(115U, 115U, 115U),
-                      micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{645, 12}, strings_.Get(snake_strings::Id::kLabelBest),
+                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line best;
     best.AppendPadded4(best_score_);
     commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(theme.text), micropixel::SystemFont::kLarge);
     Line status;
     if (screen_ == Screen::kPlaying && model_.invincible()) {
-        status.Append("SHIELD ");
+        status.Append(strings_.Get(snake_strings::Id::kStatusShieldPrefix));
         const uint32_t seconds = static_cast<uint32_t>((model_.invincible_remaining_us() + 999999U) / 1000000U);
         status.AppendUint(seconds);
-        status.Append("s");
+        status.Append(strings_.Get(snake_strings::Id::kStatusSecondsSuffix));
         if (model_.combo() > 1U) {
             status.Append("  x");
             status.AppendUint(model_.combo());
         }
     } else if (screen_ == Screen::kPlaying && model_.combo() > 1U) {
-        status.Append("COMBO x");
+        status.Append(strings_.Get(snake_strings::Id::kStatusComboPrefix));
         status.AppendUint(model_.combo());
         status.Append("  ");
     } else {
@@ -530,16 +531,18 @@ void SnakeGame::RenderPopups(micropixel::Frame& commands, int32_t board_x, int32
 void SnakeGame::RenderOverlayTexts(micropixel::Frame& commands, const Theme& theme) const {
     uint32_t used = 0U;
     if (screen_ == Screen::kMenu) {
-        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect), "START GAME", micropixel::Color::Black(),
+        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect),
+                                  strings_.Get(snake_strings::Id::kActionStart), micropixel::Color::Black(),
                                   kActionButtonFont);
         used = 1U;
     } else if (screen_ == Screen::kPaused) {
-        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect), "CONTINUE", micropixel::Color::Black(),
+        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect),
+                                  strings_.Get(snake_strings::Id::kActionContinue), micropixel::Color::Black(),
                                   kActionButtonFont);
         used = 1U;
     } else if (screen_ == Screen::kGameOver) {
-        commands.DrawTextCentered(360, 268, "CRITICAL FAILURE", micropixel::Color::Rgb(244U, 63U, 94U),
-                                  micropixel::SystemFont::kTitle);
+        commands.DrawTextCentered(360, 268, strings_.Get(snake_strings::Id::kGameOverTitle),
+                                  micropixel::Color::Rgb(244U, 63U, 94U), micropixel::SystemFont::kTitle);
         Line score;
         score.AppendPadded4(model_.score());
         commands.DrawTextCentered(360, 320, score.c_str(), micropixel::Color::White(), micropixel::SystemFont::kLarge);
@@ -547,9 +550,12 @@ void SnakeGame::RenderOverlayTexts(micropixel::Frame& commands, const Theme& the
         constexpr int32_t kComboCenter = 360;
         constexpr int32_t kLevelCenter = 470;
         const micropixel::Color label_color = micropixel::Color::Rgb(115U, 115U, 115U);
-        commands.DrawTextCentered(kFoodCenter, 360, "FOOD", label_color, micropixel::SystemFont::kSmall);
-        commands.DrawTextCentered(kComboCenter, 360, "MAX COMBO", label_color, micropixel::SystemFont::kSmall);
-        commands.DrawTextCentered(kLevelCenter, 360, "LEVEL", label_color, micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kFoodCenter, 360, strings_.Get(snake_strings::Id::kLabelFood), label_color,
+                                  micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kComboCenter, 360, strings_.Get(snake_strings::Id::kLabelMaxCombo), label_color,
+                                  micropixel::SystemFont::kSmall);
+        commands.DrawTextCentered(kLevelCenter, 360, strings_.Get(snake_strings::Id::kLabelLevel), label_color,
+                                  micropixel::SystemFont::kSmall);
         Line food;
         food.AppendUint(model_.food_eaten());
         commands.DrawTextCentered(kFoodCenter, 382, food.c_str(), micropixel::Color::White(),
@@ -563,15 +569,17 @@ void SnakeGame::RenderOverlayTexts(micropixel::Frame& commands, const Theme& the
         level.AppendUint(model_.level());
         commands.DrawTextCentered(kLevelCenter, 382, level.c_str(), micropixel::Color::White(),
                                   micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(360, ActionButtonTextY(kRestartButtonRect), "RESTART",
+        commands.DrawTextCentered(360, ActionButtonTextY(kRestartButtonRect),
+                                  strings_.Get(snake_strings::Id::kActionRestart),
                                   micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
         used = 9U;
     } else if (level_banner_us_ != 0U) {
-        commands.DrawTextCentered(360, 315, "SYSTEM UPGRADE", AsColor(theme.text), micropixel::SystemFont::kLarge);
+        commands.DrawTextCentered(360, 315, strings_.Get(snake_strings::Id::kUpgradeTitle), AsColor(theme.text),
+                                  micropixel::SystemFont::kLarge);
         Line reached;
-        reached.Append("LVL ");
+        reached.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
         reached.AppendUint(model_.level());
-        reached.Append(" REACHED");
+        reached.Append(strings_.Get(snake_strings::Id::kUpgradeReachedSuffix));
         commands.DrawTextCentered(360, 370, reached.c_str(), micropixel::Color::White(),
                                   micropixel::SystemFont::kMedium);
         used = 2U;

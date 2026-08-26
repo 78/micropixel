@@ -2,6 +2,7 @@
 #define MICROPIXEL_RUNTIME_GUEST_CONTEXT_HPP
 
 #include <array>
+#include <string_view>
 
 #include "abi/micropixel_abi.h"
 #include "device/device_services.hpp"
@@ -19,7 +20,8 @@ namespace micropixel::runtime {
 
 class GuestContext final {
    public:
-    GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices, GuestLogSink* log_sink);
+    GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
+                 std::string_view effective_locale, GuestLogSink* log_sink);
     GuestContext(const GuestContext&) = delete;
     GuestContext& operator=(const GuestContext&) = delete;
     ~GuestContext();
@@ -69,6 +71,10 @@ class GuestContext final {
     [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture) {
         return resources_.ReleaseTexture(texture);
     }
+    [[nodiscard]] ServiceResult<micropixel_font_info_t> LoadFont(uint32_t resource_id);
+    [[nodiscard]] ServiceResult<void> ReleaseFont(micropixel_font_handle_t font);
+    [[nodiscard]] ServiceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font, const char* text,
+                                                                       uint32_t text_length);
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateStreamingTexture(uint32_t width, uint32_t height,
                                                                                   uint32_t pixel_format) {
         return resources_.CreateStreamingTexture(width, height, pixel_format);

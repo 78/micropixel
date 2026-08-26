@@ -17,7 +17,13 @@ struct BitmapView final {
     uint32_t flags{};
 };
 
+struct FontResourceView final {
+    const uint8_t* data{};
+    uint32_t size{};
+};
+
 using BitmapResolver = bool (*)(void* context, micropixel_texture_handle_t bitmap, BitmapView& view_out);
+using FontValidator = bool (*)(void* context, micropixel_font_handle_t font);
 using TextureRetainer = bool (*)(void* context, micropixel_texture_handle_t texture);
 using TextureReleaser = void (*)(void* context, micropixel_texture_handle_t texture);
 
@@ -43,6 +49,10 @@ class GraphicsBackend {
     [[nodiscard]] virtual int32_t Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) = 0;
     [[nodiscard]] virtual int32_t CommitFrame(const TextureAccess& textures) = 0;
     [[nodiscard]] virtual int32_t CancelFrame() = 0;
+    [[nodiscard]] virtual int32_t LoadFont(const FontResourceView& resource, micropixel_font_info_t& info_out) = 0;
+    [[nodiscard]] virtual int32_t ReleaseFont(micropixel_font_handle_t font) = 0;
+    [[nodiscard]] virtual int32_t MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
+                                              micropixel_text_metrics_t& metrics_out) = 0;
     [[nodiscard]] virtual int32_t BeginBitmapUpdateFrame() = 0;
     [[nodiscard]] virtual int32_t UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                                uint32_t height, const uint8_t* pixels, uint32_t stride) = 0;
