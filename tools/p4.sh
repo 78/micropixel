@@ -430,7 +430,7 @@ monitor_host() {
     fi
     require_idf
     echo "==> Monitoring Host on $port (no build, no flash, no erase, no tests)"
-    idf_host -p "$port" monitor
+    ESP_IDF_MONITOR_NO_RESET=1 idf_host -p "$port" monitor
 }
 
 build_example_apps() {

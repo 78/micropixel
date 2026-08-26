@@ -10,7 +10,12 @@ import time
 
 import serial
 
-from capture_p4_screen import hard_reset, request_capture, wait_for_log
+from capture_p4_screen import (
+    hard_reset,
+    open_serial_without_reset,
+    request_capture,
+    wait_for_log,
+)
 
 
 def coordinate(value: str) -> int:
@@ -107,7 +112,7 @@ def main() -> int:
     if not args.gesture:
         parser.error("at least one --gesture is required")
 
-    with serial.Serial(args.port, 115200, timeout=0.05, exclusive=False) as device:
+    with open_serial_without_reset(args.port) as device:
         if args.reset:
             hard_reset(device)
         if args.wait_for:

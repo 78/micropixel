@@ -18,6 +18,26 @@ BEGIN = b"\nMICROPIXEL_CAPTURE_BEGIN "
 COMMAND = b"MICROPIXEL_CAPTURE\n"
 
 
+def open_serial_without_reset(port: str, timeout: float = 0.05) -> serial.Serial:
+    """Open USB Serial/JTAG without pulsing the target reset control lines."""
+    device = serial.Serial(
+        port=None,
+        baudrate=115200,
+        timeout=timeout,
+        exclusive=False,
+    )
+    # Match IDF Monitor's --no-reset ordering. Both controls are prepared in
+    # their active-low state before open, then RTS is released before DTR so
+    # the USB Serial/JTAG reset detector never observes a reset pulse.
+    device.dtr = True
+    device.rts = True
+    device.port = port
+    device.open()
+    device.rts = False
+    device.dtr = False
+    return device
+
+
 def hard_reset(device: serial.Serial) -> None:
     """Reset after opening so boot logs and deterministic trigger are not lost."""
     device.dtr = False
@@ -98,9 +118,9 @@ def request_capture(device: serial.Serial, timeout: float) -> tuple[bytes, int, 
     next_request = 0.0
     while time.monotonic() < deadline:
         now = time.monotonic()
-        # Opening an ESP USB Serial/JTAG endpoint can reset the target on some
-        # hosts. Retry only until the BEGIN marker is seen so a command sent
-        # during early boot is not silently lost and no second capture queues.
+        # USB Serial/JTAG can briefly re-enumerate on macOS. Retry only until
+        # the BEGIN marker is seen so a command lost during reconnect is sent
+        # again without queueing a second capture.
         if BEGIN not in received and now >= next_request:
             device.write(COMMAND)
             # USB Serial/JTAG can leave tcdrain() blocked indefinitely on macOS
@@ -153,7 +173,7 @@ def main() -> int:
     if args.count < 1:
         parser.error("--count must be at least one")
 
-    with serial.Serial(args.port, 115200, timeout=0.05, exclusive=False) as device:
+    with open_serial_without_reset(args.port) as device:
         if args.reset:
             hard_reset(device)
         if args.wait_for:

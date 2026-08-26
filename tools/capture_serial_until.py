@@ -10,6 +10,8 @@ import time
 
 import serial
 
+from capture_p4_screen import open_serial_without_reset
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -39,9 +41,7 @@ def main() -> int:
     reset_pending = args.reset
     while time.monotonic() < deadline:
         try:
-            with serial.Serial(
-                args.port, 115200, timeout=0.05, exclusive=False
-            ) as device:
+            with open_serial_without_reset(args.port) as device:
                 if reset_pending:
                     # Match esptool's USB Serial/JTAG hard-reset sequence while the
                     # capture endpoint is already open, so early startup logs are
