@@ -1,5 +1,8 @@
 #include <stdint.h>
 
+#include <array>
+#include <span>
+
 #include "apps/demo/demo.hpp"
 #include "apps/demo/demo_page.hpp"
 
@@ -12,12 +15,15 @@ struct PageEntry final {
     const char* label;
 };
 
-constexpr uint32_t kPageCount = 5U;
+constexpr std::array<PageEntry, 5U> kPages{{
+    {PageId::kTimer, "TIMER / CLOCK / LOG"},
+    {PageId::kInput, "INPUT / RANDOM"},
+    {PageId::kStorage, "STORAGE"},
+    {PageId::kResourceAtlas, "RESOURCE / ATLAS"},
+    {PageId::kAudio, "AUDIO"},
+}};
 
-const PageEntry kPages[kPageCount] = {
-    {PageId::kTimer, "TIMER / CLOCK / LOG"},      {PageId::kInput, "INPUT / RANDOM"}, {PageId::kStorage, "STORAGE"},
-    {PageId::kResourceAtlas, "RESOURCE / ATLAS"}, {PageId::kAudio, "AUDIO"},
-};
+constexpr uint32_t kPageCount = static_cast<uint32_t>(kPages.size());
 
 [[nodiscard]] const char* PageTitle(PageId page) {
     switch (page) {
@@ -118,14 +124,14 @@ void RenderPageContent(PageId page, DemoContext& context, micropixel::Frame& com
                             height};
 }
 
-void RenderHome(DemoContext& context, const micropixel::ui::Button (&menu_buttons)[kPageCount]) {
+void RenderHome(DemoContext& context, std::span<const micropixel::ui::Button> menu_buttons) {
     micropixel::Frame commands = context.renderer.BeginFrame();
     commands.Clear(BackgroundColor());
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 34, "MICROPIXEL SDK DEMO",
                               micropixel::Color::White(), micropixel::SystemFont::kTitle);
     commands.DrawTextCentered(static_cast<int32_t>(context.display.width() / 2U), 82, "One app / five focused modules",
                               MutedColor(), micropixel::SystemFont::kMedium);
-    for (uint32_t index = 0U; index < kPageCount; ++index) {
+    for (uint32_t index = 0U; index < menu_buttons.size(); ++index) {
         const micropixel::ui::Button& button = menu_buttons[index];
         const micropixel::Rect bounds = button.bounds();
         commands.FillRect(bounds, PanelColor());
@@ -135,7 +141,7 @@ void RenderHome(DemoContext& context, const micropixel::ui::Button (&menu_button
             micropixel::Point{bounds.x + 30, bounds.y + (bounds.height - 24) / 2 + (button.pressed() ? 1 : 0)},
             kPages[index].label, micropixel::Color::White(), micropixel::SystemFont::kLarge);
     }
-    micropixel::AssertThat(commands.Present().has_value(), "demo: frame present failed");
+    micropixel::Assert(commands.Present().has_value(), "demo: frame present failed");
 }
 
 void RenderPage(DemoContext& context, PageId page, const micropixel::ui::Button& back_button) {
@@ -146,7 +152,7 @@ void RenderPage(DemoContext& context, PageId page, const micropixel::ui::Button&
                               micropixel::Color::White(), micropixel::SystemFont::kTitle);
     commands.FillRect(micropixel::Rect{24, 92, static_cast<int32_t>(context.display.width()) - 48, 2}, AccentColor());
     RenderPageContent(page, context, commands);
-    micropixel::AssertThat(commands.Present().has_value(), "demo: frame present failed");
+    micropixel::Assert(commands.Present().has_value(), "demo: frame present failed");
 }
 
 }  // namespace
@@ -156,17 +162,16 @@ int DemoAppMain() {
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
     micropixel::InputInfo input = app.input().info();
-    micropixel::AssertThat(display.width() >= 320U && display.height() >= 480U,
-                           "demo: display must be at least 320x480");
-    micropixel::AssertThat(input.logical_width() == display.width() && input.logical_height() == display.height(),
-                           "demo: input and display coordinates must match");
+    micropixel::Assert(display.width() >= 320U && display.height() >= 480U, "demo: display must be at least 320x480");
+    micropixel::Assert(input.logical_width() == display.width() && input.logical_height() == display.height(),
+                       "demo: input and display coordinates must match");
 
     micropixel::Texture atlas_texture = LoadDemoAtlas(app);
     DemoContext context{app, renderer, display, input, atlas_texture};
     micropixel::Timer ticker = CreateDemoTicker(app);
     micropixel::Timer atlas_ticker = CreateResourceAtlasTicker(app);
     PageId active_page = PageId::kHome;
-    micropixel::ui::Button menu_buttons[kPageCount]{};
+    std::array<micropixel::ui::Button, kPageCount> menu_buttons{};
     for (uint32_t index = 0U; index < kPageCount; ++index) {
         menu_buttons[index].SetBounds(MenuButtonRect(context, index));
     }

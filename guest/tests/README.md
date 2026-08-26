@@ -1,7 +1,7 @@
 # Guest conformance tests
 
 这里保留仍由 `tools/build_guest_p4.sh` 构建的 ABI/SDK 回归用例，包括成功路径、非法 import/指针、
-watchdog、退出语义、Service、Event、Graphics、Input 和 Audio 边界。
+watchdog、退出语义、Service、Event、Graphics、Input、Audio 和 no-WASI STL 边界。
 
 ```sh
 bash tools/build_guest_p4.sh

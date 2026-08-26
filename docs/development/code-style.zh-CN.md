@@ -86,7 +86,7 @@ MicroPixel 是项目正式名称，C++ namespace 统一使用 `micropixel`。板
 | namespace | `lower_snake_case` | `micropixel::runtime` |
 | 类型、enum class | `PascalCase` | `Application`, `ErrorCode` |
 | 普通函数、普通方法 | `PascalCase` | `WaitEvent`, `Frame::Present` |
-| property accessor/mutator | `snake_case` | `width()`, `set_board()` |
+| property accessor/mutator | `snake_case` | `width()`, `set_value()` |
 | 变量、参数 | `snake_case` | `error_code`, `elapsed_us` |
 | 私有数据成员 | `snake_case_` | `handle_`, `initialized_` |
 | 编译期常量 | `kPascalCase` | `kEventQueueCapacity` |
@@ -99,7 +99,8 @@ C ABI 导出统一使用 `micropixel_` 前缀。此前的 placeholder 已随正�
 
 以下名称保留 `snake_case`，但不能据此扩散到普通项目方法：
 
-- 只返回或设置对象 property 的 accessor/mutator，例如 `score()`、`set_board()`；
+- 只返回或设置对象 property 的 accessor/mutator，例如 `score()`、`set_value()`；包含校验、资源转移或其他操作的
+  初始化方法仍使用 `PascalCase`；
 - 与 `std::expected` 对齐的 `has_value()`、`value()`、`error()`、`value_or()` 和 `unexpected()`；
 - 与 range/STL 协议对齐的 `begin()`、`end()`、`c_str()` 和运算符；
 - C ABI、Wasm 导出和 user-defined literal 等外部协议规定的名称。
@@ -123,9 +124,10 @@ C ABI 导出统一使用 `micropixel_` 前缀。此前的 placeholder 已随正�
 - 将 C++ class ABI 暴露为 Host/Guest 边界；
 - 用 `bool` 丢失本来需要诊断的失败原因。
 
-Host 可以使用目标工具链提供的 C++23 标准库子集；Guest SDK 必须在
-`-std=c++23 -ffreestanding -nostdlib -fno-exceptions -fno-rtti` 下构建，不能假定 `<new>`、
-`<utility>`、`<type_traits>`、标准容器或异常运行时存在。
+Host 可以使用目标工具链提供的 C++23 标准库子集。Guest 使用项目固定的 wasi-sdk no-exception
+libc++ profile，可以使用已由 conformance 覆盖的 utility、容器、算法和 RAII 类型；linker 按引用
+裁剪未使用实现。Guest 不能假定存在 exception、RTTI、thread、filesystem、locale/iostream、WASI
+系统调用或任意未验收标准库能力。Public SDK 不跨 Guest–Host ABI 暴露 STL 类型。
 
 Public SDK 可以使用一层模板检查 `Application::Run(handler)` 的 handler 签名；不得让应用显式填写
 模板参数，也不得把模板错误替代清晰的事件概念。常用路径应能从 `sdk/micropixel.hpp` 单头文件编译，
@@ -173,7 +175,8 @@ Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service
 ## 5. 所有权和错误处理
 
 - Host 资源由 move-only SDK proxy 持有，析构自动 release；
-- 运行时集合默认使用编译期固定容量；容量来自产品或协议上限，不在实时路径隐式扩容；
+- SDK Runtime 和 Host 实时路径的集合默认使用编译期固定容量；Guest App 的普通非实时业务逻辑可以
+  使用受支持的动态 STL 容器，但必须接受 32 KiB Guest heap 和确定的 OOM policy；
 - Timer、Texture、Audio Voice、Guest Context 等具有稳定身份的同构资源使用有界对象池；
 - 普通 value type 直接按值存储，不为统一形式机械放入对象池；
 - 裸指针默认是 non-owning，必须从作用域和类型上看出其有效期；

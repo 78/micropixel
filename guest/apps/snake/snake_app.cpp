@@ -14,13 +14,13 @@ uint32_t ReadU32OrDefault(micropixel::KVStore storage, const char* key, uint32_t
     if (value.has_value()) {
         return value.value();
     }
-    micropixel::AssertThat(value.error().code() == micropixel::ErrorCode::kNotFound, "snake: private KV read failed");
+    micropixel::Assert(value.error().code() == micropixel::ErrorCode::kNotFound, "snake: private KV read failed");
     return fallback;
 }
 
 micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
     auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(asset));
-    micropixel::AssertThat(result.has_value(), "snake: critical texture resource failed");
+    micropixel::Assert(result.has_value(), "snake: critical texture resource failed");
     return static_cast<micropixel::Texture&&>(result.value());
 }
 
@@ -40,7 +40,7 @@ int SnakeAppMain() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
-    micropixel::AssertThat(display.width() == 720U && display.height() == 720U, "snake: requires 720x720 display");
+    micropixel::Assert(display.width() == 720U && display.height() == 720U, "snake: requires 720x720 display");
 
     micropixel::KVStore storage = app.storage();
     uint32_t best_score = ReadU32OrDefault(storage, "best", 0U);
@@ -78,14 +78,14 @@ int SnakeAppMain() {
     }
 
     SnakeGame game{app, renderer, display, audio, audio_available, best_score};
-    game.set_board(static_cast<micropixel::Texture&&>(board));
-    game.set_button_textures(static_cast<micropixel::Texture&&>(start_button),
-                             static_cast<micropixel::Texture&&>(restart_button));
+    game.SetBoard(static_cast<micropixel::Texture&&>(board));
+    game.SetButtonTextures(static_cast<micropixel::Texture&&>(start_button),
+                           static_cast<micropixel::Texture&&>(restart_button));
     for (uint32_t type = 0U; type < 4U; ++type) {
-        game.set_burst_sheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(burst_sheets[type]));
+        game.SetBurstSheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(burst_sheets[type]));
     }
     for (uint32_t type = 0U; type < 4U; ++type) {
-        game.set_food_sheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(food_sheets[type]));
+        game.SetFoodSheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(food_sheets[type]));
     }
     micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
     game.Render();

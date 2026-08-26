@@ -16,13 +16,13 @@ class SnakeGame final {
 
     void Render();
 
-    void set_board(micropixel::Texture texture);
+    void SetBoard(micropixel::Texture texture);
 
-    void set_button_textures(micropixel::Texture start, micropixel::Texture restart);
+    void SetButtonTextures(micropixel::Texture start, micropixel::Texture restart);
 
-    void set_burst_sheet(FoodType type, micropixel::Texture texture);
+    void SetBurstSheet(FoodType type, micropixel::Texture texture);
 
-    void set_food_sheet(FoodType type, micropixel::Texture texture);
+    void SetFoodSheet(FoodType type, micropixel::Texture texture);
 
     void OnTimer(const micropixel::TimerEvent& tick);
 

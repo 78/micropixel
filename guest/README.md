@@ -65,6 +65,11 @@ bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 `--profile development|release|size`。链接器只允许 [`abi/allowed_imports.txt`](abi/allowed_imports.txt)
 列出的 Runtime import，拼写错误或未授权 import 会在构建阶段失败。
 
+Guest 使用 wasi-sdk 33 的 no-exception libc++ profile。常用 header-only STL、动态容器和
+`new/delete` 由统一 CLI 配置并按引用裁剪；App 不需要选择或链接独立 STL 模块。OS 相关标准库、
+exception、RTTI、Guest thread 和 WASI import 仍不属于受支持能力，具体边界见
+[Guest C++ SDK](sdk/README.md#guest-stl-profile)。
+
 Guest 代码不得直接依赖 ESP-IDF 或具体开发板。需要访问设备能力时，应经 typed SDK 和
 [Runtime Host ABI](abi/README.md) 进入 Host。当前 Public API、错误策略和待冻结事项见
 [Guest C++ SDK](sdk/README.md)。`Application` 是可发现的 capability façade；`app.xxx()` 返回

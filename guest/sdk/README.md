@@ -47,11 +47,11 @@ int main() {
 - `Stop` 会先交给 handler，handler 返回后 `Run()` 返回，应用随后从 `main()` 返回；
 - SDK/Runtime 失败在发生点 panic，普通应用不写 `try`、`if (!result)` 或 ABI status 样板。
 
-应用自身的前置条件或 invariant 使用带条件和原因的 `micropixel::AssertThat()`，不要返回无法从
+应用自身的前置条件或 invariant 使用带条件和原因的 `micropixel::Assert()`，不要返回无法从
 日志理解的数字：
 
 ```cpp
-micropixel::AssertThat(display.width() >= 320U && display.height() >= 320U,
+micropixel::Assert(display.width() >= 320U && display.height() >= 320U,
                      "app: requires at least a 320x320 logical display");
 ```
 
@@ -92,13 +92,13 @@ Resource 上：
 ```cpp
 auto texture = app.renderer().CreateStreamingTexture(
     micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
-micropixel::AssertThat(texture.has_value(), "texture allocation failed");
+micropixel::Assert(texture.has_value(), "texture allocation failed");
 
 auto frame = app.renderer().BeginFrame();
 frame.FillRect(rect, color);  // opacity 可省略，默认 255
 frame.DrawTexture(micropixel::Point{47, 76}, texture.value());
 frame.DrawTexture(micropixel::Point{x, y}, sprite, 160U);
-micropixel::AssertThat(frame.Present().has_value(), "frame present failed");
+micropixel::Assert(frame.Present().has_value(), "frame present failed");
 micropixel::InputInfo input = app.input().info();
 bool pressure_available = input.supports_pressure();
 ```
@@ -200,7 +200,7 @@ frame.SetClipRect(board_bounds);
 frame.Translate(micropixel::Point{shake_x, shake_y});
 frame.DrawTexture(micropixel::Point{board_x, board_y}, board_texture);
 frame.Restore();
-micropixel::AssertThat(frame.Present().has_value(), "frame present failed");
+micropixel::Assert(frame.Present().has_value(), "frame present failed");
 ```
 
 v1 的 `Save`/`Restore` 最多嵌套 8 层；子状态继承父状态，`Translate()` 采用累加语义，子 clip 不能扩大
@@ -242,22 +242,22 @@ frame.DrawText({24, 24}, "Hello", micropixel::Color::White(),
 ```cpp
 auto board_result = app.renderer().CreateStreamingTexture(
     micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
-micropixel::AssertThat(board_result.has_value(), "board texture allocation failed");
+micropixel::Assert(board_result.has_value(), "board texture allocation failed");
 auto board = static_cast<micropixel::StreamingTexture&&>(board_result.value());
 
 alignas(4) uint8_t cell[30U * 30U * 3U]{};
 auto batch = app.renderer().BeginTextureUpdateBatch();
-micropixel::AssertThat(
+micropixel::Assert(
     board.Update(micropixel::Rect{60, 30, 30, 30}, cell, sizeof(cell), 30U * 3U).has_value(),
     "texture update failed");
-micropixel::AssertThat(
+micropixel::Assert(
     board.Update(micropixel::Rect{60, 60, 30, 30}, cell, sizeof(cell), 30U * 3U).has_value(),
     "texture update failed");
-micropixel::AssertThat(batch.Finish().has_value(), "texture batch failed");
+micropixel::Assert(batch.Finish().has_value(), "texture batch failed");
 
 auto frame = app.renderer().BeginFrame();
 frame.DrawTexture(micropixel::Point{47, 76}, board);
-micropixel::AssertThat(frame.Present().has_value(), "frame present failed");
+micropixel::Assert(frame.Present().has_value(), "frame present failed");
 ```
 
 `Update()` 同时接收可读 `byte_length` 和每行 `pitch`；SDK 校验输入范围，并把大矩形自动切成不超过
@@ -329,6 +329,28 @@ USB 调试统一使用 `bash tools/p4.sh flash-apps` 写入 Blocks、Snake 和 D
 
 所有 import 必须在 `guest/abi/allowed_imports.txt` 中声明；未授权 import 和拼写错误在链接时
 失败。AI 不应自行拼接工具链命令。
+
+## Guest STL profile
+
+Guest 使用 wasi-sdk 33 的 no-exception libc++ headers 和静态库。`micropixel build` 始终开启
+function/data sections 和 linker GC，因此没有实例化或引用的模板、函数和运行库对象不会进入最终
+Wasm/AOT。SDK Demo 使用 `std::array`/`std::span` 管理原有页面表；Blocks 和 Snake 的生成 Catalog
+使用 `std::array<std::string_view>` 与 `std::span`，但 SDK Demo 本身不接入 localization。
+
+首版持续验证的 no-WASI 子集包括：
+
+- `array`、`span`、`string_view`、`optional`、`variant` 和常用 `algorithm`；
+- `new/delete`、`nothrow new`、aligned new/delete、`unique_ptr`；
+- `string`、`vector`、`map`、`queue` 和默认底层 `deque`。
+
+首次实际使用动态分配时，linker 才保留 Guest 的 32 KiB 单线程 heap 和 allocator。普通 `new` 的 OOM
+按 SDK 不可恢复错误策略记录并 panic；`new (std::nothrow)` 返回 `nullptr`。业务所有权仍使用容器或
+RAII，不能用裸 `new/delete` 表达长期所有权。
+
+这不是 WASI/POSIX 环境：thread、mutex、filesystem、socket、locale/iostream 和依赖系统调用的标准库
+能力不受支持，也不能新增 WASI import。exception、RTTI 和 reference-types 继续关闭；Public SDK 和
+Guest–Host ABI 不暴露 STL 类型。`Result<T>` 继续作为 SDK 的稳定错误类型，应用内部可以自由使用上述
+STL 子集。
 
 ## 错误策略：在错误发生点终止
 

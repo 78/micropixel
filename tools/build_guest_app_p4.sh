@@ -94,16 +94,19 @@ fi
 # WAMR's AOT async termination uses shared memory plus thread-manager suspend
 # checks. The import allowlist still prevents Guest thread APIs.
 "$wasm_clangxx" \
-    --target=wasm32-unknown-unknown \
+    --target=wasm32-wasip1-threads \
     -std=c++23 -nostdlib -ffreestanding \
-    -matomics -mbulk-memory \
+    -matomics -mbulk-memory -mno-reference-types \
     "${compile_profile_flags[@]}" \
     -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+    -ffunction-sections -fdata-sections \
     -Wall -Wextra -Werror \
     "${guest_include_flags[@]}" \
     -Wl,--no-entry \
     -Wl,--shared-memory \
     -Wl,--max-memory=131072 \
+    -Wl,-z,stack-size=16384 \
+    -Wl,--gc-sections \
     -Wl,--allow-undefined-file="$workspace_root/guest/abi/allowed_imports.txt" \
     -Wl,--export=__micropixel_start \
     -Wl,--export-if-defined=__wasm_call_ctors \
@@ -112,9 +115,12 @@ fi
     -Wl,--export-if-defined=__micropixel_test_key_input \
     -Wl,--export-if-defined=__micropixel_test_run_handler \
     ${link_profile_flags[@]+"${link_profile_flags[@]}"} \
+    "$workspace_root/guest/runtime/c_runtime.cpp" \
+    "$workspace_root/guest/runtime/cxx_runtime.cpp" \
     "$workspace_root/guest/runtime/startup.cpp" \
     "$workspace_root/guest/runtime/sdk.cpp" \
     "${source_paths[@]}" \
+    -lc++ \
     -o "$output_dir/$app_name.wasm"
 
 "$wamrc" \

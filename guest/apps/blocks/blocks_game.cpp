@@ -17,14 +17,14 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
 }
 
 void BlocksGame::set_textures(micropixel::Texture board, micropixel::Texture start, micropixel::Texture restart) {
-    micropixel::AssertThat(board.width() == static_cast<uint32_t>(kBoardAssetWidth) &&
-                               board.height() == static_cast<uint32_t>(kBoardAssetHeight),
-                           "blocks: board texture dimensions invalid");
-    micropixel::AssertThat(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
-                               start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
-                               restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
-                               restart.height() == static_cast<uint32_t>(kActionButtonHeight),
-                           "blocks: button texture dimensions invalid");
+    micropixel::Assert(board.width() == static_cast<uint32_t>(kBoardAssetWidth) &&
+                           board.height() == static_cast<uint32_t>(kBoardAssetHeight),
+                       "blocks: board texture dimensions invalid");
+    micropixel::Assert(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                           start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
+                           restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                           restart.height() == static_cast<uint32_t>(kActionButtonHeight),
+                       "blocks: button texture dimensions invalid");
     board_texture_ = static_cast<micropixel::Texture&&>(board);
     start_button_texture_ = static_cast<micropixel::Texture&&>(start);
     restart_button_texture_ = static_cast<micropixel::Texture&&>(restart);

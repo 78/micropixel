@@ -118,8 +118,8 @@ micropixel::Texture LoadDemoAtlas(micropixel::Application& app) {
         return micropixel::Texture{};
     }
     micropixel::Texture texture = static_cast<micropixel::Texture&&>(result.value());
-    micropixel::AssertThat(texture.width() == atlas.width && texture.height() == atlas.height,
-                           "demo.resource: atlas dimensions disagree with manifest");
+    micropixel::Assert(texture.width() == atlas.width && texture.height() == atlas.height,
+                       "demo.resource: atlas dimensions disagree with manifest");
     return texture;
 }
 

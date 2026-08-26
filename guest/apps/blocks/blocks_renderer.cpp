@@ -68,7 +68,7 @@ void BlocksGame::InitializePlayfieldSurfaces() {
     for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
         auto result = renderer_.CreateStreamingTexture(
             micropixel::Size{static_cast<uint32_t>(kPlayfieldWidth), kSurfaceHeight}, micropixel::PixelFormat::kBgr888);
-        micropixel::AssertThat(result.has_value(), "blocks: streaming texture allocation failed");
+        micropixel::Assert(result.has_value(), "blocks: streaming texture allocation failed");
         playfield_surfaces_[index] = static_cast<micropixel::StreamingTexture&&>(result.value());
     }
     visual_cache_valid_ = false;
@@ -174,17 +174,16 @@ void BlocksGame::SyncPlayfield() {
             RasterizeCell(column, row, visual);
             const uint32_t surface_index = row / kRowsPerSurface;
             const int32_t local_y = static_cast<int32_t>(row % kRowsPerSurface) * kCellPitch;
-            micropixel::AssertThat(
-                playfield_surfaces_[surface_index]
-                    .Update(
-                        micropixel::Rect{static_cast<int32_t>(column) * kCellPitch, local_y, kCellPitch, kCellPitch},
-                        cell_pixels_, sizeof(cell_pixels_), static_cast<uint32_t>(kCellPitch) * 3U)
-                    .has_value(),
-                "blocks: streaming texture update failed");
+            micropixel::Assert(playfield_surfaces_[surface_index]
+                                   .Update(micropixel::Rect{static_cast<int32_t>(column) * kCellPitch, local_y,
+                                                            kCellPitch, kCellPitch},
+                                           cell_pixels_, sizeof(cell_pixels_), static_cast<uint32_t>(kCellPitch) * 3U)
+                                   .has_value(),
+                               "blocks: streaming texture update failed");
             visual_cells_[cache_index] = visual;
         }
     }
-    micropixel::AssertThat(update_batch.Finish().has_value(), "blocks: texture update batch failed");
+    micropixel::Assert(update_batch.Finish().has_value(), "blocks: texture update batch failed");
     visual_cache_valid_ = true;
 }
 
@@ -358,9 +357,9 @@ void BlocksGame::RenderOverlay(micropixel::Frame& commands) const {
 }
 
 void BlocksGame::Render() {
-    micropixel::AssertThat(board_texture_.valid(), "blocks: board texture missing");
+    micropixel::Assert(board_texture_.valid(), "blocks: board texture missing");
     for (const auto& surface : playfield_surfaces_) {
-        micropixel::AssertThat(surface.valid(), "blocks: playfield surface missing");
+        micropixel::Assert(surface.valid(), "blocks: playfield surface missing");
     }
     SyncPlayfield();
     const Theme& theme = ThemeForLevel(model_.level());
@@ -378,7 +377,7 @@ void BlocksGame::Render() {
     RenderMiniPiece(commands, model_.next(), sidebar_center, kBoardY + 196, false, true);
     RenderStatusEffect(commands, theme);
     RenderOverlay(commands);
-    micropixel::AssertThat(commands.Present().has_value(), "blocks: frame present failed");
+    micropixel::Assert(commands.Present().has_value(), "blocks: frame present failed");
 }
 
 }  // namespace blocks

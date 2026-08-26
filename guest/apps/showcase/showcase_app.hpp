@@ -132,7 +132,7 @@ class ShowcaseApp final {
                 RenderOrbitPad(frame);
                 break;
         }
-        micropixel::AssertThat(frame.Present().has_value(), "showcase: frame present failed");
+        micropixel::Assert(frame.Present().has_value(), "showcase: frame present failed");
     }
 
     void RenderTapCounter(micropixel::Frame& frame) const {

@@ -17,6 +17,18 @@ Unless otherwise noted, project-authored source code, documentation, and assets 
 After submodule initialization, the applicable license, third-party attributions, and component-specific license
 files are present in that directory.
 
+## LLVM libc++ in Guest applications
+
+MicroPixel Guest applications are compiled with libc++ headers and selected static-library objects distributed by
+wasi-sdk. Link-time garbage collection retains only objects referenced by each Guest:
+
+- upstream: <https://github.com/llvm/llvm-project/tree/main/libcxx>;
+- toolchain distribution: <https://github.com/WebAssembly/wasi-sdk>;
+- license: Apache-2.0 WITH LLVM-exception.
+
+The toolchain distributions contain the complete applicable license and attribution files. MicroPixel does not
+copy the libc++ source tree into this repository.
+
 ## MetalioClaw4 display driver
 
 Portions of `firmware/espressif/main/platform/metalio-claw4/esp_lcd_nv3051f.c` and

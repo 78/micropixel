@@ -87,11 +87,12 @@ build_sdk_example sdk_panic "$workspace_root/guest/tests/conformance/sdk_panic.c
 build_sdk_example application_assert "$workspace_root/guest/tests/conformance/application_assert.cpp"
 build_sdk_example audio_synth "$workspace_root/guest/tests/conformance/audio_synth.cpp"
 build_sdk_example service_control "$workspace_root/guest/tests/conformance/service_control.cpp"
+build_sdk_example stl "$workspace_root/guest/tests/conformance/stl.cpp"
 
 built_guests=(
     bad_import sdk_hello event_wait graphics_protocol graphics_invalid_pointer
     touch_pressure key_input timer_counter
-    run_handler_after run_handler_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth service_control
+    run_handler_after run_handler_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth service_control stl
 )
 for guest_name in "${built_guests[@]}"; do
     ls -lh "$output_dir/$guest_name".{wasm,aot}

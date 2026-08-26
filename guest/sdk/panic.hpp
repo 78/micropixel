@@ -8,8 +8,8 @@ namespace micropixel {
 [[noreturn]] void Panic(const char* reason);
 
 // Checks an application invariant and panics with a useful diagnostic when it
-// is false. The name deliberately avoids collision with the C assert macro.
-inline void AssertThat(bool condition, const char* reason) {
+// is false. The capitalized name does not collide with the C assert macro.
+inline void Assert(bool condition, const char* reason) {
     if (!condition) [[unlikely]] {
         Panic(reason);
     }

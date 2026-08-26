@@ -7,13 +7,13 @@ void SnakeGame::Render() {
     const Theme& theme = ThemeForLevel(model_.level());
     const int32_t board_x = kBoardX;
     const int32_t board_y = kBoardY;
-    micropixel::AssertThat(board_texture_.valid(), "snake: board texture missing");
+    micropixel::Assert(board_texture_.valid(), "snake: board texture missing");
 
     constexpr uint32_t kMinimumBodySlots = 13U;
     constexpr uint32_t kFixedMandatoryRects = 13U;
     const uint32_t retained_rect_slots = RetainedRectSlotsForDrawBudget(maximum);
-    micropixel::AssertThat(retained_rect_slots >= kMinimumBodySlots + kFixedMandatoryRects,
-                           "snake: Host renderer command budget too small");
+    micropixel::Assert(retained_rect_slots >= kMinimumBodySlots + kFixedMandatoryRects,
+                       "snake: Host renderer command budget too small");
 
     uint32_t body_slots = model_.length() < kMinimumBodySlots ? kMinimumBodySlots : model_.length();
     if (body_slots + kFixedMandatoryRects > retained_rect_slots) {
@@ -62,8 +62,8 @@ void SnakeGame::Render() {
     while (commands.draw_operation_count() - board_rect_start < retained_rect_slots - 2U) {
         AppendPlaceholderRect(commands);
     }
-    micropixel::AssertThat(commands.draw_operation_count() - board_rect_start == retained_rect_slots - 2U,
-                           "snake: retained board rectangle slot count drifted");
+    micropixel::Assert(commands.draw_operation_count() - board_rect_start == retained_rect_slots - 2U,
+                       "snake: retained board rectangle slot count drifted");
 
     if (screen_ == Screen::kPlaying) {
         commands.Restore();
@@ -78,53 +78,53 @@ void SnakeGame::Render() {
     const uint32_t board_text_start = commands.draw_operation_count();
     RenderPopups(commands, board_x, board_y, theme);
     RenderOverlayTexts(commands, theme);
-    micropixel::AssertThat(commands.draw_operation_count() - board_text_start == 19U,
-                           "snake: retained board text slot count drifted");
+    micropixel::Assert(commands.draw_operation_count() - board_text_start == 19U,
+                       "snake: retained board text slot count drifted");
     commands.Restore();
 
     const uint32_t header_text_start = commands.draw_operation_count();
     RenderHeaderTexts(commands, theme);
-    micropixel::AssertThat(commands.draw_operation_count() - header_text_start == 8U,
-                           "snake: retained header text slot count drifted");
+    micropixel::Assert(commands.draw_operation_count() - header_text_start == 8U,
+                       "snake: retained header text slot count drifted");
 
-    micropixel::AssertThat(commands.draw_operation_count() == 2U + retained_rect_slots + kRetainedTextSlots &&
-                               commands.draw_operation_count() <= maximum,
-                           "snake: retained surface scene slot budget drifted");
-    micropixel::AssertThat(commands.Present().has_value(), "snake: frame present failed");
+    micropixel::Assert(commands.draw_operation_count() == 2U + retained_rect_slots + kRetainedTextSlots &&
+                           commands.draw_operation_count() <= maximum,
+                       "snake: retained surface scene slot budget drifted");
+    micropixel::Assert(commands.Present().has_value(), "snake: frame present failed");
     if (shake_capture_delay_frames_ != 0U && MotionFractionQ8() == 256U) {
         --shake_capture_delay_frames_;
     }
 }
 
-void SnakeGame::set_board(micropixel::Texture texture) {
-    micropixel::AssertThat(texture.width() == 625U && texture.height() == 625U, "snake: board dimensions invalid");
+void SnakeGame::SetBoard(micropixel::Texture texture) {
+    micropixel::Assert(texture.width() == 625U && texture.height() == 625U, "snake: board dimensions invalid");
     board_texture_ = static_cast<micropixel::Texture&&>(texture);
 }
 
-void SnakeGame::set_button_textures(micropixel::Texture start, micropixel::Texture restart) {
-    micropixel::AssertThat(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
-                               start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
-                               restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
-                               restart.height() == static_cast<uint32_t>(kActionButtonHeight),
-                           "snake: button texture dimensions invalid");
+void SnakeGame::SetButtonTextures(micropixel::Texture start, micropixel::Texture restart) {
+    micropixel::Assert(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                           start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
+                           restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
+                           restart.height() == static_cast<uint32_t>(kActionButtonHeight),
+                       "snake: button texture dimensions invalid");
     start_button_texture_ = static_cast<micropixel::Texture&&>(start);
     restart_button_texture_ = static_cast<micropixel::Texture&&>(restart);
 }
 
-void SnakeGame::set_burst_sheet(FoodType type, micropixel::Texture texture) {
+void SnakeGame::SetBurstSheet(FoodType type, micropixel::Texture texture) {
     const uint32_t type_index = static_cast<uint32_t>(type);
-    micropixel::AssertThat(type_index < 4U, "snake: food burst sheet type invalid");
+    micropixel::Assert(type_index < 4U, "snake: food burst sheet type invalid");
     const snake_assets::Atlas& atlas = snake_assets::burst_atlases[type_index];
-    micropixel::AssertThat(texture.width() == atlas.width && texture.height() == atlas.height,
-                           "snake: food burst atlas dimensions invalid");
+    micropixel::Assert(texture.width() == atlas.width && texture.height() == atlas.height,
+                       "snake: food burst atlas dimensions invalid");
     burst_sheets_[type_index] = static_cast<micropixel::Texture&&>(texture);
 }
 
-void SnakeGame::set_food_sheet(FoodType type, micropixel::Texture texture) {
+void SnakeGame::SetFoodSheet(FoodType type, micropixel::Texture texture) {
     const uint32_t type_index = static_cast<uint32_t>(type);
-    micropixel::AssertThat(type_index < 4U && texture.width() == kFoodSpriteCellSize * kSpriteSheetColumns &&
-                               texture.height() == kFoodSpriteCellSize * kSpriteSheetColumns,
-                           "snake: food sheet dimensions invalid");
+    micropixel::Assert(type_index < 4U && texture.width() == kFoodSpriteCellSize * kSpriteSheetColumns &&
+                           texture.height() == kFoodSpriteCellSize * kSpriteSheetColumns,
+                       "snake: food sheet dimensions invalid");
     food_sheets_[type_index] = static_cast<micropixel::Texture&&>(texture);
 }
 
@@ -191,17 +191,17 @@ void SnakeGame::FillClippedRect(micropixel::Frame& commands, micropixel::Rect re
 
 void SnakeGame::RenderComboBar(micropixel::Frame& commands) const {
     if (screen_ == Screen::kMenu) {
-        micropixel::AssertThat(start_button_texture_.valid(), "snake: start button texture missing");
+        micropixel::Assert(start_button_texture_.valid(), "snake: start button texture missing");
         micropixel::ui::DrawTextureButton(commands, screen_button_, start_button_texture_);
         return;
     }
     if (screen_ == Screen::kPaused) {
-        micropixel::AssertThat(start_button_texture_.valid(), "snake: continue button texture missing");
+        micropixel::Assert(start_button_texture_.valid(), "snake: continue button texture missing");
         micropixel::ui::DrawTextureButton(commands, screen_button_, start_button_texture_);
         return;
     }
     if (screen_ == Screen::kGameOver) {
-        micropixel::AssertThat(restart_button_texture_.valid(), "snake: restart button texture missing");
+        micropixel::Assert(restart_button_texture_.valid(), "snake: restart button texture missing");
         micropixel::ui::DrawTextureButton(commands, screen_button_, restart_button_texture_);
         return;
     }
@@ -276,7 +276,7 @@ void SnakeGame::RenderFood(micropixel::Frame& commands, const Food& food, int32_
     const int32_t center_x = board_x + static_cast<int32_t>(food.cell.x) * kCellPitch + kCellPitch / 2;
     const int32_t center_y = board_y + static_cast<int32_t>(food.cell.y) * kCellPitch + kCellPitch / 2;
     const micropixel::Texture& sheet = food_sheets_[static_cast<uint32_t>(food.type)];
-    micropixel::AssertThat(sheet.valid(), "snake: food sprite sheet missing");
+    micropixel::Assert(sheet.valid(), "snake: food sprite sheet missing");
     const micropixel::Rect source{static_cast<int32_t>((phase % kSpriteSheetColumns) * kFoodSpriteCellSize),
                                   static_cast<int32_t>((phase / kSpriteSheetColumns) * kFoodSpriteCellSize),
                                   static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)};
@@ -312,7 +312,7 @@ void SnakeGame::RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_
                             uint32_t body_slots) const {
     uint32_t length = model_.length();
     Rgb accent = model_.invincible() ? Rgb{34U, 211U, 238U} : theme.accent;
-    micropixel::AssertThat(body_slot_length_ == length, "snake: retained body ring length drifted");
+    micropixel::Assert(body_slot_length_ == length, "snake: retained body ring length drifted");
     // Slots form a ring. On each Move only the old tail slot is recycled
     // as the new head; all interior LVGL rectangles keep their position.
     for (uint32_t slot = 0U; slot < body_slots; ++slot) {
@@ -375,7 +375,7 @@ void SnakeGame::RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, in
     const uint32_t frame_index = display_phase * (kBurstFrameCount - 1U) / (kBurstDisplayPhaseCount - 1U);
     const uint32_t type_index = static_cast<uint32_t>(burst_type_);
     const micropixel::Texture& sheet = burst_sheets_[type_index];
-    micropixel::AssertThat(sheet.valid(), "snake: food burst sheet missing");
+    micropixel::Assert(sheet.valid(), "snake: food burst sheet missing");
     int32_t center_x = board_x + static_cast<int32_t>(burst_cell_.x) * kCellPitch + kCellPitch / 2;
     int32_t center_y = board_y + static_cast<int32_t>(burst_cell_.y) * kCellPitch + kCellPitch / 2;
     constexpr int32_t kCanvasWidth = static_cast<int32_t>(snake_assets::burst_canvas_width);

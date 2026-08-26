@@ -242,7 +242,7 @@ Cell SnakeModel::RandomFoodCell() {
 }
 
 void SnakeModel::CommitFood(Cell candidate) {
-    micropixel::AssertThat(
+    micropixel::Assert(
         candidate.x >= kFoodEdgeMargin && candidate.x < static_cast<int16_t>(kColumns) - kFoodEdgeMargin &&
             candidate.y >= kFoodEdgeMargin && candidate.y < static_cast<int16_t>(kRows) - kFoodEdgeMargin,
         "snake: food escaped the two-cell safety margin");

@@ -14,13 +14,13 @@ uint32_t ReadBest(micropixel::KVStore storage) {
     if (value.has_value()) {
         return value.value();
     }
-    micropixel::AssertThat(value.error().code() == micropixel::ErrorCode::kNotFound, "blocks: private KV read failed");
+    micropixel::Assert(value.error().code() == micropixel::ErrorCode::kNotFound, "blocks: private KV read failed");
     return 0U;
 }
 
 micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
     auto result = app.resources().LoadTexture(micropixel::ResourceRef::Package(asset));
-    micropixel::AssertThat(result.has_value(), "blocks: critical texture resource failed");
+    micropixel::Assert(result.has_value(), "blocks: critical texture resource failed");
     return static_cast<micropixel::Texture&&>(result.value());
 }
 
@@ -30,8 +30,8 @@ int BlocksAppMain() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
-    micropixel::AssertThat(display.width() == kScreenWidth && display.height() == kScreenHeight,
-                           "blocks: requires 720x720 display");
+    micropixel::Assert(display.width() == kScreenWidth && display.height() == kScreenHeight,
+                       "blocks: requires 720x720 display");
 
     const uint32_t best_score = ReadBest(app.storage());
     Line restored;
