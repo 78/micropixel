@@ -66,9 +66,9 @@ class UsbLocalControlAgent final {
     device::LocalControlBackend& backend_;
     remote_control::RemoteControlAgent& host_commands_;
     StaticQueue_t response_queue_storage_{};
-    std::array<uint8_t, sizeof(Response) * kResponseQueueCapacity> response_queue_bytes_{};
+    uint8_t* response_queue_bytes_{};
     QueueHandle_t response_queue_{};
-    remote_control::RemoteControlLocalSnapshot snapshot_workspace_{};
+    remote_control::RemoteControlLocalSnapshot* snapshot_workspace_{};
     InstallSession install_{};
     esp_timer_handle_t install_timer_{};
     std::atomic<bool> install_timeout_due_{};

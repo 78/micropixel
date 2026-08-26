@@ -147,6 +147,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     void CopyLocalSnapshot(RemoteControlLocalSnapshot& snapshot) const;
     void SetHostCommandReadySink(HostCommandReadySink sink, void* context);
     void SetLocalHostResultSink(LocalHostResultSink sink, void* context);
+    void NotifyNetworkChanged();
 
    private:
     static constexpr UBaseType_t kCommandQueueCapacity = 8U;
@@ -164,6 +165,12 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
         kShutdown,
     };
 
+    static constexpr uint32_t kWorkCommand = 1U << 0U;
+    static constexpr uint32_t kWorkHostResult = 1U << 1U;
+    static constexpr uint32_t kWorkNetwork = 1U << 2U;
+    static constexpr uint32_t kWorkTransport = 1U << 3U;
+    static constexpr uint32_t kWorkRuntimeSnapshot = 1U << 4U;
+
     struct Command final {
         CommandType type{CommandType::kSetEnabled};
         bool enabled{};
@@ -176,6 +183,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     };
 
     struct GuestLogBuffer;
+    struct ColdState;
     struct TaskContext;
 
     struct TaskRuntimeSample final {
@@ -191,7 +199,10 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     using FirmwareStatusPublisher = std::function<void()>;
 
     static void TaskEntry(void* context);
+    static void TransportReady(void* context);
     void TaskMain();
+    void NotifyTask(uint32_t work_bits);
+    [[nodiscard]] uint32_t WaitForWork(TickType_t timeout);
     [[nodiscard]] bool AllocateTaskContext();
     void ReleaseTaskContext();
     [[nodiscard]] bool QueueCommand(const Command& command);
@@ -208,6 +219,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
                                          cJSON* result);
     [[nodiscard]] bool PostCommandAccepted(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostEvent(void* client, const Identity& identity, cJSON* root, const char* type);
+    [[nodiscard]] const uint8_t* SerializeJson(cJSON* root, size_t& size_out);
     [[nodiscard]] bool SendCommandResultBody(void* client, const Identity& identity, const uint8_t* body,
                                              size_t body_size);
     [[nodiscard]] bool QueuePendingResult(const uint8_t* body, size_t body_size);
@@ -249,7 +261,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     mutable std::mutex model_mutex_;
     host_ui::RemoteControlModel model_{};
     mutable std::mutex diagnostics_mutex_;
-    RemoteControlCatalogSnapshot installed_apps_{};
+    ColdState* cold_state_{};
     std::array<char, kRemoteControlAppIdCapacity> active_app_id_{};
     std::array<char, 24U> app_lifecycle_{};
     std::array<char, kRemoteControlCommandIdCapacity> app_session_id_{};
@@ -257,7 +269,6 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     uint64_t runtime_snapshot_generation_{};
     uint64_t published_runtime_snapshot_generation_{};
     static constexpr size_t kTaskDiagnosticCapacity = 48U;
-    std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> previous_task_runtime_{};
     uint64_t previous_total_runtime_{};
     mutable std::mutex log_mutex_;
     GuestLogBuffer* guest_logs_{};
@@ -280,11 +291,10 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     StaticSemaphore_t stopped_semaphore_storage_{};
     SemaphoreHandle_t stopped_semaphore_{};
     TaskHandle_t task_{};
+    std::atomic<TaskHandle_t> notification_task_{nullptr};
     TaskContext* task_context_{};
-    std::array<char, kControlLineCapacity> control_line_{};
     size_t control_line_size_{};
     bool control_line_overflow_{};
-    std::array<std::array<char, kRemoteControlCommandIdCapacity>, kRecentCommandCapacity> recent_command_ids_{};
     std::array<PendingResultBody, kRecentCommandCapacity> recent_command_results_{};
     size_t recent_command_start_{};
     size_t recent_command_count_{};

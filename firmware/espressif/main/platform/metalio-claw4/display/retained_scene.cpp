@@ -543,7 +543,16 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
     last_used_ = used;
     bool surface_changed = false;
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
+    const bool surface_was_active = surface_.Active();
     surface_changed = surface_.Update(surface_seen ? &surface_request : nullptr);
+    if (surface_was_active && !surface_.Active()) {
+        // LVGL can consume object invalidations while dummy draw is active,
+        // even though those updates never reach the panel framebuffers.  Once
+        // direct composition ends, invalidate the current retained tree so
+        // its latest state replaces the frozen surface image immediately.
+        lv_obj_invalidate(frame);
+        surface_changed = true;
+    }
 #endif
     visual_changed = visual_changed || surface_changed;
     return {MICROPIXEL_STATUS_OK, visual_changed, SurfaceActive()};

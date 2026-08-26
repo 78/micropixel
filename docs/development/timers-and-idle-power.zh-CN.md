@@ -60,8 +60,8 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 | Resource decode worker | 旧实现 Queue Poll 20 ms | 已改为 `portMAX_DELAY` 阻塞；shutdown 通过队列 sentinel 唤醒 |
 | USB Local Control | 旧实现 USB Read timeout 20 ms | 已改为无限等待 task notification；USB RX ISR、Host 响应入队和安装 one-shot 到期显式唤醒 `micropixel_usb` |
 | Wi-Fi 扫描页 | retry 1 s，刷新 10 s | 只在扫描页面可见时按下一个 deadline 等待；Wi-Fi driver 状态变化仍走事件 |
-| Remote agent 离线状态 | 1 s | 仍存在；用于未配置、无网络和 disabled 状态的重试/固件检查，是下一阶段事件化候选 |
-| Remote agent 已连接 control stream | Read timeout 250 ms | 仍存在；用于同时推进网络流、Host result 和本地控制命令。应给 HTTP/3 stream 增加可由本地队列打断的等待，再把常态 timeout 放大或改成无限等待 |
+| Remote agent 离线状态 | 旧实现 Poll 1 s | 已改为 task notification；命令与 Wi-Fi 状态变化显式唤醒，disabled 状态仅等待 15 min 固件检查 deadline |
+| Remote agent 已连接 control stream | 旧实现 Read timeout 250 ms | 已改为 HTTP/3 stream/异步完成、Host result、命令和 Runtime snapshot 事件唤醒；醒来后用 `TryRead()` 排空数据，无事件和 deadline 时无限等待 |
 | 音频 I2S mixer | 旧实现每 128 帧写一次，16 kHz 下约 8 ms | 已改为 task notification 事件唤醒；无 active voice 时关闭 PA 和 I2S 并无限阻塞。唤醒 PA 后先发送 32 ms 静音预滚，避免吞掉短音效；播放结束保留 10 s 静音 grace，避免游戏操作间频繁关开 |
 | 前台 App completion | 20 ms | 仅 Guest 前台期间，用于 completion、远控和系统动作编排；不是大厅空闲来源 |
 | 固件更新页面 | 100 ms | 仅更新页面/更新流程期间刷新进度；可在 Remote model change event 完整接入后删除 |
@@ -78,12 +78,13 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 5. 大厅状态兜底采样从 1 s调整到 30 s；
 6. Guest resource worker 从 20 ms轮询改为阻塞队列；
 7. 音频 mixer 从持续发送静音改为首个 tone 事件启动、最后一个 tone 结束后自动关闭 I2S/PA；
-8. USB Local Control 从 20 ms read timeout 改为 USB RX、响应队列和安装 deadline 事件唤醒。
+8. USB Local Control 从 20 ms read timeout 改为 USB RX、响应队列和安装 deadline 事件唤醒；
+9. Remote agent 从 250 ms control stream timeout 和 1 s离线轮询改为 HTTP/3、队列、Wi-Fi 与准确 deadline
+   事件唤醒。
 
 暂不启用 tickless automatic light sleep。启用前必须在 Metalio-Claw4 真机逐项验证 MIPI-DSI、PPA、PSRAM、
-ESP-Hosted SDIO、GT911 和电源键在自动睡眠中的 retention/wake 行为。下一阶段应先把 Remote agent 的
-250 ms control stream timeout、1 s离线轮询和固件状态刷新改成网络/队列/Remote model event，再评估
-tickless light sleep。
+ESP-Hosted SDIO、GT911 和电源键在自动睡眠中的 retention/wake 行为。Remote agent 的常态轮询已经移除；
+下一阶段应先把固件更新页等剩余 UI 状态刷新改成 Remote model event，再评估 tickless light sleep。
 
 后续可单独评估把 `CONFIG_FREERTOS_HZ` 从 100 提升到 1000，以获得 1 ms 的阻塞和 deadline 粒度；这不是
 LVGL 动画流畅度修复的前置条件。若采用 1000 Hz，应同时启用并验证 tickless idle，并把 LVGL 动画显示提交
@@ -99,6 +100,8 @@ LVGL 动画流畅度修复的前置条件。若采用 1000 Hz，应同时启用�
 - 性能浮层关闭时记录各任务 runtime delta；重点观察 `lvgl`、`micropixel_assets` 和 Host supervisor；
 - 对比改造前后 60 s大厅静置的平均电流、CPU 频率驻留和唤醒次数；
 - 验证 30 s电量兜底刷新、USB/无线供电插拔即时刷新，以及 Wi-Fi 状态事件即时刷新；
+- Remote Control 启用和禁用状态下分别静置 60 s，确认 `micropixel_remote` 无固定 250 ms/1 s唤醒；随后验证
+  Wi-Fi 断开/恢复、远程命令、Host result、配对异步完成和 shutdown 都能立即唤醒；
 - Power Management 关闭时不应自动进入 light sleep；开启后，仅在未接外部电源且达到所选空闲时间时进入；
 - 插入 USB/无线供电应暂停自动休眠，拔出后重新完整计时；唤醒后也应重新完整计时；
 - 自动休眠与短按电源键应走同一显式 light sleep 流程，前台 App 唤醒后恢复原 Session；

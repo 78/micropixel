@@ -6,6 +6,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -91,8 +92,23 @@ bool ParseSha256(std::string_view text, std::array<uint8_t, 32U>& digest) {
 UsbLocalControlAgent::UsbLocalControlAgent(device::LocalControlBackend& backend,
                                            remote_control::RemoteControlAgent& host_commands)
     : backend_(backend), host_commands_(host_commands) {
-    response_queue_ = xQueueCreateStatic(kResponseQueueCapacity, sizeof(Response), response_queue_bytes_.data(),
-                                         &response_queue_storage_);
+    response_queue_bytes_ = static_cast<uint8_t*>(
+        heap_caps_calloc(kResponseQueueCapacity, sizeof(Response), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    void* snapshot_storage =
+        heap_caps_calloc(1U, sizeof(remote_control::RemoteControlLocalSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (snapshot_storage != nullptr) {
+        snapshot_workspace_ =
+            std::construct_at(static_cast<remote_control::RemoteControlLocalSnapshot*>(snapshot_storage));
+    }
+    if (response_queue_bytes_ != nullptr && snapshot_workspace_ != nullptr) {
+        response_queue_ = xQueueCreateStatic(kResponseQueueCapacity, sizeof(Response), response_queue_bytes_,
+                                             &response_queue_storage_);
+        ESP_LOGI(kTag, "USB local control workspaces allocated in PSRAM: queue=%zu snapshot=%zu bytes",
+                 sizeof(Response) * kResponseQueueCapacity, sizeof(*snapshot_workspace_));
+    } else {
+        ESP_LOGE(kTag, "USB local control requires %zu bytes of PSRAM workspaces",
+                 sizeof(Response) * kResponseQueueCapacity + sizeof(remote_control::RemoteControlLocalSnapshot));
+    }
 }
 
 UsbLocalControlAgent::~UsbLocalControlAgent() {
@@ -102,6 +118,13 @@ UsbLocalControlAgent::~UsbLocalControlAgent() {
         (void)esp_timer_delete(install_timer_);
         install_timer_ = nullptr;
     }
+    if (snapshot_workspace_ != nullptr) {
+        std::destroy_at(snapshot_workspace_);
+        heap_caps_free(snapshot_workspace_);
+        snapshot_workspace_ = nullptr;
+    }
+    heap_caps_free(response_queue_bytes_);
+    response_queue_bytes_ = nullptr;
 }
 
 bool UsbLocalControlAgent::Start() {
@@ -223,8 +246,12 @@ void UsbLocalControlAgent::HandleAppList(uint32_t request_id, std::string_view a
         (void)QueueResponse(request_id, "ERROR", "invalid_offset");
         return;
     }
-    host_commands_.CopyLocalSnapshot(snapshot_workspace_);
-    const remote_control::RemoteControlCatalogSnapshot& catalog = snapshot_workspace_.catalog;
+    if (snapshot_workspace_ == nullptr) {
+        (void)QueueResponse(request_id, "ERROR", "out_of_memory");
+        return;
+    }
+    host_commands_.CopyLocalSnapshot(*snapshot_workspace_);
+    const remote_control::RemoteControlCatalogSnapshot& catalog = snapshot_workspace_->catalog;
     if (offset > catalog.count) {
         (void)QueueResponse(request_id, "ERROR", "invalid_offset");
         return;
@@ -249,9 +276,9 @@ void UsbLocalControlAgent::HandleAppList(uint32_t request_id, std::string_view a
             (void)QueueResponse(request_id, "ERROR", "response_encoding_failed");
             return;
         }
-        const bool active = std::strcmp(app.app_id.data(), snapshot_workspace_.active_app_id.data()) == 0;
+        const bool active = std::strcmp(app.app_id.data(), snapshot_workspace_->active_app_id.data()) == 0;
         const char* lifecycle =
-            active && snapshot_workspace_.lifecycle[0] != '\0' ? snapshot_workspace_.lifecycle.data() : "not_running";
+            active && snapshot_workspace_->lifecycle[0] != '\0' ? snapshot_workspace_->lifecycle.data() : "not_running";
         const int entry_length = std::snprintf(detail.data() + used, detail.size() - used, " %s,%" PRIu32 ",%.*s,%u,%s",
                                                app.app_id.data(), app.bundle_size, static_cast<int>(encoded_size),
                                                encoded_name.data(), active ? 1U : 0U, lifecycle);

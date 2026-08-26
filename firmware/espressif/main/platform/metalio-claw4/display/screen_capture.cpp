@@ -37,6 +37,7 @@ constexpr char kCaptureCommand[] = "MICROPIXEL_CAPTURE";
 constexpr char kTouchCommand[] = "MICROPIXEL_TOUCH";
 constexpr char kLocalControlPrefix[] = "MPX1 ";
 constexpr size_t kLocalControlResponseCapacity = 1024U;
+constexpr size_t kLocalControlCommandCapacity = 4608U;
 
 struct PngUsbStream final {
     size_t bytes{};
@@ -171,6 +172,15 @@ class ScreenCapture final : public device::LocalControlBackend {
         touch_input_ = &touch_input;
         width_ = width;
         height_ = height;
+        if (command_ == nullptr) {
+            command_ = static_cast<char*>(
+                heap_caps_calloc(kLocalControlCommandCapacity, sizeof(char), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (command_ == nullptr) {
+                ESP_LOGE(kTag, "USB command parser requires %zu bytes of PSRAM", kLocalControlCommandCapacity);
+                return ESP_ERR_NO_MEM;
+            }
+            ESP_LOGI(kTag, "USB command parser buffer allocated in PSRAM: bytes=%zu", kLocalControlCommandCapacity);
+        }
         if (!usb_serial_jtag_is_driver_installed()) {
             usb_serial_jtag_driver_config_t usb_config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
             usb_config.rx_buffer_size = 8192U;
@@ -253,7 +263,7 @@ class ScreenCapture final : public device::LocalControlBackend {
                         command_length_ = 0U;
                         continue;
                     }
-                    if (byte >= 0x20U && byte <= 0x7eU && command_length_ + 1U < sizeof(command_)) {
+                    if (byte >= 0x20U && byte <= 0x7eU && command_length_ + 1U < kLocalControlCommandCapacity) {
                         command_[command_length_++] = static_cast<char>(byte);
                     } else {
                         command_length_ = 0U;
@@ -391,7 +401,7 @@ class ScreenCapture final : public device::LocalControlBackend {
     std::atomic<device::LocalControlCommandSink> command_sink_{};
     std::atomic<device::LocalControlResponseSource> response_source_{};
     std::atomic<void*> command_context_{};
-    char command_[4608]{};
+    char* command_{};
     size_t command_length_{};
     uint32_t sequence_{};
     uint32_t width_{};

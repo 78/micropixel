@@ -53,16 +53,18 @@ constexpr char kIdentityKey[] = "identity";
 constexpr uint8_t kIdentityVersion = 1U;
 constexpr uint32_t kTaskStackBytes = 8U * 1024U;
 constexpr uint32_t kRequestTimeoutMs = 10000U;
-constexpr uint32_t kControlReadTimeoutMs = 250U;
 constexpr size_t kMaxConcurrentAuxiliaryRequests = 10U;
 constexpr uint32_t kShutdownTimeoutMs = (kRequestTimeoutMs * 3U) + 5000U;
 constexpr uint32_t kPairingTtlMs = 5U * 60U * 1000U;
-constexpr TickType_t kOfflinePollTicks = pdMS_TO_TICKS(1000U);
+constexpr TickType_t kPairingCountdownTicks = pdMS_TO_TICKS(1000U);
 constexpr size_t kGuestLogCapacity = 1024U;
 constexpr size_t kGuestLogResponseCapacity = 48U;
 constexpr size_t kGuestLogResponseJsonBudget = 60U * 1024U;
 constexpr size_t kGuestLogMessageCapacity = MICROPIXEL_ABI_MAX_LOG_BYTES + 1U;
 constexpr size_t kMaxEventBodyBytes = 64U * 1024U;
+// cJSON_PrintPreallocated() documents a five-byte safety margin beyond the
+// rendered JSON length.
+constexpr size_t kJsonPrintBufferBytes = kMaxEventBodyBytes + 5U;
 constexpr size_t kMaxPackageBytes = 8U * 1024U * 1024U;
 constexpr size_t kMaxFirmwareBytes = 0x380000U;
 constexpr uint32_t kPackageDownloadTimeoutMs = 60000U;
@@ -437,11 +439,19 @@ struct RemoteControlAgent::GuestLogBuffer final {
     uint64_t next_sequence{1U};
 };
 
+struct RemoteControlAgent::ColdState final {
+    RemoteControlCatalogSnapshot installed_apps{};
+    std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> previous_task_runtime{};
+    std::array<char, kControlLineCapacity> control_line{};
+    std::array<std::array<char, kRemoteControlCommandIdCapacity>, kRecentCommandCapacity> recent_command_ids{};
+};
+
 struct RemoteControlAgent::TaskContext final {
     Identity identity{};
     IdentityRecord identity_record{};
     std::array<uint8_t, 1024U> control_read_buffer{};
     std::array<uint8_t, 4096U> firmware_response_bytes{};
+    std::array<char, kJsonPrintBufferBytes> json_output_buffer{};
     RemoteControlCatalogSnapshot catalog_snapshot{};
     std::array<TaskStatus_t, kTaskDiagnosticCapacity> task_status{};
     std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> current_task_runtime{};
@@ -455,6 +465,13 @@ static_assert(sizeof(GuestLogEntry) * kGuestLogCapacity < 2U * 1024U * 1024U,
               "Guest log ring must remain a bounded PSRAM allocation");
 
 RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) {
+    void* cold_storage = heap_caps_calloc(1U, sizeof(ColdState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (cold_storage != nullptr) {
+        cold_state_ = std::construct_at(static_cast<ColdState*>(cold_storage));
+        ESP_LOGI(kTag, "Remote Control cold state allocated in PSRAM: bytes=%zu", sizeof(ColdState));
+    } else {
+        ESP_LOGE(kTag, "Remote Control cold state requires %zu bytes of PSRAM", sizeof(ColdState));
+    }
     protocol::GenerateUuid(device_boot_id_);
     command_queue_ = xQueueCreateStatic(kCommandQueueCapacity, sizeof(Command), command_queue_bytes_.data(),
                                         &command_queue_storage_);
@@ -523,6 +540,11 @@ RemoteControlAgent::~RemoteControlAgent() {
     host_command_queue_bytes_ = nullptr;
     heap_caps_free(host_result_queue_bytes_);
     host_result_queue_bytes_ = nullptr;
+    if (cold_state_ != nullptr) {
+        std::destroy_at(cold_state_);
+        heap_caps_free(cold_state_);
+        cold_state_ = nullptr;
+    }
 }
 
 bool RemoteControlAgent::AllocateTaskContext() {
@@ -554,7 +576,7 @@ bool RemoteControlAgent::Start(bool enabled) {
     SetConnectionState(host_ui::RemoteControlConnectionState::kDisabled, "Remote Control agent is not built");
     return false;
 #else
-    if (task_ != nullptr || command_queue_ == nullptr || stopped_semaphore_ == nullptr) {
+    if (task_ != nullptr || command_queue_ == nullptr || stopped_semaphore_ == nullptr || cold_state_ == nullptr) {
         return task_ != nullptr;
     }
     {
@@ -596,6 +618,7 @@ void RemoteControlAgent::Stop(TickType_t timeout) {
     }
     if (xSemaphoreTake(stopped_semaphore_, timeout) != pdTRUE) {
         ESP_LOGE(kTag, "Remote Control task did not stop in time; forcing deletion");
+        notification_task_.store(nullptr, std::memory_order_release);
         vTaskDelete(task_);
     }
     task_ = nullptr;
@@ -662,13 +685,18 @@ host_ui::RemoteControlModel RemoteControlAgent::Snapshot() const {
 
 void RemoteControlAgent::UpdateInstalledApps(const RemoteControlCatalogSnapshot& catalog) {
     std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-    installed_apps_ = catalog;
-    installed_apps_.count = std::min(installed_apps_.count, static_cast<uint32_t>(installed_apps_.apps.size()));
+    if (cold_state_ == nullptr) {
+        return;
+    }
+    cold_state_->installed_apps = catalog;
+    cold_state_->installed_apps.count =
+        std::min(cold_state_->installed_apps.count, static_cast<uint32_t>(cold_state_->installed_apps.apps.size()));
 }
 
 void RemoteControlAgent::UpdateAppLifecycle(const char* app_id, const char* lifecycle) {
     const bool has_app = app_id != nullptr && app_id[0] != '\0';
     std::array<char, kRemoteControlCommandIdCapacity> next_session_id{};
+    bool snapshot_changed = false;
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
         const auto previous_app_id = active_app_id_;
@@ -702,6 +730,7 @@ void RemoteControlAgent::UpdateAppLifecycle(const char* app_id, const char* life
         if (previous_app_id != active_app_id_ || previous_lifecycle != app_lifecycle_ ||
             previous_session_id != app_session_id_) {
             ++runtime_snapshot_generation_;
+            snapshot_changed = true;
         }
     }
     if (has_app && guest_logs_ != nullptr) {
@@ -713,6 +742,9 @@ void RemoteControlAgent::UpdateAppLifecycle(const char* app_id, const char* life
             guest_logs_->next_sequence = 1U;
             std::snprintf(guest_logs_->session_id.data(), guest_logs_->session_id.size(), "%s", next_session_id.data());
         }
+    }
+    if (snapshot_changed) {
+        NotifyTask(kWorkRuntimeSnapshot);
     }
 }
 
@@ -774,6 +806,7 @@ bool RemoteControlAgent::SubmitHostResult(const RemoteControlHostResult& result)
         return false;
     }
     if (host_result_queue_ != nullptr && xQueueSend(host_result_queue_, &result, 0U) == pdTRUE) {
+        NotifyTask(kWorkHostResult);
         return true;
     }
     ReleaseArtifacts(result);
@@ -782,7 +815,7 @@ bool RemoteControlAgent::SubmitHostResult(const RemoteControlHostResult& result)
 
 void RemoteControlAgent::CopyLocalSnapshot(RemoteControlLocalSnapshot& snapshot) const {
     std::lock_guard lock(diagnostics_mutex_);
-    snapshot.catalog = installed_apps_;
+    snapshot.catalog = cold_state_ != nullptr ? cold_state_->installed_apps : RemoteControlCatalogSnapshot{};
     snapshot.active_app_id = active_app_id_;
     snapshot.lifecycle = app_lifecycle_;
 }
@@ -807,17 +840,45 @@ void RemoteControlAgent::SetLocalHostResultSink(LocalHostResultSink sink, void* 
     local_host_result_sink_.store(sink, std::memory_order_release);
 }
 
+void RemoteControlAgent::NotifyNetworkChanged() { NotifyTask(kWorkNetwork); }
+
 void RemoteControlAgent::TaskEntry(void* context) {
     auto* agent = static_cast<RemoteControlAgent*>(context);
     if (agent != nullptr) {
+        agent->notification_task_.store(xTaskGetCurrentTaskHandle(), std::memory_order_release);
         agent->TaskMain();
+        agent->notification_task_.store(nullptr, std::memory_order_release);
         (void)xSemaphoreGive(agent->stopped_semaphore_);
     }
     vTaskDelete(nullptr);
 }
 
 bool RemoteControlAgent::QueueCommand(const Command& command) {
-    return command_queue_ != nullptr && xQueueSend(command_queue_, &command, 0U) == pdTRUE;
+    if (command_queue_ == nullptr || xQueueSend(command_queue_, &command, 0U) != pdTRUE) {
+        return false;
+    }
+    NotifyTask(kWorkCommand);
+    return true;
+}
+
+void RemoteControlAgent::TransportReady(void* context) {
+    auto* agent = static_cast<RemoteControlAgent*>(context);
+    if (agent != nullptr) {
+        agent->NotifyTask(kWorkTransport);
+    }
+}
+
+void RemoteControlAgent::NotifyTask(uint32_t work_bits) {
+    TaskHandle_t task = notification_task_.load(std::memory_order_acquire);
+    if (task != nullptr) {
+        (void)xTaskNotify(task, work_bits, eSetBits);
+    }
+}
+
+uint32_t RemoteControlAgent::WaitForWork(TickType_t timeout) {
+    uint32_t work_bits = 0U;
+    (void)xTaskNotifyWait(0U, UINT32_MAX, &work_bits, timeout);
+    return work_bits;
 }
 
 void RemoteControlAgent::SetConnectionState(host_ui::RemoteControlConnectionState state, const char* message) {
@@ -1006,6 +1067,26 @@ bool RemoteControlAgent::RefreshCredential(void* client, Identity& identity) {
     return true;
 }
 
+const uint8_t* RemoteControlAgent::SerializeJson(cJSON* root, size_t& size_out) {
+    size_out = 0U;
+    if (root == nullptr || task_context_ == nullptr) {
+        return nullptr;
+    }
+    auto& output = task_context_->json_output_buffer;
+    static_assert(kJsonPrintBufferBytes <= static_cast<size_t>(INT32_MAX));
+    if (!cJSON_PrintPreallocated(root, output.data(), static_cast<int>(output.size()), false)) {
+        ESP_LOGW(kTag, "Remote Control JSON exceeds the %zu-byte PSRAM serialization buffer", kMaxEventBodyBytes);
+        return nullptr;
+    }
+    size_out = std::strlen(output.data());
+    if (size_out == 0U || size_out > kMaxEventBodyBytes) {
+        ESP_LOGW(kTag, "Remote Control JSON has invalid serialized size: %zu", size_out);
+        size_out = 0U;
+        return nullptr;
+    }
+    return reinterpret_cast<const uint8_t*>(output.data());
+}
+
 bool RemoteControlAgent::PostCommandResult(void* client, const Identity& identity, const char* command_id, bool ok,
                                            cJSON* result) {
     if (command_id == nullptr || std::strlen(command_id) >= 64U) {
@@ -1042,22 +1123,15 @@ bool RemoteControlAgent::PostCommandResult(void* client, const Identity& identit
             cJSON_Delete(result);
         }
     }
-    char* body = cJSON_PrintUnformatted(root);
+    size_t body_size = 0U;
+    const uint8_t* body = SerializeJson(root, body_size);
     cJSON_Delete(root);
     if (body == nullptr) {
         return false;
     }
-    const size_t body_size = std::strlen(body);
-    if (body_size > kMaxEventBodyBytes) {
-        cJSON_free(body);
-        ESP_LOGW(kTag, "Remote Control result exceeds bounded event size: %zu", body_size);
-        return false;
-    }
-    const auto* body_bytes = reinterpret_cast<const uint8_t*>(body);
-    CacheCompletedResult(command_id, body_bytes, body_size);
-    const bool posted = pending_result_count_ == 0U && SendCommandResultBody(client, identity, body_bytes, body_size);
-    const bool queued = !posted && QueuePendingResult(body_bytes, body_size);
-    cJSON_free(body);
+    CacheCompletedResult(command_id, body, body_size);
+    const bool posted = pending_result_count_ == 0U && SendCommandResultBody(client, identity, body, body_size);
+    const bool queued = !posted && QueuePendingResult(body, body_size);
     return posted || queued;
 }
 
@@ -1068,19 +1142,17 @@ bool RemoteControlAgent::PostEvent(void* client, const Identity& identity, cJSON
         cJSON_Delete(root);
         return false;
     }
-    char* body = cJSON_PrintUnformatted(root);
+    size_t body_size = 0U;
+    const uint8_t* body = SerializeJson(root, body_size);
     cJSON_Delete(root);
     if (body == nullptr) return false;
-    const size_t body_size = std::strlen(body);
-    const auto* bytes = reinterpret_cast<const uint8_t*>(body);
     const bool posted = body_size <= kMaxEventBodyBytes && pending_result_count_ == 0U &&
-                        SendCommandResultBody(client, identity, bytes, body_size);
+                        SendCommandResultBody(client, identity, body, body_size);
     // Keep one slot available for a terminal command result. Snapshots,
     // diagnostics, acceptance, and progress are observable hints and may be
     // regenerated or coalesced; command.completed must take priority.
     const bool queued = body_size <= kMaxEventBodyBytes && !posted &&
-                        pending_result_count_ + 1U < pending_results_.size() && QueuePendingResult(bytes, body_size);
-    cJSON_free(body);
+                        pending_result_count_ + 1U < pending_results_.size() && QueuePendingResult(body, body_size);
     return posted || queued;
 }
 
@@ -1271,8 +1343,10 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     uint32_t store_used_bytes = 0U;
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-        store_total_bytes = installed_apps_.store_total_bytes;
-        store_used_bytes = installed_apps_.store_used_bytes;
+        if (cold_state_ != nullptr) {
+            store_total_bytes = cold_state_->installed_apps.store_total_bytes;
+            store_used_bytes = cold_state_->installed_apps.store_used_bytes;
+        }
         active_app = active_app_id_;
         app_session = app_session_id_;
         lifecycle = app_lifecycle_;
@@ -1344,7 +1418,7 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
 }
 
 bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& identity, const char* command_id) {
-    if (task_context_ == nullptr) {
+    if (task_context_ == nullptr || cold_state_ == nullptr) {
         return false;
     }
     cJSON* result = cJSON_CreateObject();
@@ -1374,7 +1448,7 @@ bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& ident
             const TaskStatus_t& task = task_status[index];
             const uint64_t current_runtime = static_cast<uint64_t>(task.ulRunTimeCounter);
             uint64_t previous_runtime = current_runtime;
-            for (const TaskRuntimeSample& sample : previous_task_runtime_) {
+            for (const TaskRuntimeSample& sample : cold_state_->previous_task_runtime) {
                 if (sample.handle == task.xHandle) {
                     previous_runtime = sample.runtime_counter;
                     break;
@@ -1413,7 +1487,7 @@ bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& ident
 #endif
             cJSON_AddItemToArray(tasks, item);
         }
-        previous_task_runtime_ = current_samples;
+        cold_state_->previous_task_runtime = current_samples;
         previous_total_runtime_ = current_total_runtime;
     }
 #else
@@ -1424,7 +1498,7 @@ bool RemoteControlAgent::PostTaskDiagnostics(void* client, const Identity& ident
 }
 
 bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identity, const char* command_id) {
-    if (task_context_ == nullptr) {
+    if (task_context_ == nullptr || cold_state_ == nullptr) {
         return false;
     }
     RemoteControlCatalogSnapshot& catalog = task_context_->catalog_snapshot;
@@ -1432,7 +1506,7 @@ bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identit
     std::array<char, 24U> lifecycle{};
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-        catalog = installed_apps_;
+        catalog = cold_state_->installed_apps;
         active_app = active_app_id_;
         lifecycle = app_lifecycle_;
     }
@@ -2148,12 +2222,16 @@ void RemoteControlAgent::DrainHostResults(void* client, const Identity& identity
 
 void RemoteControlAgent::HandleControlBytes(void* client, const Identity& identity, const uint8_t* bytes, size_t size,
                                             const FirmwareStatusPublisher& publish_status) {
+    if (cold_state_ == nullptr) {
+        return;
+    }
+    auto& control_line = cold_state_->control_line;
     for (size_t index = 0U; index < size; ++index) {
         const char character = static_cast<char>(bytes[index]);
         if (character == '\n') {
             if (!control_line_overflow_ && control_line_size_ != 0U) {
-                control_line_[control_line_size_] = '\0';
-                HandleControlLine(client, identity, control_line_.data(), publish_status);
+                control_line[control_line_size_] = '\0';
+                HandleControlLine(client, identity, control_line.data(), publish_status);
             }
             control_line_size_ = 0U;
             control_line_overflow_ = false;
@@ -2162,44 +2240,49 @@ void RemoteControlAgent::HandleControlBytes(void* client, const Identity& identi
         if (control_line_overflow_) {
             continue;
         }
-        if (control_line_size_ + 1U >= control_line_.size()) {
+        if (control_line_size_ + 1U >= control_line.size()) {
             control_line_overflow_ = true;
             continue;
         }
-        control_line_[control_line_size_++] = character;
+        control_line[control_line_size_++] = character;
     }
 }
 
 bool RemoteControlAgent::RememberCommandId(const char* command_id) {
-    if (command_id == nullptr || command_id[0] == '\0' || std::strlen(command_id) >= kRemoteControlCommandIdCapacity) {
+    if (cold_state_ == nullptr || command_id == nullptr || command_id[0] == '\0' ||
+        std::strlen(command_id) >= kRemoteControlCommandIdCapacity) {
         return false;
     }
+    auto& recent_command_ids = cold_state_->recent_command_ids;
     for (size_t offset = 0U; offset < recent_command_count_; ++offset) {
-        const size_t index = (recent_command_start_ + offset) % recent_command_ids_.size();
-        if (std::strcmp(recent_command_ids_[index].data(), command_id) == 0) {
+        const size_t index = (recent_command_start_ + offset) % recent_command_ids.size();
+        if (std::strcmp(recent_command_ids[index].data(), command_id) == 0) {
             return false;
         }
     }
 
     size_t index = 0U;
-    if (recent_command_count_ < recent_command_ids_.size()) {
-        index = (recent_command_start_ + recent_command_count_) % recent_command_ids_.size();
+    if (recent_command_count_ < recent_command_ids.size()) {
+        index = (recent_command_start_ + recent_command_count_) % recent_command_ids.size();
         ++recent_command_count_;
     } else {
         index = recent_command_start_;
         heap_caps_free(recent_command_results_[index].data);
         recent_command_results_[index] = {};
-        recent_command_start_ = (recent_command_start_ + 1U) % recent_command_ids_.size();
+        recent_command_start_ = (recent_command_start_ + 1U) % recent_command_ids.size();
     }
-    CopyText(recent_command_ids_[index], command_id);
+    CopyText(recent_command_ids[index], command_id);
     return true;
 }
 
 void RemoteControlAgent::CacheCompletedResult(const char* command_id, const uint8_t* body, size_t body_size) {
-    if (command_id == nullptr || body == nullptr || body_size == 0U || body_size > kMaxEventBodyBytes) return;
+    if (cold_state_ == nullptr || command_id == nullptr || body == nullptr || body_size == 0U ||
+        body_size > kMaxEventBodyBytes)
+        return;
+    auto& recent_command_ids = cold_state_->recent_command_ids;
     for (size_t offset = 0U; offset < recent_command_count_; ++offset) {
-        const size_t index = (recent_command_start_ + offset) % recent_command_ids_.size();
-        if (std::strcmp(recent_command_ids_[index].data(), command_id) != 0) continue;
+        const size_t index = (recent_command_start_ + offset) % recent_command_ids.size();
+        if (std::strcmp(recent_command_ids[index].data(), command_id) != 0) continue;
         uint8_t* copy = static_cast<uint8_t*>(heap_caps_malloc(body_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (copy == nullptr) copy = static_cast<uint8_t*>(heap_caps_malloc(body_size, MALLOC_CAP_8BIT));
         if (copy == nullptr) return;
@@ -2211,9 +2294,13 @@ void RemoteControlAgent::CacheCompletedResult(const char* command_id, const uint
 }
 
 bool RemoteControlAgent::ReplayCommandState(void* client, const Identity& identity, const char* command_id) {
+    if (cold_state_ == nullptr) {
+        return false;
+    }
+    const auto& recent_command_ids = cold_state_->recent_command_ids;
     for (size_t offset = 0U; offset < recent_command_count_; ++offset) {
-        const size_t index = (recent_command_start_ + offset) % recent_command_ids_.size();
-        if (std::strcmp(recent_command_ids_[index].data(), command_id) != 0) continue;
+        const size_t index = (recent_command_start_ + offset) % recent_command_ids.size();
+        if (std::strcmp(recent_command_ids[index].data(), command_id) != 0) continue;
         const PendingResultBody& cached = recent_command_results_[index];
         if (cached.data == nullptr || cached.size == 0U) return PostCommandAccepted(client, identity, command_id);
         cJSON* root = cJSON_ParseWithLength(reinterpret_cast<const char*>(cached.data), cached.size);
@@ -2351,6 +2438,26 @@ void RemoteControlAgent::TaskMain() {
     bool credential_refresh_attempted = false;
     ReconnectBackoff reconnect_backoff;
 
+    auto ticks_until = [](TickType_t deadline_ticks) {
+        const int32_t remaining_ticks = static_cast<int32_t>(deadline_ticks - xTaskGetTickCount());
+        return remaining_ticks > 0 ? static_cast<TickType_t>(remaining_ticks) : static_cast<TickType_t>(0U);
+    };
+
+    auto next_scheduled_wait = [&]() {
+        TickType_t wait_ticks = portMAX_DELAY;
+        if (next_firmware_check_ticks != 0U) {
+            wait_ticks = std::min(wait_ticks, ticks_until(next_firmware_check_ticks));
+        }
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            if (pairing_deadline_ticks_ != 0U) {
+                wait_ticks =
+                    std::min(wait_ticks, std::min(kPairingCountdownTicks, ticks_until(pairing_deadline_ticks_)));
+            }
+        }
+        return wait_ticks;
+    };
+
     auto close_transport = [&]() {
         bool pairing_code_pending = false;
         {
@@ -2358,7 +2465,11 @@ void RemoteControlAgent::TaskMain() {
             pairing_code_pending = model_.pairing_code_pending;
         }
         const bool retry_pairing = pairing_request.valid() && pairing_code_pending;
+        if (control_stream) {
+            control_stream->SetReadReadySink(nullptr, nullptr);
+        }
         if (async_client) {
+            async_client->SetCompletionReadySink(nullptr, nullptr);
             async_client->Stop();
         }
         status_request = {};
@@ -2487,17 +2598,20 @@ void RemoteControlAgent::TaskMain() {
             if (remaining_ticks <= 0) {
                 break;
             }
+            const TickType_t wait_ticks = std::min(static_cast<TickType_t>(remaining_ticks), next_scheduled_wait());
+            const uint32_t work_bits = WaitForWork(wait_ticks);
+            RefreshPairingDeadline();
             Command command{};
-            if (xQueueReceive(command_queue_, &command, static_cast<TickType_t>(remaining_ticks)) == pdTRUE) {
+            while (xQueueReceive(command_queue_, &command, 0U) == pdTRUE) {
                 process_command(command);
-                bool enabled = false;
-                {
-                    std::lock_guard<std::mutex> lock(model_mutex_);
-                    enabled = model_.enabled;
-                }
-                if (!enabled) {
-                    break;
-                }
+            }
+            bool enabled = false;
+            {
+                std::lock_guard<std::mutex> lock(model_mutex_);
+                enabled = model_.enabled;
+            }
+            if (!enabled || (work_bits & kWorkNetwork) != 0U) {
+                break;
             }
         }
     };
@@ -2553,7 +2667,7 @@ void RemoteControlAgent::TaskMain() {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kBackoff,
                                    "Control service is not configured");
             }
-            vTaskDelay(kOfflinePollTicks);
+            (void)WaitForWork(next_scheduled_wait());
             continue;
         }
         if (!kAllowUnverifiedTls && CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64[0] == '\0') {
@@ -2561,7 +2675,7 @@ void RemoteControlAgent::TaskMain() {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kAuthenticationError,
                                    "Control CA certificate is not configured");
             }
-            vTaskDelay(kOfflinePollTicks);
+            (void)WaitForWork(next_scheduled_wait());
             continue;
         }
         task_context.wifi_snapshot = wifi_.Snapshot();
@@ -2571,7 +2685,7 @@ void RemoteControlAgent::TaskMain() {
             if (snapshot.enabled) {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kWaitingForNetwork, "Waiting for Wi-Fi");
             }
-            vTaskDelay(kOfflinePollTicks);
+            (void)WaitForWork(next_scheduled_wait());
             continue;
         }
         if (!client) {
@@ -2592,13 +2706,14 @@ void RemoteControlAgent::TaskMain() {
                     SetConnectionState(host_ui::RemoteControlConnectionState::kAuthenticationError,
                                        "Control CA certificate is invalid");
                 }
-                vTaskDelay(kOfflinePollTicks);
+                (void)WaitForWork(next_scheduled_wait());
                 continue;
             }
             if (snapshot.enabled) {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kConnecting, "Connecting to Control service");
             }
             async_client = std::make_unique<Http3AsyncClient>(config);
+            async_client->SetCompletionReadySink(TransportReady, this);
             client = std::make_unique<Http3Client>(*async_client);
         }
 
@@ -2610,9 +2725,7 @@ void RemoteControlAgent::TaskMain() {
             }
             perform_requested_firmware_update();
             SetConnectionState(host_ui::RemoteControlConnectionState::kDisabled, "Remote Control is disabled");
-            if (xQueueReceive(command_queue_, &command, kOfflinePollTicks) == pdTRUE) {
-                process_command(command);
-            }
+            (void)WaitForWork(next_scheduled_wait());
             continue;
         }
 
@@ -2640,6 +2753,9 @@ void RemoteControlAgent::TaskMain() {
             request.path = std::string("/device/v1/devices/") + identity.device_id.data() + "/control";
             request.headers = JsonHeaders(identity.credential.data());
             control_stream = async_client->Open(request);
+            if (control_stream) {
+                control_stream->SetReadReadySink(TransportReady, this);
+            }
             const int status = control_stream ? control_stream->GetStatus(kRequestTimeoutMs) : -1;
             if (status != 200) {
                 close_transport();
@@ -2717,21 +2833,29 @@ void RemoteControlAgent::TaskMain() {
         DrainHostResults(client.get(), identity);
         PublishRuntimeSnapshotIfChanged(client.get(), identity);
 
-        const int64_t control_read_started_us = esp_timer_get_time();
-        const int bytes_read = control_stream->Read(read_buffer.data(), read_buffer.size(), kControlReadTimeoutMs);
-        const int64_t control_read_elapsed_ms = (esp_timer_get_time() - control_read_started_us) / 1000;
-        if (control_read_elapsed_ms > static_cast<int64_t>(kControlReadTimeoutMs + 100U)) {
-            ESP_LOGW(kTag, "control stream Read exceeded timeout: configured=%" PRIu32 " ms elapsed=%" PRId64 " ms",
-                     kControlReadTimeoutMs, control_read_elapsed_ms);
+        bool control_stream_closed = false;
+        while (true) {
+            size_t bytes_read = 0U;
+            const Http3StreamReadPollResult read_result =
+                control_stream->TryRead(read_buffer.data(), read_buffer.size(), bytes_read);
+            if (read_result == Http3StreamReadPollResult::kPending) {
+                break;
+            }
+            if (read_result == Http3StreamReadPollResult::kData) {
+                reconnect_backoff.Reset();
+                HandleControlBytes(client.get(), identity, read_buffer.data(), bytes_read, publish_firmware_status);
+                continue;
+            }
+            control_stream_closed = true;
+            break;
         }
-        if (bytes_read > 0) {
-            reconnect_backoff.Reset();
-            HandleControlBytes(client.get(), identity, read_buffer.data(), static_cast<size_t>(bytes_read),
-                               publish_firmware_status);
-        } else if (bytes_read == 0 || control_stream->GetError() != "Read timeout") {
+        if (control_stream_closed) {
             close_transport();
             wait_before_retry(host_ui::RemoteControlConnectionState::kBackoff, "Control stream closed");
+            continue;
         }
+
+        (void)WaitForWork(next_scheduled_wait());
     }
 
     close_transport();

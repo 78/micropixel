@@ -1874,13 +1874,7 @@ class ActiveHost final {
         bool active{};
     };
 
-    [[nodiscard]] static RemoteInputSequenceState& RemoteInputSequence() {
-        // There is exactly one Host supervisor. Keep this bounded protocol
-        // workspace out of app_main's stack while a sequence spans UI/App
-        // iterations and possibly crosses System UI screens.
-        static RemoteInputSequenceState state;
-        return state;
-    }
+    [[nodiscard]] RemoteInputSequenceState& RemoteInputSequence() { return remote_input_sequence_; }
 
     static bool TickReached(TickType_t now, TickType_t deadline) { return static_cast<int32_t>(now - deadline) >= 0; }
 
@@ -1993,7 +1987,7 @@ class ActiveHost final {
         // Remote commands are consumed exclusively by the Host supervisor
         // task. Reuse bounded workspaces instead of placing the protocol's
         // largest fixed-capacity objects on app_main's Host stack.
-        static remote_control::RemoteControlHostResult result;
+        auto& result = remote_result_workspace_;
         result = {};
         result.command_id = command.command_id;
         const auto deadline_reached = [&]() {
@@ -2150,7 +2144,7 @@ class ActiveHost final {
             ContinueRemoteInputSequence();
             return false;
         }
-        static remote_control::RemoteControlHostCommand command;
+        auto& command = remote_command_workspace_;
         while (remote_control_.PollHostCommand(command)) {
             ESP_LOGI(kTag, "Processing Remote Control Host command: type=%u", static_cast<unsigned>(command.type));
             if (ProcessRemoteCommand(command)) {
@@ -2174,7 +2168,7 @@ class ActiveHost final {
             ContinueRemoteInputSequence();
             return false;
         }
-        static remote_control::RemoteControlHostCommand command;
+        auto& command = remote_command_workspace_;
         while (remote_control_.PeekHostCommand(command)) {
             if (command.type != remote_control::RemoteControlHostCommandType::kCaptureScreen &&
                 command.type != remote_control::RemoteControlHostCommandType::kInputSequence) {
@@ -2837,6 +2831,12 @@ class ActiveHost final {
     uint64_t hall_transition_trigger_us_{};
     bool ready_logged_{};
     bool hall_firmware_update_available_{};
+    // ActiveHost itself is allocated in PSRAM. Keep the large Remote Control
+    // protocol workspaces here instead of creating process-lifetime SRAM
+    // statics for each command-processing path.
+    RemoteInputSequenceState remote_input_sequence_{};
+    remote_control::RemoteControlHostCommand remote_command_workspace_{};
+    remote_control::RemoteControlHostResult remote_result_workspace_{};
     remote_control::RemoteControlHostResult pending_start_result_{};
     TickType_t pending_start_deadline_ticks_{};
     bool pending_start_active_{};
@@ -2858,7 +2858,12 @@ HostController::HostController(device::DeviceServices& devices, device::BatteryB
     battery_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
     wifi_.SetStateChangeSink(
-        [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyWifiStateChanged(); }, &shell_);
+        [](void* context) {
+            auto* controller = static_cast<HostController*>(context);
+            controller->shell_.NotifyWifiStateChanged();
+            controller->remote_control_.NotifyNetworkChanged();
+        },
+        this);
     remote_control_.SetHostCommandReadySink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyRemoteCommandReady(); }, &shell_);
     devices_.input().SetActivitySink(
