@@ -52,9 +52,7 @@ std::expected<bool, AppSessionError> ShowLaunchBitmap(const AotPackage& package,
         return std::unexpected(AppSessionError::kLaunchBitmap);
     }
     device::BitmapView bitmap{};
-    if (asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888) {
-        bitmap = {asset.data, asset.size, asset.width, asset.height, asset.stride, MICROPIXEL_PIXEL_FORMAT_BGR888};
-    } else if (asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG) {
+    if (asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG || asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG) {
         decoded_out = std::make_unique<DecodedBitmap>();
         if (decoded_out == nullptr || !DecodeBitmap(asset, *decoded_out)) {
             // A high-resolution Hall cover must never prevent its App from

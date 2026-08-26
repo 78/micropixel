@@ -20,6 +20,7 @@ if(CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND)
         "platform/metalio-claw4/board_hardware.cpp"
         "platform/metalio-claw4/display/esp_lcd_nv3051f.c"
         "platform/metalio-claw4/display/dirty_region_coalescer.cpp"
+        "platform/metalio-claw4/display/jpeg_cover_decoder.cpp"
         "platform/metalio-claw4/display/png_cover_decoder.cpp"
         "platform/metalio-claw4/display/screen_capture.cpp"
         "platform/metalio-claw4/display/system_transition_compositor.cpp"

@@ -40,9 +40,8 @@ python3 tools/micropixel package guest/apps/snake
 音色参数只维护在 `audio/sfx.json`，构建时执行项目统一的感知门禁并生成 `snake_sfx_profiles.hpp`；通用规则
 见[游戏音频设计与感知校准规范](../../../docs/development/game-audio.zh-CN.md)。
 
-素材构建以 `assets/manifest.json` 为唯一入口。启动图只提交 RGBA PNG，并由 manifest 指定不透明
-背景色；打包器在内存中确定性合成为 little-endian RGB888，不提交中间 raw 文件。Host 直接把
-Bundle 的只读 Flash mapping 交给 PPA，不为启动图分配 PSRAM 副本。Food 使用规则 sprite sheet，
-Burst 使用紧裁 atlas，并通过 `canvas` 与 `canvas_position` 恢复每帧在逻辑画布中的稳定位置。
+素材构建以 `assets/manifest.json` 为唯一入口。Snake 启动图需要透明背景，因此保留 RGBA PNG；不透明
+启动图默认应使用可由 ESP32-P4 硬件解码的 JPEG。launch 封面不接受 raw RGB888/ARGB8888。Food 使用规则
+sprite sheet，Burst 使用紧裁 atlas，并通过 `canvas` 与 `canvas_position` 恢复每帧在逻辑画布中的稳定位置。
 构建阶段校验 PNG、帧边界和类型顺序，只生成一个 `snake_assets.hpp` 头文件，再写入最终 Bundle
 资源区。

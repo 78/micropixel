@@ -295,9 +295,9 @@ Resource Service ABI。例如清单中的 `button.start` 和
 App 的 production 构建。资源 pack 携带版本、launch ID、逐项内容 hash 和整个目录的 SHA-256；
 finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新分配 ID：
 
-首版 `launch_asset` 是 Host 专用的不透明封面，不经过 Guest ABI 或 Resource Service。资源清单使用
-`png_to_raw_rgb888` 在构建期把 PNG 和显式 `background` 合成为 raw RGB888；Host 从 Bundle 的
-只读 Flash mapping 直接绘制，不进行运行时解码，也不保留封面 PSRAM 副本。
+首版 `launch_asset` 是 Host 专用的 JPEG/PNG 封面，不经过 Guest ABI 或 Resource Service。默认应为不透明
+封面使用 JPEG，以利用 ESP32-P4 硬件解码；需要透明背景或无损像素时使用 PNG。普通游戏资源仍可使用
+`raw_rgb888`、`raw_argb8888` 或 `png_to_raw_rgb888`，但这些 raw 格式不能被指定为 launch 封面。
 
 多帧动画应优先打包为 sprite sheet/texture atlas。Guest 只同步加载一次 `Texture`，再通过
 `Frame::DrawTexture(position, texture, source_rect)` 选择帧；切帧只更新 command 中的 source rect，

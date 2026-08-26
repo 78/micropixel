@@ -536,10 +536,8 @@ static bool valid_launch_asset_section(const micropixel_bundle_section_t* sectio
     if (section == NULL || section->size == 0U || section->width == 0U || section->height == 0U) {
         return false;
     }
-    if (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888) {
-        return section->stride == section->width * 3U && (uint64_t)section->stride * section->height == section->size;
-    }
-    return section->format == MICROPIXEL_BUNDLE_FORMAT_PNG && section->stride == 0U;
+    return (section->format == MICROPIXEL_BUNDLE_FORMAT_JPEG || section->format == MICROPIXEL_BUNDLE_FORMAT_PNG) &&
+           section->stride == 0U;
 }
 
 static bool read_logical(const bundlefs_file_t* file, uint32_t logical_offset, void* destination, uint32_t size) {

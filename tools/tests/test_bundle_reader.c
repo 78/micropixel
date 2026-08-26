@@ -141,7 +141,9 @@ static bool validate_bundle(void) {
             !check(last_mapping_offset > 0U, "cover mapping must begin at the asset, not Bundle start") ||
             !check(last_mapping_size == cover.asset.size && last_mapping_size < metadata.bundle_size,
                    "Hall must map only the launch asset") ||
-            !check(cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG, "production Hall cover must stay compressed") ||
+            !check(cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG ||
+                       cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG,
+                   "production Hall cover must use JPEG or PNG") ||
             !check(cover.asset.content_hash != 0U, "Hall cover identity must include its content hash")) {
             return false;
         }

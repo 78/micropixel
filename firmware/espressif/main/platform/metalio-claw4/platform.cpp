@@ -34,6 +34,7 @@
 #include "platform/metalio-claw4/battery_backend.hpp"
 #include "platform/metalio-claw4/board_hardware.hpp"
 #include "platform/metalio-claw4/display/hall_transition_policy.hpp"
+#include "platform/metalio-claw4/display/jpeg_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/png_cover_decoder.hpp"
 #include "platform/metalio-claw4/display/screen_capture.hpp"
 #include "platform/metalio-claw4/display/system_transition_compositor.hpp"
@@ -1086,7 +1087,7 @@ bool ValidHallCover(const host_ui::HallCoverModel& cover) {
         cover.width == 0U || cover.height == 0U || cover.size == 0U) {
         return false;
     }
-    if (cover.format == host_ui::HallCoverFormat::kPng) {
+    if (cover.format == host_ui::HallCoverFormat::kJpeg || cover.format == host_ui::HallCoverFormat::kPng) {
         return esp_ptr_in_drom(cover.data) && cover.stride == 0U;
     }
     const uint64_t expected_stride = static_cast<uint64_t>(cover.width) * 3U;
@@ -1125,13 +1126,20 @@ bool DecodeNativeHallCover(const host_ui::HallCoverModel& source, uint8_t* pixel
     if (pixels == nullptr) {
         return false;
     }
-    const bool decoded =
-        source.format == host_ui::HallCoverFormat::kPng
-            ? metalio_claw4::DecodePngCoverRgb888(source.data, source.size, source.width, source.height, pixels,
-                                                  kHallCoverNativeSize, kHallCoverNativeSize, kHallCoverNativeStride,
-                                                  0x182d48U)
-            : (ScaleRgb888Cover(source.data, source.width, source.height, source.stride, pixels), true);
-    if (decoded && source.format == host_ui::HallCoverFormat::kPng) {
+    bool decoded = false;
+    if (source.format == host_ui::HallCoverFormat::kJpeg) {
+        decoded =
+            metalio_claw4::DecodeJpegCoverRgb888(source.data, source.size, source.width, source.height, pixels,
+                                                 kHallCoverNativeSize, kHallCoverNativeSize, kHallCoverNativeStride);
+    } else if (source.format == host_ui::HallCoverFormat::kPng) {
+        decoded = metalio_claw4::DecodePngCoverRgb888(source.data, source.size, source.width, source.height, pixels,
+                                                      kHallCoverNativeSize, kHallCoverNativeSize,
+                                                      kHallCoverNativeStride, 0x182d48U);
+    } else {
+        ScaleRgb888Cover(source.data, source.width, source.height, source.stride, pixels);
+        decoded = true;
+    }
+    if (decoded && source.format != host_ui::HallCoverFormat::kRgb888) {
         MaskHallCoverCorners(pixels);
     }
     if (!decoded) {

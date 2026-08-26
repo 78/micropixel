@@ -41,6 +41,7 @@ enum class FirmwareUpdateState : uint8_t {
 
 enum class HallCoverFormat : uint8_t {
     kRgb888,
+    kJpeg,
     kPng,
 };
 

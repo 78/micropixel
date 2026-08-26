@@ -273,8 +273,10 @@ host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, co
                 .width = asset.width,
                 .height = asset.height,
                 .stride = asset.stride,
-                .format = asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG ? host_ui::HallCoverFormat::kPng
-                                                                       : host_ui::HallCoverFormat::kRgb888,
+                .format = asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG
+                              ? host_ui::HallCoverFormat::kJpeg
+                              : (asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG ? host_ui::HallCoverFormat::kPng
+                                                                              : host_ui::HallCoverFormat::kRgb888),
                 .cache_key = (static_cast<uint64_t>(catalog.apps[index].content_id) << 32U) | asset.content_hash};
         }
         if (suspended_index.has_value() && *suspended_index == index) {
