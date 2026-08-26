@@ -2,4 +2,5 @@
 # backend contracts injected by the application composition root.
 list(APPEND micropixel_sources
     "device/device_services.cpp"
+    "device/text.cpp"
 )

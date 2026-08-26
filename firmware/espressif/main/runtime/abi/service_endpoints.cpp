@@ -3,8 +3,8 @@
 #include <cinttypes>
 #include <cstring>
 
+#include "device/text.hpp"
 #include "esp_log.h"
-#include "platform/graphics/command_stream.hpp"
 #include "runtime/guest_context.hpp"
 #include "sdkconfig.h"
 
@@ -349,7 +349,7 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
         if (!ReadRequest(request, request_size, wire) || wire.size != request_size || wire.font == 0U ||
             wire.reserved0 != 0U || wire.text_length == 0U || wire.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES ||
             sizeof(wire) + wire.text_length != request_size ||
-            !platform::graphics::IsValidUtf8(request + sizeof(wire), wire.text_length)) {
+            !device::IsValidUtf8(request + sizeof(wire), wire.text_length)) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         return WriteResult<micropixel_text_metrics_t>(

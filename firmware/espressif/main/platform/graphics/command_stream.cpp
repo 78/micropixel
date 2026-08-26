@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "abi/micropixel_abi.h"
+#include "device/text.hpp"
 #include "sdkconfig.h"
 
 namespace micropixel::platform::graphics {
@@ -19,52 +20,6 @@ bool ReadStruct(const uint8_t* bytes, uint32_t length, uint32_t offset, Value& v
 }
 
 bool ValidRgb888(uint32_t color) { return (color & 0xff000000U) == 0U; }
-
-bool ValidUtf8(const uint8_t* text, uint32_t length) {
-    uint32_t index = 0U;
-    while (index < length) {
-        uint8_t first = text[index++];
-        if (first == 0U) {
-            return false;
-        }
-        if (first < 0x80U) {
-            continue;
-        }
-
-        uint32_t remaining = 0U;
-        uint32_t codepoint = 0U;
-        uint32_t minimum = 0U;
-        if ((first & 0xe0U) == 0xc0U) {
-            remaining = 1U;
-            codepoint = first & 0x1fU;
-            minimum = 0x80U;
-        } else if ((first & 0xf0U) == 0xe0U) {
-            remaining = 2U;
-            codepoint = first & 0x0fU;
-            minimum = 0x800U;
-        } else if ((first & 0xf8U) == 0xf0U) {
-            remaining = 3U;
-            codepoint = first & 0x07U;
-            minimum = 0x10000U;
-        } else {
-            return false;
-        }
-        if (remaining > length - index) {
-            return false;
-        }
-        for (uint32_t continuation = 0U; continuation < remaining; ++continuation) {
-            uint8_t next = text[index++];
-            if ((next & 0xc0U) != 0x80U) {
-                return false;
-            }
-            codepoint = (codepoint << 6U) | (next & 0x3fU);
-        }
-        if (codepoint < minimum || codepoint > 0x10ffffU || (codepoint >= 0xd800U && codepoint <= 0xdfffU)) {
-            return false;
-        }
-    }
-    return true;
-}
 
 template <typename Command>
 bool ValidRect(const Command& command, int32_t logical_width, int32_t logical_height) {
@@ -103,10 +58,6 @@ bool ValidBitmapCommand(const Command& command, int32_t logical_width, int32_t l
 
 bool IsTextOpcode(uint16_t opcode) {
     return opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXT || opcode == MICROPIXEL_GRAPHICS_OP_DRAW_TEXT_CENTERED;
-}
-
-bool IsValidUtf8(const uint8_t* text, uint32_t length) {
-    return text != nullptr && length != 0U && ValidUtf8(text, length);
 }
 
 int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t logical_width, int32_t logical_height,
@@ -202,7 +153,8 @@ int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t log
             }
             uint32_t raw_size = sizeof(command) + command.text_length;
             uint32_t expected_size = (raw_size + 3U) & ~3U;
-            if (record.size != expected_size || !ValidUtf8(bytes + offset + sizeof(command), command.text_length)) {
+            if (record.size != expected_size ||
+                !device::IsValidUtf8(bytes + offset + sizeof(command), command.text_length)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
             for (uint32_t padding = raw_size; padding < record.size; ++padding) {

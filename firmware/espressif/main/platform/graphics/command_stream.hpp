@@ -8,7 +8,6 @@
 namespace micropixel::platform::graphics {
 
 [[nodiscard]] bool IsTextOpcode(uint16_t opcode);
-[[nodiscard]] bool IsValidUtf8(const uint8_t* text, uint32_t length);
 
 [[nodiscard]] int32_t ValidateCommandStream(const uint8_t* bytes, uint32_t length, int32_t logical_width,
                                             int32_t logical_height, device::BitmapResolver resolver,

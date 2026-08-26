@@ -1016,8 +1016,8 @@ std::expected<void, device::WifiError> WifiBackend::ConfigureAndConnect(const Sa
              "candidate_bssid=%02x:%02x:%02x:%02x:%02x:%02x",
              profile.ssid.data(), BandForChannel(config.sta.channel) == device::WifiBand::k5Ghz ? "5GHz" : "2.4GHz",
              config.sta.channel, AuthModeName(profile.auth_mode), full_channel_scan ? "full" : "channel",
-             profile.bssid[0],
-             profile.bssid[1], profile.bssid[2], profile.bssid[3], profile.bssid[4], profile.bssid[5]);
+             profile.bssid[0], profile.bssid[1], profile.bssid[2], profile.bssid[3], profile.bssid[4],
+             profile.bssid[5]);
 
     esp_err_t status = esp_wifi_set_config(WIFI_IF_STA, &config);
     if (status == ESP_OK) {
