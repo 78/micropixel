@@ -42,6 +42,12 @@ struct RemoteControlCatalogSnapshot final {
     uint32_t store_used_bytes{};
 };
 
+struct RemoteControlLocalSnapshot final {
+    RemoteControlCatalogSnapshot catalog{};
+    std::array<char, kRemoteControlAppIdCapacity> active_app_id{};
+    std::array<char, 24U> lifecycle{};
+};
+
 constexpr size_t kRemoteControlCommandIdCapacity = 64U;
 constexpr size_t kRemoteControlMaxSequenceOperations = 16U;
 constexpr size_t kRemoteControlMaxResultArtifacts = 4U;
@@ -115,6 +121,7 @@ struct RemoteControlHostResult final {
 class RemoteControlAgent final : public runtime::GuestLogSink {
    public:
     using HostCommandReadySink = void (*)(void*);
+    using LocalHostResultSink = bool (*)(void*, const RemoteControlHostResult&);
 
     explicit RemoteControlAgent(device::WifiBackend& wifi);
     RemoteControlAgent(const RemoteControlAgent&) = delete;
@@ -135,8 +142,11 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
                        uint64_t timestamp_us) override;
     [[nodiscard]] bool PeekHostCommand(RemoteControlHostCommand& command) const;
     [[nodiscard]] bool PollHostCommand(RemoteControlHostCommand& command, TickType_t timeout = 0U);
+    [[nodiscard]] bool QueueLocalHostCommand(const RemoteControlHostCommand& command);
     [[nodiscard]] bool SubmitHostResult(const RemoteControlHostResult& result);
+    void CopyLocalSnapshot(RemoteControlLocalSnapshot& snapshot) const;
     void SetHostCommandReadySink(HostCommandReadySink sink, void* context);
+    void SetLocalHostResultSink(LocalHostResultSink sink, void* context);
 
    private:
     static constexpr UBaseType_t kCommandQueueCapacity = 8U;
@@ -255,6 +265,8 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     QueueHandle_t host_command_queue_{};
     std::atomic<HostCommandReadySink> host_command_ready_sink_{};
     std::atomic<void*> host_command_ready_context_{};
+    std::atomic<LocalHostResultSink> local_host_result_sink_{};
+    std::atomic<void*> local_host_result_context_{};
     StaticQueue_t host_result_queue_storage_{};
     uint8_t* host_result_queue_bytes_{};
     QueueHandle_t host_result_queue_{};

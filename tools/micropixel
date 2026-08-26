@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import struct
 import subprocess
@@ -240,6 +242,246 @@ class ControlClient:
             if time.monotonic() >= deadline:
                 raise CliError(f"Timed out waiting for Job {job_id}")
             time.sleep(0.5)
+
+
+def discover_usb_port(explicit_port: str | None) -> str:
+    if explicit_port:
+        return explicit_port
+    try:
+        from serial.tools import list_ports
+    except ImportError as error:
+        raise CliError("USB transport requires pyserial; install requirements-dev.txt") from error
+    candidates = [
+        port.device
+        for port in list_ports.comports()
+        if port.vid == 0x303A and port.pid == 0x1001
+    ]
+    if not candidates:
+        raise CliError("No ESP32 USB Serial/JTAG device found; connect the device or pass --port")
+    if len(candidates) != 1:
+        shown = ", ".join(sorted(candidates))
+        raise CliError(f"Multiple ESP32 USB Serial/JTAG devices found ({shown}); pass --port")
+    return candidates[0]
+
+
+def open_usb_serial(port: str) -> Any:
+    try:
+        import serial
+    except ImportError as error:
+        raise CliError("USB transport requires pyserial; install requirements-dev.txt") from error
+    options: dict[str, Any] = {
+        "port": None,
+        "baudrate": 115200,
+        "timeout": 0.05,
+        "write_timeout": 10.0,
+    }
+    if os.name != "nt":
+        options["exclusive"] = False
+    device = serial.Serial(**options)
+    device.dtr = True
+    device.rts = True
+    device.port = port
+    try:
+        device.open()
+        device.rts = False
+        device.dtr = False
+    except Exception:
+        device.close()
+        raise
+    return device
+
+
+class UsbControlClient:
+    CHUNK_SIZE = 3072
+
+    def __init__(self, port: str | None, timeout: float = 300.0) -> None:
+        self.port = discover_usb_port(port)
+        self.timeout = timeout
+        self.device: Any | None = None
+        self.next_request_id = secrets.randbelow(0x7FFFFFFF) + 1
+        self.received = bytearray()
+
+    def __enter__(self) -> "UsbControlClient":
+        try:
+            self.device = open_usb_serial(self.port)
+        except Exception as error:
+            raise CliError(f"Cannot open USB device {self.port}: {error}") from error
+        deadline = time.monotonic() + min(self.timeout, 20.0)
+        response: str | None = None
+        last_error: CliError | None = None
+        while response is None and time.monotonic() < deadline:
+            try:
+                response = self.request("HELLO", timeout=min(2.0, max(0.1, deadline - time.monotonic())))
+            except CliError as error:
+                if "Timed out waiting for USB device response" not in str(error):
+                    self.close()
+                    raise
+                last_error = error
+        if response is None:
+            self.close()
+            raise last_error or CliError(f"USB device {self.port} did not answer the control handshake")
+        fields = response.split()
+        if len(fields) != 4 or fields[0] != "HELLO" or fields[1] != "1":
+            self.close()
+            raise CliError(f"Device returned an incompatible USB control handshake: {response}")
+        self.CHUNK_SIZE = min(int(fields[2]), self.CHUNK_SIZE)
+        return self
+
+    def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self.device is not None:
+            self.device.close()
+            self.device = None
+
+    def _allocate_request_id(self) -> int:
+        request_id = self.next_request_id
+        self.next_request_id = 1 if request_id == 0xFFFFFFFF else request_id + 1
+        return request_id
+
+    def _send(self, request_id: int, operation: str, arguments: str = "") -> None:
+        if self.device is None:
+            raise CliError("USB device is not open")
+        suffix = f" {arguments}" if arguments else ""
+        line = f"MPX1 {request_id} {operation}{suffix}\n".encode("ascii")
+        try:
+            self.device.write(line)
+        except Exception as error:
+            raise CliError(f"USB write failed on {self.port}: {error}") from error
+
+    def _read_response(self, request_id: int, timeout: float) -> str:
+        if self.device is None:
+            raise CliError("USB device is not open")
+        prefix = f"MPX1 {request_id} ".encode("ascii")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            newline = self.received.find(b"\n")
+            while newline >= 0:
+                line = bytes(self.received[:newline]).strip(b"\r")
+                del self.received[: newline + 1]
+                if line.startswith(prefix):
+                    remainder = line[len(prefix):].decode("ascii", "replace")
+                    status, separator, detail = remainder.partition(" ")
+                    if not separator:
+                        raise CliError("Device returned a malformed USB control response")
+                    if status == "ERROR":
+                        raise CliError(f"USB device command failed: {detail}")
+                    if status != "OK":
+                        raise CliError(f"USB device returned an unknown response status: {status}")
+                    return detail
+                newline = self.received.find(b"\n")
+            try:
+                block = self.device.read(4096)
+            except Exception as error:
+                raise CliError(f"USB read failed on {self.port}: {error}") from error
+            if block:
+                self.received.extend(block)
+                if len(self.received) > 128 * 1024:
+                    del self.received[:64 * 1024]
+        raise CliError(f"Timed out waiting for USB device response on {self.port}")
+
+    def request(self, operation: str, arguments: str = "", timeout: float | None = None) -> str:
+        request_id = self._allocate_request_id()
+        self._send(request_id, operation, arguments)
+        return self._read_response(request_id, self.timeout if timeout is None else timeout)
+
+    def list_apps(self) -> dict[str, Any]:
+        apps: list[dict[str, Any]] = []
+        offset = 0
+        expected_count: int | None = None
+        store_used = 0
+        store_total = 0
+        while expected_count is None or offset < expected_count:
+            detail = self.request("APP_LIST", str(offset))
+            fields = detail.split()
+            if len(fields) < 6 or fields[0] != "APP_LIST":
+                raise CliError("Device returned a malformed App list")
+            next_offset, count, store_used, store_total, page_count = map(int, fields[1:6])
+            entries = fields[6:]
+            if page_count != len(entries) or next_offset < offset or next_offset > count:
+                raise CliError("Device returned inconsistent App list pagination")
+            if expected_count is not None and count != expected_count:
+                raise CliError("Installed App catalog changed while it was being listed")
+            expected_count = count
+            for entry in entries:
+                parts = entry.split(",", 4)
+                if len(parts) != 5:
+                    raise CliError("Device returned a malformed App descriptor")
+                app_id, size_text, encoded_name, active_text, lifecycle = parts
+                try:
+                    display_name = base64.b64decode(encoded_name, validate=True).decode("utf-8")
+                    size_bytes = int(size_text)
+                except (ValueError, UnicodeDecodeError) as error:
+                    raise CliError("Device returned an invalid App descriptor") from error
+                apps.append(
+                    {
+                        "appId": app_id,
+                        "displayName": display_name,
+                        "sizeBytes": size_bytes,
+                        "active": active_text == "1",
+                        "lifecycle": lifecycle,
+                    }
+                )
+            offset = next_offset
+            if offset == count:
+                break
+        return {
+            "apps": apps,
+            "count": len(apps),
+            "storeUsedBytes": store_used,
+            "storeTotalBytes": store_total,
+            "transport": "usb",
+            "port": self.port,
+        }
+
+    def action(self, operation: str, app_id: str | None = None) -> dict[str, Any]:
+        detail = self.request(operation, app_id or "")
+        fields = detail.split(maxsplit=1)
+        if len(fields) != 2 or fields[0] != "RESULT":
+            raise CliError(f"Device returned an unexpected action result: {detail}")
+        return {"status": "succeeded", "result": {"message": fields[1]}, "transport": "usb"}
+
+    def install(self, bundle_path: Path) -> dict[str, Any]:
+        details = validate_bundle(bundle_path)
+        data = bundle_path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        request_id = self._allocate_request_id()
+        self._send(
+            request_id,
+            "APP_INSTALL_BEGIN",
+            f"{details['appId']} {len(data)} {digest}",
+        )
+        ready = self._read_response(request_id, self.timeout)
+        ready_fields = ready.split()
+        if len(ready_fields) != 2 or ready_fields[0] != "INSTALL_READY":
+            raise CliError(f"Device rejected the USB install session: {ready}")
+        chunk_size = min(self.CHUNK_SIZE, int(ready_fields[1]))
+        try:
+            for offset in range(0, len(data), chunk_size):
+                chunk = data[offset : offset + chunk_size]
+                encoded = base64.b64encode(chunk).decode("ascii")
+                self._send(request_id, "APP_INSTALL_CHUNK", f"{offset} {encoded}")
+                acknowledgment = self._read_response(request_id, self.timeout)
+                expected = offset + len(chunk)
+                if acknowledgment != f"INSTALL_CHUNK {expected}":
+                    raise CliError(f"Device acknowledged an unexpected install offset: {acknowledgment}")
+            self._send(request_id, "APP_INSTALL_COMMIT")
+            completed = self._read_response(request_id, self.timeout)
+        except Exception:
+            try:
+                self._send(request_id, "APP_INSTALL_ABORT")
+            except Exception:
+                pass
+            raise
+        fields = completed.split(maxsplit=1)
+        if len(fields) != 2 or fields[0] != "RESULT":
+            raise CliError(f"Device returned an unexpected install result: {completed}")
+        return {
+            "status": "succeeded",
+            "result": {"message": fields[1], "appId": details["appId"], "sizeBytes": len(data)},
+            "transport": "usb",
+        }
 
 
 def job_failure_message(job_id: str, status: str, error: Any) -> str:
@@ -1144,9 +1386,37 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
         print_json(client.wait_job({"id": job_id}, args.timeout))
 
 
+def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
+    if args.command != "app":
+        raise CliError("USB transport currently supports only app list/install/start/stop/uninstall")
+    if args.app_command == "list":
+        catalog = client.list_apps()
+        if args.running:
+            apps = [app for app in catalog["apps"] if app.get("active") is True]
+            catalog = {**catalog, "apps": apps, "count": len(apps)}
+        print_json(catalog)
+    elif args.app_command == "install":
+        print_json(client.install(Path(args.bundle)))
+    elif args.app_command == "start":
+        print_json(client.action("APP_START", args.app_id))
+    elif args.app_command == "stop":
+        print_json(client.action("APP_STOP", args.app_id))
+    elif args.app_command == "uninstall":
+        print_json(client.action("APP_UNINSTALL", args.app_id))
+    else:
+        raise CliError(f"app {args.app_command} is not available over USB")
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="micropixel", description=__doc__)
     result.add_argument("--version", action="version", version=f"micropixel {VERSION}")
+    result.add_argument(
+        "--transport",
+        choices=["remote", "usb"],
+        default=os.environ.get("MICROPIXEL_TRANSPORT", "remote"),
+        help="Device transport for control commands (default: remote)",
+    )
+    result.add_argument("--port", help="USB Serial/JTAG port; auto-detected when one ESP32 device is connected")
     commands = result.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build", help="Build an app.json project into Wasm and AOT")
@@ -1167,13 +1437,6 @@ def parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
 
-    install_project = commands.add_parser("install", help="Build, upload, and install a project or existing Bundle")
-    install_project.add_argument(
-        "project_or_bundle", nargs="?", default=".", help="Project directory, app.json, or Bundle v1 (default: .)"
-    )
-    install_project.add_argument("--profile", choices=["development", "release", "size"], default="release")
-    install_project.add_argument("--output-dir", help="Build output directory")
-    install_project.add_argument("--output", help="Bundle output path when building a project")
     validate = commands.add_parser("validate", help="Validate a Bundle v1 header")
     validate.add_argument("bundle")
 
@@ -1205,8 +1468,13 @@ def parser() -> argparse.ArgumentParser:
     app_modes.add_parser("last-error", help="Show the most recent AOT load, launch, or runtime failure")
     upload_command = app_modes.add_parser("upload", help="Upload a Bundle without installing it")
     upload_command.add_argument("bundle")
-    install = app_modes.add_parser("install", help="Upload and install a Bundle")
-    install.add_argument("bundle")
+    install = app_modes.add_parser("install", help="Build if needed, then upload and install an App")
+    install.add_argument(
+        "project_or_bundle", nargs="?", default=".", help="Project directory, app.json, or Bundle v1 (default: .)"
+    )
+    install.add_argument("--profile", choices=["development", "release", "size"], default="release")
+    install.add_argument("--output-dir", help="Build output directory")
+    install.add_argument("--output", help="Bundle output path when building a project")
     start = app_modes.add_parser("start", help="Start an installed App")
     start.add_argument("app_id")
     stop = app_modes.add_parser("stop", help="Stop an App or whichever App owns the runtime")
@@ -1275,7 +1543,6 @@ def parser() -> argparse.ArgumentParser:
         reboot,
         firmware_update,
         app_list,
-        install_project,
         install,
         start,
         stop,
@@ -1301,19 +1568,24 @@ def main() -> int:
             run_build(args)
         elif args.command == "package":
             run_package(args)
-        elif args.command == "install":
+        elif args.command == "app" and args.app_command == "install":
             bundle = install_input(args)
-            install_args = argparse.Namespace(**vars(args))
-            install_args.command = "app"
-            install_args.app_command = "install"
-            install_args.bundle = str(bundle)
-            execute_network(install_args, ControlClient(ControlConfig.load(Path.cwd())))
+            args.bundle = str(bundle)
+            if args.transport == "usb":
+                with UsbControlClient(args.port, args.timeout) as client:
+                    execute_usb(args, client)
+            else:
+                execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
         elif args.command == "validate":
             print_json(validate_bundle(Path(args.bundle)))
         elif args.command == "auth" and args.auth_command == "login":
             run_auth_login(args)
         elif args.command in NETWORK_COMMANDS:
-            execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
+            if args.transport == "usb":
+                with UsbControlClient(args.port, getattr(args, "timeout", 300.0)) as client:
+                    execute_usb(args, client)
+            else:
+                execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
         else:
             raise CliError(f"Unsupported command: {args.command}")
         return 0

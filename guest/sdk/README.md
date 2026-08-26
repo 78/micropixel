@@ -309,13 +309,14 @@ finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新�
 ```sh
 python3 tools/micropixel build path/to/app
 python3 tools/micropixel package path/to/app
-python3 tools/micropixel install path/to/app
+python3 tools/micropixel app install path/to/app
 ```
 
-在包含 `app.json` 的目录中，安装后的 CLI 可直接运行 `micropixel build/package/install`，不需要 App
+在包含 `app.json` 的目录中，安装后的 CLI 可直接运行 `micropixel build`、`micropixel package` 和
+`micropixel app install`，不需要 App
 专用脚本。默认输出在项目的 `build/`；仓库集成 App 输出在 `build/apps/<name>/`。构建固定 Restricted
 C++23、警告即错误、共享 Wasm memory 和 AOT 回跳中断点。`build` 默认 development（`-O1 -g`），
-`package/install` 默认 release（Clang `-O2`、WAMR AOT opt level 3）；只有明确以体积优先时才使用：
+`package`/`app install` 默认 release（Clang `-O2`、WAMR AOT opt level 3）；只有明确以体积优先时才使用：
 
 ```sh
 python3 tools/micropixel package path/to/app --profile size

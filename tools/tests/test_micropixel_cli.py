@@ -37,6 +37,106 @@ def api_token(device_id: str) -> str:
 
 
 class MicroPixelCliTest(unittest.TestCase):
+    def test_usb_transport_lists_controls_and_installs_apps(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.responses = bytearray()
+                self.installed = bytearray()
+                self.expected_size = 0
+                self.closed = False
+
+            def write(self, data: bytes) -> int:
+                fields = data.decode("ascii").strip().split()
+                self.assert_prefix = fields[:1]
+                request_id = fields[1]
+                operation = fields[2]
+                if operation == "HELLO":
+                    detail = "HELLO 1 3072 8388608"
+                elif operation == "APP_LIST":
+                    detail = (
+                        "APP_LIST 1 1 65536 25165824 1 "
+                        "vendor.demo,65536,RGVtbw==,0,not_running"
+                    )
+                elif operation == "APP_START":
+                    detail = "RESULT app_started"
+                elif operation == "APP_INSTALL_BEGIN":
+                    self.expected_size = int(fields[4])
+                    self.installed.clear()
+                    detail = "INSTALL_READY 3072"
+                elif operation == "APP_INSTALL_CHUNK":
+                    offset = int(fields[3])
+                    self.assert_offset = offset
+                    if offset != len(self.installed):
+                        raise AssertionError("unexpected chunk offset")
+                    self.installed.extend(base64.b64decode(fields[4], validate=True))
+                    detail = f"INSTALL_CHUNK {len(self.installed)}"
+                elif operation == "APP_INSTALL_COMMIT":
+                    if len(self.installed) != self.expected_size:
+                        raise AssertionError("incomplete install")
+                    detail = "RESULT app_installed"
+                else:
+                    raise AssertionError(f"unexpected operation {operation}")
+                self.responses.extend(f"\nMPX1 {request_id} OK {detail}\n".encode("ascii"))
+                return len(data)
+
+            def read(self, size: int) -> bytes:
+                data = bytes(self.responses[:size])
+                del self.responses[:size]
+                return data
+
+            def close(self) -> None:
+                self.closed = True
+
+        fake = FakeSerial()
+        with patch.object(CLI, "discover_usb_port", return_value="/dev/fake"), patch.object(
+            CLI, "open_usb_serial", return_value=fake
+        ):
+            with CLI.UsbControlClient(None, 1.0) as client:
+                catalog = client.list_apps()
+                self.assertEqual(catalog["apps"][0]["displayName"], "Demo")
+                self.assertEqual(client.action("APP_START", "vendor.demo")["result"]["message"], "app_started")
+                with tempfile.TemporaryDirectory() as directory:
+                    bundle = bytearray(CLI.BUNDLE_ALIGNMENT)
+                    bundle[:8] = CLI.BUNDLE_MAGIC
+                    struct.pack_into("<III", bundle, 8, 1, CLI.BUNDLE_HEADER_SIZE, len(bundle))
+                    bundle[24:35] = b"vendor.demo"
+                    struct.pack_into("<I", bundle, 88, 11)
+                    path = Path(directory) / "demo.bundle.bin"
+                    path.write_bytes(bundle)
+                    result = client.install(path)
+                self.assertEqual(result["result"]["message"], "app_installed")
+                self.assertEqual(bytes(fake.installed), bytes(bundle))
+        self.assertTrue(fake.closed)
+
+    def test_usb_transport_options_are_explicit(self) -> None:
+        args = CLI.parser().parse_args(
+            ["--transport", "usb", "--port", "/dev/cu.usbmodem1101", "app", "list"]
+        )
+        self.assertEqual(args.transport, "usb")
+        self.assertEqual(args.port, "/dev/cu.usbmodem1101")
+
+    def test_usb_serial_omits_posix_exclusive_option_on_windows(self) -> None:
+        class FakeDevice:
+            def __init__(self, **options: object) -> None:
+                self.options = options
+                self.dtr = False
+                self.rts = False
+                self.port = None
+
+            def open(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class FakeSerialModule:
+            Serial = FakeDevice
+
+        with patch.dict(sys.modules, {"serial": FakeSerialModule()}), patch.object(CLI.os, "name", "nt"):
+            device = CLI.open_usb_serial("COM7")
+        self.assertEqual(device.port, "COM7")
+        self.assertNotIn("exclusive", device.options)
+
     def test_manifest_driven_package_generates_catalog_and_bundle_v1(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -108,7 +208,9 @@ class MicroPixelCliTest(unittest.TestCase):
     def test_build_package_and_install_default_to_current_project(self) -> None:
         self.assertEqual(CLI.parser().parse_args(["build"]).source, ".")
         self.assertEqual(CLI.parser().parse_args(["package"]).project, ".")
-        self.assertEqual(CLI.parser().parse_args(["install"]).project_or_bundle, ".")
+        self.assertEqual(CLI.parser().parse_args(["app", "install"]).project_or_bundle, ".")
+        with self.assertRaises(SystemExit):
+            CLI.parser().parse_args(["install"])
 
     def test_process_environment_overrides_local_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -702,16 +702,44 @@ bool RemoteControlAgent::PollHostCommand(RemoteControlHostCommand& command, Tick
     return host_command_queue_ != nullptr && xQueueReceive(host_command_queue_, &command, timeout) == pdTRUE;
 }
 
+bool RemoteControlAgent::QueueLocalHostCommand(const RemoteControlHostCommand& command) {
+    if (std::strncmp(command.command_id.data(), "usb:", 4U) != 0 || host_command_queue_ == nullptr ||
+        xQueueSend(host_command_queue_, &command, 0U) != pdTRUE) {
+        return false;
+    }
+    HostCommandReadySink sink = host_command_ready_sink_.load(std::memory_order_acquire);
+    if (sink != nullptr) {
+        sink(host_command_ready_context_.load(std::memory_order_acquire));
+    }
+    return true;
+}
+
 bool RemoteControlAgent::PeekHostCommand(RemoteControlHostCommand& command) const {
     return host_command_queue_ != nullptr && xQueuePeek(host_command_queue_, &command, 0U) == pdTRUE;
 }
 
 bool RemoteControlAgent::SubmitHostResult(const RemoteControlHostResult& result) {
+    if (std::strncmp(result.command_id.data(), "usb:", 4U) == 0) {
+        LocalHostResultSink sink = local_host_result_sink_.load(std::memory_order_acquire);
+        void* context = local_host_result_context_.load(std::memory_order_acquire);
+        if (sink != nullptr && context != nullptr && sink(context, result)) {
+            return true;
+        }
+        ReleaseArtifacts(result);
+        return false;
+    }
     if (host_result_queue_ != nullptr && xQueueSend(host_result_queue_, &result, 0U) == pdTRUE) {
         return true;
     }
     ReleaseArtifacts(result);
     return false;
+}
+
+void RemoteControlAgent::CopyLocalSnapshot(RemoteControlLocalSnapshot& snapshot) const {
+    std::lock_guard lock(diagnostics_mutex_);
+    snapshot.catalog = installed_apps_;
+    snapshot.active_app_id = active_app_id_;
+    snapshot.lifecycle = app_lifecycle_;
 }
 
 void RemoteControlAgent::SetHostCommandReadySink(HostCommandReadySink sink, void* context) {
@@ -722,6 +750,16 @@ void RemoteControlAgent::SetHostCommandReadySink(HostCommandReadySink sink, void
     }
     host_command_ready_context_.store(context, std::memory_order_release);
     host_command_ready_sink_.store(sink, std::memory_order_release);
+}
+
+void RemoteControlAgent::SetLocalHostResultSink(LocalHostResultSink sink, void* context) {
+    if (sink == nullptr) {
+        local_host_result_sink_.store(nullptr, std::memory_order_release);
+        local_host_result_context_.store(nullptr, std::memory_order_release);
+        return;
+    }
+    local_host_result_context_.store(context, std::memory_order_release);
+    local_host_result_sink_.store(sink, std::memory_order_release);
 }
 
 void RemoteControlAgent::TaskEntry(void* context) {

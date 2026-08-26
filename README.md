@@ -60,10 +60,11 @@ python3 -m pip install -r requirements-dev.txt
 ```sh
 python3 tools/micropixel build guest/apps/demo
 python3 tools/micropixel package guest/apps/demo
-python3 tools/micropixel install guest/apps/demo
+python3 tools/micropixel app install guest/apps/demo
 ```
 
-安装后的 CLI 可在项目目录直接运行 `micropixel build/package/install`。仓库级 Host 与集成构建仍使用：
+安装后的 CLI 可在项目目录直接运行 `micropixel build`、`micropixel package` 和
+`micropixel app install`。仓库级 Host 与集成构建仍使用：
 
 ```sh
 # 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
@@ -89,6 +90,23 @@ USB 调试的 App 烧录默认清空旧 Catalog 并写入 7 个示例 App：
 ```sh
 bash tools/p4.sh flash-apps
 ```
+
+日常 App 开发可直接通过正在运行的产品固件增量安装，不写整个 `app_store` 分区，也不需要 Remote Control
+Token：
+
+```sh
+python3 tools/micropixel --transport usb app list
+python3 tools/micropixel --transport usb app install guest/apps/demo
+python3 tools/micropixel --transport usb app start ai.micropixel.demo
+python3 tools/micropixel --transport usb app stop
+python3 tools/micropixel --transport usb app uninstall ai.micropixel.demo
+```
+
+只有一台 ESP32 USB Serial/JTAG 设备时端口会自动探测；否则在 macOS/Linux 使用
+`--port /dev/cu.usbmodemXXXX`，在 Windows 使用 `--port COM7`（替换为设备管理器显示的端口）。USB
+本地控制与串口 monitor/esptool 共享端口，使用前应退出 monitor。当前已在 macOS 真机验证；Windows
+由 pyserial COM 端口后端支持，但尚未完成项目真机验证。
+协议和安全边界见 [USB 本地控制](docs/design/usb-local-control.zh-CN.md)。
 
 `fullclean-host`、Host-only 烧录和完整 Host+Apps 烧录都是独立的显式命令；详见
 [ESP32-P4 烧录指南](docs/development/flashing.zh-CN.md)。

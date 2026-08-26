@@ -1,5 +1,7 @@
 #include "platform/metalio-claw4/display/screen_capture.hpp"
 
+#include <array>
+#include <atomic>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
@@ -28,10 +30,12 @@ namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_capture";
-constexpr uint32_t kTaskStackSize = 4U * 1024U;
+constexpr uint32_t kTaskStackSize = 8U * 1024U;
 constexpr BaseType_t kTaskCore = 0;
 constexpr char kCaptureCommand[] = "MICROPIXEL_CAPTURE";
 constexpr char kTouchCommand[] = "MICROPIXEL_TOUCH";
+constexpr char kLocalControlPrefix[] = "MPX1 ";
+constexpr size_t kLocalControlResponseCapacity = 1024U;
 
 struct PngUsbStream final {
     size_t bytes{};
@@ -156,7 +160,7 @@ uint8_t* DisplayedFrameBuffer(lv_display_t* display, esp_lcd_panel_handle_t pane
     return nullptr;
 }
 
-class ScreenCapture final {
+class ScreenCapture final : public device::LocalControlBackend {
    public:
     [[nodiscard]] esp_err_t Start(lv_display_t* display, Gt911Input& touch_input, uint32_t width, uint32_t height) {
         if (display == nullptr || width == 0U || height == 0U) {
@@ -168,6 +172,7 @@ class ScreenCapture final {
         height_ = height;
         if (!usb_serial_jtag_is_driver_installed()) {
             usb_serial_jtag_driver_config_t usb_config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+            usb_config.rx_buffer_size = 8192U;
             usb_config.tx_buffer_size = 4096U;
             esp_err_t status = usb_serial_jtag_driver_install(&usb_config);
             if (status != ESP_OK) {
@@ -181,6 +186,22 @@ class ScreenCapture final {
         return ESP_OK;
     }
 
+    void Bind(device::LocalControlCommandSink command_sink, device::LocalControlResponseSource response_source,
+              void* context) override {
+        command_context_.store(context, std::memory_order_release);
+        response_source_.store(response_source, std::memory_order_release);
+        command_sink_.store(command_sink, std::memory_order_release);
+    }
+
+    void Unbind(void* context) override {
+        if (command_context_.load(std::memory_order_acquire) != context) {
+            return;
+        }
+        command_sink_.store(nullptr, std::memory_order_release);
+        response_source_.store(nullptr, std::memory_order_release);
+        command_context_.store(nullptr, std::memory_order_release);
+    }
+
    private:
     static void TaskEntry(void* context) { static_cast<ScreenCapture*>(context)->Run(); }
 
@@ -188,29 +209,42 @@ class ScreenCapture final {
         ESP_LOGI(kTag, "screen capture ready; commands=%s, %s <phase> <id> <x> <y> <pressure>", kCaptureCommand,
                  kTouchCommand);
         for (;;) {
-            uint8_t byte = 0U;
-            int received = usb_serial_jtag_read_bytes(&byte, 1U, portMAX_DELAY);
+            std::array<uint8_t, 512U> bytes{};
+            int received = usb_serial_jtag_read_bytes(bytes.data(), bytes.size(), pdMS_TO_TICKS(20U));
             if (received <= 0) {
+                DrainControlResponses();
                 continue;
             }
-            if (byte == '\r') {
-                continue;
+            for (int index = 0; index < received; ++index) {
+                const uint8_t byte = bytes[static_cast<size_t>(index)];
+                if (byte == '\r') {
+                    continue;
+                }
+                if (byte == '\n') {
+                    command_[command_length_] = '\0';
+                    ProcessCommand();
+                    command_length_ = 0U;
+                    continue;
+                }
+                if (byte >= 0x20U && byte <= 0x7eU && command_length_ + 1U < sizeof(command_)) {
+                    command_[command_length_++] = static_cast<char>(byte);
+                } else {
+                    command_length_ = 0U;
+                }
             }
-            if (byte == '\n') {
-                command_[command_length_] = '\0';
-                ProcessCommand();
-                command_length_ = 0U;
-                continue;
-            }
-            if (byte >= 0x20U && byte <= 0x7eU && command_length_ + 1U < sizeof(command_)) {
-                command_[command_length_++] = static_cast<char>(byte);
-            } else {
-                command_length_ = 0U;
-            }
+            DrainControlResponses();
         }
     }
 
     void ProcessCommand() {
+        if (std::strncmp(command_, kLocalControlPrefix, sizeof(kLocalControlPrefix) - 1U) == 0) {
+            device::LocalControlCommandSink sink = command_sink_.load(std::memory_order_acquire);
+            void* context = command_context_.load(std::memory_order_acquire);
+            if (sink != nullptr && context != nullptr) {
+                sink(context, command_);
+            }
+            return;
+        }
         if (std::strcmp(command_, kCaptureCommand) == 0) {
             CaptureAndTransmit();
             return;
@@ -257,6 +291,33 @@ class ScreenCapture final {
         ESP_LOGI(kTag, "injected touch phase=%s id=%" PRIu32 " x=%" PRIu32 " y=%" PRIu32, phase_name, id, x, y);
     }
 
+    void DrainControlResponses() {
+        device::LocalControlResponseSource source = response_source_.load(std::memory_order_acquire);
+        void* context = command_context_.load(std::memory_order_acquire);
+        if (source == nullptr || context == nullptr) {
+            return;
+        }
+        std::array<char, kLocalControlResponseCapacity> response{};
+        while (source(context, response.data(), response.size())) {
+            const size_t length = ::strnlen(response.data(), response.size());
+            if (length == 0U || length == response.size()) {
+                continue;
+            }
+            esp_log_impl_lock();
+            (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(1000U));
+            const char newline = '\n';
+            const bool written = UsbWriteAll(&newline, sizeof(newline)) && UsbWriteAll(response.data(), length) &&
+                                 UsbWriteAll(&newline, sizeof(newline));
+            (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(1000U));
+            esp_log_impl_unlock();
+            if (!written) {
+                ESP_LOGW(kTag, "local control response write failed");
+                return;
+            }
+            response = {};
+        }
+    }
+
     void CaptureAndTransmit() {
         const uint32_t stride = width_ * 3U;
         const size_t snapshot_bytes = static_cast<size_t>(stride) * height_;
@@ -299,7 +360,10 @@ class ScreenCapture final {
     lv_display_t* display_{};
     Gt911Input* touch_input_{};
     TaskHandle_t task_{};
-    char command_[128]{};
+    std::atomic<device::LocalControlCommandSink> command_sink_{};
+    std::atomic<device::LocalControlResponseSource> response_source_{};
+    std::atomic<void*> command_context_{};
+    char command_[4608]{};
     size_t command_length_{};
     uint32_t sequence_{};
     uint32_t width_{};
@@ -316,6 +380,8 @@ ScreenCapture& Instance() {
 esp_err_t InitializeScreenCapture(lv_display_t* display, Gt911Input& touch_input, uint32_t width, uint32_t height) {
     return Instance().Start(display, touch_input, width, height);
 }
+
+device::LocalControlBackend& UsbLocalControlBackend() { return Instance(); }
 
 std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(lv_display_t* display,
                                                                                 esp_lcd_panel_handle_t panel,

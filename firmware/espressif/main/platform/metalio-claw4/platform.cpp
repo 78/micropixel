@@ -3032,6 +3032,9 @@ class MetalioClaw4Platform final : public Platform, public device::PowerBackend 
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] device::PowerBackend& power() override { return *this; }
+    [[nodiscard]] device::LocalControlBackend& local_control() override {
+        return metalio_claw4::UsbLocalControlBackend();
+    }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
 
     void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {

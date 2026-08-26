@@ -7,6 +7,7 @@ set(micropixel_sources
     "host_ui/system_locale.cpp"
     "host_ui/system_settings_store.cpp"
     "host_ui/system_shell.cpp"
+    "local_control/usb_local_control_agent.cpp"
     "network_time.cpp"
     "remote_control/control_protocol.cpp"
     "remote_control/remote_control_agent.cpp"

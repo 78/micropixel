@@ -40,12 +40,12 @@ guest/
 ```sh
 python3 tools/micropixel build guest/apps/demo
 python3 tools/micropixel package guest/apps/demo
-python3 tools/micropixel install guest/apps/demo
+python3 tools/micropixel app install guest/apps/demo
 
 # 已安装 CLI 时，在包含 app.json 的项目目录中可直接运行：
 micropixel build
 micropixel package
-micropixel install
+micropixel app install
 ```
 
 仓库中的 `tools/build_{blocks,snake,demo}_bundle.sh` 只是现有 CI 和 `tools/p4.sh` 的薄兼容入口，内部
@@ -61,7 +61,7 @@ bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 分区的独立公开脚本。单 App 开发安装走 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；
-`micropixel package` 和 `micropixel install` 默认使用 `release`。需要显式选择时使用
+`micropixel package` 和 `micropixel app install` 默认使用 `release`。需要显式选择时使用
 `--profile development|release|size`。链接器只允许 [`abi/allowed_imports.txt`](abi/allowed_imports.txt)
 列出的 Runtime import，拼写错误或未授权 import 会在构建阶段失败。
 

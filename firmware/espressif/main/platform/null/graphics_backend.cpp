@@ -273,6 +273,7 @@ class NullPlatform final : public Platform {
     [[nodiscard]] device::RandomBackend& random() override { return ConfiguredRandomBackend(); }
     [[nodiscard]] device::WifiBackend& wifi() override { return wifi_; }
     [[nodiscard]] device::PowerBackend& power() override { return power_; }
+    [[nodiscard]] device::LocalControlBackend& local_control() override { return local_control_; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
 
    private:
@@ -296,11 +297,23 @@ class NullPlatform final : public Platform {
         }
     };
 
+    class NullLocalControlBackend final : public device::LocalControlBackend {
+       public:
+        void Bind(device::LocalControlCommandSink command_sink, device::LocalControlResponseSource response_source,
+                  void* context) override {
+            (void)command_sink;
+            (void)response_source;
+            (void)context;
+        }
+        void Unbind(void* context) override { (void)context; }
+    };
+
     NullGraphicsBackend graphics_{};
     NullInputBackend input_{};
     NullBatteryBackend battery_{};
     NullWifiBackend wifi_{};
     NullPowerBackend power_{};
+    NullLocalControlBackend local_control_{};
     NullSystemUiBackend system_ui_{};
 };
 

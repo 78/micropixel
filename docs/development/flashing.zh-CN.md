@@ -109,7 +109,32 @@ bash tools/p4.sh flash-apps "$P4_PORT"
 bash tools/p4.sh reset-app-store "$P4_PORT"
 ```
 
-## 6. Conformance 配置与串口调试
+## 6. USB 增量安装与 App 控制
+
+产品固件正常运行时，优先使用本地控制协议安装单个 Bundle。该路径调用 Host 的 App Store 安装事务，
+不会擦除或重写整个 `app_store`：
+
+```sh
+python3 tools/micropixel --transport usb --port "$P4_PORT" app list
+python3 tools/micropixel --transport usb --port "$P4_PORT" app install build/apps/demo/demo.bundle.bin
+python3 tools/micropixel --transport usb --port "$P4_PORT" app start ai.micropixel.demo
+python3 tools/micropixel --transport usb --port "$P4_PORT" app stop
+python3 tools/micropixel --transport usb --port "$P4_PORT" app uninstall ai.micropixel.demo
+```
+
+`micropixel --transport usb app install guest/apps/demo` 会先按正式流程构建和打包，再通过同一协议安装；
+传入现有 `.bundle.bin` 时则直接安装。安装、
+升级和卸载仍由 HostController 串行执行；运行中的 Guest 必须先停止。Bundle 数据使用分块确认传输，
+设备重新计算 SHA-256，并在完整 Bundle/AOT/资源校验通过后提交 BundleFS Catalog。
+
+macOS/Linux 端口通常形如 `/dev/cu.usbmodemXXXX` 或 `/dev/ttyACM0`；Windows 端口形如 `COM7`，可直接传给
+`--port`。端口自动探测同样按 ESP32 USB Serial/JTAG 的 VID/PID 工作。当前实现已在 macOS 真机验证；
+Windows 使用 pyserial 的 COM 端口后端，代码路径受支持，但尚未完成项目真机验证。
+
+该协议依赖正在运行的 Host 固件，不适用于下载模式或 bootloader。monitor、esptool、截图脚本和本地控制
+共享 USB Serial/JTAG 端口，不能同时占用。
+
+## 7. Conformance 配置与串口调试
 
 需要专用 conformance Host 时，仍通过统一入口显式叠加配置：
 

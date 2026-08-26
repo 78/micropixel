@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <expected>
 
+#include "device/local_control.hpp"
 #include "esp_err.h"
 #include "esp_lcd_panel_ops.h"
 #include "host_ui/system_ui.hpp"
@@ -18,6 +19,7 @@ class Gt911Input;
 // outside the Guest ABI.
 [[nodiscard]] esp_err_t InitializeScreenCapture(lv_display_t* display, Gt911Input& touch_input, uint32_t width,
                                                 uint32_t height);
+[[nodiscard]] device::LocalControlBackend& UsbLocalControlBackend();
 
 // Synchronous Host-task capture used by Remote Control. The displayed panel
 // framebuffer is encoded by the ESP32-P4 JPEG peripheral into PSRAM.

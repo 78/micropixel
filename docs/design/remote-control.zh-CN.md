@@ -756,7 +756,7 @@ micropixel new
 micropixel build
 micropixel package
 micropixel validate
-micropixel install
+micropixel app install
 micropixel app start <app-id>
 micropixel logs --follow
 micropixel input sequence <file> --screenshot <jpeg>
