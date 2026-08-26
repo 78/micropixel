@@ -343,9 +343,19 @@ Wasm/AOT。SDK Demo 使用 `std::array`/`std::span` 管理原有页面表；Bloc
 - `new/delete`、`nothrow new`、aligned new/delete、`unique_ptr`；
 - `string`、`vector`、`map`、`queue` 和默认底层 `deque`。
 
-首次实际使用动态分配时，linker 才保留 Guest 的 32 KiB 单线程 heap 和 allocator。普通 `new` 的 OOM
-按 SDK 不可恢复错误策略记录并 panic；`new (std::nothrow)` 返回 `nullptr`。业务所有权仍使用容器或
-RAII，不能用裸 `new/delete` 表达长期所有权。
+首次实际使用动态分配时，linker 才保留单线程 allocator。allocator 管理 linker `__heap_base` 之后的
+Wasm linear memory，不再预留固定 32 KiB 数组。ESP32-P4 当前把每个 Guest 的策略上限设为 8 MiB，
+实例化时再根据最大连续 PSRAM 块下调实际上限并为 Host 保留安全余量；该预算同时容纳静态数据、16 KiB
+auxiliary stack 和 C++ 动态分配，因此动态可用量会低于实际 linear-memory 上限。Texture/offscreen
+surface 等 Host-owned PSRAM 资源使用独立的 12 MiB Guest 配额，不占 C++ heap。
+
+普通 `new` 的 OOM 按 SDK 不可恢复错误策略记录并 panic；`new (std::nothrow)` 返回 `nullptr`。业务所有权
+仍使用容器或 RAII，不能用裸 `new/delete` 表达长期所有权。Guest AOT 保留 16 MiB 格式扩展上限，Host
+通过 WAMR instantiation policy 施加当前最多 8 MiB、低内存时更小的实际上限；应用不能自行扩大 Host
+policy。
+
+例如实例化前最大连续 PSRAM 块只剩约 2 MiB 时，当前策略会保留 256 KiB Host 余量，并把 Guest
+linear-memory 上限降到约 1.69 MiB；静态数据和初始页能容纳在该上限内的轻量 App 仍可启动。
 
 这不是 WASI/POSIX 环境：thread、mutex、filesystem、socket、locale/iostream 和依赖系统调用的标准库
 能力不受支持，也不能新增 WASI import。exception、RTTI 和 reference-types 继续关闭；Public SDK 和

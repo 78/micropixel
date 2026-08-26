@@ -27,6 +27,7 @@ MINIMUM_FIRMWARE_VERSION = "0.1.5"
 BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
 BUNDLE_ALIGNMENT = 64 * 1024
+GUEST_LINEAR_MEMORY_ABSOLUTE_MAX_BYTES = 16 * 1024 * 1024
 NETWORK_COMMANDS = frozenset({"device", "firmware", "app", "logs", "screenshot", "input", "job"})
 ALL_API_SCOPES = (
     "device:read",
@@ -529,7 +530,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             *include_flags,
             "-Wl,--no-entry",
             "-Wl,--shared-memory",
-            "-Wl,--max-memory=131072",
+            f"-Wl,--max-memory={GUEST_LINEAR_MEMORY_ABSOLUTE_MAX_BYTES}",
             "-Wl,-z,stack-size=16384",
             "-Wl,--gc-sections",
             f"-Wl,--allow-undefined-file={root / 'guest/abi/allowed_imports.txt'}",

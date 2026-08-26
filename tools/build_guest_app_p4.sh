@@ -16,6 +16,7 @@ fi
 output_dir="${P4_GUEST_OUTPUT_DIR:-$workspace_root/build/guest-p4}"
 build_profile="${MICROPIXEL_GUEST_PROFILE:-development}"
 generated_include_dir="${MICROPIXEL_GUEST_GENERATED_INCLUDE_DIR:-}"
+guest_linear_memory_absolute_max_bytes=$((16 * 1024 * 1024))
 
 for guest_source in "${source_paths[@]}"; do
     if [[ ! -f "$guest_source" ]]; then
@@ -104,7 +105,7 @@ fi
     "${guest_include_flags[@]}" \
     -Wl,--no-entry \
     -Wl,--shared-memory \
-    -Wl,--max-memory=131072 \
+    -Wl,--max-memory="$guest_linear_memory_absolute_max_bytes" \
     -Wl,-z,stack-size=16384 \
     -Wl,--gc-sections \
     -Wl,--allow-undefined-file="$workspace_root/guest/abi/allowed_imports.txt" \

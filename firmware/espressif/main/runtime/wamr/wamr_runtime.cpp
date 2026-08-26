@@ -18,7 +18,12 @@ namespace micropixel::runtime {
 namespace {
 
 constexpr uint32_t kExecStackSize = 8U * 1024U;
-constexpr uint32_t kGuestAppHeapSize = 8U * 1024U;
+constexpr uint32_t kGuestAppHeapSize = 0U;
+constexpr uint32_t kWasmPageBytes = 64U * 1024U;
+constexpr uint32_t kGuestLinearMemoryMaxPages = CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES;
+constexpr uint32_t kGuestLinearMemoryMinimumPages = 2U;
+constexpr size_t kGuestLinearMemoryPsramReserve = 256U * 1024U;
+constexpr size_t kGuestLinearMemoryAllocationOverhead = 64U;
 // Keep small, latency-sensitive WAMR metadata in internal SRAM.  Module-load
 // buffers are larger and must not depend on finding a contiguous internal
 // block after the Host UI and a previous Guest have fragmented that heap.
@@ -26,6 +31,18 @@ constexpr unsigned kPsramAllocationThreshold = 16U * 1024U;
 constexpr uintptr_t kWamrAllocationAlignment = 8U;
 constexpr char kTag[] = "micropixel_wamr";
 bool guest_memory_placement_logged;
+
+constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
+    constexpr size_t kReservedBytes = kGuestLinearMemoryPsramReserve + kGuestLinearMemoryAllocationOverhead;
+    const uint32_t available_pages =
+        largest_psram_block > kReservedBytes
+            ? static_cast<uint32_t>((largest_psram_block - kReservedBytes) / kWasmPageBytes)
+            : 0U;
+    return std::min(kGuestLinearMemoryMaxPages, available_pages);
+}
+
+static_assert(EffectiveGuestLinearMemoryPages(2U * 1024U * 1024U) == 27U);
+static_assert(EffectiveGuestLinearMemoryPages(32U * 1024U * 1024U) == kGuestLinearMemoryMaxPages);
 
 struct WamrAllocationHeader {
     void* origin;
@@ -108,8 +125,21 @@ WamrFailure MakeFailure(WamrError code, const char* message) {
 wasm_module_inst_t InstantiateGuest(wasm_module_t module, char* error_buf, uint32_t error_buf_size) {
     const size_t internal_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t psram_before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    wasm_module_inst_t module_inst =
-        wasm_runtime_instantiate(module, kExecStackSize, kGuestAppHeapSize, error_buf, error_buf_size);
+    const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    const uint32_t effective_max_pages = EffectiveGuestLinearMemoryPages(psram_largest);
+    if (effective_max_pages < kGuestLinearMemoryMinimumPages) {
+        std::snprintf(error_buf, error_buf_size,
+                      "insufficient contiguous PSRAM for Guest linear memory: largest=%zu reserve=%zu", psram_largest,
+                      kGuestLinearMemoryPsramReserve);
+        return nullptr;
+    }
+    const uint64_t effective_max_bytes = static_cast<uint64_t>(effective_max_pages) * kWasmPageBytes;
+    const InstantiationArgs arguments{
+        .default_stack_size = kExecStackSize,
+        .host_managed_heap_size = kGuestAppHeapSize,
+        .max_memory_pages = effective_max_pages,
+    };
+    wasm_module_inst_t module_inst = wasm_runtime_instantiate_ex(module, &arguments, error_buf, error_buf_size);
 
     if (module_inst == nullptr) {
         return nullptr;
@@ -120,11 +150,15 @@ wasm_module_inst_t InstantiateGuest(wasm_module_t module, char* error_buf, uint3
     uint64_t linear_end = 0;
     const bool linear_range_valid = wasm_runtime_get_app_addr_range(module_inst, 0, &linear_start, &linear_end);
 
-    if (linear_base == nullptr || !linear_range_valid || !esp_ptr_external_ram(linear_base) ||
-        esp_ptr_external_ram(module_inst)) {
-        std::snprintf(error_buf, error_buf_size, "guest memory placement failed: linear=%p (%s), instance=%p (%s)",
-                      linear_base, linear_base != nullptr && esp_ptr_external_ram(linear_base) ? "PSRAM" : "internal",
-                      module_inst, esp_ptr_external_ram(module_inst) ? "PSRAM" : "internal");
+    const bool linear_range_ordered = linear_range_valid && linear_end >= linear_start;
+    const uint64_t linear_size = linear_range_ordered ? linear_end - linear_start : 0U;
+    if (linear_base == nullptr || !linear_range_ordered || linear_size > effective_max_bytes ||
+        !esp_ptr_external_ram(linear_base) || esp_ptr_external_ram(module_inst)) {
+        std::snprintf(error_buf, error_buf_size,
+                      "guest memory policy failed: linear=%p size=%" PRIu64 "/%" PRIu64 " (%s), instance=%p (%s)",
+                      linear_base, linear_size, effective_max_bytes,
+                      linear_base != nullptr && esp_ptr_external_ram(linear_base) ? "PSRAM" : "internal", module_inst,
+                      esp_ptr_external_ram(module_inst) ? "PSRAM" : "internal");
         wasm_runtime_deinstantiate(module_inst);
         return nullptr;
     }
@@ -133,8 +167,10 @@ wasm_module_inst_t InstantiateGuest(wasm_module_t module, char* error_buf, uint3
         const size_t internal_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         const size_t psram_after = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
-        ESP_LOGI(kTag, "guest linear memory/app heap: base=%p, size=%" PRIu64 ", region=PSRAM", linear_base,
-                 linear_end - linear_start);
+        ESP_LOGI(kTag,
+                 "guest linear memory: base=%p, initial=%" PRIu64 ", host-max=%" PRIu64 " (%" PRIu32
+                 " pages), largest-before=%zu, region=PSRAM",
+                 linear_base, linear_size, effective_max_bytes, effective_max_pages, psram_largest);
         ESP_LOGI(kTag, "WAMR instance metadata: %p, region=internal SRAM", module_inst);
         ESP_LOGI(kTag, "placement allocation delta: internal=%zu, PSRAM=%zu bytes", internal_before - internal_after,
                  psram_before - psram_after);

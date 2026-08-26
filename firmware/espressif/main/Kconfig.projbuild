@@ -1,5 +1,17 @@
 menu "WAMR application quotas"
 
+    config MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES
+        int "Maximum Wasm linear-memory pages per Guest"
+        range 2 128
+        default 128
+        help
+            Hard Host ceiling for the active Guest's Wasm linear memory. Each
+            page is 64 KiB, so the default allows 8 MiB for Guest static data,
+            stack and C++ dynamic allocations. At instantiation the Host may
+            lower this ceiling to fit the largest contiguous PSRAM block while
+            retaining a safety reserve for Host work. This remains separate
+            from Host-owned Bitmap quotas.
+
     config MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM
         bool "Copy non-mapped AOT package input into PSRAM"
         depends on SPIRAM

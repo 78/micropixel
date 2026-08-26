@@ -70,6 +70,10 @@ Guest 使用 wasi-sdk 33 的 no-exception libc++ profile。常用 header-only ST
 exception、RTTI、Guest thread 和 WASI import 仍不属于受支持能力，具体边界见
 [Guest C++ SDK](sdk/README.md#guest-stl-profile)。
 
+动态 STL 使用可增长的 Wasm linear memory。当前 P4 产品的单 Guest 策略上限为 8 MiB；Host 在启动 App
+时会根据最大连续 PSRAM 块下调实际上限并保留自身安全余量。Host 管理的 Texture/offscreen surface 使用
+另一份 PSRAM 配额，不占 Guest C++ heap。
+
 Guest 代码不得直接依赖 ESP-IDF 或具体开发板。需要访问设备能力时，应经 typed SDK 和
 [Runtime Host ABI](abi/README.md) 进入 Host。当前 Public API、错误策略和待冻结事项见
 [Guest C++ SDK](sdk/README.md)。`Application` 是可发现的 capability façade；`app.xxx()` 返回

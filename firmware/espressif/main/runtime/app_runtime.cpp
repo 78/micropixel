@@ -68,7 +68,8 @@ std::expected<AppRuntime, AppRuntimeError> AppRuntime::Initialize(device::Device
     }
     WamrRuntime wamr = std::move(*runtime_result);
     micropixel_log_heap_state("WAMR initialized");
-    ESP_LOGI(kTag, "Guest quotas: max child threads=%d, watchdog=%d ms", CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS,
+    ESP_LOGI(kTag, "Guest quotas: linear-memory=%d pages, max child threads=%d, watchdog=%d ms",
+             CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES, CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS,
              CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS);
 
     if (!micropixel_register_native_apis()) {

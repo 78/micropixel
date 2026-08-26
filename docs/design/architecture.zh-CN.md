@@ -14,6 +14,9 @@ MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产�
 - Host：ESP32-P4 + Metalio-Claw4，ESP-IDF 6.1；
 - Runtime：MicroPixel WAMR fork 固定 commit、AOT format v6，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
+- Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长并由 Host 硬限制；P4 当前单 Guest
+  策略上限为 8 MiB，实例化时按最大连续 PSRAM 块自适应下调并保留 Host 安全余量；Host-owned
+  Bitmap/offscreen surface 另有 12 MiB 配额；
 - App 分发：Bundle v1 封装 AOT、资源和 App metadata；24 MiB 可写 App Store 由 BundleFS 以离散
   64 KiB 块和四 Bank Catalog 提供写时复制事务；
 - 系统 UI：Host 原生 App Hall、Status Layer 和系统手势，不作为 Guest App 运行。

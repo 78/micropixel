@@ -176,7 +176,8 @@ Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service
 
 - Host 资源由 move-only SDK proxy 持有，析构自动 release；
 - SDK Runtime 和 Host 实时路径的集合默认使用编译期固定容量；Guest App 的普通非实时业务逻辑可以
-  使用受支持的动态 STL 容器，但必须接受 32 KiB Guest heap 和确定的 OOM policy；
+  使用受支持的动态 STL 容器，但必须接受 Host linear-memory quota 和确定的 OOM policy；当前 P4 产品
+  上限为 8 MiB，包含 Guest 静态数据、栈和动态 heap；
 - Timer、Texture、Audio Voice、Guest Context 等具有稳定身份的同构资源使用有界对象池；
 - 普通 value type 直接按值存储，不为统一形式机械放入对象池；
 - 裸指针默认是 non-owning，必须从作用域和类型上看出其有效期；

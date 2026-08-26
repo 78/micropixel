@@ -56,7 +56,14 @@ int main() {
     std::unique_ptr<AlignedValue> aligned = std::make_unique<AlignedValue>(AlignedValue{seed + 7U});
     micropixel::Assert(reinterpret_cast<uintptr_t>(aligned.get()) % alignof(AlignedValue) == 0U,
                        "stl: aligned new failed");
-    uint8_t* exhausted = new (std::nothrow) uint8_t[40U * 1024U];
+    std::unique_ptr<uint8_t[]> grown{new (std::nothrow) uint8_t[512U * 1024U]};
+    micropixel::Assert(grown != nullptr, "stl: dynamic allocation failed");
+    grown[0] = static_cast<uint8_t>(seed);
+    grown[512U * 1024U - 1U] = static_cast<uint8_t>(seed + 1U);
+    micropixel::Assert(
+        grown[0] == static_cast<uint8_t>(seed) && grown[512U * 1024U - 1U] == static_cast<uint8_t>(seed + 1U),
+        "stl: grown allocation access failed");
+    uint8_t* exhausted = new (std::nothrow) uint8_t[17U * 1024U * 1024U];
     micropixel::Assert(exhausted == nullptr, "stl: nothrow OOM failed");
 
     std::string text = "MicroPixel STL ";
