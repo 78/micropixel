@@ -8,6 +8,7 @@
 #include <functional>
 #include <mutex>
 
+#include "device/hardware_info.hpp"
 #include "device/input.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -123,7 +124,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     using HostCommandReadySink = void (*)(void*);
     using LocalHostResultSink = bool (*)(void*, const RemoteControlHostResult&);
 
-    explicit RemoteControlAgent(device::WifiBackend& wifi);
+    RemoteControlAgent(device::WifiBackend& wifi, device::HardwareInfoBackend& hardware_info);
     RemoteControlAgent(const RemoteControlAgent&) = delete;
     RemoteControlAgent& operator=(const RemoteControlAgent&) = delete;
     ~RemoteControlAgent();
@@ -136,6 +137,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     [[nodiscard]] bool CancelPairingCode();
     [[nodiscard]] bool RequestFirmwareUpdate();
     [[nodiscard]] host_ui::RemoteControlModel Snapshot() const;
+    [[nodiscard]] device::HardwareInfo HardwareInfo() const;
     void UpdateInstalledApps(const RemoteControlCatalogSnapshot& catalog);
     void UpdateAppLifecycle(const char* app_id, const char* lifecycle);
     void WriteGuestLog(const char* app_id, uint32_t level, const uint8_t* bytes, size_t length,
@@ -258,6 +260,7 @@ class RemoteControlAgent final : public runtime::GuestLogSink {
     void CacheCompletedResult(const char* command_id, const uint8_t* body, size_t body_size);
 
     device::WifiBackend& wifi_;
+    device::HardwareInfoBackend& hardware_info_;
     mutable std::mutex model_mutex_;
     host_ui::RemoteControlModel model_{};
     mutable std::mutex diagnostics_mutex_;

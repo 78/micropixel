@@ -7,8 +7,8 @@
 #include <vector>
 
 #include "device/font_cbin_format.h"
-#include "platform/metalio-claw4/fonts/font_cbin_loader.hpp"
-#include "platform/metalio-claw4/fonts/font_registry.hpp"
+#include "platform/lvgl/fonts/font_cbin_loader.hpp"
+#include "platform/lvgl/fonts/font_registry.hpp"
 #include "psa/crypto.h"
 
 namespace {
@@ -124,8 +124,8 @@ extern const lv_font_t font_builtin_latin_32{
 }
 
 int main() {
-    using micropixel::platform::metalio_claw4::FontCbinError;
-    using micropixel::platform::metalio_claw4::LoadFontCbin;
+    using micropixel::platform::lvgl::FontCbinError;
+    using micropixel::platform::lvgl::LoadFontCbin;
 
     auto package = ValidPackage();
     auto loaded = LoadFontCbin(package);
@@ -135,7 +135,7 @@ int main() {
     assert((*loaded)->size() == 16U);
     assert((*loaded)->payload().size() == kPayloadSize);
 
-    micropixel::platform::metalio_claw4::FontRegistry registry;
+    micropixel::platform::lvgl::FontRegistry registry;
     micropixel_font_info_t info{};
     assert(registry.LoadFont(package, info) == MICROPIXEL_STATUS_OK);
     assert(info.font != 0U && info.font_size == 16U && info.line_height == 16U);

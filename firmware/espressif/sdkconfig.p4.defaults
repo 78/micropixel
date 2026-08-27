@@ -102,7 +102,7 @@ CONFIG_MICROPIXEL_KV_WRITE_REFILL_MS=1000
 CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
 # ESP32-P4 product path: retained Guest objects, PPA-assisted image copies,
 # and bounded dirty-region coalescing.
-CONFIG_MICROPIXEL_METALIO_CLAW4_HOST_BACKEND=y
+CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4=y
 CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=y
 # All Ogg Opus decoders run serially on MicroPixel's one audio decode worker,
 # so one PSRAM-backed pseudostack is sufficient for every playback instance.

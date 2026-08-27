@@ -464,7 +464,8 @@ struct RemoteControlAgent::TaskContext final {
 static_assert(sizeof(GuestLogEntry) * kGuestLogCapacity < 2U * 1024U * 1024U,
               "Guest log ring must remain a bounded PSRAM allocation");
 
-RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) {
+RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi, device::HardwareInfoBackend& hardware_info)
+    : wifi_(wifi), hardware_info_(hardware_info) {
     void* cold_storage = heap_caps_calloc(1U, sizeof(ColdState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (cold_storage != nullptr) {
         cold_state_ = std::construct_at(static_cast<ColdState*>(cold_storage));
@@ -515,6 +516,8 @@ RemoteControlAgent::RemoteControlAgent(device::WifiBackend& wifi) : wifi_(wifi) 
         CopyText(model_.status_message, "Remote Control is disabled");
     }
 }
+
+device::HardwareInfo RemoteControlAgent::HardwareInfo() const { return hardware_info_.Snapshot(); }
 
 RemoteControlAgent::~RemoteControlAgent() {
     Stop();
@@ -1309,24 +1312,28 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
 
     cJSON* hardware = cJSON_AddObjectToObject(result, "hardware");
     if (hardware != nullptr) {
+        const device::HardwareInfo hardware_info = hardware_info_.Snapshot();
         esp_chip_info_t chip{};
         esp_chip_info(&chip);
-        (void)cJSON_AddStringToObject(hardware, "chip", "ESP32-P4");
+        (void)cJSON_AddStringToObject(hardware, "board", hardware_info.board);
+        (void)cJSON_AddStringToObject(hardware, "chip", hardware_info.host_chip);
         (void)cJSON_AddNumberToObject(hardware, "revision", chip.revision);
         (void)cJSON_AddNumberToObject(hardware, "cores", chip.cores);
         (void)cJSON_AddNumberToObject(hardware, "cpuFrequencyMhz", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+        (void)cJSON_AddStringToObject(hardware, "wifiCoprocessor", hardware_info.wifi_coprocessor);
+        (void)cJSON_AddStringToObject(hardware, "touchController", hardware_info.touch_controller);
         uint32_t flash_bytes = 0U;
         if (esp_flash_get_size(nullptr, &flash_bytes) == ESP_OK) {
             (void)cJSON_AddNumberToObject(hardware, "flashBytes", flash_bytes);
         }
         cJSON* display = cJSON_AddObjectToObject(hardware, "display");
         if (display != nullptr) {
-            (void)cJSON_AddStringToObject(display, "driver", "NV3051F");
-            (void)cJSON_AddStringToObject(display, "interface", "MIPI-DSI 2-lane");
-            (void)cJSON_AddNumberToObject(display, "widthPixels", 720U);
-            (void)cJSON_AddNumberToObject(display, "heightPixels", 720U);
-            (void)cJSON_AddStringToObject(display, "pixelFormat", "RGB888");
-            (void)cJSON_AddNumberToObject(display, "refreshRateHz", 60U);
+            (void)cJSON_AddStringToObject(display, "driver", hardware_info.display.driver);
+            (void)cJSON_AddStringToObject(display, "interface", hardware_info.display.interface);
+            (void)cJSON_AddNumberToObject(display, "widthPixels", hardware_info.display.width_pixels);
+            (void)cJSON_AddNumberToObject(display, "heightPixels", hardware_info.display.height_pixels);
+            (void)cJSON_AddStringToObject(display, "pixelFormat", hardware_info.display.pixel_format);
+            (void)cJSON_AddNumberToObject(display, "refreshRateHz", hardware_info.display.refresh_rate_hz);
         }
     }
 

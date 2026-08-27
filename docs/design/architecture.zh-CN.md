@@ -62,6 +62,25 @@ Runtime -> Device contracts <- Platform
 - `FirmwareApp` 是唯一同时知道 Platform、Device 和 Runtime 的组合根；
 - `runtime/abi/` 只做 Guest 内存验证、wire 转换、上下文查找和转发，不承担业务规则。
 
+Platform 内部再固定为四层，依赖只能向下：
+
+```text
+boards/<board>  ->  common + drivers + lvgl  ->  device/host_ui contracts
+       │
+       └─ owns pin mapping, power sequence, peripheral composition and board metadata
+```
+
+- `platform/common/`：可跨板复用的 ESP32 backend 与 contract adapter；
+- `platform/drivers/`：按器件型号组织的驱动，不知道开发板；
+- `platform/lvgl/`：显示合成、Guest renderer、字体与按分辨率组织的 Host UI profile；
+- `platform/boards/<board>/`：板型组合根，只拥有 wiring、启动/关机次序和不能复用的板载外设。
+
+板型由 `MICROPIXEL_BOARD` Kconfig choice 唯一选择。新增板型的正常变更面是新的
+`boards/<board>/`、一个 choice symbol、Platform source selection 与产品 defaults；Guest ABI、Runtime 和
+HostController 不因板名变化。系统信息和 Remote Control 的硬件描述统一读取
+`device::HardwareInfoBackend`。`bash tools/p4.sh build-null` 是硬件无关依赖方向的独立编译门禁，不生成可
+烧录的产品镜像。
+
 ## 3. Session 与事件模型
 
 `AppRuntime` 与 Firmware 同寿命，WAMR 只初始化一次。每次启动 Guest 创建一个 `AppSession`，

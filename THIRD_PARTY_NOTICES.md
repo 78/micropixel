@@ -31,8 +31,8 @@ copy the libc++ source tree into this repository.
 
 ## MetalioClaw4 display driver
 
-Portions of `firmware/espressif/main/platform/metalio-claw4/esp_lcd_nv3051f.c` and
-`firmware/espressif/main/platform/metalio-claw4/esp_lcd_nv3051f.h`, including the panel initialization sequence, are derived
+Portions of `firmware/espressif/main/platform/drivers/display/nv3051f/esp_lcd_nv3051f.c` and
+`firmware/espressif/main/platform/drivers/display/nv3051f/esp_lcd_nv3051f.h`, including the panel initialization sequence, are derived
 from the MetalioClaw4 project:
 
 - upstream: <https://github.com/CloudZao/MetalioClaw4>;
@@ -79,7 +79,7 @@ expose the component API to Guest applications.
 
 ## Font Awesome Wi-Fi glyph
 
-`firmware/espressif/main/platform/metalio-claw4/icons/wifi_status_icons.c` contains fixed-size alpha masks derived
+`firmware/espressif/main/platform/lvgl/ui/square_720/icons/wifi_status_icons.c` contains fixed-size alpha masks derived
 from the Font Awesome 5 Wi-Fi glyph bundled with LVGL. The weak and medium variants preserve the source glyph's
 baseline and footprint:
 

@@ -61,7 +61,7 @@ build_and_run background_executor \
 build_and_run i2c_executor \
     -pthread \
     "$workspace_root/tools/tests/test_i2c_executor.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/i2c_executor.cpp"
+    "$workspace_root/firmware/espressif/main/platform/common/i2c_executor.cpp"
 
 build_and_run_c watchdog_timer \
     -pthread \
@@ -93,15 +93,15 @@ build_and_run font_registry \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
     "$workspace_root/tools/tests/test_font_registry.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/fonts/font_registry.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/fonts/font_cbin_loader.cpp"
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp"
 
 build_and_run font_cbin_loader \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
     "$workspace_root/tools/tests/test_font_cbin_loader.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/fonts/font_cbin_loader.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/fonts/font_registry.cpp"
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp"
 
 build_and_run host_power_state \
     "$workspace_root/tools/tests/test_host_power_state.cpp"
@@ -140,7 +140,7 @@ build_and_run gpio_service \
 build_and_run device_catalog \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_device_catalog.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/metalio-claw4/device_catalog.cpp"
+    "$workspace_root/firmware/espressif/main/platform/boards/metalio-claw4/device_catalog.cpp"
 
 build_and_run app_store \
     "$workspace_root/tools/tests/test_app_store.cpp" \

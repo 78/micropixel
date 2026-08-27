@@ -76,7 +76,7 @@ add_dependencies(${COMPONENT_LIB} micropixel_host_i18n)
 target_include_directories(${COMPONENT_LIB} PRIVATE "${micropixel_host_i18n_output_dir}")
 
 set(micropixel_builtin_font_profile
-    "${CMAKE_CURRENT_LIST_DIR}/platform/metalio-claw4/fonts/builtin-latin-v1.json")
+    "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/builtin-latin-v1.json")
 set(micropixel_lvgl_font_source_dir
     "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/scripts/built_in_font")
 set(micropixel_builtin_font_report

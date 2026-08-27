@@ -52,7 +52,7 @@ void FirmwareApp::Run() {
                                           platform_.random(), platform_.devices(), platform_.sensors(),
                                           platform_.gpio(), platform_.haptics(), platform_.battery());
     static host_ui::SystemShell shell(platform_.system_ui());
-    static remote_control::RemoteControlAgent remote_control(platform_.wifi());
+    static remote_control::RemoteControlAgent remote_control(platform_.wifi(), platform_.hardware_info());
     static local_control::UsbLocalControlAgent local_control(platform_.local_control(), remote_control);
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "USB local control is unavailable for this boot");

@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "platform/metalio-claw4/perceptual_control.hpp"
+#include "platform/boards/metalio-claw4/perceptual_control.hpp"
 
 namespace {
 

@@ -1,7 +1,7 @@
 #include <cassert>
 
 #include "abi/micropixel_abi.h"
-#include "platform/metalio-claw4/fonts/font_registry.hpp"
+#include "platform/lvgl/fonts/font_registry.hpp"
 
 namespace {
 
@@ -38,8 +38,8 @@ const void* lv_font_get_bitmap_fmt_txt(lv_font_glyph_dsc_t* descriptor, lv_draw_
 }
 
 int main() {
-    using micropixel::platform::metalio_claw4::FontRegistry;
-    using micropixel::platform::metalio_claw4::SystemFontSet;
+    using micropixel::platform::lvgl::FontRegistry;
+    using micropixel::platform::lvgl::SystemFontSet;
 
     FontRegistry registry;
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_14);

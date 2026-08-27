@@ -1,18 +1,18 @@
 #include <cstdlib>
 #include <iostream>
 
-#include "platform/metalio-claw4/display/hall_transition_policy.hpp"
-#include "platform/metalio-claw4/hall_carousel.hpp"
-#include "platform/metalio-claw4/hall_cover_cache_policy.hpp"
+#include "platform/lvgl/ui/square_720/hall_transition_policy.hpp"
+#include "platform/lvgl/ui/square_720/hall_carousel.hpp"
+#include "platform/lvgl/ui/square_720/hall_cover_cache_policy.hpp"
 
 namespace {
 
-using micropixel::platform::metalio_claw4::HallCarousel;
-using micropixel::platform::metalio_claw4::HallCoverCachePolicy;
-using micropixel::platform::metalio_claw4::HallCoverCacheSlot;
-using micropixel::platform::metalio_claw4::HallLaunchBackgroundPlan;
-using micropixel::platform::metalio_claw4::HallVelocityTracker;
-using micropixel::platform::metalio_claw4::PlanHallLaunchBackground;
+using micropixel::platform::lvgl::square_720::HallCarousel;
+using micropixel::platform::lvgl::square_720::HallCoverCachePolicy;
+using micropixel::platform::lvgl::square_720::HallCoverCacheSlot;
+using micropixel::platform::lvgl::square_720::HallLaunchBackgroundPlan;
+using micropixel::platform::lvgl::square_720::HallVelocityTracker;
+using micropixel::platform::lvgl::square_720::PlanHallLaunchBackground;
 
 void Check(bool condition, const char* message) {
     if (!condition) {

@@ -954,7 +954,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
         environment = project_environment(Path.cwd())
         default_profile = (
             sdk_root()
-            / "firmware/espressif/main/platform/metalio-claw4/audio/perceptual_profile.json"
+            / "firmware/espressif/main/platform/boards/metalio-claw4/audio/perceptual_profile.json"
         )
         profile = Path(environment.get("MICROPIXEL_SFX_DEVICE_PROFILE", str(default_profile))).expanduser()
         subprocess.run(

@@ -6,10 +6,6 @@ class RandomBackend;
 }  // namespace micropixel::device
 
 namespace micropixel::platform {
-
-class InitializableAudioBackend;
-
-[[nodiscard]] InitializableAudioBackend& ConfiguredAudioBackend();
 [[nodiscard]] device::RandomBackend& ConfiguredRandomBackend();
 
 }  // namespace micropixel::platform

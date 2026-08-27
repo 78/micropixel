@@ -37,7 +37,7 @@ python3 tools/micropixel package guest/apps/snake
 ```sh
 python3 tools/analyze_sfx.py \
   --manifest guest/apps/snake/audio/sfx.json \
-  --device-profile firmware/espressif/main/platform/metalio-claw4/audio/perceptual_profile.json \
+  --device-profile firmware/espressif/main/platform/boards/metalio-claw4/audio/perceptual_profile.json \
   --report build/apps/snake/sfx-report.json \
   --write-wavs build/apps/snake/sfx-wavs \
   --check

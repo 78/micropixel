@@ -585,6 +585,7 @@ const char* ResetReasonText(esp_reset_reason_t reason) {
 }
 
 host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::RemoteControlModel& remote_control,
+                                                           const device::HardwareInfo& hardware,
                                                            bool firmware_update_view = false) {
     host_ui::SystemInformationModel model{};
     const esp_app_desc_t* description = esp_app_get_description();
@@ -600,11 +601,11 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
 
     esp_chip_info_t chip{};
     esp_chip_info(&chip);
-    std::snprintf(model.host_chip.data(), model.host_chip.size(), "ESP32-P4 Rev %u.%u",
+    std::snprintf(model.host_chip.data(), model.host_chip.size(), "%s Rev %u.%u", hardware.host_chip,
                   static_cast<unsigned>(chip.revision / 100U), static_cast<unsigned>(chip.revision % 100U));
     std::snprintf(model.cpu.data(), model.cpu.size(), "%u Core%s / %u MHz", static_cast<unsigned>(chip.cores),
                   chip.cores == 1U ? "" : "s", static_cast<unsigned>(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ));
-    CopySystemInformationText(model.wifi_coprocessor, "ESP32-C5");
+    CopySystemInformationText(model.wifi_coprocessor, hardware.wifi_coprocessor);
     std::array<uint8_t, 6> wifi_mac{};
     if (esp_wifi_get_mac(WIFI_IF_STA, wifi_mac.data()) == ESP_OK) {
         std::snprintf(model.wifi_mac.data(), model.wifi_mac.size(), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -623,10 +624,11 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
         CopySystemInformationText(model.flash_capacity, "Unknown");
     }
 
-    CopySystemInformationText(model.panel, "NV3051F");
-    CopySystemInformationText(model.display_interface, "MIPI-DSI / 2 lanes");
-    CopySystemInformationText(model.resolution, "720 x 720 / RGB888");
-    CopySystemInformationText(model.touch_controller, "GT911");
+    CopySystemInformationText(model.panel, hardware.display.driver);
+    CopySystemInformationText(model.display_interface, hardware.display.interface);
+    std::snprintf(model.resolution.data(), model.resolution.size(), "%" PRIu32 " x %" PRIu32 " / %s",
+                  hardware.display.width_pixels, hardware.display.height_pixels, hardware.display.pixel_format);
+    CopySystemInformationText(model.touch_controller, hardware.touch_controller);
     CopySystemInformationText(model.last_reset, ResetReasonText(esp_reset_reason()));
 
     const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time()) / 1000000U;
@@ -1082,7 +1084,8 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::WifiBackend& wifi, hos
 bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control,
                        RemoteCommandPump* command_pump) {
     host_ui::RemoteControlModel remote_model = remote_control.Snapshot();
-    const auto show_result = shell.ShowSystemInformation(MakeSystemInformationModel(remote_model, true));
+    const auto show_result =
+        shell.ShowSystemInformation(MakeSystemInformationModel(remote_model, remote_control.HardwareInfo(), true));
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show Firmware Update: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1094,7 +1097,8 @@ bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteContro
         if (!SameFirmwareUpdate(remote_model, latest)) {
             remote_model = latest;
             request_pending = FirmwareUpdateInProgress(remote_model.firmware_update_state);
-            shell.UpdateSystemInformation(MakeSystemInformationModel(remote_model, true));
+            shell.UpdateSystemInformation(
+                MakeSystemInformationModel(remote_model, remote_control.HardwareInfo(), true));
         }
         if (shell.PowerOffRequested()) {
             if (request_pending || FirmwareUpdateInProgress(remote_model.firmware_update_state)) {
@@ -1153,7 +1157,8 @@ bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteContro
 bool RunSystemInformation(host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control,
                           RemoteCommandPump* command_pump) {
     host_ui::RemoteControlModel remote_model = remote_control.Snapshot();
-    const auto show_result = shell.ShowSystemInformation(MakeSystemInformationModel(remote_model));
+    const auto show_result =
+        shell.ShowSystemInformation(MakeSystemInformationModel(remote_model, remote_control.HardwareInfo()));
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show System Information: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1171,7 +1176,7 @@ bool RunSystemInformation(host_ui::SystemShell& shell, remote_control::RemoteCon
         }
         if (!SameFirmwareUpdate(remote_model, latest)) {
             remote_model = latest;
-            shell.UpdateSystemInformation(MakeSystemInformationModel(remote_model));
+            shell.UpdateSystemInformation(MakeSystemInformationModel(remote_model, remote_control.HardwareInfo()));
         }
         if (!action.has_value()) {
             continue;

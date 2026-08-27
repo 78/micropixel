@@ -20,6 +20,12 @@ fail_on_include() {
 fail_on_include runtime platform "Runtime must depend on Device contracts, not Platform implementations."
 fail_on_include device platform "Device contracts and façades must not depend on Platform implementations."
 fail_on_include platform runtime "Platform implementations must not depend on Runtime session types."
+fail_on_include platform/common platform/boards \
+    "Reusable Platform common code must not depend on a concrete board."
+fail_on_include platform/drivers platform/boards \
+    "Reusable device drivers must not depend on a concrete board."
+fail_on_include platform/lvgl platform/boards \
+    "Reusable LVGL profiles must not depend on a concrete board."
 
 legacy_files=(
     "$source_root/host_bridge.h"
@@ -31,6 +37,8 @@ legacy_files=(
     "$source_root/runtime/engine.hpp"
     "$source_root/platform/graphics_backend.hpp"
     "$source_root/platform/random_backend.hpp"
+    "$source_root/platform/metalio-claw4"
+    "$source_root/platform/null"
 )
 for legacy_file in "${legacy_files[@]}"; do
     if [[ -e "$legacy_file" ]]; then

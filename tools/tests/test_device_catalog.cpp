@@ -1,8 +1,8 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "platform/metalio-claw4/device_catalog.hpp"
-#include "platform/metalio-claw4/peripheral_ids.hpp"
+#include "platform/boards/metalio-claw4/device_catalog.hpp"
+#include "platform/boards/metalio-claw4/peripheral_ids.hpp"
 
 namespace {
 

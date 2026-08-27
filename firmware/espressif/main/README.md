@@ -25,9 +25,10 @@ FirmwareApp (组合根) ────┼─ creates ─ DeviceServices ── inj
 
 `conformance/` 是配置开启后才编译的 Host 合成事件钩子，不属于产品 Runtime。
 
-## 完整文件列表
+## 目录与关键文件
 
-下面列出 `main/` 下全部自维护文件，不省略到目录级。`.cpp/.c` 是实现，配对的 `.hpp/.h` 是接口或内部契约。
+下面列出 `main/` 的稳定分层和关键入口；叶子实现使用 `*` 合并展示。`.cpp/.c` 是实现，配对的
+`.hpp/.h` 是接口或内部契约。
 
 ```text
 main/
@@ -68,6 +69,7 @@ main/
 │   ├── devices.hpp
 │   ├── gpio.hpp
 │   ├── graphics.hpp
+│   ├── hardware_info.hpp
 │   ├── haptics.hpp
 │   ├── input.hpp
 │   ├── power.hpp
@@ -78,59 +80,38 @@ main/
 ├── platform/
 │   ├── CMakeLists.txt
 │   ├── platform.hpp
-│   ├── audio_backend.hpp
 │   ├── configured_backends.hpp
-│   ├── random_backend.cpp
 │   ├── graphics/
 │   │   ├── command_stream.cpp
 │   │   └── command_stream.hpp
-│   ├── metalio-claw4/
-│   │   ├── battery_backend.cpp
-│   │   ├── battery_backend.hpp
-│   │   ├── device_catalog.cpp
-│   │   ├── device_catalog.hpp
-│   │   ├── gpio_backend.cpp
-│   │   ├── gpio_backend.hpp
-│   │   ├── haptics_backend.cpp
-│   │   ├── haptics_backend.hpp
-│   │   ├── i2c_executor.cpp
-│   │   ├── i2c_executor.hpp
-│   │   ├── peripheral_ids.hpp
-│   │   ├── platform.cpp
-│   │   ├── sensor_backend.cpp
-│   │   ├── sensor_backend.hpp
-│   │   ├── graphics_adapter.cpp
-│   │   ├── graphics_adapter.hpp
-│   │   ├── system_ui_adapter.cpp
-│   │   ├── system_ui_adapter.hpp
-│   │   ├── board_hardware.cpp
-│   │   ├── board_hardware.hpp
-│   │   ├── icons/
-│   │   │   ├── wifi_status_icons.c
-│   │   │   └── wifi_status_icons.hpp
-│   │   ├── audio/
-│   │   │   └── synth_audio.cpp
-│   │   ├── input/
-│   │   │   ├── gt911_input.cpp
-│   │   │   ├── gt911_input.hpp
-│   │   │   ├── tca9555_power_key.cpp
-│   │   │   └── tca9555_power_key.hpp
-│   │   └── display/
-│   │       ├── dirty_region_coalescer.cpp
-│   │       ├── dirty_region_coalescer.hpp
-│   │       ├── esp_lcd_nv3051f.c
-│   │       ├── esp_lcd_nv3051f.h
-│   │       ├── png_cover_decoder.cpp
-│   │       ├── png_cover_decoder.hpp
-│   │       ├── retained_scene.cpp
-│   │       ├── retained_scene.hpp
-│   │       ├── retained_surface.cpp
-│   │       ├── retained_surface.hpp
-│   │       ├── screen_capture.cpp
-│   │       └── screen_capture.hpp
-│   └── null/
-│       ├── audio_backend.cpp
-│       └── graphics_backend.cpp
+│   ├── common/                    # 可由多个板型复用的 ESP32 backend/adapters
+│   │   ├── CMakeLists.txt
+│   │   ├── random_backend.cpp
+│   │   ├── i2c_executor.*
+│   │   ├── hosted_wifi_backend.*
+│   │   ├── graphics_adapter.*
+│   │   └── system_ui_adapter.*
+│   ├── drivers/                   # 按器件组织，不知道具体开发板
+│   │   ├── CMakeLists.txt
+│   │   ├── display/nv3051f/esp_lcd_nv3051f.[ch]
+│   │   └── input/gt911_input.*
+│   ├── lvgl/                      # 显示栈、Guest renderer 和可复用 UI profile
+│   │   ├── CMakeLists.txt
+│   │   ├── display/
+│   │   ├── fonts/
+│   │   ├── guest_graphics_engine.*
+│   │   └── ui/square_720/
+│   └── boards/                    # 唯一允许组合具体板级引脚/外设的位置
+│       ├── metalio-claw4/
+│       │   ├── CMakeLists.txt
+│       │   ├── platform.cpp
+│       │   ├── board_hardware.*
+│       │   ├── audio/
+│       │   ├── display/screen_capture.*
+│       │   └── input/tca9555_power_key.*
+│       └── null/
+│           ├── CMakeLists.txt
+│           └── platform.cpp
 └── runtime/
     ├── CMakeLists.txt
     ├── app_runtime.cpp
@@ -205,7 +186,7 @@ main/
 - `work/` 提供一个固定容量、低优先级的后台执行器；App Hall 封面、Guest 压缩图片解码与 Wi-Fi NVS
   持久化共享它，避免为同类串行工作分别保留任务栈，也避免在 `sys_evt` 中执行 flash 写入。作业上下文由
   提交方持有，提交方必须等待完成或通过 shutdown protocol 证明其生命周期。
-- `platform/metalio-claw4/i2c_executor.*` 为板上的单条物理 I²C bus 提供一个 4 KiB 固定容量优先级
+- `platform/common/i2c_executor.*` 为板上的单条物理 I²C bus 提供一个 4 KiB 固定容量优先级
   executor。Touch/电源、同步控制、Sensor/电池分别进入 high/normal/low 队列；ISR 和 timer callback 只投递
   作业。Sensor 与 GT911 不再各自保留任务栈，GPIO 和实时 I²S 不进入该 executor。
 - `runtime/resources/` 负责资源请求、图片解码和 Bitmap handle/PSRAM 配额。Guest PNG 由 libpng
@@ -263,8 +244,17 @@ main/
   后等待 10 秒再开始下一轮，已连接时使用驱动的 background scan。后端状态变化
   通过非阻塞、可合并的 Host 事件主动更新 App Hall、系统菜单、Status Layer 和 Wi-Fi 页面；只有扫描间隔
   与性能采样等真正的周期任务使用定时等待。
-- `platform/graphics/` 是跨板级图形协议校验；`platform/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；Battery backend 复用板级 I²C 总线读取 BQ27220 电量和充电电流，并通过 TCA9555 的 USB / 无线充电检测输入及共享中断报告外部电源状态。
-- `platform/null/` 提供没有真实板级设备时的构建实现。
+- `platform/graphics/` 是跨板级图形协议校验；`platform/boards/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；Battery backend 复用板级 I²C 总线读取 BQ27220 电量和充电电流，并通过 TCA9555 的 USB / 无线充电检测输入及共享中断报告外部电源状态。
+- `platform/boards/null/` 提供没有真实板级设备时的构建实现。
+- `platform/common/` 只放可被多个 ESP32 板型直接复用的 backend 与窄 adapter；`platform/drivers/` 按芯片
+  型号组织，不能 include `boards/`；`platform/lvgl/` 按显示能力和 UI profile 组织，不能写 Metalio-Claw4
+  引脚或电源时序。`platform/boards/<board>/` 是组合层，选择共用实现并拥有剩余的板级 wiring。
+- 新增板型时，新增 `boards/<board>/CMakeLists.txt` 与实现，在 `MICROPIXEL_BOARD` choice 注册一个 symbol，
+  再由 `platform/CMakeLists.txt` 选择它。不得复制 Guest ABI、Runtime service、共用器件驱动或现有 LVGL
+  profile。`device::HardwareInfoBackend` 是系统信息与远控硬件描述的唯一来源，不再在 HostController 中写死
+  当前板名。
+- `bash tools/p4.sh build-null` 使用独立 build 目录编译 Null board，是 Platform/Runtime 反向依赖门禁；该
+  镜像没有真实硬件语义，脚本不会提供 flash 路径。
 
 只在 `device/`、`runtime/`、`platform/`、`conformance/` 这些已有子系统设置独立 CMake 清单；当前很小的
 `host_ui/` 由顶层清单直接收录，不为 `abi/` 等叶子目录继续增加小型 CMake 文件。

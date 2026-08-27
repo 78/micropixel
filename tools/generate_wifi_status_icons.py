@@ -91,7 +91,7 @@ def main() -> None:
         / "firmware/espressif/managed_components/lvgl__lvgl/scripts/built_in_font/FontAwesome5-Solid+Brands+Regular.woff"
     )
     default_output = (
-        repo_root / "firmware/espressif/main/platform/metalio-claw4/icons/wifi_status_icons.c"
+        repo_root / "firmware/espressif/main/platform/lvgl/ui/square_720/icons/wifi_status_icons.c"
     )
     parser = argparse.ArgumentParser()
     parser.add_argument("--font", type=Path, default=default_font)

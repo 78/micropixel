@@ -4,11 +4,11 @@
 #include <cstdlib>
 #include <thread>
 
-#include "platform/metalio-claw4/i2c_executor.hpp"
+#include "platform/common/i2c_executor.hpp"
 
 namespace {
 
-using micropixel::platform::metalio_claw4::I2cExecutor;
+using micropixel::platform::common::I2cExecutor;
 
 void Require(bool condition) {
     if (!condition) {

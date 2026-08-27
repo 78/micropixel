@@ -36,7 +36,7 @@ guest/apps/<game>/
 ```sh
 python3 tools/analyze_sfx.py \
   --manifest guest/apps/<game>/audio/sfx.json \
-  --device-profile firmware/espressif/main/platform/metalio-claw4/audio/perceptual_profile.json \
+  --device-profile firmware/espressif/main/platform/boards/metalio-claw4/audio/perceptual_profile.json \
   --emit-cpp-header build/apps/<game>/assets/<game>_sfx_profiles.hpp \
   --report build/apps/<game>/sfx-report.json \
   --check

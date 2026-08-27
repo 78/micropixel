@@ -54,6 +54,8 @@ variables and command-line PORT arguments take precedence.
 
 Normal development commands:
   build-host                         Incrementally build only the ESP32-P4 Host.
+  build-null                         Compile the hardware-independent Null board
+                                     in its own build directory; never flash it.
   build-release                      Build Host, Blocks, Snake, and SDK Demo; create a browser-flashable
                                      micropixel-full.bin containing only those three Apps.
   flash-host [PORT]                  Incrementally build and flash only the Host;
@@ -93,6 +95,7 @@ Host build configuration:
 
 Examples:
   bash tools/p4.sh build-host
+  bash tools/p4.sh build-null
   bash tools/p4.sh flash-host
   bash tools/p4.sh monitor
   bash tools/p4.sh flash-apps
@@ -420,6 +423,15 @@ build_host() {
     idf_host build
 }
 
+build_null() {
+    require_idf
+    host_build_dir="${P4_NULL_HOST_BUILD_DIR:-$workspace_root/build/host-esp32p4-null}"
+    sdkconfig_path="$host_build_dir/sdkconfig.release"
+    sdkconfig_defaults="$firmware_dir/sdkconfig.p4.defaults;$firmware_dir/sdkconfig.p4-null.defaults"
+    echo "==> Null board compile gate (separate build; never flashed)"
+    idf_host build
+}
+
 build_release() {
     echo "==> Building release Apps: Blocks, Snake, and SDK Demo"
     bash "$workspace_root/tools/build_blocks_bundle.sh"
@@ -625,6 +637,7 @@ run_tests() {
     echo "==> Explicit release/pre-push test suite"
     bash "$workspace_root/tools/build_guest_p4.sh"
     build_all
+    build_null
     bash "$workspace_root/tools/check_firmware_style.sh" --format-only
     bash "$workspace_root/tools/tests/test_firmware_host.sh"
     PYTHONPATH="$workspace_root${PYTHONPATH:+:$PYTHONPATH}" \
@@ -673,6 +686,10 @@ case "$command_name" in
     build-host)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         build_host
+        ;;
+    build-null)
+        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+        build_null
         ;;
     build-release)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }

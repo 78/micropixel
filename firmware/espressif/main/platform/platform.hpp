@@ -7,6 +7,7 @@
 #include "device/gpio.hpp"
 #include "device/graphics.hpp"
 #include "device/haptics.hpp"
+#include "device/hardware_info.hpp"
 #include "device/input.hpp"
 #include "device/local_control.hpp"
 #include "device/power.hpp"
@@ -43,6 +44,7 @@ class Platform {
     [[nodiscard]] virtual device::SensorBackend& sensors() = 0;              // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual device::GpioBackend& gpio() = 0;                   // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual device::HapticsBackend& haptics() = 0;             // NOLINT(readability-identifier-naming)
+    [[nodiscard]] virtual device::HardwareInfoBackend& hardware_info() = 0;  // NOLINT(readability-identifier-naming)
     [[nodiscard]] virtual host_ui::SystemUiBackend& system_ui() = 0;         // NOLINT(readability-identifier-naming)
     virtual void BindBackgroundExecutor(work::BackgroundExecutor& executor) = 0;
 

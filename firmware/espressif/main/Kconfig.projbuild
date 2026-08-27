@@ -83,19 +83,31 @@ endmenu
 
 menu "MicroPixel board backends"
 
-    config MICROPIXEL_METALIO_CLAW4_HOST_BACKEND
-        bool "Initialize the Metalio-Claw4 LVGL display and GT911 touch backend"
+    choice MICROPIXEL_BOARD
+        prompt "Target board"
+        default MICROPIXEL_BOARD_METALIO_CLAW4 if IDF_TARGET_ESP32P4
+        default MICROPIXEL_BOARD_NULL
+
+    config MICROPIXEL_BOARD_METALIO_CLAW4
+        bool "Metalio-Claw4"
         depends on IDF_TARGET_ESP32P4
         select LV_USE_SNAPSHOT
-        default y if IDF_TARGET_ESP32P4
         help
             Bring up the verified 720x720 RGB888 MIPI-DSI panel and GT911
             touch controller before WAMR starts. LVGL remains a Host-only
             backend and is not exposed through the Guest ABI.
 
+    config MICROPIXEL_BOARD_NULL
+        bool "Null compile-only board"
+        help
+            Build hardware-independent Runtime and Device paths with unavailable
+            device backends. This profile is not intended for flashing.
+
+    endchoice
+
     config MICROPIXEL_METALIO_CLAW4_AUDIO
         bool "Enable the Metalio-Claw4 game audio backend"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND && IDF_TARGET_ESP32P4
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
         default n
         help
             Power the board audio module and amplifier, mix up to eight
@@ -105,7 +117,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PPA_ACCEL
         bool "Use ESP32-P4 PPA for eligible LVGL RGB888 draw operations"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
         default y
         help
             Register the ESP LVGL adapter's PPA Fill/Blend handler. DMA2D panel
@@ -124,7 +136,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT
         int "LVGL double-partial draw buffer height"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
         range 20 720
         default 100
         help
@@ -135,7 +147,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM
         bool "Place the LVGL partial draw buffer in PSRAM"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND && SPIRAM
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4 && SPIRAM
         default n
         help
             Allocate the double-partial scratch buffer from PSRAM instead of
@@ -144,7 +156,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS
         int "Maximum extra pixels per dirty-area merge"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
         range 0 65536
         default 8192
         help
@@ -155,7 +167,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS
         int "Maximum union area for a dirty-area merge"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
         range 4096 518400
         default 65536
         help
@@ -165,7 +177,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
         bool "Cache and translate retained Guest surfaces"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND && MICROPIXEL_LVGL_PPA_ACCEL
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4 && MICROPIXEL_LVGL_PPA_ACCEL
         default y
         help
             Group marked Guest commands below one retained LVGL surface. For a
@@ -178,7 +190,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
         bool "Enable suspended-App snapshot transitions for the App Hall"
-        depends on MICROPIXEL_METALIO_CLAW4_HOST_BACKEND && SPIRAM
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4 && SPIRAM
         select LV_USE_SNAPSHOT
         default y
         help
