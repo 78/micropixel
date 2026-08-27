@@ -62,7 +62,8 @@
 
 - Remote Control 页面、NVS 身份和 TLS peer 验证已有开发实现；生产配置在缺少 CA 或匹配主机名时默认拒绝连接，真机负向安全矩阵仍待验收；
 - 配对和 Job 只保存在单个 Fastify 进程内，尚无限流、审计历史和多实例恢复；
-- 截图 artifact、Guest 日志环形缓冲和触摸/语义按键序列已有首版，但 TTL、流式日志和物理抢占待补；
+- 截图 artifact 已有一小时 TTL、每设备/全局容量上限、周期清理和启动孤儿清理；Guest 日志环形缓冲和
+  触摸/语义按键序列已有首版，但流式日志和物理抢占待补；
 - 当前开发版 App Store 已使用 BundleFS；离散块回收不依赖连续 extent GC，签名与真机断电恢复
   尚未达到发布门槛；
 - 当前 Control API 的内存状态和开发 Token 策略不构成生产账户安全边界。
@@ -829,7 +830,9 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 - Hall、System Settings、Remote Control 等 modal System UI 都会泵入安全的截图和输入命令；输入序列由
   跨 Host 循环的固定容量状态机推进，可以跨页面执行“输入→延迟→截图”，App 生命周期命令仍请求当前
   modal UI 安全退栈后再改变 Hall/Foreground 状态；
-- Fastify 将 JPEG 保存为无数据库文件 artifact，并以 `screen:read` JWT 保护下载；Console 能显示命令结果和最新截图；App 生命周期失败保留 Host 返回的具体稳定错误码；
+- Fastify 将 JPEG 保存为无数据库文件 artifact，并以 `screen:read` JWT 保护下载；截图保留一小时，每设备
+  最多 8 项、进程最多 64 项，每分钟清理过期文件，启动时清理无法由内存索引恢复的孤儿截图；Console 能
+  显示命令结果和最新截图；App 生命周期失败保留 Host 返回的具体稳定错误码；
 - Fastify 上传入口校验 Bundle v1 header、section 边界/hash，计算 SHA-256 并以设备 UUID 隔离文件；设备只能用匹配的 Device credential 下载；
 - ESP32-P4 分区是单一 24 MiB 可写 `app_store`；BundleFS 使用离散 64 KiB 数据块、写时复制和
   分区内四 Bank Catalog，所有 App 均可升级和卸载；
@@ -844,14 +847,14 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 - Control 从 JSONC 加载最新固件并发布内容寻址镜像；Web Console、App Hall 更新红点/快捷入口和 System Information 都可发起同一套 OTA。设备即使关闭 Remote Control 也会发现更新，安装前验证长度、SHA-256 和 ESP image 内嵌版本，再写入非活动 OTA 分区；
 - 未实现的远程命令返回明确的 `not_implemented` 应用层结果，不能把 QUIC ACK 当成命令完成。
 
-本轮自动验证基线为：Fastify 24 项测试、TypeScript typecheck、Control/Console production build、
+本轮自动验证基线为：Fastify 27 项测试、TypeScript typecheck、Control/Console production build、
 Firmware Host 回归（含 App Store 与 BundleFS）、HTTP/3 TLS parser 16 项测试、Firmware 格式/架构检查、Guest 全量构建
 （含 key input conformance）和完整 System Shell + 三个集成 Bundle 构建。真机正向验收覆盖严格
 CA/主机名 HTTP/3、NVS 身份跨重启、一次性连接码、系统信息、App 列表、Hall→Settings→Remote 页面输入
 序列、带 ID 截图以及大 artifact；不在文档或日志样例记录设备 UUID、MAC、连接码和 Token。JPEG 硬件
 编码路径仍需补充连续截图和复杂 System UI 的真机回归。
 
-尚未完成的运行控制边界也必须明确：Suspend/Resume、跨设备重启的持久结果恢复、artifact TTL、
+尚未完成的运行控制边界也必须明确：Suspend/Resume、跨设备重启的持久结果恢复、持久 artifact manifest、
 物理输入抢占和生产级审计仍待实现。输入序列会在成功、失败或过期时对仍按下的 contact 和 semantic key
 注入 `cancel`。App Store 当前把完整
 Bundle 暂存在 PSRAM，不含 `.mpxapp` 外层数字签名、版本/capability policy、手动回滚选择和真机断电
