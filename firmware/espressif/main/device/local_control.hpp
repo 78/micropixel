@@ -16,9 +16,9 @@ class LocalControlBackend {
     virtual void Bind(LocalControlCommandSink command_sink, LocalControlResponseSource response_source,
                       void* context) = 0;
     virtual void Unbind(void* context) = 0;
-    // May be called from a Host or timer task. Wake the transport owner so it
-    // can poll the bound response source; never drain the source inline.
-    virtual void RequestResponsePoll() = 0;
+    // May be called from a Host or timer task. Signal the transport owner that
+    // a response is ready; never drain the source inline.
+    virtual void NotifyResponseReady() = 0;
 
    protected:
     LocalControlBackend() = default;

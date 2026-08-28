@@ -77,6 +77,17 @@ The downloaded managed component contains the complete Apache-2.0 notice and the
 license files. MicroPixel uses its streaming Ogg Opus decoder with one shared PSRAM-backed pseudostack and does not
 expose the component API to Guest applications.
 
+### esp_tinyusb and TinyUSB
+
+ESP-Mosaico Type-C CDC uses `espressif/esp_tinyusb` 2.2.1 and its `espressif/tinyusb` dependency from the ESP
+Component Registry:
+
+- Espressif integration: <https://github.com/espressif/esp-usb/tree/master/device/esp_tinyusb>, Apache-2.0;
+- TinyUSB upstream: <https://github.com/hathach/tinyusb>, MIT.
+
+The exact resolved versions are recorded in the ESP32-S31 dependency lock, and the downloaded components retain
+their complete license files.
+
 ## Font Awesome Wi-Fi glyph
 
 `firmware/espressif/main/platform/lvgl/ui/square_720/icons/wifi_status_icons.c` contains fixed-size alpha masks derived

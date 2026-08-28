@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-if(NOT IDF_TARGET STREQUAL "esp32p4")
-    message(FATAL_ERROR "MicroPixel v1 firmware supports only ESP32-P4")
+set(MICROPIXEL_SUPPORTED_TARGETS esp32p4 esp32s31)
+if(NOT IDF_TARGET IN_LIST MICROPIXEL_SUPPORTED_TARGETS)
+    message(FATAL_ERROR "MicroPixel supports only ESP32-P4 and ESP32-S31")
 endif()
-idf_build_set_property(DEPENDENCIES_LOCK dependencies.lock.esp32p4)
+idf_build_set_property(DEPENDENCIES_LOCK dependencies.lock.${IDF_TARGET})
 set(PROJECT_VER "0.2.4")
 project(micropixel)
 
@@ -13,10 +14,12 @@ project(micropixel)
 # registered and crashes in sleep_retention.c. Remove only that auto-init
 # translation unit; the Wi-Fi backend starts esp-hosted explicitly from
 # app_main after IDF startup has completed.
-idf_component_get_property(esp_hosted_lib espressif__esp_hosted COMPONENT_LIB)
-get_target_property(esp_hosted_sources ${esp_hosted_lib} SOURCES)
-list(FILTER esp_hosted_sources EXCLUDE REGEX "port_esp_hosted_host_init\\.c$")
-set_property(TARGET ${esp_hosted_lib} PROPERTY SOURCES "${esp_hosted_sources}")
+if(IDF_TARGET STREQUAL "esp32p4")
+    idf_component_get_property(esp_hosted_lib espressif__esp_hosted COMPONENT_LIB)
+    get_target_property(esp_hosted_sources ${esp_hosted_lib} SOURCES)
+    list(FILTER esp_hosted_sources EXCLUDE REGEX "port_esp_hosted_host_init\\.c$")
+    set_property(TARGET ${esp_hosted_lib} PROPERTY SOURCES "${esp_hosted_sources}")
+endif()
 
 # WAMR 2.4.x relies on sys/stat.h and stdio.h being included indirectly.
 # ESP-IDF 6.1 no longer provides those transitive declarations, so inject the

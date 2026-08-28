@@ -1,0 +1,79 @@
+{
+  "metalio-claw4": {
+    "description": "ESP32-P4 + Metalio-Claw4 product firmware",
+    "target": "esp32p4",
+    "chip_markers": [
+      "ESP32-P4"
+    ],
+    "build_dir": "build/host-esp32p4",
+    "build_dir_env": "P4_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_env": "P4_SDKCONFIG",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.p4.defaults"
+    ],
+    "sdkconfig_defaults_env": "P4_SDKCONFIG_DEFAULTS",
+    "port_env": "P4_PORT",
+    "baud_env": "P4_BAUD",
+    "default_baud": 2000000,
+    "preview": false,
+    "flash": true,
+    "monitor": true
+  },
+  "p4-null": {
+    "description": "ESP32-P4 hardware-independent compile gate",
+    "target": "esp32p4",
+    "build_dir": "build/host-esp32p4-null",
+    "build_dir_env": "P4_NULL_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.p4.defaults",
+      "firmware/espressif/sdkconfig.p4-null.defaults"
+    ],
+    "preview": false,
+    "flash": false,
+    "monitor": false
+  },
+  "esp-mosaico": {
+    "description": "ESP32-S31 + ESP-Mosaico P0/P1 bring-up firmware",
+    "target": "esp32s31",
+    "chip_markers": [
+      "ESP32-S31"
+    ],
+    "build_dir": "build/host-esp32s31-mosaico",
+    "build_dir_env": "S31_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_env": "S31_SDKCONFIG",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.s31.defaults"
+    ],
+    "sdkconfig_defaults_env": "S31_SDKCONFIG_DEFAULTS",
+    "port_env": "S31_PORT",
+    "baud_env": "S31_BAUD",
+    "default_baud": 460800,
+    "flash_before": "no-reset",
+    "application_usb_products": [
+      "MicroPixel ESP-Mosaico"
+    ],
+    "rom_usb_products": [
+      "ESP32-S31"
+    ],
+    "preview": true,
+    "flash": true,
+    "monitor": true
+  },
+  "s31-null": {
+    "description": "ESP32-S31 hardware-independent preview compile gate",
+    "target": "esp32s31",
+    "build_dir": "build/host-esp32s31-null",
+    "build_dir_env": "S31_NULL_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.s31.defaults",
+      "firmware/espressif/sdkconfig.s31-null.defaults"
+    ],
+    "preview": true,
+    "flash": false,
+    "monitor": false
+  }
+}

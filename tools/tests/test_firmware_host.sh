@@ -76,8 +76,27 @@ build_and_run system_gesture_router \
 build_and_run hall_carousel \
     "$workspace_root/tools/tests/test_hall_carousel.cpp"
 
+build_and_run guest_viewport \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_viewport.cpp"
+
+build_and_run guest_button \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_button.cpp"
+
+build_and_run ascii_line_framer \
+    "$workspace_root/tools/tests/test_ascii_line_framer.cpp"
+
+build_and_run usb_download_reset_detector \
+    "$workspace_root/tools/tests/test_usb_download_reset_detector.cpp"
+
 build_and_run perceptual_control \
     "$workspace_root/tools/tests/test_perceptual_control.cpp"
+
+build_and_run synth_mixer \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_synth_mixer.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/common/audio/synth_mixer.cpp"
 
 build_and_run system_shell \
     -pthread \
@@ -147,6 +166,11 @@ build_and_run app_store \
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
 
 build_and_run bundlefs \
+    "$workspace_root/tools/tests/test_bundlefs.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
+
+build_and_run bundlefs_16k_mmu \
+    -DSPI_FLASH_MMU_PAGE_SIZE=16384U \
     "$workspace_root/tools/tests/test_bundlefs.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
 

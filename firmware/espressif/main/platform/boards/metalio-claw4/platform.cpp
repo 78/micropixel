@@ -33,6 +33,7 @@
 #include "platform/boards/metalio-claw4/battery_backend.hpp"
 #include "platform/boards/metalio-claw4/board_hardware.hpp"
 #include "platform/boards/metalio-claw4/device_catalog.hpp"
+#include "platform/boards/metalio-claw4/display/display_pipeline.hpp"
 #include "platform/boards/metalio-claw4/display/screen_capture.hpp"
 #include "platform/boards/metalio-claw4/gpio_backend.hpp"
 #include "platform/boards/metalio-claw4/haptics_backend.hpp"
@@ -40,9 +41,9 @@
 #include "platform/boards/metalio-claw4/perceptual_control.hpp"
 #include "platform/boards/metalio-claw4/sensor_backend.hpp"
 #include "platform/common/graphics_adapter.hpp"
-#include "platform/common/hosted_wifi_backend.hpp"
 #include "platform/common/i2c_executor.hpp"
 #include "platform/common/system_ui_adapter.hpp"
+#include "platform/common/wifi/wifi_backend.hpp"
 #include "platform/configured_backends.hpp"
 #include "platform/drivers/input/gt911_input.hpp"
 #include "platform/lvgl/display/jpeg_cover_decoder.hpp"
@@ -51,15 +52,20 @@
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/guest_graphics_engine.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
-#include "platform/lvgl/ui/square_720/hall_carousel.hpp"
-#include "platform/lvgl/ui/square_720/hall_cover_cache_policy.hpp"
-#include "platform/lvgl/ui/square_720/hall_transition_policy.hpp"
-#include "platform/lvgl/ui/square_720/icons/wifi_status_icons.hpp"
-#include "platform/lvgl/ui/square_720/status_layer_ui.hpp"
-#include "platform/lvgl/ui/square_720/system_detail_ui.hpp"
-#include "platform/lvgl/ui/square_720/system_menu_ui.hpp"
-#include "platform/lvgl/ui/square_720/wifi_settings_ui.hpp"
+#include "platform/lvgl/ui/square_common/hall_card_ui.hpp"
+#include "platform/lvgl/ui/square_common/hall_carousel.hpp"
+#include "platform/lvgl/ui/square_common/hall_cover_cache.hpp"
+#include "platform/lvgl/ui/square_common/hall_cover_codec.hpp"
+#include "platform/lvgl/ui/square_common/hall_scene_ui.hpp"
+#include "platform/lvgl/ui/square_common/hall_transition_policy.hpp"
+#include "platform/lvgl/ui/square_common/profiles/square_720.hpp"
+#include "platform/lvgl/ui/square_common/status_layer_transition.hpp"
+#include "platform/lvgl/ui/square_common/status_layer_ui.hpp"
+#include "platform/lvgl/ui/square_common/system_detail_ui.hpp"
+#include "platform/lvgl/ui/square_common/system_menu_ui.hpp"
+#include "platform/lvgl/ui/square_common/wifi_settings_ui.hpp"
 #include "platform/platform.hpp"
+#include "platform/radio/esp_hosted_radio.hpp"
 #include "task_policy.hpp"
 #include "work/background_executor.hpp"
 
@@ -70,9 +76,12 @@
 namespace micropixel::platform {
 namespace {
 
+namespace ui_profile = lvgl::square_common::profiles::square_720;
+using HallCarousel = lvgl::square_common::HallCarouselPolicy<ui_profile::Layout>;
+
 constexpr char kTag[] = "micropixel_platform";
-constexpr int kWidth = 720;
-constexpr int kHeight = 720;
+constexpr int kWidth = ui_profile::Layout::kWidth;
+constexpr int kHeight = ui_profile::Layout::kHeight;
 constexpr BaseType_t kLvglTaskCore = 1;
 constexpr uint32_t kRefreshPeriodMs = 1000;
 constexpr uint32_t kLvglIdleTimeoutMs = 1000;
@@ -81,28 +90,24 @@ constexpr uint32_t kLightSleepEntryAttempts = 3U;
 constexpr uint32_t kLvglTaskMinDelayMs = portTICK_PERIOD_MS;
 constexpr uint32_t kHostPointerQueueCapacity = 32U;
 constexpr uint32_t kThemeAccentColor = 0x287ee8U;
-constexpr int32_t kHallCardWidth = lvgl::square_720::HallCarousel::kCardWidth;
+constexpr int32_t kHallCardWidth = HallCarousel::kCardWidth;
 constexpr int32_t kHallCardRadius = 22;
 constexpr int32_t kHallCardBorderWidth = 1;
 constexpr uint32_t kHallCoverBytesPerPixel = 3U;
 constexpr uint32_t kHallCoverNativeSize = static_cast<uint32_t>(kHallCardWidth);
 constexpr uint32_t kHallCoverNativeStride = kHallCoverNativeSize * kHallCoverBytesPerPixel;
 constexpr uint32_t kHallCoverNativeBytes = kHallCoverNativeStride * kHallCoverNativeSize;
-constexpr uint32_t kHallCoverJobQueueCapacity = 8U;
-constexpr int32_t kHallScrollTrackWidth = 140;
-constexpr int32_t kHallScrollTrackHeight = 6;
+constexpr int32_t kHallScrollTrackWidth = ui_profile::Layout::kHallScrollTrackWidth;
+constexpr int32_t kHallScrollTrackHeight = ui_profile::Layout::kHallScrollTrackHeight;
 constexpr uint32_t kGuestTransitionStride = static_cast<uint32_t>(kWidth) * kHallCoverBytesPerPixel;
 constexpr uint32_t kGuestTransitionBytes = kGuestTransitionStride * static_cast<uint32_t>(kHeight);
-constexpr uint32_t kGuestTransitionHalfSize = 360U;
+constexpr uint32_t kGuestTransitionHalfSize = ui_profile::kSquareLayout.transition_intermediate_width;
 constexpr uint32_t kGuestTransitionHalfBytes =
     kGuestTransitionHalfSize * kGuestTransitionHalfSize * kHallCoverBytesPerPixel;
 constexpr uint32_t kPpaBufferAlignment = 128U;
 constexpr uint32_t kGuestTransitionHalfAllocationBytes =
     (kGuestTransitionHalfBytes + kPpaBufferAlignment - 1U) / kPpaBufferAlignment * kPpaBufferAlignment;
-constexpr uint32_t kStatusTransitionDurationMs = 100U;
 constexpr uint32_t kGuestTransitionDurationMs = 100U;
-constexpr uint32_t kUiTransitionFrameCount = 6U;
-constexpr uint16_t kTransitionComplete = 1000U;
 #if CONFIG_MICROPIXEL_LVGL_PPA_ACCEL
 constexpr bool kEnablePpaAccel = true;
 #else
@@ -213,74 +218,13 @@ uint32_t LaunchBackgroundRgb888(const device::BitmapView& bitmap) {
 }
 
 void MaskHallCoverCorners(uint8_t* destination) {
-    if (destination == nullptr) {
-        return;
-    }
     // Bake the four small corner masks into the retained bitmap instead of
     // making LVGL allocate a card-sized rounded clipping layer on every redraw.
     // The cover is drawn full-bleed below the card's post-drawn border, so its
     // baked corner mask must use the same outer radius as the card.
-    constexpr uint32_t kRadius = static_cast<uint32_t>(kHallCardRadius);
-    constexpr int32_t kCenter = static_cast<int32_t>(kRadius - 1U);
-    constexpr int32_t kRadiusSquared = kCenter * kCenter;
-    const auto set_pixel = [destination](uint32_t x, uint32_t y, uint32_t rgb) {
-        uint8_t* pixel = destination + static_cast<size_t>(y) * kHallCoverNativeStride +
-                         static_cast<size_t>(x) * kHallCoverBytesPerPixel;
-        pixel[0] = static_cast<uint8_t>(rgb);
-        pixel[1] = static_cast<uint8_t>(rgb >> 8U);
-        pixel[2] = static_cast<uint8_t>(rgb >> 16U);
-    };
-    for (uint32_t y = 0U; y < kRadius; ++y) {
-        for (uint32_t x = 0U; x < kRadius; ++x) {
-            const int32_t dx = static_cast<int32_t>(x) - kCenter;
-            const int32_t dy = static_cast<int32_t>(y) - kCenter;
-            if (dx * dx + dy * dy <= kRadiusSquared) {
-                continue;
-            }
-            set_pixel(x, y, 0x08111fU);
-            set_pixel(kHallCoverNativeSize - 1U - x, y, 0x08111fU);
-            set_pixel(x, kHallCoverNativeSize - 1U - y, 0x111f32U);
-            set_pixel(kHallCoverNativeSize - 1U - x, kHallCoverNativeSize - 1U - y, 0x111f32U);
-        }
-    }
+    lvgl::square_common::MaskHallCoverRgb888(destination, kHallCoverNativeSize, static_cast<uint32_t>(kHallCardRadius),
+                                             0x08111fU, 0x111f32U);
 }
-
-void ScaleRgb888Cover(const uint8_t* source, uint32_t source_width, uint32_t source_height, uint32_t source_stride,
-                      uint8_t* destination) {
-    if (source == nullptr || destination == nullptr || source_width == 0U || source_height == 0U) {
-        return;
-    }
-    const uint32_t crop_size = source_width < source_height ? source_width : source_height;
-    const uint32_t crop_x = (source_width - crop_size) / 2U;
-    const uint32_t crop_y = (source_height - crop_size) / 2U;
-    for (uint32_t y = 0U; y < kHallCoverNativeSize; ++y) {
-        const uint32_t source_y =
-            crop_y + static_cast<uint32_t>(static_cast<uint64_t>(y) * crop_size / kHallCoverNativeSize);
-        uint8_t* destination_row = destination + static_cast<size_t>(y) * kHallCoverNativeStride;
-        for (uint32_t x = 0U; x < kHallCoverNativeSize; ++x) {
-            const uint32_t source_x =
-                crop_x + static_cast<uint32_t>(static_cast<uint64_t>(x) * crop_size / kHallCoverNativeSize);
-            std::memcpy(destination_row + static_cast<size_t>(x) * kHallCoverBytesPerPixel,
-                        source + static_cast<size_t>(source_y) * source_stride +
-                            static_cast<size_t>(source_x) * kHallCoverBytesPerPixel,
-                        kHallCoverBytesPerPixel);
-        }
-    }
-    MaskHallCoverCorners(destination);
-}
-
-struct HallCoverCacheEntry final {
-    uint8_t* pixels{};
-    uint64_t key{};
-    uint32_t app_index{host_ui::kMaxHallApps};
-};
-
-struct HallCoverJob final {
-    host_ui::HallCoverModel source{};
-    uint64_t catalog_signature{};
-    uint32_t app_index{};
-    uint32_t request_generation{};
-};
 
 constexpr size_t kHallAppTextCapacity = 65U;
 
@@ -295,6 +239,7 @@ struct HallAppPresentation final {
 // file-level aliases.
 struct MetalioClaw4PlatformState final {
     metalio_claw4::BoardHardware hardware{kWidth, kHeight};
+    metalio_claw4::MetalioClaw4DisplayPipeline display_pipeline{hardware, kWidth, kHeight};
     common::I2cExecutor i2c_executor{};
     metalio_claw4::BatteryBackend battery{};
     metalio_claw4::SensorBackend sensors{};
@@ -303,24 +248,18 @@ struct MetalioClaw4PlatformState final {
     metalio_claw4::DeviceCatalog devices{};
     lv_display_t* display{};
     lv_obj_t* host_smoke{};
-    lv_obj_t* hall_time_status_label{};
-    lv_obj_t* hall_cellular_status_container{};
-    std::array<lv_obj_t*, 4> hall_cellular_signal_bars{};
-    lv_obj_t* hall_wifi_status_image{};
-    lv_obj_t* hall_battery_status_label{};
-    lv_obj_t* hall_battery_percent_label{};
     lvgl::FontRegistry fonts{};
     lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts};
     lvgl::SystemTransitionCompositor system_transition{};
-    lv_obj_t* hall_settings_press_overlay{};
-    lv_obj_t* hall_update_press_overlay{};
-    lv_obj_t* hall_carousel_viewport{};
-    lv_obj_t* hall_carousel_content{};
-    lv_obj_t* hall_scroll_track{};
-    lv_obj_t* hall_scroll_thumb{};
+    lvgl::square_common::HallSceneUi hall_scene_ui{};
     lv_image_dsc_t launch_image_descriptor{};
     lv_image_dsc_t hall_cover_descriptors[host_ui::kMaxHallApps]{};
-    std::array<HallCoverCacheEntry, lvgl::square_720::HallCarousel::kMaximumCachedCovers> hall_cover_cache{};
+    lvgl::square_common::HallCoverCache hall_cover_cache{{
+        .target_size = kHallCoverNativeSize,
+        .corner_radius = static_cast<uint32_t>(kHallCardRadius),
+        .top_background_rgb = 0x08111fU,
+        .bottom_background_rgb = 0x111f32U,
+    }};
     std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> hall_cover_sources{};
     // The visible source for a suspended App is its Guest snapshot. Retain the
     // installed cover separately so transition baselines can always render a
@@ -329,15 +268,6 @@ struct MetalioClaw4PlatformState final {
     std::array<HallAppPresentation, host_ui::kMaxHallApps> hall_app_presentations{};
     lv_obj_t* hall_cover_images[host_ui::kMaxHallApps]{};
     lv_obj_t* hall_cover_placeholders[host_ui::kMaxHallApps]{};
-    QueueHandle_t hall_cover_job_queue{};
-    StaticQueue_t hall_cover_job_queue_storage{};
-    std::array<uint8_t, sizeof(HallCoverJob) * kHallCoverJobQueueCapacity> hall_cover_job_queue_bytes{};
-    work::BackgroundExecutor* background_executor{};
-    std::atomic_bool hall_cover_dispatch_scheduled{};
-    std::atomic_uint32_t hall_cover_request_generation{1U};
-    std::atomic_bool hall_cover_worker_active{};
-    uint32_t hall_cover_window_first{};
-    uint32_t hall_cover_window_last{};
     uint32_t hall_card_window_first{};
     uint32_t hall_card_window_last{};
     lv_obj_t* hall_cards[host_ui::kMaxHallApps]{};
@@ -345,10 +275,10 @@ struct MetalioClaw4PlatformState final {
     metalio_claw4::Tca9555PowerKey power_key{};
     drivers::Gt911Input touch_input{kWidth, kHeight, kTouchInterrupt};
     host_ui::SystemGestureRouter input_router{touch_input, kWidth, kHeight};
-    lvgl::square_720::SystemDetailUi system_detail_ui{};
-    lvgl::square_720::SystemMenuUi system_menu_ui{};
-    lvgl::square_720::StatusLayerUi status_layer_ui{};
-    lvgl::square_720::WifiSettingsUi wifi_settings_ui{};
+    lvgl::square_common::SystemDetailUi system_detail_ui{ui_profile::kSystemPageLayout};
+    lvgl::square_common::SystemMenuUi system_menu_ui{};
+    lvgl::square_common::StatusLayerUi status_layer_ui{};
+    lvgl::square_common::WifiSettingsUi wifi_settings_ui{};
     lv_indev_t* host_pointer_indev{};
     portMUX_TYPE host_pointer_lock = portMUX_INITIALIZER_UNLOCKED;
     device::TouchSample host_pointer_queue[kHostPointerQueueCapacity]{};
@@ -367,8 +297,11 @@ struct MetalioClaw4PlatformState final {
     uint32_t hall_app_count{};
     int32_t hall_scroll_offset{};
     uint64_t hall_catalog_signature{};
+    host_ui::HallStatusBarModel hall_status_bar{};
     bool hall_firmware_update_available{};
+    bool hall_status_bar_valid{};
     bool hall_launch_enabled{};
+    bool hall_retained_for_status{};
     bool hall_app_running[host_ui::kMaxHallApps]{};
     bool guest_snapshot_in_hall{};
 };
@@ -376,43 +309,8 @@ struct MetalioClaw4PlatformState final {
 void SyncHallCardWindowLocked(MetalioClaw4PlatformState& state);
 void RequestHallCoverWindowLocked(MetalioClaw4PlatformState& state, bool force = false);
 void HallCarouselEvent(lv_event_t* event);
-void HallHeaderButtonEvent(lv_event_t* event);
 void HallCardEvent(lv_event_t* event);
 void HallCloseButtonEvent(lv_event_t* event);
-
-uint16_t EaseInCubic(uint16_t progress) {
-    const uint64_t value = progress;
-    return static_cast<uint16_t>(value * value * value / 1000000U);
-}
-
-uint16_t EaseOutCubic(uint16_t progress) {
-    return static_cast<uint16_t>(kTransitionComplete - EaseInCubic(kTransitionComplete - progress));
-}
-
-template <typename Apply>
-void RunUiTransition(MetalioClaw4PlatformState& state, bool entering, Apply&& apply) {
-    const TickType_t frame_period =
-        std::max<TickType_t>(1U, pdMS_TO_TICKS(kStatusTransitionDurationMs / kUiTransitionFrameCount));
-    TickType_t next_frame = xTaskGetTickCount();
-    for (uint32_t frame = 0U; frame <= kUiTransitionFrameCount; ++frame) {
-        const uint16_t linear = static_cast<uint16_t>(frame * kTransitionComplete / kUiTransitionFrameCount);
-        const uint16_t progress = entering ? EaseOutCubic(linear) : kTransitionComplete - EaseInCubic(linear);
-        if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
-            break;
-        }
-        apply(progress);
-        lvgl::RequestDisplayRefresh(state.display);
-        esp_lv_adapter_unlock();
-        if (frame != kUiTransitionFrameCount) {
-            vTaskDelayUntil(&next_frame, frame_period);
-        }
-    }
-}
-
-void RunStatusLayerTransition(MetalioClaw4PlatformState& state, bool entering) {
-    RunUiTransition(state, entering,
-                    [&state](uint16_t progress) { state.status_layer_ui.SetTransitionProgressLocked(progress); });
-}
 
 void HostPointerRead(lv_indev_t* indev, lv_indev_data_t* data) {
     auto* state = static_cast<MetalioClaw4PlatformState*>(lv_indev_get_user_data(indev));
@@ -573,8 +471,8 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     lv_draw_buf_get_handlers()->buf_copy_cb = CopyImageBuffer;
 
     esp_lv_adapter_display_config_t display_config{};
-    display_config.panel = state.hardware.Panel();
-    display_config.panel_io = state.hardware.PanelIo();
+    display_config.panel = state.display_pipeline.Panel();
+    display_config.panel_io = state.display_pipeline.PanelIo();
     display_config.profile.interface = ESP_LV_ADAPTER_PANEL_IF_MIPI_DSI;
     display_config.profile.hor_res = kWidth;
     display_config.profile.ver_res = kHeight;
@@ -591,11 +489,14 @@ esp_err_t InitializeLvgl(MetalioClaw4PlatformState& state) {
     if (state.display == nullptr) {
         return ESP_FAIL;
     }
-    status = state.guest_graphics.Initialize(state.display, state.hardware.Panel());
+    state.display_pipeline.BindLvgl(state.display);
+    status = state.guest_graphics.Initialize(state.display, state.display_pipeline.DirectFramebuffers());
     if (status != ESP_OK) {
         return status;
     }
-    status = state.system_transition.Initialize(state.display, state.hardware.Panel(), kWidth, kHeight);
+    status =
+        state.system_transition.Initialize(state.display, state.display_pipeline.DirectFramebuffers(), kWidth, kHeight,
+                                           lvgl::square_common::TransitionProfile(ui_profile::kSquareLayout));
     if (status != ESP_OK) {
         return status;
     }
@@ -660,7 +561,7 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
         status = InitializeLvgl(state);
     }
     if (status == ESP_OK) {
-        status = state.hardware.SetBacklight(true);
+        status = state.display_pipeline.SetBrightness(metalio_claw4::kPerceptualControlScale);
     }
     if (status == ESP_OK) {
         status = metalio_claw4::ConfiguredAudioBackend().Initialize(state.hardware.IoExpander(), state.i2c_executor);
@@ -680,14 +581,14 @@ esp_err_t InitializePlatformImpl(MetalioClaw4PlatformState& state) {
 }
 
 std::expected<void, device::PowerError> RestoreDisplayAfterSleep(MetalioClaw4PlatformState& state) {
-    const esp_err_t resume_status = state.hardware.ResumeDisplay();
+    const esp_err_t resume_status = state.display_pipeline.Resume();
     if (resume_status != ESP_OK) {
         ESP_LOGE(kTag, "display reinitialization failed after sleep: %s", esp_err_to_name(resume_status));
         return std::unexpected(device::PowerError::kDisplayRestore);
     }
 
-    state.guest_graphics.RebindPanel(state.hardware.Panel());
-    state.system_transition.RebindPanel(state.hardware.Panel());
+    state.guest_graphics.RebindFramebuffers(state.display_pipeline.DirectFramebuffers());
+    state.system_transition.RebindFramebuffers(state.display_pipeline.DirectFramebuffers());
     const esp_err_t status =
         esp_lv_adapter_sleep_recover(state.display, state.hardware.Panel(), state.hardware.PanelIo());
     if (status != ESP_OK) {
@@ -704,7 +605,7 @@ std::expected<void, device::PowerError> EnterLowPowerImpl(MetalioClaw4PlatformSt
         return std::unexpected(device::PowerError::kDisplayPrepare);
     }
 
-    status = state.hardware.SuspendDisplay();
+    status = state.display_pipeline.Suspend();
     if (status != ESP_OK) {
         ESP_LOGE(kTag, "display shutdown failed: %s", esp_err_to_name(status));
         (void)RestoreDisplayAfterSleep(state);
@@ -781,16 +682,7 @@ std::expected<void, device::PowerError> EnterLowPowerImpl(MetalioClaw4PlatformSt
 }
 
 void ResetHallImageDescriptorsLocked(MetalioClaw4PlatformState& state) {
-    state.hall_time_status_label = nullptr;
-    state.hall_cellular_status_container = nullptr;
-    state.hall_cellular_signal_bars.fill(nullptr);
-    state.hall_wifi_status_image = nullptr;
-    state.hall_battery_status_label = nullptr;
-    state.hall_battery_percent_label = nullptr;
-    state.hall_carousel_viewport = nullptr;
-    state.hall_carousel_content = nullptr;
-    state.hall_scroll_track = nullptr;
-    state.hall_scroll_thumb = nullptr;
+    state.hall_scene_ui.ResetLocked();
     state.hall_card_window_first = host_ui::kMaxHallApps;
     state.hall_card_window_last = host_ui::kMaxHallApps;
     for (uint32_t index = 0U; index < host_ui::kMaxHallApps; ++index) {
@@ -891,164 +783,6 @@ void DismissLaunchBitmapImpl(MetalioClaw4PlatformState& state) {
     esp_lv_adapter_unlock();
 }
 
-const char* HallStatusText(host_ui::HallStatus status) {
-    switch (status) {
-        case host_ui::HallStatus::kReady:
-            return "Choose an app";
-        case host_ui::HallStatus::kNoApps:
-            return "No installed apps";
-        case host_ui::HallStatus::kAppExited:
-            return "App closed - choose another";
-        case host_ui::HallStatus::kAppFailed:
-            return "App failed";
-        case host_ui::HallStatus::kRuntimeUnavailable:
-            return "Runtime unavailable";
-        case host_ui::HallStatus::kHostFailure:
-            return "Host could not start the app";
-    }
-    return "Unavailable";
-}
-
-uint32_t HallStatusColor(host_ui::HallStatus status) {
-    return status == host_ui::HallStatus::kReady || status == host_ui::HallStatus::kAppExited ? 0x4dd6a4U : 0xff8b73U;
-}
-
-lv_obj_t* CreateHallLabel(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color, int32_t x,
-                          int32_t y) {
-    lv_obj_t* label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, font, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
-    lv_obj_set_pos(label, x, y);
-    return label;
-}
-
-const lv_image_dsc_t* HallWifiImage(const host_ui::HallWifiModel& model) {
-    if (!model.available || !model.enabled || !model.connected) {
-        return nullptr;
-    }
-    if (model.rssi < -75) {
-        return &micropixel_wifi_status_weak;
-    }
-    if (model.rssi < -60) {
-        return &micropixel_wifi_status_medium;
-    }
-    return &micropixel_wifi_status_full;
-}
-
-const char* HallBatterySymbol(const host_ui::HallBatteryModel& model) {
-    if (model.charging) {
-        return LV_SYMBOL_CHARGE;
-    }
-    if (model.percent <= 10U) {
-        return LV_SYMBOL_BATTERY_EMPTY;
-    }
-    if (model.percent <= 35U) {
-        return LV_SYMBOL_BATTERY_1;
-    }
-    if (model.percent <= 60U) {
-        return LV_SYMBOL_BATTERY_2;
-    }
-    if (model.percent <= 85U) {
-        return LV_SYMBOL_BATTERY_3;
-    }
-    return LV_SYMBOL_BATTERY_FULL;
-}
-
-void UpdateHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::HallStatusBarModel& model) {
-    if (state.hall_time_status_label == nullptr || state.hall_cellular_status_container == nullptr ||
-        state.hall_wifi_status_image == nullptr || state.hall_battery_status_label == nullptr ||
-        state.hall_battery_percent_label == nullptr) {
-        return;
-    }
-
-    lv_label_set_text(state.hall_time_status_label, model.time_text.data());
-
-    if (model.cellular.available) {
-        const uint32_t active_bars = model.cellular.enabled && model.cellular.connected
-                                         ? std::min<uint32_t>(model.cellular.signal_bars, 4U)
-                                         : 0U;
-        for (uint32_t index = 0U; index < state.hall_cellular_signal_bars.size(); ++index) {
-            lv_obj_set_style_bg_opa(state.hall_cellular_signal_bars[index], index < active_bars ? LV_OPA_COVER : 72, 0);
-        }
-        lv_obj_remove_flag(state.hall_cellular_status_container, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(state.hall_cellular_status_container, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    if (const lv_image_dsc_t* wifi_image = HallWifiImage(model.wifi); wifi_image != nullptr) {
-        lv_image_set_src(state.hall_wifi_status_image, wifi_image);
-        lv_obj_remove_flag(state.hall_wifi_status_image, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(state.hall_wifi_status_image, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    lv_label_set_text(state.hall_battery_status_label, model.battery.available || model.battery.charging
-                                                           ? HallBatterySymbol(model.battery)
-                                                           : LV_SYMBOL_BATTERY_EMPTY);
-    lv_obj_set_y(state.hall_battery_status_label, model.battery.charging ? 10 : 7);
-    lv_obj_set_style_text_font(state.hall_battery_status_label,
-                               model.battery.charging ? lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium)
-                                                      : lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge),
-                               0);
-    lv_obj_set_style_transform_scale_x(state.hall_battery_status_label, model.battery.charging ? 256 : 282, 0);
-    char battery_text[8]{};
-    if (model.battery.available) {
-        (void)std::snprintf(battery_text, sizeof(battery_text), "%u%%", static_cast<unsigned>(model.battery.percent));
-    } else {
-        (void)std::snprintf(battery_text, sizeof(battery_text), "--");
-    }
-    lv_label_set_text(state.hall_battery_percent_label, battery_text);
-    const uint32_t battery_color = model.battery.charging ? 0x4dd6a4U : 0xf2f7ffU;
-    lv_obj_set_style_text_color(state.hall_battery_status_label, lv_color_hex(battery_color), 0);
-    lv_obj_set_style_text_color(state.hall_battery_percent_label, lv_color_hex(battery_color), 0);
-}
-
-void DrawHallStatusBarLocked(MetalioClaw4PlatformState& state, const host_ui::HallStatusBarModel& model) {
-    state.hall_time_status_label =
-        CreateHallLabel(state.host_smoke, model.time_text.data(), lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium),
-                        0xf2f7ffU, 40, 8);
-    lv_obj_set_width(state.hall_time_status_label, 72);
-
-    state.hall_cellular_status_container = lv_obj_create(state.host_smoke);
-    lv_obj_set_pos(state.hall_cellular_status_container, 548, 12);
-    lv_obj_set_size(state.hall_cellular_status_container, 22, 16);
-    lv_obj_set_style_pad_all(state.hall_cellular_status_container, 0, 0);
-    lv_obj_set_style_border_width(state.hall_cellular_status_container, 0, 0);
-    lv_obj_set_style_bg_opa(state.hall_cellular_status_container, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(state.hall_cellular_status_container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(state.hall_cellular_status_container, LV_OBJ_FLAG_CLICKABLE);
-    constexpr std::array<int32_t, 4> kCellularBarHeights{4, 7, 10, 13};
-    for (uint32_t index = 0U; index < state.hall_cellular_signal_bars.size(); ++index) {
-        lv_obj_t* bar = lv_obj_create(state.hall_cellular_status_container);
-        const int32_t height = kCellularBarHeights[index];
-        lv_obj_set_pos(bar, static_cast<int32_t>(index) * 5, 16 - height);
-        lv_obj_set_size(bar, 3, height);
-        lv_obj_set_style_pad_all(bar, 0, 0);
-        lv_obj_set_style_border_width(bar, 0, 0);
-        lv_obj_set_style_radius(bar, 1, 0);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(0xf2f7ffU), 0);
-        state.hall_cellular_signal_bars[index] = bar;
-    }
-
-    state.hall_wifi_status_image = lv_image_create(state.host_smoke);
-    lv_obj_set_pos(state.hall_wifi_status_image, 584, 13);
-    lv_obj_set_style_image_recolor(state.hall_wifi_status_image, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_set_style_image_recolor_opa(state.hall_wifi_status_image, LV_OPA_COVER, 0);
-
-    state.hall_battery_status_label =
-        CreateHallLabel(state.host_smoke, "", lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0xf2f7ffU, 622, 7);
-    lv_obj_set_width(state.hall_battery_status_label, 30);
-    lv_obj_set_style_text_align(state.hall_battery_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_scale_x(state.hall_battery_status_label, 282, 0);
-
-    state.hall_battery_percent_label =
-        CreateHallLabel(state.host_smoke, "", lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kSmall), 0xf2f7ffU, 657, 12);
-    lv_obj_set_width(state.hall_battery_percent_label, 38);
-    lv_obj_set_style_text_align(state.hall_battery_percent_label, LV_TEXT_ALIGN_RIGHT, 0);
-    UpdateHallStatusBarLocked(state, model);
-}
-
 struct HallCardBounds final {
     int32_t x{};
     int32_t y{};
@@ -1057,10 +791,10 @@ struct HallCardBounds final {
 };
 
 HallCardBounds HallCard(uint32_t index, int32_t scroll_offset) {
-    return HallCardBounds{.x = lvgl::square_720::HallCarousel::CardX(index, scroll_offset),
-                          .y = lvgl::square_720::HallCarousel::kTop,
+    return HallCardBounds{.x = HallCarousel::CardX(index, scroll_offset),
+                          .y = HallCarousel::kTop,
                           .width = kHallCardWidth,
-                          .height = lvgl::square_720::HallCarousel::kCardHeight};
+                          .height = HallCarousel::kCardHeight};
 }
 
 uint64_t HallCatalogSignature(const host_ui::HallModel& model, uint32_t app_count) {
@@ -1081,27 +815,13 @@ uint64_t HallCatalogSignature(const host_ui::HallModel& model, uint32_t app_coun
 }
 
 void UpdateHallCarouselLocked(MetalioClaw4PlatformState& state, int32_t offset) {
-    state.hall_scroll_offset = lvgl::square_720::HallCarousel::ClampOffset(state.hall_app_count, offset);
-    if (state.hall_scroll_thumb != nullptr) {
-        const int32_t thumb_width =
-            lvgl::square_720::HallCarousel::ScrollThumbWidth(kHallScrollTrackWidth, state.hall_app_count);
-        lv_obj_set_x(state.hall_scroll_thumb,
-                     lvgl::square_720::HallCarousel::ScrollThumbX(kHallScrollTrackWidth, thumb_width,
-                                                                  state.hall_app_count, state.hall_scroll_offset));
-    }
+    state.hall_scroll_offset = HallCarousel::ClampOffset(state.hall_app_count, offset);
+    state.hall_scene_ui.UpdateScrollLocked(state.hall_app_count, state.hall_scroll_offset);
     SyncHallCardWindowLocked(state);
     // Decoding runs on the bounded background worker. Submit the newly visible
     // window immediately, including during drag and inertia, so covers can
     // appear before motion finishes instead of leaving placeholders behind.
     RequestHallCoverWindowLocked(state);
-}
-
-const char* AppShortName(const char* app_id) {
-    if (app_id == nullptr) {
-        return "APP";
-    }
-    const char* separator = std::strrchr(app_id, '.');
-    return separator != nullptr && separator[1] != '\0' ? separator + 1 : app_id;
 }
 
 bool ValidHallCover(const host_ui::HallCoverModel& cover) {
@@ -1130,44 +850,7 @@ bool PrepareNativeHallCover(MetalioClaw4PlatformState& state, const host_ui::Hal
     if (index >= host_ui::kMaxHallApps) {
         return false;
     }
-    const auto cached = std::find_if(
-        state.hall_cover_cache.begin(), state.hall_cover_cache.end(),
-        [&](const HallCoverCacheEntry& entry) { return entry.pixels != nullptr && entry.key == source.cache_key; });
-    if (cached == state.hall_cover_cache.end()) {
-        return false;
-    }
-    prepared = {.data = cached->pixels,
-                .size = kHallCoverNativeBytes,
-                .width = kHallCoverNativeSize,
-                .height = kHallCoverNativeSize,
-                .stride = kHallCoverNativeStride};
-    return true;
-}
-
-bool DecodeNativeHallCover(const host_ui::HallCoverModel& source, uint8_t* pixels) {
-    if (pixels == nullptr) {
-        return false;
-    }
-    bool decoded = false;
-    if (source.format == host_ui::HallCoverFormat::kJpeg) {
-        decoded = lvgl::DecodeJpegCoverRgb888(source.data, source.size, source.width, source.height, pixels,
-                                              kHallCoverNativeSize, kHallCoverNativeSize, kHallCoverNativeStride);
-    } else if (source.format == host_ui::HallCoverFormat::kPng) {
-        decoded =
-            lvgl::DecodePngCoverRgb888(source.data, source.size, source.width, source.height, pixels,
-                                       kHallCoverNativeSize, kHallCoverNativeSize, kHallCoverNativeStride, 0x182d48U);
-    } else {
-        ScaleRgb888Cover(source.data, source.width, source.height, source.stride, pixels);
-        decoded = true;
-    }
-    if (decoded && source.format != host_ui::HallCoverFormat::kRgb888) {
-        MaskHallCoverCorners(pixels);
-    }
-    if (!decoded) {
-        ESP_LOGE(kTag, "could not decode Hall cover: source=%" PRIu32 "x%" PRIu32 " bytes=%" PRIu32, source.width,
-                 source.height, source.size);
-    }
-    return decoded;
+    return index < host_ui::kMaxHallApps && state.hall_cover_cache.PrepareSource(source, prepared);
 }
 
 void ShowHallCoverPlaceholderLocked(MetalioClaw4PlatformState& state, uint32_t index) {
@@ -1206,289 +889,62 @@ void AttachHallCoverLocked(MetalioClaw4PlatformState& state, uint32_t index, con
     }
 }
 
-void ReleaseHallCoverCacheEntryLocked(MetalioClaw4PlatformState& state, HallCoverCacheEntry& entry) {
-    if (entry.app_index < host_ui::kMaxHallApps) {
-        ShowHallCoverPlaceholderLocked(state, entry.app_index);
-        auto& descriptor = state.hall_cover_descriptors[entry.app_index];
-        if (descriptor.data != nullptr) {
-            lv_image_cache_drop(&descriptor);
-            lv_image_header_cache_drop(&descriptor);
-            descriptor = {};
-        }
-    }
-    heap_caps_free(entry.pixels);
-    entry = {};
+void ShowCachedHallPlaceholder(void* context, uint32_t app_index) {
+    ShowHallCoverPlaceholderLocked(*static_cast<MetalioClaw4PlatformState*>(context), app_index);
 }
 
-void ProcessHallCoverJob(MetalioClaw4PlatformState& state, const HallCoverJob& job) {
-    const uint32_t current_generation = state.hall_cover_request_generation.load(std::memory_order_acquire);
-    if (job.request_generation != current_generation) {
+void AttachCachedHallCover(void* context, uint32_t app_index, const host_ui::HallCoverModel& cover) {
+    AttachHallCoverLocked(*static_cast<MetalioClaw4PlatformState*>(context), app_index, cover);
+}
+
+void DetachCachedHallCover(void* context, uint32_t app_index) {
+    auto& state = *static_cast<MetalioClaw4PlatformState*>(context);
+    if (app_index >= host_ui::kMaxHallApps) {
         return;
     }
-    constexpr uint32_t kCacheAlignment = 64U;
-    constexpr uint32_t kAllocationBytes =
-        (kHallCoverNativeBytes + kCacheAlignment - 1U) / kCacheAlignment * kCacheAlignment;
-    auto* pixels = static_cast<uint8_t*>(
-        heap_caps_aligned_calloc(kCacheAlignment, kAllocationBytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    const int64_t started_us = esp_timer_get_time();
-    const bool decoded = pixels != nullptr && DecodeNativeHallCover(job.source, pixels);
-    if (decoded) {
-        lv_draw_buf_t draw_buf{};
-        if (lv_draw_buf_init(&draw_buf, kHallCoverNativeSize, kHallCoverNativeSize, LV_COLOR_FORMAT_RGB888,
-                             kHallCoverNativeStride, pixels, kHallCoverNativeBytes) == LV_RESULT_OK) {
-            lv_draw_buf_flush_cache(&draw_buf, nullptr);
-        }
+    auto& descriptor = state.hall_cover_descriptors[app_index];
+    if (descriptor.data != nullptr) {
+        lv_image_cache_drop(&descriptor);
+        lv_image_header_cache_drop(&descriptor);
+        descriptor = {};
     }
-    if (decoded && esp_lv_adapter_lock(-1) == ESP_OK) {
-        const bool current =
-            job.request_generation == state.hall_cover_request_generation.load(std::memory_order_acquire) &&
-            job.catalog_signature == state.hall_catalog_signature && job.app_index >= state.hall_cover_window_first &&
-            job.app_index < state.hall_cover_window_last && job.app_index < state.hall_app_count &&
-            state.hall_cover_sources[job.app_index].cache_key == job.source.cache_key;
-        if (current) {
-            auto existing = std::find_if(state.hall_cover_cache.begin(), state.hall_cover_cache.end(),
-                                         [&](const HallCoverCacheEntry& entry) {
-                                             return entry.pixels != nullptr && entry.key == job.source.cache_key;
-                                         });
-            if (existing == state.hall_cover_cache.end()) {
-                std::array<lvgl::square_720::HallCoverCacheSlot, lvgl::square_720::HallCarousel::kMaximumCachedCovers>
-                    slots{};
-                for (size_t index = 0U; index < slots.size(); ++index) {
-                    slots[index] = {.occupied = state.hall_cover_cache[index].pixels != nullptr,
-                                    .key = state.hall_cover_cache[index].key,
-                                    .app_index = state.hall_cover_cache[index].app_index};
-                }
-                const size_t slot_index = lvgl::square_720::HallCoverCachePolicy::ReplacementIndex(
-                    slots, job.source.cache_key, job.app_index, state.hall_cover_window_first,
-                    state.hall_cover_window_last);
-                if (slot_index != lvgl::square_720::HallCoverCachePolicy::kNoSlot) {
-                    auto& slot = state.hall_cover_cache[slot_index];
-                    ReleaseHallCoverCacheEntryLocked(state, slot);
-                    slot = {.pixels = pixels, .key = job.source.cache_key, .app_index = job.app_index};
-                    pixels = nullptr;
-                    existing = state.hall_cover_cache.begin() + static_cast<std::ptrdiff_t>(slot_index);
-                }
-            }
-            if (existing != state.hall_cover_cache.end()) {
-                existing->app_index = job.app_index;
-                AttachHallCoverLocked(state, job.app_index,
-                                      host_ui::HallCoverModel{.data = existing->pixels,
-                                                              .size = kHallCoverNativeBytes,
-                                                              .width = kHallCoverNativeSize,
-                                                              .height = kHallCoverNativeSize,
-                                                              .stride = kHallCoverNativeStride});
-                lv_obj_invalidate(state.hall_cover_images[job.app_index]);
-                lvgl::RequestDisplayRefresh(state.display);
-            }
-        }
-        esp_lv_adapter_unlock();
-    }
-    heap_caps_free(pixels);
-    const uint32_t elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - started_us);
-    ESP_LOGI(
-        kTag, "Hall cover worker: app=%" PRIu32 " current=%s cpu=%" PRIu32 " us", job.app_index,
-        job.request_generation == state.hall_cover_request_generation.load(std::memory_order_acquire) ? "yes" : "no",
-        elapsed_us);
+    ShowHallCoverPlaceholderLocked(state, app_index);
 }
 
-void HallCoverDispatch(void* context);
-
-bool ScheduleHallCoverDispatch(MetalioClaw4PlatformState& state) {
-    if (state.background_executor == nullptr || !state.background_executor->valid()) {
-        return false;
-    }
-    bool expected = false;
-    if (!state.hall_cover_dispatch_scheduled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        return true;
-    }
-    if (!state.background_executor->Submit(HallCoverDispatch, &state)) {
-        state.hall_cover_dispatch_scheduled.store(false, std::memory_order_release);
-        return false;
-    }
-    return true;
-}
-
-void HallCoverDispatch(void* context) {
+void RefreshCachedHallCover(void* context) {
     auto& state = *static_cast<MetalioClaw4PlatformState*>(context);
-    HallCoverJob job{};
-    if (xQueueReceive(state.hall_cover_job_queue, &job, 0U) == pdTRUE) {
-        state.hall_cover_worker_active.store(true, std::memory_order_release);
-        ProcessHallCoverJob(state, job);
-        state.hall_cover_worker_active.store(false, std::memory_order_release);
+    if (state.display != nullptr) {
+        lvgl::RequestDisplayRefresh(state.display);
     }
-    state.hall_cover_dispatch_scheduled.store(false, std::memory_order_release);
-    if (uxQueueMessagesWaiting(state.hall_cover_job_queue) != 0U) {
-        (void)ScheduleHallCoverDispatch(state);
-    }
-}
-
-bool EnsureHallCoverDispatcher(MetalioClaw4PlatformState& state) {
-    if (state.hall_cover_job_queue == nullptr) {
-        state.hall_cover_job_queue =
-            xQueueCreateStatic(kHallCoverJobQueueCapacity, sizeof(HallCoverJob),
-                               state.hall_cover_job_queue_bytes.data(), &state.hall_cover_job_queue_storage);
-    }
-    return state.hall_cover_job_queue != nullptr && state.background_executor != nullptr &&
-           state.background_executor->valid();
 }
 
 void RequestHallCoverWindowLocked(MetalioClaw4PlatformState& state, bool force) {
-    if (state.hall_app_count == 0U || state.hall_carousel_content == nullptr || !EnsureHallCoverDispatcher(state)) {
+    if (state.hall_app_count == 0U || state.hall_scene_ui.objects().carousel_content == nullptr) {
         return;
     }
-    const uint32_t first =
-        lvgl::square_720::HallCarousel::CoverWindowFirst(state.hall_app_count, state.hall_scroll_offset);
-    const uint32_t last =
-        lvgl::square_720::HallCarousel::CoverWindowLast(state.hall_app_count, state.hall_scroll_offset);
-    if (!force && first == state.hall_cover_window_first && last == state.hall_cover_window_last) {
-        return;
-    }
-    state.hall_cover_window_first = first;
-    state.hall_cover_window_last = last;
-    const uint32_t generation = state.hall_cover_request_generation.fetch_add(1U, std::memory_order_acq_rel) + 1U;
-    (void)xQueueReset(state.hall_cover_job_queue);
-    for (uint32_t index = 0U; index < state.hall_app_count; ++index) {
-        if (index < first || index >= last) {
-            ShowHallCoverPlaceholderLocked(state, index);
-        }
-    }
-    bool queued = false;
-    for (uint32_t index = first; index < last; ++index) {
-        const host_ui::HallCoverModel& source = state.hall_cover_sources[index];
-        if (!ValidHallCover(source)) {
-            continue;
-        }
-        host_ui::HallCoverModel prepared{};
-        if (PrepareNativeHallCover(state, source, index, prepared)) {
-            AttachHallCoverLocked(state, index, prepared);
-            continue;
-        }
-        ShowHallCoverPlaceholderLocked(state, index);
-        const HallCoverJob job{.source = source,
-                               .catalog_signature = state.hall_catalog_signature,
-                               .app_index = index,
-                               .request_generation = generation};
-        queued = xQueueSend(state.hall_cover_job_queue, &job, 0U) == pdTRUE || queued;
-    }
-    if (queued) {
-        (void)ScheduleHallCoverDispatch(state);
-    }
+    const uint32_t first = HallCarousel::CoverWindowFirst(state.hall_app_count, state.hall_scroll_offset);
+    const uint32_t last = HallCarousel::CoverWindowLast(state.hall_app_count, state.hall_scroll_offset);
+    state.hall_cover_cache.RequestWindow(first, last, force);
 }
 
 void DrawHallCard(MetalioClaw4PlatformState& state, lv_obj_t* parent, const HallAppPresentation& app, uint32_t index) {
-    constexpr uint32_t kCoverColors[] = {0xff9f43U, 0x4dd6a4U, 0x69a7ffU};
     const HallCardBounds bounds = HallCard(index, 0);
-    lv_obj_t* card = lv_obj_create(parent);
-    state.hall_cards[index] = card;
-    lv_obj_set_pos(card, bounds.x - lvgl::square_720::HallCarousel::kLeft, 0);
-    lv_obj_set_size(card, bounds.width, bounds.height);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_set_style_radius(card, kHallCardRadius, 0);
-    lv_obj_set_style_border_width(card, kHallCardBorderWidth, 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(0x2e4562U), 0);
-    lv_obj_set_style_border_post(card, true, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(0x111f32U), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(card, HallCardEvent, LV_EVENT_ALL, &state);
-
-    lv_obj_t* cover = lv_obj_create(card);
-    // Child coordinates start inside the border. Offset by the border width so
-    // the cover and its baked mask share the card's outer bounds.
-    lv_obj_set_pos(cover, -kHallCardBorderWidth, -kHallCardBorderWidth);
-    lv_obj_set_size(cover, bounds.width, bounds.width);
-    lv_obj_set_style_radius(cover, kHallCardRadius, 0);
-    lv_obj_set_style_border_width(cover, 0, 0);
-    lv_obj_set_style_bg_color(cover, lv_color_hex(0x182d48U), 0);
-    lv_obj_remove_flag(cover, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(cover, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* cover_mark = lv_obj_create(cover);
-    state.hall_cover_placeholders[index] = cover_mark;
-    lv_obj_set_pos(cover_mark, 0, 0);
-    lv_obj_set_size(cover_mark, bounds.width, bounds.width);
-    lv_obj_set_style_radius(cover_mark, kHallCardRadius, 0);
-    lv_obj_set_style_border_width(cover_mark, 0, 0);
-    lv_obj_set_style_bg_color(cover_mark, lv_color_hex(kCoverColors[index % std::size(kCoverColors)]), 0);
-    lv_obj_remove_flag(cover_mark, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(cover_mark, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_center(cover_mark);
-    lv_obj_t* cover_label = lv_label_create(cover_mark);
-    lv_label_set_text(cover_label, AppShortName(app.app_id.data()));
-    lv_obj_set_style_text_font(cover_label, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0);
-    lv_obj_set_style_text_color(cover_label, lv_color_hex(0x08111fU), 0);
-    lv_obj_center(cover_label);
-
-    lv_obj_t* image = lv_image_create(cover);
-    state.hall_cover_images[index] = image;
-    lv_obj_center(image);
-    lv_obj_add_flag(image, LV_OBJ_FLAG_HIDDEN);
+    lvgl::square_common::HallCardObjects objects{};
+    lvgl::square_common::DrawHallCard(
+        parent, ui_profile::kHallCardLayout,
+        {.app_id = app.app_id.data(), .display_name = app.display_name.data(), .running = app.running}, index,
+        HallCardEvent, HallCloseButtonEvent, &state, objects);
+    state.hall_cards[index] = objects.card;
+    state.hall_cover_images[index] = objects.cover_image;
+    state.hall_cover_placeholders[index] = objects.cover_placeholder;
+    state.hall_card_press_overlays[index] = objects.press_overlay;
+    lv_obj_set_pos(objects.card, bounds.x - HallCarousel::kLeft, 0);
 
     host_ui::HallCoverModel prepared_cover{};
     const host_ui::HallCoverModel& source = state.hall_cover_sources[index];
     if (ValidHallCover(source) && PrepareNativeHallCover(state, source, index, prepared_cover)) {
         AttachHallCoverLocked(state, index, prepared_cover);
     }
-
-    const char* display_name = app.display_name[0] != '\0' ? app.display_name.data() : app.app_id.data();
-    lv_obj_t* app_label = CreateHallLabel(card, display_name, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium),
-                                          0xf2f7ffU, 12, bounds.width + 12);
-    lv_obj_set_width(app_label, bounds.width - 24);
-    lv_obj_set_height(app_label, 24);
-    lv_obj_set_style_text_align(app_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(app_label, LV_LABEL_LONG_DOT);
-
-    if (app.running) {
-        lv_obj_t* running = lv_obj_create(card);
-        lv_obj_set_pos(running, 10, 10);
-        lv_obj_set_size(running, 112, 44);
-        lv_obj_set_style_radius(running, 22, 0);
-        lv_obj_set_style_border_width(running, 0, 0);
-        lv_obj_set_style_bg_color(running, lv_color_hex(0x08111fU), 0);
-        lv_obj_set_style_bg_opa(running, LV_OPA_90, 0);
-        lv_obj_remove_flag(running, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(running, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_t* running_label = lv_label_create(running);
-        lv_label_set_text(running_label, "RUNNING");
-        lv_obj_set_style_text_font(running_label, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kSmall), 0);
-        lv_obj_set_style_text_color(running_label, lv_color_hex(0x4dd6a4U), 0);
-        lv_obj_set_style_text_opa(running_label, LV_OPA_COVER, 0);
-        lv_obj_center(running_label);
-
-        lv_obj_t* close = lv_obj_create(card);
-        lv_obj_set_pos(close, bounds.width - 56, 10);
-        lv_obj_set_size(close, 46, 46);
-        lv_obj_set_style_radius(close, 23, 0);
-        lv_obj_set_style_border_width(close, 0, 0);
-        lv_obj_set_style_bg_color(close, lv_color_hex(0x08111fU), 0);
-        lv_obj_set_style_bg_color(close, lv_color_hex(0x182d48U), static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-        lv_obj_set_style_bg_opa(close, LV_OPA_90, 0);
-        lv_obj_remove_flag(close, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(close, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(close, HallCloseButtonEvent, LV_EVENT_SHORT_CLICKED, &state);
-        lv_obj_t* stop_icon = lv_obj_create(close);
-        lv_obj_set_size(stop_icon, 18, 18);
-        lv_obj_set_style_radius(stop_icon, 3, 0);
-        lv_obj_set_style_border_width(stop_icon, 0, 0);
-        lv_obj_set_style_bg_color(stop_icon, lv_color_hex(0xff5c5cU), 0);
-        lv_obj_set_style_bg_opa(stop_icon, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(stop_icon, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(stop_icon, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_center(stop_icon);
-    }
-
-    lv_obj_t* press_overlay = lv_obj_create(card);
-    lv_obj_set_pos(press_overlay, -kHallCardBorderWidth, -kHallCardBorderWidth);
-    lv_obj_set_size(press_overlay, bounds.width, bounds.height);
-    lv_obj_set_style_radius(press_overlay, kHallCardRadius, 0);
-    lv_obj_set_style_border_width(press_overlay, 0, 0);
-    lv_obj_set_style_bg_color(press_overlay, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(press_overlay, LV_OPA_40, 0);
-    lv_obj_remove_flag(press_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(press_overlay, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(press_overlay, LV_OBJ_FLAG_HIDDEN);
-    state.hall_card_press_overlays[index] = press_overlay;
     state.hall_app_running[index] = app.running;
 }
 
@@ -1520,7 +976,7 @@ uint32_t RunningHallAppIndex(const MetalioClaw4PlatformState& state) {
 
 bool PrepareCleanHallBackgroundLocked(MetalioClaw4PlatformState& state, uint32_t running_index) {
     if (running_index >= host_ui::kMaxHallApps || state.hall_cards[running_index] == nullptr ||
-        state.hall_carousel_content == nullptr) {
+        state.hall_scene_ui.objects().carousel_content == nullptr) {
         return state.system_transition.PrepareBackgroundLocked(state.host_smoke);
     }
 
@@ -1528,14 +984,16 @@ bool PrepareCleanHallBackgroundLocked(MetalioClaw4PlatformState& state, uint32_t
     DestroyHallCardLocked(state, running_index);
     state.hall_cover_sources[running_index] = state.hall_idle_cover_sources[running_index];
     state.hall_app_presentations[running_index].running = false;
-    DrawHallCard(state, state.hall_carousel_content, state.hall_app_presentations[running_index], running_index);
+    DrawHallCard(state, state.hall_scene_ui.objects().carousel_content, state.hall_app_presentations[running_index],
+                 running_index);
 
     const bool prepared = state.system_transition.PrepareBackgroundLocked(state.host_smoke);
 
     DestroyHallCardLocked(state, running_index);
     state.hall_cover_sources[running_index] = running_cover;
     state.hall_app_presentations[running_index].running = true;
-    DrawHallCard(state, state.hall_carousel_content, state.hall_app_presentations[running_index], running_index);
+    DrawHallCard(state, state.hall_scene_ui.objects().carousel_content, state.hall_app_presentations[running_index],
+                 running_index);
     return prepared;
 }
 
@@ -1544,13 +1002,11 @@ bool PrepareCleanHallBackgroundLocked(MetalioClaw4PlatformState& state) {
 }
 
 void SyncHallCardWindowLocked(MetalioClaw4PlatformState& state) {
-    if (state.hall_carousel_content == nullptr) {
+    if (state.hall_scene_ui.objects().carousel_content == nullptr) {
         return;
     }
-    const uint32_t first =
-        lvgl::square_720::HallCarousel::CoverWindowFirst(state.hall_app_count, state.hall_scroll_offset);
-    const uint32_t last =
-        lvgl::square_720::HallCarousel::CoverWindowLast(state.hall_app_count, state.hall_scroll_offset);
+    const uint32_t first = HallCarousel::CoverWindowFirst(state.hall_app_count, state.hall_scroll_offset);
+    const uint32_t last = HallCarousel::CoverWindowLast(state.hall_app_count, state.hall_scroll_offset);
     if (first == state.hall_card_window_first && last == state.hall_card_window_last) {
         return;
     }
@@ -1561,7 +1017,8 @@ void SyncHallCardWindowLocked(MetalioClaw4PlatformState& state) {
     }
     for (uint32_t index = first; index < last; ++index) {
         if (state.hall_cards[index] == nullptr) {
-            DrawHallCard(state, state.hall_carousel_content, state.hall_app_presentations[index], index);
+            DrawHallCard(state, state.hall_scene_ui.objects().carousel_content, state.hall_app_presentations[index],
+                         index);
         }
     }
     state.hall_card_window_first = first;
@@ -1592,7 +1049,7 @@ void SetHallPressOverlayLocked(lv_obj_t* overlay, bool pressed) {
 void HallCarouselEvent(lv_event_t* event) {
     auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
     lv_obj_t* viewport = lv_event_get_current_target_obj(event);
-    if (state == nullptr || viewport == nullptr || viewport != state->hall_carousel_viewport) {
+    if (state == nullptr || viewport == nullptr || viewport != state->hall_scene_ui.objects().carousel_viewport) {
         return;
     }
     UpdateHallCarouselLocked(*state, lv_obj_get_scroll_x(viewport));
@@ -1607,38 +1064,6 @@ void HallCarouselEvent(lv_event_t* event) {
     }
     if (state->display != nullptr) {
         lvgl::RequestDisplayRefresh(state->display);
-    }
-}
-
-void HallHeaderButtonEvent(lv_event_t* event) {
-    auto* state = static_cast<MetalioClaw4PlatformState*>(lv_event_get_user_data(event));
-    lv_obj_t* button = lv_event_get_current_target_obj(event);
-    if (state == nullptr || button == nullptr) {
-        return;
-    }
-    lv_obj_t* overlay = nullptr;
-    bool update = false;
-    if (state->hall_settings_press_overlay != nullptr &&
-        lv_obj_get_parent(state->hall_settings_press_overlay) == button) {
-        overlay = state->hall_settings_press_overlay;
-    } else if (state->hall_update_press_overlay != nullptr &&
-               lv_obj_get_parent(state->hall_update_press_overlay) == button) {
-        overlay = state->hall_update_press_overlay;
-        update = true;
-    } else {
-        return;
-    }
-    const lv_event_code_t code = lv_event_get_code(event);
-    if (code == LV_EVENT_PRESSED) {
-        SetHallPressOverlayLocked(overlay, true);
-    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        SetHallPressOverlayLocked(overlay, false);
-    } else if (code == LV_EVENT_SHORT_CLICKED && state->hall_action_sink != nullptr) {
-        ESP_LOGI(kTag, "App Hall accepted native %s tap", update ? "Update" : "Settings");
-        state->hall_action_sink(
-            state->hall_action_context,
-            host_ui::SystemUiAction{.type = update ? host_ui::SystemUiActionType::kOpenFirmwareUpdate
-                                                   : host_ui::SystemUiActionType::kOpenSystemMenu});
     }
 }
 
@@ -1659,13 +1084,14 @@ void HallCardEvent(lv_event_t* event) {
         SetHallPressOverlayLocked(state->hall_card_press_overlays[index], false);
     } else if (code == LV_EVENT_SHORT_CLICKED && state->hall_launch_enabled && state->hall_action_sink != nullptr) {
         const int32_t reveal_offset =
-            lvgl::square_720::HallCarousel::RevealOffset(state->hall_app_count, state->hall_scroll_offset, index);
-        if (reveal_offset != state->hall_scroll_offset && state->hall_carousel_viewport != nullptr) {
+            HallCarousel::RevealOffset(state->hall_app_count, state->hall_scroll_offset, index);
+        lv_obj_t* viewport = state->hall_scene_ui.objects().carousel_viewport;
+        if (reveal_offset != state->hall_scroll_offset && viewport != nullptr) {
             // The transition compositor requires the complete square cover to
             // be on-screen. Preserve that fully revealed position as the Hall
             // baseline before handing the launch request to FirmwareApp.
-            lv_obj_scroll_to_x(state->hall_carousel_viewport, reveal_offset, LV_ANIM_OFF);
-            UpdateHallCarouselLocked(*state, lv_obj_get_scroll_x(state->hall_carousel_viewport));
+            lv_obj_scroll_to_x(viewport, reveal_offset, LV_ANIM_OFF);
+            UpdateHallCarouselLocked(*state, lv_obj_get_scroll_x(viewport));
         }
         ESP_LOGI(kTag, "App Hall accepted native card tap: card=%" PRIu32, index);
         state->hall_action_sink(
@@ -1807,10 +1233,7 @@ std::expected<void, host_ui::SystemUiError> ShowShutdownImpl(MetalioClaw4Platfor
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
 
-    state.hall_cover_request_generation.fetch_add(1U, std::memory_order_acq_rel);
-    if (state.hall_cover_job_queue != nullptr) {
-        (void)xQueueReset(state.hall_cover_job_queue);
-    }
+    state.hall_cover_cache.Pause();
     SetHostPointerEnabledLocked(state, false);
     state.touch_input.ClearSmokeUi();
     state.input_router.UnbindTouchSink(&state);
@@ -1844,17 +1267,47 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     if (state.display == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    state.hall_cover_request_generation.fetch_add(1U, std::memory_order_acq_rel);
-    if (state.hall_cover_job_queue != nullptr) {
-        (void)xQueueReset(state.hall_cover_job_queue);
-    }
     const uint32_t visible_count = std::min(model.app_count, host_ui::kMaxHallApps);
     const uint64_t catalog_signature = HallCatalogSignature(model, visible_count);
+    bool running_state_matches = visible_count == state.hall_app_count;
+    for (uint32_t index = 0U; running_state_matches && index < visible_count; ++index) {
+        running_state_matches = state.hall_app_running[index] == model.apps[index].running;
+    }
+    const bool may_resume = state.hall_retained_for_status && state.host_smoke != nullptr &&
+                            catalog_signature == state.hall_catalog_signature && running_state_matches &&
+                            model.launch_enabled == state.hall_launch_enabled &&
+                            model.firmware_update_available == state.hall_firmware_update_available;
+    state.hall_retained_for_status = false;
+    if (may_resume && esp_lv_adapter_lock(-1) == ESP_OK) {
+        const auto& objects = state.hall_scene_ui.objects();
+        const bool scene_valid = lv_obj_is_valid(state.host_smoke) && objects.carousel_content != nullptr &&
+                                 lv_obj_is_valid(objects.carousel_content);
+        if (scene_valid) {
+            if (!state.hall_status_bar_valid ||
+                !lvgl::square_common::HallStatusBarMatches(state.hall_status_bar, model.status_bar)) {
+                state.hall_scene_ui.UpdateStatusBarLocked(model.status_bar);
+                state.hall_status_bar = model.status_bar;
+                state.hall_status_bar_valid = true;
+                lvgl::RequestDisplayRefresh(state.display);
+            }
+            state.status_layer_ui.RaisePerformanceOverlayLocked();
+            SetHostPointerEnabledLocked(state, true);
+            esp_lv_adapter_unlock();
+            state.hall_action_sink = action_sink;
+            state.hall_action_context = action_context;
+            state.input_router.BindTouchSink(HostPointerTouchSink, &state);
+            state.input_router.BindSystemActionSink(action_sink, action_context);
+            ESP_LOGI(kTag, "App Hall resumed after status layer: redraw=no");
+            return {};
+        }
+        esp_lv_adapter_unlock();
+    }
     if (catalog_signature != state.hall_catalog_signature) {
         state.hall_catalog_signature = catalog_signature;
         state.hall_scroll_offset = 0;
         state.hall_idle_cover_sources.fill({});
     }
+    state.hall_cover_cache.BeginCatalog(model, visible_count, catalog_signature);
     state.hall_app_count = visible_count;
     state.hall_cover_sources.fill({});
     state.hall_app_presentations.fill({});
@@ -1870,9 +1323,7 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
                             model.apps[index].display_name != nullptr ? model.apps[index].display_name : "");
         presentation.running = model.apps[index].running;
     }
-    state.hall_cover_window_first = host_ui::kMaxHallApps;
-    state.hall_cover_window_last = host_ui::kMaxHallApps;
-    state.hall_scroll_offset = lvgl::square_720::HallCarousel::ClampOffset(visible_count, state.hall_scroll_offset);
+    state.hall_scroll_offset = HallCarousel::ClampOffset(visible_count, state.hall_scroll_offset);
     const bool hall_was_visible = state.host_smoke != nullptr && state.hall_action_context != nullptr;
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
@@ -1884,8 +1335,6 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
         state.host_smoke = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(state.host_smoke, 0x08111fU);
     }
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
     lv_obj_set_pos(state.host_smoke, 0, 0);
@@ -1893,221 +1342,16 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
 
-    lv_obj_t* brand = lv_obj_create(state.host_smoke);
-    lv_obj_set_pos(brand, 40, 60);
-    lv_obj_set_size(brand, 18, 44);
-    lv_obj_set_style_radius(brand, 9, 0);
-    lv_obj_set_style_border_width(brand, 0, 0);
-    lv_obj_set_style_bg_color(brand, lv_color_hex(0xff9f43U), 0);
-    lv_obj_remove_flag(brand, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(brand, LV_OBJ_FLAG_CLICKABLE);
+    state.hall_scene_ui.DrawLocked(state.host_smoke, ui_profile::kHallSceneLayout, model, visible_count,
+                                   {.carousel_event = HallCarouselEvent,
+                                    .carousel_context = &state,
+                                    .action_sink = action_sink,
+                                    .action_context = action_context});
 
-    (void)CreateHallLabel(state.host_smoke, "App Hall", lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kTitle), 0xf2f7ffU,
-                          76, 56);
-    (void)CreateHallLabel(state.host_smoke,
-                          visible_count > lvgl::square_720::HallCarousel::kFullyVisibleCards
-                              ? "Swipe to browse - tap to launch"
-                              : "Tap a card to launch",
-                          lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium), 0x91a4bdU, 76, 98);
-    (void)CreateHallLabel(state.host_smoke, "INSTALLED APPS", lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium),
-                          0x91a4bdU, 40, 148);
-    char app_count_text[24]{};
-    (void)std::snprintf(app_count_text, sizeof(app_count_text), "%" PRIu32 " %s", visible_count,
-                        visible_count == 1U ? "app" : "apps");
-    lv_obj_t* app_count_label = CreateHallLabel(
-        state.host_smoke, app_count_text, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium), 0x91a4bdU, 560, 148);
-    lv_obj_set_width(app_count_label, 120);
-    lv_obj_set_style_text_align(app_count_label, LV_TEXT_ALIGN_RIGHT, 0);
-    DrawHallStatusBarLocked(state, model.status_bar);
-
-    lv_obj_t* settings_button = lv_obj_create(state.host_smoke);
-    lv_obj_set_pos(settings_button, 520, 62);
-    lv_obj_set_size(settings_button, 160, 60);
-    lv_obj_set_style_pad_all(settings_button, 0, 0);
-    lv_obj_set_style_radius(settings_button, 20, 0);
-    lv_obj_set_style_border_width(settings_button, 1, 0);
-    lv_obj_set_style_border_color(settings_button, lv_color_hex(0x42607fU), 0);
-    lv_obj_set_style_bg_color(settings_button, lv_color_hex(0x111f32U), 0);
-    lv_obj_set_style_bg_opa(settings_button, LV_OPA_COVER, 0);
-    lv_obj_set_flex_flow(settings_button, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(settings_button, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(settings_button, 8, 0);
-    lv_obj_remove_flag(settings_button, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(settings_button, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(settings_button, HallHeaderButtonEvent, LV_EVENT_ALL, &state);
-
-    lv_obj_t* settings_icon = lv_label_create(settings_button);
-    lv_label_set_text(settings_icon, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_text_font(settings_icon, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0);
-    lv_obj_set_style_text_color(settings_icon, lv_color_hex(0xf2f7ffU), 0);
-    lv_obj_t* settings_label = lv_label_create(settings_button);
-    lv_label_set_text(settings_label, "Settings");
-    lv_obj_set_style_text_font(settings_label, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0);
-    lv_obj_set_style_text_color(settings_label, lv_color_hex(0xf2f7ffU), 0);
-    state.hall_settings_press_overlay = lv_obj_create(settings_button);
-    lv_obj_set_pos(state.hall_settings_press_overlay, 0, 0);
-    lv_obj_set_size(state.hall_settings_press_overlay, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_pad_all(state.hall_settings_press_overlay, 0, 0);
-    lv_obj_set_style_radius(state.hall_settings_press_overlay, 20, 0);
-    lv_obj_set_style_border_width(state.hall_settings_press_overlay, 0, 0);
-    lv_obj_set_style_bg_color(state.hall_settings_press_overlay, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(state.hall_settings_press_overlay, LV_OPA_40, 0);
-    lv_obj_remove_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_FLOATING);
-    lv_obj_add_flag(state.hall_settings_press_overlay, LV_OBJ_FLAG_HIDDEN);
-
-    if (model.firmware_update_available) {
-        lv_obj_t* update_button = lv_obj_create(state.host_smoke);
-        lv_obj_set_pos(update_button, 338, 62);
-        lv_obj_set_size(update_button, 160, 60);
-        lv_obj_set_style_pad_all(update_button, 0, 0);
-        lv_obj_set_style_radius(update_button, 20, 0);
-        lv_obj_set_style_border_width(update_button, 1, 0);
-        lv_obj_set_style_border_color(update_button, lv_color_hex(0x5e9f59U), 0);
-        lv_obj_set_style_bg_color(update_button, lv_color_hex(0x152a2aU), 0);
-        lv_obj_set_style_bg_opa(update_button, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(update_button, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(update_button, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(update_button, HallHeaderButtonEvent, LV_EVENT_ALL, &state);
-
-        lv_obj_t* update_icon = lv_label_create(update_button);
-        lv_label_set_text(update_icon, LV_SYMBOL_REFRESH);
-        lv_obj_set_style_text_font(update_icon, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0);
-        lv_obj_set_style_text_color(update_icon, lv_color_hex(0xcdf5c6U), 0);
-        lv_obj_align(update_icon, LV_ALIGN_LEFT_MID, 18, 0);
-        lv_obj_t* update_label = lv_label_create(update_button);
-        lv_label_set_text(update_label, "Update");
-        lv_obj_set_style_text_font(update_label, lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0);
-        lv_obj_set_style_text_color(update_label, lv_color_hex(0xcdf5c6U), 0);
-        lv_obj_align(update_label, LV_ALIGN_LEFT_MID, 50, 0);
-        lv_obj_t* update_dot = lv_obj_create(update_button);
-        lv_obj_set_pos(update_dot, 141, 8);
-        lv_obj_set_size(update_dot, 10, 10);
-        lv_obj_set_style_pad_all(update_dot, 0, 0);
-        lv_obj_set_style_radius(update_dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(update_dot, 0, 0);
-        lv_obj_set_style_bg_color(update_dot, lv_color_hex(0xef5d4fU), 0);
-        lv_obj_remove_flag(update_dot, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(update_dot, LV_OBJ_FLAG_CLICKABLE);
-
-        state.hall_update_press_overlay = lv_obj_create(update_button);
-        lv_obj_set_pos(state.hall_update_press_overlay, 0, 0);
-        lv_obj_set_size(state.hall_update_press_overlay, LV_PCT(100), LV_PCT(100));
-        lv_obj_set_style_pad_all(state.hall_update_press_overlay, 0, 0);
-        lv_obj_set_style_radius(state.hall_update_press_overlay, 20, 0);
-        lv_obj_set_style_border_width(state.hall_update_press_overlay, 0, 0);
-        lv_obj_set_style_bg_color(state.hall_update_press_overlay, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(state.hall_update_press_overlay, LV_OPA_40, 0);
-        lv_obj_remove_flag(state.hall_update_press_overlay, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(state.hall_update_press_overlay, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(state.hall_update_press_overlay, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    state.hall_carousel_viewport = lv_obj_create(state.host_smoke);
-    lv_obj_set_pos(state.hall_carousel_viewport, lvgl::square_720::HallCarousel::kLeft,
-                   lvgl::square_720::HallCarousel::kTop);
-    lv_obj_set_size(state.hall_carousel_viewport, lvgl::square_720::HallCarousel::kViewportWidth,
-                    lvgl::square_720::HallCarousel::kCardHeight);
-    lv_obj_set_style_pad_all(state.hall_carousel_viewport, 0, 0);
-    lv_obj_set_style_border_width(state.hall_carousel_viewport, 0, 0);
-    lv_obj_set_style_bg_color(state.hall_carousel_viewport, lv_color_hex(0x08111fU), 0);
-    lv_obj_set_style_bg_opa(state.hall_carousel_viewport, LV_OPA_COVER, 0);
-    lv_obj_set_scroll_dir(state.hall_carousel_viewport, LV_DIR_HOR);
-    lv_obj_set_scrollbar_mode(state.hall_carousel_viewport, LV_SCROLLBAR_MODE_OFF);
-    constexpr lv_obj_flag_t kHallScrollFlags = static_cast<lv_obj_flag_t>(
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
-    lv_obj_add_flag(state.hall_carousel_viewport, kHallScrollFlags);
-    lv_obj_add_flag(state.hall_carousel_viewport, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(state.hall_carousel_viewport, HallCarouselEvent, LV_EVENT_SCROLL, &state);
-    lv_obj_add_event_cb(state.hall_carousel_viewport, HallCarouselEvent, LV_EVENT_SCROLL_END, &state);
-
-    state.hall_carousel_content = lv_obj_create(state.hall_carousel_viewport);
-    lv_obj_set_pos(state.hall_carousel_content, 0, 0);
-    lv_obj_set_size(state.hall_carousel_content,
-                    lvgl::square_720::HallCarousel::ContentWidth(visible_count) +
-                        (visible_count == 0U ? 0 : lvgl::square_720::HallCarousel::kLeft),
-                    lvgl::square_720::HallCarousel::kCardHeight);
-    lv_obj_set_style_pad_all(state.hall_carousel_content, 0, 0);
-    lv_obj_set_style_border_width(state.hall_carousel_content, 0, 0);
-    lv_obj_set_style_bg_opa(state.hall_carousel_content, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(state.hall_carousel_content, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(state.hall_carousel_content, LV_OBJ_FLAG_CLICKABLE);
-    if (visible_count > lvgl::square_720::HallCarousel::kFullyVisibleCards) {
-        state.hall_scroll_track = lv_obj_create(state.host_smoke);
-        lv_obj_set_pos(state.hall_scroll_track, (kWidth - kHallScrollTrackWidth) / 2, 462);
-        lv_obj_set_size(state.hall_scroll_track, kHallScrollTrackWidth, kHallScrollTrackHeight);
-        lv_obj_set_style_pad_all(state.hall_scroll_track, 0, 0);
-        lv_obj_set_style_radius(state.hall_scroll_track, kHallScrollTrackHeight / 2, 0);
-        lv_obj_set_style_border_width(state.hall_scroll_track, 0, 0);
-        lv_obj_set_style_bg_color(state.hall_scroll_track, lv_color_hex(0x21364eU), 0);
-        lv_obj_remove_flag(state.hall_scroll_track, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(state.hall_scroll_track, LV_OBJ_FLAG_CLICKABLE);
-
-        state.hall_scroll_thumb = lv_obj_create(state.hall_scroll_track);
-        lv_obj_set_pos(state.hall_scroll_thumb, 0, 0);
-        lv_obj_set_size(state.hall_scroll_thumb,
-                        lvgl::square_720::HallCarousel::ScrollThumbWidth(kHallScrollTrackWidth, visible_count),
-                        kHallScrollTrackHeight);
-        lv_obj_set_style_pad_all(state.hall_scroll_thumb, 0, 0);
-        lv_obj_set_style_radius(state.hall_scroll_thumb, kHallScrollTrackHeight / 2, 0);
-        lv_obj_set_style_border_width(state.hall_scroll_thumb, 0, 0);
-        lv_obj_set_style_bg_color(state.hall_scroll_thumb, lv_color_hex(0x69a7ffU), 0);
-        lv_obj_remove_flag(state.hall_scroll_thumb, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(state.hall_scroll_thumb, LV_OBJ_FLAG_CLICKABLE);
-    }
-    lv_obj_update_layout(state.hall_carousel_viewport);
-    lv_obj_scroll_to_x(state.hall_carousel_viewport, state.hall_scroll_offset, LV_ANIM_OFF);
-    UpdateHallCarouselLocked(state, lv_obj_get_scroll_x(state.hall_carousel_viewport));
-    if (visible_count == 0U) {
-        (void)CreateHallLabel(state.host_smoke, "No readable Bundle in App Store",
-                              lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kLarge), 0xf2f7ffU, 40, 210);
-    }
-
-    if (model.status == host_ui::HallStatus::kAppFailed) {
-        (void)CreateHallLabel(state.host_smoke, HallStatusText(model.status),
-                              lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium), HallStatusColor(model.status), 40,
-                              560);
-        if (model.status_app_id != nullptr && model.status_app_id[0] != '\0') {
-            lv_obj_t* app_id =
-                CreateHallLabel(state.host_smoke, model.status_app_id,
-                                lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kSmall), 0x91a4bdU, 40, 592);
-            lv_obj_set_width(app_id, 640);
-            lv_label_set_long_mode(app_id, LV_LABEL_LONG_DOT);
-        }
-        char error_identity[128]{};
-        const char* phase = model.status_error_phase != nullptr ? model.status_error_phase : "unknown";
-        const char* code = model.status_error_code != nullptr ? model.status_error_code : "app_failed";
-        if (model.status_has_exit_code) {
-            (void)std::snprintf(error_identity, sizeof(error_identity), "%s / %s / exit=%" PRId32, phase, code,
-                                model.status_exit_code);
-        } else {
-            (void)std::snprintf(error_identity, sizeof(error_identity), "%s / %s", phase, code);
-        }
-        lv_obj_t* identity = CreateHallLabel(state.host_smoke, error_identity,
-                                             lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kSmall), 0xffb29fU, 40, 618);
-        lv_obj_set_width(identity, 640);
-        lv_label_set_long_mode(identity, LV_LABEL_LONG_DOT);
-        if (model.status_error_detail != nullptr && model.status_error_detail[0] != '\0') {
-            lv_obj_t* detail =
-                CreateHallLabel(state.host_smoke, model.status_error_detail,
-                                lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kSmall), 0xc8d5e5U, 40, 646);
-            lv_obj_set_width(detail, 640);
-            lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
-        }
-    } else {
-        if (model.status != host_ui::HallStatus::kReady) {
-            (void)CreateHallLabel(state.host_smoke, HallStatusText(model.status),
-                                  lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium), HallStatusColor(model.status),
-                                  40, 604);
-        }
-        if (model.status_app_id != nullptr && model.status_app_id[0] != '\0') {
-            (void)CreateHallLabel(state.host_smoke, model.status_app_id,
-                                  lvgl::BuiltinLatinFont(lvgl::SystemFontRole::kMedium), 0x91a4bdU, 40, 638);
-        }
-    }
-
+    const auto& scene_objects = state.hall_scene_ui.objects();
+    lv_obj_update_layout(scene_objects.carousel_viewport);
+    lv_obj_scroll_to_x(scene_objects.carousel_viewport, state.hall_scroll_offset, LV_ANIM_OFF);
+    UpdateHallCarouselLocked(state, lv_obj_get_scroll_x(scene_objects.carousel_viewport));
     uint32_t running_index = host_ui::kMaxHallApps;
     for (uint32_t index = 0U; index < visible_count; ++index) {
         if (model.apps[index].running) {
@@ -2203,6 +1447,8 @@ std::expected<void, host_ui::SystemUiError> ShowHallImpl(MetalioClaw4PlatformSta
     state.hall_action_context = action_context;
     state.hall_firmware_update_available = model.firmware_update_available;
     state.hall_launch_enabled = model.launch_enabled;
+    state.hall_status_bar = model.status_bar;
+    state.hall_status_bar_valid = true;
     state.input_router.BindTouchSink(HostPointerTouchSink, &state);
     state.input_router.BindSystemActionSink(action_sink, action_context);
     ESP_LOGI(kTag, "App Hall visible: apps=%" PRIu32 " status=%u detail=%" PRIu32, visible_count,
@@ -2215,20 +1461,14 @@ void UpdateHallStatusBarImpl(MetalioClaw4PlatformState& state, const host_ui::Ha
         esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    UpdateHallStatusBarLocked(state, model);
+    state.hall_scene_ui.UpdateStatusBarLocked(model);
+    state.hall_status_bar = model;
+    state.hall_status_bar_valid = true;
     lvgl::RequestDisplayRefresh(state.display);
     esp_lv_adapter_unlock();
 }
 
-void PauseHallCoverLoadingImpl(MetalioClaw4PlatformState& state) {
-    state.hall_cover_request_generation.fetch_add(1U, std::memory_order_acq_rel);
-    if (state.hall_cover_job_queue != nullptr) {
-        (void)xQueueReset(state.hall_cover_job_queue);
-    }
-    while (state.hall_cover_worker_active.load(std::memory_order_acquire)) {
-        vTaskDelay(1U);
-    }
-}
+void PauseHallCoverLoadingImpl(MetalioClaw4PlatformState& state) { state.hall_cover_cache.Pause(); }
 
 void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     PauseHallCoverLoadingImpl(state);
@@ -2239,8 +1479,8 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     state.hall_action_sink = nullptr;
     state.hall_action_context = nullptr;
     state.hall_launch_enabled = false;
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
+    state.hall_retained_for_status = false;
+    state.hall_status_bar_valid = false;
     if (state.display == nullptr || state.host_smoke == nullptr ||
         !state.guest_graphics.RefreshSynchronizationAvailable()) {
         state.hall_app_count = 0U;
@@ -2252,22 +1492,23 @@ void LeaveHallImpl(MetalioClaw4PlatformState& state) {
     }
     SetHostPointerEnabledLocked(state, false);
     state.guest_graphics.DrainRefreshReady();
-    const lvgl::square_720::HallLaunchBackgroundPlan background_plan = lvgl::square_720::PlanHallLaunchBackground(
+    const lvgl::square_common::HallLaunchBackgroundPlan background_plan = lvgl::square_common::PlanHallLaunchBackground(
         running_index < hall_app_count, state.system_transition.HasBackground());
-    if (background_plan == lvgl::square_720::HallLaunchBackgroundPlan::kReuseCleanBaseline) {
+    if (background_plan == lvgl::square_common::HallLaunchBackgroundPlan::kReuseCleanBaseline) {
         // The clean baseline was preserved when this suspended App entered the
         // Hall (and refreshed after scrolling). Do not synchronously snapshot
         // its RUNNING card on the A-to-B launch path.
         ESP_LOGI(kTag, "reusing clean Hall transition baseline before App switch: running=%" PRIu32, running_index);
     } else {
         const int64_t background_started_us = esp_timer_get_time();
-        const bool prepared = background_plan == lvgl::square_720::HallLaunchBackgroundPlan::kPrepareCleanBaseline
+        const bool prepared = background_plan == lvgl::square_common::HallLaunchBackgroundPlan::kPrepareCleanBaseline
                                   ? PrepareCleanHallBackgroundLocked(state, running_index)
                                   : state.system_transition.PrepareBackgroundLocked(state.host_smoke);
         if (prepared) {
             ESP_LOGI(kTag, "Hall transition background refreshed before App launch: mode=%s elapsed=%" PRIu32 " us",
-                     background_plan == lvgl::square_720::HallLaunchBackgroundPlan::kPrepareCleanBaseline ? "clean"
-                                                                                                          : "visible",
+                     background_plan == lvgl::square_common::HallLaunchBackgroundPlan::kPrepareCleanBaseline
+                         ? "clean"
+                         : "visible",
                      static_cast<uint32_t>(esp_timer_get_time() - background_started_us));
         } else {
             ESP_LOGW(kTag, "could not refresh Hall transition background before App launch");
@@ -2305,8 +1546,6 @@ std::expected<void, host_ui::SystemUiError> RestoreGuestViewImpl(MetalioClaw4Pla
     state.hall_action_context = nullptr;
     state.hall_app_count = 0U;
     state.hall_launch_enabled = false;
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     lv_obj_t* guest_frame = state.guest_graphics.FrameLocked();
     if (state.display == nullptr || state.host_smoke == nullptr || guest_frame == nullptr ||
         !state.guest_graphics.RefreshSynchronizationAvailable()) {
@@ -2397,8 +1636,6 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
     state.hall_action_context = nullptr;
     state.hall_app_count = 0U;
     state.hall_launch_enabled = false;
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
@@ -2410,7 +1647,8 @@ std::expected<void, host_ui::SystemUiError> ShowSystemMenuImpl(MetalioClaw4Platf
     ResetHallImageDescriptorsLocked(state);
     lv_obj_set_style_bg_color(state.host_smoke, lv_color_hex(0x08111fU), 0);
     state.launch_image_descriptor = {};
-    auto result = state.system_menu_ui.ShowLocked(state.host_smoke, state.display, model, action_sink, action_context);
+    auto result = state.system_menu_ui.ShowLocked(state.host_smoke, state.display, ui_profile::kSystemMenuLayout, model,
+                                                  action_sink, action_context);
     if (result.has_value() && state.status_layer_ui.PerformanceOverlayVisibleLocked()) {
         state.status_layer_ui.RaisePerformanceOverlayLocked();
     }
@@ -2464,8 +1702,6 @@ std::expected<void, host_ui::SystemUiError> ShowSystemInformationImpl(MetalioCla
     }
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     auto result =
         state.system_detail_ui.ShowSystemInformationLocked(state.host_smoke, model, action_sink, action_context);
     if (!result.has_value()) {
@@ -2522,8 +1758,6 @@ std::expected<void, host_ui::SystemUiError> ShowPowerManagementImpl(MetalioClaw4
     }
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     auto result =
         state.system_detail_ui.ShowPowerManagementLocked(state.host_smoke, model, action_sink, action_context);
     if (!result.has_value()) {
@@ -2580,8 +1814,6 @@ std::expected<void, host_ui::SystemUiError> ShowRemoteControlImpl(MetalioClaw4Pl
     }
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     auto result = state.system_detail_ui.ShowRemoteControlLocked(state.host_smoke, model, action_sink, action_context);
     if (!result.has_value()) {
         state.system_detail_ui.LeaveRemoteControl();
@@ -2637,8 +1869,6 @@ std::expected<void, host_ui::SystemUiError> ShowAppManagementImpl(MetalioClaw4Pl
     }
     lv_obj_clean(state.host_smoke);
     ResetHallImageDescriptorsLocked(state);
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     auto result = state.system_detail_ui.ShowAppManagementLocked(state.host_smoke, model, action_sink, action_context);
     if (!result.has_value()) {
         state.system_detail_ui.LeaveAppManagement();
@@ -2685,11 +1915,11 @@ std::expected<void, host_ui::SystemUiError> ShowWifiSettingsImpl(MetalioClaw4Pla
         StyleFullscreenContainer(state.host_smoke, 0x08111fU);
     }
     ResetHallImageDescriptorsLocked(state);
-    state.hall_settings_press_overlay = nullptr;
-    state.hall_update_press_overlay = nullptr;
     auto result = state.wifi_settings_ui.ShowLocked(
-        state.host_smoke, state.display, model, action_sink, action_context,
-        [](void* context) { static_cast<lvgl::square_720::StatusLayerUi*>(context)->RaisePerformanceOverlayLocked(); },
+        state.host_smoke, state.display, ui_profile::kSystemPageLayout, model, action_sink, action_context,
+        [](void* context) {
+            static_cast<lvgl::square_common::StatusLayerUi*>(context)->RaisePerformanceOverlayLocked();
+        },
         &state.status_layer_ui);
     if (!result.has_value()) {
         esp_lv_adapter_unlock();
@@ -2726,50 +1956,22 @@ std::expected<void, host_ui::SystemUiError> ShowStatusLayerImpl(MetalioClaw4Plat
                                                                 uint64_t trigger_timestamp_us,
                                                                 host_ui::SystemUiActionSink action_sink,
                                                                 void* action_context) {
-    const bool hardware_started = state.system_transition.BeginStatusLayerTransition(
-        true, lvgl::square_720::StatusLayerUi::kTransitionScrimRgb,
-        lvgl::square_720::StatusLayerUi::kTransitionScrimOpacity, trigger_timestamp_us);
-    if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
-        if (hardware_started) {
-            state.system_transition.CancelStatusLayerTransition();
-        }
-        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    state.hall_retained_for_status = false;
+    if (state.display != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+        const auto& objects = state.hall_scene_ui.objects();
+        state.hall_retained_for_status =
+            state.host_smoke != nullptr && lv_obj_is_valid(state.host_smoke) && objects.carousel_content != nullptr &&
+            lv_obj_is_valid(objects.carousel_content) && state.hall_action_context != nullptr;
+        esp_lv_adapter_unlock();
     }
-    const auto log_lvgl_memory = [](const char* phase) {
-        lv_mem_monitor_t memory{};
-        lv_mem_monitor(&memory);
-        ESP_LOGI(kTag, "LVGL pool %s: total=%zu free=%zu largest=%zu used=%u%% frag=%u%% max-used=%zu", phase,
-                 memory.total_size, memory.free_size, memory.free_biggest_size, static_cast<unsigned>(memory.used_pct),
-                 static_cast<unsigned>(memory.frag_pct), memory.max_used);
-    };
-    log_lvgl_memory("before status layer");
-    auto result = state.status_layer_ui.ShowLocked(model, action_sink, action_context);
-    log_lvgl_memory("after status layer");
-    bool hardware_finished = false;
-    if (result.has_value() && hardware_started) {
-        const bool animated = state.system_transition.AnimateStatusLayerLocked(
-            state.status_layer_ui.TransitionDialogLocked(), lvgl::square_720::StatusLayerUi::kTransitionDialogVisibleY,
-            lvgl::square_720::StatusLayerUi::kTransitionDialogHiddenY, true, kStatusTransitionDurationMs,
-            trigger_timestamp_us);
-        if (animated) {
-            state.status_layer_ui.SetTransitionProgressLocked(kTransitionComplete);
-            hardware_finished = state.system_transition.FinishStatusLayerTransition(true);
-        }
-        if (!animated || !hardware_finished) {
-            state.system_transition.CancelStatusLayerTransition();
-        }
-    }
-    esp_lv_adapter_unlock();
+    auto result =
+        lvgl::square_common::PresentStatusLayer(state.display, state.status_layer_ui, state.system_transition, model,
+                                                trigger_timestamp_us, action_sink, action_context, true);
     if (!result.has_value()) {
-        if (hardware_started) {
-            state.system_transition.CancelStatusLayerTransition();
-        }
-        return result;
+        state.hall_retained_for_status = false;
+        return std::unexpected(result.error());
     }
-    if (!hardware_finished) {
-        RunStatusLayerTransition(state, true);
-    }
-    state.input_router.BindTouchSink(lvgl::square_720::StatusLayerUi::TouchSink, &state.status_layer_ui);
+    state.input_router.BindTouchSink(lvgl::square_common::StatusLayerUi::TouchSink, &state.status_layer_ui);
     state.input_router.BindSystemActionSink(action_sink, action_context);
     return {};
 }
@@ -2786,39 +1988,8 @@ void LeaveStatusLayerImpl(MetalioClaw4PlatformState& state, uint64_t trigger_tim
     void* action_context = state.status_layer_ui.ActionContext();
     state.input_router.UnbindTouchSink(&state.status_layer_ui);
     state.input_router.ClearSystemActionSink(action_context);
-    state.status_layer_ui.Deactivate();
-    const bool hardware_started = state.system_transition.BeginStatusLayerTransition(
-        false, lvgl::square_720::StatusLayerUi::kTransitionScrimRgb,
-        lvgl::square_720::StatusLayerUi::kTransitionScrimOpacity, trigger_timestamp_us);
-    if (state.display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
-        if (hardware_started) {
-            state.system_transition.CancelStatusLayerTransition();
-        }
-        return;
-    }
-    if (hardware_started) {
-        const bool animated = state.system_transition.AnimateStatusLayerLocked(
-            state.status_layer_ui.TransitionDialogLocked(), lvgl::square_720::StatusLayerUi::kTransitionDialogVisibleY,
-            lvgl::square_720::StatusLayerUi::kTransitionDialogHiddenY, false, kStatusTransitionDurationMs,
-            trigger_timestamp_us);
-        if (animated) {
-            state.status_layer_ui.LeaveLocked();
-            const bool finished = state.system_transition.FinishStatusLayerTransition(false);
-            if (!finished) {
-                state.system_transition.CancelStatusLayerTransition();
-            }
-            esp_lv_adapter_unlock();
-            return;
-        }
-        state.system_transition.CancelStatusLayerTransition();
-    }
-    esp_lv_adapter_unlock();
-    RunStatusLayerTransition(state, false);
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
-    state.status_layer_ui.LeaveLocked();
-    esp_lv_adapter_unlock();
+    (void)lvgl::square_common::DismissStatusLayer(state.display, state.status_layer_ui, state.system_transition,
+                                                  trigger_timestamp_us, true);
 }
 
 void UpdatePerformanceOverlayImpl(MetalioClaw4PlatformState& state, bool enabled, uint8_t cpu_percent) {
@@ -3022,7 +2193,7 @@ common::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformState& sta
                 const uint8_t safe_percent = percent <= 100U ? percent : 100U;
                 const uint32_t output = metalio_claw4::PerceptualBrightnessOutputPerTenThousand(safe_percent);
                 const esp_err_t status =
-                    static_cast<MetalioClaw4PlatformState*>(context)->hardware.SetBacklightOutputPerTenThousand(output);
+                    static_cast<MetalioClaw4PlatformState*>(context)->display_pipeline.SetBrightness(output);
                 if (status != ESP_OK) {
                     ESP_LOGW(kTag, "could not set backlight brightness: %s", esp_err_to_name(status));
                 }
@@ -3037,6 +2208,13 @@ common::SystemUiOperations MakeSystemUiOperations(MetalioClaw4PlatformState& sta
 class MetalioClaw4Platform final : public Platform, public device::PowerBackend, public device::HardwareInfoBackend {
    public:
     MetalioClaw4Platform() : graphics_(MakeGraphicsOperations(state_)), system_ui_(MakeSystemUiOperations(state_)) {
+        state_.hall_cover_cache.BindUi({
+            .context = &state_,
+            .show_placeholder = ShowCachedHallPlaceholder,
+            .attach = AttachCachedHallCover,
+            .detach = DetachCachedHallCover,
+            .request_refresh = RefreshCachedHallCover,
+        });
         state_.guest_graphics.SetPresentationHooks({
             .context = &state_,
             .prepare_frame_locked =
@@ -3074,7 +2252,7 @@ class MetalioClaw4Platform final : public Platform, public device::PowerBackend,
     [[nodiscard]] device::HardwareInfoBackend& hardware_info() override { return *this; }
     [[nodiscard]] host_ui::SystemUiBackend& system_ui() override { return system_ui_; }
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
-        state_.background_executor = &executor;
+        state_.hall_cover_cache.BindBackgroundExecutor(executor);
         wifi_.BindBackgroundExecutor(executor);
     }
 
@@ -3111,7 +2289,8 @@ class MetalioClaw4Platform final : public Platform, public device::PowerBackend,
    private:
     MetalioClaw4PlatformState state_{};
     common::GraphicsAdapter graphics_;
-    common::HostedWifiBackend wifi_{};
+    radio::EspHostedRadio wifi_radio_{};
+    common::wifi::WifiBackend wifi_{wifi_radio_};
     common::SystemUiAdapter system_ui_;
 };
 

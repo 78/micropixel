@@ -49,6 +49,17 @@ python3 -m pip install -r requirements-dev.txt
 `.env` 中；`tools/p4.sh` 会自动加载，并将远控地址写入生成的
 `CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST`。显式环境变量或命令行端口优先级更高。
 
+Host 的 ESP-IDF 命令统一由 `tools/firmware.py` 读取 `tools/firmware_profiles.json` 生成；`p4.sh` 和
+`s31.sh` 只保留板型易记命令及各自的产品流程。可用 profile 可直接查看：
+
+```sh
+python3 tools/firmware.py list
+```
+
+新增开发板时应增加声明式 profile，而不是复制一份 ESP-IDF build/flash/monitor shell 实现。Null
+profile 只有编译能力，通用工具会拒绝烧录；物理板 profile 在烧录前即使传入了显式端口，也会通过
+`esptool chip-id` 核对实际芯片，避免把固件写到错误目标。
+
 `p4.sh` 会在自身进程内退出已激活的 Conda 环境，避免 Conda Python/动态库污染 ESP-IDF venv；它不会也
 无法改变父终端的 Conda 状态。ESP-IDF 官方导出的工具环境缓存在 `build/p4-idf-environment.sh`，仅首次运行
 或 IDF/脚本更新后重新生成，因此无需每次手动执行 `export.sh`。
@@ -75,6 +86,24 @@ bash tools/p4.sh build-all
 
 # 仅在发布前或推送前显式运行完整测试门禁
 bash tools/p4.sh test
+```
+
+ESP-Mosaico 的 ESP32-S31 P0/P1 bring-up 使用独立入口。`build-host` 与 `flash-host` 明确分离，后者只写
+已经构建好的 Host，不重建或改写 SDK Demo/App Store。首次 ROM 烧录后，MicroPixel 应用 CDC 会自动切换到下载模式，脚本按 USB 物理位置接续
+重枚举后的 ROM 端口：
+
+```sh
+bash tools/s31.sh build-host
+bash tools/s31.sh flash-host /dev/cu.usbmodemXXXX
+bash tools/s31.sh monitor /dev/cu.usbmodemXXXX
+bash tools/s31.sh build-null
+```
+
+SDK Demo 单独通过 USB 增量安装，不烧录 Host：
+
+```sh
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
+    app install guest/apps/demo
 ```
 
 设备连接后，日常 Host 修改使用保留 App Store 的增量烧录入口：

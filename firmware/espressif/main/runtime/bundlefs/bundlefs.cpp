@@ -135,8 +135,9 @@ static_assert(offsetof(CatalogRecord, entries) == 64U);
 static_assert(offsetof(CatalogRecordV1, entries) == 64U);
 static_assert(sizeof(FileState) <= sizeof(bundlefs_file_t));
 static_assert(sizeof(WriterState) <= sizeof(bundlefs_writer_t));
-static_assert(SPI_FLASH_MMU_PAGE_SIZE == MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE,
-              "BundleFS block size must match the target MMU page size");
+static_assert(SPI_FLASH_MMU_PAGE_SIZE <= MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE &&
+                  (MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE % SPI_FLASH_MMU_PAGE_SIZE) == 0U,
+              "BundleFS data blocks must contain a whole number of target MMU pages");
 
 std::atomic_flag g_writer_active = ATOMIC_FLAG_INIT;
 
@@ -607,20 +608,25 @@ bundlefs_error_t MapFileState(const esp_partition_t* partition, const FileState&
     }
     const uint32_t first_block = offset / MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE;
     const uint32_t within_first = offset % MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE;
-    const uint32_t page_count =
+    const uint32_t block_count =
         (within_first + size + MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE - 1U) / MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE;
+    constexpr uint32_t kMmuPagesPerDataBlock = MICROPIXEL_BUNDLEFS_DATA_BLOCK_SIZE / SPI_FLASH_MMU_PAGE_SIZE;
+    const uint32_t page_count = block_count * kMmuPagesPerDataBlock;
     int* pages =
         static_cast<int*>(heap_caps_malloc(page_count * sizeof(*pages), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (pages == nullptr) {
         return BUNDLEFS_ERR_UNAVAILABLE;
     }
-    for (uint32_t index = 0U; index < page_count; ++index) {
-        const uint32_t physical = partition->address + BlockOffset(file.blocks[first_block + index]);
-        if ((physical % SPI_FLASH_MMU_PAGE_SIZE) != 0U) {
+    for (uint32_t block_index = 0U; block_index < block_count; ++block_index) {
+        const uint32_t block_physical = partition->address + BlockOffset(file.blocks[first_block + block_index]);
+        if ((block_physical % SPI_FLASH_MMU_PAGE_SIZE) != 0U) {
             free(pages);
             return BUNDLEFS_ERR_CORRUPT;
         }
-        pages[index] = static_cast<int>(physical / SPI_FLASH_MMU_PAGE_SIZE);
+        for (uint32_t page_index = 0U; page_index < kMmuPagesPerDataBlock; ++page_index) {
+            const uint32_t output_index = block_index * kMmuPagesPerDataBlock + page_index;
+            pages[output_index] = static_cast<int>(block_physical / SPI_FLASH_MMU_PAGE_SIZE + page_index);
+        }
     }
     const void* mapping = nullptr;
     spi_flash_mmap_handle_t handle = 0U;

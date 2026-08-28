@@ -8,18 +8,12 @@ namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_battery";
-constexpr uint8_t kBq27220Address = 0x55U;
-constexpr uint8_t kVoltageRegister = 0x08U;
-constexpr uint8_t kCurrentRegister = 0x0cU;
 constexpr uint8_t kTcaInputPort1 = 0x01U;
 constexpr uint8_t kTcaConfigurationPort1 = 0x07U;
 constexpr uint8_t kUsbInsertMask = 1U << 2U;       // P1-2, active-high VBUS divider.
 constexpr uint8_t kWirelessChargeMask = 1U << 3U;  // P1-3, active-high WX_OUT divider.
 constexpr uint8_t kExternalPowerInputMask = kUsbInsertMask | kWirelessChargeMask;
-constexpr uint32_t kI2cSpeedHz = 100000U;
 constexpr int kI2cTimeoutMs = 50;
-constexpr int64_t kProbeRetryUs = 10000000;
-constexpr int64_t kReadFailureCooldownUs = 2000000;
 constexpr uint16_t kEmptyVoltageMv = 3300U;
 constexpr uint16_t kFullVoltageMv = 4200U;
 constexpr int16_t kChargingThresholdMa = 5;
@@ -51,7 +45,7 @@ uint8_t EstimatePercent(uint16_t voltage_mv) {
 
 void BatteryBackend::Initialize(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t io_expander,
                                 common::I2cExecutor& i2c_executor) {
-    bus_ = bus;
+    fuel_gauge_.Bind(bus);
     io_expander_ = io_expander;
     i2c_executor_ = &i2c_executor;
     const esp_err_t status = i2c_executor.Invoke(
@@ -70,7 +64,8 @@ void BatteryBackend::InitializeOnWorker() {
     if (!ConfigurePowerDetectionInputs()) {
         ESP_LOGW(kTag, "external-power inputs could not be configured");
     }
-    (void)Attach();
+    drivers::Bq27220Sample sample{};
+    (void)fuel_gauge_.Read(sample, esp_timer_get_time());
 }
 
 device::BatterySnapshot BatteryBackend::Snapshot() {
@@ -100,10 +95,8 @@ device::BatterySnapshot BatteryBackend::RefreshOnWorker() {
     }
 
     const int64_t now_us = esp_timer_get_time();
-    if (device_ == nullptr && now_us >= next_probe_us_) {
-        (void)Attach();
-    }
-    if (device_ == nullptr || now_us < read_cooldown_until_us_) {
+    drivers::Bq27220Sample fuel_sample{};
+    if (!fuel_gauge_.Read(fuel_sample, now_us)) {
         return {.percent = last_percent_,
                 .available = sample_available_,
                 .charging = charging_,
@@ -113,32 +106,18 @@ device::BatterySnapshot BatteryBackend::RefreshOnWorker() {
                 .external_power_available = external_power_available_};
     }
 
-    uint16_t voltage_mv = 0U;
-    if (!ReadRegister(kVoltageRegister, voltage_mv)) {
-        return {.percent = last_percent_,
-                .available = sample_available_,
-                .charging = charging_,
-                .discharging = discharging_,
-                .charging_available = charging_available_,
-                .external_power_connected = external_power_connected_,
-                .external_power_available = external_power_available_};
-    }
-    last_percent_ = Filter(EstimatePercent(voltage_mv), now_us);
+    last_percent_ = Filter(EstimatePercent(fuel_sample.voltage_mv), now_us);
     sample_available_ = true;
 
-    uint16_t raw_current_ma = 0U;
-    if (ReadRegister(kCurrentRegister, raw_current_ma)) {
-        const int16_t current_ma = static_cast<int16_t>(raw_current_ma);
-        const bool charging = current_ma > kChargingThresholdMa;
-        const bool discharging = current_ma < -kChargingThresholdMa;
-        if (!charging_available_ || charging != charging_ || discharging != discharging_) {
-            const char* direction = charging ? "charging" : (discharging ? "discharging" : "idle");
-            ESP_LOGI(kTag, "battery %s: current=%d mA", direction, static_cast<int>(current_ma));
-        }
-        charging_ = charging;
-        discharging_ = discharging;
-        charging_available_ = true;
+    const bool charging = fuel_sample.current_ma > kChargingThresholdMa;
+    const bool discharging = fuel_sample.current_ma < -kChargingThresholdMa;
+    if (!charging_available_ || charging != charging_ || discharging != discharging_) {
+        const char* direction = charging ? "charging" : (discharging ? "discharging" : "idle");
+        ESP_LOGI(kTag, "battery %s: current=%d mA", direction, static_cast<int>(fuel_sample.current_ma));
     }
+    charging_ = charging;
+    discharging_ = discharging;
+    charging_available_ = true;
     return {.percent = last_percent_,
             .available = true,
             .charging = charging_,
@@ -163,64 +142,6 @@ void BatteryBackend::NotifyExternalPowerChanged() {
     if (sink != nullptr) {
         sink(state_change_context_.load(std::memory_order_acquire));
     }
-}
-
-bool BatteryBackend::Attach() {
-    if (device_ != nullptr) {
-        return true;
-    }
-    if (bus_ == nullptr) {
-        return false;
-    }
-
-    const esp_err_t probe_status = i2c_master_probe(bus_, kBq27220Address, kI2cTimeoutMs);
-    if (probe_status != ESP_OK) {
-        next_probe_us_ = esp_timer_get_time() + kProbeRetryUs;
-        if (!probe_warning_logged_) {
-            ESP_LOGW(kTag, "BQ27220 unavailable at I2C address 0x%02x: %s", kBq27220Address,
-                     esp_err_to_name(probe_status));
-            probe_warning_logged_ = true;
-        }
-        return false;
-    }
-
-    i2c_device_config_t config{};
-    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = kBq27220Address;
-    config.scl_speed_hz = kI2cSpeedHz;
-    const esp_err_t add_status = i2c_master_bus_add_device(bus_, &config, &device_);
-    if (add_status != ESP_OK) {
-        device_ = nullptr;
-        next_probe_us_ = esp_timer_get_time() + kProbeRetryUs;
-        ESP_LOGW(kTag, "could not attach BQ27220: %s", esp_err_to_name(add_status));
-        return false;
-    }
-
-    next_probe_us_ = 0;
-    ESP_LOGI(kTag, "BQ27220 ready at I2C address 0x%02x", kBq27220Address);
-    return true;
-}
-
-bool BatteryBackend::ReadRegister(uint8_t address, uint16_t& value) {
-    uint8_t bytes[2]{};
-    const esp_err_t status =
-        i2c_master_transmit_receive(device_, &address, sizeof(address), bytes, sizeof(bytes), kI2cTimeoutMs);
-    if (status != ESP_OK) {
-        ++consecutive_read_failures_;
-        if (consecutive_read_failures_ == 1U || consecutive_read_failures_ % 10U == 0U) {
-            ESP_LOGW(kTag, "BQ27220 register 0x%02x read failed: %s (consecutive=%lu)", address,
-                     esp_err_to_name(status), static_cast<unsigned long>(consecutive_read_failures_));
-        }
-        if (consecutive_read_failures_ >= 2U) {
-            read_cooldown_until_us_ = esp_timer_get_time() + kReadFailureCooldownUs;
-        }
-        return false;
-    }
-
-    consecutive_read_failures_ = 0U;
-    read_cooldown_until_us_ = 0;
-    value = static_cast<uint16_t>(bytes[0]) | static_cast<uint16_t>(static_cast<uint16_t>(bytes[1]) << 8U);
-    return true;
 }
 
 bool BatteryBackend::ConfigurePowerDetectionInputs() {

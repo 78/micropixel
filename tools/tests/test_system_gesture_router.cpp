@@ -172,6 +172,25 @@ bool TopGestureIsReserved() {
                  "top gesture must open the status layer");
 }
 
+bool TopGestureScalesFor480Display() {
+    FakeInputBackend input;
+    SystemGestureRouter router(input, 480U, 480U);
+    Capture capture;
+    router.BindTouchSink(CaptureGuest, &capture);
+    router.BindSystemActionSink(CaptureSystem, &capture);
+
+    // Real CST9217 trajectory captured on ESP-Mosaico. On a 480 px panel the
+    // proportional recognition distance is 38 px, and this modest diagonal
+    // drift must not permanently reject the downward gesture.
+    (void)input.Emit(Sample(TouchPhase::kDown, 178U, 22U, 0U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 225U, 62U, 137000U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 225U, 62U, 160000U));
+    return Check(capture.guest_samples.empty(), "recognized 480px top gesture must not leak to Guest") &&
+           Check(capture.system_actions.size() == 1U, "480px top gesture must emit exactly one System action") &&
+           Check(capture.system_actions[0].type == SystemUiActionType::kOpenStatusLayer,
+                 "480px top gesture must open the status layer");
+}
+
 bool BottomGestureIsReserved() {
     FakeInputBackend input;
     SystemGestureRouter router(input, 720U, 720U);
@@ -322,13 +341,14 @@ bool TimedOutCandidateReturnsToGuest() {
 int main() {
     const bool passed = NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() &&
                         SemanticKeyReachesGuest() && TouchAndKeyInputReportUserActivity() && TopGestureIsReserved() &&
-                        BottomGestureIsReserved() && BottomGestureRejectsIncidentalMovement() &&
+                        TopGestureScalesFor480Display() && BottomGestureIsReserved() &&
+                        BottomGestureRejectsIncidentalMovement() &&
                         RecognizedGestureQuarantinesReplacementTrack() &&
                         RejectedEdgeGestureReplaysCompleteSequence() && ReleasedEdgeTapReplaysDownAndUp() &&
                         RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
     if (!passed) {
         return 1;
     }
-    std::puts("SystemGestureRouter host tests passed (12 cases).");
+    std::puts("SystemGestureRouter host tests passed (13 cases).");
     return 0;
 }

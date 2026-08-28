@@ -6,7 +6,9 @@
 
 #include "esp_err.h"
 
+#ifndef SPI_FLASH_MMU_PAGE_SIZE
 #define SPI_FLASH_MMU_PAGE_SIZE (64U * 1024U)
+#endif
 #define SPI_FLASH_MMAP_FLAG_DATA 0U
 
 typedef uint32_t spi_flash_mmap_handle_t;

@@ -6,7 +6,7 @@
 #include "esp_ota_ops.h"
 #include "host_controller.hpp"
 #include "host_ui/system_shell.hpp"
-#include "local_control/usb_local_control_agent.hpp"
+#include "local_control/local_control_agent.hpp"
 #include "network_time.hpp"
 #include "nvs_flash.h"
 #include "platform/platform.hpp"
@@ -53,9 +53,9 @@ void FirmwareApp::Run() {
                                           platform_.gpio(), platform_.haptics(), platform_.battery());
     static host_ui::SystemShell shell(platform_.system_ui());
     static remote_control::RemoteControlAgent remote_control(platform_.wifi(), platform_.hardware_info());
-    static local_control::UsbLocalControlAgent local_control(platform_.local_control(), remote_control);
+    static local_control::LocalControlAgent local_control(platform_.local_control(), remote_control);
     if (!local_control.Start()) {
-        ESP_LOGW(kTag, "USB local control is unavailable for this boot");
+        ESP_LOGW(kTag, "local control is unavailable for this boot");
     }
     HostController(devices, platform_.battery(), platform_.wifi(), platform_.power(), shell, remote_control,
                    background_executor)

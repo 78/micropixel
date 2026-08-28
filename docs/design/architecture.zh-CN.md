@@ -62,24 +62,33 @@ Runtime -> Device contracts <- Platform
 - `FirmwareApp` 是唯一同时知道 Platform、Device 和 Runtime 的组合根；
 - `runtime/abi/` 只做 Guest 内存验证、wire 转换、上下文查找和转发，不承担业务规则。
 
-Platform 内部再固定为四层，依赖只能向下：
+Platform 内部按职责分层，依赖只能向下：
 
 ```text
-boards/<board>  ->  common + drivers + lvgl  ->  device/host_ui contracts
-       │
+boards/<board>  ->  common + drivers + lvgl + radio + transports
+       │                         │
+       │                         └─ uses SoC-selected ESP-IDF capabilities
        └─ owns pin mapping, power sequence, peripheral composition and board metadata
 ```
 
 - `platform/common/`：可跨板复用的 ESP32 backend 与 contract adapter；
 - `platform/drivers/`：按器件型号组织的驱动，不知道开发板；
 - `platform/lvgl/`：显示合成、Guest renderer、字体与按分辨率组织的 Host UI profile；
+- `platform/radio/`：Hosted 与 SoC-native Wi-Fi radio strategy；
+- `platform/transports/`：USB Serial/JTAG 等本地控制字节传输；
+- `platform/soc/<target>/`：只选择 SoC component 依赖，不组合开发板；
 - `platform/boards/<board>/`：板型组合根，只拥有 wiring、启动/关机次序和不能复用的板载外设。
 
 板型由 `MICROPIXEL_BOARD` Kconfig choice 唯一选择。新增板型的正常变更面是新的
 `boards/<board>/`、一个 choice symbol、Platform source selection 与产品 defaults；Guest ABI、Runtime 和
 HostController 不因板名变化。系统信息和 Remote Control 的硬件描述统一读取
-`device::HardwareInfoBackend`。`bash tools/p4.sh build-null` 是硬件无关依赖方向的独立编译门禁，不生成可
-烧录的产品镜像。
+`device::HardwareInfoBackend`。`bash tools/p4.sh build-null` 和 `bash tools/s31.sh build-null` 是各 SoC 的
+硬件无关依赖方向编译门禁，不生成可烧录的产品镜像。ESP-Mosaico 的 P0/P1 profile 已接入 Runtime、
+BundleFS、native Wi-Fi、板级供电、官方 CO5300 显示和 CST9217 中断触摸，并复用 App Hall、Status Layer、
+逻辑 viewport、分辨率 layout profile、系统转场时间线及 PPA/DMA2D 图形原语。P4 的 RGB888 framebuffer
+提交与 S31 的 RGB565/QSPI 提交留在各自 display pipeline；缩放、位图复制和颜色转换不回退为正常帧路径的
+CPU 整图逐像素循环。音频和板载传感器在权威 BSP 路径完成集成与真机验证前显式 unavailable，NAND
+App Store 与扩展模块属于 P2。
 
 ## 3. Session 与事件模型
 

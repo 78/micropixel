@@ -114,7 +114,8 @@ ServiceResult<device::FontResourceView> ResourceService::FindFont(uint32_t resou
 
 ServiceResult<micropixel_texture_info_t> ResourceService::CreateStreamingTexture(uint32_t width, uint32_t height,
                                                                                  uint32_t pixel_format) {
-    if (stopping_.load(std::memory_order_acquire) || width == 0U || height == 0U || width > 720U || height > 720U ||
+    if (stopping_.load(std::memory_order_acquire) || width == 0U || height == 0U ||
+        width > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION || height > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION ||
         (pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 && pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }

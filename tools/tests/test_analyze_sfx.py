@@ -123,8 +123,8 @@ class PerceptualAnalysisTest(unittest.TestCase):
 
     def test_audio_games_have_valid_checked_manifests(self) -> None:
         device_profile = SFX.load_device_profile(
-            WORKSPACE_ROOT / "firmware" / "espressif" / "main" / "platform" / "metalio-claw4" / "audio"
-            / "perceptual_profile.json"
+            WORKSPACE_ROOT / "firmware" / "espressif" / "main" / "platform" / "boards" / "metalio-claw4"
+            / "audio" / "perceptual_profile.json"
         )
         checked_games = []
         for app_manifest_path in sorted((WORKSPACE_ROOT / "guest" / "apps").glob("*/app.json")):

@@ -1,17 +1,15 @@
 #include <atomic>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 
-#include "driver/i2s_std.h"
-#include "driver/uart.h"
-#include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "platform/boards/metalio-claw4/audio/audio_backend.hpp"
+#include "platform/boards/metalio-claw4/audio/i2s_audio_sink.hpp"
 #include "platform/boards/metalio-claw4/perceptual_control.hpp"
+#include "platform/common/audio/synth_mixer.hpp"
 #include "platform/common/i2c_executor.hpp"
 #include "task_policy.hpp"
 
@@ -19,46 +17,20 @@ namespace micropixel::platform::metalio_claw4 {
 namespace {
 
 constexpr char kTag[] = "micropixel_audio";
-constexpr uint8_t kOutputPort0 = 0x02U;
-constexpr uint8_t kOutputPort1 = 0x03U;
-constexpr uint8_t kConfigPort0 = 0x06U;
-constexpr uint8_t kConfigPort1 = 0x07U;
-constexpr uint8_t kPaSwitchMask = 1U << 1U;
-constexpr uint8_t kBtPowerMask = 1U << 6U;
-constexpr uint8_t kPaEnableMask = 1U << 0U;
 constexpr uint32_t kFramesPerChunk = 128U;
 constexpr uint32_t kMaxPcmStreams = 2U;
-constexpr uint32_t kSineTableSize = 256U;
 constexpr uint32_t kAudioTaskStackSize = 4096U;
 constexpr BaseType_t kAudioTaskCore = 0;
 constexpr uint32_t kMetalioClaw4AudioSampleRate = 16000U;
-constexpr uint32_t kAudioOutputWakeupMs = 64U;
-constexpr uint32_t kAudioOutputWakeupChunks =
-    (kAudioOutputWakeupMs * kMetalioClaw4AudioSampleRate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
 constexpr uint32_t kAudioIdleGraceMs = 10000U;
 constexpr uint32_t kAudioIdleGraceChunks =
     (kAudioIdleGraceMs * kMetalioClaw4AudioSampleRate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
-
-i2s_std_clk_config_t AudioClockConfig() { return I2S_STD_CLK_DEFAULT_CONFIG(kMetalioClaw4AudioSampleRate); }
 
 enum class BackendState : uint8_t {
     kStopped,
     kInitializing,
     kReady,
     kFailed,
-};
-
-struct Voice final {
-    uint32_t waveform{};
-    uint32_t phase{};
-    uint32_t phase_step{};
-    uint32_t total_frames{};
-    uint32_t remaining_frames{};
-    uint32_t attack_frames{};
-    uint32_t release_frames{};
-    uint32_t volume_per_mille{};
-    uint32_t noise{0x51a9e21dU};
-    bool active{};
 };
 
 struct PcmVoice final {
@@ -79,12 +51,12 @@ struct AudioBackendState final {
         static_cast<uint16_t>(metalio_claw4::PerceptualVolumeOutputPerTenThousand(70U))};
     std::atomic<TaskHandle_t> task{};
     SemaphoreHandle_t voices_mutex{};
-    Voice voices[kMaxVoices]{};
+    common::audio::SynthVoice voices[kMaxVoices]{};
     PcmVoice pcm_voices[kMaxPcmStreams]{};
     device::PcmCompletionSink pcm_completion_sink{};
     void* pcm_completion_context{};
-    common::I2cExecutor* i2c_executor{};
-    int16_t sine_table[kSineTableSize]{};
+    I2sAudioSink sink{};
+    int16_t sine_table[common::audio::kSynthSineTableSize]{};
 };
 
 AudioBackendState& State() {
@@ -105,131 +77,6 @@ PcmVoice* FindPcmVoiceLocked(device::PcmStreamHandle handle) {
     return voice.active && PcmHandle(encoded_index - 1U, voice.generation) == handle ? &voice : nullptr;
 }
 
-esp_err_t UpdateRegister(i2c_master_dev_handle_t device, uint8_t address, uint8_t set_mask, uint8_t clear_mask) {
-    if (State().i2c_executor == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    struct Request final {
-        i2c_master_dev_handle_t device;
-        uint8_t address;
-        uint8_t set_mask;
-        uint8_t clear_mask;
-    } request{device, address, set_mask, clear_mask};
-    return State().i2c_executor->Invoke(
-        common::I2cExecutor::Priority::kHigh,
-        [](void* context) {
-            auto& requested = *static_cast<Request*>(context);
-            uint8_t value = 0U;
-            esp_err_t status = i2c_master_transmit_receive(requested.device, &requested.address,
-                                                           sizeof(requested.address), &value, sizeof(value), 1000);
-            if (status != ESP_OK) {
-                return status;
-            }
-            const uint8_t transaction[] = {requested.address,
-                                           static_cast<uint8_t>((value | requested.set_mask) & ~requested.clear_mask)};
-            return i2c_master_transmit(requested.device, transaction, sizeof(transaction), 1000);
-        },
-        &request);
-}
-
-esp_err_t ConfigureAudioRails(i2c_master_dev_handle_t device) {
-    ESP_RETURN_ON_ERROR(UpdateRegister(device, kOutputPort0, kPaSwitchMask | kBtPowerMask, 0U), kTag,
-                        "set audio rail latches");
-    ESP_RETURN_ON_ERROR(UpdateRegister(device, kOutputPort1, 0U, kPaEnableMask), kTag, "mute audio amplifier");
-    ESP_RETURN_ON_ERROR(UpdateRegister(device, kConfigPort0, 0U, kPaSwitchMask | kBtPowerMask), kTag,
-                        "configure audio rail outputs");
-    return UpdateRegister(device, kConfigPort1, 0U, kPaEnableMask);
-}
-
-esp_err_t InitializeBtAudioMode() {
-    uart_config_t config{};
-    config.baud_rate = 115200;
-    config.data_bits = UART_DATA_8_BITS;
-    config.parity = UART_PARITY_DISABLE;
-    config.stop_bits = UART_STOP_BITS_1;
-    config.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-    config.source_clk = UART_SCLK_DEFAULT;
-
-    ESP_RETURN_ON_ERROR(uart_driver_install(UART_NUM_2, 512, 512, 0, nullptr, 0), kTag, "install audio UART");
-    esp_err_t status = uart_param_config(UART_NUM_2, &config);
-    if (status == ESP_OK) {
-        status = uart_set_pin(UART_NUM_2, GPIO_NUM_26, GPIO_NUM_27, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    }
-    if (status != ESP_OK) {
-        (void)uart_driver_delete(UART_NUM_2);
-        return status;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    constexpr char kReceivePath[] = "AT+RX=2\r\n";
-    constexpr char kModeOne[] = "AT+MODE=1\r\n";
-    if (uart_write_bytes(UART_NUM_2, kReceivePath, sizeof(kReceivePath) - 1U) < 0) {
-        return ESP_FAIL;
-    }
-    (void)uart_wait_tx_done(UART_NUM_2, pdMS_TO_TICKS(500));
-    vTaskDelay(pdMS_TO_TICKS(700));
-    if (uart_write_bytes(UART_NUM_2, kModeOne, sizeof(kModeOne) - 1U) < 0) {
-        return ESP_FAIL;
-    }
-    (void)uart_wait_tx_done(UART_NUM_2, pdMS_TO_TICKS(500));
-    vTaskDelay(pdMS_TO_TICKS(700));
-
-    uint8_t response[160]{};
-    int response_size = uart_read_bytes(UART_NUM_2, response, sizeof(response) - 1U, pdMS_TO_TICKS(200));
-    if (response_size > 0) {
-        response[response_size] = '\0';
-        for (int index = 0; index < response_size; ++index) {
-            if (response[index] == '\r' || response[index] == '\n') {
-                response[index] = ' ';
-            }
-        }
-        ESP_LOGI(kTag, "audio module response: %s", reinterpret_cast<const char*>(response));
-    } else {
-        ESP_LOGW(kTag, "audio module returned no UART response");
-    }
-    return ESP_OK;
-}
-
-int32_t WaveformSample(Voice& voice) {
-    switch (voice.waveform) {
-        case MICROPIXEL_AUDIO_WAVE_SINE:
-            return State().sine_table[voice.phase >> 24U];
-        case MICROPIXEL_AUDIO_WAVE_SQUARE:
-            return (voice.phase & 0x80000000U) == 0U ? 32767 : -32768;
-        case MICROPIXEL_AUDIO_WAVE_TRIANGLE: {
-            uint32_t position = voice.phase >> 16U;
-            return position < 32768U ? static_cast<int32_t>(position * 2U) - 32768
-                                     : 98303 - static_cast<int32_t>(position * 2U);
-        }
-        case MICROPIXEL_AUDIO_WAVE_NOISE:
-            voice.noise = voice.noise * 1664525U + 1013904223U;
-            return static_cast<int16_t>(voice.noise >> 16U);
-        default:
-            return 0;
-    }
-}
-
-int32_t NextVoiceSample(Voice& voice) {
-    const uint32_t played_frames = voice.total_frames - voice.remaining_frames;
-    uint32_t gain = voice.volume_per_mille;
-    if (voice.attack_frames != 0U && played_frames < voice.attack_frames) {
-        gain = gain * played_frames / voice.attack_frames;
-    }
-    if (voice.release_frames != 0U && voice.remaining_frames < voice.release_frames) {
-        uint32_t release_gain = voice.volume_per_mille * voice.remaining_frames / voice.release_frames;
-        if (release_gain < gain) {
-            gain = release_gain;
-        }
-    }
-    int32_t sample = WaveformSample(voice) * static_cast<int32_t>(gain) / 1000;
-    voice.phase += voice.phase_step;
-    --voice.remaining_frames;
-    if (voice.remaining_frames == 0U) {
-        voice.active = false;
-    }
-    return sample;
-}
-
 struct AudioChunkState final {
     bool rendered_audio{};
     bool active_after{};
@@ -241,7 +88,7 @@ bool HasPlayableVoiceLocked() {
     if (State().suspended.load(std::memory_order_acquire)) {
         return false;
     }
-    for (const Voice& voice : State().voices) {
+    for (const common::audio::SynthVoice& voice : State().voices) {
         if (voice.active) {
             return true;
         }
@@ -300,10 +147,10 @@ AudioChunkState FillAudioChunk(int32_t* frames) {
         }
         for (uint32_t frame = 0U; frame < kFramesPerChunk; ++frame) {
             int32_t mixed = 0;
-            for (Voice& voice : State().voices) {
+            for (common::audio::SynthVoice& voice : State().voices) {
                 if (voice.active) {
                     chunk.rendered_audio = true;
-                    mixed += NextVoiceSample(voice);
+                    mixed += common::audio::SynthMixer::NextSample(voice, State().sine_table);
                 }
             }
             for (uint32_t index = 0U; index < kMaxPcmStreams; ++index) {
@@ -351,95 +198,19 @@ void NotifyAudioTask() {
     }
 }
 
-esp_err_t WriteSilentAudioChunk(i2s_chan_handle_t tx, int32_t* frames) {
-    std::memset(frames, 0, kFramesPerChunk * 2U * sizeof(*frames));
-    size_t bytes_written = 0U;
-    const size_t bytes = kFramesPerChunk * 2U * sizeof(*frames);
-    const esp_err_t status = i2s_channel_write(tx, frames, bytes, &bytes_written, pdMS_TO_TICKS(500));
-    if (status != ESP_OK) {
-        return status;
-    }
-    return bytes_written == bytes ? ESP_OK : ESP_FAIL;
-}
-
-esp_err_t StartAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx, int32_t* frames) {
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), kTag, "enable idle-gated I2S output");
-
-    const esp_err_t prefill_status = WriteSilentAudioChunk(tx, frames);
-    if (prefill_status != ESP_OK) {
-        (void)i2s_channel_disable(tx);
-        ESP_LOGE(kTag, "I2S silent prefill failed: %s", esp_err_to_name(prefill_status));
-        return prefill_status;
-    }
-
-    const esp_err_t amplifier_status = UpdateRegister(expander, kOutputPort1, kPaEnableMask, 0U);
-    if (amplifier_status != ESP_OK) {
-        (void)i2s_channel_disable(tx);
-        return amplifier_status;
-    }
-
-    // Keep real voice frames out of the amplifier wake-up interval. Without this
-    // pre-roll, a short gameplay effect can finish before the PA becomes audible.
-    for (uint32_t chunk = 0U; chunk < kAudioOutputWakeupChunks; ++chunk) {
-        const esp_err_t wakeup_status = WriteSilentAudioChunk(tx, frames);
-        if (wakeup_status != ESP_OK) {
-            (void)UpdateRegister(expander, kOutputPort1, 0U, kPaEnableMask);
-            (void)i2s_channel_disable(tx);
-            ESP_LOGE(kTag, "I2S amplifier wake-up pre-roll failed: %s", esp_err_to_name(wakeup_status));
-            return wakeup_status;
-        }
-    }
-    return ESP_OK;
-}
-
-esp_err_t StopAudioOutput(i2c_master_dev_handle_t expander, i2s_chan_handle_t tx) {
-    const esp_err_t amplifier_status = UpdateRegister(expander, kOutputPort1, 0U, kPaEnableMask);
-    const esp_err_t i2s_status = i2s_channel_disable(tx);
-    if (amplifier_status != ESP_OK) {
-        return amplifier_status;
-    }
-    return i2s_status;
-}
-
 void AudioTask(void* argument) {
-    auto expander = static_cast<i2c_master_dev_handle_t>(argument);
-    esp_err_t status = ConfigureAudioRails(expander);
-    if (status == ESP_OK) {
-        status = InitializeBtAudioMode();
-    }
-
-    i2s_chan_handle_t tx = nullptr;
-    if (status == ESP_OK) {
-        i2s_chan_config_t channel_config = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
-        channel_config.dma_desc_num = 6U;
-        channel_config.dma_frame_num = 240U;
-        channel_config.auto_clear_after_cb = true;
-        status = i2s_new_channel(&channel_config, &tx, nullptr);
-    }
-    if (status == ESP_OK) {
-        i2s_std_config_t standard_config{};
-        standard_config.clk_cfg = AudioClockConfig();
-        standard_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO);
-        standard_config.gpio_cfg.mclk = I2S_GPIO_UNUSED;
-        standard_config.gpio_cfg.bclk = GPIO_NUM_12;
-        standard_config.gpio_cfg.ws = GPIO_NUM_10;
-        standard_config.gpio_cfg.dout = GPIO_NUM_9;
-        standard_config.gpio_cfg.din = I2S_GPIO_UNUSED;
-        status = i2s_channel_init_std_mode(tx, &standard_config);
-    }
+    auto& sink = *static_cast<common::audio::AudioSink*>(argument);
+    esp_err_t status = sink.Initialize();
     if (status != ESP_OK) {
         State().backend_state.store(BackendState::kFailed, std::memory_order_release);
-        ESP_LOGE(kTag, "Metalio-Claw4 audio backend failed: %s", esp_err_to_name(status));
-        if (tx != nullptr) {
-            (void)i2s_del_channel(tx);
-        }
-        (void)uart_driver_delete(UART_NUM_2);
+        ESP_LOGE(kTag, "%s initialization failed: %s", sink.Name(), esp_err_to_name(status));
+        sink.Shutdown();
         vTaskDelete(nullptr);
         return;
     }
 
     State().backend_state.store(BackendState::kReady, std::memory_order_release);
-    ESP_LOGI(kTag, "Metalio-Claw4 audio ready: %lu Hz, %u synth voices, idle-gated I2S/PA, core=%d",
+    ESP_LOGI(kTag, "audio ready: sink=%s, %lu Hz, %u synth voices, core=%d", sink.Name(),
              static_cast<unsigned long>(kMetalioClaw4AudioSampleRate), kMaxVoices, xPortGetCoreID());
     int32_t frames[kFramesPerChunk * 2U]{};
     bool first_output_transition = true;
@@ -448,19 +219,16 @@ void AudioTask(void* argument) {
         if (!HasPlayableVoice()) {
             continue;
         }
-        status = StartAudioOutput(expander, tx, frames);
+        status = sink.Start(frames, kFramesPerChunk);
         if (status == ESP_OK && first_output_transition) {
             ESP_LOGI(kTag, "audio output started on first tone event");
         }
         uint32_t idle_chunks = 0U;
         while (status == ESP_OK) {
             const AudioChunkState chunk = FillAudioChunk(frames);
-            size_t bytes_written = 0U;
-            status = i2s_channel_write(tx, frames, sizeof(frames), &bytes_written, pdMS_TO_TICKS(500));
-            if (status != ESP_OK || bytes_written != sizeof(frames)) {
-                ESP_LOGE(kTag, "I2S mixer stopped: %s, wrote=%zu/%zu", esp_err_to_name(status), bytes_written,
-                         sizeof(frames));
-                status = status != ESP_OK ? status : ESP_FAIL;
+            status = sink.Write(frames, kFramesPerChunk);
+            if (status != ESP_OK) {
+                ESP_LOGE(kTag, "%s mixer stopped: %s", sink.Name(), esp_err_to_name(status));
                 break;
             }
             DeliverCompletions(chunk);
@@ -468,7 +236,7 @@ void AudioTask(void* argument) {
             if (idle_chunks < kAudioIdleGraceChunks || HasPlayableVoice()) {
                 continue;
             }
-            status = StopAudioOutput(expander, tx);
+            status = sink.Stop();
             if (status == ESP_OK && first_output_transition) {
                 ESP_LOGI(kTag, "audio output returned to idle after %lu ms grace",
                          static_cast<unsigned long>(kAudioIdleGraceMs));
@@ -479,23 +247,9 @@ void AudioTask(void* argument) {
     }
     State().backend_state.store(BackendState::kFailed, std::memory_order_release);
     State().task.store(nullptr, std::memory_order_release);
-    ESP_LOGE(kTag, "Metalio-Claw4 audio output failed: %s", esp_err_to_name(status));
-    (void)UpdateRegister(expander, kOutputPort1, 0U, kPaEnableMask);
-    (void)i2s_channel_disable(tx);
-    (void)i2s_del_channel(tx);
-    (void)uart_driver_delete(UART_NUM_2);
+    ESP_LOGE(kTag, "%s output failed: %s", sink.Name(), esp_err_to_name(status));
+    sink.Shutdown();
     vTaskDelete(nullptr);
-}
-
-bool ValidTone(const micropixel_audio_tone_t& tone) {
-    return tone.size == sizeof(tone) && tone.interface_major == MICROPIXEL_AUDIO_INTERFACE_MAJOR &&
-           tone.waveform >= MICROPIXEL_AUDIO_WAVE_SINE && tone.waveform <= MICROPIXEL_AUDIO_WAVE_NOISE &&
-           tone.volume_per_mille <= 1000U && tone.duration_ms != 0U &&
-           tone.duration_ms <= MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS && tone.attack_ms <= tone.duration_ms &&
-           tone.release_ms <= tone.duration_ms && tone.reserved[0] == 0U && tone.reserved[1] == 0U &&
-           tone.reserved[2] == 0U &&
-           (tone.waveform == MICROPIXEL_AUDIO_WAVE_NOISE ||
-            (tone.frequency_millihz >= 20000U && tone.frequency_millihz <= 20000000U));
 }
 
 }  // namespace
@@ -527,15 +281,11 @@ esp_err_t MetalioClaw4AudioBackend::Initialize(i2c_master_dev_handle_t io_expand
     if (State().voices_mutex == nullptr) {
         return ESP_ERR_NO_MEM;
     }
-    State().i2c_executor = &i2c_executor;
-    for (uint32_t index = 0U; index < kSineTableSize; ++index) {
-        constexpr double kTau = 6.28318530717958647692;
-        State().sine_table[index] =
-            static_cast<int16_t>(std::sin(kTau * static_cast<double>(index) / kSineTableSize) * 32767.0);
-    }
+    State().sink.Configure(io_expander, i2c_executor);
+    common::audio::SynthMixer::InitializeSineTable(State().sine_table);
     State().backend_state.store(BackendState::kInitializing, std::memory_order_release);
     TaskHandle_t task = nullptr;
-    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, io_expander,
+    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, &State().sink,
                                 task_policy::kAudioPriority, &task, kAudioTaskCore) != pdPASS) {
         State().backend_state.store(BackendState::kStopped, std::memory_order_release);
         vSemaphoreDelete(State().voices_mutex);
@@ -576,7 +326,7 @@ int32_t MetalioClaw4AudioBackend::GetInfo(micropixel_audio_info_t& info) {
 }
 
 int32_t MetalioClaw4AudioBackend::PlayTone(const micropixel_audio_tone_t& tone) {
-    if (!ValidTone(tone)) {
+    if (!common::audio::SynthMixer::ValidTone(tone)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     BackendState state = State().backend_state.load(std::memory_order_acquire);
@@ -589,8 +339,8 @@ int32_t MetalioClaw4AudioBackend::PlayTone(const micropixel_audio_tone_t& tone) 
     if (xSemaphoreTake(State().voices_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         return MICROPIXEL_STATUS_RATE_LIMITED;
     }
-    Voice* selected = nullptr;
-    for (Voice& voice : State().voices) {
+    common::audio::SynthVoice* selected = nullptr;
+    for (common::audio::SynthVoice& voice : State().voices) {
         if (!voice.active) {
             selected = &voice;
             break;
@@ -599,20 +349,7 @@ int32_t MetalioClaw4AudioBackend::PlayTone(const micropixel_audio_tone_t& tone) 
             selected = &voice;
         }
     }
-    const uint64_t frequency = tone.waveform == MICROPIXEL_AUDIO_WAVE_NOISE ? 0U : tone.frequency_millihz;
-    *selected = Voice{
-        .waveform = tone.waveform,
-        .phase = 0U,
-        .phase_step = static_cast<uint32_t>(frequency * (1ULL << 32U) /
-                                            (static_cast<uint64_t>(kMetalioClaw4AudioSampleRate) * 1000ULL)),
-        .total_frames = tone.duration_ms * kMetalioClaw4AudioSampleRate / 1000U,
-        .remaining_frames = tone.duration_ms * kMetalioClaw4AudioSampleRate / 1000U,
-        .attack_frames = tone.attack_ms * kMetalioClaw4AudioSampleRate / 1000U,
-        .release_frames = tone.release_ms * kMetalioClaw4AudioSampleRate / 1000U,
-        .volume_per_mille = tone.volume_per_mille,
-        .noise = 0x51a9e21dU ^ tone.frequency_millihz ^ tone.duration_ms,
-        .active = true,
-    };
+    common::audio::SynthMixer::StartVoice(*selected, tone, kMetalioClaw4AudioSampleRate);
     (void)xSemaphoreGive(State().voices_mutex);
     NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
@@ -757,7 +494,7 @@ int32_t MetalioClaw4AudioBackend::StopAll() {
     if (xSemaphoreTake(State().voices_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         return MICROPIXEL_STATUS_RATE_LIMITED;
     }
-    for (Voice& voice : State().voices) {
+    for (common::audio::SynthVoice& voice : State().voices) {
         voice.active = false;
     }
     for (PcmVoice& voice : State().pcm_voices) {

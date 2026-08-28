@@ -1,21 +1,22 @@
 # USB 本地控制协议
 
-USB 本地控制是产品 Host 的开发能力。它通过 ESP32 USB Serial/JTAG 连接为 `micropixel` CLI 提供 App
-列表、安装、卸载、启动和停止，不新增 Guest ABI，也不允许原始 Flash、NVS 或任意 Host 函数访问。
+USB 本地控制是产品 Host 的开发能力。Metalio-Claw4 使用 ESP32 USB Serial/JTAG，ESP-Mosaico 使用板载
+USB 2.0 HS OTG 上的 TinyUSB CDC；两者向 `micropixel` CLI 提供相同的 App 列表、安装、卸载、启动和停止，
+不新增 Guest ABI，也不允许原始 Flash、NVS 或任意 Host 函数访问。
 
 ## 1. 分层
 
 ```text
 micropixel CLI
-  -> USB Serial/JTAG
-  -> LocalControlBackend
-  -> UsbLocalControlAgent
+  -> USB Serial/JTAG 或 TinyUSB CDC
+  -> DevelopmentLocalControlTransport / LocalControlBackend
+  -> LocalControlAgent
   -> RemoteControlAgent 的共享有界 Host 命令队列
   -> HostController
   -> AppStore / BundleFS
 ```
 
-Platform 只拥有 USB 字节流和旧版截图/触摸命令兼容。`UsbLocalControlAgent` 解析 App 管理协议，但不直接
+Platform 只拥有 USB 字节流和开发截图/触摸命令。`LocalControlAgent` 解析 App 管理协议，但不直接
 调用 WAMR、LVGL 或 BundleFS。App 生命周期和 Store 变更仍在 HostController 所属任务执行，与 System UI
 和 Remote Control 使用同一仲裁顺序。
 
@@ -56,14 +57,40 @@ SHA-256、Bundle header、AOT 和资源边界；CLI 提供的字段不能替代�
 安装和卸载要求没有运行中的 Guest。Host 返回的 `stop_active_app_before_install`、
 `stop_active_app_before_uninstall`、`app_not_found`、`no_space` 等稳定错误同时用于远程和 USB 路径。
 
-## 4. 串口复用与安全
+## 4. JPEG 截图与输入注入
 
-MPX1 与 ESP 日志复用 USB Serial/JTAG。Platform 只在写一条协议响应时持有日志锁，并在响应前后写换行，
-CLI 会忽略不匹配 `request-id` 的普通日志。旧 `MICROPIXEL_CAPTURE` 和 `MICROPIXEL_TOUCH` 行命令继续由
-同一个 reader 处理，避免多个任务竞争 USB RX。
+开发截图和输入注入复用同一个行 reader，当前命令为：
+
+```text
+MICROPIXEL_CAPTURE LOGICAL
+MICROPIXEL_CAPTURE DISPLAY
+MICROPIXEL_TOUCH <DOWN|MOVE|UP|CANCEL> <id> <x> <y> <pressure-per-mille>
+```
+
+`LOGICAL` 通过 LVGL snapshot 获取逻辑场景；`DISPLAY` 复制 LVGL 当前完整 RGB565 提交缓冲。两种来源都由
+SoC JPEG 外设编码为 JPEG，再按“ASCII header + 精确长度二进制 payload + sequence end marker”传输。
+这既避免软件 PNG 编码占用 CPU，也能在板上显示异常时区分“LVGL 已经画错”与“提交缓冲正确、面板链路出错”。
+Host 工具不会扫描 JPEG 内容寻找结束符，因此压缩数据中即使出现换行或协议文本也不会破坏 framing。
+
+典型命令：
+
+```sh
+python3 tools/capture_screen.py "$PORT" logical.jpg --source logical --expect-size 480x480
+python3 tools/capture_screen.py "$PORT" display.jpg --source display --expect-size 480x480
+```
+
+同一时刻只允许一个进程占用该 CDC 端口。截图暂时持有 LVGL/日志输出锁，完成原始帧复制后立即释放 LVGL
+锁；JPEG 编码与 USB 输出不在 LVGL 锁内执行。
+
+## 5. 串口复用与安全
+
+MPX1 与 ESP 日志复用板卡选定的 USB CDC transport。Platform 只在写一条协议响应时持有日志锁，并在
+响应前后写换行，CLI 会忽略不匹配 `request-id` 的普通日志。`MICROPIXEL_CAPTURE` 和
+`MICROPIXEL_TOUCH` 行命令由同一个 reader 处理，避免多个任务竞争 USB RX。
 
 本地控制以物理 USB 访问作为开发期信任边界，不接受网络 Token。发布策略如需限制本地安装，应在 Host
 增加显式开发模式或设备确认，但不能通过降低 Bundle 校验、开放原始分区写入或信任 CLI hash 来实现。
 
-CLI 使用 pyserial，支持 macOS/Linux 设备节点和 Windows `COMx` 端口；自动探测基于 ESP32 USB
-Serial/JTAG VID/PID。当前协议已经在 macOS 真机验证，Windows 代码路径受支持但尚未完成项目真机验证。
+CLI 使用 pyserial，支持 macOS/Linux 设备节点和 Windows `COMx` 端口；自动探测同时识别板卡声明的应用
+USB 产品名和 ROM USB 产品名。当前协议已经在 macOS 真机验证，Windows 代码路径受支持但尚未完成项目
+真机验证。

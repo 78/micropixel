@@ -80,6 +80,19 @@ class BundleFsImageTest(unittest.TestCase):
         self.assertEqual(STORE.DATA_BLOCK_COUNT, 383)
         self.assertFalse(hasattr(STORE, "SLOT_SIZE"))
 
+    def test_empty_image_supports_mosaico_eight_mib_partition(self) -> None:
+        app_store_size = 8 * 1024 * 1024
+        image = STORE.build_empty_bundlefs(app_store_size)
+        fields = STORE.CATALOG_HEADER.unpack_from(image)
+
+        self.assertEqual(fields[11], app_store_size)
+        self.assertEqual(fields[12], 127)
+        self.assertEqual(len(image), STORE.METADATA_SIZE)
+
+    def test_geometry_rejects_partitions_larger_than_catalog_capacity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exceeds"):
+            STORE.build_empty_bundlefs(STORE.APP_STORE_SIZE + STORE.DATA_BLOCK_SIZE)
+
     def test_seeded_image_contains_bundle_catalog_and_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "demo.bundle.bin"

@@ -7,7 +7,7 @@ set(micropixel_sources
     "host_ui/system_locale.cpp"
     "host_ui/system_settings_store.cpp"
     "host_ui/system_shell.cpp"
-    "local_control/usb_local_control_agent.cpp"
+    "local_control/local_control_agent.cpp"
     "network_time.cpp"
     "remote_control/control_protocol.cpp"
     "remote_control/remote_control_agent.cpp"
@@ -53,6 +53,14 @@ target_compile_definitions(
     "LV_FONT_CUSTOM_DECLARE=LV_FONT_DECLARE(font_builtin_latin_14)"
     "LV_FONT_DEFAULT=&font_builtin_latin_14"
 )
+if(CONFIG_MICROPIXEL_LVGL_OBJECT_POOL_PSRAM)
+    # LVGL's builtin allocator normally backs its TLSF pool with an untagged
+    # static array in internal .bss. LVGL 9.5 applies this attribute only to
+    # that pool, so ESP-IDF can map it into external-RAM BSS without moving
+    # LVGL's mutex or allocator state out of internal memory.
+    target_compile_definitions(${micropixel_lvgl_lib} PRIVATE
+        "LV_ATTRIBUTE_LARGE_RAM_ARRAY=__attribute__((section(\".ext_ram.bss\")))")
+endif()
 
 idf_build_get_property(micropixel_python PYTHON)
 set(micropixel_host_i18n_dir "${CMAKE_CURRENT_LIST_DIR}/host_ui/i18n")
@@ -79,6 +87,12 @@ set(micropixel_builtin_font_profile
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/builtin-latin-v1.json")
 set(micropixel_lvgl_font_source_dir
     "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/scripts/built_in_font")
+set(micropixel_lvgl_symbol_def
+    "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/src/font/lv_symbol_def.h")
+set(micropixel_lvgl_keyboard_source
+    "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/src/widgets/keyboard/lv_keyboard.c")
+set(micropixel_lvgl_dropdown_source
+    "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/src/widgets/dropdown/lv_dropdown.c")
 set(micropixel_builtin_font_report
     "${micropixel_builtin_font_output_dir}/builtin-latin-v1-report.json")
 add_custom_command(
@@ -89,6 +103,9 @@ add_custom_command(
             --montserrat "${micropixel_lvgl_font_source_dir}/Montserrat-Medium.ttf"
             --replacement-font "${micropixel_lvgl_font_source_dir}/DejaVuSans.ttf"
             --symbol-font "${micropixel_lvgl_font_source_dir}/FontAwesome5-Solid+Brands+Regular.woff"
+            --lvgl-symbol-def "${micropixel_lvgl_symbol_def}"
+            --lvgl-symbol-source "${micropixel_lvgl_keyboard_source}"
+            --lvgl-symbol-source "${micropixel_lvgl_dropdown_source}"
             --output-dir "${micropixel_builtin_font_output_dir}"
             --report "${micropixel_builtin_font_report}"
     DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_builtin_fonts.py"
@@ -97,6 +114,9 @@ add_custom_command(
             "${micropixel_lvgl_font_source_dir}/Montserrat-Medium.ttf"
             "${micropixel_lvgl_font_source_dir}/DejaVuSans.ttf"
             "${micropixel_lvgl_font_source_dir}/FontAwesome5-Solid+Brands+Regular.woff"
+            "${micropixel_lvgl_symbol_def}"
+            "${micropixel_lvgl_keyboard_source}"
+            "${micropixel_lvgl_dropdown_source}"
     VERBATIM
 )
 add_custom_target(micropixel_builtin_fonts DEPENDS ${micropixel_builtin_font_sources}

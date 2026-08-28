@@ -40,8 +40,8 @@ uint16_t RetainedObjectOpcode(uint16_t opcode) {
 }  // namespace
 
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-void RetainedScene::BindSurface(lv_display_t* display, esp_lcd_panel_handle_t panel) {
-    surface_.Bind(display, panel, logical_width_, logical_height_);
+void RetainedScene::BindSurface(lv_display_t* display, DirectFramebufferAccess* framebuffers) {
+    surface_.Bind(display, framebuffers, logical_width_, logical_height_);
 }
 #endif
 

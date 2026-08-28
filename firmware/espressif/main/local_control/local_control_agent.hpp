@@ -1,0 +1,80 @@
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+
+#include "device/local_control.hpp"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "remote_control/remote_control_agent.hpp"
+
+namespace micropixel::firmware::local_control {
+
+// Transport-independent MPX1 protocol endpoint. Boards supply the byte/line
+// transport through the LocalControlBackend device contract.
+class LocalControlAgent final {
+   public:
+    LocalControlAgent(device::LocalControlBackend& backend, remote_control::RemoteControlAgent& host_commands);
+    ~LocalControlAgent();
+    LocalControlAgent(const LocalControlAgent&) = delete;
+    LocalControlAgent& operator=(const LocalControlAgent&) = delete;
+
+    [[nodiscard]] bool Start();
+    void Stop();
+
+   private:
+    static constexpr size_t kResponseCapacity = 1024U;
+    static constexpr UBaseType_t kResponseQueueCapacity = 8U;
+
+    struct Response final {
+        std::array<char, kResponseCapacity> text{};
+    };
+
+    struct InstallSession final {
+        uint8_t* data{};
+        size_t size{};
+        size_t received{};
+        uint32_t request_id{};
+        TickType_t last_activity{};
+        std::array<char, remote_control::kRemoteControlAppIdCapacity> app_id{};
+        std::array<uint8_t, 32U> sha256{};
+    };
+
+    static void ReceiveCommand(void* context, const char* command);
+    static bool ProvideResponse(void* context, char* response, size_t capacity);
+    static bool ReceiveHostResult(void* context, const remote_control::RemoteControlHostResult& result);
+    static void InstallTimeoutElapsed(void* context);
+
+    void HandleCommand(const char* command);
+    [[nodiscard]] bool PollResponse(char* response, size_t capacity);
+    [[nodiscard]] bool HandleHostResult(const remote_control::RemoteControlHostResult& result);
+    [[nodiscard]] bool QueueResponse(uint32_t request_id, const char* status, const char* detail);
+    [[nodiscard]] bool QueueHostCommand(uint32_t request_id, remote_control::RemoteControlHostCommandType type,
+                                        std::string_view app_id = {});
+    void HandleAppList(uint32_t request_id, std::string_view arguments);
+    void HandleInstallBegin(uint32_t request_id, std::string_view arguments);
+    void HandleInstallChunk(uint32_t request_id, std::string_view arguments);
+    void HandleInstallCommit(uint32_t request_id, std::string_view arguments);
+    void HandleInstallAbort(uint32_t request_id, std::string_view arguments);
+    [[nodiscard]] bool ArmInstallTimeout(uint64_t delay_us);
+    void DisarmInstallTimeout();
+    void AbortInstall();
+    void ExpireInstallIfNeeded();
+
+    device::LocalControlBackend& backend_;
+    remote_control::RemoteControlAgent& host_commands_;
+    StaticQueue_t response_queue_storage_{};
+    uint8_t* response_queue_bytes_{};
+    QueueHandle_t response_queue_{};
+    remote_control::RemoteControlLocalSnapshot* snapshot_workspace_{};
+    InstallSession install_{};
+    esp_timer_handle_t install_timer_{};
+    std::atomic<bool> install_timeout_due_{};
+    bool started_{};
+};
+
+}  // namespace micropixel::firmware::local_control

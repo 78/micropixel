@@ -4,12 +4,12 @@ dependencies:
   lvgl/lvgl:
     version: "^9.5.0"
     rules:
-      - if: "target == esp32p4"
+      - if: "target in [esp32p4, esp32s31]"
   espressif/esp_lvgl_adapter:
     version: "^0.6.2"
     override_path: "../components/esp-iot-solution/components/display/tools/esp_lvgl_adapter"
     rules:
-      - if: "target == esp32p4"
+      - if: "target in [esp32p4, esp32s31]"
   espressif/esp_lcd_touch_gt911:
     version: "^1.2.0"
     rules:
@@ -20,6 +20,18 @@ dependencies:
     version: "^1.7.19"
   espressif/esp_mmap_assets:
     version: "2.0.0"
+  espressif/esp_tinyusb:
+    version: "2.2.1"
+    rules:
+      - if: "target == esp32s31"
+  espressif/esp_lcd_co5300:
+    version: "2.1.0"
+    rules:
+      - if: "target == esp32s31"
+  waveshare/esp_lcd_touch_cst9217:
+    version: "1.0.4"
+    rules:
+      - if: "target == esp32s31"
   espressif/esp_new_jpeg:
     version: "1.*"
   espressif/libpng:

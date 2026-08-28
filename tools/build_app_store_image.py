@@ -19,7 +19,9 @@ METADATA_SIZE = 64 * 1024
 DATA_OFFSET = METADATA_SIZE
 DATA_BLOCK_SIZE = 64 * 1024
 APP_STORE_SIZE = 24 * 1024 * 1024
-DATA_BLOCK_COUNT = (APP_STORE_SIZE - DATA_OFFSET) // DATA_BLOCK_SIZE
+MAX_DATA_BLOCK_COUNT = (APP_STORE_SIZE - DATA_OFFSET) // DATA_BLOCK_SIZE
+# Backward-compatible name for callers that use the P4 product geometry.
+DATA_BLOCK_COUNT = MAX_DATA_BLOCK_COUNT
 MAX_FILES = 50
 CATALOG_ENTRY_SIZE = 112
 BLOCK_NUMBER_SIZE = 2
@@ -59,13 +61,25 @@ def bundle_identity(path: Path, data: bytes) -> str:
     return app_id
 
 
-def build_empty_bundlefs() -> bytes:
+def data_block_count(app_store_size: int) -> int:
+    if app_store_size < DATA_OFFSET + DATA_BLOCK_SIZE:
+        raise ValueError("app_store must contain metadata and at least one data block")
+    count = (app_store_size - DATA_OFFSET) // DATA_BLOCK_SIZE
+    if count > MAX_DATA_BLOCK_COUNT:
+        raise ValueError(
+            f"app_store exceeds the BundleFS maximum ({app_store_size} > {APP_STORE_SIZE})"
+        )
+    return count
+
+
+def build_empty_bundlefs(app_store_size: int = APP_STORE_SIZE) -> bytes:
     """Return the 64 KiB metadata region for an empty BundleFS v2."""
-    if DATA_BLOCK_COUNT != 383 or CATALOG_HEADER.size != HEADER_SIZE:
+    block_count = data_block_count(app_store_size)
+    if MAX_DATA_BLOCK_COUNT != 383 or CATALOG_HEADER.size != HEADER_SIZE:
         raise AssertionError("BundleFS v2 geometry changed without updating the image builder")
 
     bank = bytearray(BANK_SIZE)
-    payload_size = MAX_FILES * CATALOG_ENTRY_SIZE + DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE
+    payload_size = MAX_FILES * CATALOG_ENTRY_SIZE + MAX_DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE
     CATALOG_HEADER.pack_into(
         bank,
         0,
@@ -80,8 +94,8 @@ def build_empty_bundlefs() -> bytes:
         METADATA_SIZE,
         DATA_OFFSET,
         DATA_BLOCK_SIZE,
-        APP_STORE_SIZE,
-        DATA_BLOCK_COUNT,
+        app_store_size,
+        block_count,
         0,
         0,
         0,
@@ -99,16 +113,17 @@ def build_empty_bundlefs() -> bytes:
     return bytes(image)
 
 
-def build_bundlefs(bundle_paths: list[Path]) -> bytes:
+def build_bundlefs(bundle_paths: list[Path], app_store_size: int = APP_STORE_SIZE) -> bytes:
     """Return a fresh BundleFS image containing the requested Bundles."""
+    available_blocks = data_block_count(app_store_size)
     if not bundle_paths:
-        return build_empty_bundlefs()
+        return build_empty_bundlefs(app_store_size)
     if len(bundle_paths) > MAX_FILES:
         raise ValueError(f"BundleFS supports at most {MAX_FILES} Apps")
 
     bank = bytearray(BANK_SIZE)
     entries = bytearray(MAX_FILES * CATALOG_ENTRY_SIZE)
-    block_map = bytearray(DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE)
+    block_map = bytearray(MAX_DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE)
     data_region = bytearray()
     app_ids: set[str] = set()
     next_block = 0
@@ -120,7 +135,7 @@ def build_bundlefs(bundle_paths: list[Path]) -> bytes:
             raise ValueError(f"Duplicate AppId in BundleFS image: {app_id}")
         app_ids.add(app_id)
         block_count = len(data) // DATA_BLOCK_SIZE
-        if next_block + block_count > DATA_BLOCK_COUNT:
+        if next_block + block_count > available_blocks:
             raise ValueError("Bundles do not fit in the app_store partition")
 
         digest = hashlib.sha256(data).digest()
@@ -140,7 +155,7 @@ def build_bundlefs(bundle_paths: list[Path]) -> bytes:
         )
         next_block += block_count
 
-    payload_size = MAX_FILES * CATALOG_ENTRY_SIZE + DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE
+    payload_size = MAX_FILES * CATALOG_ENTRY_SIZE + MAX_DATA_BLOCK_COUNT * BLOCK_NUMBER_SIZE
     CATALOG_HEADER.pack_into(
         bank,
         0,
@@ -155,9 +170,9 @@ def build_bundlefs(bundle_paths: list[Path]) -> bytes:
         METADATA_SIZE,
         DATA_OFFSET,
         DATA_BLOCK_SIZE,
-        APP_STORE_SIZE,
-        DATA_BLOCK_COUNT,
-        next_block % DATA_BLOCK_COUNT,
+        app_store_size,
+        available_blocks,
+        next_block % available_blocks,
         len(bundle_paths),
         next_block,
         0,
@@ -180,10 +195,16 @@ def build_bundlefs(bundle_paths: list[Path]) -> bytes:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--app-store-size",
+        type=lambda value: int(value, 0),
+        default=APP_STORE_SIZE,
+        help="physical app_store partition size in bytes (decimal or 0x-prefixed)",
+    )
     parser.add_argument("bundles", nargs="*", type=Path)
     args = parser.parse_args()
 
-    image = build_bundlefs(args.bundles)
+    image = build_bundlefs(args.bundles, args.app_store_size)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(image)
     contents = "empty" if not args.bundles else f"{len(args.bundles)} Apps"

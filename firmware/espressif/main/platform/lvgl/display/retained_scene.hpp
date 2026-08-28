@@ -23,7 +23,7 @@ class RetainedScene final {
         : logical_width_(logical_width), logical_height_(logical_height), fonts_(fonts) {}
 
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    void BindSurface(lv_display_t* display, esp_lcd_panel_handle_t panel);
+    void BindSurface(lv_display_t* display, DirectFramebufferAccess* framebuffers);
 #endif
     [[nodiscard]] bool Initialize();
     void ForgetObjects();

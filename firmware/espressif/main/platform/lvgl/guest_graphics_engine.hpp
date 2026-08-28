@@ -4,11 +4,11 @@
 
 #include "device/graphics.hpp"
 #include "esp_err.h"
-#include "esp_lcd_panel_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "lvgl.h"
 #include "platform/lvgl/display/dirty_region_coalescer.hpp"
+#include "platform/lvgl/display/display_pipeline.hpp"
 #include "platform/lvgl/display/retained_scene.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 
@@ -27,8 +27,8 @@ class GuestGraphicsEngine final {
     GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts);
 
     void SetPresentationHooks(GuestPresentationHooks hooks) { presentation_hooks_ = hooks; }
-    [[nodiscard]] esp_err_t Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel);
-    void RebindPanel(esp_lcd_panel_handle_t panel);
+    [[nodiscard]] esp_err_t Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers);
+    void RebindFramebuffers(DirectFramebufferAccess* framebuffers);
 
     [[nodiscard]] bool Available() const { return true; }
     [[nodiscard]] int32_t GetInfo(micropixel_graphics_info_t& info) const;

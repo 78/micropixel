@@ -304,9 +304,24 @@ auto texture = app.resources().LoadTexture(my_assets::background);
 - `StreamingTexture`：可写脏矩形的 move-only Host 资源；
 - `TextureUpdateBatch`：把多次 streaming texture 更新合并成一次 compositor 唤醒。
 
-`RendererInfo::width()` / `height()` 是 Guest 逻辑坐标空间的唯一尺寸来源；`InputInfo` 不重复暴露第二份
-宽高。SDK 不固定设备分辨率。当前 Metalio Claw4 Host 返回 720×720，Input event 已由 Host 映射到同一个
-逻辑坐标空间。应用不得把 720 写成跨设备常量。
+`RendererInfo::width()` / `height()` 是 Guest 设备坐标空间的唯一尺寸来源；`InputInfo` 不重复暴露第二份
+宽高。SDK 不固定设备分辨率。当前 Metalio Claw4 Host 返回 720×720，ESP-Mosaico 的目标面板为 480×480，
+Input event 由 Host 映射到对应设备坐标空间。自适应 UI 应直接依据 `RendererInfo` 布局；已有固定设计稿
+可以显式使用 `ui::Viewport` 保留自己的逻辑坐标空间：
+
+```cpp
+const auto renderer = app.renderer();
+const micropixel::ui::Viewport viewport{renderer.info(), {720, 720}};
+micropixel::ui::ViewportFrame frame{renderer.BeginFrame(), viewport};
+frame.DrawTexture({0, 0}, background);  // 自动缩放到物理 panel
+
+if (const auto* touch = event.touch()) {
+    HandleTouch(viewport.ToLogical(*touch));
+}
+```
+
+`ViewportFrame` 对 geometry、clip、translation、纹理 destination 和语义字体角色做一致映射，不改变 wire ABI；
+应用必须同时把触摸转换回同一逻辑空间。它适合 720 设计稿迁移到 480 方屏，不替代真正的响应式布局。
 
 应用不接触 `Layer`、`Surface`、transport batch 或 retained-compositor capability。需要局部平移时使用
 普通渲染状态；SDK 会在支持的 Host 上自动使用 retained translation 快速路径，否则执行裁剪和平移降级：
@@ -384,13 +399,15 @@ micropixel::Assert(frame.Present().has_value(), "frame present failed");
 每个 streaming texture 计入 Guest 的 PSRAM 配额。
 
 `sdk/ui/button.hpp` 提供无堆分配的 `ui::Button`。它捕获按下时的 touch id，手指移出时取消视觉
-按下态，回到按钮内会恢复，只有在按钮内松开才返回 `clicked`。动作仍由 App 处理，渲染可选
+按下态，回到按钮内会恢复，只有在按钮内松开才返回 `clicked`。构造函数的可选 `hit_padding` 会在四边
+扩大不可见触控区域而不改变绘制边界，适合小屏上的图标按钮。相邻按钮的扩大区域不应重叠；需要紧凑
+排列时由 App 的页面级 hit tester 先选出唯一目标。动作仍由 App 处理，渲染可选
 `DrawTextButton()` 或 `DrawTextureButton()`。文本按钮默认叠加同一矩形上的半透明黑色蒙版；贴图按钮
 按下时降低原图的 command opacity，并继续保留图片自身的逐像素 alpha，因此透明边缘和圆角不会被
 矩形反馈层覆盖：
 
 ```cpp
-micropixel::ui::Button play_button{{250, 316, 220, 72}};
+micropixel::ui::Button play_button{{250, 316, 220, 72}, 12};
 
 if (const auto update = play_button.OnTouch(touch); update.clicked) {
     StartGame();

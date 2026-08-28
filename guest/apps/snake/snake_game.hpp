@@ -38,43 +38,43 @@ class SnakeGame final {
     micropixel::Rect InterpolatedSlotRect(uint32_t slot, uint32_t index, int32_t inset, int32_t board_x,
                                           int32_t board_y) const;
 
-    void AppendPlaceholderRect(micropixel::Frame& commands) const;
+    void AppendPlaceholderRect(micropixel::ui::ViewportFrame& commands) const;
 
-    static void AppendPlaceholderText(micropixel::Frame& commands);
+    static void AppendPlaceholderText(micropixel::ui::ViewportFrame& commands);
 
-    void FillClippedRect(micropixel::Frame& commands, micropixel::Rect rect, micropixel::Color color) const;
+    void FillClippedRect(micropixel::ui::ViewportFrame& commands, micropixel::Rect rect, micropixel::Color color) const;
 
-    void RenderComboBar(micropixel::Frame& commands) const;
+    void RenderComboBar(micropixel::ui::ViewportFrame& commands) const;
 
-    void RenderComboFlame(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderComboFlame(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                           uint32_t slots) const;
 
-    void RenderTrails(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderTrails(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                       uint32_t slots) const;
 
-    void RenderFood(micropixel::Frame& commands, const Food& food, int32_t board_x, int32_t board_y,
+    void RenderFood(micropixel::ui::ViewportFrame& commands, const Food& food, int32_t board_x, int32_t board_y,
                     uint32_t detail_slots) const;
 
-    void RenderObstacles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, uint32_t detail_slots) const;
+    void RenderObstacles(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, uint32_t detail_slots) const;
 
-    void RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderSnake(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                      uint32_t body_slots) const;
 
-    void RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, int32_t board_y) const;
+    void RenderFoodBurst(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y) const;
 
-    void RenderParticles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderParticles(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                          uint32_t slots) const;
 
-    void RenderFlash(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+    void RenderFlash(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                      uint32_t slots) const;
 
-    void RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
+    void RenderOverlayRect(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
 
-    void RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderHeaderTexts(micropixel::ui::ViewportFrame& commands, const Theme& theme) const;
 
-    void RenderPopups(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
+    void RenderPopups(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
 
-    void RenderOverlayTexts(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderOverlayTexts(micropixel::ui::ViewportFrame& commands, const Theme& theme) const;
 
     void SnapshotBody();
 
@@ -148,6 +148,7 @@ class SnakeGame final {
     snake_strings::Catalog strings_;
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
+    micropixel::ui::Viewport viewport_;
     micropixel::Audio audio_;
     micropixel::Texture board_texture_{};
     micropixel::Texture start_button_texture_{};

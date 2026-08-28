@@ -187,7 +187,7 @@ void BlocksGame::SyncPlayfield() {
     visual_cache_valid_ = true;
 }
 
-void BlocksGame::RenderMiniPiece(micropixel::Frame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
+void BlocksGame::RenderMiniPiece(micropixel::ui::ViewportFrame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
                                  bool visible) const {
     if (!visible) {
         return;
@@ -229,7 +229,7 @@ void BlocksGame::RenderMiniPiece(micropixel::Frame& commands, Tetromino type, in
     }
 }
 
-void BlocksGame::RenderHeader(micropixel::Frame& commands, const Theme& theme) const {
+void BlocksGame::RenderHeader(micropixel::ui::ViewportFrame& commands, const Theme& theme) const {
     commands.DrawText(micropixel::Point{24, 8}, strings_.Get(blocks_strings::Id::kAppTitle), AsColor(theme.text),
                       micropixel::SystemFont::kTitle);
     commands.DrawText(micropixel::Point{24, 47}, strings_.Get(blocks_strings::Id::kBrandEdition),
@@ -252,7 +252,7 @@ void BlocksGame::RenderHeader(micropixel::Frame& commands, const Theme& theme) c
                       micropixel::SystemFont::kLarge);
 }
 
-void BlocksGame::RenderSidebar(micropixel::Frame& commands, const Theme& theme) const {
+void BlocksGame::RenderSidebar(micropixel::ui::ViewportFrame& commands, const Theme& theme) const {
     const int32_t sidebar_left = kBoardX + kSidebarX;
     const micropixel::Color muted = micropixel::Color::Rgb(115U, 115U, 115U);
     commands.DrawText(micropixel::Point{sidebar_left + 18, kBoardY + 14}, strings_.Get(blocks_strings::Id::kLabelHold),
@@ -275,7 +275,7 @@ void BlocksGame::RenderSidebar(micropixel::Frame& commands, const Theme& theme) 
                       strings_.Get(blocks_strings::Id::kHintSwipeAnywhere), muted, micropixel::SystemFont::kSmall);
 }
 
-void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const {
+void BlocksGame::RenderStatusEffect(micropixel::ui::ViewportFrame& commands, const Theme& theme) const {
     if (clear_effect_remaining_us_ != 0U) {
         int32_t first_row_y = kBoardY + kPlayfieldHeight / 2;
         for (uint32_t row = 0U; row < kBoardRows; ++row) {
@@ -304,7 +304,7 @@ void BlocksGame::RenderStatusEffect(micropixel::Frame& commands, const Theme& th
     }
 }
 
-void BlocksGame::RenderOverlay(micropixel::Frame& commands) const {
+void BlocksGame::RenderOverlay(micropixel::ui::ViewportFrame& commands) const {
     if (screen_ == Screen::kPlaying) {
         return;
     }
@@ -363,7 +363,7 @@ void BlocksGame::Render() {
     }
     SyncPlayfield();
     const Theme& theme = ThemeForLevel(model_.level());
-    micropixel::Frame commands = renderer_.BeginFrame();
+    micropixel::ui::ViewportFrame commands{renderer_.BeginFrame(), viewport_};
     commands.Clear(micropixel::Color::Rgb(5U, 5U, 5U));
     commands.DrawTexture(micropixel::Point{kBoardX, kBoardY}, board_texture_);
     for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {

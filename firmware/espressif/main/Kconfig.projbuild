@@ -54,6 +54,15 @@ menu "WAMR application quotas"
             surfaces for the active Guest. Raw package Bitmaps remain backed
             by read-only Flash mmap and do not consume this quota.
 
+    config MICROPIXEL_MAX_TEXTURE_DIMENSION
+        int "Maximum decoded texture dimension"
+        range 64 2048
+        default 1024
+        help
+            Independent width/height ceiling for decoded and streaming
+            textures. This is a resource policy, not the physical panel
+            resolution; Guest rendering still queries RendererInfo.
+
     config MICROPIXEL_KV_MAX_BYTES
         int "Maximum logical private KV bytes per Guest"
         range 256 16384
@@ -83,6 +92,17 @@ endmenu
 
 menu "MicroPixel board backends"
 
+    config MICROPIXEL_DISPLAY_LVGL
+        bool
+        select LV_FONT_FMT_TXT_LARGE
+        select LV_USE_SNAPSHOT
+
+    config MICROPIXEL_DISPLAY_PPA
+        bool
+
+    config MICROPIXEL_DISPLAY_DIRECT_FRAMEBUFFER
+        bool
+
     choice MICROPIXEL_BOARD
         prompt "Target board"
         default MICROPIXEL_BOARD_METALIO_CLAW4 if IDF_TARGET_ESP32P4
@@ -91,11 +111,24 @@ menu "MicroPixel board backends"
     config MICROPIXEL_BOARD_METALIO_CLAW4
         bool "Metalio-Claw4"
         depends on IDF_TARGET_ESP32P4
-        select LV_USE_SNAPSHOT
+        select MICROPIXEL_DISPLAY_LVGL
+        select MICROPIXEL_DISPLAY_PPA
+        select MICROPIXEL_DISPLAY_DIRECT_FRAMEBUFFER
         help
             Bring up the verified 720x720 RGB888 MIPI-DSI panel and GT911
             touch controller before WAMR starts. LVGL remains a Host-only
             backend and is not exposed through the Guest ABI.
+
+    config MICROPIXEL_BOARD_ESP_MOSAICO
+        bool "ESP-Mosaico bring-up profile"
+        depends on IDF_TARGET_ESP32S31
+        select MICROPIXEL_DISPLAY_LVGL
+        select MICROPIXEL_DISPLAY_PPA
+        help
+            Bring up the official CO5300/CST9217 display and touch drivers with the
+            shared Runtime, Guest graphics engine and native ESP32-S31 Wi-Fi.
+            Audio, sensors, battery, NAND and module discovery remain outside
+            the initial HMI integration.
 
     config MICROPIXEL_BOARD_NULL
         bool "Null compile-only board"
@@ -115,14 +148,24 @@ menu "MicroPixel board backends"
             Ogg Opus playback streams, and expose Audio 1.1 to the active Guest.
             The Guest never receives PCM, codec, I2S, or master-volume access.
 
+    config MICROPIXEL_MOSAICO_LCD_QSPI_DRIVE_CAP
+        int "ESP-Mosaico LCD QSPI drive strength (0-3)"
+        depends on MICROPIXEL_BOARD_ESP_MOSAICO
+        range 0 3
+        default 3
+        help
+            GPIO drive capability for the CO5300 QSPI clock and DATA0-DATA3.
+            ESP-Mosaico's vendor BSP exposes the same tuning range and advises
+            increasing it when display signal integrity fails at 40 MHz. Keep
+            this board-specific; Runtime and Device contracts never depend on it.
+
     config MICROPIXEL_LVGL_PPA_ACCEL
-        bool "Use ESP32-P4 PPA for eligible LVGL RGB888 draw operations"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4
+        bool "Use PPA for eligible LVGL RGB888 draw operations"
+        depends on MICROPIXEL_DISPLAY_PPA
         default y
         help
-            Register the ESP LVGL adapter's PPA Fill/Blend handler. DMA2D panel
-            transfer remains enabled independently. Guest applications never
-            see PPA.
+            Register the ESP LVGL adapter's PPA Fill/Blend handler on a target
+            that advertises the accelerator. Guest applications never see PPA.
 
     config MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS
         int "Minimum RGB888 fill area sent to PPA"
@@ -135,28 +178,38 @@ menu "MicroPixel board backends"
             threshold use PPA Fill.
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT
-        int "LVGL double-partial draw buffer height"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4
+        int "LVGL partial draw buffer height"
+        depends on MICROPIXEL_DISPLAY_LVGL
         range 20 720
         default 100
         help
-            Number of 720-pixel-wide RGB888 rows in LVGL's scratch draw
-            buffer. A 100-row buffer splits a full-screen invalidation into
-            roughly eight render tiles. Larger values reduce repeated object
-            traversal but require proportionally more memory.
+            Number of panel-wide rows in each LVGL scratch draw buffer.
+            Larger values reduce repeated object traversal but require memory
+            proportional to the selected board's display width and pixel format.
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM
         bool "Place the LVGL partial draw buffer in PSRAM"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4 && SPIRAM
+        depends on MICROPIXEL_DISPLAY_LVGL && SPIRAM
         default n
         help
-            Allocate the double-partial scratch buffer from PSRAM instead of
-            internal SRAM. This permits a much taller buffer on ESP32-P4 at
-            the cost of slower CPU access. PPA and DMA2D remain available.
+            Allocate partial scratch buffers from PSRAM instead of internal
+            SRAM. This permits taller or multiple buffers at the cost of slower
+            CPU access. PPA and DMA2D remain available where supported.
+
+    config MICROPIXEL_LVGL_OBJECT_POOL_PSRAM
+        bool "Place the LVGL object pool in PSRAM"
+        depends on MICROPIXEL_DISPLAY_LVGL && SPIRAM && LV_USE_BUILTIN_MALLOC
+        default n
+        help
+            Place LVGL's fixed builtin TLSF pool, which owns objects, styles
+            and event descriptors, in external RAM. Draw buffers are governed
+            separately by MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM. Keep this off
+            on boards where CPU access to PSRAM makes object traversal too
+            expensive.
 
     config MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS
         int "Maximum extra pixels per dirty-area merge"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4
+        depends on MICROPIXEL_DISPLAY_LVGL
         range 0 65536
         default 8192
         help
@@ -167,7 +220,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS
         int "Maximum union area for a dirty-area merge"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4
+        depends on MICROPIXEL_DISPLAY_LVGL
         range 4096 518400
         default 65536
         help
@@ -177,7 +230,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
         bool "Cache and translate retained Guest surfaces"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4 && MICROPIXEL_LVGL_PPA_ACCEL
+        depends on MICROPIXEL_DISPLAY_DIRECT_FRAMEBUFFER && MICROPIXEL_LVGL_PPA_ACCEL
         default y
         help
             Group marked Guest commands below one retained LVGL surface. For a

@@ -52,7 +52,8 @@ micropixel_texture_handle_t BitmapStore::CreateOffscreenSurface(uint32_t width, 
                                          : (pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
     const uint64_t stride = static_cast<uint64_t>(width) * bytes_per_pixel;
     const uint64_t size = stride * height;
-    if (width == 0U || height == 0U || width > 720U || height > 720U || bytes_per_pixel == 0U || stride > UINT32_MAX ||
+    if (width == 0U || height == 0U || width > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION ||
+        height > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION || bytes_per_pixel == 0U || stride > UINT32_MAX ||
         size > UINT32_MAX || size > CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES) {
         return 0U;
     }

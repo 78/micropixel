@@ -49,6 +49,9 @@ class TouchEvent final {
     [[nodiscard]] constexpr Point position() const { return Point{x_, y_}; }
     [[nodiscard]] constexpr bool has_pressure() const { return has_pressure_; }
     [[nodiscard]] constexpr uint16_t pressure_per_mille() const { return pressure_per_mille_; }
+    [[nodiscard]] constexpr TouchEvent WithPosition(Point position) const {
+        return TouchEvent{timestamp_, phase_, id_, position.x, position.y, has_pressure_, pressure_per_mille_};
+    }
 
    private:
     constexpr TouchEvent(TimePoint timestamp, TouchPhase phase, uint32_t id, int32_t x, int32_t y, bool has_pressure,

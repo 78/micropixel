@@ -79,6 +79,7 @@ class Sensor final {
 };
 
 using Accelerometer = Sensor<Acceleration>;
+using Gyroscope = Sensor<AngularVelocity>;
 using Magnetometer = Sensor<MagneticField>;
 
 class Sensors final {

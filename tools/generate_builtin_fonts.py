@@ -14,6 +14,9 @@ from pathlib import Path
 
 GLYPH_COMMENT = re.compile(r"/\* U\+([0-9A-Fa-f]{4,6})(?: |\*)")
 OPTS_COMMENT = re.compile(r" \* Opts:.*\n")
+LVGL_SYMBOL_DEFINITION = re.compile(r"^\s*#define\s+(LV_SYMBOL_[A-Z0-9_]+).*?/\*(\d+),", re.MULTILINE)
+LVGL_SYMBOL_USAGE = re.compile(r"\bLV_SYMBOL_[A-Z0-9_]+\b")
+NON_GLYPH_LVGL_SYMBOLS = {"LV_SYMBOL_DUMMY"}
 
 
 def load_json(path: Path):
@@ -100,6 +103,30 @@ def validate_host_catalog_coverage(path: Path, requested: set[int]) -> dict:
     return report
 
 
+def lvgl_symbol_requirements(symbol_def: Path, sources: list[Path]) -> dict[str, int]:
+    definitions = {
+        name: int(codepoint)
+        for name, codepoint in LVGL_SYMBOL_DEFINITION.findall(symbol_def.read_text(encoding="utf-8"))
+    }
+    names: set[str] = set()
+    for source in sources:
+        paths = source.rglob("*") if source.is_dir() else [source]
+        for path in paths:
+            if path.is_file() and path.suffix in {".c", ".cc", ".cpp", ".h", ".hpp"}:
+                names.update(LVGL_SYMBOL_USAGE.findall(path.read_text(encoding="utf-8")))
+    unknown = names - definitions.keys() - NON_GLYPH_LVGL_SYMBOLS
+    if unknown:
+        raise ValueError(f"LVGL symbol definitions are unavailable: {', '.join(sorted(unknown))}")
+    return {name: definitions[name] for name in sorted(names - NON_GLYPH_LVGL_SYMBOLS)}
+
+
+def validate_lvgl_symbol_coverage(requirements: dict[str, int], requested: set[int]) -> None:
+    missing = {name: codepoint for name, codepoint in requirements.items() if codepoint not in requested}
+    if missing:
+        values = ", ".join(f"{name}=U+{codepoint:04X}" for name, codepoint in missing.items())
+        raise ValueError(f"builtin-latin-v1 does not cover required LVGL symbols: {values}")
+
+
 def sanitize_generated_source(source: str, profile_name: str, size: int) -> str:
     replacement = f" * Profile: {profile_name}; size={size}; converter=lv_font_conv@1.5.3\n"
     source, count = OPTS_COMMENT.subn(replacement, source, count=1)
@@ -170,6 +197,8 @@ def main() -> int:
     parser.add_argument("--montserrat", type=Path, required=True)
     parser.add_argument("--replacement-font", type=Path, required=True)
     parser.add_argument("--symbol-font", type=Path, required=True)
+    parser.add_argument("--lvgl-symbol-def", type=Path, required=True)
+    parser.add_argument("--lvgl-symbol-source", type=Path, action="append", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
@@ -180,6 +209,8 @@ def main() -> int:
         requested = requested_codepoints(profile)
         symbols = set(profile.get("symbols", []))
         host_report = validate_host_catalog_coverage(args.host_catalog_report, requested)
+        lvgl_symbols = lvgl_symbol_requirements(args.lvgl_symbol_def, args.lvgl_symbol_source)
+        validate_lvgl_symbol_coverage(lvgl_symbols, requested)
         if not args.montserrat.is_file() or not args.replacement_font.is_file() or not args.symbol_font.is_file():
             raise ValueError("LVGL managed-component font sources are unavailable")
 
@@ -227,6 +258,7 @@ def main() -> int:
                 "symbols": {"file": args.symbol_font.name, "sha256": file_sha256(args.symbol_font)},
             },
             "host_catalog_fingerprint": host_report.get("fingerprint"),
+            "required_lvgl_symbols": lvgl_symbols,
             "requested_count": len(requested),
             "requested_codepoints": sorted(requested),
             "covered_count": len(covered_intersection),

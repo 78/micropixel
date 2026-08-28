@@ -4,9 +4,10 @@ BundleFS 是 MicroPixel `app_store` 分区的专用文件系统。它只保存�
 随机覆盖写、块链表或 Guest 可见的 Flash 地址。上层 `AppStore` 负责 Bundle 语义、安装策略和 AppId 校验；
 Bundle reader、AOT loader 和 App Hall 只通过 BundleFS 的 `open/read/mmap/replace/remove` 接口访问内容。
 
-## 1. ESP32-P4 v2 几何
+## 1. v2 几何
 
-当前 `app_store` 分区固定为 24 MiB，BundleFS v2 使用以下布局：
+BundleFS v2 的元数据和数据块几何不随 SoC 改变。ESP32-P4 产品 profile 的 `app_store` 为 24 MiB，
+使用以下布局：
 
 ```text
 0x000000–0x003fff  Catalog Bank 0，16 KiB
@@ -16,9 +17,11 @@ Bundle reader、AOT loader 和 App Hall 只通过 BundleFS 的 `open/read/mmap/r
 0x010000–0x17fffff 383 个 64 KiB Bundle 数据块
 ```
 
-第一段 64 KiB 是元数据区域，v2 将其完整分配给四个 Catalog Bank。数据区仍从 64 KiB 边界开始，使
-ESP32-P4/S3 的 64 KiB Flash MMU 页可以直接参与 `spi_flash_mmap_pages()`。未来 ESP32-S31 的 16 KiB
-变体使用新的格式几何，不改变已有字段的含义。
+第一段 64 KiB 是元数据区域，v2 将其完整分配给四个 Catalog Bank。数据区仍从 64 KiB 边界开始。
+ESP32-P4 的一个 64 KiB 数据块对应一个 Flash MMU page；ESP32-S31 的一个数据块对应四个连续的
+16 KiB MMU page。BundleFS 按目标 MMU page size 展开离散块号表，因此 mmap 不要求改变 Catalog、块号或
+Bundle 磁盘格式。ESP-Mosaico P0/P1 NOR profile 的 `app_store` 为 8 MiB，包含同样的 64 KiB 元数据区和
+127 个 64 KiB 数据块；外部 NAND 属于 P2。
 
 空间统计以整个 `app_store` 分区为总容量；已用容量包含完整元数据区域、因几何对齐而不可分配的尾部以及
 已分配的 Bundle 数据块，空闲容量只包含仍可分配的数据块。数据块计数仍只描述数据区，不包含元数据。

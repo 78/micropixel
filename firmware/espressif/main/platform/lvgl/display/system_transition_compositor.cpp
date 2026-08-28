@@ -7,7 +7,6 @@
 #include <cstring>
 
 #include "esp_heap_caps.h"
-#include "esp_lcd_mipi_dsi.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
@@ -26,6 +25,14 @@ constexpr uint32_t AlignPpaBufferSize(uint32_t size) {
     return (size + kPpaBufferAlignment - 1U) / kPpaBufferAlignment * kPpaBufferAlignment;
 }
 
+esp_err_t DisableDummyDrawAfterSuccessfulTransition(lv_display_t* display) {
+#ifdef ESP_LV_ADAPTER_HAS_DISABLE_DUMMY_DRAW_PRESERVE_CONTENT
+    return esp_lv_adapter_disable_dummy_draw_preserve_content(display);
+#else
+    return esp_lv_adapter_set_dummy_draw(display, false);
+#endif
+}
+
 int32_t Interpolate(int32_t from, int32_t to, uint32_t numerator, uint32_t denominator) {
     return from + static_cast<int32_t>((static_cast<int64_t>(to - from) * numerator) / denominator);
 }
@@ -34,30 +41,32 @@ int32_t Interpolate(int32_t from, int32_t to, uint32_t numerator, uint32_t denom
 
 SystemTransitionCompositor::~SystemTransitionCompositor() { Release(); }
 
-esp_err_t SystemTransitionCompositor::Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t width,
-                                                 uint32_t height) {
-    if (display == nullptr || panel == nullptr || width == 0U || height == 0U || width > UINT32_MAX / kBytesPerPixel ||
-        width * kBytesPerPixel > UINT32_MAX / height) {
+esp_err_t SystemTransitionCompositor::Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers,
+                                                 uint32_t width, uint32_t height, SystemTransitionProfile profile) {
+    if (display == nullptr || framebuffers == nullptr || !framebuffers->Ready() || width == 0U || height == 0U ||
+        profile.intermediate_width == 0U || profile.card_width == 0U ||
+        profile.fullscreen_to_intermediate_scale <= 0.0F || profile.intermediate_to_card_scale <= 0.0F ||
+        width > UINT32_MAX / kBytesPerPixel || width * kBytesPerPixel > UINT32_MAX / height) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (srm_client_ != nullptr) {
-        return display_ == display && panel_ == panel && width_ == width && height_ == height ? ESP_OK
-                                                                                              : ESP_ERR_INVALID_STATE;
+    if (srm_blitter_.Ready()) {
+        return display_ == display && framebuffers_ == framebuffers && width_ == width && height_ == height
+                   ? ESP_OK
+                   : ESP_ERR_INVALID_STATE;
     }
 
-    ppa_client_config_t config{
-        .oper_type = PPA_OPERATION_SRM,
-        .max_pending_trans_num = 1U,
-        .data_burst_length = PPA_DATA_BURST_LENGTH_128,
-        .flags = {},
-    };
-    esp_err_t status = ppa_register_client(&config, &srm_client_);
+    esp_err_t status = srm_blitter_.Initialize();
     if (status != ESP_OK) {
         return status;
     }
 
-    config.oper_type = PPA_OPERATION_BLEND;
-    status = ppa_register_client(&config, &blend_client_);
+    ppa_client_config_t blend_config{
+        .oper_type = PPA_OPERATION_BLEND,
+        .max_pending_trans_num = 1U,
+        .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+        .flags = {},
+    };
+    status = ppa_register_client(&blend_config, &blend_client_);
     if (status != ESP_OK) {
         ESP_LOGW(kTag, "PPA status-layer blender unavailable: %s", esp_err_to_name(status));
         blend_client_ = nullptr;
@@ -72,7 +81,8 @@ esp_err_t SystemTransitionCompositor::Initialize(lv_display_t* display, esp_lcd_
         dma2d_client_ = nullptr;
     }
     display_ = display;
-    panel_ = panel;
+    framebuffers_ = framebuffers;
+    profile_ = profile;
     width_ = width;
     height_ = height;
     frame_bytes_ = width * height * kBytesPerPixel;
@@ -84,8 +94,8 @@ esp_err_t SystemTransitionCompositor::Initialize(lv_display_t* display, esp_lcd_
     return ESP_OK;
 }
 
-void SystemTransitionCompositor::RebindPanel(esp_lcd_panel_handle_t panel) {
-    panel_ = panel;
+void SystemTransitionCompositor::RebindFramebuffers(DirectFramebufferAccess* framebuffers) {
+    framebuffers_ = framebuffers;
     status_frame_states_ = {};
     prepared_to_hall_ = false;
 }
@@ -97,7 +107,7 @@ bool SystemTransitionCompositor::RefreshBackgroundLocked(lv_obj_t* root) {
 }
 
 bool SystemTransitionCompositor::CaptureBackgroundLocked(lv_obj_t* root, bool preserve_as_baseline) {
-    if (display_ == nullptr || srm_client_ == nullptr || root == nullptr) {
+    if (display_ == nullptr || !srm_blitter_.Ready() || root == nullptr) {
         return false;
     }
     if (background_pixels_ == nullptr) {
@@ -218,29 +228,16 @@ bool SystemTransitionCompositor::UpdateBackgroundPixels(const uint8_t* pixels, c
 }
 
 uint8_t* SystemTransitionCompositor::DisplayedFrameBuffer() const {
-    if (display_ == nullptr || panel_ == nullptr) {
-        return nullptr;
-    }
-    constexpr uint32_t kFramebufferCount = 2U;
-    void* panel_frame_buffers[kFramebufferCount]{};
-    const esp_err_t status =
-        esp_lcd_dpi_panel_get_frame_buffer(panel_, kFramebufferCount, &panel_frame_buffers[0], &panel_frame_buffers[1]);
-    auto* free_frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
-    if (status == ESP_OK && free_frame_buffer == panel_frame_buffers[0]) {
-        return static_cast<uint8_t*>(panel_frame_buffers[1]);
-    }
-    if (status == ESP_OK && free_frame_buffer == panel_frame_buffers[1]) {
-        return static_cast<uint8_t*>(panel_frame_buffers[0]);
-    }
-    return nullptr;
+    return framebuffers_ != nullptr ? framebuffers_->Displayed() : nullptr;
 }
 
 bool SystemTransitionCompositor::CaptureDisplayedToHalf(uint8_t* half, uint32_t half_allocation_bytes,
                                                         const SystemTransitionRect& card, uint64_t trigger_timestamp_us,
                                                         uint32_t& elapsed_us) {
     elapsed_us = 0U;
-    if (display_ == nullptr || panel_ == nullptr || half == nullptr || background_pixels_ == nullptr ||
-        card.width != kCardWidth || card.height != kCardWidth || prepared_to_hall_) {
+    if (display_ == nullptr || framebuffers_ == nullptr || half == nullptr || background_pixels_ == nullptr ||
+        card.width != static_cast<int32_t>(profile_.card_width) ||
+        card.height != static_cast<int32_t>(profile_.card_width) || prepared_to_hall_) {
         return false;
     }
 
@@ -255,16 +252,15 @@ bool SystemTransitionCompositor::CaptureDisplayedToHalf(uint8_t* half, uint32_t 
     const bool scaled =
         displayed_frame_buffer != nullptr && ScaleFullscreenToHalf(displayed_frame_buffer, half, half_allocation_bytes);
 
-    constexpr uint32_t kInitialScaleUnits = 30U;
-    auto* transition_frame =
-        scaled ? static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_)) : nullptr;
+    auto* transition_frame = scaled ? framebuffers_->AcquireFree() : nullptr;
     const SystemTransitionRect fullscreen_region{
         .x = 0, .y = 0, .width = static_cast<int32_t>(width_), .height = static_cast<int32_t>(height_)};
-    const SystemTransitionRect initial_region = GuestRect(card, kInitialScaleUnits);
+    const SystemTransitionRect initial_region = GuestRect(card, SystemTransitionTimeline::kInitialToHallScaleUnits);
     SystemTransitionRect rendered_region{};
     const bool presented = transition_frame != nullptr &&
                            RestoreGuestDifference(transition_frame, fullscreen_region, initial_region) &&
-                           ComposeGuest(transition_frame, half, card, kInitialScaleUnits, rendered_region) &&
+                           ComposeGuest(transition_frame, half, card,
+                                        SystemTransitionTimeline::kInitialToHallScaleUnits, rendered_region) &&
                            SubmitFrame(transition_frame);
     elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - started_us);
     if (!presented) {
@@ -278,7 +274,8 @@ bool SystemTransitionCompositor::CaptureDisplayedToHalf(uint8_t* half, uint32_t 
         ESP_LOGI(kTag,
                  "transition responsiveness: direction=to-hall phase=initial scale=%" PRIu32
                  "/16 trigger-to-first-present=%" PRIu64 " us capture+present=%" PRIu32 " us",
-                 kInitialScaleUnits, static_cast<uint64_t>(esp_timer_get_time()) - trigger_timestamp_us, elapsed_us);
+                 SystemTransitionTimeline::kInitialToHallScaleUnits,
+                 static_cast<uint64_t>(esp_timer_get_time()) - trigger_timestamp_us, elapsed_us);
     }
     return true;
 }
@@ -335,33 +332,28 @@ bool SystemTransitionCompositor::BlitRgb888(const uint8_t* source, uint32_t sour
                                             uint32_t destination_width, uint32_t destination_height,
                                             uint32_t destination_allocation_bytes, uint32_t destination_x,
                                             uint32_t destination_y, float scale) {
-    if (srm_client_ == nullptr || source == nullptr || destination == nullptr || source_width == 0U ||
+    if (!srm_blitter_.Ready() || source == nullptr || destination == nullptr || source_width == 0U ||
         source_height == 0U || source_block_width == 0U || source_block_height == 0U || source_x >= source_width ||
         source_y >= source_height || source_block_width > source_width - source_x ||
         source_block_height > source_height - source_y || destination_width == 0U || destination_height == 0U) {
         return false;
     }
-    ppa_srm_oper_config_t config{};
-    config.in.buffer = source;
-    config.in.pic_w = source_width;
-    config.in.pic_h = source_height;
-    config.in.block_offset_x = source_x;
-    config.in.block_offset_y = source_y;
-    config.in.block_w = source_block_width;
-    config.in.block_h = source_block_height;
-    config.in.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
-    config.out.buffer = destination;
-    config.out.buffer_size = destination_allocation_bytes;
-    config.out.pic_w = destination_width;
-    config.out.pic_h = destination_height;
-    config.out.block_offset_x = destination_x;
-    config.out.block_offset_y = destination_y;
-    config.out.srm_cm = PPA_SRM_COLOR_MODE_RGB888;
-    config.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
-    config.scale_x = scale;
-    config.scale_y = scale;
-    config.mode = PPA_TRANS_MODE_BLOCKING;
-    const esp_err_t status = ppa_do_scale_rotate_mirror(srm_client_, &config);
+    const esp_err_t status = srm_blitter_.Blit({
+        .source = source,
+        .source_width = source_width,
+        .source_height = source_height,
+        .source_region = {.x = source_x, .y = source_y, .width = source_block_width, .height = source_block_height},
+        .source_mode = PPA_SRM_COLOR_MODE_RGB888,
+        .destination = destination,
+        .destination_width = destination_width,
+        .destination_height = destination_height,
+        .destination_allocation_bytes = destination_allocation_bytes,
+        .destination_x = destination_x,
+        .destination_y = destination_y,
+        .destination_mode = PPA_SRM_COLOR_MODE_RGB888,
+        .scale_x = scale,
+        .scale_y = scale,
+    });
     if (status != ESP_OK) {
         ESP_LOGE(kTag,
                  "PPA RGB888 blit failed: %s source=%" PRIu32 "x%" PRIu32 " block=%" PRIu32 ",%" PRIu32 " %" PRIu32
@@ -375,27 +367,25 @@ bool SystemTransitionCompositor::BlitRgb888(const uint8_t* source, uint32_t sour
 
 bool SystemTransitionCompositor::ScaleFullscreenToHalf(const uint8_t* fullscreen, uint8_t* half,
                                                        uint32_t half_allocation_bytes) {
-    if (width_ != 720U || height_ != 720U || fullscreen == nullptr || half == nullptr) {
+    if (width_ != height_ || fullscreen == nullptr || half == nullptr) {
         return false;
     }
-    constexpr uint32_t kHalfBytes = kHalfWidth * kHalfWidth * kBytesPerPixel;
-    constexpr uint32_t kHalfAllocationBytes = AlignPpaBufferSize(kHalfBytes);
-    if (half_allocation_bytes < kHalfAllocationBytes) {
+    const uint32_t half_bytes = profile_.intermediate_width * profile_.intermediate_width * kBytesPerPixel;
+    const uint32_t half_allocation_bytes_required = AlignPpaBufferSize(half_bytes);
+    if (half_allocation_bytes < half_allocation_bytes_required) {
         return false;
     }
 
-    return ScaleRgb888(fullscreen, width_, height_, half, kHalfWidth, kHalfWidth, half_allocation_bytes, 0U, 0U,
-                       8.0F / 16.0F);
+    return ScaleRgb888(fullscreen, width_, height_, half, profile_.intermediate_width, profile_.intermediate_width,
+                       half_allocation_bytes, 0U, 0U, profile_.fullscreen_to_intermediate_scale);
 }
 
 bool SystemTransitionCompositor::ScaleHalfToCard(const uint8_t* half, uint8_t* card, uint32_t card_allocation_bytes) {
     if (half == nullptr || card == nullptr) {
         return false;
     }
-    // ESP32-P4 represents the fractional scale in sixteenths. Combined with
-    // the exact 720 -> 360 pass above, floor(360 * 9/16) gives the 202px card.
-    return ScaleRgb888(half, kHalfWidth, kHalfWidth, card, kCardWidth, kCardWidth, card_allocation_bytes, 0U, 0U,
-                       9.0F / 16.0F);
+    return ScaleRgb888(half, profile_.intermediate_width, profile_.intermediate_width, card, profile_.card_width,
+                       profile_.card_width, card_allocation_bytes, 0U, 0U, profile_.intermediate_to_card_scale);
 }
 
 bool SystemTransitionCompositor::ComposeBackground(uint8_t* frame_buffer) {
@@ -476,12 +466,11 @@ bool SystemTransitionCompositor::RestoreGuestDifference(uint8_t* frame_buffer, c
 
 SystemTransitionRect SystemTransitionCompositor::GuestRect(const SystemTransitionRect& card,
                                                            uint32_t scale_units) const {
-    constexpr uint32_t kCardScaleUnits = 9U;
-    constexpr uint32_t kFullscreenScaleUnits = 32U;
-    const uint32_t scaled_width = kHalfWidth * scale_units / kPpaScaleDenominator;
-    const uint32_t scaled_height = kHalfWidth * scale_units / kPpaScaleDenominator;
-    const uint32_t progress_denominator = kFullscreenScaleUnits - kCardScaleUnits;
-    const uint32_t progress_numerator = kFullscreenScaleUnits - scale_units;
+    const uint32_t scaled_width = SystemTransitionTimeline::ScaledDimension(profile_.intermediate_width, scale_units);
+    const uint32_t scaled_height = scaled_width;
+    const uint32_t progress_denominator =
+        SystemTransitionTimeline::kFullscreenScaleUnits - SystemTransitionTimeline::kCardScaleUnits;
+    const uint32_t progress_numerator = SystemTransitionTimeline::kFullscreenScaleUnits - scale_units;
     const int32_t screen_center_x = static_cast<int32_t>(width_ / 2U);
     const int32_t screen_center_y = static_cast<int32_t>(height_ / 2U);
     const int32_t card_center_x = card.x + card.width / 2;
@@ -502,13 +491,14 @@ bool SystemTransitionCompositor::ComposeGuest(uint8_t* frame_buffer, const uint8
                                               const SystemTransitionRect& card, uint32_t scale_units,
                                               SystemTransitionRect& composed_region) {
     composed_region = GuestRect(card, scale_units);
-    return ScaleRgb888(half_guest, kHalfWidth, kHalfWidth, frame_buffer, width_, height_, frame_bytes_,
-                       static_cast<uint32_t>(composed_region.x), static_cast<uint32_t>(composed_region.y),
-                       static_cast<float>(scale_units) / static_cast<float>(kPpaScaleDenominator));
+    return ScaleRgb888(
+        half_guest, profile_.intermediate_width, profile_.intermediate_width, frame_buffer, width_, height_,
+        frame_bytes_, static_cast<uint32_t>(composed_region.x), static_cast<uint32_t>(composed_region.y),
+        static_cast<float>(scale_units) / static_cast<float>(SystemTransitionTimeline::kScaleDenominator));
 }
 
 bool SystemTransitionCompositor::SubmitFrame(uint8_t* frame_buffer) {
-    const esp_err_t status = esp_lv_adapter_dummy_draw_flush_buf(display_, frame_buffer);
+    const esp_err_t status = framebuffers_ != nullptr ? framebuffers_->Submit(frame_buffer) : ESP_ERR_INVALID_STATE;
     if (status != ESP_OK) {
         ESP_LOGE(kTag, "transition frame submit failed: %s", esp_err_to_name(status));
         return false;
@@ -680,8 +670,8 @@ bool SystemTransitionCompositor::ComposeStatusDialog(uint8_t* frame_buffer, cons
 
 bool SystemTransitionCompositor::BeginStatusLayerTransition(bool entering, uint32_t scrim_rgb, uint8_t scrim_opacity,
                                                             uint64_t trigger_timestamp_us) {
-    if (display_ == nullptr || panel_ == nullptr || blend_client_ == nullptr || prepared_to_hall_ ||
-        status_transition_dummy_active_ || (!entering && !status_layer_buffers_ready_)) {
+    if (display_ == nullptr || framebuffers_ == nullptr || !framebuffers_->Ready() || blend_client_ == nullptr ||
+        prepared_to_hall_ || status_transition_dummy_active_ || (!entering && !status_layer_buffers_ready_)) {
         return false;
     }
     if (entering) {
@@ -717,7 +707,7 @@ bool SystemTransitionCompositor::BeginStatusLayerTransition(bool entering, uint3
     }
 
     uint8_t* displayed_frame_buffer = DisplayedFrameBuffer();
-    auto* first_frame = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
+    auto* first_frame = framebuffers_->AcquireFree();
     const SystemTransitionRect fullscreen{
         .x = 0, .y = 0, .width = static_cast<int32_t>(width_), .height = static_cast<int32_t>(height_)};
     const bool captured = displayed_frame_buffer != nullptr &&
@@ -757,16 +747,14 @@ bool SystemTransitionCompositor::AnimateStatusLayerLocked(lv_obj_t* dialog, int3
     status_dialog_x_ = lv_obj_get_x(dialog) - status_dialog_ext_draw_size_;
     const int32_t visible_snapshot_y = visible_y - status_dialog_ext_draw_size_;
     const int32_t hidden_snapshot_y = hidden_y - status_dialog_ext_draw_size_;
-    constexpr std::array<uint16_t, 6U> kEnterProgress{{400U, 650U, 820U, 930U, 1000U, 1000U}};
-    constexpr std::array<uint16_t, 6U> kExitProgress{{950U, 800U, 550U, 250U, 0U, 0U}};
-    const auto& frame_progress = entering ? kEnterProgress : kExitProgress;
+    const auto& frame_progress = SystemTransitionTimeline::StatusProgress(entering);
     const int64_t started_us = esp_timer_get_time();
     int64_t first_present_us = 0;
     bool success = true;
 
     for (uint32_t frame = 0U; frame < frame_progress.size(); ++frame) {
         const int64_t frame_started_us = esp_timer_get_time();
-        auto* frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
+        auto* frame_buffer = framebuffers_->AcquireFree();
         StatusFrameState* frame_state = nullptr;
         for (auto& candidate : status_frame_states_) {
             if (candidate.buffer == frame_buffer || (candidate.buffer == nullptr && frame_state == nullptr)) {
@@ -843,7 +831,7 @@ bool SystemTransitionCompositor::FinishStatusLayerTransition(bool keep_buffers) 
     if (!status_transition_dummy_active_) {
         return false;
     }
-    const esp_err_t status = esp_lv_adapter_disable_dummy_draw_preserve_content(display_);
+    const esp_err_t status = DisableDummyDrawAfterSuccessfulTransition(display_);
     status_transition_dummy_active_ = false;
     status_frame_states_ = {};
     if (!keep_buffers) {
@@ -888,8 +876,9 @@ void SystemTransitionCompositor::ClearStatusLayerBuffers() {
 bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const SystemTransitionRect& card,
                                          SystemTransitionDirection direction, uint32_t duration_ms,
                                          uint64_t trigger_timestamp_us) {
-    if (display_ == nullptr || half_guest == nullptr || background_pixels_ == nullptr || card.width != kCardWidth ||
-        card.height != kCardWidth) {
+    if (display_ == nullptr || half_guest == nullptr || background_pixels_ == nullptr ||
+        card.width != static_cast<int32_t>(profile_.card_width) ||
+        card.height != static_cast<int32_t>(profile_.card_width)) {
         return false;
     }
 
@@ -907,12 +896,6 @@ bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const System
     };
     std::array<FrameBufferState, 3U> frame_buffers{};
 
-    constexpr uint32_t kFirstVisibleScaleUnits = 11U;
-    constexpr uint32_t kLastVisibleScaleUnits = 30U;
-    constexpr uint32_t kToHallFirstScaleUnits = 25U;
-    constexpr uint32_t kToHallAnimatedFrameCount = 6U;
-    constexpr uint32_t kToGuestAnimatedFrameCount = 6U;
-    constexpr uint32_t kFinalFramebufferCount = 2U;
     struct FrameTiming final {
         uint32_t scale_units{};
         uint32_t acquire_us{};
@@ -922,10 +905,11 @@ bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const System
         uint32_t total_us{};
         bool final{};
     };
-    std::array<FrameTiming, kToGuestAnimatedFrameCount + kFinalFramebufferCount> frame_timings{};
+    std::array<FrameTiming,
+               SystemTransitionTimeline::kAnimatedFrameCount + SystemTransitionTimeline::kFinalFramebufferCount>
+        frame_timings{};
     uint32_t timing_count = 0U;
-    const uint32_t animated_frame_count =
-        direction == SystemTransitionDirection::kToHall ? kToHallAnimatedFrameCount : kToGuestAnimatedFrameCount;
+    constexpr uint32_t animated_frame_count = SystemTransitionTimeline::kAnimatedFrameCount;
     const int64_t started_us = esp_timer_get_time();
     int64_t first_present_us = 0;
     uint32_t submitted_frames = 0U;
@@ -933,16 +917,12 @@ bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const System
 
     for (uint32_t frame = 0U; frame < animated_frame_count; ++frame) {
         const uint32_t scale_units =
-            direction == SystemTransitionDirection::kToHall
-                ? kToHallFirstScaleUnits -
-                      (kToHallFirstScaleUnits - kFirstVisibleScaleUnits) * frame / (animated_frame_count - 1U)
-                : kFirstVisibleScaleUnits +
-                      (kLastVisibleScaleUnits - kFirstVisibleScaleUnits) * frame / (animated_frame_count - 1U);
+            SystemTransitionTimeline::AnimatedScaleUnits(direction == SystemTransitionDirection::kToHall, frame);
         FrameTiming& timing = frame_timings[timing_count++];
         timing.scale_units = scale_units;
         const int64_t frame_started_us = esp_timer_get_time();
         int64_t stage_started_us = frame_started_us;
-        auto* frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
+        auto* frame_buffer = framebuffers_->AcquireFree();
         timing.acquire_us = static_cast<uint32_t>(esp_timer_get_time() - stage_started_us);
         FrameBufferState* frame_state = nullptr;
         for (auto& candidate : frame_buffers) {
@@ -994,13 +974,15 @@ bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const System
     // Preserve-content mode is safe only when every panel framebuffer is back
     // in the same untransformed LVGL coordinate space. Publish the exact final
     // image twice so both buffers are repaired before LVGL owns them again.
-    for (uint32_t frame = 0U; success && frame < kFinalFramebufferCount; ++frame) {
+    for (uint32_t frame = 0U; success && frame < SystemTransitionTimeline::kFinalFramebufferCount; ++frame) {
         FrameTiming& timing = frame_timings[timing_count++];
-        timing.scale_units = direction == SystemTransitionDirection::kToHall ? 9U : 32U;
+        timing.scale_units = direction == SystemTransitionDirection::kToHall
+                                 ? SystemTransitionTimeline::kCardScaleUnits
+                                 : SystemTransitionTimeline::kFullscreenScaleUnits;
         timing.final = true;
         const int64_t frame_started_us = esp_timer_get_time();
         int64_t stage_started_us = frame_started_us;
-        auto* frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
+        auto* frame_buffer = framebuffers_->AcquireFree();
         timing.acquire_us = static_cast<uint32_t>(esp_timer_get_time() - stage_started_us);
         FrameBufferState* frame_state = nullptr;
         for (auto& candidate : frame_buffers) {
@@ -1017,8 +999,8 @@ bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const System
                            : ComposeBackground(frame_buffer);
             timing.repair_us = static_cast<uint32_t>(esp_timer_get_time() - stage_started_us);
         } else {
-            composed = ScaleRgb888(half_guest, kHalfWidth, kHalfWidth, frame_buffer, width_, height_, frame_bytes_, 0U,
-                                   0U, 2.0F);
+            composed = ScaleRgb888(half_guest, profile_.intermediate_width, profile_.intermediate_width, frame_buffer,
+                                   width_, height_, frame_bytes_, 0U, 0U, 2.0F);
             timing.compose_us = static_cast<uint32_t>(esp_timer_get_time() - stage_started_us);
         }
         stage_started_us = esp_timer_get_time();
@@ -1031,8 +1013,8 @@ bool SystemTransitionCompositor::Animate(const uint8_t* half_guest, const System
         submitted_frames += success ? 1U : 0U;
     }
 
-    status = success ? esp_lv_adapter_disable_dummy_draw_preserve_content(display_)
-                     : esp_lv_adapter_set_dummy_draw(display_, false);
+    status =
+        success ? DisableDummyDrawAfterSuccessfulTransition(display_) : esp_lv_adapter_set_dummy_draw(display_, false);
     prepared_to_hall_ = false;
     success = success && status == ESP_OK;
     const uint32_t elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - started_us);
@@ -1110,14 +1092,9 @@ void SystemTransitionCompositor::Release() {
         }
         blend_client_ = nullptr;
     }
-    if (srm_client_ != nullptr) {
-        const esp_err_t status = ppa_unregister_client(srm_client_);
-        if (status != ESP_OK) {
-            ESP_LOGW(kTag, "could not release PPA SRM client: %s", esp_err_to_name(status));
-        }
-        srm_client_ = nullptr;
-    }
-    panel_ = nullptr;
+    srm_blitter_.Release();
+    framebuffers_ = nullptr;
+    profile_ = {};
     display_ = nullptr;
     width_ = 0U;
     height_ = 0U;

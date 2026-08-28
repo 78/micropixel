@@ -5,7 +5,6 @@
 #include <cstdint>
 
 #include "esp_heap_caps.h"
-#include "esp_lcd_mipi_dsi.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
@@ -28,15 +27,13 @@ uint32_t DurationSample(int64_t duration_us) {
 
 }  // namespace
 
-void RetainedSurface::Bind(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t display_width,
+void RetainedSurface::Bind(lv_display_t* display, DirectFramebufferAccess* framebuffers, uint32_t display_width,
                            uint32_t display_height) {
-    if (panel_ != panel) {
-        for (auto& state : frame_states_) {
-            state = {};
-        }
+    for (auto& state : frame_states_) {
+        state = {};
     }
     display_ = display;
-    panel_ = panel;
+    framebuffers_ = framebuffers;
     display_width_ = display_width;
     display_height_ = display_height;
 }
@@ -112,7 +109,7 @@ bool RetainedSurface::Configure(lv_obj_t* root, const micropixel_graphics_push_s
     if (configured_) {
         return x_ == command.clip_x && y_ == command.clip_y && width_ == command.width && height_ == command.height;
     }
-    if (display_ == nullptr || panel_ == nullptr) {
+    if (display_ == nullptr || framebuffers_ == nullptr || !framebuffers_->Ready()) {
         return false;
     }
     if (!Initialize()) {
@@ -261,9 +258,7 @@ bool RetainedSurface::ComposeFrame(int32_t translate_x, int32_t translate_y, uin
                                    uint32_t& acquire_us, uint32_t& restore_us, uint32_t& surface_copy_us,
                                    uint32_t& flush_us) {
     const int64_t acquire_started_us = esp_timer_get_time();
-    auto* frame_buffer = acquired_frame_buffer != nullptr
-                             ? acquired_frame_buffer
-                             : static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
+    auto* frame_buffer = acquired_frame_buffer != nullptr ? acquired_frame_buffer : framebuffers_->AcquireFree();
     acquire_us = DurationSample(esp_timer_get_time() - acquire_started_us);
     if (frame_buffer == nullptr) {
         ESP_LOGE(kTag, "retained surface could not acquire display frame buffer");
@@ -302,7 +297,7 @@ bool RetainedSurface::ComposeFrame(int32_t translate_x, int32_t translate_y, uin
     state->translate_y = translate_y;
 
     phase_us = esp_timer_get_time();
-    status = esp_lv_adapter_dummy_draw_flush_buf(display_, frame_buffer);
+    status = framebuffers_->Submit(frame_buffer);
     flush_us = DurationSample(esp_timer_get_time() - phase_us);
     if (status != ESP_OK) {
         ESP_LOGE(kTag, "retained surface frame submit failed: %s", esp_err_to_name(status));
@@ -370,17 +365,12 @@ bool RetainedSurface::Update(const micropixel_graphics_push_state_command_t* req
             return false;
         }
 
-        void* panel_frame_buffers[kFramebufferCount]{};
-        status = esp_lcd_dpi_panel_get_frame_buffer(panel_, kFramebufferCount, &panel_frame_buffers[0],
-                                                    &panel_frame_buffers[1]);
-        auto* initial_frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display_));
-        auto* displayed_frame_buffer = initial_frame_buffer == panel_frame_buffers[0]
-                                           ? static_cast<uint8_t*>(panel_frame_buffers[1])
-                                           : static_cast<uint8_t*>(panel_frame_buffers[0]);
-        if (status != ESP_OK || initial_frame_buffer == nullptr ||
-            (initial_frame_buffer != panel_frame_buffers[0] && initial_frame_buffer != panel_frame_buffers[1])) {
+        auto* initial_frame_buffer = framebuffers_->AcquireFree();
+        auto* displayed_frame_buffer = framebuffers_->Displayed();
+        if (initial_frame_buffer == nullptr || displayed_frame_buffer == nullptr ||
+            !framebuffers_->Contains(initial_frame_buffer)) {
             (void)esp_lv_adapter_set_dummy_draw(display_, false);
-            ESP_LOGE(kTag, "retained surface could not resolve display buffers: %s", esp_err_to_name(status));
+            ESP_LOGE(kTag, "retained surface could not resolve display buffers");
             return false;
         }
 

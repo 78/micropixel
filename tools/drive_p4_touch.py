@@ -33,7 +33,10 @@ def send_touch(
     y: int,
     pressure: int,
 ) -> None:
-    command = f"MICROPIXEL_TOUCH {phase} {touch_id} {x} {y} {pressure}\n".encode()
+    # Use an explicit terminal line ending. USB CDC transports are allowed to
+    # preserve packet boundaries differently, so LF-only writes can otherwise
+    # remain buffered and concatenate several injected samples on Mosaico.
+    command = f"MICROPIXEL_TOUCH {phase} {touch_id} {x} {y} {pressure}\r\n".encode()
     device.write(command)
     time.sleep(0.025)
 
@@ -127,12 +130,12 @@ def main() -> int:
             drain_logs(device)
 
         if args.output is not None:
-            png, sequence, width, height = request_capture(device, args.timeout)
+            jpeg, sequence, width, height = request_capture(device, args.timeout)
             if (width, height) != (720, 720):
                 raise RuntimeError(f"unexpected screenshot size {width}x{height}")
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_bytes(png)
-            print(f"captured {width}x{height} PNG #{sequence}: {args.output} ({len(png)} bytes)")
+            args.output.write_bytes(jpeg)
+            print(f"captured {width}x{height} JPEG #{sequence}: {args.output} ({len(jpeg)} bytes)")
     return 0
 
 

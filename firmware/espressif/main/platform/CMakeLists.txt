@@ -3,16 +3,16 @@
 # in their corresponding layer CMake files.
 include("${CMAKE_CURRENT_LIST_DIR}/common/CMakeLists.txt")
 
-list(APPEND micropixel_requires esp_hw_support)
-
-# ESP-IDF expands component requirements before project Kconfig values are
-# available, so this component declares the dependency union for all currently
-# supported ESP32-P4 boards. Board source selection below remains exclusive.
-list(APPEND micropixel_requires
-    esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_jpeg esp_driver_ledc
-    esp_driver_ppa esp_driver_uart esp_driver_usb_serial_jtag
-    button esp_event esp_lcd esp_lvgl_adapter esp_lcd_touch_gt911 esp_netif esp_timer esp_wifi lvgl__lvgl
-)
+# IDF_TARGET is available during early component expansion while project
+# Kconfig values are not. Resolve the narrow SoC dependency set first, then
+# select exactly one board implementation below.
+if(IDF_TARGET STREQUAL "esp32p4")
+    include("${CMAKE_CURRENT_LIST_DIR}/soc/esp32p4/CMakeLists.txt")
+elseif(IDF_TARGET STREQUAL "esp32s31")
+    include("${CMAKE_CURRENT_LIST_DIR}/soc/esp32s31/CMakeLists.txt")
+else()
+    message(FATAL_ERROR "MicroPixel does not support IDF target ${IDF_TARGET}")
+endif()
 
 if(CMAKE_BUILD_EARLY_EXPANSION)
     # Kconfig values are intentionally unavailable while ESP-IDF discovers
@@ -23,6 +23,9 @@ elseif(CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4)
     include("${CMAKE_CURRENT_LIST_DIR}/drivers/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/lvgl/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/boards/metalio-claw4/CMakeLists.txt")
+elseif(CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO)
+    include("${CMAKE_CURRENT_LIST_DIR}/lvgl/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/boards/esp-mosaico/CMakeLists.txt")
 elseif(CONFIG_MICROPIXEL_BOARD_NULL)
     include("${CMAKE_CURRENT_LIST_DIR}/boards/null/CMakeLists.txt")
 else()

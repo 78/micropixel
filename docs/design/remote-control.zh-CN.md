@@ -466,7 +466,8 @@ Control 协议的 `source` 固定为 `app_store`；运行状态使用 `running`�
 把现有截图实现拆分为传输无关的 `device::ScreenCapture` contract：
 
 - Metalio-Claw4 backend 负责冻结当前显示 framebuffer，并用 ESP32-P4 JPEG 外设编码；
-- USB 开发截图保留既有 PNG 协议；Remote Control 的 artifact 格式固定为 JPEG；
+- USB 开发截图和 Remote Control artifact 均使用 SoC JPEG 外设编码；USB transport 使用带长度的二进制
+  JPEG framing，并可选择 LVGL 逻辑场景或显示提交缓冲；
 - 同时只允许一个截图 Job；
 - framebuffer 冻结、JPEG 编码和网络上传分阶段执行，避免持有显示所有权等待网络；
 - 大缓冲优先使用 PSRAM，并设置最大像素、最大输出和超时；

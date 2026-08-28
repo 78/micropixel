@@ -38,6 +38,10 @@ struct Acceleration final {
     Vector3 meters_per_second_squared{};
 };
 
+struct AngularVelocity final {
+    Vector3 radians_per_second{};
+};
+
 struct MagneticField final {
     Vector3 microtesla{};
 };
@@ -50,6 +54,14 @@ struct SensorTraits<Acceleration> final {
     static constexpr SensorKind kKind = SensorKind::kAcceleration;
     [[nodiscard]] static constexpr Acceleration FromValues(const float* values) {
         return Acceleration{{values[0], values[1], values[2]}};
+    }
+};
+
+template <>
+struct SensorTraits<AngularVelocity> final {
+    static constexpr SensorKind kKind = SensorKind::kAngularVelocity;
+    [[nodiscard]] static constexpr AngularVelocity FromValues(const float* values) {
+        return AngularVelocity{{values[0], values[1], values[2]}};
     }
 };
 

@@ -1,5 +1,7 @@
 #include "host_ui/system_gesture_router.hpp"
 
+#include <algorithm>
+#include <cinttypes>
 #include <cstdlib>
 
 #include "esp_log.h"
@@ -11,11 +13,20 @@ namespace {
 constexpr char kTag[] = "micropixel_gestures";
 constexpr uint16_t kTopReservedEdgeHeight = 64U;
 constexpr uint16_t kBottomReservedEdgeHeight = 32U;
+constexpr int32_t kGestureReferenceExtent = 720;
 constexpr int32_t kTopRecognitionDistance = 56;
 constexpr int32_t kBottomRecognitionDistance = 56;
 constexpr int32_t kDirectionSlop = 40;
+constexpr int32_t kMinimumRecognitionDistance = 24;
+constexpr int32_t kMinimumDirectionSlop = 24;
 constexpr uint64_t kRecognitionTimeoutUs = 600000U;
 constexpr uint64_t kPostGestureReleaseGuardUs = 300000U;
+
+int32_t ScaleGestureDistance(int32_t distance, uint16_t extent, int32_t minimum) {
+    const int32_t scaled =
+        (distance * static_cast<int32_t>(extent) + kGestureReferenceExtent - 1) / kGestureReferenceExtent;
+    return std::max(minimum, scaled);
+}
 
 }  // namespace
 
@@ -154,6 +165,8 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
             return Forward(sample);
         }
         candidate_ = Candidate{.initial = sample, .edge = edge, .active = true};
+        ESP_LOGD(kTag, "edge candidate: edge=%s id=%" PRIu32 " x=%d y=%d", edge == Edge::kTop ? "top" : "bottom",
+                 sample.id, sample.x, sample.y);
         return true;
     }
 
@@ -200,9 +213,14 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
     const uint64_t elapsed_us = sample.timestamp_us >= candidate_.initial.timestamp_us
                                     ? sample.timestamp_us - candidate_.initial.timestamp_us
                                     : 0U;
+    const int32_t recognition_distance =
+        ScaleGestureDistance(candidate_.edge == Edge::kTop ? kTopRecognitionDistance : kBottomRecognitionDistance,
+                             height_, kMinimumRecognitionDistance);
+    const int32_t direction_slop = ScaleGestureDistance(kDirectionSlop, width_, kMinimumDirectionSlop);
     const bool correct_direction =
-        candidate_.edge == Edge::kTop ? delta_y >= kTopRecognitionDistance : delta_y <= -kBottomRecognitionDistance;
-    if (sample.phase == device::TouchPhase::kMove && correct_direction && std::abs(delta_x) <= kDirectionSlop &&
+        candidate_.edge == Edge::kTop ? delta_y >= recognition_distance : delta_y <= -recognition_distance;
+    const bool direction_compatible = std::abs(delta_x) <= std::abs(delta_y) + direction_slop;
+    if (sample.phase == device::TouchPhase::kMove && correct_direction && direction_compatible &&
         elapsed_us <= kRecognitionTimeoutUs) {
         candidate_.recognized = true;
         Emit(candidate_.edge == Edge::kTop ? SystemUiActionType::kOpenStatusLayer : SystemUiActionType::kSuspendToHall,
@@ -210,7 +228,9 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
         return true;
     }
 
-    const bool rejected = std::abs(delta_x) > kDirectionSlop || elapsed_us > kRecognitionTimeoutUs ||
+    const bool clearly_horizontal =
+        std::abs(delta_x) > direction_slop && std::abs(delta_x) > std::abs(delta_y) + direction_slop;
+    const bool rejected = clearly_horizontal || elapsed_us > kRecognitionTimeoutUs ||
                           sample.phase == device::TouchPhase::kUp || sample.phase == device::TouchPhase::kCancel;
     if (!rejected) {
         if (sample.phase == device::TouchPhase::kMove) {
@@ -222,6 +242,8 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
 
     const device::TouchSample initial = candidate_.initial;
     const device::TouchSample latest_move = candidate_.latest_move;
+    ESP_LOGD(kTag, "edge candidate rejected: id=%" PRIu32 " dx=%" PRId32 " dy=%" PRId32 " elapsed=%" PRIu64 " phase=%u",
+             sample.id, delta_x, delta_y, elapsed_us, static_cast<unsigned>(sample.phase));
     const bool replay_latest_move = candidate_.has_latest_move && (sample.phase != device::TouchPhase::kMove ||
                                                                    sample.timestamp_us != latest_move.timestamp_us);
     ClearCandidate();

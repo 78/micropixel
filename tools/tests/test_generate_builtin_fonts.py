@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from tools import generate_builtin_fonts
 
@@ -50,6 +52,40 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         profile["profiles"][0]["role"] = "wrong"
         with self.assertRaises(ValueError):
             generate_builtin_fonts.validate_profile(profile)
+
+    def test_finds_implicit_lvgl_widget_symbols(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            symbol_def = root / "lv_symbol_def.h"
+            symbol_def.write_text(
+                '#define LV_SYMBOL_OK "ok" /*61452, 0xF00C*/\n'
+                '#define LV_SYMBOL_DOWN "down" /*61560, 0xF078*/\n',
+                encoding="utf-8",
+            )
+            widget = root / "widget.c"
+            widget.write_text("const char * symbol = LV_SYMBOL_DOWN;\n", encoding="utf-8")
+            requirements = generate_builtin_fonts.lvgl_symbol_requirements(symbol_def, [widget])
+            self.assertEqual(requirements, {"LV_SYMBOL_DOWN": 0xF078})
+            with self.assertRaisesRegex(ValueError, "LV_SYMBOL_DOWN=U\\+F078"):
+                generate_builtin_fonts.validate_lvgl_symbol_coverage(requirements, {0x20})
+
+    def test_repository_profile_covers_host_and_default_widget_symbols(self):
+        root = Path(__file__).resolve().parents[2]
+        lvgl = root / "firmware/espressif/managed_components/lvgl__lvgl"
+        requirements = generate_builtin_fonts.lvgl_symbol_requirements(
+            lvgl / "src/font/lv_symbol_def.h",
+            [
+                root / "firmware/espressif/main/platform/lvgl",
+                lvgl / "src/widgets/keyboard/lv_keyboard.c",
+                lvgl / "src/widgets/dropdown/lv_dropdown.c",
+            ],
+        )
+        profile = generate_builtin_fonts.load_json(
+            root / "firmware/espressif/main/platform/lvgl/fonts/builtin-latin-v1.json"
+        )
+        generate_builtin_fonts.validate_lvgl_symbol_coverage(
+            requirements, generate_builtin_fonts.requested_codepoints(profile)
+        )
 
 
 if __name__ == "__main__":

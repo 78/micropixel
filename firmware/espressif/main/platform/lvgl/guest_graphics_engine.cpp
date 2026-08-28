@@ -96,7 +96,7 @@ bool GuestGraphicsEngine::AccumulateDamage(BitmapDamage* damages, uint32_t capac
     return true;
 }
 
-esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel) {
+esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers) {
     if (display == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -106,9 +106,9 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, esp_lcd_panel_h
     }
     display_ = display;
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    retained_scene_.BindSurface(display_, panel);
+    retained_scene_.BindSurface(display_, framebuffers);
 #else
-    (void)panel;
+    (void)framebuffers;
 #endif
     if (!retained_scene_.Initialize()) {
         display_ = nullptr;
@@ -120,11 +120,11 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, esp_lcd_panel_h
     return ESP_OK;
 }
 
-void GuestGraphicsEngine::RebindPanel(esp_lcd_panel_handle_t panel) {
+void GuestGraphicsEngine::RebindFramebuffers(DirectFramebufferAccess* framebuffers) {
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    retained_scene_.BindSurface(display_, panel);
+    retained_scene_.BindSurface(display_, framebuffers);
 #else
-    (void)panel;
+    (void)framebuffers;
 #endif
 }
 
@@ -558,9 +558,11 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
         const BitmapDamage& damage = bitmap_damage_[index];
         invalidated = retained_scene_.InvalidateBitmap(damage.data, damage.x, damage.y, damage.width, damage.height) ||
                       invalidated;
+#if CONFIG_MICROPIXEL_LVGL_PPA_ACCEL
         if (static_cast<uint64_t>(damage.width) * damage.height > CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS) {
             ++ppa_eligible_damage;
         }
+#endif
     }
     if (invalidated) {
         RequestDisplayRefresh(display_);

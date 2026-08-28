@@ -6,6 +6,7 @@ workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 # Load machine-local defaults without overriding values supplied by the caller.
 idf_path_override="${IDF_PATH:-}"
 p4_port_override="${P4_PORT:-}"
+p4_baud_override="${P4_BAUD:-}"
 remote_control_host_override="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
 remote_control_port_override="${MICROPIXEL_REMOTE_CONTROL_PORT:-}"
 remote_control_tls_override="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-}"
@@ -21,6 +22,9 @@ if [[ -n "$idf_path_override" ]]; then
 fi
 if [[ -n "$p4_port_override" ]]; then
     P4_PORT="$p4_port_override"
+fi
+if [[ -n "$p4_baud_override" ]]; then
+    P4_BAUD="$p4_baud_override"
 fi
 if [[ -n "$remote_control_host_override" ]]; then
     MICROPIXEL_REMOTE_CONTROL_HOST="$remote_control_host_override"
@@ -58,8 +62,8 @@ Normal development commands:
                                      in its own build directory; never flash it.
   build-release                      Build Host, Blocks, Snake, and SDK Demo; create a browser-flashable
                                      micropixel-full.bin containing only those three Apps.
-  flash-host [PORT]                  Incrementally build and flash only the Host;
-                                     preserve the app_store partition.
+  flash-host [PORT]                  Flash the already-built Host only; do not
+                                     rebuild or touch the app_store partition.
   monitor [PORT]                     Monitor the running ESP32-P4 Host without
                                      building, flashing, erasing, or testing.
   build-apps                         Build Blocks, Snake, Demo, and four Showcase Bundles.
@@ -370,57 +374,31 @@ prepare_host_config() {
 }
 
 idf_host() {
+    local profile="$1"
+    local action="$2"
+    shift 2
     prepare_host_config
-    idf.py -C "$firmware_dir" -B "$host_build_dir" \
-        -D SDKCONFIG="$sdkconfig_path" \
-        -D SDKCONFIG_DEFAULTS="$sdkconfig_defaults" \
-        -D IDF_TARGET=esp32p4 \
+    python3 "$workspace_root/tools/firmware.py" "$profile" "$action" \
+        --build-dir "$host_build_dir" \
+        --sdkconfig "$sdkconfig_path" \
+        --sdkconfig-defaults "$sdkconfig_defaults" \
         "$@"
-}
-
-validate_port() {
-    local port="$1"
-    if [[ ! -e "$port" ]]; then
-        echo "Serial port not found: $port" >&2
-        exit 2
-    fi
 }
 
 resolve_port() {
     local requested="${1:-${P4_PORT:-}}"
+    require_idf >&2
+    local arguments=(metalio-claw4 port)
     if [[ -n "$requested" ]]; then
-        validate_port "$requested"
-        printf '%s\n' "$requested"
-        return
+        arguments+=(--port "$requested")
     fi
-
-    require_idf
-    local matches=()
-    local candidate probe
-    for candidate in /dev/cu.usbmodem* /dev/ttyACM*; do
-        [[ -e "$candidate" ]] || continue
-        probe="$(python -m esptool --port "$candidate" chip-id 2>&1 || true)"
-        if [[ "$probe" == *"ESP32-P4"* ]]; then
-            matches+=("$candidate")
-        fi
-    done
-    if [[ ${#matches[@]} -eq 1 ]]; then
-        printf '%s\n' "${matches[0]}"
-        return
-    fi
-    if [[ ${#matches[@]} -eq 0 ]]; then
-        echo "No connected ESP32-P4 USB device was detected; set P4_PORT explicitly." >&2
-    else
-        echo "Multiple ESP32-P4 USB devices detected; set P4_PORT explicitly:" >&2
-        printf '  %s\n' "${matches[@]}" >&2
-    fi
-    exit 2
+    python3 "$workspace_root/tools/firmware.py" "${arguments[@]}"
 }
 
 build_host() {
     require_idf
     echo "==> Incremental Host build (no Guest builds, no unit tests, no fullclean)"
-    idf_host build
+    idf_host metalio-claw4 build
 }
 
 build_null() {
@@ -429,7 +407,7 @@ build_null() {
     sdkconfig_path="$host_build_dir/sdkconfig.release"
     sdkconfig_defaults="$firmware_dir/sdkconfig.p4.defaults;$firmware_dir/sdkconfig.p4-null.defaults"
     echo "==> Null board compile gate (separate build; never flashed)"
-    idf_host build
+    idf_host p4-null build
 }
 
 build_release() {
@@ -452,23 +430,35 @@ build_release() {
 }
 
 flash_host() {
-    local port="$1"
+    local requested_port="$1"
     local baud="${P4_BAUD:-2000000}"
-    build_host
-    echo "==> Flashing Host at $baud baud; app_store and installed Apps are preserved"
-    idf_host -b "$baud" -p "$port" flash
+    local arguments=(--baud "$baud")
+    require_idf
+    if [[ -n "$requested_port" ]]; then
+        arguments+=(--port "$requested_port")
+    fi
+    echo "==> Flashing the already-built Host at $baud baud; app_store and installed Apps are preserved"
+    python3 "$workspace_root/tools/firmware.py" metalio-claw4 flash-built \
+        --build-dir "$host_build_dir" \
+        --sdkconfig "$sdkconfig_path" \
+        --sdkconfig-defaults "$sdkconfig_defaults" \
+        "${arguments[@]}"
 }
 
 monitor_host() {
-    local port="$1"
+    local requested_port="$1"
+    local arguments=()
+    if [[ -n "$requested_port" ]]; then
+        arguments+=(--port "$requested_port")
+    fi
     if [[ ! -f "$host_build_dir/micropixel.elf" ]]; then
         echo "Host ELF missing: $host_build_dir/micropixel.elf" >&2
         echo "Build it first with: bash tools/p4.sh build-host" >&2
         exit 2
     fi
     require_idf
-    echo "==> Monitoring Host on $port (no build, no flash, no erase, no tests)"
-    ESP_IDF_MONITOR_NO_RESET=1 idf_host -p "$port" monitor
+    echo "==> Monitoring Host (no build, no flash, no erase, no tests)"
+    idf_host metalio-claw4 monitor "${arguments[@]}"
 }
 
 build_example_apps() {
@@ -551,11 +541,13 @@ build_all() {
 }
 
 flash_all() {
-    local port="$1"
+    local requested_port="$1"
     local baud="${P4_BAUD:-2000000}"
+    local port
     build_all
+    port="$(resolve_port "$requested_port")"
     echo "==> Flashing Host at $baud baud"
-    idf_host -b "$baud" -p "$port" flash
+    idf_host metalio-claw4 flash --baud "$baud" --port "$port"
     echo "==> Clearing app_store and flashing seven example Apps"
     write_app_store_image "$port" "$example_app_store_image" true
     python "$workspace_root/tools/capture_serial_until.py" \
@@ -644,7 +636,7 @@ run_tests() {
         python3 -m unittest tools.tests.test_build_app_store_image tools.tests.test_analyze_sfx \
             tools.tests.test_build_app_bundle_metadata tools.tests.test_build_font_cbin \
             tools.tests.test_generate_builtin_fonts \
-            tools.tests.test_generate_localization -v
+            tools.tests.test_generate_localization tools.tests.test_firmware -v
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
@@ -658,20 +650,24 @@ run_tests() {
 }
 
 flash_example_apps() {
-    local port="$1"
+    local requested_port="$1"
+    local port
     require_idf
     create_example_app_store_image
+    port="$(resolve_port "$requested_port")"
     echo "==> USB App flash: clearing app_store and writing seven example Apps"
     write_app_store_image "$port" "$example_app_store_image"
 }
 
 reset_app_store() (
-    local port="$1"
+    local requested_port="$1"
+    local port
     local temporary_dir
     require_idf
     temporary_dir="$(mktemp -d)"
     trap 'rm -rf "$temporary_dir"' EXIT
     python3 "$workspace_root/tools/build_app_store_image.py" --output "$temporary_dir/app-store.bin"
+    port="$(resolve_port "$requested_port")"
     echo "==> RECOVERY: clearing app_store to an EMPTY Catalog"
     write_app_store_image "$port" "$temporary_dir/app-store.bin"
 )
@@ -697,19 +693,17 @@ case "$command_name" in
         ;;
     flash-host)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
-        port="$(resolve_port "${1:-}")"
-        flash_host "$port"
+        flash_host "${1:-}"
         ;;
     monitor)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
-        port="$(resolve_port "${1:-}")"
-        monitor_host "$port"
+        monitor_host "${1:-}"
         ;;
     fullclean-host)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         require_idf
         echo "==> FULLCLEAN Host build cache: $host_build_dir"
-        idf_host fullclean
+        idf_host metalio-claw4 fullclean
         ;;
     build-apps)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
@@ -717,8 +711,7 @@ case "$command_name" in
         ;;
     flash-apps)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
-        port="$(resolve_port "${1:-}")"
-        flash_example_apps "$port"
+        flash_example_apps "${1:-}"
         ;;
     install-apps-examples)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
@@ -730,13 +723,11 @@ case "$command_name" in
         ;;
     flash-all)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
-        port="$(resolve_port "${1:-}")"
-        flash_all "$port"
+        flash_all "${1:-}"
         ;;
     reset-app-store)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
-        port="$(resolve_port "${1:-}")"
-        reset_app_store "$port"
+        reset_app_store "${1:-}"
         ;;
     test)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }

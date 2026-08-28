@@ -88,19 +88,26 @@ main/
 │   │   ├── CMakeLists.txt
 │   │   ├── random_backend.cpp
 │   │   ├── i2c_executor.*
-│   │   ├── hosted_wifi_backend.*
+│   │   ├── unavailable_backends.hpp
+│   │   ├── audio/{audio_sink,synth_mixer}.*
+│   │   ├── wifi/wifi_backend.*
 │   │   ├── graphics_adapter.*
 │   │   └── system_ui_adapter.*
 │   ├── drivers/                   # 按器件组织，不知道具体开发板
 │   │   ├── CMakeLists.txt
 │   │   ├── display/nv3051f/esp_lcd_nv3051f.[ch]
-│   │   └── input/gt911_input.*
+│   │   ├── input/gt911_input.*
+│   │   ├── power/bq27220.*
+│   │   └── sensors/{sc7a20htr,qmc6309,vector_sensor}.*
 │   ├── lvgl/                      # 显示栈、Guest renderer 和可复用 UI profile
 │   │   ├── CMakeLists.txt
 │   │   ├── display/
 │   │   ├── fonts/
 │   │   ├── guest_graphics_engine.*
-│   │   └── ui/square_720/
+│   │   └── ui/{square_common,square_720,square_480}/
+│   ├── radio/                     # Wi-Fi radio strategy（Hosted / native）
+│   ├── transports/                # 本地控制字节传输
+│   ├── soc/{esp32p4,esp32s31}/    # SoC 依赖 profile
 │   └── boards/                    # 唯一允许组合具体板级引脚/外设的位置
 │       ├── metalio-claw4/
 │       │   ├── CMakeLists.txt
@@ -109,6 +116,9 @@ main/
 │       │   ├── audio/
 │       │   ├── display/screen_capture.*
 │       │   └── input/tca9555_power_key.*
+│       ├── esp-mosaico/
+│       │   ├── CMakeLists.txt
+│       │   └── platform.cpp
 │       └── null/
 │           ├── CMakeLists.txt
 │           └── platform.cpp
@@ -179,7 +189,8 @@ main/
 - `runtime/bundle/` 负责 Bundle v1 解析、语义校验和 AOT payload 所有权。v1 使用显式长度的 64 字节
   AppId、必需的 UTF-8 App 标题元数据，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h`
   固定，目录调整不改变磁盘 ABI。
-- `runtime/bundlefs/` 是 24 MiB `app_store` 的底层文件系统。它以离散 64 KiB 数据块保存不可变 Bundle，
+- `runtime/bundlefs/` 是 `app_store` 的底层文件系统（P4 产品为 24 MiB，S31 NOR bring-up profile 为
+  8 MiB）。它以离散 64 KiB 数据块保存不可变 Bundle，并按目标将每块展开为一个或多个 Flash MMU page，
   使用四个 16 KiB Catalog Bank 环形提交，最多保存 50 个 App，并兼容读取和迁移旧 v1 的四个 4 KiB
   Bank。它提供不透明的 read/mmap/replace/remove 接口；Catalog 不使用 NVS，不扫描或安装预置 App；完整格式见
   [`docs/design/bundlefs.zh-CN.md`](../../../docs/design/bundlefs.zh-CN.md)。
@@ -199,6 +210,10 @@ main/
 - `runtime/app_runtime.*` 持有长驻 WAMR，并同步创建最多一个 `AppSession`；`runtime/app_session.*` 持有一次
   Guest 的 Bundle、module、instance、exec-env 与 `GuestContext` 销毁边界。
 - `host_ui/` 是 Host 原生 App Hall/状态层的控制边界；具体绘制仍由所选 Platform 的 `SystemUiBackend` 完成，FPS 开关、亮度与音量保存到独立的 `sys_store` NVS。
+- `platform/lvgl/ui/square_common/hall_scene_ui.*` 是 App Hall 的唯一页面实现，固定 P4 的文案、视觉层级、
+  顶部状态栏、Settings/Update 按钮、轮播容器和错误状态；`square_720/layout.hpp` 与
+  `square_480/layout.hpp` 只提供分辨率布局参数。板级 `platform.cpp` 只接入输入、封面缓存、卡片窗口与转场，
+  不再自行拼装另一套 Hall 页面。
 - `remote_control/` 是 Host 拥有的远程调试 Agent：独立任务维护 HTTP/3 控制流和有界命令队列，设备
   UUID/credential 与 Remote Control 开关分别保存在 `sys_store/control`；它只向 System Shell 发布快照，
   不从网络回调直接调用 WAMR、LVGL 或板级驱动。发布配置必须提供匹配 Control 主机名的 DER CA
@@ -246,15 +261,25 @@ main/
   与性能采样等真正的周期任务使用定时等待。
 - `platform/graphics/` 是跨板级图形协议校验；`platform/boards/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；Battery backend 复用板级 I²C 总线读取 BQ27220 电量和充电电流，并通过 TCA9555 的 USB / 无线充电检测输入及共享中断报告外部电源状态。
 - `platform/boards/null/` 提供没有真实板级设备时的构建实现。
+- `platform/boards/esp-mosaico/` 是 ESP32-S31 的 P0/P1 产品组合：复用原生 Wi-Fi policy、共享 App Hall/
+  Status Layer、480 方屏 layout、逻辑 viewport、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
+  只组合官方 CO5300 与 CST9217 驱动、供电和引脚。P4/S31 的转场使用同一时间线与 PPA SRM 封装；S31 在
+  原生 RGB565 中完成缩放/合成，再以独立的 1:1 PPA pass 生成 CO5300 线序，普通 LVGL flush 也使用相同
+  的硬件打包原则，正常帧路径不做 CPU 整图逐像素颜色转换。ES8311、BMI270/BMM150 和 SAM8108 在权威
+  BSP 路径完成集成与真机验证前明确返回 unavailable；NAND 与模块发现保留到 P2。
 - `platform/common/` 只放可被多个 ESP32 板型直接复用的 backend 与窄 adapter；`platform/drivers/` 按芯片
   型号组织，不能 include `boards/`；`platform/lvgl/` 按显示能力和 UI profile 组织，不能写 Metalio-Claw4
   引脚或电源时序。`platform/boards/<board>/` 是组合层，选择共用实现并拥有剩余的板级 wiring。
 - 新增板型时，新增 `boards/<board>/CMakeLists.txt` 与实现，在 `MICROPIXEL_BOARD` choice 注册一个 symbol，
-  再由 `platform/CMakeLists.txt` 选择它。不得复制 Guest ABI、Runtime service、共用器件驱动或现有 LVGL
-  profile。`device::HardwareInfoBackend` 是系统信息与远控硬件描述的唯一来源，不再在 HostController 中写死
-  当前板名。
+  再由 `platform/CMakeLists.txt` 选择它，并在 `tools/firmware_profiles.json` 增加声明式构建 profile；板型
+  shell 只保留产品流程别名，ESP-IDF build/flash/monitor 和端口芯片核验统一委托给 `tools/firmware.py`。
+  不得复制 Guest ABI、Runtime service、共用器件驱动或现有 LVGL profile。`device::HardwareInfoBackend` 是
+  系统信息与远控硬件描述的唯一来源，不再在 HostController 中写死当前板名。
 - `bash tools/p4.sh build-null` 使用独立 build 目录编译 Null board，是 Platform/Runtime 反向依赖门禁；该
   镜像没有真实硬件语义，脚本不会提供 flash 路径。
+- `bash tools/s31.sh build-null` 是不可烧录的 S31 依赖方向门禁；`build-mosaico`、`flash-mosaico` 和
+  `monitor` 面向物理 ESP-Mosaico bring-up，烧录前必须匹配 ESP32-S31。当前 ESP-IDF preview 若自身
+  源码/header 不同步，失败应记录为 SDK blocker，不在项目中 patch 本机 ESP-IDF。
 
 只在 `device/`、`runtime/`、`platform/`、`conformance/` 这些已有子系统设置独立 CMake 清单；当前很小的
 `host_ui/` 由顶层清单直接收录，不为 `abi/` 等叶子目录继续增加小型 CMake 文件。

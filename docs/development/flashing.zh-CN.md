@@ -1,7 +1,7 @@
-# ESP32-P4 烧录指南
+# Host 固件构建与烧录指南
 
-本文说明如何将 MicroPixel Host 和 App Store 烧录到 Metalio-Claw4（ESP32-P4）。以下命令均在
-仓库根目录执行。
+本文说明如何构建和烧录 Metalio-Claw4（ESP32-P4）产品固件，以及如何构建和烧录
+ESP-Mosaico（ESP32-S31）bring-up 固件。以下命令均在仓库根目录执行。
 
 ## 1. 准备环境
 
@@ -19,6 +19,13 @@ python3 -m pip install -r requirements-dev.txt
 
 ```sh
 idf.py --version
+```
+
+底层 build/flash/monitor 参数由 `tools/firmware.py` 和 `tools/firmware_profiles.json` 统一管理。日常仍使用
+每块板的短 shell 入口；查看当前 profile 及其能力：
+
+```sh
+python3 tools/firmware.py list
 ```
 
 ## 2. 识别目标设备
@@ -55,12 +62,54 @@ bash tools/p4.sh flash-host "$P4_PORT"  # 只有一台 P4 时可省略端口
 bash tools/p4.sh monitor "$P4_PORT"     # 持续查看串口；Ctrl+] 退出
 ```
 
-`build-host` 不构建 Guest、不运行 unittest，也不执行 `fullclean`。`flash-host` 先做相同的增量构建，
-再烧录 Host 固件；它不写 `app_store`，所以保留已安装 App。`monitor` 使用已有 Host ELF 和固件 console
+`build-host` 不构建 Guest、不运行 unittest，也不执行 `fullclean`。`flash-host` 只烧录已经构建好的 Host
+固件，不触发 Host 或 Guest 构建，也不写 `app_store`，所以保留已安装 App。`monitor` 使用已有 Host ELF 和固件 console
 波特率，不触发构建、烧录、擦除或测试。只有确实需要丢弃 Host 构建缓存时才运行：
 
 ```sh
 bash tools/p4.sh fullclean-host
+```
+
+## ESP32-S31 / ESP-Mosaico bring-up
+
+ESP-Mosaico 使用 ESP32-S31 preview target 和独立 build 目录：
+
+```sh
+bash tools/s31.sh build-host
+bash tools/s31.sh flash-host /dev/cu.usbmodemXXXX
+bash tools/s31.sh monitor /dev/cu.usbmodemXXXX
+bash tools/s31.sh monitor /dev/cu.usbmodemXXXX --reset  # 从应用启动开始抓日志
+python3 tools/capture_screen.py /dev/cu.usbmodemXXXX logical.jpg --source logical --expect-size 480x480
+python3 tools/capture_screen.py /dev/cu.usbmodemXXXX display.jpg --source display --expect-size 480x480
+bash tools/s31.sh build-null
+bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
+```
+
+只有一台匹配的 S31 时可以省略端口，也可用 `S31_PORT` 指定；默认 `S31_BAUD=460800`。`s31-null` 是依赖
+方向编译门禁，没有 flash 或 monitor 能力。
+
+ESP-Mosaico 板载 Type-C 连接的是 USB 2.0 HS OTG，而不是左侧模块接口引出的 USB Serial/JTAG。Host
+固件在平台启动时初始化 TinyUSB CDC 控制台，因此应用启动后 Type-C 会重新枚举并可通过同一接口查看日志；
+左侧 USB Serial/JTAG 仍保留为次输出。ROM 下载态与应用 TinyUSB 态使用不同 USB 描述符，macOS/Linux
+设备节点可能随重枚举变化，不要把 `/dev/cu.usbmodem*` 或 `/dev/ttyACM*` 名称写死在自动化中。
+
+MicroPixel 应用 CDC 实现 BSP 的 DTR/RTS 自动下载握手。`flash-host` 识别应用 USB 产品名后请求芯片进入
+ROM，随后按同一 USB 物理位置等待 ROM 产品名并在同一个 esptool 连接中完成芯片校验和写入。这里刻意不在
+写入前单独运行 `chip-id`：rev0 S31 的一次性 ROM 下载状态会被探测连接关闭时的控制线变化消耗掉。该闭环已
+在 macOS 真机验证；首次烧录、应用固件损坏或应用 CDC 未启动时，仍需按板卡说明手动进入 ROM 下载模式。
+
+当前 `esp-mosaico` 是 P0/P1 bring-up profile：CO5300 显示、CST9217 中断触摸、板级 3V3 电源、共用 Runtime、
+BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D 转场已接入；RGB565/QSPI 只作为板级
+presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。音频、传感器、NAND 与模块发现仍未
+纳入当前范围。因此能烧录和显示大厅不代表产品功能已经完整。
+如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
+
+Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo
+时使用产品固件的 USB 本地控制通道增量安装，不进入 ROM 下载态，也不重写 Host：
+
+```sh
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
+    app install guest/apps/demo
 ```
 
 ## 4. 完整烧录 Host 和七个示例 App
@@ -132,7 +181,8 @@ macOS/Linux 端口通常形如 `/dev/cu.usbmodemXXXX` 或 `/dev/ttyACM0`；Windo
 Windows 使用 pyserial 的 COM 端口后端，代码路径受支持，但尚未完成项目真机验证。
 
 该协议依赖正在运行的 Host 固件，不适用于下载模式或 bootloader。monitor、esptool、截图脚本和本地控制
-共享 USB Serial/JTAG 端口，不能同时占用。
+共享板卡的 USB CDC 端口，不能同时占用。`capture_screen.py` 在 P4 与 S31 上使用相同 JPEG framing；S31
+可分别抓取 LVGL 逻辑场景和当前显示提交缓冲，以定位面板传输类问题。
 
 ## 7. Conformance 配置与串口调试
 

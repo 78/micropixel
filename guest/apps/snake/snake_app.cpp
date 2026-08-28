@@ -40,7 +40,8 @@ int SnakeAppMain() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
-    micropixel::Assert(display.width() == 720U && display.height() == 720U, "snake: requires 720x720 display");
+    micropixel::Assert(display.width() == display.height() && display.width() >= 480U && display.width() <= 720U,
+                       "snake: requires a 480-720 square display");
 
     micropixel::KVStore storage = app.storage();
     uint32_t best_score = ReadU32OrDefault(storage, "best", 0U);

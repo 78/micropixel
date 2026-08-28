@@ -42,8 +42,8 @@ png_voidp PngPsramAlloc(png_structp, png_alloc_size_t size) {
 void PngPsramFree(png_structp, png_voidp memory) { heap_caps_free(memory); }
 
 bool ValidDecodedSize(uint32_t width, uint32_t height, uint32_t bytes_per_pixel, size_t size) {
-    return width > 0U && height > 0U && width <= 720U && height <= 720U &&
-           (bytes_per_pixel == 3U || bytes_per_pixel == 4U) &&
+    return width > 0U && height > 0U && width <= CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION &&
+           height <= CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION && (bytes_per_pixel == 3U || bytes_per_pixel == 4U) &&
            size == static_cast<size_t>(width) * height * bytes_per_pixel &&
            size <= CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES;
 }
@@ -139,7 +139,7 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& 
 
     PngMemoryReader reader{asset.data, asset.size, 0U};
     png_set_read_fn(png, &reader, ReadPngBytes);
-    png_set_user_limits(png, 720U, 720U);
+    png_set_user_limits(png, CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION, CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION);
     png_read_info(png, info);
 
     const uint32_t width = png_get_image_width(png, info);

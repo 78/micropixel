@@ -1,18 +1,21 @@
 #include <cstdlib>
 #include <iostream>
 
-#include "platform/lvgl/ui/square_720/hall_transition_policy.hpp"
-#include "platform/lvgl/ui/square_720/hall_carousel.hpp"
-#include "platform/lvgl/ui/square_720/hall_cover_cache_policy.hpp"
+#include "platform/lvgl/ui/square_common/hall_carousel.hpp"
+#include "platform/lvgl/ui/square_common/hall_cover_cache_policy.hpp"
+#include "platform/lvgl/ui/square_common/hall_transition_policy.hpp"
+#include "platform/lvgl/ui/square_common/profiles/square_480_layout.hpp"
+#include "platform/lvgl/ui/square_common/profiles/square_720_layout.hpp"
 
 namespace {
 
-using micropixel::platform::lvgl::square_720::HallCarousel;
-using micropixel::platform::lvgl::square_720::HallCoverCachePolicy;
-using micropixel::platform::lvgl::square_720::HallCoverCacheSlot;
-using micropixel::platform::lvgl::square_720::HallLaunchBackgroundPlan;
-using micropixel::platform::lvgl::square_720::HallVelocityTracker;
-using micropixel::platform::lvgl::square_720::PlanHallLaunchBackground;
+namespace lvgl = micropixel::platform::lvgl;
+using HallCarousel = lvgl::square_common::HallCarouselPolicy<lvgl::square_common::profiles::square_720::Layout>;
+using lvgl::square_common::HallCoverCachePolicy;
+using lvgl::square_common::HallCoverCacheSlot;
+using lvgl::square_common::HallLaunchBackgroundPlan;
+using lvgl::square_common::HallVelocityTracker;
+using lvgl::square_common::PlanHallLaunchBackground;
 
 void Check(bool condition, const char* message) {
     if (!condition) {
@@ -29,6 +32,17 @@ void CapacityAndGeometry() {
           "the first view must show three cards and the leading edge of the fourth");
     Check(HallCarousel::CardX(6U, HallCarousel::MaxOffset(7U)) == 478,
           "the final snap must align the last three cards in the viewport");
+}
+
+void Square480Geometry() {
+    using Square480Carousel =
+        lvgl::square_common::HallCarouselPolicy<lvgl::square_common::profiles::square_480::Layout>;
+    Check(Square480Carousel::CardX(0U, 0) == 24 && Square480Carousel::CardX(3U, 0) == 456,
+          "the 480 profile must expose the leading edge of its fourth card");
+    Check(Square480Carousel::kCardWidth == 135 && Square480Carousel::kCardHeight == 174,
+          "the 480 profile must own independent card geometry");
+    Check(Square480Carousel::MaxOffset(7U) == 576,
+          "the shared carousel policy must derive scrolling from the 480 layout");
 }
 
 void DragClampingAndDirection() {
@@ -160,6 +174,7 @@ void HallLaunchBackgroundPolicy() {
 
 int main() {
     CapacityAndGeometry();
+    Square480Geometry();
     DragClampingAndDirection();
     VelocityAndFreeInertia();
     ContinuousIndicator();
@@ -168,6 +183,6 @@ int main() {
     CoverCacheReplacementAfterAppUpdate();
     RepeatedThrowMomentum();
     HallLaunchBackgroundPolicy();
-    std::cout << "hall_carousel tests passed: 9 cases\n";
+    std::cout << "hall_carousel tests passed: 10 cases\n";
     return 0;
 }

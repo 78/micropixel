@@ -30,8 +30,8 @@ int BlocksAppMain() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
-    micropixel::Assert(display.width() == kScreenWidth && display.height() == kScreenHeight,
-                       "blocks: requires 720x720 display");
+    micropixel::Assert(display.width() == display.height() && display.width() >= 480U && display.width() <= kScreenWidth,
+                       "blocks: requires a 480-720 square display");
 
     const uint32_t best_score = ReadBest(app.storage());
     Line restored;

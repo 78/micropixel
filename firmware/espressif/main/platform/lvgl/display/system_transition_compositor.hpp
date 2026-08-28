@@ -3,11 +3,13 @@
 #include <array>
 #include <cstdint>
 
-#include "driver/ppa.h"
 #include "esp_async_color_convert.h"
 #include "esp_err.h"
-#include "esp_lcd_panel_ops.h"
 #include "lvgl.h"
+#include "platform/lvgl/display/display_pipeline.hpp"
+#include "platform/lvgl/display/ppa_srm_blitter.hpp"
+#include "platform/lvgl/display/system_transition_timeline.hpp"
+#include "platform/lvgl/ui/square_common/status_layer_transition.hpp"
 
 namespace micropixel::platform::lvgl {
 
@@ -26,16 +28,16 @@ enum class SystemTransitionDirection : uint8_t {
 // Board-private full-screen transition compositor. Resizes use the ESP32-P4
 // PPA SRM engine, while exact Hall-background copies prefer DMA2D. LVGL only
 // renders the static Hall background once before dummy-draw mode takes over.
-class SystemTransitionCompositor final {
+class SystemTransitionCompositor final : public square_common::StatusLayerTransitionBackend {
    public:
     SystemTransitionCompositor() = default;
     SystemTransitionCompositor(const SystemTransitionCompositor&) = delete;
     SystemTransitionCompositor& operator=(const SystemTransitionCompositor&) = delete;
     ~SystemTransitionCompositor();
 
-    [[nodiscard]] esp_err_t Initialize(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t width,
-                                       uint32_t height);
-    void RebindPanel(esp_lcd_panel_handle_t panel);
+    [[nodiscard]] esp_err_t Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers, uint32_t width,
+                                       uint32_t height, SystemTransitionProfile profile);
+    void RebindFramebuffers(DirectFramebufferAccess* framebuffers);
     [[nodiscard]] bool HasBackground() const { return background_pixels_ != nullptr; }
     [[nodiscard]] bool PrepareBackgroundLocked(lv_obj_t* root);
     // Refresh only the working animation background. The preserved Hall
@@ -54,11 +56,11 @@ class SystemTransitionCompositor final {
                                SystemTransitionDirection direction, uint32_t duration_ms,
                                uint64_t trigger_timestamp_us = 0U);
     [[nodiscard]] bool BeginStatusLayerTransition(bool entering, uint32_t scrim_rgb, uint8_t scrim_opacity,
-                                                  uint64_t trigger_timestamp_us);
+                                                  uint64_t trigger_timestamp_us) override;
     [[nodiscard]] bool AnimateStatusLayerLocked(lv_obj_t* dialog, int32_t visible_y, int32_t hidden_y, bool entering,
-                                                uint32_t duration_ms, uint64_t trigger_timestamp_us);
-    [[nodiscard]] bool FinishStatusLayerTransition(bool keep_buffers);
-    void CancelStatusLayerTransition();
+                                                uint32_t duration_ms, uint64_t trigger_timestamp_us) override;
+    [[nodiscard]] bool FinishStatusLayerTransition(bool keep_buffers) override;
+    void CancelStatusLayerTransition() override;
     void CancelPreparedToHall();
     void ClearBackground();
     void Release();
@@ -95,13 +97,10 @@ class SystemTransitionCompositor final {
     void ClearStatusLayerBuffers();
 
     static constexpr uint32_t kBytesPerPixel = 3U;
-    static constexpr uint32_t kPpaScaleDenominator = 16U;
-    static constexpr uint32_t kCardWidth = 202U;
-    static constexpr uint32_t kHalfWidth = 360U;
-
     lv_display_t* display_{};
-    esp_lcd_panel_handle_t panel_{};
-    ppa_client_handle_t srm_client_{};
+    DirectFramebufferAccess* framebuffers_{};
+    SystemTransitionProfile profile_{};
+    PpaSrmBlitter srm_blitter_{};
     ppa_client_handle_t blend_client_{};
     async_color_convert_handle_t dma2d_client_{};
     uint8_t* background_pixels_{};

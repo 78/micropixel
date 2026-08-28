@@ -21,7 +21,8 @@ struct ButtonUpdate final {
 class Button final {
    public:
     constexpr Button() = default;
-    explicit constexpr Button(Rect bounds) : bounds_(bounds) {}
+    explicit constexpr Button(Rect bounds, uint16_t hit_padding = 0U)
+        : bounds_(bounds), hit_padding_(hit_padding) {}
 
     void SetBounds(Rect bounds) {
         if (bounds_.x == bounds.x && bounds_.y == bounds.y && bounds_.width == bounds.width &&
@@ -29,6 +30,14 @@ class Button final {
             return;
         }
         bounds_ = bounds;
+        Reset();
+    }
+
+    void SetHitPadding(uint16_t hit_padding) {
+        if (hit_padding_ == hit_padding) {
+            return;
+        }
+        hit_padding_ = hit_padding;
         Reset();
     }
 
@@ -50,7 +59,7 @@ class Button final {
             return {};
         }
 
-        const bool inside = bounds_.contains(event.position());
+        const bool inside = hit_bounds().contains(event.position());
         if (event.phase() == TouchPhase::kDown) {
             if (tracking_ || !inside) {
                 return {};
@@ -79,6 +88,10 @@ class Button final {
     }
 
     [[nodiscard]] constexpr Rect bounds() const { return bounds_; }
+    [[nodiscard]] constexpr Rect hit_bounds() const {
+        return bounds_.inset(-static_cast<int32_t>(hit_padding_));
+    }
+    [[nodiscard]] constexpr uint16_t hit_padding() const { return hit_padding_; }
     [[nodiscard]] constexpr bool enabled() const { return enabled_; }
     [[nodiscard]] constexpr bool tracking() const { return tracking_; }
     [[nodiscard]] constexpr bool pressed() const { return pressed_; }
@@ -86,6 +99,7 @@ class Button final {
    private:
     Rect bounds_{};
     uint32_t touch_id_{};
+    uint16_t hit_padding_{};
     bool enabled_{true};
     bool tracking_{};
     bool pressed_{};
@@ -101,7 +115,8 @@ struct ButtonStyle final {
     int8_t pressed_text_offset_px{1};
 };
 
-inline void DrawTextButton(Frame& commands, const Button& button, const char* label, ButtonStyle style = {}) {
+template <typename DrawFrame>
+inline void DrawTextButton(DrawFrame& commands, const Button& button, const char* label, ButtonStyle style = {}) {
     const Rect bounds = button.bounds();
     commands.FillRect(bounds, style.background);
     const uint8_t feedback_opacity = !button.enabled()  ? style.disabled_opacity
@@ -116,7 +131,8 @@ inline void DrawTextButton(Frame& commands, const Button& button, const char* la
                               label, style.text, style.font);
 }
 
-inline void DrawTextureButton(Frame& commands, const Button& button, const Texture& texture,
+template <typename DrawFrame>
+inline void DrawTextureButton(DrawFrame& commands, const Button& button, const Texture& texture,
                               uint8_t pressed_image_opacity = 160U) {
     const Rect bounds = button.bounds();
     commands.DrawTexture(Point{bounds.x, bounds.y}, texture, button.pressed() ? pressed_image_opacity : 255U);

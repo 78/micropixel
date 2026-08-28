@@ -5,15 +5,16 @@
 #include "abi/micropixel_abi.h"
 #include "driver/ppa.h"
 #include "esp_async_color_convert.h"
-#include "esp_lcd_panel_ops.h"
 #include "lvgl.h"
+#include "platform/lvgl/display/display_pipeline.hpp"
 
 namespace micropixel::platform::lvgl {
 
 // Direct panel-compositor state for one translated Guest surface.
 class RetainedSurface final {
    public:
-    void Bind(lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t display_width, uint32_t display_height);
+    void Bind(lv_display_t* display, DirectFramebufferAccess* framebuffers, uint32_t display_width,
+              uint32_t display_height);
     [[nodiscard]] bool Initialize();
     [[nodiscard]] bool Configure(lv_obj_t* root, const micropixel_graphics_push_state_command_t& command,
                                  bool background_valid, uint32_t background_rgb888);
@@ -57,7 +58,7 @@ class RetainedSurface final {
                                     uint32_t& flush_us);
 
     lv_display_t* display_{};
-    esp_lcd_panel_handle_t panel_{};
+    DirectFramebufferAccess* framebuffers_{};
     lv_obj_t* frame_{};
     uint8_t* pixels_{};
     async_color_convert_handle_t dma2d_client_{};

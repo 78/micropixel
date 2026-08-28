@@ -22,6 +22,7 @@ constexpr uint32_t kMaxHallApps = 50U;
 constexpr uint8_t kMinimumBrightnessPercent = 0U;
 constexpr uint8_t kDefaultAutoSleepTimeoutMinutes = 5U;
 constexpr uint32_t kMaxWifiSsidLength = 32U;
+constexpr uint32_t kMinWifiPasswordLength = 8U;
 constexpr uint32_t kMaxWifiPasswordLength = 64U;
 constexpr uint32_t kMaxSavedWifiNetworks = 8U;
 constexpr uint32_t kMaxVisibleWifiNetworks = 16U;

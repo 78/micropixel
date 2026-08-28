@@ -26,6 +26,10 @@ fail_on_include platform/drivers platform/boards \
     "Reusable device drivers must not depend on a concrete board."
 fail_on_include platform/lvgl platform/boards \
     "Reusable LVGL profiles must not depend on a concrete board."
+fail_on_include platform/radio platform/boards \
+    "Reusable radio strategies must not depend on a concrete board."
+fail_on_include platform/transports platform/boards \
+    "Reusable transports must not depend on a concrete board."
 
 legacy_files=(
     "$source_root/host_bridge.h"
@@ -61,6 +65,19 @@ fi
 if rg -n '\bCONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE\b|^[[:space:]]*config[[:space:]]+MICROPIXEL_LVGL_DIRTY_COALESCE[[:space:]]*$' \
     "$source_root" "$workspace_root/firmware/espressif" --glob '!managed_components/**'; then
     echo "Dirty-region coalescing is product behavior and must not regain an enable/disable switch." >&2
+    exit 1
+fi
+
+usb_local_control="$source_root/platform/transports/usb_serial_jtag_local_control.cpp"
+finite_usb_notification_waits="$(rg -n 'ulTaskNotifyTake[[:space:]]*\(' "$usb_local_control" | \
+    rg -v 'portMAX_DELAY' || true)"
+if [[ -n "$finite_usb_notification_waits" ]]; then
+    printf '%s\n' "$finite_usb_notification_waits" >&2
+    echo "USB local control must remain event-driven; finite task-notification waits are polling." >&2
+    exit 1
+fi
+if ! rg -q 'ulTaskNotifyTake[[:space:]]*\([^;]*portMAX_DELAY' "$usb_local_control"; then
+    echo "USB local control must block on its RX/response-ready event notification." >&2
     exit 1
 fi
 
