@@ -1085,6 +1085,13 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
             (void)cJSON_AddNumberToObject(display, "heightPixels", board_info.display.height_pixels);
             (void)cJSON_AddStringToObject(display, "pixelFormat", board_info.display.pixel_format);
             (void)cJSON_AddNumberToObject(display, "refreshRateHz", board_info.display.refresh_rate_hz);
+            cJSON* safe_area = cJSON_AddObjectToObject(display, "safeAreaInsetsPixels");
+            if (safe_area != nullptr) {
+                (void)cJSON_AddNumberToObject(safe_area, "top", board_info.display.safe_area.top_pixels);
+                (void)cJSON_AddNumberToObject(safe_area, "right", board_info.display.safe_area.right_pixels);
+                (void)cJSON_AddNumberToObject(safe_area, "bottom", board_info.display.safe_area.bottom_pixels);
+                (void)cJSON_AddNumberToObject(safe_area, "left", board_info.display.safe_area.left_pixels);
+            }
         }
     }
 

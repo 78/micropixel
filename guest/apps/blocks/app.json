@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.blocks",
-  "display": "square",
-  "display_name": {
+  "title": {
     "default": "en",
     "values": {
       "en": "Juicy Blocks"
@@ -14,7 +13,6 @@
       "en": "i18n/en.json"
     }
   },
-  "source": "main.cpp",
   "sources": [
     "main.cpp",
     "blocks_app.cpp",

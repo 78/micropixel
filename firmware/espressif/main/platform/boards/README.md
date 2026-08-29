@@ -48,7 +48,7 @@ properties.
    shared layers that the board uses. The board CMake file explicitly lists
    its reusable `drivers/` and `input/` sources so selecting one board never
    compiles another board's hardware set.
-4. Add a product `sdkconfig` defaults file. Keep compile-only profiles in a
+4. Add a board `sdkconfig` defaults file. Keep compile-only profiles in a
    separate build directory and never expose a flash command for them.
 5. Add one declarative entry to `tools/firmware_profiles.json`. Board shell
    scripts are aliases for product workflows; they must delegate ESP-IDF
@@ -58,8 +58,8 @@ The ESP-Mosaico P0/P1 profile proves ESP32-S31 target selection, WAMR/AOT
 configuration, 16 KiB MMU-page-safe BundleFS, native Wi-Fi, CO5300 display,
 CST9217 interrupt-driven touch, BQ27220 battery, ES8311/NS4150B audio and the
 digital vibration motor. It reuses the shared App Hall, Status Layer,
-fixed-capacity audio engine, viewport/layout profiles, transition timeline and
-PPA/DMA2D primitives. Both product boards also use the same Graphics contract
+fixed-capacity audio engine, logical-coordinate/layout profiles, transition timeline and
+PPA/DMA2D primitives. Both physical boards also use the same Graphics contract
 forwarder and `SquareSystemUiState`; launch screens, Hall bookkeeping, system
 pages and Host pointer routing are shared. The board layer owns only pin mapping, power sequencing,
 codec/I2S output and the RGB565/QSPI presentation boundary. Codec control,
@@ -67,14 +67,14 @@ battery and touch work are serialized through the board's shared I2C executor.
 Brightness uses the CO5300 component API instead of issuing panel registers
 from System UI.
 
-BMI270 and the two BMM150 devices remain explicitly unavailable: the current
-public BMI270 managed component has no ESP-IDF 6.1 ESP32-S31 binary and its
-high-level API owns a separate I2C bus, while no authoritative public BMM150
-integration matching this board has been located. Add those sensors only
-through the shared executor and validate axis mapping/calibration on hardware;
-do not copy Metalio-Claw4 sequences or guess controller initialization. Deep
-sleep wake behavior also remains unavailable until the SAM8108/POWER_SWITCH
-signal semantics are verified on hardware. NAND and module discovery are P2.
+BMI270 and both BMM150 devices use the pinned Bosch SensorAPI sources under
+`components/bosch_sensorapi/` and reusable drivers under `platform/drivers/sensors/`.
+Configuration and sampling are serialized through the board's shared I2C executor;
+only successfully initialized acceleration, angular-velocity and magnetic-field
+channels are registered. Axis mapping and magnetic calibration still require
+hardware validation and must not be guessed from Metalio-Claw4. The POWER switch,
+Function button, status LED, battery refresh and explicit light-sleep/power-off path
+are present; NAND App Store and module discovery remain P2.
 
 Every Board implementation submits one `BoardRegistration`. The minimum is
 only `device::BoardInfo{.board = "..."}`; add Graphics/Input/System UI when
@@ -108,6 +108,6 @@ Before adding board-local code, check these homes:
 Run at least the Host regression suite, architecture check, format check and
 the new board's full ESP-IDF build. Keep `bash tools/p4.sh build-null` passing.
 For the preview S31 target use `bash tools/s31.sh build-null` and
-`bash tools/s31.sh build-mosaico`. `s31-null` cannot be flashed; the physical
-bring-up profile exposes `flash-mosaico` and `monitor` with mandatory S31 chip
+`bash tools/s31.sh build-host`. `s31-null` cannot be flashed; the physical
+bring-up profile exposes `flash-host` and `monitor` with mandatory S31 chip
 verification.

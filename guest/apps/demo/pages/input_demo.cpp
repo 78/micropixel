@@ -21,8 +21,20 @@ class InputPage final {
             point.active = false;
         }
         event_count_ = 0U;
+        key_event_count_ = 0U;
+        function_pressed_ = false;
         last_random_ = context.app.random().U32();
-        context.app.log().Info("demo.input: touch canvas ready; colors use the hardware RNG");
+        context.app.log().Info("demo.input: touch canvas and Function/Confirm key monitor ready");
+    }
+
+    [[nodiscard]] bool OnKey(const micropixel::KeyEvent& event) {
+        if (event.code() != micropixel::KeyCode::kConfirm) {
+            return false;
+        }
+        function_pressed_ =
+            event.phase() == micropixel::KeyPhase::kDown || event.phase() == micropixel::KeyPhase::kRepeat;
+        ++key_event_count_;
+        return true;
     }
 
     [[nodiscard]] bool OnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
@@ -51,16 +63,23 @@ class InputPage final {
         return true;
     }
 
-    void Render(DemoContext& context, micropixel::Frame& commands) {
+    void Render(DemoContext& context, DemoView& commands) {
         const int32_t center_x = PageCenterX(context);
-        commands.DrawTextCentered(center_x, PageY(context, 12, 20), "Touch and drag with one or more fingers.",
-                                  MutedColor(),
-                                  micropixel::SystemFont::kMedium);
+        commands.CenteredText(center_x, PageY(context, 12, 20), "Touch and drag with one or more fingers.",
+                              MutedColor(), micropixel::SystemFont::kMedium);
+        Line function;
+        function.Append("Function / Confirm: ");
+        function.Append(function_pressed_ ? "PRESSED" : "RELEASED");
+        function.Append("   events: ");
+        function.AppendUint(key_event_count_);
+        commands.CenteredText(center_x, PageY(context, 40, 48), function.c_str(),
+                              function_pressed_ ? AccentColor() : micropixel::Color::White(),
+                              micropixel::SystemFont::kMedium);
         const micropixel::Rect canvas{context.layout.page_content.x + (context.layout.compact() ? 20 : 28),
-                                      PageY(context, 52, 64),
+                                      PageY(context, 72, 82),
                                       context.layout.page_content.width - (context.layout.compact() ? 40 : 56),
-                                      context.layout.page_content.height - (context.layout.compact() ? 100 : 126)};
-        commands.FillRect(canvas, PanelColor());
+                                      context.layout.page_content.height - (context.layout.compact() ? 120 : 144)};
+        commands.Panel(canvas, PanelColor());
 
         for (const TouchPoint& point : points_) {
             if (!point.active) {
@@ -80,7 +99,7 @@ class InputPage final {
             } else if (y > maximum_y) {
                 y = maximum_y;
             }
-            commands.FillRect(micropixel::Rect{x, y, 44, 44}, point.color);
+            commands.Panel(micropixel::Rect{x, y, 44, 44}, point.color);
         }
 
         Line status;
@@ -88,9 +107,8 @@ class InputPage final {
         status.AppendUint(event_count_);
         status.Append("   Random::U32(): ");
         status.AppendUint(last_random_);
-        commands.DrawTextCentered(center_x, context.layout.page_content.y + context.layout.page_content.height - 28,
-                                  status.c_str(), micropixel::Color::White(),
-                                  micropixel::SystemFont::kMedium);
+        commands.CenteredText(center_x, context.layout.page_content.y + context.layout.page_content.height - 28,
+                              status.c_str(), micropixel::Color::White(), micropixel::SystemFont::kMedium);
     }
 
    private:
@@ -121,7 +139,9 @@ class InputPage final {
 
     TouchPoint points_[5]{};
     uint32_t event_count_{};
+    uint32_t key_event_count_{};
     uint32_t last_random_{};
+    bool function_pressed_{};
 };
 
 InputPage input_page;
@@ -130,12 +150,12 @@ InputPage input_page;
 
 void InputDemoEnter(DemoContext& context) { input_page.Enter(context); }
 
+bool InputDemoOnKey(DemoContext&, const micropixel::KeyEvent& event) { return input_page.OnKey(event); }
+
 bool InputDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
     return input_page.OnTouch(context, event);
 }
 
-void InputDemoRender(DemoContext& context, micropixel::Frame& commands) {
-    input_page.Render(context, commands);
-}
+void InputDemoRender(DemoContext& context, DemoView& commands) { input_page.Render(context, commands); }
 
 }  // namespace demo

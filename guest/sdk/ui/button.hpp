@@ -8,8 +8,8 @@
 
 namespace micropixel::ui {
 
-// Button owns only touch interaction state. The app owns the action and chooses
-// a renderer, so text and texture buttons share capture/release semantics.
+// Button owns only touch interaction state. The app owns the action and binds
+// pressed/enabled state to retained Scene nodes.
 struct ButtonUpdate final {
     bool handled{};
     bool visual_changed{};
@@ -21,8 +21,7 @@ struct ButtonUpdate final {
 class Button final {
    public:
     constexpr Button() = default;
-    explicit constexpr Button(Rect bounds, uint16_t hit_padding = 0U)
-        : bounds_(bounds), hit_padding_(hit_padding) {}
+    explicit constexpr Button(Rect bounds, uint16_t hit_padding = 0U) : bounds_(bounds), hit_padding_(hit_padding) {}
 
     void SetBounds(Rect bounds) {
         if (bounds_.x == bounds.x && bounds_.y == bounds.y && bounds_.width == bounds.width &&
@@ -88,9 +87,7 @@ class Button final {
     }
 
     [[nodiscard]] constexpr Rect bounds() const { return bounds_; }
-    [[nodiscard]] constexpr Rect hit_bounds() const {
-        return bounds_.inset(-static_cast<int32_t>(hit_padding_));
-    }
+    [[nodiscard]] constexpr Rect hit_bounds() const { return bounds_.inset(-static_cast<int32_t>(hit_padding_)); }
     [[nodiscard]] constexpr uint16_t hit_padding() const { return hit_padding_; }
     [[nodiscard]] constexpr bool enabled() const { return enabled_; }
     [[nodiscard]] constexpr bool tracking() const { return tracking_; }
@@ -104,42 +101,6 @@ class Button final {
     bool tracking_{};
     bool pressed_{};
 };
-
-struct ButtonStyle final {
-    Color background{Color::Green()};
-    Color text{Color::White()};
-    Color feedback_overlay{Color::Black()};
-    uint8_t pressed_opacity{48U};
-    uint8_t disabled_opacity{112U};
-    SystemFont font{SystemFont::kLarge};
-    int8_t pressed_text_offset_px{1};
-};
-
-template <typename DrawFrame>
-inline void DrawTextButton(DrawFrame& commands, const Button& button, const char* label, ButtonStyle style = {}) {
-    const Rect bounds = button.bounds();
-    commands.FillRect(bounds, style.background);
-    const uint8_t feedback_opacity = !button.enabled()  ? style.disabled_opacity
-                                     : button.pressed() ? style.pressed_opacity
-                                                        : 0U;
-    // Keep the translucent FillRect record present even at zero opacity. Retained Hosts can
-    // then reuse the same command slot while the pressed state changes.
-    commands.FillRect(bounds, style.feedback_overlay, feedback_opacity);
-    const int32_t text_offset = button.pressed() ? style.pressed_text_offset_px : 0;
-    constexpr int32_t kLargeFontLineHeight = 24;
-    commands.DrawTextCentered(bounds.center_x(), bounds.y + (bounds.height - kLargeFontLineHeight) / 2 + text_offset,
-                              label, style.text, style.font);
-}
-
-template <typename DrawFrame>
-inline void DrawTextureButton(DrawFrame& commands, const Button& button, const Texture& texture,
-                              uint8_t pressed_image_opacity = 160U) {
-    const Rect bounds = button.bounds();
-    commands.DrawTexture(Point{bounds.x, bounds.y}, texture, button.pressed() ? pressed_image_opacity : 255U);
-    // Keep the second record as a transparent placeholder so retained scenes
-    // preserve the same command topology as text buttons and state changes.
-    commands.FillRect(bounds, Color::Black(), 0U);
-}
 
 }  // namespace micropixel::ui
 

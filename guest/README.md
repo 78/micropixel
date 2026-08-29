@@ -35,41 +35,33 @@ guest/
 录制的 BGM、对白和长音效使用 asset manifest 的 `ogg_opus` 格式；Host 内置 micro-opus 解码，App Bundle
 只携带压缩 Ogg，不需要打包 WAV 或 Guest codec。
 
-日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。App 必须用一个简单的 `display` 字段声明逻辑
-画布：`square`、`landscape` 或 `portrait`。构建工具把这个声明编译进 Guest，SDK 初始化时读取物理屏幕
-尺寸并完成兼容性判断和坐标变换。`square` 可运行在任意比例的屏幕上，使用短边形成居中的 720×720
-逻辑画布；`landscape` 和 `portrait` 分别使用对应方向的完整屏幕，方向不符时由 SDK 统一退出。Host 不解释
-布局策略。`sources`、`localization`、
+日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。Manifest 用 `title` 表达 App Hall 中的用户可见名称，
+用唯一的 `sources` 数组列出所有 C++ translation unit，不再声明屏幕 profile 或重复的单数 `source`。
+SDK 初始化时根据物理屏幕建立短边为 720 的逻辑坐标；App 通过 `RendererInfo` 判断当前宽高和方向，
+并对不支持的布局显式 `Assert`。`localization`、
 `asset_manifest` 和 `audio/sfx.json` 是生成 Catalog、资源绑定、音效 profile、Wasm/AOT 与 Bundle 的
 唯一输入，不需要为每个 App 编写 build 脚本：
 
 ```sh
-python3 tools/micropixel build guest/apps/demo
-python3 tools/micropixel package guest/apps/demo
-python3 tools/micropixel app install guest/apps/demo
+python3 tools/micropixel --transport usb run guest/apps/demo
 
 # 已安装 CLI 时，在包含 app.json 的项目目录中可直接运行：
-micropixel build
-micropixel package
-micropixel app install
-micropixel run
+micropixel --transport usb run
 ```
 
-这些命令默认读取当前目录的 `app.json`。`micropixel run` 会完成 development 构建、停止当前 Guest、
+该命令默认读取当前目录的 `app.json`，完成 development 构建、停止当前 Guest、
 安装、启动和日志跟随；`Ctrl-C` 不会停止设备上的 App。只需部署并启动时使用 `micropixel run --no-follow`。
-已经安装后也可运行 `micropixel app start --follow`，CLI 会从当前 manifest 推导 App ID。
+只做本地产物时再单独使用 `micropixel build` 或 `micropixel package`。
 
-仓库中的 `tools/build_{blocks,snake,demo}_bundle.sh` 只是现有 CI 和 `tools/p4.sh` 的薄兼容入口，内部
-同样调用 `micropixel package`，不再维护第二套构建参数。完整产品基线仍可使用：
+完整产品基线仍可使用：
 
 ```sh
 bash tools/p4.sh build-all
-bash tools/build_showcase_bundles.sh
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
 `flash-apps` 明确替换 App Store，并写入七个示例 App；不再提供会把任意 Bundle 直接写入
-分区的独立公开脚本。单 App 开发安装走 Remote Control 的正常安装事务。
+分区的独立公开脚本。单 App 开发安装走 USB Local Control 或 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；
 `micropixel package` 和 `micropixel app install` 默认使用 `release`。需要显式选择时使用

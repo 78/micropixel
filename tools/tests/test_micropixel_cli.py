@@ -230,13 +230,11 @@ class MicroPixelCliTest(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "app_id": "vendor.fixture",
-                        "display": "landscape",
-                        "display_name": {"default": "en", "values": {"en": "Fixture"}},
+                        "title": {"default": "en", "values": {"en": "Fixture"}},
                         "localization": {
                             "default": "en",
                             "translations": {"en": "i18n/en.json"},
                         },
-                        "source": "main.cpp",
                         "sources": ["main.cpp"],
                     }
                 ),
@@ -245,7 +243,6 @@ class MicroPixelCliTest(unittest.TestCase):
             output_dir = root / "out"
 
             def fake_build(args: argparse.Namespace) -> None:
-                self.assertEqual(args.display_profile, "landscape")
                 Path(args.output_dir_override).mkdir(parents=True, exist_ok=True)
                 (Path(args.output_dir_override) / "fixture.aot").write_bytes(b"fixture-aot")
 
@@ -279,9 +276,7 @@ class MicroPixelCliTest(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "app_id": "vendor.fixture",
-                        "display": "square",
-                        "display_name": "Fixture",
-                        "source": "../outside.cpp",
+                        "title": "Fixture",
                         "sources": ["../outside.cpp"],
                     }
                 ),
@@ -289,6 +284,33 @@ class MicroPixelCliTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(CLI.CliError, "escapes the project directory"):
                 CLI.load_project_manifest(manifest)
+
+    def test_project_manifest_rejects_removed_public_fields(self) -> None:
+        cases = (
+            ({"display_name": "Fixture"}, "renamed to title"),
+            ({"display_profile": "square-720"}, "no longer declares a display profile"),
+            ({"source": "main.cpp"}, "source has been removed"),
+        )
+        for extra, message in cases:
+            with self.subTest(field=next(iter(extra))):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / "main.cpp").write_text("int fixture = 1;\n", encoding="utf-8")
+                    manifest = root / "app.json"
+                    manifest.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "app_id": "vendor.fixture",
+                                "title": "Fixture",
+                                "sources": ["main.cpp"],
+                                **extra,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(CLI.CliError, message):
+                        CLI.load_project_manifest(manifest)
 
     def test_build_package_and_install_default_to_current_project(self) -> None:
         self.assertEqual(CLI.parser().parse_args(["build"]).source, ".")
@@ -312,9 +334,7 @@ class MicroPixelCliTest(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "app_id": "vendor.fixture",
-                        "display": "square",
-                        "display_name": "Fixture",
-                        "source": "main.cpp",
+                        "title": "Fixture",
                         "sources": ["main.cpp"],
                     }
                 ),

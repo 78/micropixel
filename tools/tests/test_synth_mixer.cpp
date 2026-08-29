@@ -1,7 +1,9 @@
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 #include "platform/audio/audio_mixer.hpp"
+#include "platform/audio/audio_output_policy.hpp"
 
 namespace {
 
@@ -24,6 +26,45 @@ micropixel_audio_tone_t Tone(uint16_t waveform = MICROPIXEL_AUDIO_WAVE_SINE) {
         .release_ms = 2U,
         .reserved = {},
     };
+}
+
+void AudioOutputLifecycleIsBounded() {
+    using micropixel::platform::audio::NextAudioIdleChunkCount;
+    using micropixel::platform::audio::ShouldRunAudioOutput;
+    using micropixel::platform::audio::ShouldStopAudioOutput;
+
+    Check(ShouldRunAudioOutput(true, false), "a foreground App must keep audio output running");
+    Check(!ShouldRunAudioOutput(false, false), "idle background audio output must stay stopped");
+    Check(ShouldRunAudioOutput(false, true), "a playable voice must keep background output running");
+
+    constexpr uint32_t kGraceChunks = 3U;
+    uint32_t idle_chunks = 0U;
+    for (uint32_t index = 0U; index < 20U; ++index) {
+        idle_chunks = NextAudioIdleChunkCount(idle_chunks, true, false, false);
+        Check(idle_chunks == 0U, "foreground output must reset the idle counter");
+        Check(!ShouldStopAudioOutput(true, idle_chunks, kGraceChunks, false),
+              "foreground output must not stop at the idle threshold");
+    }
+
+    idle_chunks = NextAudioIdleChunkCount(idle_chunks, false, false, false);
+    Check(idle_chunks == 1U && !ShouldStopAudioOutput(false, idle_chunks, kGraceChunks, false),
+          "the first idle chunk must remain inside the grace period");
+    idle_chunks = NextAudioIdleChunkCount(idle_chunks, false, false, false);
+    Check(idle_chunks == 2U && !ShouldStopAudioOutput(false, idle_chunks, kGraceChunks, false),
+          "the second idle chunk must remain inside the grace period");
+    idle_chunks = NextAudioIdleChunkCount(idle_chunks, false, false, false);
+    Check(idle_chunks == kGraceChunks && ShouldStopAudioOutput(false, idle_chunks, kGraceChunks, false),
+          "audio output must stop after the complete idle grace period");
+
+    Check(NextAudioIdleChunkCount(kGraceChunks, false, true, false) == 0U,
+          "rendered audio must reset the idle counter");
+    Check(NextAudioIdleChunkCount(kGraceChunks, false, false, true) == 0U,
+          "a playable voice must reset the idle counter");
+    Check(NextAudioIdleChunkCount(kGraceChunks, true, false, false) == 0U,
+          "a foreground App must reset the idle counter");
+    Check(NextAudioIdleChunkCount(std::numeric_limits<uint32_t>::max(), false, false, false) ==
+              std::numeric_limits<uint32_t>::max(),
+          "the idle counter must saturate instead of wrapping");
 }
 
 }  // namespace
@@ -56,6 +97,8 @@ int main() {
     }
     Check(!voice.active && voice.remaining_frames == 0U, "voice must stop at the final frame");
 
-    std::cout << "synth mixer tests passed\n";
+    AudioOutputLifecycleIsBounded();
+
+    std::cout << "audio mixer and output policy tests passed\n";
     return 0;
 }

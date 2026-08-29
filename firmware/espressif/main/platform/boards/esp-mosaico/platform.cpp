@@ -1,7 +1,5 @@
 #include "platform/platform.hpp"
 
-#include <algorithm>
-#include <array>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -9,16 +7,12 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
-#include "driver/spi_master.h"
-#include "esp_async_color_convert.h"
 #include "esp_check.h"
-#include "esp_heap_caps.h"
-#include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch_cst9217.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
-#include "esp_memory_utils.h"
+#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,13 +24,17 @@
 #include "platform/boards/esp-mosaico/board_config.hpp"
 #include "platform/boards/esp-mosaico/display/brightness_controller.hpp"
 #include "platform/boards/esp-mosaico/display/panel_transition_compositor.hpp"
+#include "platform/boards/esp-mosaico/function_button.hpp"
 #include "platform/boards/esp-mosaico/haptic_actuator.hpp"
 #include "platform/boards/esp-mosaico/i2s_audio_sink.hpp"
 #include "platform/boards/esp-mosaico/platform_state.hpp"
 #include "platform/boards/esp-mosaico/power_controller.hpp"
 #include "platform/boards/esp-mosaico/presentation.hpp"
+#include "platform/boards/esp-mosaico/sensor_peripheral.hpp"
+#include "platform/boards/esp-mosaico/status_led.hpp"
 #include "platform/boards/esp-mosaico/usb_cdc_console.hpp"
 #include "platform/buses/i2c_executor.hpp"
+#include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/input/esp_lcd_touch_input.hpp"
 #include "platform/lvgl/display/screen_capture.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
@@ -57,159 +55,9 @@ namespace {
 
 namespace board_detail = esp_mosaico::detail;
 
-board_detail::MosaicoBoardState* g_display_flush_state{};
-
-void CaptureDisplayedShadowFlush(lv_display_t* display, const lv_area_t* area, uint8_t* pixels) {
-    board_detail::MosaicoBoardState* state = g_display_flush_state;
-    if (state != nullptr && state->display == display && state->displayed_shadow != nullptr && area != nullptr &&
-        pixels != nullptr && area->x1 >= 0 && area->y1 >= 0 && area->x2 < board_detail::kWidth &&
-        area->y2 < board_detail::kHeight) {
-        const uint32_t area_width = static_cast<uint32_t>(area->x2 - area->x1 + 1);
-        const uint32_t area_height = static_cast<uint32_t>(area->y2 - area->y1 + 1);
-        const uint32_t source_stride = lv_display_get_buf_active(display)->header.stride;
-        async_color_convert_request_t copy{};
-        copy.src_buffer = pixels;
-        copy.src_stride = source_stride / 2U;
-        copy.src_height = area_height;
-        copy.dst_buffer = state->displayed_shadow;
-        copy.dst_stride = static_cast<uint32_t>(board_detail::kWidth);
-        copy.dst_height = static_cast<uint32_t>(board_detail::kHeight);
-        copy.dst_x = static_cast<uint32_t>(area->x1);
-        copy.dst_y = static_cast<uint32_t>(area->y1);
-        copy.copy_width = area_width;
-        copy.copy_height = area_height;
-        copy.src_color_format = ESP_COLOR_FOURCC_RGB16;
-        copy.dst_color_format = ESP_COLOR_FOURCC_RGB16;
-        const bool copied = state->shadow_copy_dma2d != nullptr &&
-                            esp_color_convert_blocking(state->shadow_copy_dma2d, &copy, -1) == ESP_OK;
-        for (int32_t y = area->y1; copied && y <= area->y2; ++y) {
-            if (area->x1 == 0 && area->x2 == board_detail::kWidth - 1) {
-                state->displayed_shadow_rows[static_cast<size_t>(y)] = true;
-            }
-        }
-        if (!state->displayed_shadow_valid) {
-            state->displayed_shadow_valid =
-                std::all_of(state->displayed_shadow_rows.begin(), state->displayed_shadow_rows.end(),
-                            [](bool row_ready) { return row_ready; });
-        }
-    }
-    if (state != nullptr && state->adapter_flush_cb != nullptr) {
-        state->adapter_flush_cb(display, area, pixels);
-    } else {
-        lv_display_flush_ready(display);
-    }
-}
-
-void RoundQspiArea(lv_area_t* area, void*) {
-    if (area == nullptr) {
-        return;
-    }
-    // CO5300 partial writes require even start coordinates and even extents.
-    // X is kept at the stricter four-pixel QSPI/PPA alignment; expand Y to an
-    // even start and an even row count so moving objects do not leave their
-    // first or last row behind when LVGL invalidates an odd-aligned area.
-    area->x1 = std::max<int32_t>(0, area->x1 / 4 * 4);
-    area->x2 = std::min<int32_t>(board_detail::kWidth - 1, (area->x2 + 4) / 4 * 4 - 1);
-    area->y1 = std::max<int32_t>(0, area->y1 / 2 * 2);
-    area->y2 = std::min<int32_t>(board_detail::kHeight - 1, (area->y2 + 2) / 2 * 2 - 1);
-}
-
-esp_err_t InitializePanel(board_detail::MosaicoBoardState& state) {
-    static const uint8_t kPage20[] = {0x20};
-    static const uint8_t kRegister19[] = {0x10};
-    static const uint8_t kRegister1c[] = {0xa0};
-    static const uint8_t kPage00[] = {0x00};
-    static const uint8_t kRegisterC4[] = {0x80};
-    static const uint8_t kPixelFormat[] = {0x55};
-    static const uint8_t kTearEffect[] = {0x00};
-    static const uint8_t kDisplayControl[] = {0x20};
-    static const uint8_t kMaximumBrightness[] = {0xff};
-    static const uint8_t kHbmBrightness[] = {0xff};
-    static const uint8_t kColumnRange[] = {0x00, 0x00, 0x01, 0xdf};
-    static const uint8_t kRowRange[] = {0x00, 0x00, 0x01, 0xdf};
-    static const co5300_lcd_init_cmd_t kVendorInit[] = {
-        {0x11, nullptr, 0, 600},
-        {0xfe, kPage20, sizeof(kPage20), 0},
-        {0x19, kRegister19, 1, 0},
-        {0x1c, kRegister1c, 1, 0},
-        {0xfe, kPage00, sizeof(kPage00), 0},
-        {0xc4, kRegisterC4, 1, 0},
-        {0x3a, kPixelFormat, 1, 0},
-        {0x35, kTearEffect, 1, 0},
-        {0x53, kDisplayControl, 1, 0},
-        {0x51, kMaximumBrightness, 1, 0},
-        {0x63, kHbmBrightness, 1, 0},
-        {0x2a, kColumnRange, 4, 0},
-        {0x2b, kRowRange, 4, 0},
-        {0x29, nullptr, 0, 600},
-    };
-
-    spi_bus_config_t bus_config{};
-    bus_config.data0_io_num = esp_mosaico::board::kDisplayData0;
-    bus_config.data1_io_num = esp_mosaico::board::kDisplayData1;
-    bus_config.sclk_io_num = esp_mosaico::board::kDisplayClock;
-    bus_config.data2_io_num = esp_mosaico::board::kDisplayData2;
-    bus_config.data3_io_num = esp_mosaico::board::kDisplayData3;
-    bus_config.data4_io_num = -1;
-    bus_config.data5_io_num = -1;
-    bus_config.data6_io_num = -1;
-    bus_config.data7_io_num = -1;
-    // Match the DMA transaction ceiling to one LVGL draw buffer. On Mosaico
-    // that buffer is a full-height RGB565 surface in PSRAM, and the panel IO
-    // consumes it directly without an internal-SRAM bounce allocation.
-    bus_config.max_transfer_sz = board_detail::kWidth * CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT *
-                                 static_cast<int32_t>(esp_mosaico::board::kDisplayBitsPerPixel) / 8;
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(esp_mosaico::board::kDisplaySpiHost, &bus_config, SPI_DMA_CH_AUTO),
-                        board_detail::kTag, "initialize CO5300 QSPI bus failed");
-    constexpr gpio_num_t kBusPins[] = {
-        esp_mosaico::board::kDisplayClock, esp_mosaico::board::kDisplayData0, esp_mosaico::board::kDisplayData1,
-        esp_mosaico::board::kDisplayData2, esp_mosaico::board::kDisplayData3,
-    };
-    for (gpio_num_t pin : kBusPins) {
-        ESP_RETURN_ON_ERROR(
-            gpio_set_drive_capability(pin, static_cast<gpio_drive_cap_t>(CONFIG_MICROPIXEL_MOSAICO_LCD_QSPI_DRIVE_CAP)),
-            board_detail::kTag, "set QSPI GPIO%d drive capability failed", static_cast<int>(pin));
-    }
-
-    esp_lcd_panel_io_spi_config_t io_config{};
-    io_config.cs_gpio_num = esp_mosaico::board::kDisplayChipSelect;
-    io_config.dc_gpio_num = GPIO_NUM_NC;
-    io_config.spi_mode = 0;
-    io_config.pclk_hz = esp_mosaico::board::kDisplayPixelClockHz;
-    io_config.trans_queue_depth = 10U;
-    io_config.lcd_cmd_bits = 32;
-    io_config.lcd_param_bits = 8;
-    io_config.flags.quad_mode = true;
-    // PPA and DMA2D finish before a transition frame is submitted. Let QSPI DMA
-    // consume that immutable PSRAM frame directly instead of copying it through
-    // an internal-SRAM strip and issuing one panel command per strip.
-    io_config.flags.psram_dma_direct = true;
-    ESP_RETURN_ON_ERROR(
-        esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(esp_mosaico::board::kDisplaySpiHost), &io_config,
-                                 &state.panel_io),
-        board_detail::kTag, "create CO5300 panel IO failed");
-
-    co5300_vendor_config_t vendor_config{};
-    vendor_config.init_cmds = kVendorInit;
-    vendor_config.init_cmds_size = std::size(kVendorInit);
-    vendor_config.flags.use_qspi_interface = true;
-    esp_lcd_panel_dev_config_t panel_config{};
-    panel_config.reset_gpio_num = esp_mosaico::board::kDisplayReset;
-    panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
-    panel_config.bits_per_pixel = esp_mosaico::board::kDisplayBitsPerPixel;
-    panel_config.vendor_config = &vendor_config;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_co5300(state.panel_io, &panel_config, &state.panel), board_detail::kTag,
-                        "create CO5300 panel failed");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(state.panel), board_detail::kTag, "reset CO5300 failed");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(state.panel), board_detail::kTag, "initialize CO5300 failed");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(state.panel, true), board_detail::kTag, "turn CO5300 on failed");
-    ESP_LOGI(board_detail::kTag, "CO5300 ready: 480x480 QSPI with TE on GPIO%d",
-             static_cast<int>(esp_mosaico::board::kDisplayTe));
-    return ESP_OK;
-}
-
 esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
-    ESP_RETURN_ON_ERROR(InitializePanel(state), board_detail::kTag, "initialize Mosaico panel failed");
+    ESP_RETURN_ON_ERROR(state.display_pipeline.InitializePanel(), board_detail::kTag,
+                        "initialize Mosaico display pipeline failed");
     if (!esp_lv_adapter_is_initialized()) {
         esp_lv_adapter_config_t adapter_config{};
         adapter_config.task_stack_size = 10240U;
@@ -228,8 +76,8 @@ esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
         ESP_RETURN_ON_ERROR(esp_lv_adapter_init(&adapter_config), board_detail::kTag, "initialize LVGL adapter failed");
     }
     esp_lv_adapter_display_config_t display_config{};
-    display_config.panel = state.panel;
-    display_config.panel_io = state.panel_io;
+    display_config.panel = state.display_pipeline.Panel();
+    display_config.panel_io = state.display_pipeline.PanelIo();
     display_config.profile.interface = ESP_LV_ADAPTER_PANEL_IF_OTHER;
     display_config.profile.rotation = ESP_LV_ADAPTER_ROTATE_0;
     display_config.profile.hor_res = board_detail::kWidth;
@@ -248,25 +96,8 @@ esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
     if (state.display == nullptr) {
         return ESP_FAIL;
     }
-    state.displayed_shadow = static_cast<uint8_t*>(heap_caps_aligned_calloc(board_detail::kTransitionAlignment,
-                                                                            board_detail::kDisplayFrameAllocationBytes,
-                                                                            1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (state.displayed_shadow == nullptr) {
-        return ESP_ERR_NO_MEM;
-    }
-    async_color_convert_config_t dma2d_config{};
-    dma2d_config.backlog = 1U;
-    dma2d_config.dma_burst_size = 128U;
-    ESP_RETURN_ON_ERROR(esp_async_color_convert_install_dma2d(&dma2d_config, &state.shadow_copy_dma2d),
-                        board_detail::kTag, "install displayed-shadow DMA2D copier failed");
-    state.adapter_flush_cb = state.display->flush_cb;
-    if (state.adapter_flush_cb == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    g_display_flush_state = &state;
-    lv_display_set_flush_cb(state.display, CaptureDisplayedShadowFlush);
-    ESP_RETURN_ON_ERROR(esp_lv_adapter_set_area_rounder_cb(state.display, RoundQspiArea, nullptr), board_detail::kTag,
-                        "configure QSPI area alignment failed");
+    ESP_RETURN_ON_ERROR(state.display_pipeline.BindLvgl(state.display), board_detail::kTag,
+                        "bind Mosaico display pipeline to LVGL failed");
     ESP_RETURN_ON_ERROR(esp_lv_adapter_start(), board_detail::kTag, "start LVGL adapter failed");
     return ESP_OK;
 }
@@ -306,7 +137,84 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
     return ESP_OK;
 }
 
-class EspMosaicoBoard final : public Board {
+std::expected<void, device::PowerError> RestoreDisplayAfterSleep(board_detail::MosaicoBoardState& state) {
+    const esp_err_t resume_status = state.display_pipeline.Resume();
+    if (resume_status != ESP_OK) {
+        ESP_LOGE(board_detail::kTag, "display resume failed after sleep: %s", esp_err_to_name(resume_status));
+        return std::unexpected(device::PowerError::kDisplayRestore);
+    }
+    const esp_err_t adapter_status =
+        esp_lv_adapter_sleep_recover(state.display, state.display_pipeline.Panel(), state.display_pipeline.PanelIo());
+    if (adapter_status != ESP_OK) {
+        ESP_LOGE(board_detail::kTag, "LVGL recovery failed after sleep: %s", esp_err_to_name(adapter_status));
+        return std::unexpected(device::PowerError::kDisplayRestore);
+    }
+    return {};
+}
+
+std::expected<void, device::PowerError> EnterLowPowerImpl(board_detail::MosaicoBoardState& state,
+                                                          esp_mosaico::PowerController& power) {
+    esp_err_t status = esp_lv_adapter_sleep_prepare();
+    if (status != ESP_OK) {
+        ESP_LOGE(board_detail::kTag, "LVGL sleep preparation failed: %s", esp_err_to_name(status));
+        return std::unexpected(device::PowerError::kDisplayPrepare);
+    }
+    status = state.display_pipeline.Suspend();
+    if (status != ESP_OK) {
+        (void)RestoreDisplayAfterSleep(state);
+        return std::unexpected(device::PowerError::kDisplayShutdown);
+    }
+
+    const auto power_press_pending = [&power] { return power.PowerPressOccurredAfterRequest() || power.IsPressed(); };
+    if (power_press_pending()) {
+        ESP_LOGI(board_detail::kTag, "light sleep canceled by a concurrent POWER press");
+        power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+        return RestoreDisplayAfterSleep(state);
+    }
+
+    for (uint32_t attempt = 1U; attempt <= esp_mosaico::board::kLightSleepEntryAttempts; ++attempt) {
+        status = power.PrepareForLightSleep();
+        if (status != ESP_OK) {
+            if (power_press_pending()) {
+                power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+                return RestoreDisplayAfterSleep(state);
+            }
+            const auto restore = RestoreDisplayAfterSleep(state);
+            if (!restore.has_value()) {
+                return restore;
+            }
+            return std::unexpected(device::PowerError::kWakeSource);
+        }
+        if (power_press_pending()) {
+            power.FinishLightSleep();
+            power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+            return RestoreDisplayAfterSleep(state);
+        }
+
+        const int64_t started_us = esp_timer_get_time();
+        status = esp_light_sleep_start();
+        const uint64_t duration_us = static_cast<uint64_t>(esp_timer_get_time() - started_us);
+        power.FinishLightSleep();
+        if (status == ESP_OK) {
+            ESP_LOGI(board_detail::kTag, "light sleep returned after %" PRIu64 " ms", duration_us / 1000U);
+            power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+            break;
+        }
+        ESP_LOGW(board_detail::kTag, "light sleep attempt %" PRIu32 " rejected: %s", attempt, esp_err_to_name(status));
+        if (status != ESP_ERR_SLEEP_REJECT || attempt == esp_mosaico::board::kLightSleepEntryAttempts) {
+            break;
+        }
+    }
+
+    const auto restore = RestoreDisplayAfterSleep(state);
+    if (!restore.has_value()) {
+        return restore;
+    }
+    return status == ESP_OK ? std::expected<void, device::PowerError>{}
+                            : std::unexpected(device::PowerError::kSleepRejected);
+}
+
+class EspMosaicoBoard final : public Board, public device::Power {
    public:
     EspMosaicoBoard()
         : graphics_context_{
@@ -329,12 +237,15 @@ class EspMosaicoBoard final : public Board {
         ESP_RETURN_ON_ERROR(InitializeUsbCdcConsole(), board_detail::kTag, "initialize Type-C USB CDC console failed");
         ESP_LOGI(board_detail::kTag, "initializing ESP-Mosaico with official CO5300/CST9217 drivers");
         ESP_RETURN_ON_ERROR(power_.Initialize(), board_detail::kTag, "initialize Mosaico power control failed");
+        ESP_RETURN_ON_ERROR(status_led_.Initialize(), board_detail::kTag, "initialize Mosaico status LED failed");
+        ESP_RETURN_ON_ERROR(status_led_.Set(true), board_detail::kTag, "turn on Mosaico startup status LED failed");
         ESP_RETURN_ON_ERROR(InitializeDisplay(state_), board_detail::kTag, "initialize Mosaico display failed");
         ESP_RETURN_ON_ERROR(
             state_.panel_transition.Initialize(
                 state_.display, board_detail::kWidth, board_detail::kHeight,
                 host_ui::lvgl::square_common::TransitionProfile(board_detail::ui_profile::kSystemUiProfile.square),
-                state_.shadow_copy_dma2d, state_.displayed_shadow, &state_.displayed_shadow_valid),
+                state_.display_pipeline.ShadowCopyDma2d(), state_.display_pipeline.DisplayedShadow(),
+                state_.display_pipeline.DisplayedShadowReady()),
             board_detail::kTag, "initialize CO5300 direct transition compositor failed");
         ESP_RETURN_ON_ERROR(InitializeTouch(state_), board_detail::kTag, "initialize Mosaico touch failed");
         ESP_RETURN_ON_ERROR(state_.i2c_executor.Initialize(), board_detail::kTag,
@@ -342,7 +253,9 @@ class EspMosaicoBoard final : public Board {
         ESP_RETURN_ON_ERROR(audio_output_.Configure(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
                             "configure Mosaico ES8311 audio hardware failed");
         battery_.Initialize(state_.i2c_bus, state_.i2c_executor);
+        sensors_.Initialize(state_.i2c_bus, state_.i2c_executor);
         ESP_RETURN_ON_ERROR(haptics_.Initialize(), board_detail::kTag, "initialize Mosaico vibration motor failed");
+        ESP_RETURN_ON_ERROR(gpio_.Initialize(), board_detail::kTag, "initialize Mosaico application GPIO failed");
         ESP_RETURN_ON_ERROR(state_.touch_input.Initialize(state_.touch, state_.i2c_executor), board_detail::kTag,
                             "bind CST9217 input failed");
         ESP_RETURN_ON_ERROR(state_.guest_graphics.Initialize(state_.display, nullptr), board_detail::kTag,
@@ -359,14 +272,16 @@ class EspMosaicoBoard final : public Board {
 
         esp_lv_adapter_unlock();
 
+        ESP_RETURN_ON_ERROR(function_button_.Initialize(state_.ui.Input()), board_detail::kTag,
+                            "initialize Mosaico function button failed");
         ESP_RETURN_ON_ERROR(state_.touch_input.Start(state_.display), board_detail::kTag,
                             "start interrupt-driven touch failed");
         ESP_RETURN_ON_ERROR(state_.development_display.Start(state_.display, state_.touch_input, state_.local_control,
                                                              board_detail::kWidth, board_detail::kHeight,
-                                                             {.pixels = state_.displayed_shadow,
+                                                             {.pixels = state_.display_pipeline.DisplayedShadow(),
                                                               .stride = board_detail::kWidth * 2U,
                                                               .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                                              .ready = &state_.displayed_shadow_valid}),
+                                                              .ready = state_.display_pipeline.DisplayedShadowReady()}),
                             board_detail::kTag, "start USB screen capture/local control failed");
         ESP_LOGI(board_detail::kTag,
                  "Mosaico HMI ready: 480x480 QSPI display, interrupt-driven touch, shared Guest renderer");
@@ -383,6 +298,17 @@ class EspMosaicoBoard final : public Board {
                     .width_pixels = static_cast<uint32_t>(board_detail::kWidth),
                     .height_pixels = static_cast<uint32_t>(board_detail::kHeight),
                     .refresh_rate_hz = 60U,
+                    // H0216F002AMT004-1 does not specify a simple circular
+                    // corner radius. Its mechanical drawing defines a rounded
+                    // Active Area whose largest axis-aligned safe rectangle is
+                    // inset by about 22 px. Keep a 2 px assembly/rounding guard.
+                    .safe_area =
+                        {
+                            .top_pixels = 24U,
+                            .right_pixels = 24U,
+                            .bottom_pixels = 24U,
+                            .left_pixels = 24U,
+                        },
                 },
         }};
         registration.SetGraphics(graphics_);
@@ -390,17 +316,64 @@ class EspMosaicoBoard final : public Board {
         registration.SetAudioOutput(audio_output_, 16000U, &power_);
         registration.SetBattery(battery_);
         registration.SetWifi(wifi_);
-        registration.SetPower(power_);
+        registration.SetPower(*this);
         registration.SetLocalControl(state_.local_control);
         registration.SetSystemUi(system_ui_);
-        const bool registered =
-            registration.AddHaptics(haptics_, haptics::TimedHapticsPeripheral::kChannel, "Built-in vibration motor");
-        return registered && context.Publish(registration) ? ESP_OK : ESP_ERR_INVALID_STATE;
+        bool registered = true;
+        if (sensors_.acceleration_available()) {
+            registered = registration.AddSensor(sensors_, esp_mosaico::SensorPeripheral::kAcceleration,
+                                                "BMI270 accelerometer") &&
+                         registered;
+        }
+        if (sensors_.angular_velocity_available()) {
+            registered =
+                registration.AddSensor(sensors_, esp_mosaico::SensorPeripheral::kAngularVelocity, "BMI270 gyroscope") &&
+                registered;
+        }
+        if (sensors_.magnetic_field2_available()) {
+            registered = registration.AddSensor(sensors_, esp_mosaico::SensorPeripheral::kMagneticField2,
+                                                "BMM150 magnetometer #2") &&
+                         registered;
+        }
+        if (sensors_.magnetic_field3_available()) {
+            registered = registration.AddSensor(sensors_, esp_mosaico::SensorPeripheral::kMagneticField3,
+                                                "BMM150 magnetometer #3") &&
+                         registered;
+        }
+        registered =
+            registration.AddGpio(status_led_, esp_mosaico::StatusLed::kChannel, "Orange status LED") && registered;
+        for (device::PeripheralChannelId line : esp_mosaico::board::kApplicationGpioLines) {
+            char name[16]{};
+            (void)std::snprintf(name, sizeof(name), "GPIO%u", static_cast<unsigned>(line));
+            registered = registration.AddGpio(gpio_, line, name) && registered;
+        }
+        registered =
+            registration.AddHaptics(haptics_, haptics::TimedHapticsPeripheral::kChannel, "Built-in vibration motor") &&
+            registered;
+        if (!registered || !context.Publish(registration)) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        ESP_RETURN_ON_ERROR(status_led_.Set(false), board_detail::kTag, "turn off Mosaico startup status LED failed");
+        return ESP_OK;
     }
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
         state_.ui.BindBackgroundExecutor(executor);
         wifi_.BindBackgroundExecutor(executor);
     }
+
+    void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {
+        power_.SetPowerButtonSink(sink, context);
+    }
+
+    void SetPowerOffButtonSink(device::PowerOffButtonSink sink, void* context) override {
+        power_.SetPowerOffButtonSink(sink, context);
+    }
+
+    [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override {
+        return EnterLowPowerImpl(state_, power_);
+    }
+
+    [[noreturn]] void PowerOff() override { power_.PowerOff(); }
 
    private:
     board_detail::MosaicoBoardState state_{};
@@ -410,6 +383,10 @@ class EspMosaicoBoard final : public Board {
     board_detail::MosaicoPresentation presentation_;
     host_ui::lvgl::square_common::SquareSystemUi system_ui_;
     esp_mosaico::BatteryPeripheral battery_{};
+    esp_mosaico::SensorPeripheral sensors_{};
+    gpio::EspGpioPeripheral gpio_{esp_mosaico::board::kApplicationGpioLines};
+    esp_mosaico::FunctionButton function_button_{};
+    esp_mosaico::StatusLed status_led_{};
     wifi::NativeWifiRadio wifi_radio_{};
     wifi::WifiManager wifi_{wifi_radio_};
     esp_mosaico::PowerController power_{};

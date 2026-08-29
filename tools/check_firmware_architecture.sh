@@ -151,6 +151,12 @@ legacy_files=(
     "$source_root/runtime/engine.cpp"
     "$source_root/runtime/engine.hpp"
     "$source_root/platform/graphics_backend.hpp"
+    "$source_root/platform/graphics/command_stream.cpp"
+    "$source_root/platform/graphics/command_stream.hpp"
+    "$source_root/platform/lvgl/display/retained_scene.cpp"
+    "$source_root/platform/lvgl/display/retained_scene.hpp"
+    "$source_root/platform/lvgl/display/retained_surface.cpp"
+    "$source_root/platform/lvgl/display/retained_surface.hpp"
     "$source_root/platform/random_backend.hpp"
     "$source_root/device/contracts/hardware_info.hpp"
     "$source_root/platform/adapters/system_ui_adapter.cpp"
@@ -175,6 +181,26 @@ for legacy_file in "${legacy_files[@]}"; do
         exit 1
     fi
 done
+
+guest_hardware_dependencies="$(rg -n \
+    '^[[:space:]]*#include[[:space:]]+[<\"](esp_|driver/|freertos/|lvgl|src/)' \
+    "$workspace_root/guest/sdk" "$workspace_root/guest/runtime" "$workspace_root/guest/abi" \
+    --glob '*.{c,cc,cpp,h,hpp}' || true)"
+if [[ -n "$guest_hardware_dependencies" ]]; then
+    printf '%s\n' "$guest_hardware_dependencies" >&2
+    echo "Guest SDK, lowering and ABI must remain independent of ESP-IDF and LVGL." >&2
+    exit 1
+fi
+
+mosaico_display_bypass="$(rg -n \
+    '\besp_lcd_panel_draw_bitmap[[:space:]]*\(|\blv_display_set_flush_cb[[:space:]]*\(' \
+    "$source_root/platform/boards/esp-mosaico" --glob '*.{cpp,hpp}' \
+    --glob '!**/display/display_pipeline.cpp' --glob '!**/display/display_pipeline.hpp' || true)"
+if [[ -n "$mosaico_display_bypass" ]]; then
+    printf '%s\n' "$mosaico_display_bypass" >&2
+    echo "Mosaico DisplayPipeline is the sole panel/flush owner." >&2
+    exit 1
+fi
 
 legacy_platform_names="$(rg -n \
     '\bBoardDrivers\b|\bScreenCaptureDevelopment\b|namespace[[:space:]]+micropixel::platform::mosaico\b' \

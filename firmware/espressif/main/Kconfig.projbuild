@@ -179,6 +179,17 @@ menu "MicroPixel board backends"
             and cache maintenance can dominate them. Areas larger than this
             threshold use PPA Fill.
 
+    config MICROPIXEL_APP_SURFACE_HW_MIN_AREA_PIXELS
+        int "Minimum App Surface operation sent to PPA/DMA2D"
+        depends on MICROPIXEL_DISPLAY_PPA
+        range 1 65536
+        default 100
+        help
+            Retained Scene damage is already clipped before replay, so its
+            hardware threshold can be lower than LVGL's generic draw threshold.
+            Small glyph spans still remain on CPU while ordinary game cells,
+            sprites and background restores use PPA or DMA2D.
+
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT
         int "LVGL partial draw buffer height"
         depends on MICROPIXEL_DISPLAY_LVGL
@@ -229,19 +240,6 @@ menu "MicroPixel board backends"
             Prevent repeated locally-cheap merges from chaining scattered
             sprites into a full-screen invalidation. An already-large damage
             area is still rendered as-is, but is not enlarged by coalescing.
-
-    config MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-        bool "Cache and translate retained Guest surfaces"
-        depends on MICROPIXEL_DISPLAY_DIRECT_FRAMEBUFFER && MICROPIXEL_LVGL_PPA_ACCEL
-        default y
-        help
-            Group marked Guest commands below one retained LVGL surface. For a
-            short translation effect, capture the already-presented panel
-            region into one bounded RGB888 PSRAM buffer, then use DMA2D and PPA
-            to move it through the two panel framebuffers. This avoids both an
-            LVGL object-tree snapshot and a full-screen background cache.
-            Guest applications must query the advertised Graphics capability
-            and retain a non-surface fallback.
 
     config MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
         bool "Enable suspended-App snapshot transitions for the App Hall"

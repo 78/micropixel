@@ -111,16 +111,10 @@ adapters::GraphicsOperations MakeGuestGraphicsOperations(GuestGraphicsOperations
         .available = [](void* opaque) { return Binding(opaque).engine->Available(); },
         .get_info = [](void* opaque,
                        micropixel_graphics_info_t& info) { return Binding(opaque).engine->GetInfo(info); },
-        .begin_frame = [](void* opaque) { return Binding(opaque).engine->BeginFrame(); },
         .submit =
             [](void* opaque, const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) {
                 return Binding(opaque).engine->Submit(bytes, length, textures);
             },
-        .commit_frame =
-            [](void* opaque, const device::TextureAccess& textures) {
-                return Binding(opaque).engine->CommitFrame(textures);
-            },
-        .cancel_frame = [](void* opaque) { return Binding(opaque).engine->CancelFrame(); },
         .load_font = [](void* opaque, const device::FontResourceView& resource,
                         micropixel_font_info_t& info) { return Binding(opaque).engine->LoadFont(resource, info); },
         .release_font = [](void* opaque,

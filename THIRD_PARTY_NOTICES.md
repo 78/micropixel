@@ -65,6 +65,21 @@ ESP-IDF, LVGL, and components resolved from the Espressif Component Registry are
 vendored in this repository. Exact resolved versions are recorded in `dependencies.lock` files. Their own license
 terms apply when they are downloaded or redistributed in a binary release.
 
+## Bosch SensorAPI
+
+`firmware/espressif/components/bosch_sensorapi/` contains the minimal unmodified C sources and headers used for
+ESP-Mosaico's BMI270 inertial sensor and two BMM150 magnetometers:
+
+- BMI270 SensorAPI: <https://github.com/boschsensortec/BMI270_SensorAPI>, pinned commit
+  `41129fcfe39c583ee5462d79195741945d51c1fe`;
+- BMM150 SensorAPI: <https://github.com/boschsensortec/BMM150_SensorAPI>, pinned commit
+  `0dce0617873cda1f6d51f6b7b961fdc2641e0c7c`;
+- copyright: Bosch Sensortec GmbH;
+- license: BSD-3-Clause.
+
+The complete upstream license text is retained alongside each copied driver. MicroPixel supplies only the
+ESP-IDF transport callbacks and board-level scheduling wrappers.
+
 ### esp_codec_dev
 
 ESP-Mosaico ES8311 initialization uses `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:

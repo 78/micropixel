@@ -58,10 +58,10 @@ ESP32-S31 board aliases backed by the common firmware profile tool:
   flash-mosaico   Deprecated compatibility alias for flash-host; no build.
   monitor         Monitor without rebuilding; pass --reset to capture boot logs.
 
-The current ESP-Mosaico profile enables the CO5300 display, CST9217 touch,
-board power rail, native Wi-Fi and shared Runtime. Audio, sensors, NAND and
-module discovery remain outside the current P0/P1 scope. Flashing this profile
-is for bring-up validation, not a product-complete ESP-Mosaico experience.
+The ESP-Mosaico profile enables the CO5300 display, CST9217-compatible touch,
+ES8311 audio, BMI270 plus dual BMM150 sensors, battery/power-key handling,
+safe expansion GPIO, native Wi-Fi and the shared Runtime. NAND, microphone
+capture and module discovery remain outside the current first-stage scope.
 
 S31_PORT and S31_BAUD can be set in the repository-root .env. An explicit PORT
 argument takes precedence; the default flash baud is 460800. Once MicroPixel

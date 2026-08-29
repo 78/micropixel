@@ -31,12 +31,11 @@ snake/
 python3 tools/micropixel package guest/apps/snake
 ```
 
-兼容脚本 `bash tools/build_snake_bundle.sh` 只转发到同一条 manifest 驱动的命令。
-
 `gamekit/` 仍是 Snake 内部实现；只有第二个游戏出现相同需求且语义稳定后，才移动到公共 SDK。
-通用的按钮、固定字符串和 Renderer/Frame helper 已放在 `guest/sdk/`。
+通用的按钮交互、固定字符串和 retained Scene API 位于 `guest/sdk/`。
 
-当前 P4 / Metalio-Claw4 Mode 1 音频硬件链路固定为 16 kHz；Snake 根据 `Audio::info()` 使用这一格式。
+当前 Metalio-Claw4 与 ESP-Mosaico 音频硬件链路均为 16 kHz；Snake 仍根据 `Audio::info()` 使用 Host
+实际报告的格式，不把板级采样率写进游戏逻辑。
 音色参数只维护在 `audio/sfx.json`，构建时执行项目统一的感知门禁并生成 `snake_sfx_profiles.hpp`；通用规则
 见[游戏音频设计与感知校准规范](../../../docs/development/game-audio.zh-CN.md)。
 
@@ -45,3 +44,17 @@ python3 tools/micropixel package guest/apps/snake
 sprite sheet，Burst 使用紧裁 atlas，并通过 `canvas` 与 `canvas_position` 恢复每帧在逻辑画布中的稳定位置。
 构建阶段校验 PNG、帧边界和类型顺序，只生成一个 `snake_assets.hpp` 头文件，再写入最终 Bundle
 资源区。
+
+Food sprite 的原始 36×36 帧保存在 `assets/source/*_1x.png`。为了让 720×720 逻辑画布缩放到
+480×480 物理屏幕后仍能看清图案，发布素材使用最接近 1.2× 的整数帧尺寸 43×43；修改 1× 源素材后运行：
+
+```sh
+python3 guest/apps/snake/assets/source/generate_food_sheets.py
+```
+
+Snake 的普通移动使用固定容量 SpriteBatch 和 body ring：尾槽复用为新身体位置，SDK 只序列化事务的净
+instance 差量。Food/Burst 通过 Sprite atlas source patch 播放；粒子复用固定池 Batch。震动先提交完成的
+Game Layer，再在震动期间冻结其子节点，只更新 Layer translation；HUD 位于独立 Layer，Host 因而可以
+捕获一次 Game Layer snapshot 并用 PPA/DMA2D 移动，而不会被同时变化的 flash/particle 迫使全量重放。
+顶部 HUD 从 `RendererInfo::safe_area_insets()` 读取圆角屏的逻辑边缘内缩：标题保留额外视觉 padding，
+Level、Score、Best、状态文字和 Combo 条按右侧 inset 整组左移，不按 Mosaico 板名硬编码布局分支。

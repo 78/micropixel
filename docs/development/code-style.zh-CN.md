@@ -85,7 +85,7 @@ MicroPixel 是项目正式名称，C++ namespace 统一使用 `micropixel`。板
 | --- | --- | --- |
 | namespace | `lower_snake_case` | `micropixel::runtime` |
 | 类型、enum class | `PascalCase` | `Application`, `ErrorCode` |
-| 普通函数、普通方法 | `PascalCase` | `WaitEvent`, `Frame::Present` |
+| 普通函数、普通方法 | `PascalCase` | `WaitEvent`, `SceneUpdate::Present` |
 | property accessor/mutator | `snake_case` | `width()`, `set_value()` |
 | 变量、参数 | `snake_case` | `error_code`, `elapsed_us` |
 | 私有数据成员 | `snake_case_` | `handle_`, `initialized_` |
@@ -169,8 +169,8 @@ Timer timer = timers.After(100_ms);    // Resource
 `Application` 是 capability façade。它可以公开 `renderer()`、`audio()`、`input()` 等稳定顶层
 能力入口和唯一的 `Run(handler)` 事件编排入口，但不能吸收 Service 或 Resource 的叶子操作。
 Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service 上增加普通方法，
-不新增 Application 的同类叶子操作；优先写 `frame.FillRect(...)`，不新增
-`app.DrawRect(...)`。
+不新增 Application 的同类叶子操作；优先创建 `Scene` 中的 `ShapeNode` 并在 `SceneUpdate` 修改属性，
+不新增 `app.DrawRect(...)`。
 
 ## 5. 所有权和错误处理
 

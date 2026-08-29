@@ -10,15 +10,15 @@
 #define MICROPIXEL_ABI_MAX_LOG_BYTES 1024U
 #define MICROPIXEL_MAX_TOUCH_POINTS 5U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
-#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 2U
+#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
-#define MICROPIXEL_GRAPHICS_COMMAND_MAGIC 0x4652474dU
-#define MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES 4096U
-#define MICROPIXEL_GRAPHICS_MAX_COMMANDS 128U
-#define MICROPIXEL_GRAPHICS_MAX_FRAME_COMMAND_BYTES 16384U
-#define MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS 256U
-#define MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS 272U
+#define MICROPIXEL_GRAPHICS_SCENE_MAGIC 0x5347504dU
+#define MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES 24576U
+#define MICROPIXEL_GRAPHICS_MAX_SCENE_NODES 256U
+#define MICROPIXEL_GRAPHICS_MAX_LAYERS 4U
+#define MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES 8U
+#define MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES 256U
 #define MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES 128U
 #define MICROPIXEL_RESOURCE_INTERFACE_MAJOR 1U
 #define MICROPIXEL_RESOURCE_INTERFACE_MINOR 2U
@@ -65,6 +65,7 @@ typedef enum micropixel_status {
     MICROPIXEL_STATUS_CANCELLED = -12,
     MICROPIXEL_STATUS_CLOSED = -13,
     MICROPIXEL_STATUS_VERSION_MISMATCH = -14,
+    MICROPIXEL_STATUS_STALE_STATE = -15,
 } micropixel_status_t;
 
 typedef uint64_t micropixel_app_time_t;
@@ -465,15 +466,63 @@ typedef struct micropixel_power_info_response {
 
 typedef enum micropixel_graphics_method {
     MICROPIXEL_GRAPHICS_METHOD_GET_INFO = 1,
-    MICROPIXEL_GRAPHICS_METHOD_FRAME_BEGIN = 2,
-    MICROPIXEL_GRAPHICS_METHOD_FRAME_COMMIT = 3,
-    MICROPIXEL_GRAPHICS_METHOD_FRAME_CANCEL = 4,
-    MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT = 5,
+    MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT = 2,
 } micropixel_graphics_method_t;
 
 typedef enum micropixel_graphics_channel {
-    MICROPIXEL_GRAPHICS_CHANNEL_COMMANDS = 1,
+    MICROPIXEL_GRAPHICS_CHANNEL_SCENE = 1,
 } micropixel_graphics_channel_t;
+
+typedef enum micropixel_graphics_scene_message_kind {
+    MICROPIXEL_GRAPHICS_SCENE_KEYFRAME = 1,
+    MICROPIXEL_GRAPHICS_SCENE_PATCH = 2,
+} micropixel_graphics_scene_message_kind_t;
+
+typedef enum micropixel_graphics_scene_record_opcode {
+    MICROPIXEL_GRAPHICS_SCENE_OP_BACKGROUND = 1,
+    MICROPIXEL_GRAPHICS_SCENE_OP_LAYER = 2,
+    MICROPIXEL_GRAPHICS_SCENE_OP_RECT = 3,
+    MICROPIXEL_GRAPHICS_SCENE_OP_TEXTURE = 4,
+    MICROPIXEL_GRAPHICS_SCENE_OP_TEXT = 5,
+    MICROPIXEL_GRAPHICS_SCENE_OP_SPRITE_BATCH = 6,
+    MICROPIXEL_GRAPHICS_SCENE_OP_BATCH_INSTANCES = 7,
+} micropixel_graphics_scene_record_opcode_t;
+
+typedef enum micropixel_graphics_scene_node_property {
+    MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY = 1U << 0U,
+    MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE = 1U << 1U,
+    MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT = 1U << 2U,
+    MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY = 1U << 3U,
+    MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER = 1U << 4U,
+    MICROPIXEL_GRAPHICS_SCENE_NODE_KIND = 1U << 5U,
+} micropixel_graphics_scene_node_property_t;
+
+typedef enum micropixel_graphics_scene_layer_property {
+    MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP = 1U << 0U,
+    MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION = 1U << 1U,
+    MICROPIXEL_GRAPHICS_SCENE_LAYER_APPEARANCE = 1U << 2U,
+    MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER = 1U << 3U,
+} micropixel_graphics_scene_layer_property_t;
+
+typedef enum micropixel_graphics_scene_background_property {
+    MICROPIXEL_GRAPHICS_SCENE_BACKGROUND_COLOR = 1U << 0U,
+} micropixel_graphics_scene_background_property_t;
+
+typedef enum micropixel_graphics_scene_node_flag {
+    MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE = 1U << 0U,
+    MICROPIXEL_GRAPHICS_SCENE_TEXT_CENTERED = 1U << 1U,
+} micropixel_graphics_scene_node_flag_t;
+
+typedef enum micropixel_graphics_scene_batch_instance_property {
+    MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY = 1U << 0U,
+    MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT = 1U << 1U,
+    MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE = 1U << 2U,
+    MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY = 1U << 3U,
+} micropixel_graphics_scene_batch_instance_property_t;
+
+typedef enum micropixel_graphics_scene_batch_instance_flag {
+    MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBLE = 1U << 0U,
+} micropixel_graphics_scene_batch_instance_flag_t;
 
 typedef enum micropixel_input_method {
     MICROPIXEL_INPUT_METHOD_GET_INFO = 1,
@@ -704,36 +753,6 @@ typedef struct micropixel_streaming_texture_update_request {
     uint32_t reserved1;
 } micropixel_streaming_texture_update_request_t;
 
-typedef enum micropixel_graphics_opcode {
-    MICROPIXEL_GRAPHICS_OP_CLEAR = 1,
-    MICROPIXEL_GRAPHICS_OP_FILL_RECT = 2,
-    MICROPIXEL_GRAPHICS_OP_DRAW_TEXT = 3,
-    MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE = 4,
-    /* x is the horizontal center; Host uses the selected font's real metrics. */
-    MICROPIXEL_GRAPHICS_OP_DRAW_TEXT_CENTERED = 5,
-    /*
-     * PUSH_STATE carries the current clip and translation selected through the
-     * public Renderer state API. A capable Host may retain that state scope and
-     * translate its cached pixels as one compositor operation.
-     */
-    MICROPIXEL_GRAPHICS_OP_PUSH_STATE = 6,
-    MICROPIXEL_GRAPHICS_OP_POP_STATE = 7,
-    /* Blend one solid RGB color over the current target using opacity [0, 255]. */
-    MICROPIXEL_GRAPHICS_OP_BLEND_RECT = 8,
-    /* Blend Texture source alpha multiplied by one uniform draw opacity [0, 255]. */
-    MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE = 9,
-} micropixel_graphics_opcode_t;
-
-typedef enum micropixel_graphics_capability {
-    /* Private SDK/Host acceleration for a clipped translated saved state. */
-    MICROPIXEL_GRAPHICS_CAP_RETAINED_TRANSLATION = 1U << 0U,
-    MICROPIXEL_GRAPHICS_CAP_MULTI_SUBMIT_FRAME = 1U << 1U,
-} micropixel_graphics_capability_t;
-
-typedef enum micropixel_graphics_state_flag {
-    MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE = 1U << 0U,
-} micropixel_graphics_state_flag_t;
-
 typedef enum micropixel_system_font_handle {
     MICROPIXEL_SYSTEM_FONT_SMALL = 1,
     MICROPIXEL_SYSTEM_FONT_MEDIUM = 2,
@@ -745,14 +764,20 @@ typedef struct micropixel_graphics_info {
     uint16_t size;
     uint16_t interface_major;
     uint16_t interface_minor;
-    uint16_t max_frame_commands;
+    uint16_t max_layers;
     uint32_t width;
     uint32_t height;
     uint32_t pixel_format;
-    uint32_t capabilities;
-    uint32_t max_command_bytes;
-    uint16_t max_commands;
-    uint16_t max_draw_operations;
+    uint32_t max_scene_bytes;
+    uint16_t max_scene_nodes;
+    uint16_t max_batch_instances;
+    uint16_t max_sprite_batches;
+    uint16_t reserved0;
+    /* Native-display pixel insets for the largest unobscured content area. */
+    uint16_t safe_inset_top;
+    uint16_t safe_inset_right;
+    uint16_t safe_inset_bottom;
+    uint16_t safe_inset_left;
 } micropixel_graphics_info_t;
 
 /* Followed by text_length UTF-8 bytes without a trailing NUL. */
@@ -771,95 +796,125 @@ typedef struct micropixel_text_metrics {
     int32_t baseline;
 } micropixel_text_metrics_t;
 
-typedef struct micropixel_graphics_command_header {
+typedef struct micropixel_graphics_scene_header {
     uint32_t magic;
     uint16_t interface_major;
     uint16_t interface_minor;
+    uint16_t kind;
+    uint16_t flags;
     uint32_t total_size;
-    uint32_t command_count;
-} micropixel_graphics_command_header_t;
+    uint32_t generation;
+    uint32_t base_revision;
+    uint32_t revision;
+    uint16_t record_count;
+    uint16_t node_count;
+    uint16_t layer_count;
+    uint16_t batch_instance_count;
+} micropixel_graphics_scene_header_t;
 
-typedef struct micropixel_graphics_record_header {
+typedef struct micropixel_graphics_scene_record_header {
     uint16_t opcode;
     uint16_t size;
-} micropixel_graphics_record_header_t;
+} micropixel_graphics_scene_record_header_t;
 
-typedef struct micropixel_graphics_clear_command {
-    micropixel_graphics_record_header_t record;
+typedef struct micropixel_graphics_scene_background_record {
+    micropixel_graphics_scene_record_header_t record;
+    uint32_t property_mask;
     uint32_t rgb888;
-} micropixel_graphics_clear_command_t;
+} micropixel_graphics_scene_background_record_t;
 
-typedef struct micropixel_graphics_fill_rect_command {
-    micropixel_graphics_record_header_t record;
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    uint32_t rgb888;
-} micropixel_graphics_fill_rect_command_t;
-
-typedef struct micropixel_graphics_blend_rect_command {
-    micropixel_graphics_record_header_t record;
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    uint32_t rgb888;
-    uint8_t opacity;
-    uint8_t reserved[3];
-} micropixel_graphics_blend_rect_command_t;
-
-typedef struct micropixel_graphics_draw_text_command {
-    micropixel_graphics_record_header_t record;
-    int32_t x;
-    int32_t y;
-    uint32_t rgb888;
-    micropixel_font_handle_t font_handle;
-    uint16_t text_length;
-} micropixel_graphics_draw_text_command_t;
-
-typedef struct micropixel_graphics_draw_texture_command {
-    micropixel_graphics_record_header_t record;
-    micropixel_texture_handle_t texture;
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    int32_t source_x;
-    int32_t source_y;
-    int32_t source_width;
-    int32_t source_height;
-} micropixel_graphics_draw_texture_command_t;
-
-typedef struct micropixel_graphics_blend_texture_command {
-    micropixel_graphics_record_header_t record;
-    micropixel_texture_handle_t texture;
-    int32_t x;
-    int32_t y;
-    int32_t width;
-    int32_t height;
-    int32_t source_x;
-    int32_t source_y;
-    int32_t source_width;
-    int32_t source_height;
-    uint8_t opacity;
-    uint8_t reserved[3];
-} micropixel_graphics_blend_texture_command_t;
-
-typedef struct micropixel_graphics_push_state_command {
-    micropixel_graphics_record_header_t record;
+typedef struct micropixel_graphics_scene_layer_record {
+    micropixel_graphics_scene_record_header_t record;
+    uint16_t layer_id;
+    uint16_t reserved0;
+    uint32_t property_mask;
     int32_t clip_x;
     int32_t clip_y;
     int32_t width;
     int32_t height;
     int32_t translate_x;
     int32_t translate_y;
-    uint32_t flags;
-} micropixel_graphics_push_state_command_t;
+    int16_t z_order;
+    uint8_t opacity;
+    uint8_t visible;
+} micropixel_graphics_scene_layer_record_t;
 
-typedef struct micropixel_graphics_pop_state_command {
-    micropixel_graphics_record_header_t record;
-} micropixel_graphics_pop_state_command_t;
+typedef struct micropixel_graphics_scene_node_header {
+    micropixel_graphics_scene_record_header_t record;
+    uint16_t node_id;
+    uint8_t layer_id;
+    uint8_t flags;
+    uint32_t property_mask;
+} micropixel_graphics_scene_node_header_t;
+
+typedef struct micropixel_graphics_scene_rect_record {
+    micropixel_graphics_scene_node_header_t node;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    uint32_t rgb888;
+    uint8_t opacity;
+    uint8_t reserved0[3];
+} micropixel_graphics_scene_rect_record_t;
+
+typedef struct micropixel_graphics_scene_texture_record {
+    micropixel_graphics_scene_node_header_t node;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    micropixel_texture_handle_t texture;
+    int32_t source_x;
+    int32_t source_y;
+    int32_t source_width;
+    int32_t source_height;
+    uint8_t opacity;
+    uint8_t reserved0[3];
+} micropixel_graphics_scene_texture_record_t;
+
+/* Followed by text_length UTF-8 bytes and zero padding to a 4-byte record size. */
+typedef struct micropixel_graphics_scene_text_record {
+    micropixel_graphics_scene_node_header_t node;
+    int32_t x;
+    int32_t y;
+    uint32_t rgb888;
+    micropixel_font_handle_t font;
+    uint16_t text_length;
+} micropixel_graphics_scene_text_record_t;
+
+typedef struct micropixel_graphics_scene_sprite_batch_record {
+    micropixel_graphics_scene_node_header_t node;
+    micropixel_texture_handle_t texture;
+    uint16_t capacity;
+    uint8_t opacity;
+    uint8_t reserved0;
+} micropixel_graphics_scene_sprite_batch_record_t;
+
+typedef struct micropixel_graphics_scene_sprite_instance {
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+    int32_t source_x;
+    int32_t source_y;
+    int32_t source_width;
+    int32_t source_height;
+    uint32_t rgb888;
+    uint8_t opacity;
+    uint8_t flags;
+    uint16_t reserved0;
+} micropixel_graphics_scene_sprite_instance_t;
+
+/* Followed by instance_count contiguous micropixel_graphics_scene_sprite_instance_t values. */
+typedef struct micropixel_graphics_scene_batch_instances_record {
+    micropixel_graphics_scene_record_header_t record;
+    uint16_t batch_node_id;
+    uint16_t first_instance;
+    uint16_t instance_count;
+    uint16_t reserved0;
+    uint32_t property_mask;
+} micropixel_graphics_scene_batch_instances_record_t;
 
 typedef struct micropixel_texture_info {
     uint16_t size;
@@ -1011,23 +1066,28 @@ static_assert(sizeof(micropixel_power_info_response_t) == 24U, "micropixel_power
 static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_info_t) == 32U, "micropixel_graphics_info_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_command_header_t) == 16U,
-              "micropixel_graphics_command_header_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_fill_rect_command_t) == 24U,
-              "micropixel_graphics_fill_rect_command_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_blend_rect_command_t) == 28U,
-              "micropixel_graphics_blend_rect_command_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_draw_text_command_t) == 20U,
-              "micropixel_graphics_draw_text_command_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_draw_texture_command_t) == 40U,
-              "micropixel_graphics_draw_texture_command_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_blend_texture_command_t) == 44U,
-              "micropixel_graphics_blend_texture_command_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_push_state_command_t) == 32U,
-              "micropixel_graphics_push_state_command_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_pop_state_command_t) == 4U,
-              "micropixel_graphics_pop_state_command_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_info_t) == 40U, "micropixel_graphics_info_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_header_t) == 36U, "micropixel_graphics_scene_header_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_record_header_t) == 4U,
+              "micropixel_graphics_scene_record_header_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_background_record_t) == 12U,
+              "micropixel_graphics_scene_background_record_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_layer_record_t) == 40U,
+              "micropixel_graphics_scene_layer_record_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_node_header_t) == 12U,
+              "micropixel_graphics_scene_node_header_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_rect_record_t) == 36U,
+              "micropixel_graphics_scene_rect_record_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_texture_record_t) == 52U,
+              "micropixel_graphics_scene_texture_record_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_text_record_t) == 28U,
+              "micropixel_graphics_scene_text_record_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_sprite_batch_record_t) == 20U,
+              "micropixel_graphics_scene_sprite_batch_record_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_sprite_instance_t) == 40U,
+              "micropixel_graphics_scene_sprite_instance_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_scene_batch_instances_record_t) == 16U,
+              "micropixel_graphics_scene_batch_instances_record_t ABI size changed");
 static_assert(sizeof(micropixel_texture_info_t) == 32U, "micropixel_texture_info_t ABI size changed");
 static_assert(sizeof(micropixel_adaptive_texture_info_t) == 40U, "micropixel_adaptive_texture_info_t ABI size changed");
 static_assert(sizeof(micropixel_streaming_texture_create_request_t) == 16U,
@@ -1085,23 +1145,29 @@ _Static_assert(sizeof(micropixel_power_info_response_t) == 24U, "micropixel_powe
 _Static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_info_t) == 32U, "micropixel_graphics_info_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_command_header_t) == 16U,
-               "micropixel_graphics_command_header_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_fill_rect_command_t) == 24U,
-               "micropixel_graphics_fill_rect_command_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_blend_rect_command_t) == 28U,
-               "micropixel_graphics_blend_rect_command_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_draw_text_command_t) == 20U,
-               "micropixel_graphics_draw_text_command_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_draw_texture_command_t) == 40U,
-               "micropixel_graphics_draw_texture_command_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_blend_texture_command_t) == 44U,
-               "micropixel_graphics_blend_texture_command_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_push_state_command_t) == 32U,
-               "micropixel_graphics_push_state_command_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_pop_state_command_t) == 4U,
-               "micropixel_graphics_pop_state_command_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_info_t) == 40U, "micropixel_graphics_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_header_t) == 36U,
+               "micropixel_graphics_scene_header_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_record_header_t) == 4U,
+               "micropixel_graphics_scene_record_header_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_background_record_t) == 12U,
+               "micropixel_graphics_scene_background_record_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_layer_record_t) == 40U,
+               "micropixel_graphics_scene_layer_record_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_node_header_t) == 12U,
+               "micropixel_graphics_scene_node_header_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_rect_record_t) == 36U,
+               "micropixel_graphics_scene_rect_record_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_texture_record_t) == 52U,
+               "micropixel_graphics_scene_texture_record_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_text_record_t) == 28U,
+               "micropixel_graphics_scene_text_record_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_sprite_batch_record_t) == 20U,
+               "micropixel_graphics_scene_sprite_batch_record_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_sprite_instance_t) == 40U,
+               "micropixel_graphics_scene_sprite_instance_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_scene_batch_instances_record_t) == 16U,
+               "micropixel_graphics_scene_batch_instances_record_t ABI size changed");
 _Static_assert(sizeof(micropixel_texture_info_t) == 32U, "micropixel_texture_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_adaptive_texture_info_t) == 40U,
                "micropixel_adaptive_texture_info_t ABI size changed");

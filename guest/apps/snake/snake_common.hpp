@@ -35,7 +35,7 @@ constexpr uint32_t kRetainedTextSlots = 27U;
 constexpr uint32_t kFoodFrameCount = 16U;
 constexpr uint32_t kBurstFrameCount = 12U;
 constexpr uint32_t kSpriteSheetColumns = 4U;
-constexpr uint32_t kFoodSpriteCellSize = 36U;
+constexpr uint32_t kFoodSpriteCellSize = 43U;
 constexpr uint32_t kBurstDisplayPhaseCount = 8U;
 constexpr uint64_t kBurstDurationUs = 600000U;
 constexpr uint64_t kFoodAnimationDurationUs = 600000U;
@@ -65,12 +65,6 @@ static_assert(kBurstFrameCount == snake_assets::burst_atlas_frame_count);
 static_assert(snake_assets::burst_atlas_count == 4U);
 static_assert(kRetainedRectSlots >= kMaxLength + 13U + kVisibleTrailSlots,
               "full-length Snake and its motion trail must fit the retained frame");
-
-constexpr uint32_t RetainedRectSlotsForDrawBudget(uint32_t max_draw_operations) {
-    constexpr uint32_t kNonRectCommands = 2U + kRetainedTextSlots;
-    const uint32_t available = max_draw_operations > kNonRectCommands ? max_draw_operations - kNonRectCommands : 0U;
-    return available < kRetainedRectSlots ? available : kRetainedRectSlots;
-}
 
 // Touch-first leisure curve. Difficulty increases gently with each level while
 // the effect hold below prevents the transition itself from hiding movement or

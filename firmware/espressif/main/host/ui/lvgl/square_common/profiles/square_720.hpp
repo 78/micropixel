@@ -19,7 +19,10 @@ inline constexpr SquareLayout kSquareLayout{
 inline constexpr int32_t kLaunchLabelBottomOffset = 70;
 inline constexpr bool kScaleOversizedLaunchBitmap = false;
 inline constexpr bool kDeriveLaunchBackground = true;
-inline constexpr bool kAllowSoftwareStatusAnimation = true;
+// Both square targets use their PPA/DMA2D transition compositor. If that
+// hardware path is unavailable, fall back to a static presentation rather
+// than animating full-screen LVGL frames in software.
+inline constexpr bool kAllowSoftwareStatusAnimation = false;
 
 inline constexpr HallCardLayout kHallCardLayout{
     .width = Layout::kHallCardWidth,

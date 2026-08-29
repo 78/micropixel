@@ -989,10 +989,6 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         "size": (["-Oz"], ["-Wl,--strip-all"], ["--opt-level=3", "--size-level=3"]),
     }
     compile_flags, link_flags, aot_flags = profiles[args.profile]
-    display_profiles = {"square": 1, "landscape": 2, "portrait": 3}
-    display_profile = getattr(args, "display_profile", "square")
-    if display_profile not in display_profiles:
-        raise CliError("Guest display profile must be square, landscape, or portrait")
     include_flags = ["-I", str(root / "guest")]
     if generated_include:
         include_flags.extend(["-I", generated_include])
@@ -1018,7 +1014,6 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             "-Wall",
             "-Wextra",
             "-Werror",
-            f"-DMICROPIXEL_APP_DISPLAY_PROFILE={display_profiles[display_profile]}",
             *include_flags,
             "-Wl,--no-entry",
             "-Wl,--shared-memory",
@@ -1037,6 +1032,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             str(root / "guest/runtime/cxx_runtime.cpp"),
             str(root / "guest/runtime/startup.cpp"),
             str(root / "guest/runtime/sdk.cpp"),
+            str(root / "guest/runtime/scene.cpp"),
             *(str(source) for source in sources),
             "-lc++",
             "-o",
@@ -1128,19 +1124,20 @@ def load_project_manifest(path: Path) -> ProjectManifest:
     sources: list[Path] = []
     raw_sources = value.get("sources")
     if package_type == "app":
-        if value.get("display") not in {"square", "landscape", "portrait"}:
-            raise CliError("App project display must be square, landscape, or portrait")
-        if raw_sources is None:
-            raw_source = value.get("source")
-            raw_sources = [raw_source] if raw_source is not None else None
+        if "display" in value or "display_profile" in value:
+            raise CliError("app.json no longer declares a display profile; inspect RendererInfo in Guest code")
+        if "display_name" in value:
+            raise CliError("app.json display_name has been renamed to title")
+        if not isinstance(value.get("title"), (str, dict)):
+            raise CliError("App project requires a title string or localized title object")
+        if "source" in value:
+            raise CliError("app.json source has been removed; list every translation unit in sources")
         if (
             not isinstance(raw_sources, list)
             or not raw_sources
             or not all(isinstance(item, str) for item in raw_sources)
         ):
             raise CliError("App project requires a non-empty string sources list")
-        if value.get("source") is not None and raw_sources[0] != value.get("source"):
-            raise CliError("app.json source must be the first sources entry")
         for index, raw_source in enumerate(raw_sources):
             source = _manifest_child(project_root, raw_source, f"sources[{index}]")
             if not source.is_file():
@@ -1242,7 +1239,6 @@ def build_project(project: ProjectManifest, profile: str, output_dir: Path) -> P
         extra_source=[str(source) for source in project.sources[1:]],
         name=project.name,
         profile=profile,
-        display_profile=project.value["display"],
         generated_include_override=generated_dir,
         output_dir_override=output_dir,
     )
@@ -1264,7 +1260,6 @@ def package_project(
             extra_source=[str(source) for source in project.sources[1:]],
             name=project.name,
             profile=profile,
-            display_profile=project.value["display"],
             generated_include_override=generated_dir,
             output_dir_override=output_dir,
         )

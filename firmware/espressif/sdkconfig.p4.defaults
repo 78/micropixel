@@ -32,6 +32,8 @@ CONFIG_PM_DFS_INIT_AUTO=y
 
 # Use 1 ms FreeRTOS tick granularity for bounded waits and service deadlines.
 CONFIG_FREERTOS_HZ=1000
+# Reserve enough shared interrupt stack for nested display, Wi-Fi and timer ISRs.
+CONFIG_FREERTOS_ISR_STACKSIZE=2048
 # Suppress periodic ticks while every runnable task is blocked. Runtime PM does
 # not enable automatic light sleep; explicit Host sleep remains authoritative.
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
@@ -136,12 +138,9 @@ CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION=720
 # Merge nearby retained-object invalidations to limit repeated LVGL tree walks.
 # Coalescing is always enabled; this bounds the extra overdraw per merge.
 CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS=8192
-CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION=y
 CONFIG_LV_COLOR_DEPTH_24=y
-# Snake keeps 150 retained draw objects alive while the Hall and status layer
-# are visible. Reserve enough fixed LVGL memory for those objects plus the
-# software transform path's 8584-byte scratch buffer. Do not rely on run-time
-# pool expansion in the display task.
+# The Host shell, status panel and the Guest App Surface image share LVGL's
+# fixed pool. Do not rely on run-time pool expansion in the display task.
 CONFIG_LV_MEM_SIZE_KILOBYTES=96
 CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0
 # CONFIG_LV_USE_LODEPNG is not set

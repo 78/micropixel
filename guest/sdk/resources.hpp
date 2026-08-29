@@ -9,10 +9,11 @@
 namespace micropixel {
 
 class Application;
-class Frame;
+class Scene;
 class Renderer;
 class Resources;
 class StreamingTexture;
+class SurfaceNode;
 class Font;
 
 class AssetId final {
@@ -55,7 +56,10 @@ class Texture final {
     uint32_t physical_height_{};
     bool adaptive_{};
 
-    friend class Frame;
+    friend class Scene;
+    friend class SpriteNode;
+    friend class SurfaceNode;
+    friend class SpriteBatch;
     friend class Renderer;
     friend class Resources;
     friend class StreamingTexture;
@@ -87,7 +91,7 @@ class Font final {
     int16_t ascent_{};
     int16_t descent_{};
 
-    friend class Frame;
+    friend class Scene;
     friend class Renderer;
     friend class Resources;
 };
@@ -114,8 +118,9 @@ class StreamingTexture final {
     Texture texture_{};
     PixelFormat pixel_format_{PixelFormat::kBgr888};
 
-    friend class Frame;
     friend class Renderer;
+    friend class Scene;
+    friend class SurfaceNode;
 };
 
 class TextureUpdateBatch final {

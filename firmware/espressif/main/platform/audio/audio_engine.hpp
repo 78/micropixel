@@ -30,6 +30,8 @@ class AudioEngine : public device::Audio {
     void BindPcmCompletionSink(device::PcmCompletionSink sink, void* context) override;
     void UnbindPcmCompletionSink(void* context) override;
     [[nodiscard]] int32_t StopAll() override;
+    // GuestContext uses these as the App foreground boundary. ResumeAll keeps
+    // output ready even while silent; SuspendAll enables the idle timeout.
     [[nodiscard]] int32_t SuspendAll() override;
     [[nodiscard]] int32_t ResumeAll() override;
 };

@@ -21,8 +21,7 @@ class GenerateLocalizationTest(unittest.TestCase):
                 {
                     "schema_version": 1,
                     "app_id": "micropixel.test",
-                    "display": "square",
-                    "display_name": "Test",
+                    "title": "Test",
                     "localization": {"default": "en", "translations": translations},
                 }
             ),

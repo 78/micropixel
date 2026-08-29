@@ -6,8 +6,28 @@
 #include "src/display/lv_display_private.h"
 
 namespace micropixel::platform::lvgl {
+namespace {
 
-void DirtyRegionCoalescer::Coalesce(lv_display_t* display) {
+uint64_t InvalidatedPixels(const lv_display_t* display) {
+    uint64_t pixels = 0U;
+    for (uint32_t index = 0U; index < display->inv_p; ++index) {
+        pixels += static_cast<uint64_t>(lv_area_get_size(&display->inv_areas[index]));
+    }
+    return pixels;
+}
+
+}  // namespace
+
+DirtyRegionStats DirtyRegionCoalescer::Coalesce(lv_display_t* display) {
+    if (display == nullptr) {
+        return {};
+    }
+    DirtyRegionStats stats{
+        .input_regions = display->inv_p,
+        .output_regions = display->inv_p,
+        .input_pixels = InvalidatedPixels(display),
+        .output_pixels = 0U,
+    };
     bool merged = true;
     while (merged) {
         merged = false;
@@ -37,6 +57,9 @@ void DirtyRegionCoalescer::Coalesce(lv_display_t* display) {
             }
         }
     }
+    stats.output_regions = display->inv_p;
+    stats.output_pixels = InvalidatedPixels(display);
+    return stats;
 }
 
 }  // namespace micropixel::platform::lvgl

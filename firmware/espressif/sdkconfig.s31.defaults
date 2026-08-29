@@ -26,7 +26,7 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
 # Keep the first product display baseline aligned with the official Mosaico
 # HMI demo. The S31 preview PSRAM/SPI DMA path is not yet validated while APB
 # and CPU clocks change underneath a full-frame QSPI transfer.
-# CONFIG_PM_ENABLE is not set
+CONFIG_PM_ENABLE=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

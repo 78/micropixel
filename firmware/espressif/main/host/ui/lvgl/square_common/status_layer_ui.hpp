@@ -10,7 +10,7 @@
 namespace micropixel::host_ui::lvgl::square_common {
 
 // Owns the persistent quick-settings layer, its native LVGL controls, and the
-// final-display performance HUD. Callers hold the LVGL adapter
+// Guest-foreground performance HUD. Callers hold the LVGL adapter
 // lock for methods whose name ends in Locked.
 class StatusLayerUi final {
    public:

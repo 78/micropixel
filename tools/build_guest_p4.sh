@@ -67,8 +67,10 @@ build_bad_import() {
 build_sdk_example() {
     local name="$1"
     local source="$2"
-    P4_GUEST_OUTPUT_DIR="$output_dir" \
-        bash "$workspace_root/tools/build_guest_app_p4.sh" "$source" "$name"
+    python3 "$workspace_root/tools/micropixel" build "$source" \
+        --name "$name" \
+        --profile "${MICROPIXEL_GUEST_PROFILE:-development}" \
+        --output-dir "$output_dir"
 }
 
 build_bad_import

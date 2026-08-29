@@ -291,6 +291,7 @@ void SquareSystemUiState::PrepareGuestFrameLocked(lv_obj_t* guest_frame, bool cr
         DeleteRootLocked();
         needs_present = true;
     }
+    RefreshPerformanceOverlayLocked();
     const bool performance_visible = status_layer_ui.PerformanceOverlayVisibleLocked();
     const bool gesture_hint_visible = guest_gesture_hint_ui.VisibleLocked();
     if (performance_visible || gesture_hint_visible) {
@@ -651,7 +652,9 @@ void SquareSystemUiState::LeaveWifiSettings() {
 void SquareSystemUiState::WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) {
     input_router.BindSystemActionSink(action_sink, action_context);
     if (display != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+        guest_actions_watched_ = true;
         guest_gesture_hint_ui.ShowLocked(display);
+        RefreshPerformanceOverlayLocked();
         esp_lv_adapter_unlock();
     }
 }
@@ -659,7 +662,9 @@ void SquareSystemUiState::WatchGuestActions(host_ui::SystemUiActionSink action_s
 void SquareSystemUiState::StopWatchingGuestActions(void* action_context) {
     input_router.ClearSystemActionSink(action_context);
     if (display != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+        guest_actions_watched_ = false;
         guest_gesture_hint_ui.HideLocked();
+        RefreshPerformanceOverlayLocked();
         esp_lv_adapter_unlock();
     }
 }
@@ -707,8 +712,18 @@ void SquareSystemUiState::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_per
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    status_layer_ui.UpdatePerformanceOverlayLocked(enabled, cpu_percent, guest_graphics_.GuestPresentedFrameSequence());
+    performance_overlay_requested_ = enabled;
+    performance_cpu_percent_ = cpu_percent;
+    RefreshPerformanceOverlayLocked();
     esp_lv_adapter_unlock();
+}
+
+void SquareSystemUiState::RefreshPerformanceOverlayLocked() {
+    const bool guest_app_visible = guest_actions_watched_ && guest_graphics_.FrameLocked() != nullptr &&
+                                   root == nullptr && status_layer_ui.ActionContext() == nullptr;
+    status_layer_ui.UpdatePerformanceOverlayLocked(performance_overlay_requested_ && guest_app_visible,
+                                                   performance_cpu_percent_,
+                                                   guest_graphics_.GuestPresentedFrameSequence());
 }
 
 void SquareSystemUiState::ApplyTheme(host_ui::SystemThemeMode mode) {

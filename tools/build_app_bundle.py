@@ -108,7 +108,7 @@ class ResourcePack:
 
 
 @dataclass(frozen=True)
-class LocalizedDisplayNames:
+class LocalizedTitles:
     default_locale: str
     values: dict[str, str]
 
@@ -116,7 +116,7 @@ class LocalizedDisplayNames:
 @dataclass(frozen=True)
 class PackageManifest:
     package_id: str
-    display_names: LocalizedDisplayNames
+    titles: LocalizedTitles
     launch_asset: str
     package_type: str = "app"
     component_type: str = ""
@@ -125,7 +125,6 @@ class PackageManifest:
     font_bundle: str = ""
     charset: str = ""
     font_roles: dict[str, dict[str, object]] | None = None
-    display: str = "square"
 
 
 def align(value: int, alignment: int) -> int:
@@ -613,14 +612,14 @@ def load_asset_manifest(path: Path) -> list[InputSection]:
     return sections
 
 
-def validate_display_name(value: object) -> str:
+def validate_title(value: object) -> str:
     if not isinstance(value, str) or not value or value.startswith(" ") or value.endswith(" "):
-        raise ValueError("display_name must be a non-empty string without surrounding whitespace")
+        raise ValueError("title must be a non-empty string without surrounding whitespace")
     encoded = value.encode("utf-8")
     if len(encoded) > DISPLAY_NAME_MAX_LENGTH:
-        raise ValueError(f"display_name must be at most {DISPLAY_NAME_MAX_LENGTH} UTF-8 bytes")
+        raise ValueError(f"title must be at most {DISPLAY_NAME_MAX_LENGTH} UTF-8 bytes")
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
-        raise ValueError("display_name must not contain control characters")
+        raise ValueError("title must not contain control characters")
     return value
 
 
@@ -653,37 +652,38 @@ def normalize_locale_tag(value: object) -> str:
     return "-".join(normalized)
 
 
-def parse_display_names(value: object, fallback_default: object = "en") -> LocalizedDisplayNames:
+def parse_titles(value: object, fallback_default: object = "en") -> LocalizedTitles:
     if isinstance(value, str):
         default_locale = normalize_locale_tag(fallback_default)
-        return LocalizedDisplayNames(default_locale, {default_locale: validate_display_name(value)})
+        return LocalizedTitles(default_locale, {default_locale: validate_title(value)})
     if not isinstance(value, dict):
-        raise ValueError("display_name must be a string or localized display-name object")
+        raise ValueError("title must be a string or localized title object")
     default_locale = normalize_locale_tag(value.get("default"))
     raw_values = value.get("values")
     if not isinstance(raw_values, dict) or not raw_values:
-        raise ValueError("display_name.values must be a non-empty object")
+        raise ValueError("title.values must be a non-empty object")
     values: dict[str, str] = {}
     for raw_locale, raw_name in raw_values.items():
         locale = normalize_locale_tag(raw_locale)
         if raw_locale != locale:
-            raise ValueError(f"display_name Locale must use canonical spelling: {raw_locale!r} -> {locale!r}")
+            raise ValueError(f"title Locale must use canonical spelling: {raw_locale!r} -> {locale!r}")
         if locale in values:
-            raise ValueError(f"duplicate display_name Locale: {locale}")
-        values[locale] = validate_display_name(raw_name)
+            raise ValueError(f"duplicate title Locale: {locale}")
+        values[locale] = validate_title(raw_name)
     if default_locale not in values:
-        raise ValueError(f"display_name default Locale {default_locale!r} has no value")
-    return LocalizedDisplayNames(default_locale, values)
+        raise ValueError(f"title default Locale {default_locale!r} has no value")
+    return LocalizedTitles(default_locale, values)
 
 
 def serialize_package_metadata(manifest: PackageManifest) -> bytes:
+    # Bundle metadata v1 keeps its published display_name wire key. app.json
+    # uses title; this serializer is the compatibility boundary.
     payload = {
         "schema_version": PACKAGE_METADATA_VERSION,
         "package_type": "app",
-        "display": manifest.display,
         "display_name": {
-            "default": manifest.display_names.default_locale,
-            "values": manifest.display_names.values,
+            "default": manifest.titles.default_locale,
+            "values": manifest.titles.values,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -709,23 +709,24 @@ def load_package_manifest(path: Path) -> PackageManifest:
                 raise TypeError
             localization = value.get("localization")
             fallback_default = localization.get("default", "en") if isinstance(localization, dict) else "en"
-            display_name = parse_display_names(value["display_name"], fallback_default)
-            display = value["display"]
-            if display not in ("square", "landscape", "portrait"):
-                raise ValueError("display must be one of: square, landscape, portrait")
+            if "display" in value or "display_profile" in value:
+                raise ValueError("app manifest no longer declares a display profile")
+            if "display_name" in value:
+                raise ValueError("app manifest display_name has been renamed to title")
+            titles = parse_titles(value["title"], fallback_default)
             launch_asset = str(value.get("launch_asset", ""))
             if launch_asset:
                 validate_asset_name(launch_asset, 0)
-            return PackageManifest(app_id, display_name, launch_asset, display=display)
+            return PackageManifest(app_id, titles, launch_asset)
         except (KeyError, TypeError) as error:
             raise ValueError(
-                "app manifest requires app_id, display_name, display and a valid launch_asset name"
+                "app manifest requires app_id, title and a valid launch_asset name"
             ) from error
     if package_type != "component" or value.get("component_type") != "font":
         raise ValueError("only package_type=component with component_type=font is supported")
     try:
         package_id = validate_component_identifier(value["id"], "component id")
-        display_names = parse_display_names(value["display_name"])
+        titles = parse_titles(value["title"])
         version = str(value["version"])
         if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
             raise ValueError("component version must be canonical major.minor.patch")
@@ -762,7 +763,7 @@ def load_package_manifest(path: Path) -> PackageManifest:
                 raise ValueError("font component roles must reference distinct assets")
             asset_names.add(asset)
             font_roles[role] = {"asset": asset, "style": style, "size": size, "bpp": bpp}
-        return PackageManifest(package_id, display_names, "", "component", "font", version, tuple(languages),
+        return PackageManifest(package_id, titles, "", "component", "font", version, tuple(languages),
                                font_bundle, charset, font_roles)
     except KeyError as error:
         raise ValueError(f"font component manifest is missing {error.args[0]}") from error
@@ -777,8 +778,8 @@ def serialize_component_metadata(manifest: PackageManifest) -> bytes:
         "component_type": "font",
         "version": manifest.version,
         "display_name": {
-            "default": manifest.display_names.default_locale,
-            "values": manifest.display_names.values,
+            "default": manifest.titles.default_locale,
+            "values": manifest.titles.values,
         },
         "languages": list(manifest.languages),
         "font_bundle": manifest.font_bundle,
@@ -788,11 +789,11 @@ def serialize_component_metadata(manifest: PackageManifest) -> bytes:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def load_app_manifest(path: Path) -> tuple[str, LocalizedDisplayNames, str]:
+def load_app_manifest(path: Path) -> tuple[str, LocalizedTitles, str]:
     manifest = load_package_manifest(path)
     if manifest.package_type != "app":
         raise ValueError("app manifest cannot describe a Component Package")
-    return manifest.package_id, manifest.display_names, manifest.launch_asset
+    return manifest.package_id, manifest.titles, manifest.launch_asset
 
 
 def resource_pack_digest(sections: list[InputSection], launch_asset_id: int) -> bytes:
@@ -1165,15 +1166,15 @@ def main() -> None:
         try:
             package_manifest = load_package_manifest(args.app_manifest)
             app_id_text = package_manifest.package_id
-            display_names = package_manifest.display_names
+            titles = package_manifest.titles
             manifest_launch_asset = package_manifest.launch_asset
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise SystemExit(str(error)) from error
     else:
         app_id_text = args.app_id or ""
-        display_names = parse_display_names(app_id_text)
+        titles = parse_titles(app_id_text)
         manifest_launch_asset = ""
-        package_manifest = PackageManifest(app_id_text, display_names, "")
+        package_manifest = PackageManifest(app_id_text, titles, "")
     launch_asset = (
         args.launch_asset if args.launch_asset is not None else manifest_launch_asset
     )
@@ -1239,12 +1240,12 @@ def main() -> None:
         raise SystemExit(
             f"--app-id must be 1..{APP_ID_MAX_LENGTH} ASCII letters, digits, '.', '_' or '-'"
         )
-    default_display_name = display_names.values[display_names.default_locale]
+    default_title = titles.values[titles.default_locale]
     if package_manifest.package_type == "component" and args.legacy_metadata_v1:
         raise SystemExit("Component Packages require typed metadata schema v1")
     if args.legacy_metadata_v1:
         metadata_format = FORMAT_UTF8
-        metadata_payload = default_display_name.encode("utf-8")
+        metadata_payload = default_title.encode("utf-8")
         metadata_version = 1
     elif package_manifest.package_type == "component":
         metadata_format = FORMAT_PACKAGE_METADATA_JSON
@@ -1327,8 +1328,8 @@ def main() -> None:
     args.output.write_bytes(image)
     print(
         f"Bundle v{VERSION}: type={package_manifest.package_type} id={app_id_text} "
-        f"title={default_display_name!r} metadata=v{metadata_version} "
-        f"locales={len(display_names.values)} sections={len(sections)} "
+        f"title={default_title!r} metadata=v{metadata_version} "
+        f"locales={len(titles.values)} sections={len(sections)} "
         f"content={cursor} extent={bundle_size} launch={launch_asset}({launch_asset_id}) "
         f"resources={len(sections) - (2 if package_manifest.package_type == 'app' else 1)} "
         f"digest={resource_digest.hex()} "

@@ -8,17 +8,9 @@ int32_t GraphicsAdapter::GetInfo(micropixel_graphics_info_t& info) {
     return operations_.get_info(operations_.context, info);
 }
 
-int32_t GraphicsAdapter::BeginFrame() { return operations_.begin_frame(operations_.context); }
-
 int32_t GraphicsAdapter::Submit(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) {
     return operations_.submit(operations_.context, bytes, length, textures);
 }
-
-int32_t GraphicsAdapter::CommitFrame(const device::TextureAccess& textures) {
-    return operations_.commit_frame(operations_.context, textures);
-}
-
-int32_t GraphicsAdapter::CancelFrame() { return operations_.cancel_frame(operations_.context); }
 
 int32_t GraphicsAdapter::LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out) {
     return operations_.load_font(operations_.context, resource, info_out);

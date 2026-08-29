@@ -10,7 +10,14 @@ namespace micropixel {
 
 class Application;
 class Renderer;
-class Frame;
+class Scene;
+class Layer;
+class ShapeNode;
+class SpriteNode;
+class SurfaceNode;
+class LabelNode;
+class SpriteBatch;
+struct SceneDescriptor;
 class Texture;
 class StreamingTexture;
 class TextureUpdateBatch;
@@ -30,6 +37,7 @@ class Color final {
     [[nodiscard]] constexpr uint8_t red() const { return static_cast<uint8_t>(rgb888_ >> 16U); }
     [[nodiscard]] constexpr uint8_t green() const { return static_cast<uint8_t>(rgb888_ >> 8U); }
     [[nodiscard]] constexpr uint8_t blue() const { return static_cast<uint8_t>(rgb888_); }
+    [[nodiscard]] constexpr uint32_t rgb888() const { return rgb888_; }
 
     [[nodiscard]] static constexpr Color Mix(Color foreground, Color background, uint8_t opacity) {
         const uint32_t inverse = 255U - opacity;
@@ -47,7 +55,9 @@ class Color final {
     explicit constexpr Color(uint32_t rgb888) : rgb888_(rgb888) {}
     uint32_t rgb888_{};
 
-    friend class Frame;
+    friend class Scene;
+    friend class ShapeNode;
+    friend class LabelNode;
 };
 
 struct TextMetrics final {
@@ -70,128 +80,56 @@ enum class SystemFont : uint16_t {
     kTitle = 4U,
 };
 
+struct DisplayInsets final {
+    uint32_t top{};
+    uint32_t right{};
+    uint32_t bottom{};
+    uint32_t left{};
+};
+
 class RendererInfo final {
    public:
     [[nodiscard]] constexpr uint32_t width() const { return width_; }
     [[nodiscard]] constexpr uint32_t height() const { return height_; }
-    [[nodiscard]] constexpr uint16_t max_draw_operations() const { return max_draw_operations_; }
+    [[nodiscard]] constexpr uint32_t physical_width() const { return physical_width_; }
+    [[nodiscard]] constexpr uint32_t physical_height() const { return physical_height_; }
+    [[nodiscard]] constexpr DisplayInsets safe_area_insets() const { return safe_area_insets_; }
+    [[nodiscard]] constexpr Rect safe_area() const {
+        return {static_cast<int32_t>(safe_area_insets_.left), static_cast<int32_t>(safe_area_insets_.top),
+                static_cast<int32_t>(width_ - safe_area_insets_.left - safe_area_insets_.right),
+                static_cast<int32_t>(height_ - safe_area_insets_.top - safe_area_insets_.bottom)};
+    }
+    [[nodiscard]] constexpr uint16_t max_scene_nodes() const { return max_scene_nodes_; }
+    [[nodiscard]] constexpr uint16_t max_batch_instances() const { return max_batch_instances_; }
+    [[nodiscard]] constexpr uint16_t max_layers() const { return max_layers_; }
+    [[nodiscard]] constexpr uint16_t max_sprite_batches() const { return max_sprite_batches_; }
+    [[nodiscard]] constexpr uint32_t max_scene_bytes() const { return max_scene_bytes_; }
 
    private:
-    constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t capabilities, uint16_t max_batch_commands,
-                           uint16_t max_draw_operations, uint16_t max_frame_commands)
+    constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t physical_width, uint32_t physical_height,
+                           DisplayInsets safe_area_insets, uint16_t max_scene_nodes, uint16_t max_batch_instances,
+                           uint16_t max_layers, uint16_t max_sprite_batches, uint32_t max_scene_bytes)
         : width_(width),
           height_(height),
-          capabilities_(capabilities),
-          max_batch_commands_(max_batch_commands),
-          max_draw_operations_(max_draw_operations),
-          max_frame_commands_(max_frame_commands == 0U ? max_batch_commands : max_frame_commands) {}
-
-    [[nodiscard]] constexpr uint16_t max_batch_commands() const { return max_batch_commands_; }
-    [[nodiscard]] constexpr uint16_t max_frame_commands() const { return max_frame_commands_; }
-    [[nodiscard]] constexpr bool retained_translation_available() const { return (capabilities_ & (1U << 0U)) != 0U; }
-    [[nodiscard]] constexpr bool multi_submit_available() const { return (capabilities_ & (1U << 1U)) != 0U; }
+          physical_width_(physical_width),
+          physical_height_(physical_height),
+          safe_area_insets_(safe_area_insets),
+          max_scene_bytes_(max_scene_bytes),
+          max_scene_nodes_(max_scene_nodes),
+          max_batch_instances_(max_batch_instances),
+          max_layers_(max_layers),
+          max_sprite_batches_(max_sprite_batches) {}
 
     uint32_t width_{};
     uint32_t height_{};
-    uint32_t capabilities_{};
-    uint16_t max_batch_commands_{};
-    uint16_t max_draw_operations_{};
-    uint16_t max_frame_commands_{};
-
-    friend class Renderer;
-    friend class Frame;
-};
-
-// Records one atomic display update. Frame owns its bounded command storage;
-// transport batches and retained-translation acceleration are private details.
-class Frame final {
-   public:
-    static constexpr uint32_t kCapacityBytes = 4096U;
-    static constexpr uint32_t kCapacityCommands = 128U;
-    static constexpr uint32_t kMaxStateDepth = 8U;
-
-    Frame(const Frame&) = delete;
-    Frame& operator=(const Frame&) = delete;
-    Frame(Frame&& other) noexcept;
-    Frame& operator=(Frame&&) = delete;
-    ~Frame();
-
-    void Clear(Color color);
-    void FillRect(Rect rect, Color color, uint8_t opacity = 255U);
-    void DrawText(Point position, const char* text, Color color, SystemFont font = SystemFont::kMedium);
-    void DrawText(Point position, const char* text, Color color, const Font& font);
-    void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color,
-                          SystemFont font = SystemFont::kMedium);
-    void DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, const Font& font);
-    void DrawTexture(Point position, const Texture& texture, uint8_t opacity = 255U);
-    void DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity = 255U);
-    void DrawTexture(Rect destination, const Texture& texture, uint8_t opacity = 255U);
-    void DrawTexture(Rect destination, const Texture& texture, Rect source, uint8_t opacity = 255U);
-    void DrawTexture(Point position, const StreamingTexture& texture, uint8_t opacity = 255U);
-    void DrawTexture(Point position, const StreamingTexture& texture, Rect source, uint8_t opacity = 255U);
-    void DrawTexture(Rect destination, const StreamingTexture& texture, uint8_t opacity = 255U);
-    void DrawTexture(Rect destination, const StreamingTexture& texture, Rect source, uint8_t opacity = 255U);
-
-    void Save();
-    void SetClipRect(Rect clip);
-    void Translate(Point offset);
-    void Restore();
-
-    [[nodiscard]] Result<void> Present();
-
-    [[nodiscard]] constexpr uint32_t draw_operation_count() const { return draw_operation_count_; }
-
-   private:
-    struct CapabilityToken {};
-    Frame(CapabilityToken, const RendererInfo& info);
-
-    [[nodiscard]] uint8_t* Append(uint32_t bytes);
-    [[nodiscard]] uint8_t* AppendUnchecked(uint32_t bytes);
-    [[nodiscard]] uint8_t* DiscardRecord(uint32_t bytes);
-    void ResetBatch();
-    [[nodiscard]] bool SubmitBatch();
-    [[nodiscard]] bool StartHostFrame();
-    void Fail(int32_t status);
-    void Cancel();
-    void ContinueStateInNewBatch();
-    void EnsureStateEncoded();
-    void CloseEncodedState();
-    [[nodiscard]] Rect StateClip() const;
-    [[nodiscard]] Rect EffectiveClip() const;
-    [[nodiscard]] Point EffectiveTranslation() const;
-    void DrawTextWithHandle(Point position, const char* text, Color color, uint16_t font_handle);
-    void DrawTextCenteredWithHandle(int32_t center_x, int32_t y, const char* text, Color color, uint16_t font_handle);
-
-    struct State final {
-        Rect clip{};
-        Rect clip_limit{};
-        Point translation{};
-        bool draw_started{};
-    };
-
-    alignas(4) uint8_t bytes_[kCapacityBytes]{};
-    uint32_t size_{};
-    uint32_t batch_command_count_{};
-    uint32_t draw_operation_count_{};
-    uint32_t frame_command_count_{};
-    uint32_t max_batch_commands_{};
-    uint32_t max_draw_operations_{};
-    uint32_t max_frame_commands_{};
-    Rect display_bounds_{};
-    Rect retained_clip_{};
-    Point retained_translation_{};
-    State states_[kMaxStateDepth + 1U]{};
-    uint32_t state_depth_{};
-    uint32_t encoded_state_depth_{};
-    uint32_t retained_scope_count_{};
-    int32_t failure_status_{};
-    alignas(4) uint8_t discard_record_[160U]{};
-    bool retained_translation_available_{};
-    bool multi_submit_available_{};
-    bool retained_scope_selected_{};
-    bool state_encoded_{};
-    bool host_frame_active_{};
-    bool presented_{};
+    uint32_t physical_width_{};
+    uint32_t physical_height_{};
+    DisplayInsets safe_area_insets_{};
+    uint32_t max_scene_bytes_{};
+    uint16_t max_scene_nodes_{};
+    uint16_t max_batch_instances_{};
+    uint16_t max_layers_{};
+    uint16_t max_sprite_batches_{};
 
     friend class Renderer;
 };
@@ -202,7 +140,7 @@ class Renderer final {
     constexpr Renderer& operator=(const Renderer&) noexcept = default;
 
     [[nodiscard]] RendererInfo info() const;
-    [[nodiscard]] Frame BeginFrame() const;
+    [[nodiscard]] Scene CreateScene(const SceneDescriptor& descriptor) const;
     [[nodiscard]] Result<StreamingTexture> CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
     [[nodiscard]] TextureUpdateBatch BeginTextureUpdateBatch() const;
     [[nodiscard]] Result<TextMetrics> MeasureText(const char* text, SystemFont font = SystemFont::kMedium) const;
@@ -215,5 +153,7 @@ class Renderer final {
 };
 
 }  // namespace micropixel
+
+#include "sdk/scene.hpp"
 
 #endif

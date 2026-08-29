@@ -11,7 +11,7 @@ int main() {
         return MICROPIXEL_STATUS_INTERNAL;
     }
     constexpr uintptr_t kBeyondGuestMemory = 0xfffffff0U;
-    return micropixel_service_submit(service.handle, MICROPIXEL_GRAPHICS_CHANNEL_COMMANDS,
+    return micropixel_service_submit(service.handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
                                      reinterpret_cast<const uint8_t*>(kBeyondGuestMemory),
-                                     sizeof(micropixel_graphics_command_header_t));
+                                     sizeof(micropixel_graphics_scene_header_t));
 }

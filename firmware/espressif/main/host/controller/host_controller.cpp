@@ -230,9 +230,9 @@ host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, co
     return model;
 }
 
-HallCoverMappings OpenHallCovers(const runtime::InstalledAppCatalog& catalog,
-                                 const std::optional<uint32_t>& snapshot_index = std::nullopt) {
-    HallCoverMappings covers{};
+void OpenHallCovers(const runtime::InstalledAppCatalog& catalog, HallCoverMappings& covers_out,
+                    const std::optional<uint32_t>& snapshot_index = std::nullopt) {
+    covers_out = {};
     const uint32_t visible_count = std::min(catalog.count, host_ui::kMaxHallApps);
     for (uint32_t index = 0U; index < visible_count; ++index) {
         if (snapshot_index.has_value() && *snapshot_index == index) {
@@ -244,9 +244,8 @@ HallCoverMappings OpenHallCovers(const runtime::InstalledAppCatalog& catalog,
                      catalog.apps[index].app_id.data());
             continue;
         }
-        covers[index] = std::move(*mapping_result);
+        covers_out[index] = std::move(*mapping_result);
     }
-    return covers;
 }
 
 std::expected<runtime::AppRunOutcome, AppControllerError> StopApp(AppController& controller) {
@@ -1526,7 +1525,8 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
                         host_ui::HallStatus status, uint32_t detail, host_ui::StatusLayerModel& status_model,
                         host_ui::SystemSettingsStore& settings_store,
                         remote_control::RemoteControlAgent& remote_control) {
-    HallCoverMappings covers = OpenHallCovers(catalog);
+    HallCoverMappings covers{};
+    OpenHallCovers(catalog, covers);
     RemoteCommandPump power_pump{
         .poll = [](void* context) { return static_cast<host_ui::SystemShell*>(context)->PowerTransitionRequested(); },
         .context = &shell,
@@ -1671,7 +1671,6 @@ class ActiveHost final {
                host_ui::SystemSettingsStore& settings_store, control::ControlDispatcher& controls,
                remote_control::RemoteControlAgent& remote_control, std::string_view effective_locale)
         : catalog_(std::move(catalog)),
-          covers_(OpenHallCovers(catalog_)),
           app_controller_(runtime),
           devices_(devices),
           shell_(shell),
@@ -1684,6 +1683,7 @@ class ActiveHost final {
           controls_(controls),
           remote_control_(remote_control),
           hall_status_(catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady) {
+        OpenHallCovers(catalog_, covers_);
         std::snprintf(effective_locale_.data(), effective_locale_.size(), "%.*s",
                       static_cast<int>(effective_locale.size()), effective_locale.data());
         UpdateControlCatalog(controls_, catalog_);
@@ -1821,7 +1821,7 @@ class ActiveHost final {
             return false;
         }
         catalog_ = std::move(*reloaded_catalog);
-        covers_ = OpenHallCovers(catalog_);
+        OpenHallCovers(catalog_, covers_);
         UpdateControlCatalog(controls_, catalog_);
         RefreshStatusMetrics(status_model_, catalog_, battery_);
         hall_status_ = catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady;
@@ -1835,7 +1835,7 @@ class ActiveHost final {
         covers_ = {};
     }
 
-    void RestoreHallCovers() { covers_ = OpenHallCovers(catalog_, suspended_index_); }
+    void RestoreHallCovers() { OpenHallCovers(catalog_, covers_, suspended_index_); }
 
     [[nodiscard]] bool UninstallInstalledApp(uint32_t app_index) {
         if (app_controller_.state() != AppLifecycleState::kNotRunning || app_index >= catalog_.count) {

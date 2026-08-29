@@ -82,13 +82,13 @@ build_and_run system_gesture_router \
 build_and_run hall_carousel \
     "$workspace_root/tools/tests/test_hall_carousel.cpp"
 
-build_and_run guest_viewport \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_viewport.cpp"
-
 build_and_run guest_display_transform \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_guest_display_transform.cpp"
+
+build_and_run snake_gamekit \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_snake_gamekit.cpp"
 
 build_and_run guest_layout \
     -I "$workspace_root/guest" \
@@ -96,6 +96,24 @@ build_and_run guest_layout \
 
 build_and_run guest_psram \
     "$workspace_root/tools/tests/test_guest_psram.cpp"
+
+build_and_run pixel_compositor \
+    "$workspace_root/tools/tests/test_pixel_compositor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/pixel_compositor.cpp"
+
+build_and_run app_surface_compositor \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_app_surface_compositor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/app_surface_compositor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/pixel_compositor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/guest_scene.cpp" \
+    "$workspace_root/firmware/espressif/main/device/text.cpp"
+
+build_and_run guest_scene \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_scene.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/guest_scene.cpp" \
+    "$workspace_root/firmware/espressif/main/device/text.cpp"
 
 build_and_run guest_button \
     -I "$workspace_root/guest" \
@@ -114,6 +132,9 @@ build_and_run synth_mixer \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_synth_mixer.cpp" \
     "$workspace_root/firmware/espressif/main/platform/audio/audio_mixer.cpp"
+
+build_and_run mosaico_battery_power_policy \
+    "$workspace_root/tools/tests/test_mosaico_battery_power_policy.cpp"
 
 build_and_run system_shell \
     -pthread \
@@ -215,7 +236,7 @@ root = Path(sys.argv[1])
 (root / "app.json").write_text(json.dumps({
     "schema_version": 1,
     "app_id": "micropixel.metadata-test",
-    "display_name": {
+    "title": {
         "default": "en",
         "values": {
             "en": "Metadata Test",
@@ -223,8 +244,7 @@ root = Path(sys.argv[1])
             "zh": "中文测试",
         },
     },
-    "display": "square",
-    "source": "unused.cpp",
+    "sources": ["unused.cpp"],
 }, ensure_ascii=False), encoding="utf-8")
 PY
 python3 "$workspace_root/tools/build_app_bundle.py" \
@@ -267,7 +287,7 @@ root = Path(sys.argv[1])
     "package_type": "component",
     "component_type": "font",
     "id": "fonts.fixture",
-    "display_name": {"default": "en", "values": {"en": "Fixture Fonts"}},
+    "title": {"default": "en", "values": {"en": "Fixture Fonts"}},
     "version": "1.0.0",
     "languages": ["zh-CN", "zh-Hans"],
     "font_bundle": "fixture-font-v1",

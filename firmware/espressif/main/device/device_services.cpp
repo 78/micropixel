@@ -170,20 +170,25 @@ DeviceResult<micropixel_graphics_info_t> GraphicsService::GetInfo() const {
     if (status != MICROPIXEL_STATUS_OK) {
         return Fail<micropixel_graphics_info_t>(status);
     }
+    const DisplaySafeAreaInsets& safe_area = display_.safe_area;
+    const uint32_t horizontal_insets = safe_area.left_pixels + safe_area.right_pixels;
+    const uint32_t vertical_insets = safe_area.top_pixels + safe_area.bottom_pixels;
+    if (info.width != display_.width_pixels || info.height != display_.height_pixels ||
+        safe_area.top_pixels > UINT16_MAX || safe_area.right_pixels > UINT16_MAX ||
+        safe_area.bottom_pixels > UINT16_MAX || safe_area.left_pixels > UINT16_MAX || horizontal_insets >= info.width ||
+        vertical_insets >= info.height) {
+        return Fail<micropixel_graphics_info_t>(MICROPIXEL_STATUS_INTERNAL);
+    }
+    info.safe_inset_top = static_cast<uint16_t>(safe_area.top_pixels);
+    info.safe_inset_right = static_cast<uint16_t>(safe_area.right_pixels);
+    info.safe_inset_bottom = static_cast<uint16_t>(safe_area.bottom_pixels);
+    info.safe_inset_left = static_cast<uint16_t>(safe_area.left_pixels);
     return info;
 }
-
-DeviceResult<void> GraphicsService::BeginFrame() const { return StatusResult(implementation_.BeginFrame()); }
 
 DeviceResult<void> GraphicsService::Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const {
     return StatusResult(implementation_.Submit(bytes, length, textures));
 }
-
-DeviceResult<void> GraphicsService::CommitFrame(const TextureAccess& textures) const {
-    return StatusResult(implementation_.CommitFrame(textures));
-}
-
-DeviceResult<void> GraphicsService::CancelFrame() const { return StatusResult(implementation_.CancelFrame()); }
 
 DeviceResult<micropixel_font_info_t> GraphicsService::LoadFont(const FontResourceView& resource) const {
     micropixel_font_info_t info{};

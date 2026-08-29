@@ -1,8 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.snake",
-  "display": "square",
-  "display_name": {
+  "title": {
     "default": "en",
     "values": {
       "en": "Juicy Snake"
@@ -14,7 +13,6 @@
       "en": "i18n/en.json"
     }
   },
-  "source": "main.cpp",
   "sources": [
     "main.cpp",
     "snake_app.cpp",

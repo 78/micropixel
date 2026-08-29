@@ -49,18 +49,22 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
 ## 控制面、提交面和事件面
 
 - Timer、Storage、Resource、Audio 控制以及各类 `get_info` 使用 `service_call`。
-- Renderer Frame command stream 使用 `service_submit`，避免逐条绘图跨 ABI。
+- Graphics Scene keyframe/patch 使用 `service_submit`，避免逐对象调用跨 ABI。
 - 未来网络下载的数据面优先使用独立 Service channel；只有真机基准证明现有 transport
   无法满足背压或吞吐需求时，才讨论新增 Core import。
 - Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
-当前 Graphics 1.2 command protocol 包含 `PUSH_STATE` / `POP_STATE`、`BLEND_RECT`、`DRAW_TEXTURE` 和
-`BLEND_TEXTURE`。SDK 用前两者 lowering `Save`、clip、translation 和 `Restore`；capable Host 可把稳定
-scope 识别为 retained translation，但该优化不进入 Public C++ API。texture command 的 `opacity` 与
-资源自身逐像素 alpha 相乘；不透明 `DRAW_TEXTURE` 走 Host copy 快速路径。Texture wire command 分别携带
-destination rectangle 与 source rectangle，因此 1:1、裁剪、缩放及裁剪后缩放不需要新增 opcode。
-`max_draw_operations` 是 Public SDK 可见的稳定绘制预算，`max_frame_commands` 只用于 SDK/Host transport，
-自动生成的 state 与跨批续接记录不会改变应用预算。
+Graphics wire 是 retained Scene 协议。首个提交发送完整 keyframe，之后仅发送 Layer、Sprite、
+SpriteBatch instance、Shape、Label 或 SurfaceNode 的属性差量；消息携带 generation、base revision 和
+revision，Host 在固定容量 scratch scene 中完成整包验证后再原子交换。SpriteBatch 可让蛇身、方块、
+爆炸和粒子共享一个 Host 节点，patch 只携带变化的 instance。Texture/SurfaceNode 同时携带 destination 与
+source rectangle，opacity 与资源自身逐像素 alpha 相乘；不透明复制、缩放和填充分别映射到
+DMA2D/PPA 快速路径。容量由 `max_scene_nodes`、`max_batch_instances`、`max_layers`、
+`max_sprite_batches` 和 `max_scene_bytes` 明确给出。
+
+Graphics 1.1 在 `GET_INFO` 尾部追加物理显示像素单位的 `safe_inset_{top,right,bottom,left}`。Host 从
+Board 的显示几何元数据填充这些值；Guest SDK 用向外取整换算到逻辑坐标，避免缩放后重新暴露一个被圆角、
+盖板或异形边缘遮挡的物理像素。零值表示对应边没有额外安全内缩，而不是让 App 猜测板型。
 
 文字命令传递稳定的 System Font role handle（Small、Medium、Large、Title），不传具体像素字号。
 Guest 使用逻辑像素定位；Host 可以按设备密度、语言和字体可用性为这些角色选择实际字形与字号。
@@ -82,10 +86,10 @@ Audio 1.1 在原有有界 `PLAY_TONE` 基础上增加 Ogg Opus source/playback �
 Devices 1.0 是设备目录，不替代具体能力 Service。`LIST(kind)` 返回不超过 64 个不透明
 `device_id` 和 catalog generation，`GET_INFO(device_id)` 返回 kind、parent、capabilities 与显示名称。
 应用必须保存并传递 `device_id`，不能把枚举 index、GPIO 号、I2C 地址或 Host 指针当作设备身份。
-未来热插拔设备用 Devices added/removed event 和新 generation 通知；第一阶段 Metalio-Claw4 目录在
-一次 Session 中保持不变。
+未来热插拔设备用 Devices added/removed event 和新 generation 通知；当前板载目录在一次 Session 中保持
+不变，并且只登记初始化成功的 Peripheral。
 
-- Sensors 1.0 按 `device_id` 查询类型和单位，再创建独立 handle。加速度与磁场使用不同的 typed reading，
+- Sensors 1.0 按 `device_id` 查询类型和单位，再创建独立 handle。加速度、角速度与磁场使用不同的 typed reading，
   不是一个不断增加可选字段的万能 Sensor 对象。第一个 handle 启动 Host 最新值缓存，最后一个 handle
   释放后停止；应用按自己的节奏调用 `READ`，实际维数由 `SensorInfo::value_count` 和 sensor kind 决定。
   method 4 配置缓存采样间隔，Host 不宣告 Sensor events；event 1 继续保留且不得复用。一个手柄以后可
@@ -125,6 +129,12 @@ Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表�
   由 SDK 的 move-only RAII 对象释放。
 - Retained scene 持有独立 Texture 引用。Guest release 只撤销 Guest 引用；显示场景替换或 Session teardown
   后才撤销 scene 引用，两个引用都归零时才释放像素内存。
+- Graphics scene wire 由 `micropixel_graphics_scene_header_t` 开始。Keyframe 必须完整声明 background、连续
+  node slot 和所有 Layer，并以新的非零 generation、`base_revision=0`、`revision=1` 发布；Patch 必须精确
+  引用 Host 当前的 generation 与 base revision，且 revision 只增加 1。Host 对固定容量 scratch scene 完成
+  所有 record、property mask、slot、Layer、坐标、UTF-8、Font 和 Texture 校验后才原子交换。任一字段失败不
+  改变当前 scene；base revision 不匹配返回 `MICROPIXEL_STATUS_STALE_STATE`，SDK 下一帧发送新 keyframe。
+  Node ID 是稳定 z-order slot，0 是最底层；Layer ID 0 表示 root，1..4 表示 retained group。
 - Resource 1.2 提供同步 `LOAD_TEXTURE`、带整数缩放比的 `LOAD_ADAPTIVE_TEXTURE`、release、streaming
   texture create/update 和 update batch。自适应请求由 SDK 根据物理屏幕尺寸生成比例；Host 验证比例与
   最终尺寸，在 worker 解码后使用平台缩放能力生成缓存纹理。普通自然尺寸绘制因此不需要逐帧缩放。

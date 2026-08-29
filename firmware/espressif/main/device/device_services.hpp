@@ -7,6 +7,7 @@
 #include "abi/micropixel_abi.h"
 #include "device/contracts/audio.hpp"
 #include "device/contracts/battery.hpp"
+#include "device/contracts/board_info.hpp"
 #include "device/contracts/devices.hpp"
 #include "device/contracts/gpio.hpp"
 #include "device/contracts/graphics.hpp"
@@ -94,14 +95,12 @@ class PowerInfoService final {
 
 class GraphicsService final {
    public:
-    explicit GraphicsService(Graphics& implementation) : implementation_(implementation) {}
+    GraphicsService(Graphics& implementation, DisplayInfo display)
+        : implementation_(implementation), display_(display) {}
 
     [[nodiscard]] bool Available() const { return implementation_.Available(); }
     [[nodiscard]] DeviceResult<micropixel_graphics_info_t> GetInfo() const;
-    [[nodiscard]] DeviceResult<void> BeginFrame() const;
     [[nodiscard]] DeviceResult<void> Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const;
-    [[nodiscard]] DeviceResult<void> CommitFrame(const TextureAccess& textures) const;
-    [[nodiscard]] DeviceResult<void> CancelFrame() const;
     [[nodiscard]] DeviceResult<micropixel_font_info_t> LoadFont(const FontResourceView& resource) const;
     [[nodiscard]] DeviceResult<void> ReleaseFont(micropixel_font_handle_t font) const;
     [[nodiscard]] DeviceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font, const char* text,
@@ -117,6 +116,7 @@ class GraphicsService final {
 
    private:
     Graphics& implementation_;
+    DisplayInfo display_{};
 };
 
 class InputService final {
@@ -172,9 +172,9 @@ class RandomService final {
 // Guest runtime session. Concrete Platform objects remain outside Runtime.
 class DeviceServices final {
    public:
-    DeviceServices(Graphics& graphics, Input& input, Audio& audio, Random& random, DeviceCatalog& devices,
-                   Sensors& sensors, Gpio& gpio, Haptics& haptics, Battery& battery)
-        : graphics_(graphics),
+    DeviceServices(Graphics& graphics, DisplayInfo display, Input& input, Audio& audio, Random& random,
+                   DeviceCatalog& devices, Sensors& sensors, Gpio& gpio, Haptics& haptics, Battery& battery)
+        : graphics_(graphics, display),
           input_(input),
           audio_(audio),
           random_(random),

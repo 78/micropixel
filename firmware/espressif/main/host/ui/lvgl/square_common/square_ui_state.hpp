@@ -183,6 +183,7 @@ class SquareSystemUiState final {
    private:
     static bool HostPointerTouchSink(void* context, const device::TouchSample& sample);
     static theme::Mode ThemeMode(host_ui::SystemThemeMode mode);
+    void RefreshPerformanceOverlayLocked();
     void ShowStartingScreenLocked();
     void PrepareGuestFrameLocked(lv_obj_t* guest_frame, bool created_guest_frame, bool& needs_present);
     void ResetHallLocked();
@@ -199,6 +200,9 @@ class SquareSystemUiState final {
     void* before_launch_presentation_context_{};
     PrepareHardwareCallback before_root_release_locked_{};
     void* before_root_release_context_{};
+    uint8_t performance_cpu_percent_{};
+    bool performance_overlay_requested_{};
+    bool guest_actions_watched_{};
 };
 
 }  // namespace micropixel::host_ui::lvgl::square_common

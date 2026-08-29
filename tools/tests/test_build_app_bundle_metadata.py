@@ -54,16 +54,15 @@ class PackageMetadataTests(unittest.TestCase):
             )
         )
 
-    def write_manifest(self, root: Path, display_name: object) -> Path:
+    def write_manifest(self, root: Path, title: object) -> Path:
         path = root / "app.json"
         path.write_text(
             json.dumps(
                 {
                     "schema_version": 1,
                     "app_id": "micropixel.test",
-                    "display": "square",
-                    "display_name": display_name,
-                    "source": "unused.cpp",
+                    "title": title,
+                    "sources": ["unused.cpp"],
                 },
                 ensure_ascii=False,
             ),
@@ -71,7 +70,7 @@ class PackageMetadataTests(unittest.TestCase):
         )
         return path
 
-    def test_localized_display_names_serialize_as_typed_schema_v1(self) -> None:
+    def test_localized_titles_serialize_to_bundle_metadata_schema_v1(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = self.write_manifest(
                 Path(directory),
@@ -81,22 +80,23 @@ class PackageMetadataTests(unittest.TestCase):
                 },
             )
             manifest = bundle.load_package_manifest(path)
-            app_id, names, launch = bundle.load_app_manifest(path)
+            app_id, titles, launch = bundle.load_app_manifest(path)
             payload = json.loads(bundle.serialize_package_metadata(manifest))
             self.assertEqual(app_id, "micropixel.test")
             self.assertEqual(launch, "")
             self.assertEqual(payload["schema_version"], 1)
             self.assertEqual(payload["package_type"], "app")
-            self.assertEqual(payload["display"], "square")
+            self.assertNotIn("display", payload)
             self.assertEqual(payload["display_name"]["default"], "en")
             self.assertEqual(payload["display_name"]["values"]["zh-Hans"], "测试")
+            self.assertEqual(titles.values["zh-Hans"], "测试")
 
-    def test_legacy_manifest_string_is_promoted_to_one_locale(self) -> None:
+    def test_title_string_is_promoted_to_one_locale(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = self.write_manifest(Path(directory), "Test")
-            _, names, _ = bundle.load_app_manifest(path)
-            self.assertEqual(names.default_locale, "en")
-            self.assertEqual(names.values, {"en": "Test"})
+            _, titles, _ = bundle.load_app_manifest(path)
+            self.assertEqual(titles.default_locale, "en")
+            self.assertEqual(titles.values, {"en": "Test"})
 
     def test_default_locale_requires_a_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -127,7 +127,7 @@ class PackageMetadataTests(unittest.TestCase):
                         "package_type": "component",
                         "component_type": "font",
                         "id": "fonts.zh-hans",
-                        "display_name": {"default": "en", "values": {"en": "Chinese Fonts"}},
+                        "title": {"default": "en", "values": {"en": "Chinese Fonts"}},
                         "version": "1.0.0",
                         "languages": ["zh-CN", "zh-Hans"],
                         "font_bundle": "noto-zh-hans-v1",

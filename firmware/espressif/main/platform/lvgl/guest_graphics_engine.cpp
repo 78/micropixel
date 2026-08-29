@@ -7,17 +7,33 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
-#include "platform/graphics/command_stream.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::lvgl {
 namespace {
 
 constexpr char kTag[] = "guest_graphics";
+constexpr size_t kAppSurfaceAlignment = 64U;
 
-bool SameTextureAccess(const device::TextureAccess& left, const device::TextureAccess& right) {
-    return left.context == right.context && left.resolve == right.resolve && left.retain == right.retain &&
-           left.release == right.release;
+uint16_t SceneWireInstanceCount(const uint8_t* bytes, uint32_t length) {
+    micropixel_graphics_scene_header_t header{};
+    if (bytes == nullptr || length < sizeof(header)) {
+        return 0U;
+    }
+    std::memcpy(&header, bytes, sizeof(header));
+    uint32_t offset = sizeof(header);
+    uint32_t instances = 0U;
+    for (uint16_t index = 0U; index < header.record_count; ++index) {
+        micropixel_graphics_scene_record_header_t record{};
+        std::memcpy(&record, bytes + offset, sizeof(record));
+        if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_BATCH_INSTANCES) {
+            micropixel_graphics_scene_batch_instances_record_t batch{};
+            std::memcpy(&batch, bytes + offset, sizeof(batch));
+            instances += batch.instance_count;
+        }
+        offset += record.size;
+    }
+    return static_cast<uint16_t>(instances > UINT16_MAX ? UINT16_MAX : instances);
 }
 
 void ReleaseTextures(const device::TextureAccess& access, const micropixel_texture_handle_t* textures, uint32_t count) {
@@ -61,39 +77,10 @@ void StyleFullscreenContainer(lv_obj_t* container, int32_t width, int32_t height
 }  // namespace
 
 GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts)
-    : width_(width), height_(height), fonts_(fonts), retained_scene_(width, height, fonts) {}
+    : width_(width), height_(height), fonts_(fonts), bitmap_font_rasterizer_(fonts) {}
 
 bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_handle_t font) {
     return context != nullptr && static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font) != nullptr;
-}
-
-bool GuestGraphicsEngine::AccumulateDamage(BitmapDamage* damages, uint32_t capacity, uint32_t& damage_count,
-                                           const uint8_t* data, uint32_t x, uint32_t y, uint32_t width,
-                                           uint32_t height) {
-    for (uint32_t index = 0U; index < damage_count; ++index) {
-        BitmapDamage& damage = damages[index];
-        if (damage.data != data) {
-            continue;
-        }
-        const uint32_t right = x + width;
-        const uint32_t bottom = y + height;
-        const uint32_t damage_right = damage.x + damage.width;
-        const uint32_t damage_bottom = damage.y + damage.height;
-        const uint32_t union_left = x < damage.x ? x : damage.x;
-        const uint32_t union_top = y < damage.y ? y : damage.y;
-        const uint32_t union_right = right > damage_right ? right : damage_right;
-        const uint32_t union_bottom = bottom > damage_bottom ? bottom : damage_bottom;
-        damage.x = union_left;
-        damage.y = union_top;
-        damage.width = union_right - union_left;
-        damage.height = union_bottom - union_top;
-        return true;
-    }
-    if (damage_count >= capacity) {
-        return false;
-    }
-    damages[damage_count++] = BitmapDamage{data, x, y, width, height};
-    return true;
 }
 
 esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers) {
@@ -105,35 +92,26 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebuff
         return ESP_ERR_NO_MEM;
     }
     display_ = display;
-#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    retained_scene_.BindSurface(display_, framebuffers);
-#else
-    (void)framebuffers;
-#endif
-    if (!retained_scene_.Initialize()) {
-        display_ = nullptr;
-        display_refresh_ready_ = nullptr;
-        return ESP_ERR_NO_MEM;
+    const esp_err_t compositor_status =
+        hardware_pixel_compositor_.Initialize(CONFIG_MICROPIXEL_APP_SURFACE_HW_MIN_AREA_PIXELS);
+    if (compositor_status != ESP_OK) {
+        ESP_LOGW(kTag, "hardware pixel compositor partially unavailable: %s; CPU fallback remains active",
+                 esp_err_to_name(compositor_status));
     }
+    (void)framebuffers;
     lv_display_add_event_cb(display_, DisplayRefreshStartEvent, LV_EVENT_REFR_START, this);
     lv_display_add_event_cb(display_, DisplayRefreshReadyEvent, LV_EVENT_REFR_READY, this);
     return ESP_OK;
 }
 
-void GuestGraphicsEngine::RebindFramebuffers(DirectFramebufferAccess* framebuffers) {
-#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    retained_scene_.BindSurface(display_, framebuffers);
-#else
-    (void)framebuffers;
-#endif
-}
+void GuestGraphicsEngine::RebindFramebuffers(DirectFramebufferAccess* framebuffers) { (void)framebuffers; }
 
 void GuestGraphicsEngine::DisplayRefreshStartEvent(lv_event_t* event) {
     auto* engine = static_cast<GuestGraphicsEngine*>(lv_event_get_user_data(event));
     if (engine == nullptr) {
         return;
     }
-    engine->dirty_region_coalescer_.Coalesce(engine->display_);
+    engine->refresh_damage_ = engine->dirty_region_coalescer_.Coalesce(engine->display_);
     engine->guest_refresh_active_ = engine->guest_refresh_pending_;
     engine->guest_refresh_pending_ = false;
     engine->display_refresh_started_us_ = esp_timer_get_time();
@@ -146,14 +124,20 @@ void GuestGraphicsEngine::DisplayRefreshReadyEvent(lv_event_t* event) {
     }
     if (engine->display_refresh_started_us_ != 0) {
         const uint32_t sequence = ++engine->display_refresh_sequence_;
-        if (engine->guest_refresh_active_) {
+        const bool guest_refresh = engine->guest_refresh_active_;
+        if (guest_refresh) {
             ++engine->guest_presented_frame_sequence_;
         }
         engine->guest_refresh_active_ = false;
         const uint32_t duration_us = static_cast<uint32_t>(esp_timer_get_time() - engine->display_refresh_started_us_);
         engine->display_refresh_started_us_ = 0;
         if (sequence <= 4U || (sequence % 60U) == 0U) {
-            ESP_LOGI(kTag, "display refresh #%" PRIu32 ": total=%" PRIu32 " us", sequence, duration_us);
+            ESP_LOGI(kTag,
+                     "display refresh #%" PRIu32 ": total=%" PRIu32 " us damage=%" PRIu32 "->%" PRIu32
+                     " regions/%" PRIu64 "->%" PRIu64 " pixels guest=%s",
+                     sequence, duration_us, engine->refresh_damage_.input_regions,
+                     engine->refresh_damage_.output_regions, engine->refresh_damage_.input_pixels,
+                     engine->refresh_damage_.output_pixels, guest_refresh ? "yes" : "no");
         }
     }
     if (engine->display_refresh_ready_ != nullptr) {
@@ -186,80 +170,250 @@ int32_t GuestGraphicsEngine::GetInfo(micropixel_graphics_info_t& info) const {
     info.width = width_;
     info.height = height_;
     info.pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888;
-    info.capabilities = 0U;
-#if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
-    info.capabilities |= MICROPIXEL_GRAPHICS_CAP_RETAINED_TRANSLATION;
-#endif
-    info.capabilities |= MICROPIXEL_GRAPHICS_CAP_MULTI_SUBMIT_FRAME;
-    info.max_command_bytes = MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES;
-    info.max_commands = MICROPIXEL_GRAPHICS_MAX_COMMANDS;
-    info.max_draw_operations = MICROPIXEL_GRAPHICS_MAX_DRAW_OPERATIONS;
-    info.max_frame_commands = MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS;
+    info.max_layers = MICROPIXEL_GRAPHICS_MAX_LAYERS;
+    info.max_scene_bytes = MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES;
+    info.max_scene_nodes = MICROPIXEL_GRAPHICS_MAX_SCENE_NODES;
+    info.max_batch_instances = MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES;
+    info.max_sprite_batches = MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES;
+    info.reserved0 = 0U;
     return MICROPIXEL_STATUS_OK;
 }
 
 bool GuestGraphicsEngine::EnsureTextureStorage() {
-    if (texture_storage_ != nullptr) {
+    if (texture_storage_ != nullptr && font_storage_ != nullptr) {
         return true;
     }
-    constexpr uint32_t kTextureArrayCount = 3U;
+    constexpr uint32_t kTextureArrayCount = 2U;
     texture_storage_ = static_cast<micropixel_texture_handle_t*>(
         heap_caps_aligned_calloc(alignof(micropixel_texture_handle_t), kTextureArrayCount * kMaxSceneTextures,
                                  sizeof(micropixel_texture_handle_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (texture_storage_ == nullptr) {
         return false;
     }
-    graphics_frame_textures_ = texture_storage_;
-    scene_textures_ = texture_storage_ + kMaxSceneTextures;
-    scratch_textures_ = texture_storage_ + 2U * kMaxSceneTextures;
-    return true;
-}
-
-void GuestGraphicsEngine::ClearPendingFrameTextures(bool release) {
-    if (release) {
-        ReleaseTextures(graphics_frame_texture_access_, graphics_frame_textures_, graphics_frame_texture_count_);
-    }
-    graphics_frame_texture_count_ = 0U;
-    graphics_frame_texture_access_ = {};
-}
-
-bool GuestGraphicsEngine::AddPendingFrameTextures(const micropixel_texture_handle_t* textures, uint32_t count,
-                                                  const device::TextureAccess& access) {
-    if (graphics_frame_texture_count_ != 0U && !SameTextureAccess(graphics_frame_texture_access_, access)) {
+    font_storage_ = static_cast<micropixel_font_handle_t*>(
+        heap_caps_aligned_calloc(alignof(micropixel_font_handle_t), kTextureArrayCount * kMaxSceneTextures,
+                                 sizeof(micropixel_font_handle_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (font_storage_ == nullptr) {
+        heap_caps_free(texture_storage_);
+        texture_storage_ = nullptr;
         return false;
     }
-    const uint32_t original_count = graphics_frame_texture_count_;
-    for (uint32_t index = 0U; index < count; ++index) {
-        bool exists = false;
-        for (uint32_t current = 0U; current < graphics_frame_texture_count_; ++current) {
-            if (graphics_frame_textures_[current] == textures[index]) {
-                exists = true;
-                break;
-            }
-        }
-        if (exists) {
-            continue;
-        }
-        if (graphics_frame_texture_count_ >= kMaxSceneTextures || access.retain == nullptr ||
-            !access.retain(access.context, textures[index])) {
-            ReleaseTextures(access, graphics_frame_textures_ + original_count,
-                            graphics_frame_texture_count_ - original_count);
-            graphics_frame_texture_count_ = original_count;
-            return false;
-        }
-        graphics_frame_textures_[graphics_frame_texture_count_++] = textures[index];
-    }
-    if (original_count == 0U) {
-        graphics_frame_texture_access_ = access;
-    }
+    scene_textures_ = texture_storage_;
+    scratch_textures_ = texture_storage_ + kMaxSceneTextures;
+    scene_fonts_ = font_storage_;
+    scratch_fonts_ = font_storage_ + kMaxSceneTextures;
     return true;
 }
 
-int32_t GuestGraphicsEngine::ApplyFrameLocked(const uint8_t* bytes, uint32_t length,
-                                              const device::TextureAccess& textures,
+bool GuestGraphicsEngine::EnsureSceneStorage() {
+    if (guest_scene_.has_value()) {
+        return true;
+    }
+    guest_scene_node_storage_ = static_cast<graphics::GuestSceneNode*>(
+        heap_caps_aligned_calloc(alignof(graphics::GuestSceneNode), 2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
+                                 sizeof(graphics::GuestSceneNode), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    guest_scene_instance_storage_ = static_cast<graphics::GuestSceneSpriteInstance*>(heap_caps_aligned_calloc(
+        alignof(graphics::GuestSceneSpriteInstance), 2U * MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES,
+        sizeof(graphics::GuestSceneSpriteInstance), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (guest_scene_node_storage_ == nullptr || guest_scene_instance_storage_ == nullptr) {
+        heap_caps_free(guest_scene_node_storage_);
+        heap_caps_free(guest_scene_instance_storage_);
+        guest_scene_node_storage_ = nullptr;
+        guest_scene_instance_storage_ = nullptr;
+        return false;
+    }
+    guest_scene_.emplace(guest_scene_node_storage_, guest_scene_node_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
+                         MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, guest_scene_instance_storage_,
+                         guest_scene_instance_storage_ + MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES,
+                         MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES);
+    return true;
+}
+
+bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
+    if (app_surface_compositor_.has_value()) {
+        return true;
+    }
+    if (app_surface_allocation_failed_ || width_ <= 0 || height_ <= 0 || width_ > INT32_MAX / 3) {
+        return false;
+    }
+    const uint64_t pixel_bytes = static_cast<uint64_t>(width_) * static_cast<uint32_t>(height_) * 3U;
+    const uint64_t allocation_bytes = (pixel_bytes + kAppSurfaceAlignment - 1U) & ~(kAppSurfaceAlignment - 1U);
+    if (pixel_bytes == 0U || allocation_bytes > UINT32_MAX || allocation_bytes > SIZE_MAX / 2U) {
+        app_surface_allocation_failed_ = true;
+        return false;
+    }
+    app_surface_pixels_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+        kAppSurfaceAlignment, static_cast<size_t>(allocation_bytes * 2U), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    app_surface_operation_storage_ = static_cast<graphics::AppDrawOperation*>(
+        heap_caps_aligned_calloc(kAppSurfaceAlignment, 2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
+                                 sizeof(graphics::AppDrawOperation), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (app_surface_pixels_ == nullptr || app_surface_operation_storage_ == nullptr) {
+        heap_caps_free(app_surface_pixels_);
+        heap_caps_free(app_surface_operation_storage_);
+        app_surface_pixels_ = nullptr;
+        app_surface_layer_pixels_ = nullptr;
+        app_surface_operation_storage_ = nullptr;
+        app_surface_allocation_failed_ = true;
+        ESP_LOGW(kTag, "App Surface allocation failed; retaining LVGL Guest fallback");
+        return false;
+    }
+
+    constexpr graphics::DamageMergePolicy kDamageMergePolicy{
+        .max_extra_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS,
+        .max_region_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS,
+    };
+    app_surface_pixel_bytes_ = static_cast<uint32_t>(pixel_bytes);
+    app_surface_allocation_bytes_ = static_cast<uint32_t>(allocation_bytes);
+    app_surface_layer_pixels_ = app_surface_pixels_ + app_surface_allocation_bytes_;
+    app_surface_compositor_.emplace(
+        app_surface_operation_storage_, app_surface_operation_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
+        MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, hardware_pixel_compositor_, kDamageMergePolicy, &bitmap_font_rasterizer_);
+    app_surface_compositor_->SetLayerCache({
+        .pixels = app_surface_layer_pixels_,
+        .size = app_surface_allocation_bytes_,
+        .width = static_cast<uint32_t>(width_),
+        .height = static_cast<uint32_t>(height_),
+        .stride = static_cast<uint32_t>(width_) * 3U,
+        .format = graphics::SurfacePixelFormat::kBgr888,
+    });
+    app_surface_image_descriptor_ = {};
+    app_surface_image_descriptor_.header.magic = LV_IMAGE_HEADER_MAGIC;
+    app_surface_image_descriptor_.header.cf = LV_COLOR_FORMAT_RGB888;
+    app_surface_image_descriptor_.header.w = static_cast<uint32_t>(width_);
+    app_surface_image_descriptor_.header.h = static_cast<uint32_t>(height_);
+    app_surface_image_descriptor_.header.stride = static_cast<uint32_t>(width_) * 3U;
+    app_surface_image_descriptor_.data_size = app_surface_pixel_bytes_;
+    app_surface_image_descriptor_.data = app_surface_pixels_;
+    ESP_LOGI(kTag,
+             "App Surface ready: %" PRId32 "x%" PRId32 " RGB888 pixels=%" PRIu32 " layer-cache=%" PRIu32
+             " scene=%zu bytes",
+             width_, height_, app_surface_pixel_bytes_, app_surface_allocation_bytes_,
+             2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES * sizeof(graphics::AppDrawOperation));
+    return true;
+}
+
+graphics::PixelSurface GuestGraphicsEngine::AppSurfacePixels() const {
+    return {
+        .pixels = app_surface_pixels_,
+        .size = app_surface_allocation_bytes_,
+        .width = static_cast<uint32_t>(width_),
+        .height = static_cast<uint32_t>(height_),
+        .stride = static_cast<uint32_t>(width_) * 3U,
+        .format = graphics::SurfacePixelFormat::kBgr888,
+    };
+}
+
+void GuestGraphicsEngine::ShowAppSurfaceLocked() {
+    if (app_surface_image_ == nullptr) {
+        app_surface_image_ = lv_image_create(guest_frame_);
+        lv_image_set_src(app_surface_image_, &app_surface_image_descriptor_);
+        lv_image_set_inner_align(app_surface_image_, LV_IMAGE_ALIGN_TOP_LEFT);
+        lv_image_set_pivot(app_surface_image_, 0, 0);
+        lv_image_set_antialias(app_surface_image_, false);
+        lv_obj_set_pos(app_surface_image_, 0, 0);
+        lv_obj_set_size(app_surface_image_, width_, height_);
+        lv_obj_remove_flag(app_surface_image_, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(app_surface_image_, LV_OBJ_FLAG_CLICKABLE);
+    }
+    if (!app_surface_active_) {
+        lv_obj_remove_flag(app_surface_image_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(app_surface_image_);
+        app_surface_active_ = true;
+    }
+}
+
+void GuestGraphicsEngine::HideAppSurfaceLocked() {
+    if (app_surface_image_ != nullptr && app_surface_active_) {
+        lv_obj_add_flag(app_surface_image_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (app_surface_active_ && app_surface_compositor_.has_value()) {
+        // Frames rendered by LVGL are not mirrored into the hidden pixel cache.
+        // Force a complete reconstruction before this path becomes visible again.
+        app_surface_compositor_->Reset();
+    }
+    app_surface_active_ = false;
+}
+
+void GuestGraphicsEngine::InvalidateAppSurfaceDamageLocked() {
+    if (app_surface_image_ == nullptr || !app_surface_compositor_.has_value()) {
+        return;
+    }
+    lv_area_t image_area{};
+    lv_obj_get_coords(app_surface_image_, &image_area);
+    for (size_t index = 0U; index < app_surface_compositor_->LastDamageCount(); ++index) {
+        const graphics::DamageRect damage = app_surface_compositor_->LastDamage(index);
+        const lv_area_t area{
+            .x1 = image_area.x1 + static_cast<int32_t>(damage.x),
+            .y1 = image_area.y1 + static_cast<int32_t>(damage.y),
+            .x2 = image_area.x1 + static_cast<int32_t>(damage.x + damage.width) - 1,
+            .y2 = image_area.y1 + static_cast<int32_t>(damage.y + damage.height) - 1,
+        };
+        (void)lv_obj_invalidate_area(app_surface_image_, &area);
+    }
+}
+
+bool GuestGraphicsEngine::RefreshAppSurfaceBitmapLocked(const uint8_t* bitmap_data, graphics::DamageRect damage) {
+    if (!app_surface_active_ || !app_surface_compositor_.has_value()) {
+        return false;
+    }
+    const graphics::AppSurfaceFrameResult result =
+        app_surface_compositor_->RefreshBitmap(bitmap_data, damage, AppSurfacePixels());
+    if (result.status != graphics::AppSurfaceStatus::kOk) {
+        ESP_LOGE(kTag, "App Surface bitmap refresh failed: status=%u", static_cast<unsigned>(result.status));
+        return false;
+    }
+    if (result.visual_changed) {
+        InvalidateAppSurfaceDamageLocked();
+    }
+    return result.visual_changed;
+}
+
+void GuestGraphicsEngine::ReleaseAppSurfaceLocked() {
+    app_surface_active_ = false;
+    app_surface_image_ = nullptr;
+    app_surface_compositor_.reset();
+    heap_caps_free(app_surface_operation_storage_);
+    heap_caps_free(app_surface_pixels_);
+    app_surface_operation_storage_ = nullptr;
+    app_surface_pixels_ = nullptr;
+    app_surface_layer_pixels_ = nullptr;
+    app_surface_pixel_bytes_ = 0U;
+    app_surface_allocation_bytes_ = 0U;
+    app_surface_image_descriptor_ = {};
+    app_surface_allocation_failed_ = false;
+    app_surface_frame_sequence_ = 0U;
+    scene_wire_bytes_ = 0U;
+    scene_wire_records_ = 0U;
+    scene_wire_instances_ = 0U;
+    layer_snapshot_telemetry_active_ = false;
+}
+
+void GuestGraphicsEngine::ReleaseFonts(const micropixel_font_handle_t* fonts, uint32_t count) {
+    for (uint32_t index = 0U; index < count; ++index) {
+        fonts_.ReleaseSceneFont(fonts[index]);
+    }
+}
+
+bool GuestGraphicsEngine::RetainFonts(const micropixel_font_handle_t* fonts, uint32_t count) {
+    uint32_t retained = 0U;
+    for (; retained < count; ++retained) {
+        if (!fonts_.RetainSceneFont(fonts[retained])) {
+            break;
+        }
+    }
+    if (retained == count) {
+        return true;
+    }
+    ReleaseFonts(fonts, retained);
+    return false;
+}
+
+int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textures,
                                               const micropixel_texture_handle_t* retained_textures,
-                                              uint32_t retained_count) {
-    if (!retained_scene_.Initialize()) {
+                                              uint32_t retained_texture_count,
+                                              const micropixel_font_handle_t* retained_fonts,
+                                              uint32_t retained_font_count) {
+    if (!guest_scene_.has_value() || !EnsureAppSurfaceStorageLocked()) {
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
     const bool created_guest_frame = guest_frame_ == nullptr;
@@ -267,17 +421,34 @@ int32_t GuestGraphicsEngine::ApplyFrameLocked(const uint8_t* bytes, uint32_t len
         guest_frame_ = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(guest_frame_, width_, height_, 0x000000U);
     }
-    const RetainedFrameResult result =
-        retained_scene_.Execute(bytes, length, guest_frame_, textures.resolve, textures.context);
-    if (result.status != MICROPIXEL_STATUS_OK) {
-        ESP_LOGE(kTag, "retained-object command execution failed");
-        return result.status;
+
+    const graphics::AppSurfaceFrameResult result =
+        app_surface_compositor_->PresentScene(*guest_scene_, AppSurfacePixels(), textures.resolve, textures.context);
+    if (result.status != graphics::AppSurfaceStatus::kOk) {
+        ESP_LOGE(kTag, "App Surface scene render failed: status=%u", static_cast<unsigned>(result.status));
+        return result.status == graphics::AppSurfaceStatus::kResourceExhausted ? MICROPIXEL_STATUS_RESOURCE_EXHAUSTED
+                                                                               : MICROPIXEL_STATUS_INTERNAL;
     }
-    bool needs_present = created_guest_frame || result.visual_changed;
-    // Direct-compositor output is already physically visible. LVGL only needs
-    // another refresh after the translated surface becomes inactive.
-    if (result.surface_active) {
-        needs_present = false;
+    const bool became_visible = !app_surface_active_;
+    ShowAppSurfaceLocked();
+    InvalidateAppSurfaceDamageLocked();
+    bool needs_present = created_guest_frame || became_visible || result.visual_changed;
+    const uint32_t sequence = ++app_surface_frame_sequence_;
+    const bool layer_snapshot_transition = result.layer_snapshot_used != layer_snapshot_telemetry_active_;
+    layer_snapshot_telemetry_active_ = result.layer_snapshot_used;
+    if (sequence <= 8U || (sequence % 120U) == 0U || layer_snapshot_transition) {
+        const graphics::HardwarePixelCompositorStats hardware = hardware_pixel_compositor_.Stats();
+        ESP_LOGI(kTag,
+                 "App Surface scene #%" PRIu32 ": revision=%" PRIu32 " damage=%" PRIu32 "/%" PRIu64
+                 " pixels replays=%" PRIu32 " normalize=%" PRIu32 "/%s wire=%" PRIu16 "rec/%" PRIu16 "inst/%" PRIu32
+                 "B layer-cache=%s capacity-merges=%" PRIu32 " hw=fill:%" PRIu32 "/blend:%" PRIu32 "/scale:%" PRIu32
+                 "/dma2d:%" PRIu32 " cpu:%" PRIu32,
+                 sequence, guest_scene_->Revision(), result.damage_region_count, result.damage_pixels,
+                 result.draw_operations_replayed, result.operations_normalized,
+                 result.incremental_normalization ? "patch" : "full", scene_wire_records_, scene_wire_instances_,
+                 scene_wire_bytes_, result.layer_snapshot_used ? "yes" : "no", result.capacity_merge_count,
+                 hardware.ppa_fills, hardware.ppa_blends, hardware.ppa_scales, hardware.dma2d_copies,
+                 hardware.software_fallbacks);
     }
 
     if (presentation_hooks_.prepare_frame_locked != nullptr) {
@@ -286,16 +457,14 @@ int32_t GuestGraphicsEngine::ApplyFrameLocked(const uint8_t* bytes, uint32_t len
     }
 
     ReleaseTextures(scene_texture_access_, scene_textures_, scene_texture_count_);
-    std::memcpy(scene_textures_, retained_textures, retained_count * sizeof(retained_textures[0]));
-    scene_texture_count_ = retained_count;
-    scene_texture_access_ = retained_count == 0U ? device::TextureAccess{} : textures;
-    if (result.surface_presented) {
-        ++guest_presented_frame_sequence_;
-    }
+    std::memcpy(scene_textures_, retained_textures, retained_texture_count * sizeof(retained_textures[0]));
+    scene_texture_count_ = retained_texture_count;
+    scene_texture_access_ = retained_texture_count == 0U ? device::TextureAccess{} : textures;
+    ReleaseFonts(scene_fonts_, scene_font_count_);
+    std::memcpy(scene_fonts_, retained_fonts, retained_font_count * sizeof(retained_fonts[0]));
+    scene_font_count_ = retained_font_count;
     if (needs_present) {
-        if (!result.surface_active) {
-            guest_refresh_pending_ = true;
-        }
+        guest_refresh_pending_ = true;
         RequestDisplayRefresh(display_);
     }
     return MICROPIXEL_STATUS_OK;
@@ -306,168 +475,102 @@ void GuestGraphicsEngine::Release() {
         return;
     }
     if (guest_frame_ != nullptr) {
-        retained_scene_.ForgetObjects();
         lv_obj_delete(guest_frame_);
         guest_frame_ = nullptr;
         guest_refresh_pending_ = false;
         RequestDisplayRefresh(display_);
         ESP_LOGI(kTag, "Guest graphics tree released before Bitmap teardown");
     }
+    ReleaseAppSurfaceLocked();
     ReleaseTextures(scene_texture_access_, scene_textures_, scene_texture_count_);
     scene_texture_count_ = 0U;
     scene_texture_access_ = {};
-    ClearPendingFrameTextures(true);
+    ReleaseFonts(scene_fonts_, scene_font_count_);
+    scene_font_count_ = 0U;
     bitmap_update_frame_active_ = false;
-    bitmap_damage_count_ = 0U;
+    bitmap_damage_.Clear();
     bitmap_frame_updates_ = 0U;
     bitmap_frame_bytes_ = 0U;
-    graphics_frame_active_ = false;
-    graphics_frame_length_ = 0U;
-    graphics_frame_commands_ = 0U;
-    heap_caps_free(graphics_frame_bytes_);
-    graphics_frame_bytes_ = nullptr;
     heap_caps_free(texture_storage_);
     texture_storage_ = nullptr;
-    graphics_frame_textures_ = nullptr;
     scene_textures_ = nullptr;
     scratch_textures_ = nullptr;
-    retained_scene_.Release();
+    heap_caps_free(font_storage_);
+    font_storage_ = nullptr;
+    scene_fonts_ = nullptr;
+    scratch_fonts_ = nullptr;
+    guest_scene_.reset();
+    heap_caps_free(guest_scene_node_storage_);
+    guest_scene_node_storage_ = nullptr;
+    heap_caps_free(guest_scene_instance_storage_);
+    guest_scene_instance_storage_ = nullptr;
     fonts_.ReleaseGuestFonts();
     esp_lv_adapter_unlock();
-}
-
-int32_t GuestGraphicsEngine::BeginFrame() {
-    if (display_ == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (graphics_frame_active_ || bitmap_update_frame_active_) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    if (!EnsureTextureStorage()) {
-        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-    }
-    if (graphics_frame_bytes_ == nullptr) {
-        graphics_frame_bytes_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(
-            4U, MICROPIXEL_GRAPHICS_MAX_FRAME_COMMAND_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (graphics_frame_bytes_ == nullptr) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-    }
-    std::memset(graphics_frame_bytes_, 0, sizeof(micropixel_graphics_command_header_t));
-    graphics_frame_length_ = sizeof(micropixel_graphics_command_header_t);
-    graphics_frame_commands_ = 0U;
-    ClearPendingFrameTextures(true);
-    graphics_frame_active_ = true;
-    return MICROPIXEL_STATUS_OK;
 }
 
 int32_t GuestGraphicsEngine::Submit(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) {
     if (display_ == nullptr || bytes == nullptr || textures.resolve == nullptr) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
-    if (!EnsureTextureStorage()) {
+    if (!EnsureTextureStorage() || !EnsureSceneStorage()) {
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
-
-    const bool frame_active = graphics_frame_active_;
-    const bool lvgl_locked = !frame_active;
-    if (lvgl_locked && esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
-    const int32_t validation_status = graphics::ValidateCommandStream(bytes, length, width_, height_, textures.resolve,
-                                                                      textures.context, ValidateFontHandle, this);
+    const int32_t validation_status = guest_scene_->Apply(bytes, length, width_, height_, textures.resolve,
+                                                          textures.context, ValidateFontHandle, this);
     if (validation_status != MICROPIXEL_STATUS_OK) {
-        if (lvgl_locked) {
-            esp_lv_adapter_unlock();
-        }
-        ESP_LOGW(kTag, "rejected graphics batch: status=%" PRId32 " bytes=%" PRIu32, validation_status, length);
+        esp_lv_adapter_unlock();
+        ESP_LOGW(kTag, "rejected graphics scene: status=%" PRId32 " bytes=%" PRIu32, validation_status, length);
         return validation_status;
     }
-    uint32_t frame_texture_count = 0U;
-    if (!graphics::CollectTextureHandles(bytes, length, scratch_textures_, kMaxSceneTextures, frame_texture_count)) {
-        if (lvgl_locked) {
-            esp_lv_adapter_unlock();
+    micropixel_graphics_scene_header_t wire_header{};
+    std::memcpy(&wire_header, bytes, sizeof(wire_header));
+    scene_wire_bytes_ = length;
+    scene_wire_records_ = wire_header.record_count;
+    scene_wire_instances_ = SceneWireInstanceCount(bytes, length);
+
+    uint32_t texture_count = 0U;
+    uint32_t font_count = 0U;
+    for (uint16_t index = 0U; index < guest_scene_->NodeCount(); ++index) {
+        const graphics::GuestSceneNode& node = guest_scene_->Nodes()[index];
+        if (node.kind == graphics::GuestSceneNodeKind::kTexture ||
+            (node.kind == graphics::GuestSceneNodeKind::kSpriteBatch && node.texture != 0U)) {
+            bool exists = false;
+            for (uint32_t current = 0U; current < texture_count; ++current) {
+                exists = exists || scratch_textures_[current] == node.texture;
+            }
+            if (!exists) {
+                scratch_textures_[texture_count++] = node.texture;
+            }
+        } else if (node.kind == graphics::GuestSceneNodeKind::kText) {
+            bool exists = false;
+            for (uint32_t current = 0U; current < font_count; ++current) {
+                exists = exists || scratch_fonts_[current] == node.font;
+            }
+            if (!exists) {
+                scratch_fonts_[font_count++] = node.font;
+            }
         }
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (graphics_frame_active_) {
-        micropixel_graphics_command_header_t batch_header{};
-        std::memcpy(&batch_header, bytes, sizeof(batch_header));
-        const uint32_t record_bytes = length - sizeof(batch_header);
-        if (graphics_frame_bytes_ == nullptr ||
-            batch_header.command_count > MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS - graphics_frame_commands_ ||
-            record_bytes > MICROPIXEL_GRAPHICS_MAX_FRAME_COMMAND_BYTES - graphics_frame_length_) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-        if (!AddPendingFrameTextures(scratch_textures_, frame_texture_count, textures)) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-        std::memcpy(graphics_frame_bytes_ + graphics_frame_length_, bytes + sizeof(batch_header), record_bytes);
-        graphics_frame_length_ += record_bytes;
-        graphics_frame_commands_ += batch_header.command_count;
-        return MICROPIXEL_STATUS_OK;
-    }
-    if (!RetainTextures(textures, scratch_textures_, frame_texture_count)) {
+    if (!RetainFonts(scratch_fonts_, font_count)) {
         esp_lv_adapter_unlock();
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
-    const int32_t execution_status = ApplyFrameLocked(bytes, length, textures, scratch_textures_, frame_texture_count);
-    if (execution_status != MICROPIXEL_STATUS_OK) {
-        ReleaseTextures(textures, scratch_textures_, frame_texture_count);
-    }
-    if (lvgl_locked) {
+    if (!RetainTextures(textures, scratch_textures_, texture_count)) {
+        ReleaseFonts(scratch_fonts_, font_count);
         esp_lv_adapter_unlock();
+        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
-    return execution_status;
-}
-
-int32_t GuestGraphicsEngine::CommitFrame(const device::TextureAccess& textures) {
-    if (display_ == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
+    const int32_t execution_status =
+        ApplySceneLocked(textures, scratch_textures_, texture_count, scratch_fonts_, font_count);
+    if (execution_status != MICROPIXEL_STATUS_OK) {
+        ReleaseTextures(textures, scratch_textures_, texture_count);
+        ReleaseFonts(scratch_fonts_, font_count);
     }
-    if (!graphics_frame_active_ || graphics_frame_bytes_ == nullptr || graphics_frame_commands_ == 0U) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    micropixel_graphics_command_header_t header{};
-    header.magic = MICROPIXEL_GRAPHICS_COMMAND_MAGIC;
-    header.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    header.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
-    header.total_size = graphics_frame_length_;
-    header.command_count = graphics_frame_commands_;
-    std::memcpy(graphics_frame_bytes_, &header, sizeof(header));
-
-    const uint32_t frame_commands = graphics_frame_commands_;
-    const uint32_t frame_bytes = graphics_frame_length_;
-    graphics_frame_active_ = false;
-    graphics_frame_length_ = 0U;
-    graphics_frame_commands_ = 0U;
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        ClearPendingFrameTextures(true);
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    const device::TextureAccess retained_access =
-        graphics_frame_texture_count_ == 0U ? textures : graphics_frame_texture_access_;
-    const int32_t status = ApplyFrameLocked(graphics_frame_bytes_, frame_bytes, retained_access,
-                                            graphics_frame_textures_, graphics_frame_texture_count_);
-    const uint32_t sequence = status == MICROPIXEL_STATUS_OK ? ++graphics_frame_sequence_ : 0U;
-    ClearPendingFrameTextures(status != MICROPIXEL_STATUS_OK);
     esp_lv_adapter_unlock();
-    if (status == MICROPIXEL_STATUS_OK && (sequence <= 8U || (sequence % 120U) == 0U)) {
-        ESP_LOGI(kTag, "graphics frame #%" PRIu32 ": commands=%" PRIu32 " bytes=%" PRIu32, sequence, frame_commands,
-                 frame_bytes);
-    }
-    return status;
-}
-
-int32_t GuestGraphicsEngine::CancelFrame() {
-    if (!graphics_frame_active_) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    graphics_frame_active_ = false;
-    graphics_frame_length_ = 0U;
-    graphics_frame_commands_ = 0U;
-    ClearPendingFrameTextures(true);
-    return MICROPIXEL_STATUS_OK;
+    return execution_status;
 }
 
 int32_t GuestGraphicsEngine::LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out) {
@@ -506,12 +609,12 @@ int32_t GuestGraphicsEngine::BeginBitmapUpdateFrame() {
     if (display_ == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
-    if (bitmap_update_frame_active_ || graphics_frame_active_) {
+    if (bitmap_update_frame_active_) {
         esp_lv_adapter_unlock();
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     bitmap_update_frame_active_ = true;
-    bitmap_damage_count_ = 0U;
+    bitmap_damage_.Clear();
     bitmap_frame_updates_ = 0U;
     bitmap_frame_bytes_ = 0U;
     bitmap_frame_started_us_ = static_cast<uint64_t>(esp_timer_get_time());
@@ -534,24 +637,28 @@ int32_t GuestGraphicsEngine::UpdateBitmap(const device::BitmapView& bitmap, uint
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
+    if (bitmap_update_frame_active_) {
+        constexpr graphics::DamageMergePolicy kDamageMergePolicy{
+            .max_extra_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS,
+            .max_region_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS,
+        };
+        if (!bitmap_damage_.Add(bitmap.data, {.x = x, .y = y, .width = width, .height = height}, kDamageMergePolicy)) {
+            esp_lv_adapter_unlock();
+            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+        }
+    }
     auto* destination = const_cast<uint8_t*>(bitmap.data) + y * bitmap.stride + x * bytes_per_pixel;
     for (uint32_t row = 0U; row < height; ++row) {
         std::memcpy(destination + row * bitmap.stride, pixels + row * stride, stride);
     }
     if (bitmap_update_frame_active_) {
-        if (!AccumulateDamage(bitmap_damage_, kBitmapDamageCapacity, bitmap_damage_count_, bitmap.data, x, y, width,
-                              height)) {
-            esp_lv_adapter_unlock();
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
         ++bitmap_frame_updates_;
         bitmap_frame_bytes_ += static_cast<uint64_t>(stride) * height;
     } else {
-        const bool invalidated = retained_scene_.InvalidateBitmap(bitmap.data, x, y, width, height);
+        const bool invalidated =
+            RefreshAppSurfaceBitmapLocked(bitmap.data, {.x = x, .y = y, .width = width, .height = height});
         if (invalidated) {
-            if (!retained_scene_.SurfaceActive()) {
-                guest_refresh_pending_ = true;
-            }
+            guest_refresh_pending_ = true;
             RequestDisplayRefresh(display_);
         }
     }
@@ -570,40 +677,41 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
 
     bool invalidated = false;
     uint32_t ppa_eligible_damage = 0U;
-    for (uint32_t index = 0U; index < bitmap_damage_count_; ++index) {
-        const BitmapDamage& damage = bitmap_damage_[index];
-        invalidated = retained_scene_.InvalidateBitmap(damage.data, damage.x, damage.y, damage.width, damage.height) ||
-                      invalidated;
+    for (size_t index = 0U; index < bitmap_damage_.Size(); ++index) {
+        const graphics::DamageRegion& damage = bitmap_damage_[index];
+        invalidated =
+            RefreshAppSurfaceBitmapLocked(static_cast<const uint8_t*>(damage.source), damage.rect) || invalidated;
 #if CONFIG_MICROPIXEL_LVGL_PPA_ACCEL
-        if (static_cast<uint64_t>(damage.width) * damage.height > CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS) {
+        if (static_cast<uint64_t>(damage.rect.width) * damage.rect.height >
+            CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS) {
             ++ppa_eligible_damage;
         }
 #endif
     }
     if (invalidated) {
-        if (!retained_scene_.SurfaceActive()) {
-            guest_refresh_pending_ = true;
-        }
+        guest_refresh_pending_ = true;
         RequestDisplayRefresh(display_);
     }
 
     const uint32_t updates = bitmap_frame_updates_;
     const uint64_t bytes = bitmap_frame_bytes_;
-    const uint32_t damage_count = bitmap_damage_count_;
+    const size_t damage_count = bitmap_damage_.Size();
+    const uint32_t capacity_merges = bitmap_damage_.CapacityMergeCount();
     const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
     const uint64_t elapsed_us = now_us >= bitmap_frame_started_us_ ? now_us - bitmap_frame_started_us_ : 0U;
     const uint32_t sequence = updates == 0U ? bitmap_frame_sequence_ : ++bitmap_frame_sequence_;
     bitmap_update_frame_active_ = false;
-    bitmap_damage_count_ = 0U;
+    bitmap_damage_.Clear();
     bitmap_frame_updates_ = 0U;
     bitmap_frame_bytes_ = 0U;
     esp_lv_adapter_unlock();
 
     if (updates != 0U && (sequence <= 8U || (sequence % 120U) == 0U)) {
         ESP_LOGI(kTag,
-                 "offscreen frame #%" PRIu32 ": updates=%" PRIu32 " bytes=%" PRIu64 " unions=%" PRIu32
-                 " ppa-eligible=%" PRIu32 " stage=%" PRIu64 " us present=%s",
-                 sequence, updates, bytes, damage_count, ppa_eligible_damage, elapsed_us, invalidated ? "yes" : "no");
+                 "offscreen frame #%" PRIu32 ": updates=%" PRIu32 " bytes=%" PRIu64 " regions=%" PRIu32
+                 " ppa-eligible=%" PRIu32 " capacity-merges=%" PRIu32 " stage=%" PRIu64 " us present=%s",
+                 sequence, updates, bytes, static_cast<uint32_t>(damage_count), ppa_eligible_damage, capacity_merges,
+                 elapsed_us, invalidated ? "yes" : "no");
     }
     return MICROPIXEL_STATUS_OK;
 }

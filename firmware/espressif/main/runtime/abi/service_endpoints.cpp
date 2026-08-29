@@ -533,14 +533,13 @@ int32_t RandomServiceEndpoint::Call(uint32_t method_id, const uint8_t*, uint32_t
 
 ServiceDescriptor GraphicsServiceEndpoint::Describe() const {
     auto result = context_.GraphicsInfo();
-    const uint64_t capabilities = result ? result->capabilities : 0U;
-    const uint32_t max_submit_bytes = result ? result->max_command_bytes : MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES;
+    const uint32_t max_submit_bytes = result ? result->max_scene_bytes : MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES;
     return ServiceDescriptor{
         .service_id = MICROPIXEL_SERVICE_GRAPHICS,
         .interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
         .interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_SUBMIT,
-        .capabilities = capabilities,
+        .capabilities = 0U,
         .max_request_bytes = sizeof(micropixel_graphics_measure_text_request_t) + MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES,
         .max_response_bytes = sizeof(micropixel_graphics_info_t),
         .max_submit_bytes = max_submit_bytes,
@@ -555,24 +554,6 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
         }
         return WriteResult<micropixel_graphics_info_t>(context_.GraphicsInfo(), response, response_capacity,
                                                        response_size_out);
-    }
-    if (method_id == MICROPIXEL_GRAPHICS_METHOD_FRAME_BEGIN) {
-        if (!EmptyRequest(request_size)) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        return ResultStatus(context_.GraphicsBeginFrame());
-    }
-    if (method_id == MICROPIXEL_GRAPHICS_METHOD_FRAME_COMMIT) {
-        if (!EmptyRequest(request_size)) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        return ResultStatus(context_.GraphicsCommitFrame());
-    }
-    if (method_id == MICROPIXEL_GRAPHICS_METHOD_FRAME_CANCEL) {
-        if (!EmptyRequest(request_size)) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        return ResultStatus(context_.GraphicsCancelFrame());
     }
     if (method_id == MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT) {
         micropixel_graphics_measure_text_request_t wire{};
@@ -590,7 +571,7 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
 }
 
 int32_t GraphicsServiceEndpoint::Submit(uint32_t channel_id, const uint8_t* bytes, uint32_t length) {
-    if (channel_id != MICROPIXEL_GRAPHICS_CHANNEL_COMMANDS) {
+    if (channel_id != MICROPIXEL_GRAPHICS_CHANNEL_SCENE) {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
     return ResultStatus(context_.GraphicsSubmit(bytes, length));

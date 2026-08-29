@@ -410,11 +410,22 @@ build_null() {
     idf_host p4-null build
 }
 
+build_app_package() {
+    local app_name="$1"
+    local app_dir="$workspace_root/guest/apps/$app_name"
+    local app_build_dir="$workspace_root/build/apps/$app_name"
+
+    python3 "$workspace_root/tools/micropixel" package "$app_dir" \
+        --profile "${MICROPIXEL_GUEST_PROFILE:-release}" \
+        --output-dir "$app_build_dir" \
+        --output "$app_build_dir/$app_name.bundle.bin"
+}
+
 build_release() {
     echo "==> Building release Apps: Blocks, Snake, and SDK Demo"
-    bash "$workspace_root/tools/build_blocks_bundle.sh"
-    bash "$workspace_root/tools/build_snake_bundle.sh"
-    bash "$workspace_root/tools/build_demo_bundle.sh"
+    build_app_package blocks
+    build_app_package snake
+    build_app_package demo
     build_host
     mkdir -p "$system_shell_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
@@ -463,10 +474,10 @@ monitor_host() {
 
 build_example_apps() {
     echo "==> Building seven example Apps"
-    bash "$workspace_root/tools/build_blocks_bundle.sh"
-    bash "$workspace_root/tools/build_snake_bundle.sh"
-    bash "$workspace_root/tools/build_demo_bundle.sh"
-    bash "$workspace_root/tools/build_showcase_bundles.sh"
+    local app_name
+    for app_name in blocks snake demo tap-counter color-lab pixel-sketch orbit-pad; do
+        build_app_package "$app_name"
+    done
 }
 
 app_store_partition_info() {

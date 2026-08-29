@@ -43,6 +43,8 @@ class Audio {
     virtual void BindPcmCompletionSink(PcmCompletionSink sink, void* context) = 0;
     virtual void UnbindPcmCompletionSink(void* context) = 0;
     [[nodiscard]] virtual int32_t StopAll() = 0;
+    // These methods also define the owning AppSession's foreground state:
+    // ResumeAll keeps output ready, while SuspendAll permits idle shutdown.
     [[nodiscard]] virtual int32_t SuspendAll() = 0;
     [[nodiscard]] virtual int32_t ResumeAll() = 0;
 };

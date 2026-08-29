@@ -15,8 +15,8 @@ struct Layout final {
     static constexpr int32_t kHallCardGap = 17;
     static constexpr int32_t kHallScrollTrackWidth = 140;
     static constexpr int32_t kHallScrollTrackHeight = 6;
-    static constexpr int32_t kStatusDialogVisibleY = 36;
-    static constexpr int32_t kStatusDialogHiddenY = -508;
+    static constexpr int32_t kStatusDialogVisibleY = 24;
+    static constexpr int32_t kStatusDialogHiddenY = -570;
 };
 
 }  // namespace micropixel::host_ui::lvgl::square_common::profiles::square_720

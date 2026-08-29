@@ -29,8 +29,6 @@ blocks/
 python3 tools/micropixel package guest/apps/blocks
 ```
 
-兼容脚本 `bash tools/build_blocks_bundle.sh` 只转发到同一条 manifest 驱动的命令。
-
 触控操作覆盖整个 720×720 屏幕：任意位置点击旋转、水平拖动、慢速下拖软降、快速下划硬降、上划换块；
 轻点 HOLD 换块，轻点左上角标题区域暂停。从 HOLD 或标题区域起手的滑动仍按游戏手势处理，不会被按钮截断。
 
@@ -43,20 +41,27 @@ python3 tools/micropixel package guest/apps/blocks
 visual-cell code，逻辑变化后重新合成活动块、Ghost 和落定棋盘，只对 code 改变的 `30×30` 格子调用
 `StreamingTexture::Update()`。每次 `SyncPlayfield()` 用一个 `TextureUpdateBatch` 包住全部写入；Host
 按 surface 合并脏格，commit 时统一 invalidate 并只唤醒一次 compositor。合并后的活动块区域通常超过
-4096 pixels，可进入 ESP32-P4 PPA RGB888 image SRM 路径，不再把逐格 CPU fallback 过程暴露到屏幕。
-普通横移/旋转不提交新的 `Frame`；HUD、Hold/Next 和 overlay 仅在状态变化时提交。
+4096 pixels，可进入 Host PPA RGB888 image SRM 路径，不再把逐格 CPU fallback 过程暴露到屏幕。
+普通横移/旋转只提交对应 Scene 对象的属性差量；HUD、Hold/Next 和 overlay 仅在状态变化时更新。
 离屏 buffer 数量和脏格统计只保留在 Host 诊断日志中，不占用发布版 HUD。
+
+顶部 HUD 与 Juicy Snake 使用同一套圆角屏布局规则：标题和右侧 Level/Score/Best、Combo 分别消费
+`RendererInfo::safe_area_insets()` 的左右内缩，标题另保留 12 个逻辑像素的视觉 padding。
 
 音效参数只维护在 `audio/sfx.json`。`tools/analyze_sfx.py` 逐采样复现 Host 合成器，结合可替换的设备
 频响计算 A-weighted 事件能量、重复暴露、尖锐度代理、瞬态和层级评分；构建会生成报告及 Guest 头文件，
 并在感知约束回归时失败。算法、WAV 导出和扬声器校准方法见 `audio/README.md`。
 
-抓屏 Host 还可从 USB Serial/JTAG 注入同路径触控并立即抓图：
+可通过统一 CLI 从 USB Serial/JTAG 注入同路径触控并立即抓图：
 
 ```sh
-python3 tools/drive_p4_touch.py /dev/cu.usbmodem1101 build/captures/blocks-playing.png \
-  --reset --gesture tap:360:352 --gesture tap:560:230 \
-  --gesture swipe:520:300:610:300:120:3 --gesture flick:560:250:560:520:100
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodem1101 input tap 360 352
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodem1101 input tap 560 230
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodem1101 \
+  input swipe 520 300 610 300 --duration-ms 120 --steps 3
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodem1101 \
+  input swipe 560 250 560 520 --duration-ms 100 --steps 2 \
+  --screenshot build/captures/blocks-playing.jpg
 ```
 
 规则回归可原生运行；设备集成还应检查启动日志中的四条

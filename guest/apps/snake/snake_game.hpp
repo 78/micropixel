@@ -38,45 +38,26 @@ class SnakeGame final {
     micropixel::Rect InterpolatedSlotRect(uint32_t slot, uint32_t index, int32_t inset, int32_t board_x,
                                           int32_t board_y) const;
 
-    void AppendPlaceholderRect(micropixel::Frame& commands) const;
+    void InitializeScene();
 
-    static void AppendPlaceholderText(micropixel::Frame& commands);
+    static void SetSolidInstance(micropixel::SpriteBatch& batch, micropixel::SceneUpdate& update, uint16_t id,
+                                 micropixel::Rect rect, micropixel::Color color, bool visible = true);
 
-    void FillClippedRect(micropixel::Frame& commands, micropixel::Rect rect, micropixel::Color color) const;
+    void RenderScenery(micropixel::SceneUpdate& update, const Theme& theme);
 
-    void RenderComboBar(micropixel::Frame& commands) const;
+    void RenderFood(micropixel::SceneUpdate& update);
 
-    void RenderComboFlame(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                          uint32_t slots) const;
+    void RenderSnake(micropixel::SceneUpdate& update, const Theme& theme);
 
-    void RenderTrails(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                      uint32_t slots) const;
+    void RenderFoodBurst(micropixel::SceneUpdate& update);
 
-    void RenderFood(micropixel::Frame& commands, const Food& food, int32_t board_x, int32_t board_y,
-                    uint32_t detail_slots) const;
+    void RenderParticles(micropixel::SceneUpdate& update, const Theme& theme);
 
-    void RenderObstacles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, uint32_t detail_slots) const;
+    void RenderFlash(micropixel::SceneUpdate& update, const Theme& theme);
 
-    void RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                     uint32_t body_slots) const;
+    void RenderOverlay(micropixel::SceneUpdate& update, const Theme& theme);
 
-    void RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, int32_t board_y) const;
-
-    void RenderParticles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                         uint32_t slots) const;
-
-    void RenderFlash(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                     uint32_t slots) const;
-
-    void RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
-
-    void RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const;
-
-    void RenderPopups(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const;
-
-    void RenderOverlayTexts(micropixel::Frame& commands, const Theme& theme) const;
-
-    void SnapshotBody();
+    void RenderHud(micropixel::SceneUpdate& update, const Theme& theme);
 
     void ResetBodySlotMapping();
 
@@ -148,6 +129,22 @@ class SnakeGame final {
     snake_strings::Catalog strings_;
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
+    micropixel::Scene scene_;
+    micropixel::Layer game_layer_{};
+    micropixel::Layer hud_layer_{};
+    micropixel::SpriteNode board_node_{};
+    micropixel::SpriteBatch scenery_batch_{};
+    micropixel::SpriteNode food_node_{};
+    micropixel::SpriteBatch snake_batch_{};
+    micropixel::SpriteNode burst_node_{};
+    micropixel::SpriteBatch particle_batch_{};
+    micropixel::ShapeNode overlay_node_{};
+    micropixel::SpriteBatch flash_batch_{};
+    micropixel::SpriteNode button_node_{};
+    micropixel::SpriteBatch combo_batch_{};
+    micropixel::LabelNode popup_labels_[kPopupPoolSize]{};
+    micropixel::LabelNode overlay_labels_[9U]{};
+    micropixel::LabelNode header_labels_[7U]{};
     micropixel::Audio audio_;
     micropixel::Texture board_texture_{};
     micropixel::Texture start_button_texture_{};
@@ -156,7 +153,6 @@ class SnakeGame final {
     micropixel::Texture food_sheets_[4U]{};
     SnakeModel model_{};
     Cell burst_cell_{};
-    Cell previous_body_[kMaxLength]{};
     Cell body_slot_previous_[kMaxLength]{};
     snake::gamekit::CyclicPool<Particle, kParticlePoolSize> particles_{};
     snake::gamekit::CyclicPool<Trail, kTrailPoolSize> trails_{};
@@ -187,10 +183,11 @@ class SnakeGame final {
     bool audio_available_{};
     bool bgm_playing_{};
     bool audio_error_logged_{};
+    bool scene_initialized_{};
     Screen screen_{Screen::kMenu};
     micropixel::ui::Button screen_button_{};
     micropixel::ui::Button pause_touch_button_{};
-    snake::gamekit::SwipeGesture touch_gesture_{};
+    snake::gamekit::SwipeGesture touch_gesture_;
 };
 
 }  // namespace snake

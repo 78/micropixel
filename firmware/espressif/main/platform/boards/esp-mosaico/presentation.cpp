@@ -25,7 +25,6 @@
 #include "platform/adapters/graphics_adapter.hpp"
 #include "platform/boards/esp-mosaico/battery_peripheral.hpp"
 #include "platform/boards/esp-mosaico/board_config.hpp"
-#include "platform/boards/esp-mosaico/display/brightness_controller.hpp"
 #include "platform/boards/esp-mosaico/display/panel_transition_compositor.hpp"
 #include "platform/boards/esp-mosaico/platform_state.hpp"
 #include "platform/boards/esp-mosaico/power_controller.hpp"
@@ -58,8 +57,8 @@ bool MosaicoPresentation::AnimateToGuest(lv_obj_t* hall_root, lv_obj_t* guest_fr
     const bool transition_requested = state_.guest_transition_intermediate != nullptr &&
                                       state_.guest_snapshot_cover != nullptr && state_.guest_snapshot_in_hall;
     bool transitioned = false;
-    if (transition_requested && state_.displayed_shadow_valid &&
-        state_.panel_transition.CaptureDisplayedBackground(state_.displayed_shadow)) {
+    if (transition_requested && *state_.display_pipeline.DisplayedShadowReady() &&
+        state_.panel_transition.CaptureDisplayedBackground(state_.display_pipeline.DisplayedShadow())) {
         transitioned =
             state_.panel_transition.Animate(state_.guest_transition_intermediate, state_.guest_transition_card,
                                             PanelTransitionDirection::kToGuest, transition_duration_ms);
@@ -75,10 +74,10 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> MosaicoPresentati
     lv_obj_t* guest_frame = state_.guest_graphics.FrameLocked();
     if (state_.display == nullptr || guest_frame == nullptr || !presentation.card_valid ||
         state_.guest_transition_intermediate != nullptr || state_.guest_snapshot_cover != nullptr ||
-        state_.displayed_shadow == nullptr || !state_.displayed_shadow_valid ||
+        state_.display_pipeline.DisplayedShadow() == nullptr || !*state_.display_pipeline.DisplayedShadowReady() ||
         !state_.panel_transition.HasBackground()) {
         ESP_LOGW(kTag, "retained Guest capture unavailable: shadow=%s Hall-baseline=%s",
-                 state_.displayed_shadow_valid ? "ready" : "incomplete",
+                 *state_.display_pipeline.DisplayedShadowReady() ? "ready" : "incomplete",
                  state_.panel_transition.HasBackground() ? "ready" : "missing");
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
@@ -110,8 +109,8 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> MosaicoPresentati
 
     uint32_t first_frame_elapsed_us = 0U;
     const bool first_frame_presented = state_.panel_transition.CaptureDisplayedToIntermediate(
-        state_.displayed_shadow, intermediate, intermediate_allocation_bytes, state_.guest_transition_card,
-        trigger_timestamp_us, first_frame_elapsed_us);
+        state_.display_pipeline.DisplayedShadow(), intermediate, intermediate_allocation_bytes,
+        state_.guest_transition_card, trigger_timestamp_us, first_frame_elapsed_us);
     const int64_t cover_started_us = esp_timer_get_time();
     const bool cover_scaled = first_frame_presented && state_.panel_transition.ScaleIntermediateToCoverRgb888(
                                                            intermediate, cover, cover_allocation_bytes);
@@ -156,10 +155,10 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> MosaicoPresentati
 
 std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> MosaicoPresentation::CaptureScreenJpeg() {
     return lvgl::CaptureScreenJpeg(state_.display, static_cast<uint32_t>(kWidth), static_cast<uint32_t>(kHeight),
-                                   {.pixels = state_.displayed_shadow,
+                                   {.pixels = state_.display_pipeline.DisplayedShadow(),
                                     .stride = kDisplayFrameStride,
                                     .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                    .ready = &state_.displayed_shadow_valid});
+                                    .ready = state_.display_pipeline.DisplayedShadowReady()});
 }
 
 void MosaicoPresentation::ReleaseGuestSnapshot() {
@@ -174,8 +173,8 @@ void MosaicoPresentation::ReleaseGuestSnapshot() {
 
 bool MosaicoPresentation::PrepareHallBackgroundLocked() {
     const int64_t background_started_us = esp_timer_get_time();
-    const bool prepared =
-        state_.displayed_shadow_valid && state_.panel_transition.CaptureDisplayedBackground(state_.displayed_shadow);
+    const bool prepared = *state_.display_pipeline.DisplayedShadowReady() &&
+                          state_.panel_transition.CaptureDisplayedBackground(state_.display_pipeline.DisplayedShadow());
     if (prepared) {
         ESP_LOGI(kTag, "Hall transition baseline retained before App launch: elapsed=%" PRIu32 " us",
                  static_cast<uint32_t>(esp_timer_get_time() - background_started_us));
@@ -186,7 +185,7 @@ bool MosaicoPresentation::PrepareHallBackgroundLocked() {
 }
 
 void MosaicoPresentation::ApplyBrightness(uint8_t percent) {
-    const esp_err_t status = esp_mosaico::SetDisplayBrightness(state_.panel, percent);
+    const esp_err_t status = state_.display_pipeline.SetBrightness(static_cast<uint32_t>(percent) * 100U);
     if (status != ESP_OK) {
         ESP_LOGW(kTag, "could not set display brightness: %s", esp_err_to_name(status));
     }

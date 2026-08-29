@@ -45,10 +45,7 @@ class Graphics {
 
     [[nodiscard]] virtual bool Available() const = 0;
     [[nodiscard]] virtual int32_t GetInfo(micropixel_graphics_info_t& info) = 0;
-    [[nodiscard]] virtual int32_t BeginFrame() = 0;
     [[nodiscard]] virtual int32_t Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) = 0;
-    [[nodiscard]] virtual int32_t CommitFrame(const TextureAccess& textures) = 0;
-    [[nodiscard]] virtual int32_t CancelFrame() = 0;
     [[nodiscard]] virtual int32_t LoadFont(const FontResourceView& resource, micropixel_font_info_t& info_out) = 0;
     [[nodiscard]] virtual int32_t ReleaseFont(micropixel_font_handle_t font) = 0;
     [[nodiscard]] virtual int32_t MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,

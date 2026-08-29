@@ -145,41 +145,42 @@ class DevicePage final {
         return redraw;
     }
 
-    void Render(DemoContext& context, micropixel::Frame& commands) {
+    void Render(DemoContext& context, DemoView& commands) {
         const int32_t center_x = PageCenterX(context);
         if (!selected_valid_) {
-            commands.DrawTextCentered(center_x, PageY(context, 80, 90), "No devices discovered", DangerColor(),
-                                      micropixel::SystemFont::kTitle);
-            commands.DrawTextCentered(center_x, PageY(context, 140, 150), status_.c_str(), MutedColor(),
-                                      micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 80, 90), "No devices discovered", DangerColor(),
+                                  micropixel::SystemFont::kTitle);
+            commands.CenteredText(center_x, PageY(context, 140, 150), status_.c_str(), MutedColor(),
+                                  micropixel::SystemFont::kMedium);
         } else {
             Line heading;
             heading.Append("Device ");
             heading.AppendUint(selected_index_ + 1U);
             heading.Append(" / ");
             heading.AppendUint(devices_.size());
-            commands.DrawTextCentered(center_x, PageY(context, 10, 12), heading.c_str(), MutedColor(),
-                                      micropixel::SystemFont::kMedium);
-            commands.DrawTextCentered(center_x, PageY(context, 40, 48), selected_.name.c_str(),
-                                      micropixel::Color::White(),
-                                      micropixel::SystemFont::kLarge);
+            commands.CenteredText(center_x, PageY(context, 10, 12), heading.c_str(), MutedColor(),
+                                  micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 40, 48), selected_.name.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kLarge);
 
             Line identity;
             identity.Append(KindName(selected_.kind));
             identity.Append("   DeviceId ");
             identity.AppendUint(selected_.id.value());
-            commands.DrawTextCentered(center_x, PageY(context, 78, 94), identity.c_str(), AccentColor(),
-                                      micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 78, 94), identity.c_str(), AccentColor(),
+                                  micropixel::SystemFont::kMedium);
             RenderSelected(context, commands, center_x);
-            commands.DrawTextCentered(center_x, context.layout.page_content.y + context.layout.page_content.height - 30,
-                                      status_.c_str(), MutedColor(),
-                                      micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, context.layout.page_content.y + context.layout.page_content.height - 30,
+                                  status_.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
         }
 
         DrawButton(commands, buttons_[0], "PREV", BlueColor());
         if (HasAction()) {
-            DrawButton(commands, buttons_[1],
-                       selected_.kind == micropixel::DeviceKind::kGpioLine ? "READ" : "ACTION", AccentColor());
+            const char* action = "ACTION";
+            if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
+                action = gpio_output_.valid() ? "TOGGLE" : "READ";
+            }
+            DrawButton(commands, buttons_[1], action, AccentColor());
         }
         DrawButton(commands, buttons_[2], "NEXT", BlueColor());
     }
@@ -228,8 +229,7 @@ class DevicePage final {
             return false;
         }
         return selected_.kind == micropixel::DeviceKind::kHaptics ||
-               selected_.kind == micropixel::DeviceKind::kGpioLine ||
-               selected_.kind == micropixel::DeviceKind::kPower;
+               selected_.kind == micropixel::DeviceKind::kGpioLine || selected_.kind == micropixel::DeviceKind::kPower;
     }
 
     [[nodiscard]] bool ActionEnabled() const {
@@ -240,7 +240,7 @@ class DevicePage final {
             return haptic_.valid();
         }
         if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
-            return gpio_input_.valid();
+            return gpio_input_.valid() || gpio_output_.valid();
         }
         return true;
     }
@@ -258,10 +258,10 @@ class DevicePage final {
         const int32_t vertical_padding = context.layout.compact() ? 12 : 16;
         auto result = micropixel::ui::ComputeFlexLayout(
             context.layout.page_actions,
-            micropixel::ui::FlexLayout{.direction = micropixel::ui::FlexDirection::kHorizontal,
-                                       .padding = {vertical_padding, horizontal_padding, vertical_padding,
-                                                   horizontal_padding},
-                                       .gap_pixels = context.layout.compact() ? 10 : 14},
+            micropixel::ui::FlexLayout{
+                .direction = micropixel::ui::FlexDirection::kHorizontal,
+                .padding = {vertical_padding, horizontal_padding, vertical_padding, horizontal_padding},
+                .gap_pixels = context.layout.compact() ? 10 : 14},
             items, rects);
         micropixel::Assert(result.has_value(), "demo.device: navigation button layout failed");
         buttons_[0].SetBounds(rects[0]);
@@ -321,16 +321,30 @@ class DevicePage final {
                 return;
             }
             gpio_info_ = *info_result;
-            auto opened = context.app.gpio().OpenInput(
-                selected_.id, micropixel::GpioInputOptions{.pull = micropixel::GpioPull::kDown,
-                                                           .edge = micropixel::GpioEdgeTrigger::kBoth});
-            if (!opened) {
-                SetError("GPIO input failed: ", opened.error());
-                return;
+            if (gpio_info_.Supports(micropixel::GpioCapability::kInput)) {
+                auto opened = context.app.gpio().OpenInput(
+                    selected_.id, micropixel::GpioInputOptions{.pull = micropixel::GpioPull::kDown,
+                                                               .edge = micropixel::GpioEdgeTrigger::kBoth});
+                if (!opened) {
+                    SetError("GPIO input failed: ", opened.error());
+                    return;
+                }
+                gpio_input_ = std::move(*opened);
+                SetStatus("Pull-down active; connect this line to 3.3V");
+                (void)ReadGpio();
+            } else if (gpio_info_.Supports(micropixel::GpioCapability::kOutput)) {
+                auto opened = context.app.gpio().OpenOutput(selected_.id, false);
+                if (!opened) {
+                    SetError("GPIO output failed: ", opened.error());
+                    return;
+                }
+                gpio_output_ = std::move(*opened);
+                gpio_value_ = false;
+                has_gpio_value_ = true;
+                SetStatus("TOGGLE controls this logical output");
+            } else {
+                SetStatus("GPIO has no Demo-compatible mode");
             }
-            gpio_input_ = std::move(*opened);
-            SetStatus("Pull-down active; connect this line to 3.3V");
-            (void)ReadGpio();
         } else if (selected_.kind == micropixel::DeviceKind::kPower) {
             ReadPower(context);
         }
@@ -340,6 +354,7 @@ class DevicePage final {
         accelerometer_.Reset();
         magnetometer_.Reset();
         gpio_input_.Reset();
+        gpio_output_.Reset();
         haptic_.Reset();
         selected_valid_ = false;
         has_acceleration_ = false;
@@ -374,6 +389,18 @@ class DevicePage final {
             return;
         }
         if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
+            if (gpio_output_.valid()) {
+                const bool next_value = !gpio_value_;
+                auto written = gpio_output_.Write(next_value);
+                if (!written) {
+                    SetError("GPIO write failed: ", written.error());
+                    return;
+                }
+                gpio_value_ = next_value;
+                has_gpio_value_ = true;
+                SetStatus(gpio_value_ ? "Logical output is ON" : "Logical output is OFF");
+                return;
+            }
             (void)ReadGpio(true);
             return;
         }
@@ -413,7 +440,7 @@ class DevicePage final {
         }
     }
 
-    void RenderSelected(DemoContext& context, micropixel::Frame& commands, int32_t center_x) const {
+    void RenderSelected(DemoContext& context, DemoView& commands, int32_t center_x) const {
         if (selected_.kind == micropixel::DeviceKind::kSensor) {
             Line axes;
             if (sensor_kind_ == micropixel::SensorKind::kAcceleration && has_acceleration_) {
@@ -433,30 +460,32 @@ class DevicePage final {
             } else {
                 axes.Append("Waiting for the first cached sample...");
             }
-            commands.DrawTextCentered(center_x, PageY(context, 135, 178), axes.c_str(), micropixel::Color::White(),
-                                      micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 135, 178), axes.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         } else if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
             Line gpio;
             gpio.Append("Physical line ");
             gpio.AppendUint(gpio_info_.line_number);
-            if (!gpio_input_.valid() || !has_gpio_value_) {
+            if (gpio_output_.valid() && has_gpio_value_) {
+                gpio.Append(gpio_value_ ? "   OUTPUT ON" : "   OUTPUT OFF");
+            } else if (!gpio_input_.valid() || !has_gpio_value_) {
                 gpio.Append("   input unavailable");
             } else {
                 gpio.Append(gpio_value_ ? "   INPUT HIGH" : "   INPUT LOW");
             }
-            commands.DrawTextCentered(center_x, PageY(context, 135, 178), gpio.c_str(), micropixel::Color::White(),
-                                      micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 135, 178), gpio.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         } else if (selected_.kind == micropixel::DeviceKind::kPower && has_power_) {
             Line power;
             power.Append("Battery ");
             power.AppendUint(power_.battery_percent);
             power.Append("%   ");
             power.Append(power_.external_connected ? "external power" : "battery power");
-            commands.DrawTextCentered(center_x, PageY(context, 135, 178), power.c_str(), micropixel::Color::White(),
-                                      micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 135, 178), power.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
         } else {
-            commands.DrawTextCentered(center_x, PageY(context, 135, 178), "Select devices by opaque DeviceId",
-                                      micropixel::Color::White(), micropixel::SystemFont::kMedium);
+            commands.CenteredText(center_x, PageY(context, 135, 178), "Select devices by opaque DeviceId",
+                                  micropixel::Color::White(), micropixel::SystemFont::kMedium);
         }
     }
 
@@ -478,6 +507,7 @@ class DevicePage final {
     micropixel::Accelerometer accelerometer_{};
     micropixel::Magnetometer magnetometer_{};
     micropixel::GpioInput gpio_input_{};
+    micropixel::GpioOutput gpio_output_{};
     micropixel::Haptic haptic_{};
     micropixel::Acceleration acceleration_{};
     micropixel::MagneticField magnetic_field_{};
@@ -511,8 +541,6 @@ bool DeviceDemoOnEvent(DemoContext& context, const micropixel::Event& event) {
 bool DeviceDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
     return device_page.OnTouch(context, event);
 }
-void DeviceDemoRender(DemoContext& context, micropixel::Frame& commands) {
-    device_page.Render(context, commands);
-}
+void DeviceDemoRender(DemoContext& context, DemoView& commands) { device_page.Render(context, commands); }
 
 }  // namespace demo

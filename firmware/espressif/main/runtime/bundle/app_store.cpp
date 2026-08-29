@@ -6,7 +6,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <new>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "psa/crypto.h"
 #include "runtime/bundle/bundle_format.h"
@@ -18,6 +21,28 @@ namespace {
 
 constexpr char kTag[] = "app_store";
 constexpr size_t kWriteChunkSize = 4096U;
+
+template <typename T>
+struct HeapCapsObjectDeleter final {
+    void operator()(T* value) const {
+        if (value != nullptr) {
+            value->~T();
+            heap_caps_free(value);
+        }
+    }
+};
+
+template <typename T>
+using HeapCapsObjectPtr = std::unique_ptr<T, HeapCapsObjectDeleter<T>>;
+
+template <typename T>
+HeapCapsObjectPtr<T> MakePsramObject() {
+    void* memory = heap_caps_malloc(sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (memory == nullptr) {
+        return {};
+    }
+    return HeapCapsObjectPtr<T>(new (memory) T{});
+}
 
 std::array<char, MICROPIXEL_BUNDLE_LOCALE_MAX_LENGTH + 1U> LocaleBuffer(std::string_view locale) {
     if (locale.empty() || locale.size() > MICROPIXEL_BUNDLE_LOCALE_MAX_LENGTH) {
@@ -144,9 +169,14 @@ std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& cata
         return std::unexpected(MapBundleFsError(error));
     }
 
-    std::array<bundlefs_file_info_t, kMaxInstalledApps> files{};
+    using FileList = std::array<bundlefs_file_info_t, kMaxInstalledApps>;
+    auto files = MakePsramObject<FileList>();
+    if (files == nullptr) {
+        ESP_LOGE(kTag, "App catalog file-list workspace requires %zu bytes of PSRAM", sizeof(FileList));
+        return std::unexpected(AppStoreError::kUnavailable);
+    }
     uint32_t file_count = 0U;
-    error = bundlefs_list(files.data(), files.size(), &file_count);
+    error = bundlefs_list(files->data(), files->size(), &file_count);
     if (error != BUNDLEFS_OK) {
         return std::unexpected(MapBundleFsError(error));
     }
@@ -160,15 +190,15 @@ std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& cata
     catalog_out.store_used_bytes = store_info.used_bytes;
     for (uint32_t index = 0U; index < file_count; ++index) {
         bundlefs_file_t file{};
-        error = bundlefs_open(files[index].name, &file);
+        error = bundlefs_open((*files)[index].name, &file);
         if (error != BUNDLEFS_OK) {
             return std::unexpected(MapBundleFsError(error));
         }
         micropixel_bundle_metadata_t metadata{};
         const auto locale = LocaleBuffer(effective_locale);
         if (!micropixel_read_bundle_metadata_for_locale(&file, locale.data(), &metadata) ||
-            metadata.bundle_size != files[index].size ||
-            std::strcmp(reinterpret_cast<const char*>(metadata.app_id), files[index].name) != 0) {
+            metadata.bundle_size != (*files)[index].size ||
+            std::strcmp(reinterpret_cast<const char*>(metadata.app_id), (*files)[index].name) != 0) {
             return std::unexpected(AppStoreError::kCatalogCorrupt);
         }
         if (metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT) {
@@ -179,7 +209,7 @@ std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& cata
             ++catalog_out.component_count;
             continue;
         }
-        auto installed = InstalledFromFile(file, files[index], effective_locale);
+        auto installed = InstalledFromFile(file, (*files)[index], effective_locale);
         if (!installed || catalog_out.count >= catalog_out.apps.size()) {
             return std::unexpected(installed ? AppStoreError::kCatalogFull : installed.error());
         }

@@ -56,9 +56,9 @@ void FirmwareApp::Run() {
     // Keep them out of app_main's bounded stack: RemoteControlAgent owns
     // several fixed-capacity protocol buffers even when remote control is
     // disabled.
-    static device::DeviceServices devices(*services.graphics, *services.input, *services.audio, *services.random,
-                                          *services.devices, *services.sensors, *services.gpio, *services.haptics,
-                                          *services.battery);
+    static device::DeviceServices devices(*services.graphics, services.board_info.display, *services.input,
+                                          *services.audio, *services.random, *services.devices, *services.sensors,
+                                          *services.gpio, *services.haptics, *services.battery);
     static host_ui::SystemShell shell(*services.system_ui);
     static control::GuestLogBuffer guest_logs;
     static control::ControlDispatcher controls(

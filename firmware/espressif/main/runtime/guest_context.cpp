@@ -46,6 +46,8 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
                         graphics_endpoint_, input_endpoint_, audio_endpoint_, devices_endpoint_, sensors_endpoint_,
                         gpio_endpoint_, haptics_endpoint_, power_info_endpoint_) {
     (void)std::snprintf(app_id_.data(), app_id_.size(), "%s", reinterpret_cast<const char*>(package.app_id));
+    const auto audio_result = devices_.audio().ResumeAll();
+    audio_foreground_ready_ = audio_result || audio_result.error().status == MICROPIXEL_STATUS_UNSUPPORTED;
 }
 
 GuestContext::~GuestContext() {
@@ -57,7 +59,7 @@ GuestContext::~GuestContext() {
     haptics_.Shutdown();
     audio_playback_.Shutdown();
     (void)devices_.audio().StopAll();
-    (void)devices_.audio().ResumeAll();
+    (void)devices_.audio().SuspendAll();
     devices_.graphics().ReleaseGuestResources();
     resources_.Shutdown();
 }
@@ -198,15 +200,6 @@ device::DeviceResult<void> GuestContext::GraphicsSubmit(const uint8_t* bytes, ui
     }
     return result;
 }
-
-device::DeviceResult<void> GuestContext::GraphicsBeginFrame() { return devices_.graphics().BeginFrame(); }
-
-device::DeviceResult<void> GuestContext::GraphicsCommitFrame() {
-    const device::TextureAccess textures = GraphicsTextureAccess();
-    return devices_.graphics().CommitFrame(textures);
-}
-
-device::DeviceResult<void> GuestContext::GraphicsCancelFrame() { return devices_.graphics().CancelFrame(); }
 
 ServiceResult<micropixel_font_info_t> GuestContext::LoadFont(uint32_t resource_id) {
     auto resource = resources_.FindFont(resource_id);

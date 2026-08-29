@@ -53,6 +53,8 @@ const char* StatusName(int32_t status) {
             return "closed";
         case MICROPIXEL_STATUS_VERSION_MISMATCH:
             return "version_mismatch";
+        case MICROPIXEL_STATUS_STALE_STATE:
+            return "stale_state";
         default:
             return "internal";
     }
@@ -76,13 +78,6 @@ void CopyBytes(void* destination, const void* source, uint32_t length) {
     const auto* input = static_cast<const uint8_t*>(source);
     for (uint32_t index = 0U; index < length; ++index) {
         output[index] = input[index];
-    }
-}
-
-void ClearBytes(void* destination, uint32_t length) {
-    auto* output = static_cast<uint8_t*>(destination);
-    for (uint32_t index = 0U; index < length; ++index) {
-        output[index] = 0U;
     }
 }
 
@@ -201,9 +196,14 @@ const micropixel_graphics_info_t& LoadPhysicalGraphicsInfo() {
             cached_graphics_info.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
             cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 || cached_graphics_info.width == 0U ||
             cached_graphics_info.height == 0U ||
-            cached_graphics_info.max_command_bytes < micropixel::Frame::kCapacityBytes ||
-            cached_graphics_info.max_commands == 0U || cached_graphics_info.max_draw_operations == 0U ||
-            cached_graphics_info.max_frame_commands < cached_graphics_info.max_draw_operations) {
+            cached_graphics_info.max_scene_bytes < MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES ||
+            cached_graphics_info.max_scene_nodes == 0U || cached_graphics_info.max_batch_instances == 0U ||
+            cached_graphics_info.max_layers == 0U || cached_graphics_info.max_sprite_batches == 0U ||
+            static_cast<uint32_t>(cached_graphics_info.safe_inset_left) + cached_graphics_info.safe_inset_right >=
+                cached_graphics_info.width ||
+            static_cast<uint32_t>(cached_graphics_info.safe_inset_top) + cached_graphics_info.safe_inset_bottom >=
+                cached_graphics_info.height ||
+            cached_graphics_info.reserved0 != 0U) {
             micropixel::runtime::Panic("graphics.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         if (input_info_loaded && (cached_graphics_info.width != cached_input_info.logical_width ||
@@ -220,8 +220,8 @@ const micropixel::detail::DisplayTransform& LoadDisplayContext() {
     if (!display_context_loaded) {
         cached_display_context = micropixel::detail::MakeDisplayTransform(physical.width, physical.height);
         if (cached_display_context.logical_width == 0U || cached_display_context.logical_height == 0U) {
-            // This is the single SDK-owned compatibility exit point. A future
-            // system modal can be invoked here before terminating the Guest.
+            // A display with no usable dimensions cannot define the shared
+            // logical coordinate space exposed through RendererInfo.
             micropixel::runtime::Panic("application.display.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         display_context_loaded = true;
@@ -231,23 +231,6 @@ const micropixel::detail::DisplayTransform& LoadDisplayContext() {
 
 int32_t ScaleCoordinate(int32_t value, uint32_t numerator, uint32_t denominator) {
     return micropixel::detail::ScaleCoordinate(value, numerator, denominator);
-}
-
-micropixel::Point ToPhysical(micropixel::Point point) {
-    const auto& context = LoadDisplayContext();
-    return {context.offset_x + ScaleCoordinate(point.x, context.physical_width, context.logical_width),
-            context.offset_y + ScaleCoordinate(point.y, context.physical_height, context.logical_height)};
-}
-
-micropixel::Rect ToPhysical(micropixel::Rect rect) {
-    const auto& context = LoadDisplayContext();
-    const int32_t left = context.offset_x + ScaleCoordinate(rect.x, context.physical_width, context.logical_width);
-    const int32_t top = context.offset_y + ScaleCoordinate(rect.y, context.physical_height, context.logical_height);
-    const int32_t right =
-        context.offset_x + ScaleCoordinate(rect.x + rect.width, context.physical_width, context.logical_width);
-    const int32_t bottom =
-        context.offset_y + ScaleCoordinate(rect.y + rect.height, context.physical_height, context.logical_height);
-    return {left, top, right - left, bottom - top};
 }
 
 micropixel::Point ToLogical(micropixel::Point point) {
@@ -366,6 +349,12 @@ bool StorageKeyLength(const char* key, uint32_t& length_out) {
 
 }  // namespace
 
+namespace micropixel::detail {
+
+const DisplayTransform& CurrentDisplayTransform() { return LoadDisplayContext(); }
+
+}  // namespace micropixel::detail
+
 namespace micropixel::runtime {
 
 [[noreturn]] void Panic(const char* operation, int32_t status) {
@@ -379,10 +368,6 @@ namespace micropixel::runtime {
 
 namespace micropixel {
 
-static_assert(Frame::kCapacityBytes == MICROPIXEL_GRAPHICS_MAX_COMMAND_BYTES,
-              "SDK/ABI graphics command byte capacity drifted");
-static_assert(Frame::kCapacityCommands == MICROPIXEL_GRAPHICS_MAX_COMMANDS,
-              "SDK/ABI graphics command count capacity drifted");
 static_assert(KVStore::kMaximumKeyBytes == MICROPIXEL_STORAGE_MAX_KEY_BYTES, "SDK/ABI storage key limit drifted");
 static_assert(KVStore::kMaximumValueBytes == MICROPIXEL_STORAGE_MAX_VALUE_BYTES, "SDK/ABI storage value limit drifted");
 static_assert(Log::kMaximumMessageBytes + 1U == MICROPIXEL_ABI_MAX_LOG_BYTES, "SDK/ABI log message limit drifted");
@@ -856,683 +841,22 @@ Timer Timers::Every(Duration period) const {
 RendererInfo Renderer::info() const {
     const micropixel_graphics_info_t& raw = LoadPhysicalGraphicsInfo();
     const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
-    return RendererInfo{display.logical_width, display.logical_height,  raw.capabilities,
-                        raw.max_commands,      raw.max_draw_operations, raw.max_frame_commands};
+    const micropixel::detail::LogicalInsets safe = micropixel::detail::MapPhysicalInsets(
+        display, raw.safe_inset_top, raw.safe_inset_right, raw.safe_inset_bottom, raw.safe_inset_left);
+    if (safe.left + safe.right >= display.logical_width || safe.top + safe.bottom >= display.logical_height) {
+        runtime::Panic("graphics.info.safe_area", MICROPIXEL_STATUS_UNSUPPORTED);
+    }
+    return RendererInfo{display.logical_width,
+                        display.logical_height,
+                        display.physical_width,
+                        display.physical_height,
+                        {safe.top, safe.right, safe.bottom, safe.left},
+                        raw.max_scene_nodes,
+                        raw.max_batch_instances,
+                        raw.max_layers,
+                        raw.max_sprite_batches,
+                        raw.max_scene_bytes};
 }
-
-Frame::Frame(CapabilityToken, const RendererInfo& info)
-    : max_batch_commands_(info.max_batch_commands() < kCapacityCommands ? info.max_batch_commands()
-                                                                        : kCapacityCommands),
-      max_draw_operations_(info.max_draw_operations()),
-      max_frame_commands_(info.max_frame_commands()),
-      display_bounds_{0, 0, static_cast<int32_t>(info.width()), static_cast<int32_t>(info.height())},
-      retained_translation_available_(info.retained_translation_available()),
-      multi_submit_available_(info.multi_submit_available()) {
-    states_[0].clip = display_bounds_;
-    states_[0].clip_limit = display_bounds_;
-    ResetBatch();
-}
-
-Frame::Frame(Frame&& other) noexcept
-    : size_(other.size_),
-      batch_command_count_(other.batch_command_count_),
-      draw_operation_count_(other.draw_operation_count_),
-      frame_command_count_(other.frame_command_count_),
-      max_batch_commands_(other.max_batch_commands_),
-      max_draw_operations_(other.max_draw_operations_),
-      max_frame_commands_(other.max_frame_commands_),
-      display_bounds_(other.display_bounds_),
-      retained_clip_(other.retained_clip_),
-      retained_translation_(other.retained_translation_),
-      state_depth_(other.state_depth_),
-      encoded_state_depth_(other.encoded_state_depth_),
-      retained_scope_count_(other.retained_scope_count_),
-      failure_status_(other.failure_status_),
-      retained_translation_available_(other.retained_translation_available_),
-      multi_submit_available_(other.multi_submit_available_),
-      retained_scope_selected_(other.retained_scope_selected_),
-      state_encoded_(other.state_encoded_),
-      host_frame_active_(other.host_frame_active_),
-      presented_(other.presented_) {
-    CopyBytes(bytes_, other.bytes_, sizeof(bytes_));
-    CopyBytes(states_, other.states_, sizeof(states_));
-    other.host_frame_active_ = false;
-    other.presented_ = true;
-}
-
-Frame::~Frame() { Cancel(); }
-
-void Frame::ResetBatch() {
-    ClearBytes(bytes_, sizeof(micropixel_graphics_command_header_t));
-    micropixel_graphics_command_header_t header{};
-    header.magic = MICROPIXEL_GRAPHICS_COMMAND_MAGIC;
-    header.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    header.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
-    header.total_size = sizeof(header);
-    CopyBytes(bytes_, &header, sizeof(header));
-    size_ = sizeof(header);
-    batch_command_count_ = 0U;
-}
-
-uint8_t* Frame::AppendUnchecked(uint32_t bytes) {
-    if (failure_status_ != MICROPIXEL_STATUS_OK) {
-        return DiscardRecord(bytes);
-    }
-    if (bytes == 0U || bytes > kCapacityBytes - size_ || batch_command_count_ >= max_batch_commands_ ||
-        frame_command_count_ >= max_frame_commands_) {
-        Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-        return DiscardRecord(bytes);
-    }
-    uint8_t* record = bytes_ + size_;
-    ClearBytes(record, bytes);
-    size_ += bytes;
-    ++batch_command_count_;
-    ++frame_command_count_;
-    return record;
-}
-
-uint8_t* Frame::DiscardRecord(uint32_t bytes) {
-    if (bytes == 0U || bytes > sizeof(discard_record_)) {
-        runtime::Panic("graphics.frame.record_size", MICROPIXEL_STATUS_INTERNAL);
-    }
-    ClearBytes(discard_record_, bytes);
-    return discard_record_;
-}
-
-void Frame::Fail(int32_t status) {
-    if (failure_status_ == MICROPIXEL_STATUS_OK) {
-        failure_status_ = status == MICROPIXEL_STATUS_OK ? MICROPIXEL_STATUS_INTERNAL : status;
-    }
-}
-
-bool Frame::StartHostFrame() {
-    if (host_frame_active_) {
-        return true;
-    }
-    if (!multi_submit_available_) {
-        Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-        return false;
-    }
-    int32_t status = OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-                                 MICROPIXEL_GRAPHICS_INTERFACE_MINOR);
-    if (status == MICROPIXEL_STATUS_OK) {
-        status = CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_BEGIN, nullptr, 0U);
-    }
-    if (status != MICROPIXEL_STATUS_OK) {
-        Fail(status);
-        return false;
-    }
-    host_frame_active_ = true;
-    return true;
-}
-
-bool Frame::SubmitBatch() {
-    if (batch_command_count_ == 0U) {
-        return true;
-    }
-    micropixel_graphics_command_header_t header{};
-    CopyBytes(&header, bytes_, sizeof(header));
-    header.total_size = size_;
-    header.command_count = batch_command_count_;
-    CopyBytes(bytes_, &header, sizeof(header));
-    int32_t status = OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-                                 MICROPIXEL_GRAPHICS_INTERFACE_MINOR);
-    if (status == MICROPIXEL_STATUS_OK) {
-        status = micropixel_service_submit(graphics_service.info.handle, MICROPIXEL_GRAPHICS_CHANNEL_COMMANDS, bytes_,
-                                           size_);
-    }
-    if (status != MICROPIXEL_STATUS_OK) {
-        Fail(status);
-        return false;
-    }
-    return true;
-}
-
-void Frame::CloseEncodedState() {
-    micropixel_graphics_pop_state_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_POP_STATE;
-    command.record.size = sizeof(command);
-    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
-    state_encoded_ = false;
-    encoded_state_depth_ = 0U;
-}
-
-void Frame::ContinueStateInNewBatch() {
-    const uint32_t continued_depth = encoded_state_depth_;
-    CloseEncodedState();
-    if (!SubmitBatch()) {
-        return;
-    }
-    ResetBatch();
-
-    micropixel_graphics_push_state_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_PUSH_STATE;
-    command.record.size = sizeof(command);
-    command.clip_x = retained_clip_.x;
-    command.clip_y = retained_clip_.y;
-    command.width = retained_clip_.width;
-    command.height = retained_clip_.height;
-    command.translate_x = retained_translation_.x;
-    command.translate_y = retained_translation_.y;
-    command.flags = (retained_translation_.x != 0 || retained_translation_.y != 0)
-                        ? MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE
-                        : 0U;
-    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
-    if (failure_status_ == MICROPIXEL_STATUS_OK) {
-        state_encoded_ = true;
-        encoded_state_depth_ = continued_depth;
-    }
-}
-
-uint8_t* Frame::Append(uint32_t bytes) {
-    if (presented_ || bytes == 0U) {
-        runtime::Panic("graphics.frame.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    if (failure_status_ != MICROPIXEL_STATUS_OK) {
-        return DiscardRecord(bytes);
-    }
-    if (draw_operation_count_ >= max_draw_operations_) {
-        Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-        return DiscardRecord(bytes);
-    }
-    const uint32_t reserved_commands = state_encoded_ ? 1U : 0U;
-    const uint32_t reserved_bytes = state_encoded_ ? sizeof(micropixel_graphics_pop_state_command_t) : 0U;
-    if (bytes > kCapacityBytes - size_ - reserved_bytes ||
-        batch_command_count_ + 1U + reserved_commands > max_batch_commands_) {
-        if (batch_command_count_ == 0U) {
-            Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-            return DiscardRecord(bytes);
-        }
-        if (!StartHostFrame()) {
-            return DiscardRecord(bytes);
-        }
-        if (state_encoded_) {
-            ContinueStateInNewBatch();
-        } else {
-            if (!SubmitBatch()) {
-                return DiscardRecord(bytes);
-            }
-            ResetBatch();
-        }
-    }
-    uint8_t* record = AppendUnchecked(bytes);
-    if (failure_status_ == MICROPIXEL_STATUS_OK) {
-        ++draw_operation_count_;
-    }
-    return record;
-}
-
-void Frame::Clear(Color color) {
-    if (state_depth_ != 0U) {
-        runtime::Panic("graphics.clear.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    micropixel_graphics_clear_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_CLEAR;
-    command.record.size = sizeof(command);
-    command.rgb888 = color.rgb888_;
-    CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-}
-
-void Frame::EnsureStateEncoded() {
-    constexpr uint32_t kMaxRetainedScopesPerFrame = 4U;
-    const auto& display = LoadDisplayContext();
-    if (display.logical_width != display.physical_width || display.logical_height != display.physical_height ||
-        display.offset_x != 0 || display.offset_y != 0 || state_depth_ == 0U || state_encoded_ ||
-        failure_status_ != MICROPIXEL_STATUS_OK || retained_scope_count_ >= kMaxRetainedScopesPerFrame) {
-        return;
-    }
-    const State& state = states_[state_depth_];
-    const Rect state_clip = StateClip();
-    if (state_clip.empty()) {
-        return;
-    }
-    const Rect wire_clip = state_clip.translated(-state.translation.x, -state.translation.y);
-    const int64_t translated_left = static_cast<int64_t>(wire_clip.x) + state.translation.x;
-    const int64_t translated_top = static_cast<int64_t>(wire_clip.y) + state.translation.y;
-    const int64_t translated_right = translated_left + wire_clip.width;
-    const int64_t translated_bottom = translated_top + wire_clip.height;
-    bool use_retained_translation =
-        retained_translation_available_ && state.translation.x >= -32 && state.translation.x <= 32 &&
-        state.translation.y >= -32 && state.translation.y <= 32 && translated_left >= display_bounds_.x &&
-        translated_top >= display_bounds_.y &&
-        translated_right <= static_cast<int64_t>(display_bounds_.x) + display_bounds_.width &&
-        translated_bottom <= static_cast<int64_t>(display_bounds_.y) + display_bounds_.height;
-    if (use_retained_translation && retained_scope_selected_ &&
-        (wire_clip != retained_clip_ || state.translation != retained_translation_)) {
-        use_retained_translation = false;
-    }
-    if (!use_retained_translation) {
-        return;
-    }
-    if (!retained_scope_selected_) {
-        retained_scope_selected_ = true;
-        retained_clip_ = wire_clip;
-        retained_translation_ = state.translation;
-    }
-
-    micropixel_graphics_push_state_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_PUSH_STATE;
-    command.record.size = sizeof(command);
-    command.clip_x = wire_clip.x;
-    command.clip_y = wire_clip.y;
-    command.width = wire_clip.width;
-    command.height = wire_clip.height;
-    command.translate_x = state.translation.x;
-    command.translate_y = state.translation.y;
-    command.flags = (state.translation.x != 0 || state.translation.y != 0)
-                        ? MICROPIXEL_GRAPHICS_STATE_RETAINED_TRANSLATION_ACTIVE
-                        : 0U;
-    const uint32_t pop_size = sizeof(micropixel_graphics_pop_state_command_t);
-    if (sizeof(command) > kCapacityBytes - size_ - pop_size || batch_command_count_ + 2U > max_batch_commands_) {
-        if (batch_command_count_ == 0U) {
-            Fail(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-            return;
-        }
-        if (!StartHostFrame() || !SubmitBatch()) {
-            return;
-        }
-        ResetBatch();
-    }
-    CopyBytes(AppendUnchecked(sizeof(command)), &command, sizeof(command));
-    if (failure_status_ == MICROPIXEL_STATUS_OK) {
-        state_encoded_ = true;
-        encoded_state_depth_ = state_depth_;
-        ++retained_scope_count_;
-    }
-}
-
-Rect Frame::StateClip() const {
-    if (state_depth_ == 0U) {
-        return display_bounds_;
-    }
-    const State& state = states_[state_depth_];
-    return state.clip.translated(state.translation.x, state.translation.y)
-        .intersection(state.clip_limit)
-        .intersection(display_bounds_);
-}
-
-Rect Frame::EffectiveClip() const {
-    const Rect clip = StateClip();
-    return state_encoded_
-               ? clip.translated(-retained_translation_.x, -retained_translation_.y).intersection(retained_clip_)
-               : clip;
-}
-
-Point Frame::EffectiveTranslation() const {
-    if (state_depth_ == 0U) {
-        return {};
-    }
-    const Point translation = states_[state_depth_].translation;
-    return state_encoded_ ? Point{translation.x - retained_translation_.x, translation.y - retained_translation_.y}
-                          : translation;
-}
-
-void Frame::FillRect(Rect rect, Color color, uint8_t opacity) {
-    if (rect.empty()) {
-        runtime::Panic("graphics.fill_rect.rect", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    if (state_depth_ != 0U) {
-        states_[state_depth_].draw_started = true;
-    }
-    EnsureStateEncoded();
-    const Point translation = EffectiveTranslation();
-    rect = rect.translated(translation.x, translation.y).intersection(EffectiveClip());
-    if (rect.empty()) {
-        return;
-    }
-    rect = ToPhysical(rect);
-    if (opacity == 255U) {
-        micropixel_graphics_fill_rect_command_t command{};
-        command.record.opcode = MICROPIXEL_GRAPHICS_OP_FILL_RECT;
-        command.record.size = sizeof(command);
-        command.x = rect.x;
-        command.y = rect.y;
-        command.width = rect.width;
-        command.height = rect.height;
-        command.rgb888 = color.rgb888_;
-        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-    } else {
-        micropixel_graphics_blend_rect_command_t command{};
-        command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_RECT;
-        command.record.size = sizeof(command);
-        command.x = rect.x;
-        command.y = rect.y;
-        command.width = rect.width;
-        command.height = rect.height;
-        command.rgb888 = color.rgb888_;
-        command.opacity = opacity;
-        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-    }
-}
-
-void Frame::DrawText(Point position, const char* text, Color color, SystemFont font) {
-    const auto& display = LoadDisplayContext();
-    if (display.scale_numerator < display.scale_denominator) {
-        switch (font) {
-            case SystemFont::kTitle:
-                font = SystemFont::kLarge;
-                break;
-            case SystemFont::kLarge:
-                font = SystemFont::kMedium;
-                break;
-            case SystemFont::kMedium:
-                font = SystemFont::kSmall;
-                break;
-            case SystemFont::kSmall:
-                break;
-        }
-    }
-    const uint16_t font_handle = static_cast<uint16_t>(font);
-    if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
-        runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    DrawTextWithHandle(position, text, color, font_handle);
-}
-
-void Frame::DrawText(Point position, const char* text, Color color, const Font& font) {
-    if (!font.valid()) {
-        runtime::Panic("graphics.draw_text.font", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    DrawTextWithHandle(position, text, color, font.handle_);
-}
-
-void Frame::DrawTextWithHandle(Point position, const char* text, Color color, uint16_t font_handle) {
-    if (text == nullptr || font_handle == 0U) {
-        runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    if (state_depth_ != 0U) {
-        states_[state_depth_].draw_started = true;
-    }
-    EnsureStateEncoded();
-    const Point translation = EffectiveTranslation();
-    position.x += translation.x;
-    position.y += translation.y;
-    const Rect text_clip = EffectiveClip();
-    if (!text_clip.contains(position)) {
-        return;
-    }
-    position = ToPhysical(position);
-    uint32_t text_length = 0U;
-    while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
-        ++text_length;
-    }
-    if (text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES) {
-        runtime::Panic("graphics.draw_text.length", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-
-    uint32_t raw_size = sizeof(micropixel_graphics_draw_text_command_t) + text_length;
-    uint32_t record_size = (raw_size + 3U) & ~3U;
-    uint8_t* record = Append(record_size);
-    micropixel_graphics_draw_text_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_TEXT;
-    command.record.size = static_cast<uint16_t>(record_size);
-    command.x = position.x;
-    command.y = position.y;
-    command.rgb888 = color.rgb888_;
-    command.font_handle = font_handle;
-    command.text_length = static_cast<uint16_t>(text_length);
-    CopyBytes(record, &command, sizeof(command));
-    CopyBytes(record + sizeof(command), text, text_length);
-}
-
-void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, SystemFont font) {
-    const auto& display = LoadDisplayContext();
-    if (display.scale_numerator < display.scale_denominator) {
-        switch (font) {
-            case SystemFont::kTitle:
-                font = SystemFont::kLarge;
-                break;
-            case SystemFont::kLarge:
-                font = SystemFont::kMedium;
-                break;
-            case SystemFont::kMedium:
-                font = SystemFont::kSmall;
-                break;
-            case SystemFont::kSmall:
-                break;
-        }
-    }
-    const uint16_t font_handle = static_cast<uint16_t>(font);
-    if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
-        runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    DrawTextCenteredWithHandle(center_x, y, text, color, font_handle);
-}
-
-void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, const Font& font) {
-    if (!font.valid()) {
-        runtime::Panic("graphics.draw_text_centered.font", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    DrawTextCenteredWithHandle(center_x, y, text, color, font.handle_);
-}
-
-void Frame::DrawTextCenteredWithHandle(int32_t center_x, int32_t y, const char* text, Color color,
-                                       uint16_t font_handle) {
-    if (text == nullptr || font_handle == 0U) {
-        runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    if (state_depth_ != 0U) {
-        states_[state_depth_].draw_started = true;
-    }
-    EnsureStateEncoded();
-    const Point translation = EffectiveTranslation();
-    center_x += translation.x;
-    y += translation.y;
-    const Rect text_clip = EffectiveClip();
-    if (!text_clip.contains(center_x, y)) {
-        return;
-    }
-    const Point physical = ToPhysical(Point{center_x, y});
-    center_x = physical.x;
-    y = physical.y;
-    uint32_t text_length = 0U;
-    while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
-        ++text_length;
-    }
-    if (text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES) {
-        runtime::Panic("graphics.draw_text_centered.length", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-
-    uint32_t raw_size = sizeof(micropixel_graphics_draw_text_command_t) + text_length;
-    uint32_t record_size = (raw_size + 3U) & ~3U;
-    uint8_t* record = Append(record_size);
-    micropixel_graphics_draw_text_command_t command{};
-    command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_TEXT_CENTERED;
-    command.record.size = static_cast<uint16_t>(record_size);
-    command.x = center_x;
-    command.y = y;
-    command.rgb888 = color.rgb888_;
-    command.font_handle = font_handle;
-    command.text_length = static_cast<uint16_t>(text_length);
-    CopyBytes(record, &command, sizeof(command));
-    CopyBytes(record + sizeof(command), text, text_length);
-}
-
-void Frame::DrawTexture(Point position, const Texture& texture, uint8_t opacity) {
-    const Rect source{0, 0, static_cast<int32_t>(texture.width()), static_cast<int32_t>(texture.height())};
-    DrawTexture(Rect{position.x, position.y, source.width, source.height}, texture, source, opacity);
-}
-
-void Frame::DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity) {
-    DrawTexture(Rect{position.x, position.y, source.width, source.height}, texture, source, opacity);
-}
-
-void Frame::DrawTexture(Rect destination, const Texture& texture, uint8_t opacity) {
-    DrawTexture(destination, texture,
-                Rect{0, 0, static_cast<int32_t>(texture.width()), static_cast<int32_t>(texture.height())}, opacity);
-}
-
-void Frame::DrawTexture(Rect destination, const Texture& texture, Rect source, uint8_t opacity) {
-    if (!texture.valid() || destination.empty() || source.x < 0 || source.y < 0 || source.empty() ||
-        static_cast<uint64_t>(source.x) + static_cast<uint32_t>(source.width) > texture.width() ||
-        static_cast<uint64_t>(source.y) + static_cast<uint32_t>(source.height) > texture.height()) {
-        runtime::Panic("graphics.draw_texture.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    const bool natural_size = destination.width == source.width && destination.height == source.height;
-    if (state_depth_ != 0U) {
-        states_[state_depth_].draw_started = true;
-    }
-    EnsureStateEncoded();
-    const Point translation = EffectiveTranslation();
-    destination = destination.translated(translation.x, translation.y);
-    const Rect clipped = destination.intersection(EffectiveClip());
-    if (clipped.empty()) {
-        return;
-    }
-    const int64_t left_offset = static_cast<int64_t>(clipped.x) - destination.x;
-    const int64_t top_offset = static_cast<int64_t>(clipped.y) - destination.y;
-    const int64_t right_offset = left_offset + clipped.width;
-    const int64_t bottom_offset = top_offset + clipped.height;
-    const int32_t source_left = source.x + static_cast<int32_t>(left_offset * source.width / destination.width);
-    const int32_t source_top = source.y + static_cast<int32_t>(top_offset * source.height / destination.height);
-    const int32_t source_right =
-        source.x + static_cast<int32_t>((right_offset * source.width + destination.width - 1) / destination.width);
-    const int32_t source_bottom =
-        source.y + static_cast<int32_t>((bottom_offset * source.height + destination.height - 1) / destination.height);
-    source = Rect{source_left, source_top, source_right - source_left, source_bottom - source_top};
-    Rect physical_destination = ToPhysical(clipped);
-    if (texture.adaptive_) {
-        const int32_t left = ScaleCoordinate(source.x, texture.physical_width_, texture.width_);
-        const int32_t top = ScaleCoordinate(source.y, texture.physical_height_, texture.height_);
-        const int32_t right = ScaleCoordinate(source.x + source.width, texture.physical_width_, texture.width_);
-        const int32_t bottom = ScaleCoordinate(source.y + source.height, texture.physical_height_, texture.height_);
-        source = {left, top, right - left, bottom - top};
-        if (natural_size) {
-            // A naturally sized adaptive texture was already resized once by
-            // the Host. Preserve a strict 1:1 destination even when an odd
-            // physical aspect ratio causes one-pixel coordinate rounding.
-            physical_destination.width = source.width;
-            physical_destination.height = source.height;
-        }
-    }
-    if (opacity == 255U) {
-        micropixel_graphics_draw_texture_command_t command{};
-        command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE;
-        command.record.size = sizeof(command);
-        command.texture = texture.handle_;
-        command.x = physical_destination.x;
-        command.y = physical_destination.y;
-        command.width = physical_destination.width;
-        command.height = physical_destination.height;
-        command.source_x = source.x;
-        command.source_y = source.y;
-        command.source_width = source.width;
-        command.source_height = source.height;
-        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-    } else {
-        micropixel_graphics_blend_texture_command_t command{};
-        command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE;
-        command.record.size = sizeof(command);
-        command.texture = texture.handle_;
-        command.x = physical_destination.x;
-        command.y = physical_destination.y;
-        command.width = physical_destination.width;
-        command.height = physical_destination.height;
-        command.source_x = source.x;
-        command.source_y = source.y;
-        command.source_width = source.width;
-        command.source_height = source.height;
-        command.opacity = opacity;
-        CopyBytes(Append(sizeof(command)), &command, sizeof(command));
-    }
-}
-
-void Frame::DrawTexture(Point position, const StreamingTexture& texture, uint8_t opacity) {
-    DrawTexture(position, texture.texture_, opacity);
-}
-
-void Frame::DrawTexture(Point position, const StreamingTexture& texture, Rect source, uint8_t opacity) {
-    DrawTexture(position, texture.texture_, source, opacity);
-}
-
-void Frame::DrawTexture(Rect destination, const StreamingTexture& texture, uint8_t opacity) {
-    DrawTexture(destination, texture.texture_, opacity);
-}
-
-void Frame::DrawTexture(Rect destination, const StreamingTexture& texture, Rect source, uint8_t opacity) {
-    DrawTexture(destination, texture.texture_, source, opacity);
-}
-
-void Frame::Save() {
-    if (presented_ || state_depth_ >= kMaxStateDepth) {
-        runtime::Panic("graphics.save.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    states_[state_depth_ + 1U] = states_[state_depth_];
-    states_[state_depth_ + 1U].clip_limit = StateClip();
-    states_[state_depth_ + 1U].draw_started = false;
-    ++state_depth_;
-}
-
-void Frame::SetClipRect(Rect clip) {
-    if (state_depth_ == 0U || states_[state_depth_].draw_started || clip.empty()) {
-        runtime::Panic("graphics.clip.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    states_[state_depth_].clip = clip;
-}
-
-void Frame::Translate(Point offset) {
-    if (state_depth_ == 0U || states_[state_depth_].draw_started) {
-        runtime::Panic("graphics.translate.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    const int64_t x = static_cast<int64_t>(states_[state_depth_].translation.x) + offset.x;
-    const int64_t y = static_cast<int64_t>(states_[state_depth_].translation.y) + offset.y;
-    if (x <= INT32_MIN || x > INT32_MAX || y <= INT32_MIN || y > INT32_MAX) {
-        runtime::Panic("graphics.translate.range", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    states_[state_depth_].translation = Point{static_cast<int32_t>(x), static_cast<int32_t>(y)};
-}
-
-void Frame::Restore() {
-    if (state_depth_ == 0U || presented_) {
-        runtime::Panic("graphics.restore.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    if (state_encoded_ && encoded_state_depth_ == state_depth_) {
-        CloseEncodedState();
-    }
-    --state_depth_;
-}
-
-Result<void> Frame::Present() {
-    if (presented_ || state_depth_ != 0U) {
-        runtime::Panic("graphics.present.state", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    presented_ = true;
-    if (failure_status_ != MICROPIXEL_STATUS_OK) {
-        const int32_t status = failure_status_;
-        Cancel();
-        return unexpected(ErrorFromStatus(status));
-    }
-    if (draw_operation_count_ == 0U) {
-        return {};
-    }
-    if (!SubmitBatch()) {
-        const int32_t status = failure_status_;
-        Cancel();
-        return unexpected(ErrorFromStatus(status));
-    }
-    if (host_frame_active_) {
-        const int32_t status = CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_COMMIT, nullptr, 0U);
-        if (status != MICROPIXEL_STATUS_OK) {
-            Cancel();
-            return unexpected(ErrorFromStatus(status));
-        }
-        host_frame_active_ = false;
-    }
-    return {};
-}
-
-void Frame::Cancel() {
-    if (host_frame_active_) {
-        if (OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-                        MICROPIXEL_GRAPHICS_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
-            (void)CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_FRAME_CANCEL, nullptr, 0U);
-        }
-        host_frame_active_ = false;
-    }
-    presented_ = true;
-}
-
-Frame Renderer::BeginFrame() const { return Frame{Frame::CapabilityToken{}, info()}; }
 
 namespace {
 
@@ -1584,22 +908,7 @@ Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle
 
 Result<TextMetrics> Renderer::MeasureText(const char* text, SystemFont font) const {
     const auto& display = LoadDisplayContext();
-    if (display.scale_numerator < display.scale_denominator) {
-        switch (font) {
-            case SystemFont::kTitle:
-                font = SystemFont::kLarge;
-                break;
-            case SystemFont::kLarge:
-                font = SystemFont::kMedium;
-                break;
-            case SystemFont::kMedium:
-                font = SystemFont::kSmall;
-                break;
-            case SystemFont::kSmall:
-                break;
-        }
-    }
-    const uint16_t font_handle = static_cast<uint16_t>(font);
+    const uint16_t font_handle = detail::MapSystemFont(static_cast<uint16_t>(font), display);
     if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }

@@ -107,11 +107,17 @@ auto texture = app.renderer().CreateStreamingTexture(
     micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
 micropixel::Assert(texture.has_value(), "texture allocation failed");
 
-auto frame = app.renderer().BeginFrame();
-frame.FillRect(rect, color);  // opacity 可省略，默认 255
-frame.DrawTexture(micropixel::Point{47, 76}, texture.value());
-frame.DrawTexture(micropixel::Point{x, y}, sprite, 160U);
-micropixel::Assert(frame.Present().has_value(), "frame present failed");
+const auto display = app.renderer().info();
+auto scene = app.renderer().CreateScene({
+    .logical_width = display.width(),
+    .logical_height = display.height(),
+    .background = micropixel::Color::Black(),
+});
+auto game = scene.CreateLayer({.clip = {0, 0, 720, 720}});
+auto board = scene.CreateSurfaceNode(texture.value(), rect, source, game);
+auto update = scene.BeginUpdate();
+board.SetOpacity(update, 192U);
+micropixel::Assert(update.Present().has_value(), "scene present failed");
 micropixel::InputInfo input = app.input().info();
 bool pressure_available = input.supports_pressure();
 ```
@@ -180,8 +186,9 @@ for (micropixel::DeviceId id : *listed) {
 按键和传感器。设备目录只回答“有什么”，具体读取、配置与生命周期由 Sensors、GPIO、Haptics
 等 Service 负责。
 
-Sensor 按 reading 类型打开，后续温度、光照和压力会增加各自的 value type 与 `SensorTraits`，不会向
-`Acceleration` 塞入无关字段：
+Sensor 按 reading 类型打开。当前提供 `Acceleration`、`AngularVelocity` 和 `MagneticField`，对应别名为
+`Accelerometer`、`Gyroscope` 和 `Magnetometer`；后续温度、光照和压力会增加各自的 value type 与
+`SensorTraits`，不会向现有 reading 塞入无关字段：
 
 ```cpp
 using micropixel::literals::operator""_ms;
@@ -270,8 +277,8 @@ South/East/West/North face button。Public API 不定义 A/B/X/Y，应用不得�
 
 ## Service 演进与 ABI 隔离
 
-Public C++ 方法不与 Wasm import 一一对应。新增 `Frame::DrawText()`、`Audio::Pause()` 或
-`Input` capability 时，优先增加版本化 service method、payload field、event 或 command opcode，
+Public C++ 方法不与 Wasm import 一一对应。新增 Scene 节点属性、`Audio::Pause()` 或
+`Input` capability 时，优先增加版本化 service method、payload field、event 或 Scene record，
 不能机械增加同名 ABI 函数。
 
 ```text
@@ -283,7 +290,7 @@ Typed C++ Service View
 每个 Service 独立维护 major/minor 和 capability set，Host 在进入 `main()` 前校验 required
 capability。旧 Guest 必须能在兼容的新 Host 上继续运行；新 Guest 对旧 Host 的可选能力应 fallback，
 required 能力缺失则在启动前给出明确诊断。service/method ID、wire schema、resource handle 和
-command protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。首版资源加载只有同步
+Scene protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。首版资源加载只有同步
 `Resources::LoadTexture()`；未来如需异步加载，会增加独立的任务/请求对象，不改变现有同步方法的语义，
 也不会把完成事件塞回通用 `Event`。
 
@@ -294,25 +301,33 @@ Package 资源已经由生成代码表示为 `AssetId`，直接传给 loader；�
 auto texture = app.resources().LoadTexture(my_assets::background);
 ```
 
-## Renderer、Frame 与 Texture
+## Renderer、Scene 与 Texture
 
-公开图形模型固定为五个对象：
+公开图形模型固定为以下对象：
 
-- `Renderer`：可复制的设备入口，只负责查询信息、开始帧和创建 streaming texture；
-- `Frame`：一次逻辑显示更新的命令记录器，必须显式 `Present()`；析构不会上屏；
+- `Renderer`：可复制的设备入口，负责查询信息、创建 Scene 和 streaming texture；
+- `Scene`：Guest 图形内容的唯一根节点，保存背景和对象集合；
+- `Layer`：世界、HUD 等对象的分组节点，支持 clip、translation、opacity、visibility 和 z-order；
+- `Sprite` / `SpriteBatch` / `Shape` / `Label` / `SurfaceNode`：保留式视觉对象；
+- `SceneUpdate`：一次原子属性事务，必须显式 `Present()`；析构只放弃未提交事务；
 - `Texture`：同步加载的只读、move-only Host 资源；
 - `StreamingTexture`：可写脏矩形的 move-only Host 资源；
 - `TextureUpdateBatch`：把多次 streaming texture 更新合并成一次 compositor 唤醒。
 
-`RendererInfo::width()` / `height()` 是 Guest 逻辑坐标空间的唯一尺寸来源；`InputInfo` 不重复暴露第二份
-宽高。构建工具会把 `app.json` 的 `display` 声明编译进 Guest，`Application` 初始化时由 SDK 读取物理屏幕
-尺寸并建立逻辑画布：`square` 始终呈现 720×720，并在非方形屏幕上按短边等比缩放后居中；`landscape`
-以 720 为逻辑高度并按物理宽高比推导宽度；`portrait` 以 720 为逻辑宽度并推导高度。后两种模式遇到方向
-不符的屏幕时由 SDK 走统一的不兼容退出点，未来可在该位置接入 Host 提供的系统模态提示。Host 不负责
-Guest 布局判断。绘图命令和 Touch event 都由 SDK 自动在逻辑与物理坐标之间转换。自适应 UI 应直接依据
-`RendererInfo` 布局。`ui::ComputeFlexLayout()`
+`RendererInfo::width()` / `height()` 是 Guest 布局所用逻辑坐标空间的唯一尺寸来源；
+`physical_width()` / `physical_height()` 仅用于把触摸距离等物理像素阈值换算到逻辑坐标，不应用于布局；
+`InputInfo` 不重复暴露第二份宽高。App manifest 不声明屏幕 profile。`Application` 初始化时由 SDK 读取物理屏幕
+尺寸并建立短边为 720、长边按实际宽高比推导的逻辑画布。App 必须通过 `RendererInfo` 判断当前宽高和方向，
+对不支持的布局在 Guest 入口给出明确 `Assert`；Host 不负责 Guest 布局判断。Scene geometry 和 Touch event 使用同一个逻辑坐标空间；SDK 在发送 Scene
+keyframe/patch 前统一把节点矩形、Layer translation、atlas source rect 和语义字体 lower 为当前屏幕的
+物理值，Host Scene 只接收并验证物理坐标，不重复实现 Guest viewport 或布局规则。Scene descriptor 的
+逻辑宽高必须等于当前 `RendererInfo`。自适应 UI 应直接依据 `RendererInfo` 布局。`ui::ComputeFlexLayout()`
 是纯 Guest 侧的固定容量整数计算：应用提供 item 和输出 `Rect` span，不创建控件树、不动态分配，也不调用
 Host。复杂页面通过嵌套横向和纵向 Flex 完成：
+
+`RendererInfo::safe_area_insets()` 返回已经换算为逻辑像素的四边安全内缩，`safe_area()` 返回对应的轴对齐
+安全矩形。值由 Board 根据面板 Active Area、盖板和遮挡几何声明；圆角屏上的标题、状态值和触摸控件应以它
+作为边缘基线，再叠加 App 自己的视觉 padding。普通矩形屏返回零 inset，App 不按板名或物理分辨率猜圆角。
 
 ```cpp
 const auto info = app.renderer().info();
@@ -329,57 +344,59 @@ micropixel::Assert(laid_out.has_value(), "layout failed");
 
 Flex v1 支持横向/纵向、固定像素、grow、padding、gap、主轴分布和交叉轴对齐，不支持 Grid、wrap、span
 或百分比。布局通常在应用启动或页面进入时计算一次，结果同时交给绘制和 `ui::Button::SetBounds()`；触摸
-事件已经是逻辑坐标，不需要转换；在 square 游戏的居中画布以外，坐标会自然落在逻辑范围之外，游戏可以
-忽略。`Resources::LoadTexture()` 会把 SDK 算出的短边缩放比例随请求发送给
-Host；Host 在后台解码 PNG 后通过 PPA 一次性生成物理尺寸纹理。纹理使用
-`Frame::DrawTexture(Point, ...)` 时保持 1:1 物理绘制，只有应用显式传入不同尺寸的 destination `Rect`
-时才走逐帧缩放路径。
+事件已经是逻辑坐标，不需要转换。`Resources::LoadTexture()` 会把 SDK 算出的短边缩放比例随请求发送给
+Host；Host 在后台解码 PNG 后通过 PPA 一次性生成物理尺寸纹理。SDK 使用和资源请求相同的比例 lower
+atlas source rect；纹理 destination 的尺寸独立取整，以保证逻辑 source/destination 同尺寸时在物理空间
+仍严格同尺寸。纹理使用
+`Sprite` 或 `SurfaceNode` 的 source/destination 同尺寸时保持 1:1 物理绘制，只有尺寸不同时
+才走缩放路径。
 
-`ui::Viewport` 仅保留给需要额外嵌套坐标空间的高级场景。普通 App 不应再用它适配屏幕，否则会和
-`Application` 已经提供的逻辑坐标变换重复。
+如果游戏内部还需要棋盘、摄像机或小地图等嵌套坐标空间，应在 App 内用纯几何函数表达。Public SDK
+不再提供第二套屏幕坐标工具，避免与 `Application` 建立的逻辑坐标变换重复。
 
-应用不接触 `Layer`、`Surface`、transport batch 或 retained-compositor capability。需要局部平移时使用
-普通渲染状态；SDK 会在支持的 Host 上自动使用 retained translation 快速路径，否则执行裁剪和平移降级：
-
-```cpp
-auto frame = app.renderer().BeginFrame();
-frame.Clear(micropixel::Color::Black());
-frame.Save();
-frame.SetClipRect(board_bounds);
-frame.Translate(micropixel::Point{shake_x, shake_y});
-frame.DrawTexture(micropixel::Point{board_x, board_y}, board_texture);
-frame.Restore();
-micropixel::Assert(frame.Present().has_value(), "frame present failed");
-```
-
-v1 的 `Save`/`Restore` 最多嵌套 8 层；子状态继承父状态，`Translate()` 采用累加语义，子 clip 不能扩大
-父 clip。每层的 clip 和 translation 必须在该层第一条绘制命令前设置。小帧直接一次 `service_submit`；超过 4096 bytes 时，SDK 才自动使用
-Host frame begin/commit 做多批原子提交。应用不能手动提交 transport batch。未 `Present()` 的跨批帧
-会在析构时 cancel，不会留下半帧状态。
-
-`FillRect(rect, color, opacity)` 和 `DrawTexture(..., opacity)` 统一处理不透明与半透明
-绘制。`opacity` 默认为 `255`；图片 opacity 与图片自身逐像素 alpha 相乘。不透明 texture 保留 Host copy
-快速路径，不需要另一组 `Blend*` API。
-
-Texture 有两组互补的绘制形式，宽高为 0 始终是非法空矩形，不承担“自动尺寸”语义：
+应用直接创建 Scene 对象，但不接触 App Surface、transport generation 或 revision。首次提交发送完整
+Scene keyframe，之后 `Present()` 只发送变化的对象属性。局部震动只改变 Game Layer translation：
 
 ```cpp
-frame.DrawTexture(micropixel::Point{x, y}, texture);          // 原始尺寸
-frame.DrawTexture(micropixel::Point{x, y}, texture, source);  // source 原始尺寸
-frame.DrawTexture(destination, texture);                      // 整张纹理缩放到 destination
-frame.DrawTexture(destination, texture, source);              // 裁剪并缩放
+const auto display = app.renderer().info();
+auto scene = app.renderer().CreateScene({display.width(), display.height(), micropixel::Color::Black()});
+auto game = scene.CreateLayer({.clip = board_bounds});
+auto board = scene.CreateSprite(board_texture, board_bounds, board_source, game);
+
+auto update = scene.BeginUpdate();
+game.SetTranslation(update, {shake_x, shake_y});
+micropixel::Assert(update.Present().has_value(), "scene present failed");
 ```
 
-`Frame::draw_operation_count()` 与 `RendererInfo::max_draw_operations()` 只统计应用绘制操作；SDK 自动生成的
-state、transport batch 和 retained acceleration 记录不计入预算，因此 Host 优化变化不会破坏应用的槽位计算。
-`Present()` 返回 `Result<void>`；参数和状态编程错误仍会 trap，提交失败、容量耗尽等运行时错误可由应用处理。
+Scene 同时最多存在一个，Layer 最大深度和对象容量由 `RendererInfo` 给出。应用不能手动提交 wire record、
+generation 或 revision。`SceneUpdate` 析构会放弃未提交的属性事务，不产生半更新。
+属性 dirty mask 表示相对于 `BeginUpdate()` 的净差量，而不是 setter 调用历史；例如先隐藏整个 Batch、再把
+仍然存活的 instance 恢复为可见，不会把这些最终未变化的 visibility 写入 patch。
+
+Sprite 的 destination 和 source 分别描述显示矩形与 atlas 区域；宽高为 0 是非法空矩形。图片 opacity 与
+逐像素 alpha 相乘，不透明 texture 保留 Host copy 快速路径。蛇身、方块和粒子应使用 SpriteBatch：
+
+```cpp
+auto snake = scene.CreateSpriteBatch(snake_atlas, 128U, game);
+auto update = scene.BeginUpdate();
+snake.SetInstance(update, tail_slot, {
+    .destination = new_head_rect,
+    .source = head_frame,
+    .visible = true,
+});
+micropixel::Assert(update.Present().has_value(), "snake patch failed");
+```
+
+`RendererInfo::max_scene_nodes()`、`max_batch_instances()`、`max_layers()`、`max_sprite_batches()` 和
+`max_scene_bytes()` 是明确容量。`Present()` 返回 `Result<void>`；参数和状态编程错误仍会 trap，提交失败、
+容量耗尽等运行时错误可由应用处理。
 
 文字使用语义字体角色而不是固定物理字号，坐标仍是 `RendererInfo` 给出的逻辑像素：
 
 ```cpp
 const micropixel::Locale locale = app.localization().CurrentLocale(); // BCP 47，例如 en
-frame.DrawText({24, 24}, "Hello", micropixel::Color::White(),
-               micropixel::SystemFont::kLarge);
+auto title = scene.CreateLabel({24, 24}, "Hello", micropixel::Color::White(),
+                               micropixel::SystemFont::kLarge);
 ```
 
 `SystemFont::{kSmall,kMedium,kLarge,kTitle}` 的实际字体和像素大小由 Host 决定。这样 Host 后续可在不改变
@@ -404,9 +421,9 @@ micropixel::Assert(
     "texture update failed");
 micropixel::Assert(batch.Finish().has_value(), "texture batch failed");
 
-auto frame = app.renderer().BeginFrame();
-frame.DrawTexture(micropixel::Point{47, 76}, board);
-micropixel::Assert(frame.Present().has_value(), "frame present failed");
+auto board_node = scene.CreateSurfaceNode(board, {47, 76, 300, 150}, {0, 0, 300, 150});
+auto update = scene.BeginUpdate();
+micropixel::Assert(update.Present().has_value(), "surface present failed");
 ```
 
 `Update()` 同时接收可读 `byte_length` 和每行 `pitch`；SDK 校验输入范围，并把大矩形自动切成不超过
@@ -416,10 +433,8 @@ micropixel::Assert(frame.Present().has_value(), "frame present failed");
 `sdk/ui/button.hpp` 提供无堆分配的 `ui::Button`。它捕获按下时的 touch id，手指移出时取消视觉
 按下态，回到按钮内会恢复，只有在按钮内松开才返回 `clicked`。构造函数的可选 `hit_padding` 会在四边
 扩大不可见触控区域而不改变绘制边界，适合小屏上的图标按钮。相邻按钮的扩大区域不应重叠；需要紧凑
-排列时由 App 的页面级 hit tester 先选出唯一目标。动作仍由 App 处理，渲染可选
-`DrawTextButton()` 或 `DrawTextureButton()`。文本按钮默认叠加同一矩形上的半透明黑色蒙版；贴图按钮
-按下时降低原图的 command opacity，并继续保留图片自身的逐像素 alpha，因此透明边缘和圆角不会被
-矩形反馈层覆盖：
+排列时由 App 的页面级 hit tester 先选出唯一目标。动作和视觉绑定均由 App 处理；按下状态通常修改
+按钮 Shape 的 opacity 或 Sprite 的 tint/opacity：
 
 ```cpp
 micropixel::ui::Button play_button{{250, 316, 220, 72}, 12};
@@ -428,7 +443,9 @@ if (const auto update = play_button.OnTouch(touch); update.clicked) {
     StartGame();
 }
 
-micropixel::ui::DrawTextButton(commands, play_button, "START GAME");
+auto scene_update = scene.BeginUpdate();
+feedback.SetOpacity(scene_update, play_button.pressed() ? 48U : 0U);
+micropixel::Assert(scene_update.Present().has_value(), "button update failed");
 ```
 
 无需动态分配的短文本拼接统一使用 `FixedString<Capacity>`；`Append*()` 返回内容是否完整写入，
@@ -452,8 +469,9 @@ finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新�
 `raw_rgb888`、`raw_argb8888` 或 `png_to_raw_rgb888`，但这些 raw 格式不能被指定为 launch 封面。
 
 多帧动画应优先打包为 sprite sheet/texture atlas。Guest 只同步加载一次 `Texture`，再通过
-`Frame::DrawTexture(position, texture, source_rect)` 选择帧；切帧只更新 command 中的 source rect，
-不触发资源查找、图片解码或 Texture 分配。
+`SpriteNode::SetSource()` 或 `SpriteBatch::SetInstance()` 选择 atlas frame；切帧只提交 source rect 差量，
+不触发资源查找、图片解码或 Texture 分配。v1 不提供 `AnimationClip/Track`，动画时间由 Guest 游戏循环
+驱动；未来若加入 Host timeline，必须同时定义时钟、暂停/恢复、打断、资源 pin 和完成事件。
 
 日常构建只把项目目录交给统一 CLI。它从 `app.json` 读取 sources、localization 和 asset manifest，生成
 绑定头、编译 Guest，并把稳定 AppId、AOT 和资源 TOC 写入补齐到 64 KiB extent 的 Bundle v1：
@@ -479,11 +497,11 @@ python3 tools/micropixel package path/to/app --profile size
 在启动后立即返回。对于已经安装的 App，`micropixel app start --follow` 会从当前 `app.json` 推导 App ID；
 `Ctrl-C` 只断开日志跟随，不停止 App。
 
-`tools/build_guest_app_p4.sh` 与 `tools/build_app_bundle.py` 仍是 conformance、底层调试和打包器测试使用的
+`tools/build_guest_p4.sh` 与 `tools/build_app_bundle.py` 仍是 conformance 和打包器测试使用的
 内部构件，不是普通 App 的公开工作流。
 
-USB 调试统一使用 `bash tools/p4.sh flash-apps` 写入 Blocks、Snake 和 Demo。自定义 Bundle 不再绕过
-安装事务直接覆写分区，应通过 Remote Control 安装。
+USB 调试统一使用 `bash tools/p4.sh flash-apps` 写入七个示例 App。自定义 Bundle 不再绕过
+安装事务直接覆写分区，应通过 USB Local Control 或 Remote Control 安装。
 
 所有 import 必须在 `guest/abi/allowed_imports.txt` 中声明；未授权 import 和拼写错误在链接时
 失败。AI 不应自行拼接工具链命令。

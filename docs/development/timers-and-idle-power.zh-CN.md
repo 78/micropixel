@@ -30,14 +30,6 @@ App 安全暂停、背光渐暗、显示释放、显式 `esp_light_sleep_start()
 都会刷新最后交互时间。固件更新期间到期的请求按现有电源保护规则拒绝，不中断 OTA 事务。设置以向后兼容的
 v2 Host settings record 保存在 `sys_store/system`；旧 v1 record 首次读取时采用 5 分钟默认值。
 
-## 与 pocket-sage 事件循环的对应
-
-`pocket-sage/main/gui/gui_manager.cc` 的核心做法是调用 `lv_timer_handler()` 后，按其返回的下一个 LVGL
-deadline 等待 EventGroup；没有 timer 时最长等待 120 s，画面或输入变化再设置 `GUI_WAKE_BIT`。本项目继续使用
-`esp_lv_adapter` 管理 MIPI-DSI、flush 和 PM 生命周期，没有复制一套 GUI task；adapter fork 新增 LVGL 9
-monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相同的“按需时钟 + deadline + 外部事件”
-语义。
-
 ## 显式创建的 `esp_timer`
 
 | 所有者 | 数量/周期 | 功能 | 结论 |
@@ -62,29 +54,21 @@ monotonic tick mode，并用 `esp_lv_adapter_request_wake()`/ISR 版本实现相
 | Wi-Fi 扫描页 | retry 1 s，刷新 10 s | 只在扫描页面可见时按下一个 deadline 等待；Wi-Fi driver 状态变化仍走事件 |
 | Remote agent 离线状态 | 旧实现 Poll 1 s | 已改为 task notification；命令与 Wi-Fi 状态变化显式唤醒，disabled 状态仅等待 15 min 固件检查 deadline |
 | Remote agent 已连接 control stream | 旧实现 Read timeout 250 ms | 已改为 HTTP/3 stream/异步完成、Host result、命令和 Runtime snapshot 事件唤醒；醒来后用 `TryRead()` 排空数据，无事件和 deadline 时无限等待 |
-| 音频 I2S mixer | 旧实现每 128 帧写一次，16 kHz 下约 8 ms | 已改为 task notification 事件唤醒；无 active voice 时关闭 PA 和 I2S 并无限阻塞。唤醒 PA 后先发送 64 ms 静音预滚，等待冷启动链路稳定；播放结束保留 10 s 静音 grace，避免游戏操作间频繁关开 |
+| 音频 I2S mixer | 每 128 帧写一次，16 kHz 下约 8 ms | Guest 前台期间保持输出链路就绪并可发送静音；Suspend、Stop 或 Session 销毁后才允许按 10 s idle grace 关闭 PA/I2S。没有前台 App 且没有可播放 voice 时无限阻塞 |
 | 前台 App completion | 20 ms | 仅 Guest 前台期间，用于 completion、远控和系统动作编排；不是大厅空闲来源 |
 | 固件更新页面 | 100 ms | 仅更新页面/更新流程期间刷新进度；可在 Remote model change event 完整接入后删除 |
 | 亮度与系统转场 | 15–17 ms，约 100–180 ms 总时长 | 有限帧瞬态任务，结束后不再唤醒 |
 
-## 本轮优化边界
+## 功耗策略边界
 
-本轮优先消除了 App Hall 的持续唤醒来源，同时保持屏幕常亮和触摸即响应：
+产品使用按需 LVGL clock、事件驱动 pointer、显式 display wake、阻塞 worker 和准确 deadline；不要重新引入
+毫秒级永久轮询来推动 UI、USB、Remote、Resource 或空闲音频。大厅的 30 s 状态采样只负责电量与固件状态
+兜底，Wi-Fi、外部供电和远控命令仍应通过事件即时唤醒。
 
-1. LVGL 9.5 使用按需单调时钟，从根上取消 1 ms tick timer；1 s 无活动后 adapter pause；
-2. pointer 从 4 ms永久轮询改为触摸事件驱动；
-3. 所有会改变画面的 Host/Guest 路径统一执行 refresh-ready + adapter wake；
-4. 远控命令从 250 ms轮询改为队列事件；
-5. 大厅状态兜底采样从 1 s调整到 30 s；
-6. Guest resource worker 从 20 ms轮询改为阻塞队列；
-7. 音频 mixer 从持续发送静音改为首个 tone 事件启动、最后一个 tone 结束后自动关闭 I2S/PA；
-8. USB Local Control 从 20 ms read timeout 改为 USB RX、响应队列和安装 deadline 事件唤醒；
-9. Remote agent 从 250 ms control stream timeout 和 1 s离线轮询改为 HTTP/3、队列、Wi-Fi 与准确 deadline
-   事件唤醒。
-
-暂不启用 tickless automatic light sleep。启用前必须在 Metalio-Claw4 真机逐项验证 MIPI-DSI、PPA、PSRAM、
-ESP-Hosted SDIO、GT911 和电源键在自动睡眠中的 retention/wake 行为。Remote agent 的常态轮询已经移除；
-下一阶段应先把固件更新页等剩余 UI 状态刷新改成 Remote model event，再评估 tickless light sleep。
+当前启用 FreeRTOS tickless idle，但不启用 automatic light sleep。显式 light sleep 由 Host 电源状态机编排，
+不能用空闲 scheduler 自行进入。若未来启用 automatic light sleep，Metalio-Claw4 必须验证 MIPI-DSI、PPA、
+PSRAM、ESP-Hosted SDIO、GT911 与电源键的 retention/wake；ESP-Mosaico 必须单独验证 QSPI/CO5300、native Wi-Fi、
+CST9217、PSRAM、POWER switch 与 USB CDC 重枚举。两个 profile 的验收不能互相替代。
 
 当前产品基线已将 `CONFIG_FREERTOS_HZ` 设为 1000，以获得 1 ms 的阻塞和 deadline 粒度，并启用
 `CONFIG_FREERTOS_USE_TICKLESS_IDLE`；这不会代替 LVGL 独立的帧率限制，也不会自动启用 light sleep。后续启用 automatic light sleep 时，

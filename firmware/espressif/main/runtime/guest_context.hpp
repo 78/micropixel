@@ -42,7 +42,7 @@ class GuestContext final {
 
     [[nodiscard]] bool valid() const {  // NOLINT(readability-identifier-naming)
         return events_.valid() && timers_.valid() && sensors_.valid() && gpio_.valid() && haptics_.valid() &&
-               resources_.valid() && audio_playback_.valid() && storage_.valid();
+               resources_.valid() && audio_playback_.valid() && storage_.valid() && audio_foreground_ready_;
     }
     [[nodiscard]] micropixel_app_time_t AppTimeNow() const { return timers_.Now(); }
     [[nodiscard]] EventWaitResult WaitEvent(micropixel_event_t& event, uint64_t timeout_us) {
@@ -102,9 +102,6 @@ class GuestContext final {
         return resources_.ResolveTexture(texture, view_out);
     }
     [[nodiscard]] device::DeviceResult<void> GraphicsSubmit(const uint8_t* bytes, uint32_t length);
-    [[nodiscard]] device::DeviceResult<void> GraphicsBeginFrame();
-    [[nodiscard]] device::DeviceResult<void> GraphicsCommitFrame();
-    [[nodiscard]] device::DeviceResult<void> GraphicsCancelFrame();
     [[nodiscard]] device::DeviceResult<micropixel_graphics_info_t> GraphicsInfo() const {
         return devices_.graphics().GetInfo();
     }
@@ -258,6 +255,7 @@ class GuestContext final {
     ServiceRegistry service_registry_;
     uint32_t core_sequence_{};
     bool suspended_{};
+    bool audio_foreground_ready_{};
 };
 
 }  // namespace micropixel::runtime

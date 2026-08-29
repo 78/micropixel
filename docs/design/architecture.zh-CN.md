@@ -11,19 +11,20 @@ Firmware 文件职责以 [Espressif main README](../../firmware/espressif/main/R
 
 MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产品基线为：
 
-- Host：ESP32-P4 + Metalio-Claw4，ESP-IDF 6.1；
+- Host：ESP32-P4 + Metalio-Claw4 是产品 profile；ESP32-S31 + ESP-Mosaico P0/P1 是同步维护的 preview
+  bring-up profile；两者使用 ESP-IDF 6.1；
 - Runtime：MicroPixel WAMR fork 固定 commit、AOT format v6，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
 - Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长，P4 与 S31 的当前策略上限均为
   8 MiB；实例化时按最大连续 PSRAM 块自适应下调，后续增长也必须保留 Host 安全水位。Host-owned
   Bitmap/offscreen surface 不预留累计配额，而是在每次实际分配时使用同一安全水位做动态准入；
-- App 分发：Bundle v1 封装 AOT、资源和 App metadata；24 MiB 可写 App Store 由 BundleFS 以离散
-  64 KiB 块和四 Bank Catalog 提供写时复制事务；
+- App 分发：Bundle v1 封装 AOT、资源和 App metadata；P4 的 24 MiB 与 S31 NOR bring-up 的 8 MiB
+  可写 App Store 都由 BundleFS v2 以离散 64 KiB 块和四个 16 KiB Catalog Bank 提供写时复制事务；
 - 系统 UI：Host 原生 App Hall、Status Layer 和系统手势，不作为 Guest App 运行。
 
 当前不承诺 ESP32-S3 产品适配、多 Guest 并行、Guest 多线程、生产级在线 App 分发、网络 Service、
 Camera Service 或通用 Widget Server。Remote Control 的开发版在线安装已经进入代码基线，但 package
-数字签名、BundleFS 真机断电恢复矩阵和完整 TLS peer 验证仍是发布门槛。BundleFS 的块号表允许物理块
+数字签名、BundleFS 真机断电恢复矩阵和 TLS 负向真机矩阵仍是发布门槛。BundleFS 的块号表允许物理块
 离散分布，卸载后的块可直接复用，不依赖连续 extent GC。
 
 ## 2. Host 分层
@@ -32,7 +33,8 @@ Camera Service 或通用 Widget Server。Remote Control 的开发版在线安装
 app_main
     └── FirmwareApp                         # 唯一组合根
         ├── Platform
-        │   ├── Metalio-Claw4                # display/input/audio/sensors/GPIO/system UI
+        │   ├── Metalio-Claw4                # ESP32-P4 product board
+        │   ├── ESP-Mosaico                  # ESP32-S31 preview board
         │   └── Null                          # 硬件无关编译基线
         ├── DeviceServices
         │   ├── Graphics / Input / Audio / Random
@@ -119,10 +121,13 @@ HostController 不因板名变化。系统信息和 Remote Control 的板型描�
 硬件无关依赖方向编译门禁，不生成可烧录的产品镜像。ESP-Mosaico 的 P0/P1 profile 已接入 Runtime、
 BundleFS、native Wi-Fi、板级供电、官方 CO5300 显示和 CST9217 中断触摸，并复用 App Hall、Status Layer、
 ES8311/NS4150B 音频、BQ27220 电池与数字振动电机，并复用共享固定容量音频引擎、
-逻辑 viewport、分辨率 layout profile、系统转场时间线及 PPA/DMA2D 图形原语。P4 的 RGB888 framebuffer
+逻辑坐标变换、分辨率 layout profile、系统转场时间线及 PPA/DMA2D 图形原语。P4 的 RGB888 framebuffer
 提交与 S31 的 RGB565/QSPI 提交留在各自 display pipeline；缩放、位图复制和颜色转换不回退为正常帧路径的
-CPU 整图逐像素循环。BMI270/BMM150 仍在兼容 ESP-IDF 6.1/S31 的权威驱动及轴向/校准完成真机验证前
-显式 unavailable，NAND App Store 与扩展模块属于 P2。
+CPU 整图逐像素循环。BMI270 与双 BMM150 通过固定版本 Bosch SensorAPI 接入同一块板级 I²C executor，
+POWER/Function Button、状态 LED、白名单扩展 GPIO、主动电池刷新与 SAM8108 light-sleep/关机路径也由
+Platform 提供。Function Button 归一化为 Confirm key；GPIO3 橙色单色状态 LED 通过现有 GPIO Service
+暴露为只输出逻辑设备，`true` 表示点亮并由 Platform 处理低有效。三颗传感器的板坐标轴映射与磁场校准
+仍需真机验收。NAND App Store 与扩展模块属于 P2。
 
 ## 3. Session 与事件模型
 
@@ -215,7 +220,7 @@ Public C++ SDK 不直接暴露 C ABI。`guest/runtime/sdk.cpp` 将强类型对�
 三条数据路径的职责不混用：
 
 - `service_call`：低频、有界的控制请求和响应；
-- `service_submit`：Renderer Frame command stream 等高频或批量数据；
+- `service_submit`：Graphics Scene keyframe/patch 等高频或批量数据；
 - `event_wait`：Timer、Touch、Audio playback、Resume 和 Stop 等异步通知。
 
 `micropixel_event_t` 固定为 48 bytes，按 `service_id + event_id` 解码。Service descriptor、handle 和
@@ -243,7 +248,7 @@ GPIO 不要求出厂 binding：每根引脚以物理 line number 和 capability 
 打开形成 Session 内独占 lease；关闭或 Session teardown 后恢复 input/无上下拉安全状态。板级已占用引脚
 根本不进入 catalog。
 
-Sensors 使用 `Sensor<Reading>` typed resource；Acceleration 和 MagneticField 有各自单位与 value type，
+Sensors 使用 `Sensor<Reading>` typed resource；Acceleration、AngularVelocity 和 MagneticField 有各自单位与 value type，
 温度、光照、压力等以后增加独立 reading type，而不是扩张一个万能对象。没有 sensor handle 时芯片保持
 suspend，也没有专属 sensor task；第一个 `Open` 只向板级共享 I²C executor 注册周期采样，最后一个 handle
 释放后注销采样并让芯片休眠。Platform 固定槽位维护最新值缓存，Guest `Read` 自主读取缓存，不产生 Sensor
@@ -263,20 +268,55 @@ Guest event。最后一个 edge input 释放或 App Suspend 时卸载对应 ISR 
 
 ## 5. Graphics 与 Resource
 
-公开 Graphics 使用 SDL3 风格概念：
+公开 Graphics 使用 retained scene graph：
 
 ```text
-Renderer -> Frame -> Present
-Resources -> Texture
-Renderer -> StreamingTexture / TextureUpdateBatch
+Renderer -> Scene -> Layer -> Sprite / SpriteBatch / Shape / Label / SurfaceNode
+Resources -> Texture / Font
+Renderer -> StreamingTexture / TextureUpdateBatch -> SurfaceNode
 ```
 
-- `Frame` 直接提供 `Clear`、`FillRect`、`DrawText`、`DrawTexture` 和
-  `Save/SetClipRect/Translate/Restore`；
+- 一个 Guest 同时只有一个 Active Scene。Scene 是唯一根节点，Layer 用于世界/HUD 分组、clip、opacity、
+  z-order 和整体 translation；
+- `Sprite` 适合有独立身份的纹理对象，`SpriteBatch` 适合蛇身、方块、爆炸、粒子和 tile；`Shape` v1
+  提供矩形，`Label` 使用 Host 字形缓存，`SurfaceNode` 显示可局部更新的 `StreamingTexture`；
 - `Point`、`Rect` 和 `Size` 是 Renderer 与 Input 共用的逻辑坐标 value；显示尺寸只由 `RendererInfo`
-  公开，`InputInfo` 不维护第二份尺寸来源；
-- 一个 Frame 是一次原子场景替换，`Present()` 显式发布；析构不会隐式 Present；
-- SDK 将大 Frame 自动分成有界 batch，应用不感知 transport 或 retained 优化开关；
+  公开，`InputInfo` 不维护第二份尺寸来源；布局只使用 `width()` / `height()`，物理视口尺寸只用于把触摸
+  距离等设备像素阈值换算到逻辑坐标；
+- Board 的 `DisplayInfo` 以原生像素声明四边 safe-area inset。Graphics Service 把它追加到 `GET_INFO`，
+  Guest SDK 向外取整为逻辑 `RendererInfo::safe_area_insets()` / `safe_area()`；圆角和异形屏适配由布局消费
+  这一通用几何值，不把板名、面板型号或经验 padding 写进 App；
+- 逻辑坐标变换属于 Guest SDK：SDK 根据物理屏幕建立短边为 720 的逻辑画布，并在序列化 Scene 前把
+  geometry、Layer translation、atlas source rect 和语义字体统一 lower 为物理值。Graphics wire 与 Host
+  `GuestScene` 只处理物理坐标，不复制 Guest 的 layout 兼容判断；Scene descriptor 必须匹配当前
+  `RendererInfo` 的逻辑尺寸；
+- `SceneUpdate` 聚合一次逻辑更新并以 `Present()` 原子发布；失败时 Host current scene 不变；
+- Guest Scene 事务以 touched slot 为工作集：setter 对无变化值直接返回，普通 patch 只扫描触碰过的
+  node/layer/instance；Host compositor 根据最近一次成功 wire 的 property mask 增量更新 normalized
+  operation。keyframe、结构变化和 Layer z-order 变化仍保留完整验证、展开与排序路径；
+- Graphics wire 首次发布完整 Scene keyframe，普通更新发布属性 patch。Patch 携带
+  `scene_generation + base_revision + revision`，Host 在固定容量 scratch scene 中完整验证后才原子交换；
+  revision 不匹配时 SDK 下一次自动发布 keyframe；
+- 局部震动只 patch Layer translation；Sprite 动画只 patch source、destination、opacity 或 visibility；
+  SceneUpdate 以 `BeginUpdate()` 时的状态计算净差量，属性在同一事务中改回原值时不进入 wire。Snake 的
+  body ring 复用尾槽，普通移动只发送尾槽、独立头部/眼睛和少量颜色分段边界的真实变化，不随蛇长线性
+  重发整个 SpriteBatch；
+- Guest 不能访问 Host DisplayRoot。HostCompositor 把整个 Guest Scene 作为 `GuestSceneLayer`，再与
+  `StatusBarLayer`、`PullDownPanelLayer` 和 `SystemDialogLayer` 合成，所以下拉状态面板不进入 Guest ABI；
+- Host 正常链路固定为 `GuestScene -> AppSurfaceCompositor -> App Surface damage -> LVGL Host root ->
+  DisplayPipeline`。LVGL 中的 Guest 只有一个 App Surface image，系统 UI 保持原生对象；板级
+  `DisplayPipeline` 是 panel、transport、flush 和显示 shadow 的唯一 owner，其他 compositor 不直接提交面板；
+- 调试日志分别记录 Scene damage/重放数/Layer cache、PPA/DMA2D/CPU fallback、LVGL 合并前后区域，以及
+  QSPI panel submit 与 DMA2D shadow copy，用于真机核对每个局部区域只有一次最终 RAM copy 和一次面板提交；
+  分段计时边界、当前真机基线和优化判断见
+  [Graphics 性能诊断与基线](../development/graphics-performance.zh-CN.md)；
+- Snake 真机验收使用 480×480 屏幕：首次 keyframe 可以全屏；稳定普通移动的单次 wire 应不超过 16 个
+  changed instances，damage 应小于屏幕 10% 且 `capacity-merges=0`；atlas 切帧应为单节点 patch；震动进入
+  时必须出现 `layer-cache=yes`、translation-only wire，并把旧/新 Layer bounds 合成一个小于全屏的区域；
+  `panel submit` 与 `shadow=dma2d` 的累计次数和像素数必须相等。超出这些条件属于性能回归，不以画面正确
+  代替验收；
+- v1 不提供 `AnimationClip/Track`。动画时序由 Guest 驱动，未来只有在真机传输数据证明需要时，才以完整的
+  playback、时钟、暂停和完成事件语义扩展，不预留半套 opcode；
 - 公开资源概念统一为 `Texture`；Host 内部的 `BitmapView` 只是 CPU 像素内存描述符，
   不是公开资源身份；
 - `Resources::LoadTexture(AssetId)` 同步返回 `Result<Texture>`，Host 可在内部使用 worker 解码；
@@ -324,8 +364,9 @@ Guest 进入 `main()` 后的 Trap 代替。
 
 ## 8. 发布基线
 
-当前集成应用为 Blocks、Snake 和 Demo。Demo 覆盖公开 Service，Snake 覆盖高频 Graphics、
-Input、Storage 和 Audio，Blocks 覆盖 StreamingTexture 与批量 damage。
+当前集成应用为 Blocks、Snake、Demo 和四个 Showcase Bundle（Tap Counter、Color Lab、Pixel Sketch、
+Orbit Pad）。Demo 覆盖公开 Service，Snake 覆盖高频 Graphics、Input、Storage 和 Audio，Blocks 覆盖
+StreamingTexture 与批量 damage，Showcase 覆盖多 App Hall、轻量 Scene 和独立 Bundle 生命周期。
 
 自动基线：
 
@@ -342,10 +383,10 @@ python3 -m unittest tools.tests.test_build_app_store_image
 
 - App Hall 能显示并启动最多 50 个 App，第一行可自由左右拖动并带惯性、不强制卡片吸附；新安装 App 位于
   最左侧。卡片和解码封面使用最多 6 项的视口窗口，快速滑动期间允许占位；切换时旧 Session 已先销毁；
-- App Hall 顶部居中显示紧凑 FPS/CPU，右侧 Wi-Fi 信号与电池状态不会互相遮挡；
+- FPS/CPU 蒙层只在 Guest App 前台运行时显示，App Hall、系统菜单、Status Layer、启动页和挂起状态隐藏；
 - 顶部下滑打开 Status Layer；从底部中央三分之一区域上滑会暂停并返回大厅，左右两侧同类输入仍交给
   Guest；App 启动或恢复后的底部提示条显示 3 秒并自动隐藏；
-- 恢复同一 App 时复用 Session 和 retained scene，并由 PPA 从 Hall 卡片硬件放大回最后一帧；
+- 恢复同一 App 时复用 Session 和 retained Scene，并由 PPA 从 Hall 卡片硬件放大回最后一帧；
 - Texture `Present → Reset → 重绘/换场景` 不产生 UAF；
 - Timer 积压时 `elapsed` 和 `missed_count` 正确；
 - GT911 不声明 pressure capability，Touch 坐标与 Renderer 使用同一逻辑空间；
@@ -361,8 +402,8 @@ python3 -m unittest tools.tests.test_build_app_store_image
 1. Bundle requirements 与 WAMR instance 创建前的兼容性 preflight；
 2. 权限声明、grant 与 method 级检查；
 3. Resource/Graphics/Input 协议版本冻结、兼容 fixture 和 wire 负向/fuzz 回归；
-4. Texture retained 生命周期、Timer 积压、Run/Stop 和三个应用的真机回归；
-5. System Shell 的在线安装/卸载、网络配置和完整错误恢复。
+4. Texture retained 生命周期、Timer 积压、Run/Stop 和七个集成应用的真机回归；
+5. 生产 package 签名与授权、网络配置，以及在线安装/升级/卸载的完整断电和错误恢复矩阵。
 
 ## 9. 架构禁止项
 

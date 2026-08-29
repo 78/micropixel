@@ -20,37 +20,12 @@ class UnavailableGraphics final : public device::Graphics {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
 
-    [[nodiscard]] int32_t BeginFrame() override {
-        if (graphics_frame_active_) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        graphics_frame_active_ = true;
-        return MICROPIXEL_STATUS_OK;
-    }
-
     [[nodiscard]] int32_t Submit(const uint8_t* bytes, uint32_t length,
                                  const device::TextureAccess& textures) override {
         (void)bytes;
         (void)length;
         (void)textures;
         return MICROPIXEL_STATUS_UNSUPPORTED;
-    }
-
-    [[nodiscard]] int32_t CommitFrame(const device::TextureAccess& textures) override {
-        (void)textures;
-        if (!graphics_frame_active_) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        graphics_frame_active_ = false;
-        return MICROPIXEL_STATUS_UNSUPPORTED;
-    }
-
-    [[nodiscard]] int32_t CancelFrame() override {
-        if (!graphics_frame_active_) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        graphics_frame_active_ = false;
-        return MICROPIXEL_STATUS_OK;
     }
 
     [[nodiscard]] int32_t LoadFont(const device::FontResourceView&, micropixel_font_info_t&) override {
@@ -107,14 +82,10 @@ class UnavailableGraphics final : public device::Graphics {
     }
 
     void DismissLaunchBitmap() override {}
-    void ReleaseGuestResources() override {
-        bitmap_update_frame_active_ = false;
-        graphics_frame_active_ = false;
-    }
+    void ReleaseGuestResources() override { bitmap_update_frame_active_ = false; }
 
    private:
     bool bitmap_update_frame_active_{};
-    bool graphics_frame_active_{};
 };
 
 class UnavailableAudio final : public device::Audio {

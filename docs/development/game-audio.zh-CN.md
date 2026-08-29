@@ -75,7 +75,7 @@ bash tools/build_<game>_bundle.sh
 只用于累计暴露和辅助判断。长旋律不能再依靠多个很小的音符累计能量来通过响度门禁。相同系统音量下，
 不同游戏的参考效果原则上应控制在 ±1 dB 内；超过时必须在游戏的 `audio/README.md` 说明设计原因。
 
-Metalio-Claw4 上的 Guest 不得定义 App master，也不得对所有音效再做一层统一衰减。每个音效的
+所有产品板上的 Guest 都不得定义 App master，也不得对所有音效再做一层统一衰减。每个音效的
 相对响度由 `volume_per_mille` 表达；设备的整体音量由 Host 系统音量统一控制。
 
 ## 4. 舒适度约束

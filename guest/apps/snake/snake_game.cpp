@@ -2,6 +2,12 @@
 
 namespace snake {
 
+namespace {
+
+constexpr uint32_t kSwipeThresholdPhysicalPixels = 50U;
+
+}  // namespace
+
 SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer,
                      micropixel::RendererInfo renderer_info, micropixel::Audio audio, bool audio_available,
                      uint32_t best_score)
@@ -9,13 +15,19 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer
       strings_(snake_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
+      scene_(renderer.CreateScene({.logical_width = renderer_info.width(),
+                                   .logical_height = renderer_info.height(),
+                                   .background = micropixel::Color::Rgb(5U, 5U, 5U)})),
       audio_(audio),
       best_score_(best_score),
-      audio_available_(audio_available) {
+      audio_available_(audio_available),
+      touch_gesture_{gamekit::ScalePhysicalThreshold(kSwipeThresholdPhysicalPixels, renderer_info.width(),
+                                                     renderer_info.physical_width()),
+                     gamekit::ScalePhysicalThreshold(kSwipeThresholdPhysicalPixels, renderer_info.height(),
+                                                     renderer_info.physical_height())} {
     screen_button_.SetBounds(kStartButtonRect);
     pause_touch_button_.SetBounds(kPauseTouchRect);
     ResetGameModel();
-    SnapshotBody();
     ResetBodySlotMapping();
     app_.log().Info("snake: M18 menu ready");
     app_.log().Info("snake: renderer state translation enabled");
@@ -84,7 +96,6 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
         }
         Cell previous_head = model_.body()[0];
         uint32_t previous_length = model_.length();
-        SnapshotBody();
         MoveOutcome outcome = model_.Move();
         if (outcome.changed) {
             AdvanceBodySlotMapping(previous_head, previous_length);
@@ -215,7 +226,6 @@ void SnakeGame::PersistBestScore() {
 
 void SnakeGame::StartGame() {
     ResetGameModel();
-    SnapshotBody();
     ResetBodySlotMapping();
     ResetEffects();
     accumulated_us_ = 0U;

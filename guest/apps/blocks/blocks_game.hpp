@@ -34,15 +34,16 @@ class BlocksGame final {
     void ResetGesture();
     void InitializePlayfieldSurfaces();
     void SyncPlayfield();
+    void InitializeScene();
     void RasterizeCell(uint32_t column, uint32_t row, uint8_t visual);
     void PutCellPixel(uint32_t x, uint32_t y, Rgb color);
     [[nodiscard]] uint8_t VisualCell(uint32_t column, uint32_t row) const;
-    void RenderMiniPiece(micropixel::Frame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
-                         bool visible) const;
-    void RenderHeader(micropixel::Frame& commands, const Theme& theme) const;
-    void RenderSidebar(micropixel::Frame& commands, const Theme& theme) const;
-    void RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const;
-    void RenderOverlay(micropixel::Frame& commands) const;
+    void RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first_instance, Tetromino type, int32_t center_x,
+                         int32_t top, bool muted, bool visible);
+    void RenderHeader(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderSidebar(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderStatusEffect(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderOverlay(micropixel::SceneUpdate& update);
 
     [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
                                              uint16_t volume_per_mille, uint16_t attack_ms = 4U,
@@ -64,6 +65,18 @@ class BlocksGame final {
     blocks_strings::Catalog strings_;
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
+    micropixel::Scene scene_;
+    micropixel::Layer layer_{};
+    micropixel::SpriteNode board_node_{};
+    micropixel::SurfaceNode playfield_nodes_[4U]{};
+    micropixel::SpriteBatch mini_piece_batch_{};
+    micropixel::SpriteBatch status_batch_{};
+    micropixel::LabelNode header_labels_[6U]{};
+    micropixel::LabelNode sidebar_labels_[6U]{};
+    micropixel::LabelNode status_label_{};
+    micropixel::ShapeNode overlay_node_{};
+    micropixel::SpriteNode button_node_{};
+    micropixel::LabelNode overlay_labels_[7U]{};
     micropixel::Audio audio_;
     BlocksModel model_{};
     micropixel::Texture board_texture_{};
@@ -95,6 +108,7 @@ class BlocksGame final {
     bool audio_error_logged_{};
     bool storage_error_logged_{};
     bool visual_cache_valid_{};
+    bool scene_initialized_{};
 };
 
 }  // namespace blocks

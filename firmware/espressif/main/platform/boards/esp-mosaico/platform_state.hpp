@@ -1,16 +1,15 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 
 #include "driver/i2c_master.h"
-#include "esp_async_color_convert.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch.h"
 #include "host/ui/lvgl/square_common/profiles/square_480.hpp"
 #include "lvgl.h"
 #include "platform/boards/esp-mosaico/board_config.hpp"
+#include "platform/boards/esp-mosaico/display/display_pipeline.hpp"
 #include "platform/boards/esp-mosaico/display/panel_transition_compositor.hpp"
 #include "platform/boards/esp-mosaico/usb_cdc_console.hpp"
 #include "platform/buses/i2c_executor.hpp"
@@ -41,14 +40,9 @@ inline constexpr bool kEnableLvglAdapterPpaAccel = CONFIG_MICROPIXEL_LVGL_PPA_AC
 struct MosaicoBoardState final {
     buses::I2cExecutor i2c_executor{};
     i2c_master_bus_handle_t i2c_bus{};
-    esp_lcd_panel_handle_t panel{};
-    esp_lcd_panel_io_handle_t panel_io{};
+    MosaicoDisplayPipeline display_pipeline{kWidth, kHeight};
     esp_lcd_panel_io_handle_t touch_io{};
     lv_display_t* display{};
-    async_color_convert_handle_t shadow_copy_dma2d{};
-    lv_display_flush_cb_t adapter_flush_cb{};
-    uint8_t* displayed_shadow{};
-    std::array<bool, static_cast<size_t>(kHeight)> displayed_shadow_rows{};
     esp_lcd_touch_handle_t touch{};
     lvgl::FontRegistry fonts{};
     lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts};
@@ -62,7 +56,6 @@ struct MosaicoBoardState final {
     uint8_t* guest_snapshot_cover{};
     PanelTransitionRect guest_transition_card{};
     bool guest_snapshot_in_hall{};
-    bool displayed_shadow_valid{};
 };
 
 }  // namespace micropixel::platform::esp_mosaico::detail

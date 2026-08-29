@@ -1,96 +1,153 @@
+#include "apps/snake/gamekit/canvas_geometry.hpp"
 #include "apps/snake/snake_game.hpp"
 
 namespace snake {
+namespace {
+
+constexpr int32_t kBoardPadding = 8;
+constexpr micropixel::Rect kBoardClip{
+    kBoardX - kBoardPadding,
+    kBoardY - kBoardPadding,
+    static_cast<int32_t>(kColumns) * kCellPitch + kBoardPadding * 2,
+    static_cast<int32_t>(kRows) * kCellPitch + kBoardPadding * 2,
+};
+constexpr micropixel::Rect kDisplayClip{0, 0, kScreenWidth, kScreenHeight};
+constexpr micropixel::Point kTitlePosition{kBoardX, 8};
+constexpr micropixel::Point kLevelPosition{460, 12};
+constexpr micropixel::Point kScoreLabelPosition{545, 12};
+constexpr micropixel::Point kScoreValuePosition{545, 33};
+constexpr micropixel::Point kBestLabelPosition{645, 12};
+constexpr micropixel::Point kBestValuePosition{635, 33};
+constexpr micropixel::Point kStatusPosition{380, 27};
+constexpr int32_t kComboBarX = kStatusPosition.x;
+constexpr int32_t kComboBarY = 54;
+constexpr uint32_t kComboBarWidth = 96U;
+constexpr int32_t kGameOverContentOffsetY = -32;
+constexpr int32_t kHudEdgePadding = 12;
+
+constexpr uint16_t kFlameOffset = 0U;
+constexpr uint16_t kTrailOffset = kFlameOffset + 4U;
+constexpr uint16_t kObstacleOffset = kTrailOffset + kTrailPoolSize;
+constexpr uint16_t kObstacleDetailOffset = kObstacleOffset + 5U;
+constexpr uint16_t kSceneryCapacity = kObstacleDetailOffset + 5U;
+
+constexpr uint16_t kSnakeHeadInstance = kMaxLength;
+constexpr uint16_t kSnakeFirstEyeInstance = kMaxLength + 1U;
+constexpr uint16_t kSnakeSecondEyeInstance = kMaxLength + 2U;
+constexpr uint16_t kSnakeBatchCapacity = kMaxLength + 3U;
+
+void SetLabel(micropixel::LabelNode& label, micropixel::SceneUpdate& update, micropixel::Point position,
+              const char* text, micropixel::Color color, micropixel::SystemFont font, bool visible = true) {
+    label.SetPosition(update, position);
+    label.SetText(update, text);
+    label.SetColor(update, color);
+    label.SetFont(update, font);
+    label.SetVisible(update, visible);
+}
+
+micropixel::Point SafeTitlePosition(micropixel::Point position, const micropixel::RendererInfo& info) {
+    const int32_t safe_left = static_cast<int32_t>(info.safe_area_insets().left) + kHudEdgePadding;
+    if (position.x < safe_left) {
+        position.x = safe_left;
+    }
+    return position;
+}
+
+micropixel::Point ShiftLeftOfSafeRight(micropixel::Point position, const micropixel::RendererInfo& info) {
+    position.x -= static_cast<int32_t>(info.safe_area_insets().right);
+    return position;
+}
+
+}  // namespace
+
+void SnakeGame::InitializeScene() {
+    if (scene_initialized_) {
+        return;
+    }
+    micropixel::Assert(board_texture_.valid() && start_button_texture_.valid() && restart_button_texture_.valid(),
+                       "snake: retained scene textures missing");
+    for (uint32_t index = 0U; index < 4U; ++index) {
+        micropixel::Assert(food_sheets_[index].valid() && burst_sheets_[index].valid(),
+                           "snake: retained scene atlas missing");
+    }
+
+    game_layer_ = scene_.CreateLayer({.clip = kBoardClip, .translation = {}, .z_order = 0});
+    hud_layer_ = scene_.CreateLayer({.clip = kDisplayClip, .translation = {}, .z_order = 10});
+
+    board_node_ = scene_.CreateSprite(board_texture_, {kBoardX, kBoardY, 625, 625}, {0, 0, 625, 625}, game_layer_);
+    scenery_batch_ = scene_.CreateSpriteBatch(kSceneryCapacity, game_layer_);
+    food_node_ = scene_.CreateSprite(
+        food_sheets_[0],
+        {kBoardX, kBoardY, static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)},
+        {0, 0, static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)}, game_layer_);
+    snake_batch_ = scene_.CreateSpriteBatch(kSnakeBatchCapacity, game_layer_);
+    const snake_assets::AtlasFrame& first_burst = snake_assets::burst_atlases[0].frames[0];
+    burst_node_ =
+        scene_.CreateSprite(burst_sheets_[0], {kBoardX, kBoardY, first_burst.width, first_burst.height},
+                            {first_burst.x, first_burst.y, first_burst.width, first_burst.height}, game_layer_);
+    particle_batch_ = scene_.CreateSpriteBatch(kParticlePoolSize, game_layer_);
+    overlay_node_ =
+        scene_.CreateShape({kBoardX, kBoardY, 625, 625}, micropixel::Color::Black(), game_layer_, kOverlayOpacity);
+    flash_batch_ = scene_.CreateSpriteBatch(4U, game_layer_);
+    button_node_ = scene_.CreateSprite(start_button_texture_, kStartButtonRect,
+                                       {0, 0, kActionButtonWidth, kActionButtonHeight}, game_layer_);
+    for (micropixel::LabelNode& label : popup_labels_) {
+        label = scene_.CreateLabel({kBoardX, kBoardY}, " ", micropixel::Color::White(), micropixel::SystemFont::kLarge,
+                                   game_layer_);
+    }
+    for (micropixel::LabelNode& label : overlay_labels_) {
+        label = scene_.CreateLabel({360, 300}, " ", micropixel::Color::White(), micropixel::SystemFont::kLarge,
+                                   game_layer_, true);
+    }
+
+    combo_batch_ = scene_.CreateSpriteBatch(2U, hud_layer_);
+    header_labels_[0] =
+        scene_.CreateLabel(kTitlePosition, " ", micropixel::Color::White(), micropixel::SystemFont::kTitle, hud_layer_);
+    header_labels_[1] =
+        scene_.CreateLabel(kLevelPosition, " ", micropixel::Color::White(), micropixel::SystemFont::kSmall, hud_layer_);
+    header_labels_[2] = scene_.CreateLabel(kScoreLabelPosition, " ", micropixel::Color::White(),
+                                           micropixel::SystemFont::kSmall, hud_layer_);
+    header_labels_[3] = scene_.CreateLabel(kScoreValuePosition, " ", micropixel::Color::White(),
+                                           micropixel::SystemFont::kLarge, hud_layer_);
+    header_labels_[4] = scene_.CreateLabel(kBestLabelPosition, " ", micropixel::Color::White(),
+                                           micropixel::SystemFont::kSmall, hud_layer_);
+    header_labels_[5] = scene_.CreateLabel(kBestValuePosition, " ", micropixel::Color::White(),
+                                           micropixel::SystemFont::kLarge, hud_layer_);
+    header_labels_[6] = scene_.CreateLabel(kStatusPosition, " ", micropixel::Color::White(),
+                                           micropixel::SystemFont::kSmall, hud_layer_);
+    scene_initialized_ = true;
+}
 
 void SnakeGame::Render() {
-    const uint32_t maximum = renderer_info_.max_draw_operations();
+    InitializeScene();
     const Theme& theme = ThemeForLevel(model_.level());
-    const int32_t board_x = kBoardX;
-    const int32_t board_y = kBoardY;
-    micropixel::Assert(board_texture_.valid(), "snake: board texture missing");
-
-    constexpr uint32_t kMinimumBodySlots = 13U;
-    constexpr uint32_t kFixedMandatoryRects = 13U;
-    const uint32_t retained_rect_slots = RetainedRectSlotsForDrawBudget(maximum);
-    micropixel::Assert(retained_rect_slots >= kMinimumBodySlots + kFixedMandatoryRects,
-                       "snake: Host renderer command budget too small");
-
-    uint32_t body_slots = model_.length() < kMinimumBodySlots ? kMinimumBodySlots : model_.length();
-    if (body_slots + kFixedMandatoryRects > retained_rect_slots) {
-        body_slots = retained_rect_slots - kFixedMandatoryRects;
-    }
-    uint32_t optional = retained_rect_slots - body_slots - kFixedMandatoryRects;
-    // Motion feedback is part of the core Snake look, so claim four trail
-    // samples before purely decorative food/obstacle detail.
-    const uint32_t trail_slots = TakeSlots(optional, kVisibleTrailSlots);
-    const uint32_t obstacle_detail_slots = TakeSlots(optional, 5U);
-    const uint32_t flash_slots = TakeSlots(optional, 4U);
-    const uint32_t flame_slots = TakeSlots(optional, 4U);
-    const uint32_t particle_slots = TakeSlots(optional, kParticlePoolSize);
-    const uint32_t food_detail_slots = TakeSlots(optional, 4U);
-
-    micropixel::Frame commands = renderer_.BeginFrame();
-    commands.Clear(micropixel::Color::Rgb(5U, 5U, 5U));
-
-    constexpr int32_t kPadding = 8;
-    constexpr micropixel::Rect kBoardClip{
-        kBoardX - kPadding,
-        kBoardY - kPadding,
-        static_cast<int32_t>(kColumns) * kCellPitch + kPadding * 2,
-        static_cast<int32_t>(kRows) * kCellPitch + kPadding * 2,
-    };
     const bool shake_active = shake_remaining_us_ != 0U && shake_capture_delay_frames_ == 0U;
     const micropixel::Point translation{shake_active ? ShakeX() : 0, shake_active ? ShakeY() : 0};
-    commands.Save();
-    commands.SetClipRect(kBoardClip);
-    commands.Translate(translation);
-    commands.DrawTexture(micropixel::Point{kBoardX, kBoardY}, board_texture_);
 
-    // Keep all but the final two runtime-budgeted rectangle slots below
-    // the cached surface. The final two remain the header combo bar while
-    // playing, but join the surface when reused as menu/pause buttons.
-    const uint32_t board_rect_start = commands.draw_operation_count();
-    RenderComboFlame(commands, kBoardX, kBoardY, theme, flame_slots);
-    RenderTrails(commands, board_x, board_y, theme, trail_slots);
-    RenderFood(commands, model_.food(), board_x, board_y, food_detail_slots);
-    RenderObstacles(commands, board_x, board_y, obstacle_detail_slots);
-    RenderSnake(commands, board_x, board_y, theme, body_slots);
-    RenderFoodBurst(commands, board_x, board_y);
-    RenderParticles(commands, board_x, board_y, theme, particle_slots);
-    RenderOverlayRect(commands, kBoardX, kBoardY, theme);
-    RenderFlash(commands, kBoardX, kBoardY, theme, flash_slots);
-    while (commands.draw_operation_count() - board_rect_start < retained_rect_slots - 2U) {
-        AppendPlaceholderRect(commands);
+    auto update = scene_.BeginUpdate();
+    game_layer_.SetTranslation(update, translation);
+    // A translated Game Layer is a frozen visual snapshot. Keeping every
+    // child property unchanged lets the Host capture it once and move that
+    // cache for the remaining shake frames. Effects continue aging in the
+    // Guest model and are reconciled when translation returns to zero.
+    if (!shake_active) {
+        RenderScenery(update, theme);
+        RenderFood(update);
+        RenderSnake(update, theme);
+        RenderFoodBurst(update);
+        RenderParticles(update, theme);
+        RenderFlash(update, theme);
+        RenderOverlay(update, theme);
     }
-    micropixel::Assert(commands.draw_operation_count() - board_rect_start == retained_rect_slots - 2U,
-                       "snake: retained board rectangle slot count drifted");
-
-    if (screen_ == Screen::kPlaying) {
-        commands.Restore();
-        RenderComboBar(commands);
-        commands.Save();
-        commands.SetClipRect(kBoardClip);
-        commands.Translate(translation);
-    } else {
-        RenderComboBar(commands);
+    RenderHud(update, theme);
+    auto presented = update.Present();
+    if (!presented.has_value()) {
+        Line failure;
+        failure.Append("snake: scene update failed: ");
+        failure.Append(presented.error().name());
+        app_.log().Error(failure.c_str());
+        micropixel::Panic("snake: scene update failed");
     }
-
-    const uint32_t board_text_start = commands.draw_operation_count();
-    RenderPopups(commands, board_x, board_y, theme);
-    RenderOverlayTexts(commands, theme);
-    micropixel::Assert(commands.draw_operation_count() - board_text_start == 19U,
-                       "snake: retained board text slot count drifted");
-    commands.Restore();
-
-    const uint32_t header_text_start = commands.draw_operation_count();
-    RenderHeaderTexts(commands, theme);
-    micropixel::Assert(commands.draw_operation_count() - header_text_start == 8U,
-                       "snake: retained header text slot count drifted");
-
-    micropixel::Assert(commands.draw_operation_count() == 2U + retained_rect_slots + kRetainedTextSlots &&
-                           commands.draw_operation_count() <= maximum,
-                       "snake: retained surface scene slot budget drifted");
-    micropixel::Assert(commands.Present().has_value(), "snake: frame present failed");
     if (shake_capture_delay_frames_ != 0U && MotionFractionQ8() == 256U) {
         --shake_capture_delay_frames_;
     }
@@ -129,220 +186,133 @@ void SnakeGame::SetFoodSheet(FoodType type, micropixel::Texture texture) {
 }
 
 micropixel::Rect SnakeGame::CellRect(Cell cell, int32_t inset, int32_t board_x, int32_t board_y) {
-    return micropixel::Rect{board_x + static_cast<int32_t>(cell.x) * kCellPitch + inset,
-                            board_y + static_cast<int32_t>(cell.y) * kCellPitch + inset, kCellPitch - inset * 2,
-                            kCellPitch - inset * 2};
+    return {board_x + static_cast<int32_t>(cell.x) * kCellPitch + inset,
+            board_y + static_cast<int32_t>(cell.y) * kCellPitch + inset, kCellPitch - inset * 2,
+            kCellPitch - inset * 2};
 }
 
-[[nodiscard]] uint32_t SnakeGame::MotionFractionQ8() const {
+uint32_t SnakeGame::MotionFractionQ8() const {
     if (screen_ != Screen::kPlaying) {
         return 256U;
     }
-    uint64_t period = MovementPeriodUs();
-    uint64_t fraction = period == 0U ? 256U : (accumulated_us_ * 256U) / period;
+    const uint64_t period = MovementPeriodUs();
+    const uint64_t fraction = period == 0U ? 256U : (accumulated_us_ * 256U) / period;
     return fraction > 256U ? 256U : static_cast<uint32_t>(fraction);
 }
 
 micropixel::Rect SnakeGame::InterpolatedSlotRect(uint32_t slot, uint32_t index, int32_t inset, int32_t board_x,
                                                  int32_t board_y) const {
-    Cell current = model_.body()[index];
+    const Cell current = model_.body()[index];
     Cell previous = slot < body_slot_length_ ? body_slot_previous_[slot] : current;
     if (AbsoluteValue(static_cast<int32_t>(current.x) - previous.x) > 1 ||
         AbsoluteValue(static_cast<int32_t>(current.y) - previous.y) > 1) {
         previous = current;
     }
-    uint32_t fraction = MotionFractionQ8();
-    int32_t previous_x = static_cast<int32_t>(previous.x) * kCellPitch;
-    int32_t previous_y = static_cast<int32_t>(previous.y) * kCellPitch;
-    int32_t current_x = static_cast<int32_t>(current.x) * kCellPitch;
-    int32_t current_y = static_cast<int32_t>(current.y) * kCellPitch;
-    return micropixel::Rect{
-        board_x + InterpolateAxis(previous_x, current_x, fraction) + inset,
-        board_y + InterpolateAxis(previous_y, current_y, fraction) + inset,
-        kCellPitch - inset * 2,
-        kCellPitch - inset * 2,
-    };
+    const uint32_t fraction = MotionFractionQ8();
+    return {board_x +
+                InterpolateAxis(static_cast<int32_t>(previous.x) * kCellPitch,
+                                static_cast<int32_t>(current.x) * kCellPitch, fraction) +
+                inset,
+            board_y +
+                InterpolateAxis(static_cast<int32_t>(previous.y) * kCellPitch,
+                                static_cast<int32_t>(current.y) * kCellPitch, fraction) +
+                inset,
+            kCellPitch - inset * 2, kCellPitch - inset * 2};
 }
 
-void SnakeGame::AppendPlaceholderRect(micropixel::Frame& commands) const {
-    commands.FillRect(micropixel::Rect{kBoardX - 8, kBoardY - 8, 1, 1}, micropixel::Color::Rgb(5U, 5U, 5U));
+void SnakeGame::SetSolidInstance(micropixel::SpriteBatch& batch, micropixel::SceneUpdate& update, uint16_t id,
+                                 micropixel::Rect rect, micropixel::Color color, bool visible) {
+    batch.SetInstance(update, id,
+                      {.destination = rect, .source = {}, .color = color, .opacity = 255U, .visible = visible});
 }
 
-void SnakeGame::AppendPlaceholderText(micropixel::Frame& commands) {
-    commands.DrawText(micropixel::Point{kBoardX, kBoardY}, " ", micropixel::Color::Rgb(5U, 5U, 5U),
-                      micropixel::SystemFont::kMedium);
-}
-
-void SnakeGame::FillClippedRect(micropixel::Frame& commands, micropixel::Rect rect, micropixel::Color color) const {
-    micropixel::Rect clipped{};
-    if (ClipRectToScreen(rect, clipped)) {
-        constexpr int32_t kPadding = 8;
-        constexpr micropixel::Rect kBoardClip{kBoardX - kPadding, kBoardY - kPadding,
-                                              static_cast<int32_t>(kColumns) * kCellPitch + kPadding * 2,
-                                              static_cast<int32_t>(kRows) * kCellPitch + kPadding * 2};
-        clipped = clipped.intersection(kBoardClip);
-        if (!clipped.empty()) {
-            commands.FillRect(clipped, color);
-            return;
+void SnakeGame::RenderScenery(micropixel::SceneUpdate& update, const Theme& theme) {
+    if (model_.combo() >= 5U) {
+        const uint32_t pulse = static_cast<uint32_t>((animation_time_us_ / 100000U) % 6U);
+        const uint32_t opacity = 105U + (pulse <= 3U ? pulse : 6U - pulse) * 25U;
+        const Rgb flame{251U, 191U, 36U};
+        const micropixel::Color edge = AsColor(MixRgb(flame, theme.board, opacity));
+        constexpr int32_t size = static_cast<int32_t>(kColumns) * kCellPitch;
+        SetSolidInstance(scenery_batch_, update, kFlameOffset + 0U, {kBoardX - 3, kBoardY - 3, size + 6, 3}, edge);
+        SetSolidInstance(scenery_batch_, update, kFlameOffset + 1U, {kBoardX - 3, kBoardY + size, size + 6, 3}, edge);
+        SetSolidInstance(scenery_batch_, update, kFlameOffset + 2U, {kBoardX - 3, kBoardY, 3, size}, edge);
+        SetSolidInstance(scenery_batch_, update, kFlameOffset + 3U, {kBoardX + size, kBoardY, 3, size}, edge);
+    } else {
+        for (uint16_t index = 0U; index < 4U; ++index) {
+            scenery_batch_.SetInstanceVisible(update, kFlameOffset + index, false);
         }
     }
-    AppendPlaceholderRect(commands);
-}
-
-void SnakeGame::RenderComboBar(micropixel::Frame& commands) const {
-    if (screen_ == Screen::kMenu) {
-        micropixel::Assert(start_button_texture_.valid(), "snake: start button texture missing");
-        micropixel::ui::DrawTextureButton(commands, screen_button_, start_button_texture_);
-        return;
-    }
-    if (screen_ == Screen::kPaused) {
-        micropixel::Assert(start_button_texture_.valid(), "snake: continue button texture missing");
-        micropixel::ui::DrawTextureButton(commands, screen_button_, start_button_texture_);
-        return;
-    }
-    if (screen_ == Screen::kGameOver) {
-        micropixel::Assert(restart_button_texture_.valid(), "snake: restart button texture missing");
-        micropixel::ui::DrawTextureButton(commands, screen_button_, restart_button_texture_);
-        return;
-    }
-    const bool visible = model_.combo() > 1U;
-    const uint64_t duration_us = model_.combo_duration_us();
-    uint32_t width = duration_us == 0U ? 0U : static_cast<uint32_t>((model_.combo_remaining_us() * 96U) / duration_us);
-    width = width > 96U ? 96U : width;
-    width = width == 0U ? 1U : width;
-    commands.FillRect(micropixel::Rect{380, 54, 96, 4},
-                      visible ? micropixel::Color::Rgb(38U, 38U, 38U) : micropixel::Color::Rgb(5U, 5U, 5U));
-    commands.FillRect(micropixel::Rect{380, 54, static_cast<int32_t>(width), 4},
-                      !visible              ? micropixel::Color::Rgb(5U, 5U, 5U)
-                      : model_.combo() > 3U ? micropixel::Color::Rgb(251U, 191U, 36U)
-                                            : micropixel::Color::White());
-}
-
-void SnakeGame::RenderComboFlame(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                                 uint32_t slots) const {
-    uint32_t pulse = static_cast<uint32_t>((animation_time_us_ / 100000U) % 6U);
-    uint32_t opacity = 105U + (pulse <= 3U ? pulse : 6U - pulse) * 25U;
-    Rgb flame = model_.combo() >= 5U ? Rgb{251U, 191U, 36U} : theme.accent;
-    Rgb edge = MixRgb(flame, theme.board, opacity);
-    constexpr int32_t kSize = static_cast<int32_t>(kColumns) * kCellPitch;
-    for (uint32_t index = 0U; index < slots; ++index) {
-        if (model_.combo() < 5U || index >= 4U) {
-            AppendPlaceholderRect(commands);
-        } else if (index == 0U) {
-            commands.FillRect(micropixel::Rect{board_x - 3, board_y - 3, kSize + 6, 3}, AsColor(edge));
-        } else if (index == 1U) {
-            commands.FillRect(micropixel::Rect{board_x - 3, board_y + kSize, kSize + 6, 3}, AsColor(edge));
-        } else if (index == 2U) {
-            commands.FillRect(micropixel::Rect{board_x - 3, board_y, 3, kSize}, AsColor(edge));
-        } else {
-            commands.FillRect(micropixel::Rect{board_x + kSize, board_y, 3, kSize}, AsColor(edge));
-        }
-    }
-}
-
-void SnakeGame::RenderTrails(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                             uint32_t slots) const {
-    uint32_t emitted = 0U;
-    // The producer cycles through all twelve storage entries. Scan the entire
-    // pool so a smaller retained-command allowance does not make the trail
-    // disappear whenever the producer cursor advances beyond the visible
-    // prefix.
-    for (uint32_t index = 0U; index < kTrailPoolSize && emitted < slots; ++index) {
+    uint16_t trail_output = 0U;
+    for (uint32_t index = 0U; index < kTrailPoolSize && trail_output < kTrailPoolSize; ++index) {
         const Trail& trail = trails_[index];
         if (!trail.active) {
             continue;
         }
-        uint32_t opacity = 102U * (400000U - trail.age_us) / 400000U;
-        commands.FillRect(CellRect(trail.cell, 5, board_x, board_y),
-                          AsColor(MixRgb(theme.accent, theme.board, opacity)));
-        ++emitted;
+        const uint32_t opacity = 102U * (400000U - trail.age_us) / 400000U;
+        SetSolidInstance(scenery_batch_, update, kTrailOffset + trail_output++,
+                         CellRect(trail.cell, 5, kBoardX, kBoardY),
+                         AsColor(MixRgb(theme.accent, theme.board, opacity)));
     }
-    while (emitted < slots) {
-        AppendPlaceholderRect(commands);
-        ++emitted;
+    for (uint16_t index = trail_output; index < kTrailPoolSize; ++index) {
+        scenery_batch_.SetInstanceVisible(update, kTrailOffset + index, false);
+    }
+    const uint16_t obstacle_count = model_.obstacle_count() < 5U ? model_.obstacle_count() : 5U;
+    for (uint16_t index = 0U; index < obstacle_count; ++index) {
+        const micropixel::Rect rock = CellRect(model_.obstacles()[index], 2, kBoardX, kBoardY);
+        SetSolidInstance(scenery_batch_, update, kObstacleOffset + index, rock, micropixel::Color::Rgb(82U, 82U, 82U));
+        SetSolidInstance(scenery_batch_, update, kObstacleDetailOffset + index, {rock.x + 4, rock.y + 3, 8, 3},
+                         micropixel::Color::Rgb(126U, 126U, 126U));
+    }
+    for (uint16_t index = obstacle_count; index < 5U; ++index) {
+        scenery_batch_.SetInstanceVisible(update, kObstacleOffset + index, false);
+        scenery_batch_.SetInstanceVisible(update, kObstacleDetailOffset + index, false);
     }
 }
 
-void SnakeGame::RenderFood(micropixel::Frame& commands, const Food& food, int32_t board_x, int32_t board_y,
-                           uint32_t detail_slots) const {
+void SnakeGame::RenderFood(micropixel::SceneUpdate& update) {
+    const Food& food = model_.food();
     if (food.cell.x < 0) {
-        for (uint32_t index = 0U; index < detail_slots + 1U; ++index) {
-            AppendPlaceholderRect(commands);
-        }
+        food_node_.SetVisible(update, false);
         return;
     }
     const uint32_t phase = static_cast<uint32_t>(((animation_time_us_ % kFoodAnimationDurationUs) * kFoodFrameCount) /
                                                  kFoodAnimationDurationUs);
-    const int32_t center_x = board_x + static_cast<int32_t>(food.cell.x) * kCellPitch + kCellPitch / 2;
-    const int32_t center_y = board_y + static_cast<int32_t>(food.cell.y) * kCellPitch + kCellPitch / 2;
-    const micropixel::Texture& sheet = food_sheets_[static_cast<uint32_t>(food.type)];
-    micropixel::Assert(sheet.valid(), "snake: food sprite sheet missing");
-    const micropixel::Rect source{static_cast<int32_t>((phase % kSpriteSheetColumns) * kFoodSpriteCellSize),
-                                  static_cast<int32_t>((phase / kSpriteSheetColumns) * kFoodSpriteCellSize),
-                                  static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)};
-    commands.DrawTexture(micropixel::Point{center_x - static_cast<int32_t>(kFoodSpriteCellSize / 2U),
-                                           center_y - static_cast<int32_t>(kFoodSpriteCellSize / 2U)},
-                         sheet, source);
-    for (uint32_t index = 0U; index < detail_slots; ++index) {
-        AppendPlaceholderRect(commands);
-    }
+    const int32_t center_x = kBoardX + static_cast<int32_t>(food.cell.x) * kCellPitch + kCellPitch / 2;
+    const int32_t center_y = kBoardY + static_cast<int32_t>(food.cell.y) * kCellPitch + kCellPitch / 2;
+    food_node_.SetTexture(update, food_sheets_[static_cast<uint32_t>(food.type)]);
+    food_node_.SetSource(update,
+                         {static_cast<int32_t>((phase % kSpriteSheetColumns) * kFoodSpriteCellSize),
+                          static_cast<int32_t>((phase / kSpriteSheetColumns) * kFoodSpriteCellSize),
+                          static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)});
+    food_node_.SetDestination(
+        update, {center_x - static_cast<int32_t>(kFoodSpriteCellSize / 2U),
+                 center_y - static_cast<int32_t>(kFoodSpriteCellSize / 2U), static_cast<int32_t>(kFoodSpriteCellSize),
+                 static_cast<int32_t>(kFoodSpriteCellSize)});
+    food_node_.SetVisible(update, true);
 }
 
-void SnakeGame::RenderObstacles(micropixel::Frame& commands, int32_t board_x, int32_t board_y,
-                                uint32_t detail_slots) const {
-    for (uint32_t index = 0U; index < 5U; ++index) {
-        if (index >= model_.obstacle_count()) {
-            AppendPlaceholderRect(commands);
-            continue;
-        }
-        commands.FillRect(CellRect(model_.obstacles()[index], 2, board_x, board_y),
-                          micropixel::Color::Rgb(82U, 82U, 82U));
-    }
-    for (uint32_t index = 0U; index < detail_slots; ++index) {
-        if (index >= model_.obstacle_count()) {
-            AppendPlaceholderRect(commands);
-            continue;
-        }
-        micropixel::Rect rock = CellRect(model_.obstacles()[index], 2, board_x, board_y);
-        commands.FillRect(micropixel::Rect{rock.x + 4, rock.y + 3, 8, 3}, micropixel::Color::Rgb(126U, 126U, 126U));
-    }
-}
-
-void SnakeGame::RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                            uint32_t body_slots) const {
-    uint32_t length = model_.length();
-    Rgb accent = model_.invincible() ? Rgb{34U, 211U, 238U} : theme.accent;
-    micropixel::Assert(body_slot_length_ == length, "snake: retained body ring length drifted");
-    // Slots form a ring. On each Move only the old tail slot is recycled
-    // as the new head; all interior LVGL rectangles keep their position.
-    for (uint32_t slot = 0U; slot < body_slots; ++slot) {
-        if (slot >= length) {
-            AppendPlaceholderRect(commands);
-            continue;
-        }
+void SnakeGame::RenderSnake(micropixel::SceneUpdate& update, const Theme& theme) {
+    const uint32_t length = model_.length();
+    const Rgb accent = model_.invincible() ? Rgb{34U, 211U, 238U} : theme.accent;
+    micropixel::Assert(body_slot_length_ == length, "snake: body ring length drifted");
+    for (uint32_t slot = 0U; slot < length; ++slot) {
         const uint32_t index = (slot + length - body_slot_head_) % length;
         if (index == 0U) {
-            // The ring still owns the logical head position, but its
-            // physical slot rotates. Keep it hidden and draw one stable
-            // head object After Every body slot so the body can never
-            // cover the face because of retained-object z order.
-            AppendPlaceholderRect(commands);
+            snake_batch_.SetInstanceVisible(update, static_cast<uint16_t>(slot), false);
             continue;
         }
         const uint32_t band = (index * 8U) / length;
-        // HTML scales body segments from 0.90 to 0.75 cell. Integer P4
-        // geometry uses 23/21/19 px (0.92/0.84/0.76 cell) in 8 stable
-        // bands, avoiding a full-tail dirty cascade when length changes.
-        int32_t inset = band < 3U ? 1 : (band < 7U ? 2 : 3);
-        uint32_t opacity = 255U - (band * 190U) / 8U;
-        commands.FillRect(InterpolatedSlotRect(slot, index, inset, board_x, board_y),
-                          AsColor(MixRgb(accent, theme.board, opacity)));
+        const int32_t inset = band < 3U ? 1 : (band < 7U ? 2 : 3);
+        const uint32_t opacity = 255U - (band * 190U) / 8U;
+        SetSolidInstance(snake_batch_, update, static_cast<uint16_t>(slot),
+                         InterpolatedSlotRect(slot, index, inset, kBoardX, kBoardY),
+                         AsColor(MixRgb(accent, theme.board, opacity)));
     }
-
-    // Original HTML head scale is 1.15 cell: 25 * 1.15 = 28.75 px.
-    // A -2 px inset produces a centered 29x29 head on the integer raster.
-    micropixel::Rect head = InterpolatedSlotRect(body_slot_head_, 0U, -2, board_x, board_y);
-    commands.FillRect(head, AsColor(accent));
+    for (uint16_t slot = static_cast<uint16_t>(length); slot < kMaxLength; ++slot) {
+        snake_batch_.SetInstanceVisible(update, slot, false);
+    }
+    const micropixel::Rect head = InterpolatedSlotRect(body_slot_head_, 0U, -2, kBoardX, kBoardY);
+    SetSolidInstance(snake_batch_, update, kSnakeHeadInstance, head, AsColor(accent));
     int32_t first_x = head.x + 6;
     int32_t first_y = head.y + 4;
     int32_t second_x = head.x + 19;
@@ -360,13 +330,15 @@ void SnakeGame::RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_
         first_y = head.y + 6;
         second_y = head.y + 19;
     }
-    commands.FillRect(micropixel::Rect{first_x, first_y, 4, 5}, micropixel::Color::Black());
-    commands.FillRect(micropixel::Rect{second_x, second_y, 4, 5}, micropixel::Color::Black());
+    SetSolidInstance(snake_batch_, update, kSnakeFirstEyeInstance, {first_x, first_y, 4, 5},
+                     micropixel::Color::Black());
+    SetSolidInstance(snake_batch_, update, kSnakeSecondEyeInstance, {second_x, second_y, 4, 5},
+                     micropixel::Color::Black());
 }
 
-void SnakeGame::RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, int32_t board_y) const {
+void SnakeGame::RenderFoodBurst(micropixel::SceneUpdate& update) {
     if (burst_remaining_us_ == 0U) {
-        AppendPlaceholderRect(commands);
+        burst_node_.SetVisible(update, false);
         return;
     }
     const uint64_t elapsed = kBurstDurationUs - burst_remaining_us_;
@@ -374,119 +346,201 @@ void SnakeGame::RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, in
     display_phase = display_phase >= kBurstDisplayPhaseCount ? kBurstDisplayPhaseCount - 1U : display_phase;
     const uint32_t frame_index = display_phase * (kBurstFrameCount - 1U) / (kBurstDisplayPhaseCount - 1U);
     const uint32_t type_index = static_cast<uint32_t>(burst_type_);
-    const micropixel::Texture& sheet = burst_sheets_[type_index];
-    micropixel::Assert(sheet.valid(), "snake: food burst sheet missing");
-    int32_t center_x = board_x + static_cast<int32_t>(burst_cell_.x) * kCellPitch + kCellPitch / 2;
-    int32_t center_y = board_y + static_cast<int32_t>(burst_cell_.y) * kCellPitch + kCellPitch / 2;
-    constexpr int32_t kCanvasWidth = static_cast<int32_t>(snake_assets::burst_canvas_width);
-    constexpr int32_t kCanvasHeight = static_cast<int32_t>(snake_assets::burst_canvas_height);
-    int32_t canvas_x = center_x - kCanvasWidth / 2;
-    int32_t canvas_y = center_y - kCanvasHeight / 2;
-    canvas_x = canvas_x < 0 ? 0 : (canvas_x > kScreenWidth - kCanvasWidth ? kScreenWidth - kCanvasWidth : canvas_x);
-    canvas_y = canvas_y < 0 ? 0 : (canvas_y > kScreenHeight - kCanvasHeight ? kScreenHeight - kCanvasHeight : canvas_y);
     const snake_assets::AtlasFrame& frame = snake_assets::burst_atlases[type_index].frames[frame_index];
-    const int32_t x = canvas_x + frame.canvas_x;
-    const int32_t y = canvas_y + frame.canvas_y;
-    const micropixel::Rect source{frame.x, frame.y, frame.width, frame.height};
-    commands.DrawTexture(micropixel::Point{x, y}, sheet, source);
+    int32_t canvas_x = kBoardX + static_cast<int32_t>(burst_cell_.x) * kCellPitch + kCellPitch / 2 -
+                       static_cast<int32_t>(snake_assets::burst_canvas_width) / 2;
+    int32_t canvas_y = kBoardY + static_cast<int32_t>(burst_cell_.y) * kCellPitch + kCellPitch / 2 -
+                       static_cast<int32_t>(snake_assets::burst_canvas_height) / 2;
+    canvas_x = snake::gamekit::ClampCanvasOrigin(canvas_x, static_cast<int32_t>(snake_assets::burst_canvas_width),
+                                                 kScreenWidth);
+    canvas_y = snake::gamekit::ClampCanvasOrigin(canvas_y, static_cast<int32_t>(snake_assets::burst_canvas_height),
+                                                 kScreenHeight);
+    burst_node_.SetTexture(update, burst_sheets_[type_index]);
+    burst_node_.SetSource(update, {frame.x, frame.y, frame.width, frame.height});
+    burst_node_.SetDestination(update,
+                               {canvas_x + frame.canvas_x, canvas_y + frame.canvas_y, frame.width, frame.height});
+    burst_node_.SetVisible(update, true);
 }
 
-void SnakeGame::RenderParticles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                                uint32_t slots) const {
-    for (uint32_t index = 0U; index < slots; ++index) {
+void SnakeGame::RenderParticles(micropixel::SceneUpdate& update, const Theme& theme) {
+    for (uint16_t index = 0U; index < kParticlePoolSize; ++index) {
         const Particle& particle = particles_[index];
         if (!particle.active) {
-            AppendPlaceholderRect(commands);
+            particle_batch_.SetInstanceVisible(update, index, false);
             continue;
         }
-        uint32_t progress = particle.age_us * 256U / particle.duration_us;
-        uint32_t opacity = 255U - (progress > 255U ? 255U : progress);
-        int32_t x = board_x + static_cast<int32_t>(particle.origin.x) * kCellPitch + kCellPitch / 2 +
-                    particle.dx * static_cast<int32_t>(progress) / 256;
-        int32_t y = board_y + static_cast<int32_t>(particle.origin.y) * kCellPitch + kCellPitch / 2 +
-                    particle.dy * static_cast<int32_t>(progress) / 256;
+        const uint32_t progress = particle.age_us * 256U / particle.duration_us;
+        const uint32_t opacity = 255U - (progress > 255U ? 255U : progress);
+        const int32_t x = kBoardX + static_cast<int32_t>(particle.origin.x) * kCellPitch + kCellPitch / 2 +
+                          particle.dx * static_cast<int32_t>(progress) / 256;
+        const int32_t y = kBoardY + static_cast<int32_t>(particle.origin.y) * kCellPitch + kCellPitch / 2 +
+                          particle.dy * static_cast<int32_t>(progress) / 256;
         int32_t size = static_cast<int32_t>(particle.size) * static_cast<int32_t>(256U - progress) / 256;
         size = size < 2 ? 2 : size;
-        FillClippedRect(commands, micropixel::Rect{x - size / 2, y - size / 2, size, size},
-                        AsColor(MixRgb(particle.color, theme.board, opacity)));
+        const micropixel::Rect rect = micropixel::Rect{x - size / 2, y - size / 2, size, size}.intersection(kBoardClip);
+        if (rect.empty()) {
+            particle_batch_.SetInstanceVisible(update, index, false);
+        } else {
+            SetSolidInstance(particle_batch_, update, index, rect,
+                             AsColor(MixRgb(particle.color, theme.board, opacity)));
+        }
     }
 }
 
-void SnakeGame::RenderFlash(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
-                            uint32_t slots) const {
-    // Game Over has no board-wide color overlay. Preserve the same retained
-    // slots without painting fake corner masks over the board artwork.
-    if (screen_ == Screen::kGameOver) {
-        for (uint32_t index = 0U; index < slots; ++index) {
-            AppendPlaceholderRect(commands);
+void SnakeGame::RenderFlash(micropixel::SceneUpdate& update, const Theme& theme) {
+    if (screen_ == Screen::kGameOver || flash_remaining_us_ == 0U || flash_duration_us_ == 0U) {
+        for (uint16_t index = 0U; index < 4U; ++index) {
+            flash_batch_.SetInstanceVisible(update, index, false);
         }
         return;
     }
-    uint32_t flash_opacity =
-        flash_duration_us_ == 0U ? 0U : static_cast<uint32_t>(flash_remaining_us_ * 190U / flash_duration_us_);
-    uint32_t shake_opacity = 0U;
-    uint32_t opacity = flash_opacity > shake_opacity ? flash_opacity : shake_opacity;
-    const Rgb source = flash_opacity != 0U ? flash_color_ : theme.accent;
+    const uint32_t opacity = static_cast<uint32_t>(flash_remaining_us_ * 190U / flash_duration_us_);
     const int32_t dx = ShakeX();
     const int32_t dy = ShakeY();
-    auto directional_opacity = [opacity](bool active) { return active ? opacity : opacity * 2U / 5U; };
-    const Rgb top = MixRgb(source, theme.board, directional_opacity(dy <= 0));
-    const Rgb bottom = MixRgb(source, theme.board, directional_opacity(dy >= 0));
-    const Rgb left = MixRgb(source, theme.board, directional_opacity(dx <= 0));
-    const Rgb right = MixRgb(source, theme.board, directional_opacity(dx >= 0));
-    constexpr int32_t kSize = static_cast<int32_t>(kColumns) * kCellPitch;
-    for (uint32_t index = 0U; index < slots; ++index) {
-        if (opacity == 0U || index >= 4U) {
-            AppendPlaceholderRect(commands);
-        } else if (index == 0U) {
-            commands.FillRect(micropixel::Rect{board_x, board_y, kSize, 6}, AsColor(top));
-        } else if (index == 1U) {
-            commands.FillRect(micropixel::Rect{board_x, board_y + kSize - 6, kSize, 6}, AsColor(bottom));
-        } else if (index == 2U) {
-            commands.FillRect(micropixel::Rect{board_x, board_y + 6, 6, kSize - 12}, AsColor(left));
-        } else {
-            commands.FillRect(micropixel::Rect{board_x + kSize - 6, board_y + 6, 6, kSize - 12}, AsColor(right));
+    const auto directional = [opacity](bool active) { return active ? opacity : opacity * 2U / 5U; };
+    constexpr int32_t size = static_cast<int32_t>(kColumns) * kCellPitch;
+    SetSolidInstance(flash_batch_, update, 0U, {kBoardX, kBoardY, size, 6},
+                     AsColor(MixRgb(flash_color_, theme.board, directional(dy <= 0))));
+    SetSolidInstance(flash_batch_, update, 1U, {kBoardX, kBoardY + size - 6, size, 6},
+                     AsColor(MixRgb(flash_color_, theme.board, directional(dy >= 0))));
+    SetSolidInstance(flash_batch_, update, 2U, {kBoardX, kBoardY + 6, 6, size - 12},
+                     AsColor(MixRgb(flash_color_, theme.board, directional(dx <= 0))));
+    SetSolidInstance(flash_batch_, update, 3U, {kBoardX + size - 6, kBoardY + 6, 6, size - 12},
+                     AsColor(MixRgb(flash_color_, theme.board, directional(dx >= 0))));
+}
+
+void SnakeGame::RenderOverlay(micropixel::SceneUpdate& update, const Theme& theme) {
+    const bool overlay_visible = screen_ != Screen::kPlaying;
+    overlay_node_.SetVisible(update, overlay_visible);
+    overlay_node_.SetColor(
+        update, screen_ == Screen::kGameOver ? micropixel::Color::Rgb(69U, 10U, 10U) : micropixel::Color::Black());
+    overlay_node_.SetOpacity(update, kOverlayOpacity);
+
+    const bool button_visible = screen_ == Screen::kMenu || screen_ == Screen::kPaused || screen_ == Screen::kGameOver;
+    button_node_.SetVisible(update, button_visible);
+    if (button_visible) {
+        const bool restart = screen_ == Screen::kGameOver;
+        button_node_.SetTexture(update, restart ? restart_button_texture_ : start_button_texture_);
+        button_node_.SetDestination(update, restart ? kRestartButtonRect : kStartButtonRect);
+        button_node_.SetSource(update, {0, 0, kActionButtonWidth, kActionButtonHeight});
+        button_node_.SetOpacity(update, screen_button_.pressed() ? 160U : 255U);
+    }
+
+    const bool popups_visible = screen_ == Screen::kPlaying && level_banner_us_ == 0U;
+    for (uint16_t index = 0U; index < kPopupPoolSize; ++index) {
+        const Popup& popup = popups_[index];
+        if (!popups_visible || !popup.active) {
+            popup_labels_[index].SetVisible(update, false);
+            continue;
         }
+        const uint32_t progress = popup.age_us * 256U / 800000U;
+        const uint32_t opacity = 255U - (progress > 255U ? 255U : progress);
+        Line text;
+        text.Append("+");
+        text.AppendUint(popup.points);
+        SetLabel(
+            popup_labels_[index], update,
+            {kBoardX + static_cast<int32_t>(popup.cell.x) * kCellPitch,
+             kBoardY + static_cast<int32_t>(popup.cell.y) * kCellPitch - static_cast<int32_t>(progress * 50U / 256U)},
+            text.c_str(), AsColor(MixRgb(popup.color, theme.board, opacity)), popup.font);
+    }
+    uint16_t slot = 0U;
+    const auto centered = [&](int32_t x, int32_t y, const char* text, micropixel::Color color,
+                              micropixel::SystemFont font) {
+        SetLabel(overlay_labels_[slot++], update, {x, y}, text, color, font);
+    };
+    if (screen_ == Screen::kMenu || screen_ == Screen::kPaused) {
+        centered(360, ActionButtonTextY(kStartButtonRect),
+                 strings_.Get(screen_ == Screen::kMenu ? snake_strings::Id::kActionStart
+                                                       : snake_strings::Id::kActionContinue),
+                 micropixel::Color::Black(), kActionButtonFont);
+    } else if (screen_ == Screen::kGameOver) {
+        centered(360, 268 + kGameOverContentOffsetY, strings_.Get(snake_strings::Id::kGameOverTitle),
+                 micropixel::Color::Rgb(244U, 63U, 94U), micropixel::SystemFont::kTitle);
+        Line score;
+        score.AppendPadded4(model_.score());
+        centered(360, 320 + kGameOverContentOffsetY, score.c_str(), micropixel::Color::White(),
+                 micropixel::SystemFont::kLarge);
+        constexpr int32_t centers[] = {250, 360, 470};
+        centered(centers[0], 356 + kGameOverContentOffsetY, strings_.Get(snake_strings::Id::kLabelFood),
+                 micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+        centered(centers[1], 356 + kGameOverContentOffsetY, strings_.Get(snake_strings::Id::kLabelMaxCombo),
+                 micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+        centered(centers[2], 356 + kGameOverContentOffsetY, strings_.Get(snake_strings::Id::kLabelLevel),
+                 micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+        Line food;
+        food.AppendUint(model_.food_eaten());
+        centered(centers[0], 390 + kGameOverContentOffsetY, food.c_str(), micropixel::Color::White(),
+                 micropixel::SystemFont::kMedium);
+        Line combo;
+        combo.Append("x");
+        combo.AppendUint(model_.max_combo());
+        centered(centers[1], 390 + kGameOverContentOffsetY, combo.c_str(), micropixel::Color::White(),
+                 micropixel::SystemFont::kMedium);
+        Line level;
+        level.AppendUint(model_.level());
+        centered(centers[2], 390 + kGameOverContentOffsetY, level.c_str(), micropixel::Color::White(),
+                 micropixel::SystemFont::kMedium);
+        centered(360, ActionButtonTextY(kRestartButtonRect), strings_.Get(snake_strings::Id::kActionRestart),
+                 micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
+    } else if (level_banner_us_ != 0U) {
+        centered(360, 315, strings_.Get(snake_strings::Id::kUpgradeTitle), AsColor(theme.text),
+                 micropixel::SystemFont::kLarge);
+        Line reached;
+        reached.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
+        reached.AppendUint(model_.level());
+        reached.Append(strings_.Get(snake_strings::Id::kUpgradeReachedSuffix));
+        centered(360, 370, reached.c_str(), micropixel::Color::White(), micropixel::SystemFont::kMedium);
+    }
+    while (slot < 9U) {
+        overlay_labels_[slot++].SetVisible(update, false);
     }
 }
 
-void SnakeGame::RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, int32_t board_y,
-                                  const Theme& theme) const {
-    constexpr int32_t kBoardSize = static_cast<int32_t>(kColumns) * kCellPitch;
-    micropixel::Color color = micropixel::Color::Black();
-    const uint8_t opacity = screen_ == Screen::kPlaying ? 0U : kOverlayOpacity;
-    if (screen_ == Screen::kGameOver) {
-        color = micropixel::Color::Rgb(69U, 10U, 10U);
+void SnakeGame::RenderHud(micropixel::SceneUpdate& update, const Theme& theme) {
+    const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
+    if (screen_ == Screen::kPlaying && model_.combo() > 1U) {
+        const uint64_t duration = model_.combo_duration_us();
+        uint32_t width =
+            duration == 0U ? 1U : static_cast<uint32_t>((model_.combo_remaining_us() * kComboBarWidth) / duration);
+        width = width == 0U ? 1U : (width > kComboBarWidth ? kComboBarWidth : width);
+        SetSolidInstance(combo_batch_, update, 0U,
+                         {kComboBarX - safe_right, kComboBarY, static_cast<int32_t>(kComboBarWidth), 4},
+                         micropixel::Color::Rgb(38U, 38U, 38U));
+        SetSolidInstance(combo_batch_, update, 1U,
+                         {kComboBarX - safe_right, kComboBarY, static_cast<int32_t>(width), 4},
+                         model_.combo() > 3U ? micropixel::Color::Rgb(251U, 191U, 36U) : micropixel::Color::White());
+    } else {
+        combo_batch_.SetInstanceVisible(update, 0U, false);
+        combo_batch_.SetInstanceVisible(update, 1U, false);
     }
-    (void)theme;
-    commands.FillRect(micropixel::Rect{board_x, board_y, kBoardSize, kBoardSize}, color, opacity);
-}
 
-void SnakeGame::RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const {
-    commands.DrawText(micropixel::Point{24, 35}, strings_.Get(snake_strings::Id::kAppTitle), AsColor(theme.text),
-                      micropixel::SystemFont::kTitle);
-    commands.DrawText(micropixel::Point{24, 47}, " ", micropixel::Color::Rgb(5U, 5U, 5U),
-                      micropixel::SystemFont::kSmall);
+    SetLabel(header_labels_[0], update, SafeTitlePosition(kTitlePosition, renderer_info_),
+             strings_.Get(snake_strings::Id::kAppTitle), AsColor(theme.text), micropixel::SystemFont::kTitle);
     Line level;
     level.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
     level.AppendUint(model_.level());
-    commands.DrawText(micropixel::Point{460, 12}, level.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
-    commands.DrawText(micropixel::Point{545, 12}, strings_.Get(snake_strings::Id::kLabelScore),
-                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+    const bool level_visible = screen_ != Screen::kPlaying || (!model_.invincible() && model_.combo() <= 1U);
+    SetLabel(header_labels_[1], update, ShiftLeftOfSafeRight(kLevelPosition, renderer_info_), level.c_str(),
+             AsColor(theme.text), micropixel::SystemFont::kSmall, level_visible);
+    SetLabel(header_labels_[2], update, ShiftLeftOfSafeRight(kScoreLabelPosition, renderer_info_),
+             strings_.Get(snake_strings::Id::kLabelScore), micropixel::Color::Rgb(115U, 115U, 115U),
+             micropixel::SystemFont::kSmall);
     Line score;
     score.AppendPadded4(model_.score());
-    commands.DrawText(micropixel::Point{545, 33}, score.c_str(), micropixel::Color::White(),
-                      micropixel::SystemFont::kLarge);
-    commands.DrawText(micropixel::Point{645, 12}, strings_.Get(snake_strings::Id::kLabelBest),
-                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+    SetLabel(header_labels_[3], update, ShiftLeftOfSafeRight(kScoreValuePosition, renderer_info_), score.c_str(),
+             micropixel::Color::White(), micropixel::SystemFont::kLarge);
+    SetLabel(header_labels_[4], update, ShiftLeftOfSafeRight(kBestLabelPosition, renderer_info_),
+             strings_.Get(snake_strings::Id::kLabelBest), micropixel::Color::Rgb(115U, 115U, 115U),
+             micropixel::SystemFont::kSmall);
     Line best;
     best.AppendPadded4(best_score_);
-    commands.DrawText(micropixel::Point{635, 33}, best.c_str(), AsColor(theme.text), micropixel::SystemFont::kLarge);
+    SetLabel(header_labels_[5], update, ShiftLeftOfSafeRight(kBestValuePosition, renderer_info_), best.c_str(),
+             AsColor(theme.text), micropixel::SystemFont::kLarge);
     Line status;
     if (screen_ == Screen::kPlaying && model_.invincible()) {
         status.Append(strings_.Get(snake_strings::Id::kStatusShieldPrefix));
-        const uint32_t seconds = static_cast<uint32_t>((model_.invincible_remaining_us() + 999999U) / 1000000U);
-        status.AppendUint(seconds);
+        status.AppendUint(static_cast<uint32_t>((model_.invincible_remaining_us() + 999999U) / 1000000U));
         status.Append(strings_.Get(snake_strings::Id::kStatusSecondsSuffix));
         if (model_.combo() > 1U) {
             status.Append("  x");
@@ -495,105 +549,14 @@ void SnakeGame::RenderHeaderTexts(micropixel::Frame& commands, const Theme& them
     } else if (screen_ == Screen::kPlaying && model_.combo() > 1U) {
         status.Append(strings_.Get(snake_strings::Id::kStatusComboPrefix));
         status.AppendUint(model_.combo());
-        status.Append("  ");
     } else {
         status.Append(" ");
     }
-    // Match the Score/Best value row instead of leaving Combo on a lower,
-    // visually disconnected baseline.
-    commands.DrawText(micropixel::Point{380, 33}, status.c_str(),
-                      model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
-                      : model_.combo() > 1U ? micropixel::Color::Rgb(251U, 191U, 36U)
-                                            : micropixel::Color::Rgb(5U, 5U, 5U),
-                      micropixel::SystemFont::kSmall);
-}
-
-void SnakeGame::RenderPopups(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const {
-    bool visible = screen_ == Screen::kPlaying && level_banner_us_ == 0U;
-    for (uint32_t index = 0U; index < kPopupPoolSize; ++index) {
-        const Popup& popup = popups_[index];
-        if (!visible || !popup.active) {
-            AppendPlaceholderText(commands);
-            continue;
-        }
-        uint32_t progress = popup.age_us * 256U / 800000U;
-        uint32_t opacity = 255U - (progress > 255U ? 255U : progress);
-        Line label;
-        label.Append("+");
-        label.AppendUint(popup.points);
-        commands.DrawText(micropixel::Point{board_x + static_cast<int32_t>(popup.cell.x) * kCellPitch,
-                                            board_y + static_cast<int32_t>(popup.cell.y) * kCellPitch -
-                                                static_cast<int32_t>(progress * 50U / 256U)},
-                          label.c_str(), AsColor(MixRgb(popup.color, theme.board, opacity)), popup.font);
-    }
-}
-
-void SnakeGame::RenderOverlayTexts(micropixel::Frame& commands, const Theme& theme) const {
-    uint32_t used = 0U;
-    if (screen_ == Screen::kMenu) {
-        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect),
-                                  strings_.Get(snake_strings::Id::kActionStart), micropixel::Color::Black(),
-                                  kActionButtonFont);
-        used = 1U;
-    } else if (screen_ == Screen::kPaused) {
-        commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect),
-                                  strings_.Get(snake_strings::Id::kActionContinue), micropixel::Color::Black(),
-                                  kActionButtonFont);
-        used = 1U;
-    } else if (screen_ == Screen::kGameOver) {
-        commands.DrawTextCentered(360, 268, strings_.Get(snake_strings::Id::kGameOverTitle),
-                                  micropixel::Color::Rgb(244U, 63U, 94U), micropixel::SystemFont::kTitle);
-        Line score;
-        score.AppendPadded4(model_.score());
-        commands.DrawTextCentered(360, 320, score.c_str(), micropixel::Color::White(), micropixel::SystemFont::kLarge);
-        constexpr int32_t kFoodCenter = 250;
-        constexpr int32_t kComboCenter = 360;
-        constexpr int32_t kLevelCenter = 470;
-        const micropixel::Color label_color = micropixel::Color::Rgb(115U, 115U, 115U);
-        commands.DrawTextCentered(kFoodCenter, 360, strings_.Get(snake_strings::Id::kLabelFood), label_color,
-                                  micropixel::SystemFont::kSmall);
-        commands.DrawTextCentered(kComboCenter, 360, strings_.Get(snake_strings::Id::kLabelMaxCombo), label_color,
-                                  micropixel::SystemFont::kSmall);
-        commands.DrawTextCentered(kLevelCenter, 360, strings_.Get(snake_strings::Id::kLabelLevel), label_color,
-                                  micropixel::SystemFont::kSmall);
-        Line food;
-        food.AppendUint(model_.food_eaten());
-        commands.DrawTextCentered(kFoodCenter, 382, food.c_str(), micropixel::Color::White(),
-                                  micropixel::SystemFont::kMedium);
-        Line combo;
-        combo.Append("x");
-        combo.AppendUint(model_.max_combo());
-        commands.DrawTextCentered(kComboCenter, 382, combo.c_str(), micropixel::Color::White(),
-                                  micropixel::SystemFont::kMedium);
-        Line level;
-        level.AppendUint(model_.level());
-        commands.DrawTextCentered(kLevelCenter, 382, level.c_str(), micropixel::Color::White(),
-                                  micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(360, ActionButtonTextY(kRestartButtonRect),
-                                  strings_.Get(snake_strings::Id::kActionRestart),
-                                  micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
-        used = 9U;
-    } else if (level_banner_us_ != 0U) {
-        commands.DrawTextCentered(360, 315, strings_.Get(snake_strings::Id::kUpgradeTitle), AsColor(theme.text),
-                                  micropixel::SystemFont::kLarge);
-        Line reached;
-        reached.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
-        reached.AppendUint(model_.level());
-        reached.Append(strings_.Get(snake_strings::Id::kUpgradeReachedSuffix));
-        commands.DrawTextCentered(360, 370, reached.c_str(), micropixel::Color::White(),
-                                  micropixel::SystemFont::kMedium);
-        used = 2U;
-    }
-    while (used++ < 9U) {
-        AppendPlaceholderText(commands);
-    }
-}
-
-void SnakeGame::SnapshotBody() {
-    previous_length_ = model_.length();
-    for (uint32_t index = 0U; index < previous_length_; ++index) {
-        previous_body_[index] = model_.body()[index];
-    }
+    SetLabel(header_labels_[6], update, ShiftLeftOfSafeRight(kStatusPosition, renderer_info_), status.c_str(),
+             model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
+             : model_.combo() > 1U ? micropixel::Color::Rgb(251U, 191U, 36U)
+                                   : micropixel::Color::Rgb(5U, 5U, 5U),
+             micropixel::SystemFont::kSmall);
 }
 
 void SnakeGame::ResetBodySlotMapping() {
@@ -608,8 +571,6 @@ void SnakeGame::AdvanceBodySlotMapping(Cell previous_head, uint32_t previous_len
     const uint32_t length = model_.length();
     if (length == 0U || length != previous_length || body_slot_length_ != previous_length) {
         ResetBodySlotMapping();
-        // Growth and poison change the retained ring topology, but the head
-        // still needs to animate across the Move that caused that change.
         if (length != 0U) {
             body_slot_previous_[body_slot_head_] = previous_head;
         }
@@ -620,8 +581,6 @@ void SnakeGame::AdvanceBodySlotMapping(Cell previous_head, uint32_t previous_len
         const uint32_t index = (slot + length - body_slot_head_) % length;
         body_slot_previous_[slot] = model_.body()[index];
     }
-    // The recycled tail slot animates from the old head into the new head;
-    // Every other slot is already exactly at its new logical segment cell.
     body_slot_previous_[body_slot_head_] = previous_head;
 }
 

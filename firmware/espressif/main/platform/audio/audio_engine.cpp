@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "platform/audio/audio_mixer.hpp"
 #include "platform/audio/audio_output_peripheral.hpp"
+#include "platform/audio/audio_output_policy.hpp"
 #include "platform/audio/audio_power_controller.hpp"
 #include "platform/audio/volume_curve.hpp"
 #include "work/task_policy.hpp"
@@ -45,6 +46,7 @@ constexpr uint32_t kMaxVoices = 8U;
 struct AudioEngineState final {
     std::atomic<EngineState> engine_state{EngineState::kStopped};
     std::atomic<bool> suspended{};
+    std::atomic<bool> app_foreground{};
     std::atomic<uint16_t> master_volume_per_ten_thousand{static_cast<uint16_t>(VolumeOutputPerTenThousand(70U))};
     std::atomic<TaskHandle_t> task{};
     SemaphoreHandle_t voices_mutex{};
@@ -108,6 +110,12 @@ bool HasPlayableVoice() {
     (void)xSemaphoreGive(State().voices_mutex);
     return playable;
 }
+
+bool AppKeepsOutputActive() {
+    return State().app_foreground.load(std::memory_order_acquire) && !State().suspended.load(std::memory_order_acquire);
+}
+
+bool HasOutputDemand() { return ShouldRunAudioOutput(AppKeepsOutputActive(), HasPlayableVoice()); }
 
 AudioChunkState FillAudioChunk(int32_t* frames) {
     std::memset(frames, 0, kFramesPerChunk * 2U * sizeof(*frames));
@@ -217,7 +225,7 @@ void AudioTask(void* argument) {
     bool first_output_transition = true;
     while (status == ESP_OK) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (!HasPlayableVoice()) {
+        if (!HasOutputDemand()) {
             continue;
         }
         if (power_controller != nullptr) {
@@ -236,7 +244,7 @@ void AudioTask(void* argument) {
         }
         status = sink.Start(frames, kFramesPerChunk);
         if (status == ESP_OK && first_output_transition) {
-            ESP_LOGI(kTag, "audio output started on first tone event");
+            ESP_LOGI(kTag, "audio output started for foreground App");
         }
         uint32_t idle_chunks = 0U;
         while (status == ESP_OK) {
@@ -247,10 +255,13 @@ void AudioTask(void* argument) {
                 break;
             }
             DeliverCompletions(chunk);
-            idle_chunks = chunk.rendered_audio || chunk.active_after ? 0U : idle_chunks + 1U;
+            const bool app_foreground = AppKeepsOutputActive();
+            const bool playable_voice = HasPlayableVoice();
+            idle_chunks = NextAudioIdleChunkCount(idle_chunks, app_foreground, chunk.rendered_audio,
+                                                  chunk.active_after || playable_voice);
             const uint32_t idle_grace_chunks =
                 (kAudioIdleGraceMs * State().sample_rate + kFramesPerChunk * 1000U - 1U) / (kFramesPerChunk * 1000U);
-            if (idle_chunks < idle_grace_chunks || HasPlayableVoice()) {
+            if (!ShouldStopAudioOutput(app_foreground, idle_chunks, idle_grace_chunks, playable_voice)) {
                 continue;
             }
             status = sink.Stop();
@@ -525,6 +536,7 @@ int32_t AudioEngine::SuspendAll() {
         return MICROPIXEL_STATUS_INTERNAL;
     }
     State().suspended.store(true, std::memory_order_release);
+    State().app_foreground.store(false, std::memory_order_release);
     NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
 }
@@ -538,6 +550,7 @@ int32_t AudioEngine::ResumeAll() {
         return MICROPIXEL_STATUS_INTERNAL;
     }
     State().suspended.store(false, std::memory_order_release);
+    State().app_foreground.store(true, std::memory_order_release);
     NotifyAudioTask();
     return MICROPIXEL_STATUS_OK;
 }

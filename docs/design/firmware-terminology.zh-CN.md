@@ -93,7 +93,7 @@ Registry 和 Service 都不是 Peripheral。
 ```text
 ESP-IDF GPIO Driver
     ↓
-Claw4GpioPeripheral
+Metalio-Claw4 GpioPeripheral
     ├─ channel 5  / "P5"
     └─ channel 15 / "P15"
     ↓

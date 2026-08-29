@@ -5,19 +5,20 @@
 
 ## 一句话理解项目
 
-MicroPixel 是运行在 ESP32-P4 + Metalio-Claw4 上的 WebAssembly 应用运行时：Host 基于
-ESP-IDF 6.1 和 WAMR 2.4.3 AOT，Guest 使用受限 C++23 SDK，通过稳定的 Service ABI 访问图形、
+MicroPixel 是运行在 Espressif MCU 上的 WebAssembly 应用运行时：产品固件面向 ESP32-P4 +
+Metalio-Claw4，ESP32-S31 + ESP-Mosaico 作为 preview bring-up profile；Host 基于 ESP-IDF 6.1 和固定
+commit 的 WAMR fork AOT v6，Guest 使用受限 C++23 SDK，通过稳定的 Service ABI 访问图形、
 输入、音频、存储和资源，不直接依赖芯片或板级 SDK。
 
 当前产品基线：
 
-- 硬件：ESP32-P4 + Metalio-Claw4；
+- 硬件：ESP32-P4 + Metalio-Claw4 产品 profile；ESP32-S31 + ESP-Mosaico preview profile；
 - Host：ESP-IDF 6.1，一个长驻 `AppRuntime`，同时最多一个 Guest `AppSession`；
 - Guest：Wasm32 + RISC-V 32-bit AOT，单线程事件模型；
-- 分发：Bundle v1 + 统一 24 MiB 可写 `app_store`；BundleFS 使用离散 64 KiB 数据块、写时复制和
-  四个 4 KiB Catalog Bank，不依赖 NVS Catalog；
+- 分发：Bundle v1；P4 使用 24 MiB、S31 NOR bring-up 使用 8 MiB 可写 `app_store`。BundleFS v2 使用
+  离散 64 KiB 数据块、写时复制和四个 16 KiB Catalog Bank，并兼容迁移旧 v1，不依赖 NVS Catalog；
 - 系统 UI：Host 原生 App Hall、Status Layer、系统菜单和系统手势；
-- 集成 App：Blocks、Snake 和 Demo。
+- 集成 App：Blocks、Snake、Demo，以及 Tap Counter、Color Lab、Pixel Sketch、Orbit Pad 四个 Showcase Bundle。
 
 ## 先读哪里
 
@@ -32,6 +33,7 @@ ESP-IDF 6.1 和 WAMR 2.4.3 AOT，Guest 使用受限 C++23 SDK，通过稳定的 
 - Guest–Host wire 协议：[`guest/abi/README.md`](guest/abi/README.md) 和
   [`guest/abi/micropixel_abi.h`](guest/abi/micropixel_abi.h)；
 - C/C++ 格式、命名、所有权和错误策略：[`docs/development/code-style.zh-CN.md`](docs/development/code-style.zh-CN.md)；
+- Graphics 性能诊断：[`docs/development/graphics-performance.zh-CN.md`](docs/development/graphics-performance.zh-CN.md)；
 - 游戏音频：[`docs/development/game-audio.zh-CN.md`](docs/development/game-audio.zh-CN.md)；
 - 真机烧录：[`docs/development/flashing.zh-CN.md`](docs/development/flashing.zh-CN.md)；
 - 贡献和提交前检查：[`CONTRIBUTING.md`](CONTRIBUTING.md)。
@@ -42,7 +44,8 @@ ESP-IDF 6.1 和 WAMR 2.4.3 AOT，Guest 使用受限 C++23 SDK，通过稳定的 
 app_main
   └─ FirmwareApp                         # 唯一组合根
       ├─ Platform
-      │   ├─ Metalio-Claw4                # display/input/audio/system UI
+      │   ├─ Metalio-Claw4                # ESP32-P4 product
+      │   ├─ ESP-Mosaico                  # ESP32-S31 preview bring-up
       │   └─ Null                          # 硬件无关编译基线
       ├─ DeviceServices                    # 硬件无关契约
       ├─ AppRuntime
@@ -83,7 +86,8 @@ guest/
   abi/                            # wire 格式、ID、allowed imports
   runtime/                        # Guest startup 与 SDK lowering
   sdk/                            # 应用可包含的 Public C++ API
-  apps/{blocks,snake,demo}/       # 集成 App
+  apps/{blocks,snake,demo}/       # 完整游戏与 SDK Demo
+  apps/{tap-counter,color-lab,pixel-sketch,orbit-pad}/ # Showcase Bundle
   tests/conformance/              # Guest/Host 边界验收
 tools/                            # 构建、打包、分析、烧录和回归脚本
 docs/                             # 跨模块长期文档
@@ -92,7 +96,7 @@ build/                            # 本地生成产物，不提交
 
 ## 修改时必须保持的边界
 
-- Guest SDK、Guest App 和 ABI 不得依赖 ESP-IDF、LVGL 或 Metalio-Claw4 类型。
+- Guest SDK、Guest App 和 ABI 不得依赖 ESP-IDF、LVGL 或任何具体开发板类型。
 - 不在 C ABI 中暴露 C++ class、STL 类型、vtable、`std::expected` 或 Host 指针。
 - 已发布的 Service/method/channel/event/capability/opcode ID 不得改义或复用。
 - 所有跨 ABI pointer/length、handle、generation、所属 Guest 和容量都由 Host 验证。
@@ -114,7 +118,7 @@ build/                            # 本地生成产物，不提交
 | 修改 Public Guest API | `guest/sdk/` → `guest/runtime/sdk.cpp` → 必要时再改 `guest/abi/` 和 Host endpoint |
 | 修改 wire/Service | `guest/abi/` + `firmware/espressif/main/runtime/abi/` + conformance/negative tests |
 | 修改 Host 业务能力 | `device/contracts/` + Runtime service；板级差异放 `platform/` |
-| 修改应用大厅/状态层 | `host/ui/`、`host/controller/`、Metalio-Claw4 system UI backend |
+| 修改应用大厅/状态层 | `host/ui/`、`host/controller/`、共享 Square System UI；板级只接入 presentation |
 | 修改图形热路径 | Graphics Service、Guest graphics engine、display/compositor；保持边界验证 |
 | 修改 Blocks/Snake | 对应 `guest/apps/<app>/`；同时运行该 Bundle 的正式构建 |
 | 修改音效 | `audio/sfx.json` + 分析器测试 + App Bundle 构建 + 真机 A/B |
@@ -135,7 +139,10 @@ bash tools/build_guest_p4.sh
 # ESP32-P4 Host 产品基线
 bash tools/p4.sh build-host
 
-# System Shell + Blocks + Snake + Demo + App Store 集成
+# ESP32-S31 / ESP-Mosaico preview Host
+bash tools/s31.sh build-host
+
+# System Shell + 七个示例 App + App Store 集成
 bash tools/p4.sh build-all
 
 # 发布前或推送前完整门禁；普通 build/flash 不隐式运行
@@ -151,9 +158,9 @@ bash tools/tests/test_firmware_host.sh
 python3 -m unittest tools.tests.test_analyze_sfx -v
 
 # 正式 App Bundle
-bash tools/build_blocks_bundle.sh
-bash tools/build_snake_bundle.sh
-bash tools/build_demo_bundle.sh
+python3 tools/micropixel package guest/apps/blocks
+python3 tools/micropixel package guest/apps/snake
+python3 tools/micropixel package guest/apps/demo
 
 # Shell 语法
 bash -n tools/*.sh

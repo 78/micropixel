@@ -1,8 +1,6 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.color-lab",
-  "display": "square",
-  "display_name": "Color Lab",
-  "source": "main.cpp",
+  "title": "Color Lab",
   "sources": ["main.cpp"]
 }

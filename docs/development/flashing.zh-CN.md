@@ -97,10 +97,17 @@ ROM，随后按同一 USB 物理位置等待 ROM 产品名并在同一个 esptoo
 写入前单独运行 `chip-id`：rev0 S31 的一次性 ROM 下载状态会被探测连接关闭时的控制线变化消耗掉。该闭环已
 在 macOS 真机验证；首次烧录、应用固件损坏或应用 CDC 未启动时，仍需按板卡说明手动进入 ROM 下载模式。
 
-当前 `esp-mosaico` 是 P0/P1 bring-up profile：CO5300 显示、CST9217 中断触摸、板级 3V3 电源、共用 Runtime、
-BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D 转场已接入；RGB565/QSPI 只作为板级
-presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。音频、传感器、NAND 与模块发现仍未
-纳入当前范围。因此能烧录和显示大厅不代表产品功能已经完整。
+当前 `esp-mosaico` 第一阶段 profile 已接入 CO5300 显示、CST9217-compatible 中断触摸、ES8311 音频、
+BMI270、双 BMM150、BQ27220 主动刷新、POWER/Function Button、状态 LED、白名单扩展 GPIO、板级 3V3
+电源、light sleep、共用 Runtime、BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D
+转场；RGB565/QSPI 只作为板级 presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。
+NAND、麦克风采集与模块发现仍未纳入当前范围；传感器轴向/磁校准和电源时序必须按下方真机清单验收。
+
+第一阶段真机验收至少包括：静置/六面翻转检查加速度方向，绕三轴转动检查陀螺仪符号，两颗磁力计分别
+读取且无串址；短按 POWER 完成睡眠与唤醒，长按触发关机；Demo Input 页中 Function Button 产生 Confirm
+down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange status LED` 后，TOGGLE 可点亮/熄灭且
+退出页面恢复熄灭；插拔 Type-C/VIN 时电池与外部供电状态在 2 秒级更新；逐根检查公开 GPIO 不与显示、
+触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 
 Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo
@@ -165,9 +172,9 @@ bash tools/p4.sh reset-app-store "$P4_PORT"
 ```sh
 python3 tools/micropixel --transport usb --port "$P4_PORT" app list
 python3 tools/micropixel --transport usb --port "$P4_PORT" app install build/apps/demo/demo.bundle.bin
-python3 tools/micropixel --transport usb --port "$P4_PORT" app start ai.micropixel.demo
+python3 tools/micropixel --transport usb --port "$P4_PORT" app start micropixel.demo
 python3 tools/micropixel --transport usb --port "$P4_PORT" app stop
-python3 tools/micropixel --transport usb --port "$P4_PORT" app uninstall ai.micropixel.demo
+python3 tools/micropixel --transport usb --port "$P4_PORT" app uninstall micropixel.demo
 ```
 
 `micropixel --transport usb app install guest/apps/demo` 会先按正式流程构建和打包，再通过同一协议安装；
@@ -207,7 +214,7 @@ bash tools/p4.sh monitor "$P4_PORT"
 
 监视器占用串口时，其他烧录或抓取命令无法同时使用该端口。退出监视器后再烧录。
 
-## 7. 验收与常见问题
+## 8. 验收与常见问题
 
 完整烧录后至少检查：
 

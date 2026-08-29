@@ -114,12 +114,12 @@ main/
 │   │   ├── CMakeLists.txt
 │   │   └── i2c_executor.*
 │   ├── graphics/
-│   │   ├── command_stream.cpp
-│   │   └── command_stream.hpp
+│   │   ├── guest_scene.cpp
+│   │   └── app_surface_compositor.cpp
 │   ├── drivers/                   # 按器件组织，不知道具体开发板
 │   │   ├── display/nv3051f/esp_lcd_nv3051f.[ch]
 │   │   ├── power/bq27220.*
-│   │   └── sensors/{sc7a20htr,qmc6309,vector_sensor}.*
+│   │   └── sensors/{sc7a20htr,qmc6309,bmi270,bmm150,vector_sensor}.*
 │   ├── input/                     # 厂商触摸句柄到 Device Input 的共享实现
 │   │   ├── esp_lcd_touch_input.*
 │   │   └── gt911_input.*
@@ -152,7 +152,8 @@ main/
 │       │   ├── presentation.*
 │       │   ├── i2s_audio_sink.*
 │       │   ├── display/
-│       │   ├── battery_peripheral.* + power_controller.* + haptic_actuator.*
+│       │   ├── {battery,sensor}_peripheral.* + power_controller.*
+│       │   ├── function_button.* + status_led.* + haptic_actuator.*
 │       │   └── usb_cdc_console.*
 │       └── null/
 │           ├── CMakeLists.txt
@@ -303,7 +304,8 @@ main/
   显示基于 LVGL 内置 Wi-Fi 字形生成的 RSSI 分级图标和 LVGL 多档电池图标；
   USB 或无线外部电源接入时，电池图标立即切换为绿色充电符号，断开后恢复当前电量档位；
   蜂窝信号使用 Host 绘制的分级信号柱，真实蜂窝能力可用前不显示。状态层使用 LVGL primitive 和单次
-  半透明合成；亮度、主音量及居中的 Guest 实际呈现 FPS/聚合 CPU 小蒙层均由 Host 控制。FPS 只在包含
+  半透明合成；亮度、主音量及居中的 Guest 实际呈现 FPS/聚合 CPU 小蒙层均由 Host 控制。性能蒙层只在
+  Guest App 前台运行时显示；App Hall、系统菜单、Status Layer、启动页和挂起状态均隐藏。FPS 只在包含
   Guest 内容的刷新完成后计数，不包含蒙层自身或其他 Host UI 的局部刷新。
 - Wi-Fi 冷启动和掉线发现使用被动扫描，只按已保存网络的信道去重后逐个检查，并优先检查上次连接网络的
   信道；发现候选后才连接。已连接链路掉线后只做一次快速重连，失败后立即进入被动发现，未发现候选时按
@@ -314,14 +316,20 @@ main/
   与性能采样等真正的周期任务使用定时等待。
 - `platform/graphics/` 是跨板级图形协议校验；`platform/boards/metalio-claw4/` 只放该开发板的实现，并按真实硬件子系统分为 `display/`、`input/`、`audio/`；`BatteryPeripheral` 复用板级 I²C 总线读取 BQ27220 电量和充电电流，并通过 TCA9555 的 USB / 无线充电检测输入及共享中断报告外部电源状态。
 - `platform/boards/null/` 提供没有真实板级设备时的构建实现。
+- `platform/audio/` 在 App 启动或 Resume 后立即打开音频输出，并在 App 保持前台时持续输出静音帧以保持
+  I²S、codec 和功放就绪；只有 App Suspend、Stop 或 Session 销毁后，原有 10 秒静音空闲计时才允许关闭输出。
 - `platform/boards/esp-mosaico/` 是 ESP32-S31 的 P0/P1 产品组合：复用原生 Wi-Fi policy、共享 App Hall/
-  Status Layer、480 方屏 layout、逻辑 viewport、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
+  Status Layer、480 方屏 layout、逻辑坐标变换、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
   组合官方 CO5300、CST9217、ES8311 codec、BQ27220、数字振动电机、供电和引脚；音频 tone/PCM mixer 与
   Host 对数主音量曲线复用 `platform/audio/`，codec 控制与 Touch/Battery 共用 I²C executor。P4/S31
   的转场使用同一时间线与 PPA SRM 封装；S31 在
   原生 RGB565 中完成缩放/合成，再以独立的 1:1 PPA pass 生成 CO5300 线序，普通 LVGL flush 也使用相同
-  的硬件打包原则，正常帧路径不做 CPU 整图逐像素颜色转换。BMI270/BMM150 与 SAM8108 deep-sleep wake
-  在兼容 ESP-IDF 6.1/S31 的权威驱动和真机语义完成验证前明确返回 unavailable；NAND 与模块发现保留到 P2。
+  的硬件打包原则，正常帧路径不做 CPU 整图逐像素颜色转换。BMI270 加速度/陀螺仪与两颗 BMM150 使用
+  固定版本的 Bosch SensorAPI，由板级共享 I²C executor 串行执行配置和采样；GPIO57 监听实体 POWER 键并
+  作为 light-sleep 唤醒源，低电平开漏仍承担 SAM8108 关机请求。Function Button 作为逻辑 Confirm key
+  向 Guest 发布 down/up；GPIO3 橙色单色状态 LED 以逻辑归一化、只输出的 GPIO Device 开放，Guest 写
+  `true` 即点亮，不感知物理低有效。17 根安全扩展 GPIO 和两秒主动电池刷新也已接入。CoreBoard V1.0 未把 HUSB320/TP4057 状态脚接回 MCU，因此
+  外部供电由 BQ27220 的充放电方向推断；传感器轴向仍需真机姿态验收。NAND 与模块发现保留到 P2。
 - 跨板实现按领域放入 `platform/audio/`、`platform/haptics/`、`platform/wifi/` 等目录；
   `platform/adapters/` 放窄接口适配器，`platform/buses/` 负责共享总线调度；`platform/drivers/` 按芯片
   型号组织，不能 include `boards/`；`platform/lvgl/` 按显示能力组织，不能写 Metalio-Claw4 引脚或电源时序；
@@ -341,7 +349,7 @@ main/
   远控板型描述的唯一来源，不再在 HostController 中写死当前板名。
 - `bash tools/p4.sh build-null` 使用独立 build 目录编译 Null board，是 Platform/Runtime 反向依赖门禁；该
   镜像没有真实硬件语义，脚本不会提供 flash 路径。
-- `bash tools/s31.sh build-null` 是不可烧录的 S31 依赖方向门禁；`build-mosaico`、`flash-mosaico` 和
+- `bash tools/s31.sh build-null` 是不可烧录的 S31 依赖方向门禁；`build-host`、`flash-host` 和
   `monitor` 面向物理 ESP-Mosaico bring-up，烧录前必须匹配 ESP32-S31。当前 ESP-IDF preview 若自身
   源码/header 不同步，失败应记录为 SDK blocker，不在项目中 patch 本机 ESP-IDF。
 

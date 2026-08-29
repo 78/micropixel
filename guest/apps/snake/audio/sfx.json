@@ -18,31 +18,31 @@
     "bgm_a": {
       "max_rate_hz": 0.3,
       "check_repetition_exposure": true,
-      "target_relative_db": -12.0,
+      "target_relative_db": -6.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
-        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
-        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
+        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
+        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
       ]
     },
     "bgm_b": {
       "max_rate_hz": 0.3,
       "check_repetition_exposure": true,
-      "target_relative_db": -12.0,
+      "target_relative_db": -6.0,
       "tones": [
-        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
-        {"waveform": "sine", "frequency_hz": 1047, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
-        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
-        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
-        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
-        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 71, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
+        {"waveform": "sine", "frequency_hz": 523, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 0},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 214},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 428},
+        {"waveform": "sine", "frequency_hz": 1047, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 642},
+        {"waveform": "sine", "frequency_hz": 880, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 856},
+        {"waveform": "sine", "frequency_hz": 784, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 1070},
+        {"waveform": "sine", "frequency_hz": 659, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 1284},
+        {"waveform": "sine", "frequency_hz": 587, "duration_ms": 145, "volume_per_mille": 142, "attack_ms": 12, "release_ms": 60, "delay_ms": 1498}
       ]
     },
     "food_normal": {
