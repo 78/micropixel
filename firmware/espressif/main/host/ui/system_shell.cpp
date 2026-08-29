@@ -76,6 +76,9 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
             battery_state_change_pending_.store(false, std::memory_order_release);
             battery_state_change_queued_.store(false, std::memory_order_release);
             RefreshExternalPowerState();
+        } else if (action.type == SystemUiActionType::kTimeStateChanged) {
+            time_state_change_pending_.store(false, std::memory_order_release);
+            time_state_change_queued_.store(false, std::memory_order_release);
         } else if (action.type == SystemUiActionType::kRemoteCommandReady) {
             remote_command_pending_.store(false, std::memory_order_release);
             remote_command_queued_.store(false, std::memory_order_release);
@@ -85,6 +88,7 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
         }
         QueuePendingWifiStateChange();
         QueuePendingBatteryStateChange();
+        QueuePendingTimeStateChange();
         QueuePendingRemoteCommand();
         QueuePendingUserActivity();
         if (action.type != SystemUiActionType::kPowerButtonPressed) {
@@ -308,6 +312,14 @@ void SystemShell::NotifyBatteryStateChanged() {
     QueuePendingBatteryStateChange();
 }
 
+void SystemShell::NotifyTimeStateChanged() {
+    if (action_queue_ == nullptr) {
+        return;
+    }
+    time_state_change_pending_.store(true, std::memory_order_release);
+    QueuePendingTimeStateChange();
+}
+
 void SystemShell::NotifyRemoteCommandReady() {
     if (action_queue_ == nullptr) {
         return;
@@ -387,6 +399,17 @@ void SystemShell::QueuePendingBatteryStateChange() {
     const SystemUiAction action{.type = SystemUiActionType::kBatteryStateChanged};
     if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
         battery_state_change_queued_.store(false, std::memory_order_release);
+    }
+}
+
+void SystemShell::QueuePendingTimeStateChange() {
+    if (action_queue_ == nullptr || !time_state_change_pending_.load(std::memory_order_acquire) ||
+        time_state_change_queued_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const SystemUiAction action{.type = SystemUiActionType::kTimeStateChanged};
+    if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
+        time_state_change_queued_.store(false, std::memory_order_release);
     }
 }
 
@@ -470,12 +493,14 @@ void SystemShell::ResetActionQueue() {
     power_off_queued_.store(false, std::memory_order_release);
     wifi_state_change_queued_.store(false, std::memory_order_release);
     battery_state_change_queued_.store(false, std::memory_order_release);
+    time_state_change_queued_.store(false, std::memory_order_release);
     remote_command_queued_.store(false, std::memory_order_release);
     user_activity_queued_.store(false, std::memory_order_release);
     QueuePendingPowerButton();
     QueuePendingPowerOff();
     QueuePendingWifiStateChange();
     QueuePendingBatteryStateChange();
+    QueuePendingTimeStateChange();
     QueuePendingRemoteCommand();
     QueuePendingUserActivity();
 }

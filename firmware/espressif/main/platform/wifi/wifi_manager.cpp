@@ -11,6 +11,7 @@
 #include "esp_wifi_default.h"
 #include "nvs.h"
 #include "work/background_executor.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::wifi {
 namespace {
@@ -31,6 +32,8 @@ constexpr std::array<int64_t, 4U> kDiscoveryBackoffUs = {
 };
 constexpr size_t kScanRecordWorkspaceBytes =
     sizeof(wifi_ap_record_t) * static_cast<size_t>(device::kMaxVisibleWifiNetworks);
+constexpr char kRadioStartupTaskName[] = "micropixel_wifi";
+constexpr uint32_t kRadioStartupTaskStackBytes = 10U * 1024U;
 
 struct StoredProfile final {
     char ssid[device::kWifiSsidCapacity + 1U]{};
@@ -174,10 +177,16 @@ const char* AuthModeName(uint8_t auth_mode) {
 
 void WifiManager::HeapCapsDeleter::operator()(std::byte* value) const { heap_caps_free(value); }
 
+WifiManager::~WifiManager() {
+    if (radio_startup_task_started_ && radio_startup_done_ != nullptr) {
+        (void)xSemaphoreTake(radio_startup_done_, portMAX_DELAY);
+    }
+}
+
 void WifiManager::BindBackgroundExecutor(work::BackgroundExecutor& executor) { background_executor_ = &executor; }
 
 std::expected<void, device::WifiError> WifiManager::Initialize() {
-    if (initialized_) {
+    if (initialization_started_) {
         return {};
     }
     mutex_ = xSemaphoreCreateMutex();
@@ -207,11 +216,6 @@ std::expected<void, device::WifiError> WifiManager::Initialize() {
     }
     (void)LoadSettings();
 
-    const esp_err_t radio_status = radio_.Initialize();
-    if (radio_status != ESP_OK) {
-        ESP_LOGW(kTag, "%s radio initialization failed: %s", radio_.Name(), esp_err_to_name(radio_status));
-        return std::unexpected(WifiErrorFor(radio_status));
-    }
     esp_err_t status = esp_netif_init();
     if (status != ESP_OK && status != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "esp_netif initialization failed: %s", esp_err_to_name(status));
@@ -228,12 +232,51 @@ std::expected<void, device::WifiError> WifiManager::Initialize() {
         return std::unexpected(device::WifiError::kOperationFailed);
     }
 
+    initialization_started_ = true;
+    {
+        ScopedLock lock(mutex_);
+        RebuildSnapshotLocked();
+    }
+    if (!radio_.HasSlowStartup()) {
+        return FinishInitialize();
+    }
+
+    radio_startup_done_ = xSemaphoreCreateBinaryStatic(&radio_startup_done_storage_);
+    if (radio_startup_done_ == nullptr ||
+        xTaskCreate(RadioStartupEntry, kRadioStartupTaskName, kRadioStartupTaskStackBytes, this,
+                    task_policy::kAssetWorkerPriority, &radio_startup_task_) != pdPASS) {
+        radio_startup_task_ = nullptr;
+        ESP_LOGW(kTag, "could not start %s radio initialization task", radio_.Name());
+        return std::unexpected(device::WifiError::kOperationFailed);
+    }
+    radio_startup_task_started_ = true;
+    ESP_LOGI(kTag, "%s radio initialization continuing in background", radio_.Name());
+    return {};
+}
+
+void WifiManager::RadioStartupEntry(void* context) {
+    auto* manager = static_cast<WifiManager*>(context);
+    const auto result = manager->FinishInitialize();
+    if (!result) {
+        ESP_LOGW(kTag, "Wi-Fi is unavailable for this boot: error=%u", static_cast<unsigned>(result.error()));
+    }
+    (void)xSemaphoreGive(manager->radio_startup_done_);
+    vTaskDelete(nullptr);
+}
+
+std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
+    const esp_err_t radio_status = radio_.Initialize();
+    if (radio_status != ESP_OK) {
+        ESP_LOGW(kTag, "%s radio initialization failed: %s", radio_.Name(), esp_err_to_name(radio_status));
+        return std::unexpected(WifiErrorFor(radio_status));
+    }
+
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     // MicroPixel owns Wi-Fi persistence in runtime_nvs and explicitly uses
     // WIFI_STORAGE_RAM below. Disable the driver's separate default-NVS path
     // so native and hosted radios share one authoritative settings store.
     config.nvs_enable = false;
-    status = esp_wifi_init(&config);
+    esp_err_t status = esp_wifi_init(&config);
     if (status != ESP_OK) {
         ESP_LOGW(kTag, "Wi-Fi initialization failed: %s", esp_err_to_name(status));
         return std::unexpected(WifiErrorFor(status));

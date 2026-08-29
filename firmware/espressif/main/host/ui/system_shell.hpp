@@ -76,6 +76,7 @@ class SystemShell final {
     [[nodiscard]] bool PowerTransitionRequested() const;
     void NotifyWifiStateChanged();
     void NotifyBatteryStateChanged();
+    void NotifyTimeStateChanged();
     void NotifyRemoteCommandReady();
     void NotifyUserActivity();
     void ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query, void* power_context);
@@ -90,6 +91,7 @@ class SystemShell final {
     void QueuePendingPowerOff();
     void QueuePendingWifiStateChange();
     void QueuePendingBatteryStateChange();
+    void QueuePendingTimeStateChange();
     void QueuePendingRemoteCommand();
     void QueuePendingUserActivity();
     void RefreshExternalPowerState();
@@ -113,6 +115,8 @@ class SystemShell final {
     std::atomic_bool wifi_state_change_queued_{};
     std::atomic_bool battery_state_change_pending_{};
     std::atomic_bool battery_state_change_queued_{};
+    std::atomic_bool time_state_change_pending_{};
+    std::atomic_bool time_state_change_queued_{};
     std::atomic_bool remote_command_pending_{};
     std::atomic_bool remote_command_queued_{};
     std::atomic_bool user_activity_pending_{};

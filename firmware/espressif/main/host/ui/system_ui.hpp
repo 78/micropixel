@@ -414,6 +414,7 @@ enum class SystemUiActionType {
     kPowerOffRequested,
     kWifiStateChanged,
     kBatteryStateChanged,
+    kTimeStateChanged,
     kRemoteCommandReady,
     kUserActivity,
 };

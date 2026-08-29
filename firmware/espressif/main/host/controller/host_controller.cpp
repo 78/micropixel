@@ -1609,6 +1609,11 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
+            if (action->type == host_ui::SystemUiActionType::kTimeStateChanged) {
+                shell.UpdateHallStatusBar(MakeHallStatusBarModel(wifi.Snapshot(), battery.Snapshot()));
+                next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
+                continue;
+            }
             if (action->type == host_ui::SystemUiActionType::kOpenWifiSettings) {
                 (void)RunWifiSettings(shell, wifi, status_model, &power_pump);
                 if (power_pump.unwind_requested) {
@@ -2323,6 +2328,11 @@ class ActiveHost final {
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
+            if (action.type == host_ui::SystemUiActionType::kTimeStateChanged) {
+                shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_.Snapshot(), battery_.Snapshot()));
+                next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
+                continue;
+            }
             if (action.type == host_ui::SystemUiActionType::kLaunchApp && action.app_index < catalog_.count &&
                 CanLaunch()) {
                 ActivateSelectedApp(action.app_index);
@@ -2611,6 +2621,9 @@ class ActiveHost final {
             }
             if (action->type == host_ui::SystemUiActionType::kWifiStateChanged) {
                 RefreshWifiStatus(status_model_, wifi_.Snapshot());
+                continue;
+            }
+            if (action->type == host_ui::SystemUiActionType::kTimeStateChanged) {
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kOpenStatusLayer) {

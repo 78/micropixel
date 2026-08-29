@@ -75,6 +75,9 @@ class Wifi {
     Wifi(const Wifi&) = delete;
     Wifi& operator=(const Wifi&) = delete;
 
+    // Starts the platform Wi-Fi lifecycle. A successful return may represent
+    // accepted background radio startup; Snapshot().available is the ready
+    // signal for operations and state-change sinks report the transition.
     [[nodiscard]] virtual std::expected<void, WifiError> Initialize() = 0;
     [[nodiscard]] virtual WifiSnapshot Snapshot() const = 0;
     virtual void SetStateChangeSink(WifiStateChangeSink sink, void* context) = 0;

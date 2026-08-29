@@ -102,7 +102,7 @@ esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
     return ESP_OK;
 }
 
-esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
+esp_err_t InitializeSharedI2c(board_detail::MosaicoBoardState& state) {
     i2c_master_bus_config_t bus_config{};
     bus_config.i2c_port = I2C_NUM_0;
     bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
@@ -111,6 +111,13 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
     bus_config.flags.enable_internal_pullup = true;
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &state.i2c_bus), board_detail::kTag,
                         "initialize shared Mosaico I2C bus failed");
+    return ESP_OK;
+}
+
+esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
+    if (state.i2c_bus == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
     esp_lcd_panel_io_i2c_config_t io_config{};
     io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_CST9217_ADDRESS;
     io_config.scl_speed_hz = 400000U;
@@ -239,6 +246,15 @@ class EspMosaicoBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(power_.Initialize(), board_detail::kTag, "initialize Mosaico power control failed");
         ESP_RETURN_ON_ERROR(status_led_.Initialize(), board_detail::kTag, "initialize Mosaico status LED failed");
         ESP_RETURN_ON_ERROR(status_led_.Set(true), board_detail::kTag, "turn on Mosaico startup status LED failed");
+        ESP_RETURN_ON_ERROR(InitializeSharedI2c(state_), board_detail::kTag,
+                            "initialize shared Mosaico I2C bus failed");
+        ESP_RETURN_ON_ERROR(InitializeTouch(state_), board_detail::kTag, "initialize Mosaico touch failed");
+        ESP_RETURN_ON_ERROR(state_.i2c_executor.Initialize(), board_detail::kTag,
+                            "start shared Mosaico I2C executor failed");
+        ESP_RETURN_ON_ERROR(state_.touch_input.Initialize(state_.touch, state_.i2c_executor), board_detail::kTag,
+                            "bind CST9217 input failed");
+        ESP_RETURN_ON_ERROR(sensors_.BeginInitialize(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
+                            "start Mosaico sensor discovery failed");
         ESP_RETURN_ON_ERROR(InitializeDisplay(state_), board_detail::kTag, "initialize Mosaico display failed");
         ESP_RETURN_ON_ERROR(
             state_.panel_transition.Initialize(
@@ -247,17 +263,6 @@ class EspMosaicoBoard final : public Board, public device::Power {
                 state_.display_pipeline.ShadowCopyDma2d(), state_.display_pipeline.DisplayedShadow(),
                 state_.display_pipeline.DisplayedShadowReady()),
             board_detail::kTag, "initialize CO5300 direct transition compositor failed");
-        ESP_RETURN_ON_ERROR(InitializeTouch(state_), board_detail::kTag, "initialize Mosaico touch failed");
-        ESP_RETURN_ON_ERROR(state_.i2c_executor.Initialize(), board_detail::kTag,
-                            "start shared Mosaico I2C executor failed");
-        ESP_RETURN_ON_ERROR(audio_output_.Configure(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
-                            "configure Mosaico ES8311 audio hardware failed");
-        battery_.Initialize(state_.i2c_bus, state_.i2c_executor);
-        sensors_.Initialize(state_.i2c_bus, state_.i2c_executor);
-        ESP_RETURN_ON_ERROR(haptics_.Initialize(), board_detail::kTag, "initialize Mosaico vibration motor failed");
-        ESP_RETURN_ON_ERROR(gpio_.Initialize(), board_detail::kTag, "initialize Mosaico application GPIO failed");
-        ESP_RETURN_ON_ERROR(state_.touch_input.Initialize(state_.touch, state_.i2c_executor), board_detail::kTag,
-                            "bind CST9217 input failed");
         ESP_RETURN_ON_ERROR(state_.guest_graphics.Initialize(state_.display, nullptr), board_detail::kTag,
                             "initialize shared Guest graphics failed");
 
@@ -272,6 +277,12 @@ class EspMosaicoBoard final : public Board, public device::Power {
 
         esp_lv_adapter_unlock();
 
+        ESP_RETURN_ON_ERROR(sensors_.FinishInitialize(), board_detail::kTag, "finish Mosaico sensor discovery failed");
+        ESP_RETURN_ON_ERROR(audio_output_.Configure(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
+                            "configure Mosaico ES8311 audio hardware failed");
+        battery_.Initialize(state_.i2c_bus, state_.i2c_executor);
+        ESP_RETURN_ON_ERROR(haptics_.Initialize(), board_detail::kTag, "initialize Mosaico vibration motor failed");
+        ESP_RETURN_ON_ERROR(gpio_.Initialize(), board_detail::kTag, "initialize Mosaico application GPIO failed");
         ESP_RETURN_ON_ERROR(function_button_.Initialize(state_.ui.Input()), board_detail::kTag,
                             "initialize Mosaico function button failed");
         ESP_RETURN_ON_ERROR(state_.touch_input.Start(state_.display), board_detail::kTag,

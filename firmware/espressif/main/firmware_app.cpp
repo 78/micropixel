@@ -41,12 +41,14 @@ void FirmwareApp::Run() {
         return;
     }
     const platform::PlatformServices& services = platform_.Services();
+    static host_ui::SystemShell shell(*services.system_ui);
 
     auto wifi_result = services.wifi->Initialize();
     if (!wifi_result) {
         ESP_LOGW(kTag, "Wi-Fi is unavailable for this boot: error=%u", static_cast<unsigned>(wifi_result.error()));
     } else {
-        const esp_err_t time_error = network_time::Initialize();
+        const esp_err_t time_error = network_time::Initialize(
+            [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyTimeStateChanged(); }, &shell);
         if (time_error != ESP_OK) {
             ESP_LOGW(kTag, "Host network time is unavailable for this boot: %s", esp_err_to_name(time_error));
         }
@@ -59,7 +61,6 @@ void FirmwareApp::Run() {
     static device::DeviceServices devices(*services.graphics, services.board_info.display, *services.input,
                                           *services.audio, *services.random, *services.devices, *services.sensors,
                                           *services.gpio, *services.haptics, *services.battery);
-    static host_ui::SystemShell shell(*services.system_ui);
     static control::GuestLogBuffer guest_logs;
     static control::ControlDispatcher controls(
         [](void* context, const char* app_id) {

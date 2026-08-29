@@ -21,7 +21,8 @@ class SensorPeripheral final : public device::SensorPeripheral {
 
     ~SensorPeripheral() override;
 
-    void Initialize(i2c_master_bus_handle_t bus, buses::I2cExecutor& i2c_executor);
+    [[nodiscard]] esp_err_t BeginInitialize(i2c_master_bus_handle_t bus, buses::I2cExecutor& i2c_executor);
+    [[nodiscard]] esp_err_t FinishInitialize();
 
     [[nodiscard]] bool acceleration_available() const { return acceleration_.available(); }
     [[nodiscard]] bool angular_velocity_available() const { return angular_velocity_.available(); }
@@ -45,6 +46,7 @@ class SensorPeripheral final : public device::SensorPeripheral {
     };
 
     void InitializeOnWorker();
+    void PrepareSamplers();
     [[nodiscard]] int32_t ReadVector(device::PeripheralChannelId channel, device::SensorValues& values_out);
     [[nodiscard]] int32_t ConfigureOnWorker(device::PeripheralChannelId channel, uint32_t interval_us);
     void StopOnWorker(device::PeripheralChannelId channel);
@@ -61,6 +63,8 @@ class SensorPeripheral final : public device::SensorPeripheral {
     drivers::Bmm150 magnetic_field2_{0x11U};
     drivers::Bmm150 magnetic_field3_{0x12U};
     buses::I2cExecutor* i2c_executor_{};
+    bool initialization_started_{};
+    bool initialization_finished_{};
     Sampler acceleration_sampler_{};
     Sampler angular_velocity_sampler_{};
     Sampler magnetic_field2_sampler_{};

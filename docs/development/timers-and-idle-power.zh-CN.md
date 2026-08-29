@@ -46,7 +46,7 @@ v2 Host settings record 保存在 `sys_store/system`；旧 v1 record 首次读�
 
 | 路径 | 周期/超时 | 当前处理 |
 |---|---:|---|
-| App Hall 状态兜底采样 | 30 s | Wi-Fi、外接电源和远控命令均由事件立即唤醒；30 s只用于电量/固件状态兜底。电量滤波按实际流逝时间补权重，不会因采样变稀而把原约 60 s窗口拉长到 30 min |
+| App Hall 状态兜底采样 | 30 s | Wi-Fi、外接电源、SNTP 时间同步和远控命令均由事件立即唤醒；30 s只用于电量/固件状态兜底。电量滤波按实际流逝时间补权重，不会因采样变稀而把原约 60 s窗口拉长到 30 min |
 | 性能浮层 | CPU sample 1 s | 仅用户显式打开浮层时启用；等待 UI/远程事件或下一采样 deadline，不再 20 ms 轮询 |
 | Remote Host command | 旧实现 Poll 250 ms | 已改为入队时通知 `SystemShell`；仅远控 input sequence 执行期间保留 250 ms deadline 推进 |
 | Resource decode worker | 旧实现 Queue Poll 20 ms | 已改为 `portMAX_DELAY` 阻塞；shutdown 通过队列 sentinel 唤醒 |

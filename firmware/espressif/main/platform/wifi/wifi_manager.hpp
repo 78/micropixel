@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "platform/wifi/wifi_radio.hpp"
 
 namespace micropixel::work {
@@ -26,6 +27,7 @@ namespace micropixel::platform::wifi {
 class WifiManager final : public device::Wifi {
    public:
     explicit WifiManager(WifiRadio& radio) : radio_(radio) {}
+    ~WifiManager() override;
     void BindBackgroundExecutor(work::BackgroundExecutor& executor);
 
     [[nodiscard]] std::expected<void, device::WifiError> Initialize() override;
@@ -68,7 +70,9 @@ class WifiManager final : public device::Wifi {
 
     static void WifiEventHandler(void* context, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void DiscoveryTimerHandler(void* context);
+    static void RadioStartupEntry(void* context);
     static void SaveSettingsEntry(void* context);
+    [[nodiscard]] std::expected<void, device::WifiError> FinishInitialize();
     void HandleWifiEvent(int32_t event_id, void* event_data);
     void HandleGotIp();
     void HandleScanDone();
@@ -94,6 +98,9 @@ class WifiManager final : public device::Wifi {
 
     mutable SemaphoreHandle_t mutex_{};
     mutable SemaphoreHandle_t persistence_mutex_{};
+    StaticSemaphore_t radio_startup_done_storage_{};
+    SemaphoreHandle_t radio_startup_done_{};
+    TaskHandle_t radio_startup_task_{};
     work::BackgroundExecutor* background_executor_{};
     esp_timer_handle_t discovery_timer_{};
     esp_netif_t* station_netif_{};
@@ -115,6 +122,8 @@ class WifiManager final : public device::Wifi {
     int64_t last_user_scan_request_us_{};
     std::atomic_uint32_t save_request_generation_{};
     std::atomic_bool save_job_scheduled_{};
+    bool initialization_started_{};
+    bool radio_startup_task_started_{};
     bool initialized_{};
     bool enabled_{true};
     bool associated_{};

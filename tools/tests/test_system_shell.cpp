@@ -292,6 +292,25 @@ void BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges() {
           "pending Battery notification should survive a screen queue reset");
 }
 
+void TimeStateNotificationsAreCoalescedAndSurviveScreenChanges() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
+
+    shell.NotifyTimeStateChanged();
+    shell.NotifyTimeStateChanged();
+    const auto coalesced = shell.PollAction(0U);
+    Check(coalesced.has_value() && coalesced->type == SystemUiActionType::kTimeStateChanged,
+          "duplicate time state notifications should coalesce");
+    Check(!shell.PollAction(0U).has_value(), "coalesced time notification should only be queued once");
+
+    shell.NotifyTimeStateChanged();
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "system menu should render after time notification");
+    const auto preserved = shell.PollAction(0U);
+    Check(preserved.has_value() && preserved->type == SystemUiActionType::kTimeStateChanged,
+          "pending time notification should survive a screen queue reset");
+}
+
 void RemoteCommandsWakePollingWithoutBecomingUiActions() {
     FakeSystemUi ui;
     SystemShell shell(ui);
@@ -474,12 +493,13 @@ int main() {
     ScreenCaptureCapabilityComesFromPresentation();
     WifiStateNotificationsAreCoalescedAndSurviveScreenChanges();
     BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges();
+    TimeStateNotificationsAreCoalescedAndSurviveScreenChanges();
     RemoteCommandsWakePollingWithoutBecomingUiActions();
     PowerButtonNotificationsAreCoalescedAndSurviveScreenChanges();
     PowerOffNotificationsAreExclusiveAndReachTheShutdownScreen();
     ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 13 cases\n";
+    std::cout << "system_shell tests passed: 14 cases\n";
     return 0;
 }

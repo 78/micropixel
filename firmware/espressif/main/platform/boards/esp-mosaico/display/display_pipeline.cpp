@@ -43,7 +43,10 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
     static const uint8_t kColumnRange[] = {0x00, 0x00, 0x01, 0xdf};
     static const uint8_t kRowRange[] = {0x00, 0x00, 0x01, 0xdf};
     static const co5300_lcd_init_cmd_t kVendorInit[] = {
-        {0x11, nullptr, 0, 600},
+        // The documented CO5300 sleep-out guard is 120 ms. The previous
+        // 600 ms guard was inherited from early bring-up and extended every
+        // boot needlessly.
+        {0x11, nullptr, 0, 120},
         {0xfe, kPage20, sizeof(kPage20), 0},
         {0x19, kRegister19, 1, 0},
         {0x1c, kRegister1c, 1, 0},
@@ -56,7 +59,7 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
         {0x63, kHbmBrightness, 1, 0},
         {0x2a, kColumnRange, 4, 0},
         {0x2b, kRowRange, 4, 0},
-        {0x29, nullptr, 0, 600},
+        {0x29, nullptr, 0, 120},
     };
 
     spi_bus_config_t bus_config{};
