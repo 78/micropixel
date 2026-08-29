@@ -304,24 +304,39 @@ auto texture = app.resources().LoadTexture(my_assets::background);
 - `StreamingTexture`：可写脏矩形的 move-only Host 资源；
 - `TextureUpdateBatch`：把多次 streaming texture 更新合并成一次 compositor 唤醒。
 
-`RendererInfo::width()` / `height()` 是 Guest 设备坐标空间的唯一尺寸来源；`InputInfo` 不重复暴露第二份
-宽高。SDK 不固定设备分辨率。当前 Metalio Claw4 Host 返回 720×720，ESP-Mosaico 的目标面板为 480×480，
-Input event 由 Host 映射到对应设备坐标空间。自适应 UI 应直接依据 `RendererInfo` 布局；已有固定设计稿
-可以显式使用 `ui::Viewport` 保留自己的逻辑坐标空间：
+`RendererInfo::width()` / `height()` 是 Guest 逻辑坐标空间的唯一尺寸来源；`InputInfo` 不重复暴露第二份
+宽高。构建工具会把 `app.json` 的 `display` 声明编译进 Guest，`Application` 初始化时由 SDK 读取物理屏幕
+尺寸并建立逻辑画布：`square` 始终呈现 720×720，并在非方形屏幕上按短边等比缩放后居中；`landscape`
+以 720 为逻辑高度并按物理宽高比推导宽度；`portrait` 以 720 为逻辑宽度并推导高度。后两种模式遇到方向
+不符的屏幕时由 SDK 走统一的不兼容退出点，未来可在该位置接入 Host 提供的系统模态提示。Host 不负责
+Guest 布局判断。绘图命令和 Touch event 都由 SDK 自动在逻辑与物理坐标之间转换。自适应 UI 应直接依据
+`RendererInfo` 布局。`ui::ComputeFlexLayout()`
+是纯 Guest 侧的固定容量整数计算：应用提供 item 和输出 `Rect` span，不创建控件树、不动态分配，也不调用
+Host。复杂页面通过嵌套横向和纵向 Flex 完成：
 
 ```cpp
-const auto renderer = app.renderer();
-const micropixel::ui::Viewport viewport{renderer.info(), {720, 720}};
-micropixel::ui::ViewportFrame frame{renderer.BeginFrame(), viewport};
-frame.DrawTexture({0, 0}, background);  // 自动缩放到物理 panel
-
-if (const auto* touch = event.touch()) {
-    HandleTouch(viewport.ToLogical(*touch));
-}
+const auto info = app.renderer().info();
+const micropixel::Rect screen{0, 0, static_cast<int32_t>(info.width()), static_cast<int32_t>(info.height())};
+constexpr std::array items{micropixel::ui::FlexItem::Fixed(72U), micropixel::ui::FlexItem::Grow(),
+                           micropixel::ui::FlexItem::Fixed(64U)};
+std::array<micropixel::Rect, items.size()> rects{};
+auto laid_out = micropixel::ui::ComputeFlexLayout(
+    screen,
+    {.direction = micropixel::ui::FlexDirection::kVertical, .padding = {16, 20, 16, 20}, .gap_pixels = 12},
+    items, rects);
+micropixel::Assert(laid_out.has_value(), "layout failed");
 ```
 
-`ViewportFrame` 对 geometry、clip、translation、纹理 destination 和语义字体角色做一致映射，不改变 wire ABI；
-应用必须同时把触摸转换回同一逻辑空间。它适合 720 设计稿迁移到 480 方屏，不替代真正的响应式布局。
+Flex v1 支持横向/纵向、固定像素、grow、padding、gap、主轴分布和交叉轴对齐，不支持 Grid、wrap、span
+或百分比。布局通常在应用启动或页面进入时计算一次，结果同时交给绘制和 `ui::Button::SetBounds()`；触摸
+事件已经是逻辑坐标，不需要转换；在 square 游戏的居中画布以外，坐标会自然落在逻辑范围之外，游戏可以
+忽略。`Resources::LoadTexture()` 会把 SDK 算出的短边缩放比例随请求发送给
+Host；Host 在后台解码 PNG 后通过 PPA 一次性生成物理尺寸纹理。纹理使用
+`Frame::DrawTexture(Point, ...)` 时保持 1:1 物理绘制，只有应用显式传入不同尺寸的 destination `Rect`
+时才走逐帧缩放路径。
+
+`ui::Viewport` 仅保留给需要额外嵌套坐标空间的高级场景。普通 App 不应再用它适配屏幕，否则会和
+`Application` 已经提供的逻辑坐标变换重复。
 
 应用不接触 `Layer`、`Surface`、transport batch 或 retained-compositor capability。需要局部平移时使用
 普通渲染状态；SDK 会在支持的 Host 上自动使用 retained translation 快速路径，否则执行裁剪和平移降级：
@@ -459,6 +474,11 @@ C++23、警告即错误、共享 Wasm memory 和 AOT 回跳中断点。`build` �
 python3 tools/micropixel package path/to/app --profile size
 ```
 
+需要构建、安装、启动并持续观察 Guest 日志时，可运行 `micropixel run`。它默认使用 development profile，
+在完整打包成功后才停止当前 Guest；安装或启动失败时会尽力恢复此前运行的 App。`micropixel run --no-follow`
+在启动后立即返回。对于已经安装的 App，`micropixel app start --follow` 会从当前 `app.json` 推导 App ID；
+`Ctrl-C` 只断开日志跟随，不停止 App。
+
 `tools/build_guest_app_p4.sh` 与 `tools/build_app_bundle.py` 仍是 conformance、底层调试和打包器测试使用的
 内部构件，不是普通 App 的公开工作流。
 
@@ -482,18 +502,20 @@ Wasm/AOT。SDK Demo 使用 `std::array`/`std::span` 管理原有页面表；Bloc
 - `string`、`vector`、`map`、`queue` 和默认底层 `deque`。
 
 首次实际使用动态分配时，linker 才保留单线程 allocator。allocator 管理 linker `__heap_base` 之后的
-Wasm linear memory，不再预留固定 32 KiB 数组。ESP32-P4 当前把每个 Guest 的策略上限设为 8 MiB，
-实例化时再根据最大连续 PSRAM 块下调实际上限并为 Host 保留安全余量；该预算同时容纳静态数据、16 KiB
-auxiliary stack 和 C++ 动态分配，因此动态可用量会低于实际 linear-memory 上限。Texture/offscreen
-surface 等 Host-owned PSRAM 资源使用独立的 12 MiB Guest 配额，不占 C++ heap。
+Wasm linear memory，不再预留固定 32 KiB 数组。ESP32-P4 与 ESP32-S31 当前都把每个 Guest 的策略上限
+设为 8 MiB，实例化时再根据最大连续 PSRAM 块下调实际上限；后续 `memory.grow` 只有在增长后仍高于 Host
+安全水位时才会成功。该预算同时容纳静态数据、16 KiB auxiliary stack 和 C++ 动态分配，因此动态可用量会
+低于实际 linear-memory 上限。Texture/offscreen surface 等 Host-owned PSRAM 资源不占 C++ heap，也不再
+使用固定累计 Guest 配额；每次资源分配都按实时空闲量和最大连续块动态准入。
 
 普通 `new` 的 OOM 按 SDK 不可恢复错误策略记录并 panic；`new (std::nothrow)` 返回 `nullptr`。业务所有权
 仍使用容器或 RAII，不能用裸 `new/delete` 表达长期所有权。Guest AOT 保留 16 MiB 格式扩展上限，Host
 通过 WAMR instantiation policy 施加当前最多 8 MiB、低内存时更小的实际上限；应用不能自行扩大 Host
 policy。
 
-例如实例化前最大连续 PSRAM 块只剩约 2 MiB 时，当前策略会保留 256 KiB Host 余量，并把 Guest
-linear-memory 上限降到约 1.69 MiB；静态数据和初始页能容纳在该上限内的轻量 App 仍可启动。
+当前 Host 为 Guest 触发的 PSRAM 分配保留 2 MiB 安全水位。若实例化前最大连续块已经不足以同时容纳
+Guest 初始 linear memory 和该安全水位，应用会收到内存不足；已经启动的轻量 App 不会因为另一个大型 App
+的理论上限而预占内存。
 
 这不是 WASI/POSIX 环境：thread、mutex、filesystem、socket、locale/iostream 和依赖系统调用的标准库
 能力不受支持，也不能新增 WASI import。exception、RTTI 和 reference-types 继续关闭；Public SDK 和

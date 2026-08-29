@@ -35,7 +35,7 @@ enum class EventResult : uint8_t {
 // or the resources created through them.
 class Application final {
    public:
-    constexpr Application() noexcept = default;
+    Application() noexcept;
 
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;

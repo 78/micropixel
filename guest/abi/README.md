@@ -54,7 +54,7 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
   无法满足背压或吞吐需求时，才讨论新增 Core import。
 - Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
-当前 Graphics 1.1 command protocol 包含 `PUSH_STATE` / `POP_STATE`、`BLEND_RECT`、`DRAW_TEXTURE` 和
+当前 Graphics 1.2 command protocol 包含 `PUSH_STATE` / `POP_STATE`、`BLEND_RECT`、`DRAW_TEXTURE` 和
 `BLEND_TEXTURE`。SDK 用前两者 lowering `Save`、clip、translation 和 `Restore`；capable Host 可把稳定
 scope 识别为 retained translation，但该优化不进入 Public C++ API。texture command 的 `opacity` 与
 资源自身逐像素 alpha 相乘；不透明 `DRAW_TEXTURE` 走 Host copy 快速路径。Texture wire command 分别携带
@@ -125,7 +125,9 @@ Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表�
   由 SDK 的 move-only RAII 对象释放。
 - Retained scene 持有独立 Texture 引用。Guest release 只撤销 Guest 引用；显示场景替换或 Session teardown
   后才撤销 scene 引用，两个引用都归零时才释放像素内存。
-- Resource 1.0 提供同步 `LOAD_TEXTURE`、release、streaming texture create/update 和 update batch。
+- Resource 1.2 提供同步 `LOAD_TEXTURE`、带整数缩放比的 `LOAD_ADAPTIVE_TEXTURE`、release、streaming
+  texture create/update 和 update batch。自适应请求由 SDK 根据物理屏幕尺寸生成比例；Host 验证比例与
+  最终尺寸，在 worker 解码后使用平台缩放能力生成缓存纹理。普通自然尺寸绘制因此不需要逐帧缩放。
   压缩图片仍由 Host worker 解码，但 `service_call` 等待 worker 完成并在等待期间暂停 Guest watchdog；
   不分配 request handle，也不产生 Resource-ready event。StreamingTexture 像素由 Host PSRAM 持有并计入
   Texture 配额；update request 由 32-byte header 和紧密排列的原生格式脏矩形组成，总长度不超过

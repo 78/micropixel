@@ -1,6 +1,7 @@
-# Device façades are platform-independent and only depend on the abstract
-# backend contracts injected by the application composition root.
+# Device contracts and façades are platform-independent. Platform supplies
+# their implementations to the application composition root.
 list(APPEND micropixel_sources
+    "device/device_registry.cpp"
     "device/device_services.cpp"
     "device/text.cpp"
 )

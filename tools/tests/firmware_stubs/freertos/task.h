@@ -44,6 +44,11 @@ inline BaseType_t xTaskCreatePinnedToCore(TaskFunction_t function, const char*, 
     return pdTRUE;
 }
 
+inline BaseType_t xTaskCreate(TaskFunction_t function, const char* name, uint32_t stack_size, void* context,
+                              UBaseType_t priority, TaskHandle_t* task_out) {
+    return xTaskCreatePinnedToCore(function, name, stack_size, context, priority, task_out, 0);
+}
+
 inline void vTaskDelete(TaskHandle_t) {}
 
 inline void xTaskNotifyGive(TaskHandle_t task) {

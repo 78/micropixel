@@ -257,7 +257,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
             micropixel_graphics_push_state_command_t command{};
             (void)ReadStruct(bytes, length, offset, command);
             if (!surface_.Configure(frame, command, background_valid_, background_rgb888_)) {
-                return {MICROPIXEL_STATUS_RESOURCE_EXHAUSTED, false, surface_.Active()};
+                return {MICROPIXEL_STATUS_RESOURCE_EXHAUSTED, false, surface_.Active(), false};
             }
             surface_request = command;
             surface_seen = true;
@@ -381,12 +381,12 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
                 const lv_font_t* font = fonts_.ResolveRetainedHandle(command.font_handle);
                 if (slot.font_handle != command.font_handle) {
                     if (!fonts_.RetainSceneFont(command.font_handle)) {
-                        return {MICROPIXEL_STATUS_RESOURCE_EXHAUSTED, false, SurfaceActive()};
+                        return {MICROPIXEL_STATUS_RESOURCE_EXHAUSTED, false, SurfaceActive(), false};
                     }
                     font = fonts_.ResolveRetainedHandle(command.font_handle);
                     if (font == nullptr) {
                         fonts_.ReleaseSceneFont(command.font_handle);
-                        return {MICROPIXEL_STATUS_INVALID_ARGUMENT, false, SurfaceActive()};
+                        return {MICROPIXEL_STATUS_INVALID_ARGUMENT, false, SurfaceActive(), false};
                     }
                     const micropixel_font_handle_t previous_font = slot.font_handle;
                     lv_obj_set_style_text_font(slot.object, font, 0);
@@ -441,7 +441,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
             }
             device::BitmapView bitmap{};
             if (!resolver(resolver_context, bitmap_handle, bitmap)) {
-                return {MICROPIXEL_STATUS_INVALID_ARGUMENT, false, SurfaceActive()};
+                return {MICROPIXEL_STATUS_INVALID_ARGUMENT, false, SurfaceActive(), false};
             }
             RetainedObject& slot =
                 PrepareObject(used++, record.opcode, target_frame, target_width, changed, order_dirty);
@@ -542,9 +542,11 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
     }
     last_used_ = used;
     bool surface_changed = false;
+    bool surface_presented = false;
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
     const bool surface_was_active = surface_.Active();
     surface_changed = surface_.Update(surface_seen ? &surface_request : nullptr);
+    surface_presented = surface_changed && surface_.Active();
     if (surface_was_active && !surface_.Active()) {
         // LVGL can consume object invalidations while dummy draw is active,
         // even though those updates never reach the panel framebuffers.  Once
@@ -555,7 +557,7 @@ RetainedFrameResult RetainedScene::Execute(const uint8_t* bytes, uint32_t length
     }
 #endif
     visual_changed = visual_changed || surface_changed;
-    return {MICROPIXEL_STATUS_OK, visual_changed, SurfaceActive()};
+    return {MICROPIXEL_STATUS_OK, visual_changed, SurfaceActive(), surface_presented};
 }
 
 bool RetainedScene::InvalidateBitmap(const uint8_t* data, uint32_t x, uint32_t y, uint32_t width, uint32_t height) {

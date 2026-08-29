@@ -134,6 +134,8 @@ void GuestGraphicsEngine::DisplayRefreshStartEvent(lv_event_t* event) {
         return;
     }
     engine->dirty_region_coalescer_.Coalesce(engine->display_);
+    engine->guest_refresh_active_ = engine->guest_refresh_pending_;
+    engine->guest_refresh_pending_ = false;
     engine->display_refresh_started_us_ = esp_timer_get_time();
 }
 
@@ -144,6 +146,10 @@ void GuestGraphicsEngine::DisplayRefreshReadyEvent(lv_event_t* event) {
     }
     if (engine->display_refresh_started_us_ != 0) {
         const uint32_t sequence = ++engine->display_refresh_sequence_;
+        if (engine->guest_refresh_active_) {
+            ++engine->guest_presented_frame_sequence_;
+        }
+        engine->guest_refresh_active_ = false;
         const uint32_t duration_us = static_cast<uint32_t>(esp_timer_get_time() - engine->display_refresh_started_us_);
         engine->display_refresh_started_us_ = 0;
         if (sequence <= 4U || (sequence % 60U) == 0U) {
@@ -283,7 +289,13 @@ int32_t GuestGraphicsEngine::ApplyFrameLocked(const uint8_t* bytes, uint32_t len
     std::memcpy(scene_textures_, retained_textures, retained_count * sizeof(retained_textures[0]));
     scene_texture_count_ = retained_count;
     scene_texture_access_ = retained_count == 0U ? device::TextureAccess{} : textures;
+    if (result.surface_presented) {
+        ++guest_presented_frame_sequence_;
+    }
     if (needs_present) {
+        if (!result.surface_active) {
+            guest_refresh_pending_ = true;
+        }
         RequestDisplayRefresh(display_);
     }
     return MICROPIXEL_STATUS_OK;
@@ -297,6 +309,7 @@ void GuestGraphicsEngine::Release() {
         retained_scene_.ForgetObjects();
         lv_obj_delete(guest_frame_);
         guest_frame_ = nullptr;
+        guest_refresh_pending_ = false;
         RequestDisplayRefresh(display_);
         ESP_LOGI(kTag, "Guest graphics tree released before Bitmap teardown");
     }
@@ -536,6 +549,9 @@ int32_t GuestGraphicsEngine::UpdateBitmap(const device::BitmapView& bitmap, uint
     } else {
         const bool invalidated = retained_scene_.InvalidateBitmap(bitmap.data, x, y, width, height);
         if (invalidated) {
+            if (!retained_scene_.SurfaceActive()) {
+                guest_refresh_pending_ = true;
+            }
             RequestDisplayRefresh(display_);
         }
     }
@@ -565,6 +581,9 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
 #endif
     }
     if (invalidated) {
+        if (!retained_scene_.SurfaceActive()) {
+            guest_refresh_pending_ = true;
+        }
         RequestDisplayRefresh(display_);
     }
 

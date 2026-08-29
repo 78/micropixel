@@ -5,11 +5,11 @@
 
 #include "esp_async_color_convert.h"
 #include "esp_err.h"
+#include "host/ui/lvgl/square_common/status_layer_transition.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/display/display_pipeline.hpp"
 #include "platform/lvgl/display/ppa_srm_blitter.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
-#include "platform/lvgl/ui/square_common/status_layer_transition.hpp"
 
 namespace micropixel::platform::lvgl {
 
@@ -28,7 +28,7 @@ enum class SystemTransitionDirection : uint8_t {
 // Board-private full-screen transition compositor. Resizes use the ESP32-P4
 // PPA SRM engine, while exact Hall-background copies prefer DMA2D. LVGL only
 // renders the static Hall background once before dummy-draw mode takes over.
-class SystemTransitionCompositor final : public square_common::StatusLayerTransitionBackend {
+class SystemTransitionCompositor final : public host_ui::lvgl::square_common::StatusLayerTransition {
    public:
     SystemTransitionCompositor() = default;
     SystemTransitionCompositor(const SystemTransitionCompositor&) = delete;

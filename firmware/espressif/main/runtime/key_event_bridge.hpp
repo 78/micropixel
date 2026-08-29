@@ -4,7 +4,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "device/input.hpp"
+#include "device/contracts/input.hpp"
 
 namespace micropixel::device {
 class InputService;

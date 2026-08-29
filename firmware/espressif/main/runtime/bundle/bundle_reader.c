@@ -517,10 +517,22 @@ static bool parse_package_metadata_json(const uint8_t* bytes, uint32_t length, c
                  parse_display_name(root, effective_locale, metadata_out->display_name);
     if (valid && provisional_localized) {
         metadata_out->package_type = MICROPIXEL_BUNDLE_PACKAGE_APP;
+        metadata_out->display_profile = MICROPIXEL_BUNDLE_DISPLAY_SQUARE;
     } else if (valid) {
         const cJSON* package_type = cJSON_GetObjectItemCaseSensitive(root, "package_type");
         if (cJSON_IsString(package_type) && strcmp(package_type->valuestring, "app") == 0) {
             metadata_out->package_type = MICROPIXEL_BUNDLE_PACKAGE_APP;
+            const cJSON* display = cJSON_GetObjectItemCaseSensitive(root, "display");
+            if (display == NULL || (cJSON_IsString(display) && strcmp(display->valuestring, "square") == 0)) {
+                /* Bundles created before this field used square implicitly. */
+                metadata_out->display_profile = MICROPIXEL_BUNDLE_DISPLAY_SQUARE;
+            } else if (cJSON_IsString(display) && strcmp(display->valuestring, "landscape") == 0) {
+                metadata_out->display_profile = MICROPIXEL_BUNDLE_DISPLAY_LANDSCAPE;
+            } else if (cJSON_IsString(display) && strcmp(display->valuestring, "portrait") == 0) {
+                metadata_out->display_profile = MICROPIXEL_BUNDLE_DISPLAY_PORTRAIT;
+            } else {
+                valid = false;
+            }
         } else {
             valid = parse_component_metadata(root, metadata_out);
         }
@@ -582,6 +594,7 @@ static bool read_package_metadata(const bundlefs_file_t* file, const micropixel_
             memcpy(metadata.display_name, payload, section.size);
             metadata.metadata_schema_version = 0U;
             metadata.package_type = MICROPIXEL_BUNDLE_PACKAGE_APP;
+            metadata.display_profile = MICROPIXEL_BUNDLE_DISPLAY_SQUARE;
         }
         free(payload);
         if (!valid) {

@@ -21,7 +21,7 @@
 #define MICROPIXEL_GRAPHICS_MAX_FRAME_COMMANDS 272U
 #define MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES 128U
 #define MICROPIXEL_RESOURCE_INTERFACE_MAJOR 1U
-#define MICROPIXEL_RESOURCE_INTERFACE_MINOR 1U
+#define MICROPIXEL_RESOURCE_INTERFACE_MINOR 2U
 #define MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES 4096U
 #define MICROPIXEL_AUDIO_INTERFACE_MAJOR 1U
 #define MICROPIXEL_AUDIO_INTERFACE_MINOR 1U
@@ -131,7 +131,16 @@ typedef enum micropixel_resource_method {
     MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_FINISH = 6,
     MICROPIXEL_RESOURCE_METHOD_LOAD_FONT = 7,
     MICROPIXEL_RESOURCE_METHOD_FONT_RELEASE = 8,
+    MICROPIXEL_RESOURCE_METHOD_LOAD_ADAPTIVE_TEXTURE = 9,
 } micropixel_resource_method_t;
+
+typedef struct micropixel_resource_load_adaptive_texture_request {
+    uint16_t size;
+    uint16_t reserved0;
+    uint32_t asset_id;
+    uint32_t scale_numerator;
+    uint32_t scale_denominator;
+} micropixel_resource_load_adaptive_texture_request_t;
 
 typedef enum micropixel_random_method {
     MICROPIXEL_RANDOM_METHOD_GET_U32 = 1,
@@ -865,6 +874,21 @@ typedef struct micropixel_texture_info {
     micropixel_texture_handle_t texture;
 } micropixel_texture_info_t;
 
+typedef struct micropixel_adaptive_texture_info {
+    uint16_t size;
+    uint16_t interface_major;
+    uint16_t interface_minor;
+    uint16_t reserved0;
+    uint32_t logical_width;
+    uint32_t logical_height;
+    uint32_t physical_width;
+    uint32_t physical_height;
+    uint32_t stride;
+    uint32_t pixel_format;
+    uint32_t flags;
+    micropixel_texture_handle_t texture;
+} micropixel_adaptive_texture_info_t;
+
 typedef enum micropixel_touch_phase {
     MICROPIXEL_TOUCH_DOWN = 1,
     MICROPIXEL_TOUCH_MOVE = 2,
@@ -1005,6 +1029,7 @@ static_assert(sizeof(micropixel_graphics_push_state_command_t) == 32U,
 static_assert(sizeof(micropixel_graphics_pop_state_command_t) == 4U,
               "micropixel_graphics_pop_state_command_t ABI size changed");
 static_assert(sizeof(micropixel_texture_info_t) == 32U, "micropixel_texture_info_t ABI size changed");
+static_assert(sizeof(micropixel_adaptive_texture_info_t) == 40U, "micropixel_adaptive_texture_info_t ABI size changed");
 static_assert(sizeof(micropixel_streaming_texture_create_request_t) == 16U,
               "micropixel_streaming_texture_create_request_t ABI size changed");
 static_assert(sizeof(micropixel_streaming_texture_update_request_t) == 32U,
@@ -1030,6 +1055,8 @@ static_assert(sizeof(micropixel_storage_key_request_t) == 20U, "micropixel_stora
 static_assert(sizeof(micropixel_storage_set_request_t) == 8U, "micropixel_storage_set_request_t ABI size changed");
 static_assert(sizeof(micropixel_resource_load_texture_request_t) == 8U,
               "micropixel_resource_load_texture_request_t ABI size changed");
+static_assert(sizeof(micropixel_resource_load_adaptive_texture_request_t) == 16U,
+              "micropixel_resource_load_adaptive_texture_request_t ABI size changed");
 static_assert(sizeof(micropixel_random_u32_response_t) == 8U, "micropixel_random_u32_response_t ABI size changed");
 #else
 _Static_assert(sizeof(micropixel_event_t) == 48U, "micropixel_event_t ABI size changed");
@@ -1076,6 +1103,8 @@ _Static_assert(sizeof(micropixel_graphics_push_state_command_t) == 32U,
 _Static_assert(sizeof(micropixel_graphics_pop_state_command_t) == 4U,
                "micropixel_graphics_pop_state_command_t ABI size changed");
 _Static_assert(sizeof(micropixel_texture_info_t) == 32U, "micropixel_texture_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_adaptive_texture_info_t) == 40U,
+               "micropixel_adaptive_texture_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_streaming_texture_create_request_t) == 16U,
                "micropixel_streaming_texture_create_request_t ABI size changed");
 _Static_assert(sizeof(micropixel_streaming_texture_update_request_t) == 32U,
@@ -1101,6 +1130,8 @@ _Static_assert(sizeof(micropixel_storage_key_request_t) == 20U, "micropixel_stor
 _Static_assert(sizeof(micropixel_storage_set_request_t) == 8U, "micropixel_storage_set_request_t ABI size changed");
 _Static_assert(sizeof(micropixel_resource_load_texture_request_t) == 8U,
                "micropixel_resource_load_texture_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_resource_load_adaptive_texture_request_t) == 16U,
+               "micropixel_resource_load_adaptive_texture_request_t ABI size changed");
 _Static_assert(sizeof(micropixel_random_u32_response_t) == 8U, "micropixel_random_u32_response_t ABI size changed");
 #endif
 

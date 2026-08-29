@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "device/graphics.hpp"
+#include "device/contracts/graphics.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "sdkconfig.h"
 #if CONFIG_MICROPIXEL_GRAPHICS_SURFACE_TRANSLATION
@@ -15,6 +15,7 @@ struct RetainedFrameResult final {
     int32_t status{};
     bool visual_changed{};
     bool surface_active{};
+    bool surface_presented{};
 };
 
 class RetainedScene final {

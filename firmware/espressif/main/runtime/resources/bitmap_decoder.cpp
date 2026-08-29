@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "png.h"
+#include "runtime/memory/guest_psram.hpp"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -35,9 +36,7 @@ void PngError(png_structp png, png_const_charp) { png_longjmp(png, 1); }
 
 void PngWarning(png_structp, png_const_charp) {}
 
-png_voidp PngPsramAlloc(png_structp, png_alloc_size_t size) {
-    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-}
+png_voidp PngPsramAlloc(png_structp, png_alloc_size_t size) { return AllocateGuestPsram(size); }
 
 void PngPsramFree(png_structp, png_voidp memory) { heap_caps_free(memory); }
 
@@ -90,8 +89,7 @@ bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, device::BitmapView&
     if (jpeg_dec_parse_header(decoder, &io, &header) == JPEG_ERR_OK) {
         size_t output_size = static_cast<size_t>(header.width) * header.height * 3U;
         if (ValidDecodedSize(header.width, header.height, 3U, output_size)) {
-            auto* output =
-                static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            auto* output = static_cast<uint8_t*>(AllocateAlignedGuestPsram(64U, output_size));
             if (output != nullptr) {
                 io.outbuf = output;
                 if (jpeg_dec_process(decoder, &io) == JPEG_ERR_OK) {
@@ -178,7 +176,7 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& 
         png_get_rowbytes(png, info) != static_cast<size_t>(width) * 4U) {
         png_error(png, "unsupported PNG bitmap pixel layout");
     }
-    decoded = static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    decoded = static_cast<uint8_t*>(AllocateAlignedGuestPsram(64U, output_size));
     if (decoded == nullptr) {
         png_error(png, "PNG bitmap output allocation failed");
     }
@@ -201,6 +199,37 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& 
 DecodedBitmap::~DecodedBitmap() { heap_caps_free(const_cast<uint8_t*>(view_.data)); }
 
 void DecodedBitmap::ReleaseOwnership() { view_.data = nullptr; }
+
+bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, DecodedBitmap& bitmap,
+                    uint32_t stride_alignment_pixels) {
+    if (bitmap.valid()) {
+        return false;
+    }
+    const uint32_t bytes_per_pixel = pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
+                                         ? 3U
+                                         : (pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
+    if (width == 0U || height == 0U || width > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION ||
+        height > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION || bytes_per_pixel == 0U || stride_alignment_pixels == 0U ||
+        (stride_alignment_pixels & (stride_alignment_pixels - 1U)) != 0U ||
+        width > UINT32_MAX - (stride_alignment_pixels - 1U)) {
+        return false;
+    }
+    const uint32_t storage_width = (width + stride_alignment_pixels - 1U) & ~(stride_alignment_pixels - 1U);
+    const uint64_t stride = static_cast<uint64_t>(storage_width) * bytes_per_pixel;
+    const uint64_t pixel_bytes = stride * height;
+    const uint64_t allocation_bytes = stride_alignment_pixels == 1U ? pixel_bytes : (pixel_bytes + 127U) & ~127ULL;
+    if (stride > UINT32_MAX || allocation_bytes > UINT32_MAX ||
+        allocation_bytes > CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES) {
+        return false;
+    }
+    auto* pixels = static_cast<uint8_t*>(AllocateAlignedGuestPsram(128U, static_cast<size_t>(allocation_bytes)));
+    if (pixels == nullptr) {
+        return false;
+    }
+    bitmap.view_ = {pixels, static_cast<uint32_t>(allocation_bytes), width,
+                    height, static_cast<uint32_t>(stride),           pixel_format};
+    return true;
+}
 
 bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, DecodedBitmap& decoded) {
     if (decoded.valid()) {

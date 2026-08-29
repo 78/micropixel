@@ -47,6 +47,7 @@ class TinyUsbCdcLocalControl final : public DevelopmentLocalControlTransport {
     DevelopmentCommandSink development_sink_{};
     void* development_context_{};
     char* command_{};
+    uint8_t* io_workspace_{};
     AsciiLineFramer line_framer_{};
     TaskHandle_t task_{};
     tinyusb_cdcacm_itf_t interface_{};

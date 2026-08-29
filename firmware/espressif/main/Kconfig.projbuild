@@ -12,6 +12,16 @@ menu "WAMR application quotas"
             retaining a safety reserve for Host work. This remains separate
             from Host-owned Bitmap quotas.
 
+    config MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES
+        int "PSRAM safety reserve protected from Guest allocations"
+        range 262144 8388608
+        default 2097152
+        help
+            Minimum free PSRAM retained for Host display, audio, system UI and
+            transient work. WAMR growth, decoded textures and mutable surfaces
+            are admitted on demand only while this reserve remains available.
+            This is a Host safety floor, not a preallocated Guest quota.
+
     config MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM
         bool "Copy non-mapped AOT package input into PSRAM"
         depends on SPIRAM
@@ -46,13 +56,15 @@ menu "WAMR application quotas"
             but must not exceed the framework's policy ceiling.
 
     config MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES
-        int "Maximum Bitmap/offscreen-surface PSRAM bytes per Guest"
+        int "Maximum bytes in one decoded Bitmap/offscreen surface"
         range 65536 25165824
         default 4194304
         help
-            Limits Host-owned JPEG/PNG decode outputs and mutable offscreen
-            surfaces for the active Guest. Raw package Bitmaps remain backed
-            by read-only Flash mmap and do not consume this quota.
+            Rejects one unexpectedly large JPEG/PNG decode output or mutable
+            offscreen surface. This is not a cumulative Guest quota: multiple
+            textures are allocated elastically while the Host PSRAM safety
+            reserve remains intact. Raw package Bitmaps remain backed by
+            read-only Flash mmap and do not consume PSRAM.
 
     config MICROPIXEL_MAX_TEXTURE_DIMENSION
         int "Maximum decoded texture dimension"
@@ -137,16 +149,6 @@ menu "MicroPixel board backends"
             device backends. This profile is not intended for flashing.
 
     endchoice
-
-    config MICROPIXEL_METALIO_CLAW4_AUDIO
-        bool "Enable the Metalio-Claw4 game audio backend"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4
-        default n
-        help
-            Power the board audio module and amplifier, mix up to eight
-            bounded sine/square/triangle/noise voices plus two Host-decoded
-            Ogg Opus playback streams, and expose Audio 1.1 to the active Guest.
-            The Guest never receives PCM, codec, I2S, or master-volume access.
 
     config MICROPIXEL_MOSAICO_LCD_QSPI_DRIVE_CAP
         int "ESP-Mosaico LCD QSPI drive strength (0-3)"

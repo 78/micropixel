@@ -117,6 +117,25 @@ inline BaseType_t xQueueSend(QueueHandle_t queue, const void* item, TickType_t t
     return pdTRUE;
 }
 
+inline BaseType_t xQueuePeek(QueueHandle_t queue, void* item, TickType_t timeout) {
+    if (queue == nullptr || item == nullptr) {
+        return pdFALSE;
+    }
+    std::unique_lock lock(queue->mutex);
+    const auto has_item = [queue] { return queue->count != 0U; };
+    if (timeout == portMAX_DELAY) {
+        queue->ready.wait(lock, has_item);
+    } else if (timeout == 0U) {
+        if (!has_item()) {
+            return pdFALSE;
+        }
+    } else if (!queue->ready.wait_for(lock, std::chrono::milliseconds(timeout), has_item)) {
+        return pdFALSE;
+    }
+    std::memcpy(item, queue->buffer + (queue->head * queue->item_size), queue->item_size);
+    return pdTRUE;
+}
+
 inline BaseType_t xQueueSendToFront(QueueHandle_t queue, const void* item, TickType_t timeout) {
     if (queue == nullptr || item == nullptr) {
         return pdFALSE;

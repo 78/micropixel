@@ -13,7 +13,7 @@ void Require(bool condition) {
     }
 }
 
-class GpioBackend final : public micropixel::device::GpioBackend {
+class Gpio final : public micropixel::device::Gpio {
    public:
     [[nodiscard]] int32_t GetInfo(micropixel_device_id_t device, micropixel_gpio_info_t& info) const override {
         if (device != kGpio) {
@@ -84,7 +84,7 @@ micropixel_gpio_open_request_t EdgeInputRequest() {
 }  // namespace
 
 int main() {
-    GpioBackend backend;
+    Gpio backend;
     micropixel::device::GpioService devices{backend};
     micropixel::runtime::EventQueue events;
     micropixel::runtime::TimerService clock;

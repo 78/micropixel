@@ -4,10 +4,13 @@
 
 - [架构与发布基线](design/architecture.zh-CN.md)：产品边界、Host 分层、Guest–Host 数据路径、
   所有权、安全规则和尚未完成的发布门槛；
+- [Firmware 硬件分层与命名](design/firmware-terminology.zh-CN.md)：Board、Driver、Peripheral、Device、
+  Service 和 ABI Endpoint 的固定词义；
 - [C/C++ 代码风格](development/code-style.zh-CN.md)：Firmware、Guest SDK 和 C ABI 的编码规则与检查入口；
 - [游戏音频规范](development/game-audio.zh-CN.md)：当前 App 的合成音效格式、感知约束和构建门禁；
 - [定时器与大厅空闲功耗](development/timers-and-idle-power.zh-CN.md)：LVGL、`esp_timer`、周期唤醒和事件化边界；
 - [ESP32-P4 烧录指南](development/flashing.zh-CN.md)：环境、设备识别、完整/增量烧录、验收和排错；
+- [USB 本地控制协议](design/usb-local-control.zh-CN.md)：CLI 本地 App 管理、日志、截图、输入和安全边界；
 - [音效清单模板](development/game-sfx.template.json)：新游戏的起始配置。
 
 与代码一起演进的组件级说明放在源码附近：

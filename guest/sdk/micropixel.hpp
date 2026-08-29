@@ -18,6 +18,7 @@
 #include "sdk/sensors.hpp"
 #include "sdk/storage.hpp"
 #include "sdk/ui/button.hpp"
+#include "sdk/ui/layout.hpp"
 #include "sdk/ui/viewport.hpp"
 
 #endif

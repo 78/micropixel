@@ -27,6 +27,7 @@ typedef struct {
     uint32_t bundle_size;
     uint32_t metadata_schema_version;
     uint32_t package_type;
+    uint32_t display_profile;
     uint32_t component_type;
     uint32_t language_count;
     uint32_t font_asset_ids[MICROPIXEL_BUNDLE_FONT_ROLE_COUNT];

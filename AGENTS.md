@@ -73,11 +73,12 @@ Guest 只使用七个 Core imports：`abi_version`、`log_write`、`clock_now`�
 
 ```text
 firmware/espressif/main/
-  device/                         # Host 硬件无关能力
-  platform/                       # 板级实现；metalio-claw4 与 null
+  device/contracts/               # Host 硬件无关能力契约
+  device/                         # Runtime 使用的设备 façade 与共享校验/格式
+  platform/                       # 板级能力注册；boards/buses/drivers/input/lvgl 与共享能力
   runtime/                        # WAMR、Session、Bundle、ABI adapter、Host Services
-  host_ui/                        # System Shell 模型和持久化
-  host_controller.*               # App Hall 与 Session 编排
+  host/{controller,ui,time}/       # Host 编排、System Shell 与系统时间
+  work/                           # 后台执行器和全局任务优先级策略
 guest/
   abi/                            # wire 格式、ID、allowed imports
   runtime/                        # Guest startup 与 SDK lowering
@@ -112,8 +113,8 @@ build/                            # 本地生成产物，不提交
 |---|---|
 | 修改 Public Guest API | `guest/sdk/` → `guest/runtime/sdk.cpp` → 必要时再改 `guest/abi/` 和 Host endpoint |
 | 修改 wire/Service | `guest/abi/` + `firmware/espressif/main/runtime/abi/` + conformance/negative tests |
-| 修改 Host 业务能力 | `device/` 契约 + Runtime service；板级差异放 `platform/` |
-| 修改应用大厅/状态层 | `host_ui/`、`host_controller.*`、Metalio-Claw4 system UI backend |
+| 修改 Host 业务能力 | `device/contracts/` + Runtime service；板级差异放 `platform/` |
+| 修改应用大厅/状态层 | `host/ui/`、`host/controller/`、Metalio-Claw4 system UI backend |
 | 修改图形热路径 | Graphics Service、Guest graphics engine、display/compositor；保持边界验证 |
 | 修改 Blocks/Snake | 对应 `guest/apps/<app>/`；同时运行该 Bundle 的正式构建 |
 | 修改音效 | `audio/sfx.json` + 分析器测试 + App Bundle 构建 + 真机 A/B |

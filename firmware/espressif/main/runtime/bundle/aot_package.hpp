@@ -19,6 +19,7 @@ constexpr uint32_t kMaxInstalledApps = BUNDLEFS_MAX_FILES;
 struct InstalledApp final {
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id{};
     std::array<char, MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH + 1U> display_name{};
+    uint32_t display_profile{MICROPIXEL_BUNDLE_DISPLAY_SQUARE};
     uint32_t bundle_size{};
     uint32_t content_id{};
     bundlefs_file_t file{};

@@ -8,7 +8,7 @@
 #include "esp_log.h"
 #include "esp_private/log_lock.h"
 #include "freertos/idf_additions.h"
-#include "task_policy.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::transports {
 namespace {

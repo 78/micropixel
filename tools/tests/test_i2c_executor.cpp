@@ -4,11 +4,11 @@
 #include <cstdlib>
 #include <thread>
 
-#include "platform/common/i2c_executor.hpp"
+#include "platform/buses/i2c_executor.hpp"
 
 namespace {
 
-using micropixel::platform::common::I2cExecutor;
+using micropixel::platform::buses::I2cExecutor;
 
 void Require(bool condition) {
     if (!condition) {

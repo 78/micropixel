@@ -1,7 +1,7 @@
 #include "work/background_executor.hpp"
 
 #include "esp_log.h"
-#include "task_policy.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::work {
 namespace {
@@ -9,7 +9,6 @@ namespace {
 constexpr char kTag[] = "micropixel_background";
 constexpr char kTaskName[] = "micropixel_bg";
 constexpr uint32_t kTaskStackBytes = 8U * 1024U;
-constexpr BaseType_t kTaskCore = 0;
 
 }  // namespace
 
@@ -17,8 +16,8 @@ BackgroundExecutor::BackgroundExecutor()
     : queue_(xQueueCreateStatic(kQueueCapacity, sizeof(Job), queue_bytes_.data(), &queue_storage_)),
       stopped_(xSemaphoreCreateBinaryStatic(&stopped_storage_)) {
     if (queue_ == nullptr || stopped_ == nullptr ||
-        xTaskCreatePinnedToCore(WorkerEntry, kTaskName, kTaskStackBytes, this, task_policy::kAssetWorkerPriority,
-                                &worker_, kTaskCore) != pdPASS) {
+        xTaskCreate(WorkerEntry, kTaskName, kTaskStackBytes, this, task_policy::kAssetWorkerPriority, &worker_) !=
+            pdPASS) {
         worker_ = nullptr;
         ESP_LOGE(kTag, "unable to create shared background executor");
     }

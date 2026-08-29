@@ -5,14 +5,15 @@
 #include <cstdint>
 
 #include "abi/micropixel_abi.h"
-#include "device/graphics.hpp"
+#include "device/contracts/graphics.hpp"
 #include "freertos/FreeRTOS.h"
 #include "runtime/runtime_limits.hpp"
 
 namespace micropixel::runtime {
 
-// Owns Guest-visible Texture handles and the decoded-PSRAM quota. BitmapView is
-// the internal pixel descriptor used by render backends; the resource identity
+// Owns Guest-visible Texture handles. Bitmap pixels are admitted elastically
+// while preserving the shared Host PSRAM safety floor. BitmapView is
+// the internal pixel descriptor used by render implementations; the resource identity
 // exposed across the ABI is always a Texture handle.
 class BitmapStore final {
    public:
@@ -45,7 +46,6 @@ class BitmapStore final {
     mutable portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
     Slot slots_[limits::kMaxBitmaps]{};
     uint32_t next_handle_{1U};
-    size_t owned_bytes_{};
 };
 
 }  // namespace micropixel::runtime

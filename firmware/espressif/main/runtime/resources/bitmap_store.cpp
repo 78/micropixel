@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "esp_heap_caps.h"
+#include "runtime/memory/guest_psram.hpp"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -15,11 +16,6 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
         return 0U;
     }
     portENTER_CRITICAL(&lock_);
-    if (owned && (view.size > CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES ||
-                  owned_bytes_ > CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES - view.size)) {
-        portEXIT_CRITICAL(&lock_);
-        return 0U;
-    }
     for (auto& slot : slots_) {
         if (slot.handle != 0U) {
             continue;
@@ -35,9 +31,6 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
             .mutable_pixels = mutable_pixels,
             .guest_reference = true,
         };
-        if (owned) {
-            owned_bytes_ += view.size;
-        }
         portEXIT_CRITICAL(&lock_);
         return handle;
     }
@@ -57,8 +50,7 @@ micropixel_texture_handle_t BitmapStore::CreateOffscreenSurface(uint32_t width, 
         size > UINT32_MAX || size > CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES) {
         return 0U;
     }
-    auto* pixels = static_cast<uint8_t*>(
-        heap_caps_aligned_alloc(64U, static_cast<size_t>(size), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    auto* pixels = static_cast<uint8_t*>(AllocateAlignedGuestPsram(64U, static_cast<size_t>(size)));
     if (pixels == nullptr) {
         return 0U;
     }
@@ -125,7 +117,6 @@ void BitmapStore::ReleaseSceneReference(micropixel_texture_handle_t bitmap) {
         --slot.scene_references;
         if (slot.scene_references == 0U && !slot.guest_reference) {
             if (slot.owned) {
-                owned_bytes_ -= slot.view.size;
                 owned_data = slot.view.data;
             }
             slot = {};
@@ -146,7 +137,6 @@ void BitmapStore::Release(micropixel_texture_handle_t bitmap) {
         slot.guest_reference = false;
         if (slot.scene_references == 0U) {
             if (slot.owned) {
-                owned_bytes_ -= slot.view.size;
                 owned_data = slot.view.data;
             }
             slot = {};
@@ -167,7 +157,6 @@ void BitmapStore::ReleaseAll() {
         }
         slot = {};
     }
-    owned_bytes_ = 0U;
     portEXIT_CRITICAL(&lock_);
     for (uint32_t index = 0U; index < owned_count; ++index) {
         std::free(const_cast<uint8_t*>(owned_data[index]));

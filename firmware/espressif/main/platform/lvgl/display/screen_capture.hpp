@@ -1,10 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 
-#include "device/input.hpp"
-#include "esp_err.h"
-#include "platform/transports/development_local_control.hpp"
+#include "host/ui/system_ui.hpp"
 
 struct _lv_display_t;
 using lv_display_t = _lv_display_t;  // NOLINT(readability-identifier-naming)
@@ -26,32 +25,10 @@ struct DisplayCaptureSource final {
     const bool* ready{};
 };
 
-// Development-only screen capture shared by LVGL boards. Captures are encoded
-// by the SoC JPEG peripheral and streamed over the board's USB local-control
-// transport; this is not part of the Guest ABI.
-class ScreenCaptureDevelopment final {
-   public:
-    enum class Source : uint8_t {
-        kLogical,
-        kDisplayBuffer,
-    };
-
-    [[nodiscard]] esp_err_t Start(lv_display_t* display, device::InputBackend& input,
-                                  transports::DevelopmentLocalControlTransport& transport, uint32_t width,
-                                  uint32_t height, DisplayCaptureSource display_source = {});
-
-   private:
-    static void ReceiveDevelopmentCommand(void* context, const char* command);
-    void ProcessCommand(const char* command);
-    void CaptureAndTransmit(Source source);
-
-    lv_display_t* display_{};
-    device::InputBackend* input_{};
-    transports::DevelopmentLocalControlTransport* transport_{};
-    uint32_t sequence_{};
-    uint32_t width_{};
-    uint32_t height_{};
-    DisplayCaptureSource display_source_{};
-};
+// Captures a stable full-frame display source and encodes it with the SoC JPEG
+// peripheral. The returned buffer owns its bytes and may be detached into a
+// Host control artifact.
+[[nodiscard]] std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(
+    lv_display_t* display, uint32_t width, uint32_t height, DisplayCaptureSource display_source = {});
 
 }  // namespace micropixel::platform::lvgl

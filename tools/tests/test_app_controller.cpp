@@ -4,7 +4,7 @@
 #include <optional>
 #include <thread>
 
-#include "app_controller.hpp"
+#include "host/controller/app_controller.hpp"
 
 namespace {
 
@@ -97,8 +97,7 @@ bool SuspendedAppCanStopWithoutResuming() {
         return Check(false, "Hall-close test App must start");
     }
     runtime.AllowReady();
-    if (!Check(WaitForState(controller, AppLifecycleState::kForeground),
-               "Hall-close test App must reach Foreground") ||
+    if (!Check(WaitForState(controller, AppLifecycleState::kForeground), "Hall-close test App must reach Foreground") ||
         !Check(controller.Suspend(pdMS_TO_TICKS(100)).has_value(), "Hall-close test App must suspend") ||
         !Check(controller.state() == AppLifecycleState::kSuspended, "Hall-close target must remain Suspended") ||
         !Check(controller.RequestStop(), "Suspended App must accept Hall stop")) {
@@ -109,8 +108,7 @@ bool SuspendedAppCanStopWithoutResuming() {
     return Check(outcome.has_value(), "Hall-stopped App must publish completion") &&
            Check(outcome->completion == AppCompletion::kStopped, "Hall stop completion must be Stopped") &&
            Check(runtime.resume_requests() == 0U, "Hall stop must not resume the Guest") &&
-           Check(controller.state() == AppLifecycleState::kNotRunning,
-                 "Hall-stopped App must finish in NotRunning");
+           Check(controller.state() == AppLifecycleState::kNotRunning, "Hall-stopped App must finish in NotRunning");
 }
 
 bool InvalidTransitionsAreRejected() {
@@ -231,9 +229,9 @@ bool ForcedStopHasFinalDeadline() {
 
 int main() {
     const bool passed = ForegroundSuspendResumeStop() && SuspendedAppCanStopWithoutResuming() &&
-                        InvalidTransitionsAreRejected() &&
-                        CompletionWinsSuspendRaceAndAllowsRestart() && StopWhileStartingCompletesCleanly() &&
-                        UncooperativeStopCanBeForced() && ForcedStopHasFinalDeadline();
+                        InvalidTransitionsAreRejected() && CompletionWinsSuspendRaceAndAllowsRestart() &&
+                        StopWhileStartingCompletesCleanly() && UncooperativeStopCanBeForced() &&
+                        ForcedStopHasFinalDeadline();
     if (!passed) {
         return 1;
     }

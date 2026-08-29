@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include "device/graphics.hpp"
+#include "device/contracts/graphics.hpp"
 
 namespace micropixel::platform::graphics {
 

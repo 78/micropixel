@@ -72,10 +72,13 @@ profile 只有编译能力，通用工具会拒绝烧录；物理板 profile 在
 python3 tools/micropixel build guest/apps/demo
 python3 tools/micropixel package guest/apps/demo
 python3 tools/micropixel app install guest/apps/demo
+python3 tools/micropixel --transport usb run guest/apps/demo
 ```
 
 安装后的 CLI 可在项目目录直接运行 `micropixel build`、`micropixel package` 和
-`micropixel app install`。仓库级 Host 与集成构建仍使用：
+`micropixel app install`，都默认读取当前目录的 `app.json`。`micropixel run` 会以 development profile
+构建，停止当前 Guest，安装并启动目标 App，然后持续输出日志；按 `Ctrl-C` 只退出日志跟随，App 继续运行。
+仓库级 Host 与集成构建仍使用：
 
 ```sh
 # 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
@@ -127,9 +130,19 @@ Token：
 python3 tools/micropixel --transport usb app list
 python3 tools/micropixel --transport usb app install guest/apps/demo
 python3 tools/micropixel --transport usb app start ai.micropixel.demo
+python3 tools/micropixel --transport usb app start ai.micropixel.demo --follow
 python3 tools/micropixel --transport usb app stop
 python3 tools/micropixel --transport usb app uninstall ai.micropixel.demo
 ```
+
+在 App 项目目录中可以省略路径和 App ID，并把开发闭环合并成一条命令：
+
+```sh
+micropixel --transport usb run
+```
+
+不需要跟随日志时使用 `micropixel --transport usb run --no-follow`。构建或打包失败发生在设备操作之前；
+安装或启动失败时，CLI 会尽力恢复此前运行的 App。
 
 只有一台 ESP32 USB Serial/JTAG 设备时端口会自动探测；否则在 macOS/Linux 使用
 `--port /dev/cu.usbmodemXXXX`，在 Windows 使用 `--port COM7`（替换为设备管理器显示的端口）。USB

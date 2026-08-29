@@ -65,6 +65,17 @@ ESP-IDF, LVGL, and components resolved from the Espressif Component Registry are
 vendored in this repository. Exact resolved versions are recorded in `dependencies.lock` files. Their own license
 terms apply when they are downloaded or redistributed in a binary release.
 
+### esp_codec_dev
+
+ESP-Mosaico ES8311 initialization uses `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
+
+- upstream: <https://components.espressif.com/components/espressif/esp_codec_dev>, Apache-2.0;
+- scope: ES8311 codec configuration and the ESP-IDF I2S data interface; MicroPixel supplies the shared-I2C-executor
+  control interface and keeps Host master-volume attenuation in its fixed-capacity audio backend.
+
+The exact resolved version is recorded in the ESP32-S31 dependency lock, and the downloaded component retains its
+complete license file.
+
 ### micro-opus and libopus
 
 Ogg Opus playback uses `esphome/micro-opus` 0.4.1 from the ESP Component Registry:

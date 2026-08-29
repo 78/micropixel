@@ -6,12 +6,12 @@
 #include "driver/ppa.h"
 #include "esp_async_color_convert.h"
 #include "esp_err.h"
+#include "host/ui/lvgl/square_common/status_layer_transition.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/display/display_pipeline.hpp"
 #include "platform/lvgl/display/ppa_srm_blitter.hpp"
-#include "platform/lvgl/ui/square_common/status_layer_transition.hpp"
 
-namespace micropixel::platform::mosaico {
+namespace micropixel::platform::esp_mosaico {
 
 struct PanelTransitionRect final {
     int32_t x{};
@@ -31,7 +31,7 @@ enum class PanelTransitionDirection : uint8_t {
 // performs a separate 1:1 hardware byte-pack pass for the CO5300 wire order.
 // Keeping byte packing out of the scaling pass is required: PPA byte_swap acts
 // on input pixels, so enabling it while scaling interpolates misread colours.
-class PanelTransitionCompositor final : public lvgl::square_common::StatusLayerTransitionBackend {
+class PanelTransitionCompositor final : public host_ui::lvgl::square_common::StatusLayerTransition {
    public:
     PanelTransitionCompositor() = default;
     PanelTransitionCompositor(const PanelTransitionCompositor&) = delete;
@@ -113,4 +113,4 @@ class PanelTransitionCompositor final : public lvgl::square_common::StatusLayerT
     bool prepared_to_hall_{};
 };
 
-}  // namespace micropixel::platform::mosaico
+}  // namespace micropixel::platform::esp_mosaico

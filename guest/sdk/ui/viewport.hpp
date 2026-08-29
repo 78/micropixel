@@ -80,7 +80,7 @@ class Viewport final {
         const int64_t product = static_cast<int64_t>(value) * numerator;
         const int64_t rounding = denominator / 2;
         return static_cast<int32_t>(product >= 0 ? (product + rounding) / denominator
-                                                  : (product - rounding) / denominator);
+                                                 : (product - rounding) / denominator);
     }
 
     Size physical_{};
@@ -89,8 +89,7 @@ class Viewport final {
 
 class ViewportFrame final {
    public:
-    ViewportFrame(Frame frame, const Viewport& viewport)
-        : frame_(static_cast<Frame&&>(frame)), viewport_(viewport) {}
+    ViewportFrame(Frame& frame, const Viewport& viewport) : frame_(frame), viewport_(viewport) {}
 
     ViewportFrame(const ViewportFrame&) = delete;
     ViewportFrame& operator=(const ViewportFrame&) = delete;
@@ -118,9 +117,8 @@ class ViewportFrame final {
     }
 
     void DrawTexture(Point position, const Texture& texture, uint8_t opacity = 255U) {
-        DrawTexture(position, texture, {0, 0, static_cast<int32_t>(texture.width()),
-                                       static_cast<int32_t>(texture.height())},
-                    opacity);
+        DrawTexture(position, texture,
+                    {0, 0, static_cast<int32_t>(texture.width()), static_cast<int32_t>(texture.height())}, opacity);
     }
     void DrawTexture(Point position, const Texture& texture, Rect source, uint8_t opacity = 255U) {
         const Rect destination{position.x, position.y, source.width, source.height};
@@ -133,9 +131,8 @@ class ViewportFrame final {
         frame_.DrawTexture(viewport_.ToPhysical(destination), texture, source, opacity);
     }
     void DrawTexture(Point position, const StreamingTexture& texture, uint8_t opacity = 255U) {
-        DrawTexture(position, texture, {0, 0, static_cast<int32_t>(texture.width()),
-                                       static_cast<int32_t>(texture.height())},
-                    opacity);
+        DrawTexture(position, texture,
+                    {0, 0, static_cast<int32_t>(texture.width()), static_cast<int32_t>(texture.height())}, opacity);
     }
     void DrawTexture(Point position, const StreamingTexture& texture, Rect source, uint8_t opacity = 255U) {
         const Rect destination{position.x, position.y, source.width, source.height};
@@ -156,7 +153,7 @@ class ViewportFrame final {
     [[nodiscard]] constexpr uint32_t draw_operation_count() const { return frame_.draw_operation_count(); }
 
    private:
-    Frame frame_;
+    Frame& frame_;
     const Viewport& viewport_;
 };
 

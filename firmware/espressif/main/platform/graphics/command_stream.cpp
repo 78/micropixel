@@ -38,6 +38,17 @@ uint32_t BitmapBytesPerPixel(uint32_t pixel_format) {
     return pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U;
 }
 
+bool ValidBitmapStorage(const device::BitmapView& bitmap) {
+    const uint32_t bytes_per_pixel = BitmapBytesPerPixel(bitmap.pixel_format);
+    if (bitmap.data == nullptr || bytes_per_pixel == 0U || bitmap.width == 0U || bitmap.height == 0U ||
+        bitmap.width > UINT32_MAX / bytes_per_pixel) {
+        return false;
+    }
+    const uint32_t row_bytes = bitmap.width * bytes_per_pixel;
+    return bitmap.stride >= row_bytes && bitmap.stride % bytes_per_pixel == 0U &&
+           static_cast<uint64_t>(bitmap.stride) * bitmap.height <= bitmap.size;
+}
+
 template <typename Command>
 bool ValidBitmapCommand(const Command& command, int32_t logical_width, int32_t logical_height,
                         device::BitmapResolver resolver, void* resolver_context) {
@@ -46,12 +57,9 @@ bool ValidBitmapCommand(const Command& command, int32_t logical_width, int32_t l
            command.source_y >= 0 && command.width > 0 && command.height > 0 && command.source_width > 0 &&
            command.source_height > 0 && static_cast<int64_t>(command.x) + command.width <= logical_width &&
            static_cast<int64_t>(command.y) + command.height <= logical_height && resolver != nullptr &&
-           resolver(resolver_context, command.texture, bitmap) && bitmap.data != nullptr &&
-           BitmapBytesPerPixel(bitmap.pixel_format) != 0U &&
+           resolver(resolver_context, command.texture, bitmap) && ValidBitmapStorage(bitmap) &&
            static_cast<int64_t>(command.source_x) + command.source_width <= bitmap.width &&
-           static_cast<int64_t>(command.source_y) + command.source_height <= bitmap.height &&
-           bitmap.stride == bitmap.width * BitmapBytesPerPixel(bitmap.pixel_format) &&
-           bitmap.size == bitmap.stride * bitmap.height;
+           static_cast<int64_t>(command.source_y) + command.source_height <= bitmap.height;
 }
 
 }  // namespace

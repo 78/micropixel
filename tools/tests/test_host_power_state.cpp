@@ -1,7 +1,7 @@
 #include <cstdlib>
 #include <iostream>
 
-#include "host_power_state.hpp"
+#include "host/controller/host_power_state.hpp"
 
 namespace {
 

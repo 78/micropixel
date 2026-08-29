@@ -14,7 +14,7 @@
 #include "src/core/lv_obj_draw_private.h"
 #include "src/draw/snapshot/lv_snapshot.h"
 
-namespace micropixel::platform::mosaico {
+namespace micropixel::platform::esp_mosaico {
 namespace {
 
 constexpr char kTag[] = "mosaico_transition";
@@ -164,13 +164,20 @@ PanelTransitionRect PanelTransitionCompositor::GuestRect(const PanelTransitionRe
 PanelTransitionRect PanelTransitionCompositor::AlignedUnion(const PanelTransitionRect& left,
                                                             const PanelTransitionRect& right) const {
     constexpr int32_t kQspiXAlignment = 4;
+    constexpr int32_t kQspiYAlignment = 2;
     int32_t x1 = std::min(left.x, right.x);
-    const int32_t y1 = std::min(left.y, right.y);
+    int32_t y1 = std::min(left.y, right.y);
     int32_t x2 = std::max(left.x + left.width, right.x + right.width);
-    const int32_t y2 = std::max(left.y + left.height, right.y + right.height);
+    int32_t y2 = std::max(left.y + left.height, right.y + right.height);
     x1 = std::max<int32_t>(0, x1 / kQspiXAlignment * kQspiXAlignment);
     x2 =
         std::min<int32_t>(static_cast<int32_t>(width_), (x2 + kQspiXAlignment - 1) / kQspiXAlignment * kQspiXAlignment);
+    // Direct dummy-draw blits bypass the LVGL area rounder. Apply the same
+    // CO5300 row-window constraint here so an odd transition rectangle cannot
+    // leave the first or last row from the previous animation frame behind.
+    y1 = std::max<int32_t>(0, y1 / kQspiYAlignment * kQspiYAlignment);
+    y2 = std::min<int32_t>(static_cast<int32_t>(height_),
+                           (y2 + kQspiYAlignment - 1) / kQspiYAlignment * kQspiYAlignment);
     return {.x = x1, .y = y1, .width = x2 - x1, .height = y2 - y1};
 }
 
@@ -776,4 +783,4 @@ void PanelTransitionCompositor::Release() {
     displayed_source_ready_ = nullptr;
 }
 
-}  // namespace micropixel::platform::mosaico
+}  // namespace micropixel::platform::esp_mosaico

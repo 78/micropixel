@@ -6,15 +6,15 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "lvgl.h"
-#include "platform/boards/metalio-claw4/board_hardware.hpp"
+#include "platform/boards/metalio-claw4/board_io.hpp"
 #include "platform/lvgl/display/display_pipeline.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
 
 class MetalioClaw4DisplayPipeline final : public lvgl::DisplayPipeline {
    public:
-    MetalioClaw4DisplayPipeline(BoardHardware& hardware, uint32_t width, uint32_t height)
-        : hardware_(hardware), geometry_{width, height, 3U} {}
+    MetalioClaw4DisplayPipeline(BoardIo& board_io, uint32_t width, uint32_t height)
+        : board_io_(board_io), geometry_{width, height, 3U} {}
 
     void BindLvgl(lv_display_t* display);
     void RebindPanel();
@@ -26,8 +26,8 @@ class MetalioClaw4DisplayPipeline final : public lvgl::DisplayPipeline {
     [[nodiscard]] esp_err_t Resume() override;
     [[nodiscard]] esp_err_t SetBrightness(uint32_t per_ten_thousand) override;
 
-    [[nodiscard]] esp_lcd_panel_handle_t Panel() const { return hardware_.Panel(); }
-    [[nodiscard]] esp_lcd_panel_io_handle_t PanelIo() const { return hardware_.PanelIo(); }
+    [[nodiscard]] esp_lcd_panel_handle_t Panel() const { return board_io_.Panel(); }
+    [[nodiscard]] esp_lcd_panel_io_handle_t PanelIo() const { return board_io_.PanelIo(); }
 
    private:
     class DpiFramebuffers final : public lvgl::DirectFramebufferAccess {
@@ -48,7 +48,7 @@ class MetalioClaw4DisplayPipeline final : public lvgl::DisplayPipeline {
         std::array<uint8_t*, 2U> buffers_{};
     };
 
-    BoardHardware& hardware_;
+    BoardIo& board_io_;
     lvgl::DisplayGeometry geometry_{};
     DpiFramebuffers framebuffers_{};
     lv_display_t* display_{};

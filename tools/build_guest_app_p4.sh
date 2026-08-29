@@ -15,6 +15,7 @@ if [[ $# -gt 2 ]]; then
 fi
 output_dir="${P4_GUEST_OUTPUT_DIR:-$workspace_root/build/guest-p4}"
 build_profile="${MICROPIXEL_GUEST_PROFILE:-development}"
+display_profile="${MICROPIXEL_APP_DISPLAY:-square}"
 generated_include_dir="${MICROPIXEL_GUEST_GENERATED_INCLUDE_DIR:-}"
 guest_linear_memory_absolute_max_bytes=$((16 * 1024 * 1024))
 
@@ -87,6 +88,22 @@ size)
     ;;
 esac
 
+case "$display_profile" in
+square)
+    display_profile_value=1
+    ;;
+landscape)
+    display_profile_value=2
+    ;;
+portrait)
+    display_profile_value=3
+    ;;
+*)
+    echo "MICROPIXEL_APP_DISPLAY must be square, landscape, or portrait." >&2
+    exit 2
+    ;;
+esac
+
 guest_include_flags=(-I "$workspace_root/guest")
 if [[ -n "$generated_include_dir" ]]; then
     guest_include_flags+=(-I "$generated_include_dir")
@@ -102,6 +119,7 @@ fi
     -fno-exceptions -fno-rtti -fno-threadsafe-statics \
     -ffunction-sections -fdata-sections \
     -Wall -Wextra -Werror \
+    -DMICROPIXEL_APP_DISPLAY_PROFILE="$display_profile_value" \
     "${guest_include_flags[@]}" \
     -Wl,--no-entry \
     -Wl,--shared-memory \

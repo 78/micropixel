@@ -197,7 +197,7 @@ void GpioService::Shutdown() {
     for (uint32_t index = 0U; index < device_count; ++index) {
         gpio_.Close(devices[index]);
     }
-    // The Platform backend outlives this AppSession. RequestStop() suspends
+    // The Platform implementation outlives this AppSession. RequestStop() suspends
     // edge delivery before Shutdown(), so restore the no-owner baseline after
     // all handles are closed; otherwise the next Guest cannot subscribe.
     (void)gpio_.ResumeEvents();

@@ -63,7 +63,7 @@ class LoadedCbinFont final {
 
 // package must remain mapped and byte-stable for the returned object's full
 // lifetime. FontRegistry keeps the loaded object within the owning AppSession;
-// the Bundle mapping is released only after GraphicsBackend guest resources.
+// the Bundle mapping is released only after Graphics guest resources.
 [[nodiscard]] std::expected<std::unique_ptr<LoadedCbinFont>, FontCbinError> LoadFontCbin(
     std::span<const uint8_t> package);
 

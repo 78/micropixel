@@ -1,15 +1,19 @@
 # Platform selection is centralized here. Each board owns only its concrete
 # wiring and startup sources; reusable transports, drivers, and renderers live
 # in their corresponding layer CMake files.
-include("${CMAKE_CURRENT_LIST_DIR}/common/CMakeLists.txt")
+include("${CMAKE_CURRENT_LIST_DIR}/audio/CMakeLists.txt")
+include("${CMAKE_CURRENT_LIST_DIR}/haptics/CMakeLists.txt")
+include("${CMAKE_CURRENT_LIST_DIR}/random/CMakeLists.txt")
+include("${CMAKE_CURRENT_LIST_DIR}/wifi/CMakeLists.txt")
+list(APPEND micropixel_sources "platform/platform.cpp")
 
 # IDF_TARGET is available during early component expansion while project
 # Kconfig values are not. Resolve the narrow SoC dependency set first, then
 # select exactly one board implementation below.
 if(IDF_TARGET STREQUAL "esp32p4")
-    include("${CMAKE_CURRENT_LIST_DIR}/soc/esp32p4/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/targets/esp32p4/CMakeLists.txt")
 elseif(IDF_TARGET STREQUAL "esp32s31")
-    include("${CMAKE_CURRENT_LIST_DIR}/soc/esp32s31/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/targets/esp32s31/CMakeLists.txt")
 else()
     message(FATAL_ERROR "MicroPixel does not support IDF target ${IDF_TARGET}")
 endif()
@@ -20,10 +24,13 @@ if(CMAKE_BUILD_EARLY_EXPANSION)
     # this pass; use the minimal source set only to keep script evaluation valid.
     include("${CMAKE_CURRENT_LIST_DIR}/boards/null/CMakeLists.txt")
 elseif(CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4)
-    include("${CMAKE_CURRENT_LIST_DIR}/drivers/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/adapters/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/buses/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/lvgl/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/boards/metalio-claw4/CMakeLists.txt")
 elseif(CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO)
+    include("${CMAKE_CURRENT_LIST_DIR}/adapters/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/buses/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/lvgl/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/boards/esp-mosaico/CMakeLists.txt")
 elseif(CONFIG_MICROPIXEL_BOARD_NULL)

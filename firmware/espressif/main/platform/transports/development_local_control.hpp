@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "device/local_control.hpp"
+#include "device/contracts/local_control.hpp"
 #include "esp_err.h"
 
 namespace micropixel::platform::transports {
@@ -11,10 +11,10 @@ namespace micropixel::platform::transports {
 using DevelopmentCommandSink = void (*)(void* context, const char* command);
 
 // USB development transport shared by board implementations. MPX1 remains on
-// the hardware-independent LocalControlBackend contract; framed binary output
+// the hardware-independent LocalControl contract; framed binary output
 // is deliberately kept in the Platform layer for diagnostics such as screen
 // capture.
-class DevelopmentLocalControlTransport : public device::LocalControlBackend {
+class DevelopmentLocalControlTransport : public device::LocalControl {
    public:
     [[nodiscard]] virtual esp_err_t Start(DevelopmentCommandSink development_sink = nullptr,
                                           void* development_context = nullptr) = 0;

@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "abi/micropixel_abi.h"
+#include "runtime/display_transform.hpp"
 #include "runtime/panic.hpp"
 #include "sdk/application.hpp"
 #include "sdk/devices.hpp"
@@ -136,6 +137,8 @@ ServiceCache haptics_service;
 ServiceCache power_info_service;
 micropixel_graphics_info_t cached_graphics_info{};
 bool graphics_info_loaded{};
+micropixel::detail::DisplayTransform cached_display_context{};
+bool display_context_loaded{};
 micropixel_input_info_t cached_input_info{};
 bool input_info_loaded{};
 
@@ -183,6 +186,74 @@ int32_t CallVoid(ServiceCache& cache, uint32_t method_id, const void* request, u
     uint32_t response_size = 0U;
     int32_t status = CallService(cache, method_id, request, request_size, nullptr, 0U, response_size);
     return status == MICROPIXEL_STATUS_OK && response_size != 0U ? MICROPIXEL_STATUS_INTERNAL : status;
+}
+
+const micropixel_graphics_info_t& LoadPhysicalGraphicsInfo() {
+    RequireOk(OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
+                          MICROPIXEL_GRAPHICS_INTERFACE_MINOR),
+              "graphics.open");
+    if (!graphics_info_loaded) {
+        uint32_t response_size = 0U;
+        RequireOk(CallService(graphics_service, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U, &cached_graphics_info,
+                              sizeof(cached_graphics_info), response_size),
+                  "graphics.info");
+        if (response_size < sizeof(cached_graphics_info) || cached_graphics_info.size < sizeof(cached_graphics_info) ||
+            cached_graphics_info.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
+            cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 || cached_graphics_info.width == 0U ||
+            cached_graphics_info.height == 0U ||
+            cached_graphics_info.max_command_bytes < micropixel::Frame::kCapacityBytes ||
+            cached_graphics_info.max_commands == 0U || cached_graphics_info.max_draw_operations == 0U ||
+            cached_graphics_info.max_frame_commands < cached_graphics_info.max_draw_operations) {
+            micropixel::runtime::Panic("graphics.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
+        }
+        if (input_info_loaded && (cached_graphics_info.width != cached_input_info.logical_width ||
+                                  cached_graphics_info.height != cached_input_info.logical_height)) {
+            micropixel::runtime::Panic("graphics.info.coordinate_space", MICROPIXEL_STATUS_UNSUPPORTED);
+        }
+        graphics_info_loaded = true;
+    }
+    return cached_graphics_info;
+}
+
+const micropixel::detail::DisplayTransform& LoadDisplayContext() {
+    const micropixel_graphics_info_t& physical = LoadPhysicalGraphicsInfo();
+    if (!display_context_loaded) {
+        cached_display_context = micropixel::detail::MakeDisplayTransform(physical.width, physical.height);
+        if (cached_display_context.logical_width == 0U || cached_display_context.logical_height == 0U) {
+            // This is the single SDK-owned compatibility exit point. A future
+            // system modal can be invoked here before terminating the Guest.
+            micropixel::runtime::Panic("application.display.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
+        }
+        display_context_loaded = true;
+    }
+    return cached_display_context;
+}
+
+int32_t ScaleCoordinate(int32_t value, uint32_t numerator, uint32_t denominator) {
+    return micropixel::detail::ScaleCoordinate(value, numerator, denominator);
+}
+
+micropixel::Point ToPhysical(micropixel::Point point) {
+    const auto& context = LoadDisplayContext();
+    return {context.offset_x + ScaleCoordinate(point.x, context.physical_width, context.logical_width),
+            context.offset_y + ScaleCoordinate(point.y, context.physical_height, context.logical_height)};
+}
+
+micropixel::Rect ToPhysical(micropixel::Rect rect) {
+    const auto& context = LoadDisplayContext();
+    const int32_t left = context.offset_x + ScaleCoordinate(rect.x, context.physical_width, context.logical_width);
+    const int32_t top = context.offset_y + ScaleCoordinate(rect.y, context.physical_height, context.logical_height);
+    const int32_t right =
+        context.offset_x + ScaleCoordinate(rect.x + rect.width, context.physical_width, context.logical_width);
+    const int32_t bottom =
+        context.offset_y + ScaleCoordinate(rect.y + rect.height, context.physical_height, context.logical_height);
+    return {left, top, right - left, bottom - top};
+}
+
+micropixel::Point ToLogical(micropixel::Point point) {
+    const auto& context = LoadDisplayContext();
+    return {ScaleCoordinate(point.x - context.offset_x, context.logical_width, context.physical_width),
+            ScaleCoordinate(point.y - context.offset_y, context.logical_height, context.physical_height)};
 }
 
 const micropixel_input_info_t& LoadInputInfo() {
@@ -783,31 +854,10 @@ Timer Timers::Every(Duration period) const {
 }
 
 RendererInfo Renderer::info() const {
-    RequireOk(OpenService(graphics_service, MICROPIXEL_SERVICE_GRAPHICS, MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-                          MICROPIXEL_GRAPHICS_INTERFACE_MINOR),
-              "graphics.open");
-    if (!graphics_info_loaded) {
-        uint32_t response_size = 0U;
-        RequireOk(CallService(graphics_service, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U, &cached_graphics_info,
-                              sizeof(cached_graphics_info), response_size),
-                  "graphics.info");
-        if (response_size < sizeof(cached_graphics_info) || cached_graphics_info.size < sizeof(cached_graphics_info) ||
-            cached_graphics_info.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
-            cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 || cached_graphics_info.width == 0U ||
-            cached_graphics_info.height == 0U || cached_graphics_info.max_command_bytes < Frame::kCapacityBytes ||
-            cached_graphics_info.max_commands == 0U || cached_graphics_info.max_draw_operations == 0U ||
-            cached_graphics_info.max_frame_commands < cached_graphics_info.max_draw_operations) {
-            runtime::Panic("graphics.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
-        }
-        if (input_info_loaded && (cached_graphics_info.width != cached_input_info.logical_width ||
-                                  cached_graphics_info.height != cached_input_info.logical_height)) {
-            runtime::Panic("graphics.info.coordinate_space", MICROPIXEL_STATUS_UNSUPPORTED);
-        }
-        graphics_info_loaded = true;
-    }
-    const micropixel_graphics_info_t& raw = cached_graphics_info;
-    return RendererInfo{
-        raw.width, raw.height, raw.capabilities, raw.max_commands, raw.max_draw_operations, raw.max_frame_commands};
+    const micropixel_graphics_info_t& raw = LoadPhysicalGraphicsInfo();
+    const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
+    return RendererInfo{display.logical_width, display.logical_height,  raw.capabilities,
+                        raw.max_commands,      raw.max_draw_operations, raw.max_frame_commands};
 }
 
 Frame::Frame(CapabilityToken, const RendererInfo& info)
@@ -1025,8 +1075,10 @@ void Frame::Clear(Color color) {
 
 void Frame::EnsureStateEncoded() {
     constexpr uint32_t kMaxRetainedScopesPerFrame = 4U;
-    if (state_depth_ == 0U || state_encoded_ || failure_status_ != MICROPIXEL_STATUS_OK ||
-        retained_scope_count_ >= kMaxRetainedScopesPerFrame) {
+    const auto& display = LoadDisplayContext();
+    if (display.logical_width != display.physical_width || display.logical_height != display.physical_height ||
+        display.offset_x != 0 || display.offset_y != 0 || state_depth_ == 0U || state_encoded_ ||
+        failure_status_ != MICROPIXEL_STATUS_OK || retained_scope_count_ >= kMaxRetainedScopesPerFrame) {
         return;
     }
     const State& state = states_[state_depth_];
@@ -1128,6 +1180,7 @@ void Frame::FillRect(Rect rect, Color color, uint8_t opacity) {
     if (rect.empty()) {
         return;
     }
+    rect = ToPhysical(rect);
     if (opacity == 255U) {
         micropixel_graphics_fill_rect_command_t command{};
         command.record.opcode = MICROPIXEL_GRAPHICS_OP_FILL_RECT;
@@ -1153,6 +1206,22 @@ void Frame::FillRect(Rect rect, Color color, uint8_t opacity) {
 }
 
 void Frame::DrawText(Point position, const char* text, Color color, SystemFont font) {
+    const auto& display = LoadDisplayContext();
+    if (display.scale_numerator < display.scale_denominator) {
+        switch (font) {
+            case SystemFont::kTitle:
+                font = SystemFont::kLarge;
+                break;
+            case SystemFont::kLarge:
+                font = SystemFont::kMedium;
+                break;
+            case SystemFont::kMedium:
+                font = SystemFont::kSmall;
+                break;
+            case SystemFont::kSmall:
+                break;
+        }
+    }
     const uint16_t font_handle = static_cast<uint16_t>(font);
     if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         runtime::Panic("graphics.draw_text.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -1182,6 +1251,7 @@ void Frame::DrawTextWithHandle(Point position, const char* text, Color color, ui
     if (!text_clip.contains(position)) {
         return;
     }
+    position = ToPhysical(position);
     uint32_t text_length = 0U;
     while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
         ++text_length;
@@ -1206,6 +1276,22 @@ void Frame::DrawTextWithHandle(Point position, const char* text, Color color, ui
 }
 
 void Frame::DrawTextCentered(int32_t center_x, int32_t y, const char* text, Color color, SystemFont font) {
+    const auto& display = LoadDisplayContext();
+    if (display.scale_numerator < display.scale_denominator) {
+        switch (font) {
+            case SystemFont::kTitle:
+                font = SystemFont::kLarge;
+                break;
+            case SystemFont::kLarge:
+                font = SystemFont::kMedium;
+                break;
+            case SystemFont::kMedium:
+                font = SystemFont::kSmall;
+                break;
+            case SystemFont::kSmall:
+                break;
+        }
+    }
     const uint16_t font_handle = static_cast<uint16_t>(font);
     if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         runtime::Panic("graphics.draw_text_centered.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -1236,6 +1322,9 @@ void Frame::DrawTextCenteredWithHandle(int32_t center_x, int32_t y, const char* 
     if (!text_clip.contains(center_x, y)) {
         return;
     }
+    const Point physical = ToPhysical(Point{center_x, y});
+    center_x = physical.x;
+    y = physical.y;
     uint32_t text_length = 0U;
     while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
         ++text_length;
@@ -1279,6 +1368,7 @@ void Frame::DrawTexture(Rect destination, const Texture& texture, Rect source, u
         static_cast<uint64_t>(source.y) + static_cast<uint32_t>(source.height) > texture.height()) {
         runtime::Panic("graphics.draw_texture.argument", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
+    const bool natural_size = destination.width == source.width && destination.height == source.height;
     if (state_depth_ != 0U) {
         states_[state_depth_].draw_started = true;
     }
@@ -1300,15 +1390,30 @@ void Frame::DrawTexture(Rect destination, const Texture& texture, Rect source, u
     const int32_t source_bottom =
         source.y + static_cast<int32_t>((bottom_offset * source.height + destination.height - 1) / destination.height);
     source = Rect{source_left, source_top, source_right - source_left, source_bottom - source_top};
+    Rect physical_destination = ToPhysical(clipped);
+    if (texture.adaptive_) {
+        const int32_t left = ScaleCoordinate(source.x, texture.physical_width_, texture.width_);
+        const int32_t top = ScaleCoordinate(source.y, texture.physical_height_, texture.height_);
+        const int32_t right = ScaleCoordinate(source.x + source.width, texture.physical_width_, texture.width_);
+        const int32_t bottom = ScaleCoordinate(source.y + source.height, texture.physical_height_, texture.height_);
+        source = {left, top, right - left, bottom - top};
+        if (natural_size) {
+            // A naturally sized adaptive texture was already resized once by
+            // the Host. Preserve a strict 1:1 destination even when an odd
+            // physical aspect ratio causes one-pixel coordinate rounding.
+            physical_destination.width = source.width;
+            physical_destination.height = source.height;
+        }
+    }
     if (opacity == 255U) {
         micropixel_graphics_draw_texture_command_t command{};
         command.record.opcode = MICROPIXEL_GRAPHICS_OP_DRAW_TEXTURE;
         command.record.size = sizeof(command);
         command.texture = texture.handle_;
-        command.x = clipped.x;
-        command.y = clipped.y;
-        command.width = clipped.width;
-        command.height = clipped.height;
+        command.x = physical_destination.x;
+        command.y = physical_destination.y;
+        command.width = physical_destination.width;
+        command.height = physical_destination.height;
         command.source_x = source.x;
         command.source_y = source.y;
         command.source_width = source.width;
@@ -1319,10 +1424,10 @@ void Frame::DrawTexture(Rect destination, const Texture& texture, Rect source, u
         command.record.opcode = MICROPIXEL_GRAPHICS_OP_BLEND_TEXTURE;
         command.record.size = sizeof(command);
         command.texture = texture.handle_;
-        command.x = clipped.x;
-        command.y = clipped.y;
-        command.width = clipped.width;
-        command.height = clipped.height;
+        command.x = physical_destination.x;
+        command.y = physical_destination.y;
+        command.width = physical_destination.width;
+        command.height = physical_destination.height;
         command.source_x = source.x;
         command.source_y = source.y;
         command.source_width = source.width;
@@ -1468,12 +1573,32 @@ Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle
     if (response_size < sizeof(response) || response.size < sizeof(response) || response.reserved0 != 0U) {
         runtime::Panic("graphics.measure_text.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return TextMetrics{response.width, response.height, response.baseline};
+    const auto& display = LoadDisplayContext();
+    return TextMetrics{
+        static_cast<uint32_t>(ScaleCoordinate(response.width, display.logical_width, display.physical_width)),
+        static_cast<uint32_t>(ScaleCoordinate(response.height, display.logical_height, display.physical_height)),
+        ScaleCoordinate(response.baseline, display.logical_height, display.physical_height)};
 }
 
 }  // namespace
 
 Result<TextMetrics> Renderer::MeasureText(const char* text, SystemFont font) const {
+    const auto& display = LoadDisplayContext();
+    if (display.scale_numerator < display.scale_denominator) {
+        switch (font) {
+            case SystemFont::kTitle:
+                font = SystemFont::kLarge;
+                break;
+            case SystemFont::kLarge:
+                font = SystemFont::kMedium;
+                break;
+            case SystemFont::kMedium:
+                font = SystemFont::kSmall;
+                break;
+            case SystemFont::kSmall:
+                break;
+        }
+    }
     const uint16_t font_handle = static_cast<uint16_t>(font);
     if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
@@ -1925,7 +2050,13 @@ InputInfo Input::info() const {
     return InputInfo{raw.max_touch_points, raw.capabilities};
 }
 
-Texture::Texture(Texture&& other) noexcept : handle_(other.handle_), width_(other.width_), height_(other.height_) {
+Texture::Texture(Texture&& other) noexcept
+    : handle_(other.handle_),
+      width_(other.width_),
+      height_(other.height_),
+      physical_width_(other.physical_width_),
+      physical_height_(other.physical_height_),
+      adaptive_(other.adaptive_) {
     other.handle_ = 0U;
 }
 
@@ -1935,6 +2066,9 @@ Texture& Texture::operator=(Texture&& other) noexcept {
         handle_ = other.handle_;
         width_ = other.width_;
         height_ = other.height_;
+        physical_width_ = other.physical_width_;
+        physical_height_ = other.physical_height_;
+        adaptive_ = other.adaptive_;
         other.handle_ = 0U;
     }
     return *this;
@@ -1951,6 +2085,9 @@ void Texture::Reset() {
         handle_ = 0U;
         width_ = 0U;
         height_ = 0U;
+        physical_width_ = 0U;
+        physical_height_ = 0U;
+        adaptive_ = false;
     }
 }
 
@@ -2074,23 +2211,30 @@ Result<Texture> Resources::LoadTexture(AssetId asset) const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    micropixel_resource_load_texture_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
-    micropixel_texture_info_t response{};
+    const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
+    micropixel_resource_load_adaptive_texture_request_t request{};
+    request.size = sizeof(request);
+    request.asset_id = asset.value();
+    request.scale_numerator = display.scale_numerator;
+    request.scale_denominator = display.scale_denominator;
+    micropixel_adaptive_texture_info_t response{};
     uint32_t response_size = 0U;
-    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_TEXTURE, &request, sizeof(request),
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_ADAPTIVE_TEXTURE, &request, sizeof(request),
                          &response, sizeof(response), response_size);
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
     if (response_size < sizeof(response) || response.size < sizeof(response) ||
         response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
-        response.width == 0U || response.height == 0U ||
+        response.logical_width == 0U || response.logical_height == 0U || response.physical_width == 0U ||
+        response.physical_height == 0U ||
         (response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
          response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888) ||
         (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) != 0U) {
         runtime::Panic("resources.load_texture.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return Texture{response.texture, response.width, response.height};
+    return Texture{response.texture,        response.logical_width,   response.logical_height,
+                   response.physical_width, response.physical_height, true};
 }
 
 Result<Font> Resources::LoadFont(AssetId asset) const {
@@ -2143,7 +2287,9 @@ Result<StreamingTexture> Renderer::CreateStreamingTexture(Size size, PixelFormat
         (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U) {
         runtime::Panic("texture.create.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return StreamingTexture{Texture{response.texture, response.width, response.height}, pixel_format};
+    return StreamingTexture{
+        Texture{response.texture, response.width, response.height, response.width, response.height, false},
+        pixel_format};
 }
 
 TextureUpdateBatch Renderer::BeginTextureUpdateBatch() const {
@@ -2152,6 +2298,8 @@ TextureUpdateBatch Renderer::BeginTextureUpdateBatch() const {
               "texture.batch.begin");
     return TextureUpdateBatch{TextureUpdateBatch::CapabilityToken{}};
 }
+
+Application::Application() noexcept { (void)LoadDisplayContext(); }
 
 void Application::BeginRun() const {
     if (running_) {
@@ -2280,7 +2428,8 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
         if (has_pressure && payload.pressure_per_mille > 1000U) {
             runtime::Panic("application.wait_event.touch_pressure", MICROPIXEL_STATUS_INTERNAL);
         }
-        event = Event{TouchEvent{timestamp, phase, raw.source, payload.x, payload.y, has_pressure,
+        const Point logical = ToLogical(Point{payload.x, payload.y});
+        event = Event{TouchEvent{timestamp, phase, raw.source, logical.x, logical.y, has_pressure,
                                  static_cast<uint16_t>(has_pressure ? payload.pressure_per_mille : 0U)}};
         return true;
     }

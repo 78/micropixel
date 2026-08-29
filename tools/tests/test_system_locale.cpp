@@ -2,7 +2,7 @@
 #include <cassert>
 #include <string_view>
 
-#include "host_ui/system_locale.hpp"
+#include "host/ui/system_locale.hpp"
 
 namespace {
 

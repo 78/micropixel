@@ -39,12 +39,21 @@ class Texture final {
     void Reset();
 
    private:
-    constexpr Texture(uint32_t handle, uint32_t width, uint32_t height)
-        : handle_(handle), width_(width), height_(height) {}
+    constexpr Texture(uint32_t handle, uint32_t width, uint32_t height, uint32_t physical_width,
+                      uint32_t physical_height, bool adaptive)
+        : handle_(handle),
+          width_(width),
+          height_(height),
+          physical_width_(physical_width),
+          physical_height_(physical_height),
+          adaptive_(adaptive) {}
 
     uint32_t handle_{};
     uint32_t width_{};
     uint32_t height_{};
+    uint32_t physical_width_{};
+    uint32_t physical_height_{};
+    bool adaptive_{};
 
     friend class Frame;
     friend class Renderer;

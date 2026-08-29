@@ -15,7 +15,7 @@ void Require(bool condition) {
     }
 }
 
-class Catalog final : public micropixel::device::DeviceCatalogBackend {
+class Catalog final : public micropixel::device::DeviceCatalog {
    public:
     [[nodiscard]] uint32_t Generation() const override { return 7U; }
     [[nodiscard]] uint32_t Count() const override { return 4U; }
@@ -42,7 +42,7 @@ class Catalog final : public micropixel::device::DeviceCatalogBackend {
     }
 };
 
-class Sensors final : public micropixel::device::SensorBackend {
+class Sensors final : public micropixel::device::Sensors {
    public:
     [[nodiscard]] int32_t GetInfo(micropixel_device_id_t device, micropixel_sensor_info_t& info) const override {
         if (device != kSensor) {
@@ -72,7 +72,7 @@ class Sensors final : public micropixel::device::SensorBackend {
         values.values[2] = 3.0F;
         return MICROPIXEL_STATUS_OK;
     }
-    void Stop(micropixel_device_id_t device) override {
+    void StopSampling(micropixel_device_id_t device) override {
         if (device == kSensor) {
             started = false;
         }
@@ -82,7 +82,7 @@ class Sensors final : public micropixel::device::SensorBackend {
     uint32_t interval{};
 };
 
-class Gpio final : public micropixel::device::GpioBackend {
+class Gpio final : public micropixel::device::Gpio {
    public:
     [[nodiscard]] int32_t GetInfo(micropixel_device_id_t device, micropixel_gpio_info_t& info) const override {
         if (device != kGpio) {
@@ -136,7 +136,7 @@ class Gpio final : public micropixel::device::GpioBackend {
     bool events_suspended{};
 };
 
-class Haptics final : public micropixel::device::HapticsBackend {
+class Haptics final : public micropixel::device::Haptics {
    public:
     [[nodiscard]] int32_t GetInfo(micropixel_device_id_t device, micropixel_haptics_info_t& info) const override {
         if (device != kHaptics) {
@@ -164,7 +164,7 @@ class Haptics final : public micropixel::device::HapticsBackend {
     bool playing{};
 };
 
-class Battery final : public micropixel::device::BatteryBackend {
+class Battery final : public micropixel::device::Battery {
    public:
     [[nodiscard]] micropixel::device::BatterySnapshot Snapshot() override {
         return {.percent = 42U,

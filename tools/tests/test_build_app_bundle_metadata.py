@@ -61,6 +61,7 @@ class PackageMetadataTests(unittest.TestCase):
                 {
                     "schema_version": 1,
                     "app_id": "micropixel.test",
+                    "display": "square",
                     "display_name": display_name,
                     "source": "unused.cpp",
                 },
@@ -79,12 +80,14 @@ class PackageMetadataTests(unittest.TestCase):
                     "values": {"en": "Test", "zh-Hans": "测试"},
                 },
             )
+            manifest = bundle.load_package_manifest(path)
             app_id, names, launch = bundle.load_app_manifest(path)
-            payload = json.loads(bundle.serialize_package_metadata(names))
+            payload = json.loads(bundle.serialize_package_metadata(manifest))
             self.assertEqual(app_id, "micropixel.test")
             self.assertEqual(launch, "")
             self.assertEqual(payload["schema_version"], 1)
             self.assertEqual(payload["package_type"], "app")
+            self.assertEqual(payload["display"], "square")
             self.assertEqual(payload["display_name"]["default"], "en")
             self.assertEqual(payload["display_name"]["values"]["zh-Hans"], "测试")
 

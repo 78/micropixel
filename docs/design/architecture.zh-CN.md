@@ -14,9 +14,9 @@ MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产�
 - Host：ESP32-P4 + Metalio-Claw4，ESP-IDF 6.1；
 - Runtime：MicroPixel WAMR fork 固定 commit、AOT format v6，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
-- Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长并由 Host 硬限制；P4 当前单 Guest
-  策略上限为 8 MiB，实例化时按最大连续 PSRAM 块自适应下调并保留 Host 安全余量；Host-owned
-  Bitmap/offscreen surface 另有 12 MiB 配额；
+- Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长，P4 与 S31 的当前策略上限均为
+  8 MiB；实例化时按最大连续 PSRAM 块自适应下调，后续增长也必须保留 Host 安全水位。Host-owned
+  Bitmap/offscreen surface 不预留累计配额，而是在每次实际分配时使用同一安全水位做动态准入；
 - App 分发：Bundle v1 封装 AOT、资源和 App metadata；24 MiB 可写 App Store 由 BundleFS 以离散
   64 KiB 块和四 Bank Catalog 提供写时复制事务；
 - 系统 UI：Host 原生 App Hall、Status Layer 和系统手势，不作为 Guest App 运行。
@@ -56,8 +56,8 @@ app_main
 Runtime -> Device contracts <- Platform
 ```
 
-- `device/` 定义硬件无关能力契约；
-- `platform/` 实现板级 backend，不 include Runtime；
+- `device/contracts/` 定义硬件无关能力契约，`device/` 根部提供 Runtime 使用的 façade；
+- `platform/` 实现硬件契约并装配 Board，不 include Runtime；
 - Runtime 只使用注入的 `DeviceServices`，不 include Platform；
 - `FirmwareApp` 是唯一同时知道 Platform、Device 和 Runtime 的组合根；
 - `runtime/abi/` 只做 Guest 内存验证、wire 转换、上下文查找和转发，不承担业务规则。
@@ -65,30 +65,64 @@ Runtime -> Device contracts <- Platform
 Platform 内部按职责分层，依赖只能向下：
 
 ```text
-boards/<board>  ->  common + drivers + lvgl + radio + transports
-       │                         │
-       │                         └─ uses SoC-selected ESP-IDF capabilities
-       └─ owns pin mapping, power sequence, peripheral composition and board metadata
+boards/<board>  ->  audio + haptics + wifi + adapters + buses + drivers + lvgl + transports
+       │                                           │
+       │                                           └─ uses target-selected ESP-IDF capabilities
+       └─ owns pin mapping, startup order, peripherals, controllers and board metadata
 ```
 
-- `platform/common/`：可跨板复用的 ESP32 backend 与 contract adapter；
+- `platform/adapters/`：把具体呈现操作适配成硬件无关契约的窄 adapter；
+- `platform/audio/`、`platform/haptics/`、`platform/wifi/`：按领域放跨板复用的引擎、Peripheral 和管理器；
+- `platform/random/`、`platform/defaults/`：通用随机源和缺失能力的默认实现；
+- `platform/controllers/`：跨板复用的板级控制算法；
+- `platform/buses/`：共享物理总线的串行调度与优先级执行器；
 - `platform/drivers/`：按器件型号组织的驱动，不知道开发板；
-- `platform/lvgl/`：显示合成、Guest renderer、字体与按分辨率组织的 Host UI profile；
-- `platform/radio/`：Hosted 与 SoC-native Wi-Fi radio strategy；
+- `platform/lvgl/`：LVGL 与平台的共享桥接，只包含显示合成、Guest renderer、字体与 Host 指针路由；
+- `host/ui/lvgl/`：Host 拥有的 LVGL App Hall、Status Layer、系统页面、共享 UI 状态与分辨率 layout profile；
 - `platform/transports/`：USB Serial/JTAG 等本地控制字节传输；
-- `platform/soc/<target>/`：只选择 SoC component 依赖，不组合开发板；
-- `platform/boards/<board>/`：板型组合根，只拥有 wiring、启动/关机次序和不能复用的板载外设。
+- `platform/targets/<target>/`：只选择 SoC component 依赖，不组合开发板；
+- `platform/boards/<board>/`：板型组合根，只拥有 wiring、启动/关机次序、不能复用的板载外设，以及
+  初始化成功后的 `BoardRegistration` 声明。`platform.cpp` 保持为窄组合入口；私有 `platform_state.hpp`
+  只组合一个 `SquareSystemUiState`，不再逐项拥有 LVGL 页面、Hall 数组、指针路由或主题状态。Hall 卡片由
+  `host/ui/lvgl/` 统一按有界窗口虚拟化；板型 `presentation.*` 只提供 framebuffer/GRAM 所有权，并按需实现
+  `DisplayTransition`、`ScreenCapture`、`BrightnessControl`、`VolumeControl` 和 `ShutdownPresentation`，
+  不定义页面、Hall 生命周期或产品 UI 属性。
+
+`FirmwareApp` 只读取 `PlatformServices`，不调用板型 getter，也不根据板名分支。Board 只提交已经完成初始化的
+`BoardRegistration`；`Platform::Publish()` 统一补齐 unavailable 实现、公共 `AudioEngine` 与 `DeviceRegistry`，
+因此服务集合完整性和硬件支持程度是两个独立概念。`NullBoard` 只提交 `BoardInfo`，用于证明新增板型可以从
+最小声明开始，再逐步增加显示、输入、音频和 Peripheral。
+
+顶部 Status Layer 由 `host/ui/lvgl/square_common/status_layer_ui.*` 唯一实现，以 ESP-Mosaico 的
+480×480 控件结构和交互语义为基准，720×720 profile 只调整几何与字体。快捷项、亮度和音量全部使用 LVGL
+原生 button/slider/bar 与 event callback；板级不得重新实现 hit-test 或控件状态，只提供转场以及亮度、
+音量的能力落地。
+
+`host/ui/lvgl/square_common/square_ui_state.*` 与 `square_system_ui.*` 是方屏 Host UI 的共享状态与
+生命周期边界，集中拥有主题安装、启动/加载/关机页、Guest 前台层级、App Hall、系统页面、Status Layer、
+手势和 Host 指针路由。
+`virtualized_hall_policy.*` 只物化可见卡片及前后预取窗口，使 UI 对象和解码封面的内存占用不随已安装应用
+数量线性增长；480/720 profile 分别完整声明该分辨率的页面几何、字体角色、启动呈现和转场参数，开发板只
+选择其中一个完整 profile。共享 System UI 把 Hall 卡片目标区域和封面参数收敛为转场请求；板级接口只消费
+该请求并操作 framebuffer/GRAM，不读取 Hall 索引、滚动位置或 Host UI 对象。这些产品属性和生命周期不得
+散落回具体开发板实现。
+
+Host LVGL 实现统一使用 `micropixel::host_ui::lvgl::square_common` namespace。共享 `SquareSystemUi` 实现
+`host_ui::SystemUi` 契约，并只通过 `SquarePresentation` 的窄接口访问板级呈现。芯片能够加速 Guest↔Hall
+转场时实现完整 `DisplayTransition`；不具备该能力时返回空接口，共享 Host UI 仍可工作。屏幕抓取、亮度、
+音量和关机呈现同样是独立可选接口，Board 不反向拥有 Host UI 页面。
 
 板型由 `MICROPIXEL_BOARD` Kconfig choice 唯一选择。新增板型的正常变更面是新的
 `boards/<board>/`、一个 choice symbol、Platform source selection 与产品 defaults；Guest ABI、Runtime 和
-HostController 不因板名变化。系统信息和 Remote Control 的硬件描述统一读取
-`device::HardwareInfoBackend`。`bash tools/p4.sh build-null` 和 `bash tools/s31.sh build-null` 是各 SoC 的
+HostController 不因板名变化。系统信息和 Remote Control 的板型描述统一读取 `device::BoardInfo`。
+`bash tools/p4.sh build-null` 和 `bash tools/s31.sh build-null` 是各 SoC 的
 硬件无关依赖方向编译门禁，不生成可烧录的产品镜像。ESP-Mosaico 的 P0/P1 profile 已接入 Runtime、
 BundleFS、native Wi-Fi、板级供电、官方 CO5300 显示和 CST9217 中断触摸，并复用 App Hall、Status Layer、
+ES8311/NS4150B 音频、BQ27220 电池与数字振动电机，并复用共享固定容量音频引擎、
 逻辑 viewport、分辨率 layout profile、系统转场时间线及 PPA/DMA2D 图形原语。P4 的 RGB888 framebuffer
 提交与 S31 的 RGB565/QSPI 提交留在各自 display pipeline；缩放、位图复制和颜色转换不回退为正常帧路径的
-CPU 整图逐像素循环。音频和板载传感器在权威 BSP 路径完成集成与真机验证前显式 unavailable，NAND
-App Store 与扩展模块属于 P2。
+CPU 整图逐像素循环。BMI270/BMM150 仍在兼容 ESP-IDF 6.1/S31 的权威驱动及轴向/校准完成真机验证前
+显式 unavailable，NAND App Store 与扩展模块属于 P2。
 
 ## 3. Session 与事件模型
 
@@ -123,7 +157,8 @@ app.Run([&](const micropixel::Event& event) {
   标准写法；
 - Host 暂停 Guest 时通过 Runtime 内部控制消息等待 `event_wait` 安全点，并同时暂停 watchdog；不存在 Guest
   可见的 `Pause` 事件。恢复同一 Session 时只投递 `Resume`；
-- 系统手势由 Host 拦截，不泄漏给 Guest。
+- 系统手势由 Host 拦截，不泄漏给 Guest。顶部下滑使用整条顶部边缘；底部上滑只从屏幕中央三分之一区域
+  开始识别，左右两侧输入继续传给 Guest。Host 在 App 启动或恢复后的 3 秒显示底部手势提示条。
 
 电源管理由 Host supervisor 独立持有 `Awake / EnteringSleep / Asleep / Waking / ShuttingDown` 状态，不与
 `Hall / Foreground` 或 App lifecycle 混成一个枚举。单击电源键时，前台 App 先完成上述安全点确认，再渐暗
@@ -193,8 +228,9 @@ method/channel/event，其次增加 Service，只有真机证据证明现有传�
 ### 4.1 设备发现与组合设备
 
 Devices Service 是类似操作系统设备目录的发现面，但不把 Linux device tree、ACPI、ESP-IDF driver 或
-板级地址暴露给 Guest。Platform 构造固定容量 catalog；应用枚举 opaque `DeviceId`，读取 kind、parent、
-capabilities 和显示名称，再把同一个 ID 交给 Sensors、GPIO、Haptics、PowerInfo 等能力 Service。
+板级地址暴露给 Guest。Board 只向 `BoardRegistration` 登记“Peripheral + Peripheral 内部 Channel + 物理显示名称”；
+上层 `DeviceRegistry` 决定 kind/capability、构造固定容量 catalog 并分配 opaque `DeviceId`。应用读取 kind、
+parent、capabilities 和显示名称，再把同一个 ID 交给 Sensors、GPIO、Haptics、PowerInfo 等能力 Service。
 
 `DeviceId` 与枚举 index 分离。parent 支持组合设备：未来外接两个手柄时，每个手柄有独立身份，手柄内的
 传感器是带 parent 的独立 device；Camera、Location 和更多 SensorKind 可以扩展 catalog 与对应 Service，
@@ -203,6 +239,7 @@ added/removed event。
 
 Metalio-Claw4 第一阶段暴露内置加速度计、磁力计、震动马达、电源信息和 14 根板上确认可开放的 GPIO。
 GPIO 不要求出厂 binding：每根引脚以物理 line number 和 capability 枚举，应用选择任意一根后直接打开。
+厂商可按说明书使用 `P15`、`GPIO15` 等物理名称；该名称只用于人机识别，不是公开 `DeviceId`，也不参与路由。
 打开形成 Session 内独占 lease；关闭或 Session teardown 后恢复 input/无上下拉安全状态。板级已占用引脚
 根本不进入 catalog。
 
@@ -306,7 +343,8 @@ python3 -m unittest tools.tests.test_build_app_store_image
 - App Hall 能显示并启动最多 50 个 App，第一行可自由左右拖动并带惯性、不强制卡片吸附；新安装 App 位于
   最左侧。卡片和解码封面使用最多 6 项的视口窗口，快速滑动期间允许占位；切换时旧 Session 已先销毁；
 - App Hall 顶部居中显示紧凑 FPS/CPU，右侧 Wi-Fi 信号与电池状态不会互相遮挡；
-- 顶部下滑打开 Status Layer，底部上滑暂停并返回大厅；
+- 顶部下滑打开 Status Layer；从底部中央三分之一区域上滑会暂停并返回大厅，左右两侧同类输入仍交给
+  Guest；App 启动或恢复后的底部提示条显示 3 秒并自动隐藏；
 - 恢复同一 App 时复用 Session 和 retained scene，并由 PPA 从 Hall 卡片硬件放大回最后一帧；
 - Texture `Present → Reset → 重绘/换场景` 不产生 UAF；
 - Timer 积压时 `elapsed` 和 `missed_count` 正确；

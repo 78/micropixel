@@ -49,7 +49,7 @@ class DirectFramebufferAccess {
 };
 
 // Platform-internal display boundary. Device/Runtime still see only
-// device::GraphicsBackend; this contract keeps panel transport, brightness and
+// device::Graphics; this contract keeps panel transport, brightness and
 // framebuffer assumptions out of the reusable LVGL renderer.
 class DisplayPipeline {
    public:

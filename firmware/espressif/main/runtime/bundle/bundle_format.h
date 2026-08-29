@@ -42,6 +42,12 @@ typedef enum micropixel_bundle_package_type {
     MICROPIXEL_BUNDLE_PACKAGE_COMPONENT = 2,
 } micropixel_bundle_package_type_t;
 
+typedef enum micropixel_bundle_display_profile {
+    MICROPIXEL_BUNDLE_DISPLAY_SQUARE = 1,
+    MICROPIXEL_BUNDLE_DISPLAY_LANDSCAPE = 2,
+    MICROPIXEL_BUNDLE_DISPLAY_PORTRAIT = 3,
+} micropixel_bundle_display_profile_t;
+
 typedef enum micropixel_bundle_component_type {
     MICROPIXEL_BUNDLE_COMPONENT_NONE = 0,
     MICROPIXEL_BUNDLE_COMPONENT_FONT = 1,

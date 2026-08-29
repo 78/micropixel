@@ -125,6 +125,7 @@ class PackageManifest:
     font_bundle: str = ""
     charset: str = ""
     font_roles: dict[str, dict[str, object]] | None = None
+    display: str = "square"
 
 
 def align(value: int, alignment: int) -> int:
@@ -675,13 +676,14 @@ def parse_display_names(value: object, fallback_default: object = "en") -> Local
     return LocalizedDisplayNames(default_locale, values)
 
 
-def serialize_package_metadata(display_names: LocalizedDisplayNames) -> bytes:
+def serialize_package_metadata(manifest: PackageManifest) -> bytes:
     payload = {
         "schema_version": PACKAGE_METADATA_VERSION,
         "package_type": "app",
+        "display": manifest.display,
         "display_name": {
-            "default": display_names.default_locale,
-            "values": display_names.values,
+            "default": manifest.display_names.default_locale,
+            "values": manifest.display_names.values,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -708,12 +710,17 @@ def load_package_manifest(path: Path) -> PackageManifest:
             localization = value.get("localization")
             fallback_default = localization.get("default", "en") if isinstance(localization, dict) else "en"
             display_name = parse_display_names(value["display_name"], fallback_default)
+            display = value["display"]
+            if display not in ("square", "landscape", "portrait"):
+                raise ValueError("display must be one of: square, landscape, portrait")
             launch_asset = str(value.get("launch_asset", ""))
             if launch_asset:
                 validate_asset_name(launch_asset, 0)
-            return PackageManifest(app_id, display_name, launch_asset)
+            return PackageManifest(app_id, display_name, launch_asset, display=display)
         except (KeyError, TypeError) as error:
-            raise ValueError("app manifest requires app_id, display_name and a valid launch_asset name") from error
+            raise ValueError(
+                "app manifest requires app_id, display_name, display and a valid launch_asset name"
+            ) from error
     if package_type != "component" or value.get("component_type") != "font":
         raise ValueError("only package_type=component with component_type=font is supported")
     try:
@@ -1245,7 +1252,7 @@ def main() -> None:
         metadata_version = PACKAGE_METADATA_VERSION
     else:
         metadata_format = FORMAT_PACKAGE_METADATA_JSON
-        metadata_payload = serialize_package_metadata(display_names)
+        metadata_payload = serialize_package_metadata(package_manifest)
         metadata_version = PACKAGE_METADATA_VERSION
 
     sections = [InputSection(KIND_APP_METADATA, 0, metadata_format, 0, 0, 0, metadata_payload)]

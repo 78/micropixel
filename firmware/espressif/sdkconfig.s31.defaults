@@ -31,8 +31,8 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
-# Keep the Runtime policy aligned across the two RISC-V targets. The smaller
-# S31 PSRAM profile bounds one Guest to 4 MiB and decoded textures to 4 MiB.
+# Let small Guests keep a small working set and larger Guests grow on demand.
+# Both WAMR and decoded resources must leave the Host PSRAM safety floor intact.
 # CONFIG_ESP_SYSTEM_MEMPROT is not set
 CONFIG_WAMR_BUILD_RELEASE=y
 CONFIG_WAMR_ENABLE_AOT=y
@@ -48,7 +48,8 @@ CONFIG_WAMR_LINEAR_MEMORY_IN_PSRAM=y
 # AOT text there so normal-sized apps do not depend on scarce contiguous SRAM.
 CONFIG_WAMR_AOT_CODE_IN_PSRAM=y
 CONFIG_MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM=y
-CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES=64
+CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES=128
+CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES=2097152
 CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS=2
 CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS=1000
 

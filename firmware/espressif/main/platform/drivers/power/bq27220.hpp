@@ -13,7 +13,7 @@ struct Bq27220Sample final {
 
 // Bounded read-only fuel-gauge driver shared by board battery policies. It
 // owns probing, the I2C device handle and failure backoff; percentage/filter
-// and external-power semantics stay with the board backend.
+// and external-power semantics stay with the Board.
 class Bq27220 final {
    public:
     void Bind(i2c_master_bus_handle_t bus) { bus_ = bus; }

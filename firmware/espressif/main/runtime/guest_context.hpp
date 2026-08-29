@@ -78,6 +78,11 @@ class GuestContext final {
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id) {
         return resources_.LoadTexture(asset_id);
     }
+    [[nodiscard]] ServiceResult<micropixel_adaptive_texture_info_t> LoadAdaptiveTexture(uint32_t asset_id,
+                                                                                        uint32_t scale_numerator,
+                                                                                        uint32_t scale_denominator) {
+        return resources_.LoadAdaptiveTexture(asset_id, scale_numerator, scale_denominator);
+    }
     [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture) {
         return resources_.ReleaseTexture(texture);
     }

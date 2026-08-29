@@ -1,6 +1,7 @@
 #include "runtime/resources/resource_service.hpp"
 
 #include <cinttypes>
+#include <cstring>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -13,8 +14,12 @@ namespace {
 constexpr char kTag[] = "micropixel_resource";
 }  // namespace
 
-ResourceService::ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor)
-    : package_(package), background_executor_(background_executor), work_done_(xSemaphoreCreateBinary()) {}
+ResourceService::ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor,
+                                 device::GraphicsService& graphics)
+    : package_(package),
+      background_executor_(background_executor),
+      graphics_(graphics),
+      work_done_(xSemaphoreCreateBinary()) {}
 
 ResourceService::~ResourceService() {
     Shutdown();
@@ -70,7 +75,7 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
 
     // Guest service calls are serialized. This stack context remains valid
     // because the call waits for Process() to signal completion below.
-    Work work{this, asset};
+    Work work{this, asset, false, 1U, 1U};
     completed_texture_ = 0U;
     completed_status_ = MICROPIXEL_STATUS_INTERNAL;
     while (xSemaphoreTake(work_done_, 0U) == pdTRUE) {
@@ -91,6 +96,71 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
     return TextureInfo(completed_texture_, view);
+}
+
+ServiceResult<micropixel_adaptive_texture_info_t> ResourceService::LoadAdaptiveTexture(uint32_t asset_id,
+                                                                                       uint32_t scale_numerator,
+                                                                                       uint32_t scale_denominator) {
+    if (asset_id == 0U || scale_numerator == 0U || scale_denominator == 0U || scale_numerator > 4096U ||
+        scale_denominator > 4096U || stopping_.load(std::memory_order_acquire)) {
+        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    micropixel_bundle_asset_view_t asset{};
+    if (!micropixel_bundle_find_asset(&package_, asset_id, &asset)) {
+        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
+    }
+
+    const bool raw =
+        asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 || asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
+    if (scale_numerator == scale_denominator && raw) {
+        auto loaded = AddAsset(asset);
+        if (!loaded) {
+            return FailService<micropixel_adaptive_texture_info_t>(loaded.error().status);
+        }
+        micropixel_adaptive_texture_info_t info{};
+        info.size = sizeof(info);
+        info.interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR;
+        info.interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR;
+        info.logical_width = asset.width;
+        info.logical_height = asset.height;
+        info.physical_width = loaded->width;
+        info.physical_height = loaded->height;
+        info.stride = loaded->stride;
+        info.pixel_format = loaded->pixel_format;
+        info.flags = loaded->flags;
+        info.texture = loaded->texture;
+        return info;
+    }
+
+    completed_texture_ = 0U;
+    completed_status_ = MICROPIXEL_STATUS_INTERNAL;
+    while (xSemaphoreTake(work_done_, 0U) == pdTRUE) {
+    }
+    Work work{this, asset, true, scale_numerator, scale_denominator};
+    if (!background_executor_.Submit(ProcessEntry, &work)) {
+        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    }
+    if (xSemaphoreTake(work_done_, portMAX_DELAY) != pdTRUE || completed_status_ != MICROPIXEL_STATUS_OK ||
+        completed_texture_ == 0U) {
+        return FailService<micropixel_adaptive_texture_info_t>(completed_status_);
+    }
+    device::BitmapView view{};
+    if (!bitmaps_.Resolve(completed_texture_, view)) {
+        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
+    }
+    micropixel_adaptive_texture_info_t info{};
+    info.size = sizeof(info);
+    info.interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR;
+    info.interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR;
+    info.logical_width = asset.width;
+    info.logical_height = asset.height;
+    info.physical_width = view.width;
+    info.physical_height = view.height;
+    info.stride = view.stride;
+    info.pixel_format = view.pixel_format;
+    info.flags = view.flags;
+    info.texture = completed_texture_;
+    return info;
 }
 
 ServiceResult<void> ResourceService::ReleaseTexture(micropixel_texture_handle_t texture) {
@@ -167,25 +237,71 @@ void ResourceService::ProcessEntry(void* argument) {
 
 void ResourceService::Process(const Work& work) {
     const int64_t started = esp_timer_get_time();
-    DecodedBitmap decoded{};
-    const bool decoded_ok = DecodeBitmap(work.asset, decoded);
     micropixel_texture_handle_t texture = 0U;
-    if (decoded_ok) {
-        texture = bitmaps_.Add(decoded.view(), true);
-        if (texture != 0U) {
-            decoded.ReleaseOwnership();
-        }
-    }
+    const int32_t load_status = LoadOwnedAsset(work, texture);
     completed_texture_ = texture;
-    completed_status_ = texture != 0U
-                            ? MICROPIXEL_STATUS_OK
-                            : (decoded_ok ? MICROPIXEL_STATUS_RESOURCE_EXHAUSTED : MICROPIXEL_STATUS_INTERNAL);
+    completed_status_ = load_status;
+    device::BitmapView loaded{};
+    (void)bitmaps_.Resolve(texture, loaded);
     ESP_LOGI(kTag,
-             "decoded format=%" PRIu32 " texture=%" PRIu32 " %" PRIu32 "x%" PRIu32 " bytes=%" PRIu32 " elapsed=%" PRId64
-             " us status=%" PRId32,
-             work.asset.format, texture, decoded.view().width, decoded.view().height, decoded.view().size,
+             "loaded format=%" PRIu32 " adaptive=%d texture=%" PRIu32 " %" PRIu32 "x%" PRIu32 " bytes=%" PRIu32
+             " elapsed=%" PRId64 " us status=%" PRId32,
+             work.asset.format, work.adaptive, texture, loaded.width, loaded.height, loaded.size,
              esp_timer_get_time() - started, completed_status_);
     xSemaphoreGive(work_done_);
+}
+
+int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_handle_t& texture_out) {
+    DecodedBitmap source{};
+    const uint32_t pixel_format = work.asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888
+                                      ? MICROPIXEL_PIXEL_FORMAT_BGRA8888
+                                      : MICROPIXEL_PIXEL_FORMAT_BGR888;
+    const bool raw = work.asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 ||
+                     work.asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
+    if (raw) {
+        if (!AllocateBitmap(work.asset.width, work.asset.height, pixel_format, source)) {
+            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+        }
+        auto* destination = const_cast<uint8_t*>(source.view().data);
+        const uint32_t row_bytes = source.view().stride;
+        if (work.asset.stride < row_bytes) {
+            return MICROPIXEL_STATUS_INTERNAL;
+        }
+        for (uint32_t row = 0U; row < work.asset.height; ++row) {
+            std::memcpy(destination + row * row_bytes, work.asset.data + row * work.asset.stride, row_bytes);
+        }
+    } else if (!DecodeBitmap(work.asset, source)) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+
+    DecodedBitmap scaled{};
+    DecodedBitmap* output = &source;
+    if (work.adaptive && work.scale_numerator != work.scale_denominator) {
+        const auto scaled_dimension = [&work](uint32_t value) {
+            return static_cast<uint32_t>(
+                (static_cast<uint64_t>(value) * work.scale_numerator + work.scale_denominator / 2U) /
+                work.scale_denominator);
+        };
+        const uint32_t width = scaled_dimension(source.view().width);
+        const uint32_t height = scaled_dimension(source.view().height);
+        constexpr uint32_t kPpaStrideAlignmentPixels = 32U;
+        if (width == 0U || height == 0U ||
+            !AllocateBitmap(width, height, source.view().pixel_format, scaled, kPpaStrideAlignmentPixels)) {
+            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+        }
+        auto scale_result = graphics_.ScaleBitmap(source.view(), scaled.view());
+        if (!scale_result) {
+            return scale_result.error().status;
+        }
+        output = &scaled;
+    }
+
+    texture_out = bitmaps_.Add(output->view(), true);
+    if (texture_out == 0U) {
+        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+    }
+    output->ReleaseOwnership();
+    return MICROPIXEL_STATUS_OK;
 }
 
 void ResourceService::Shutdown() {

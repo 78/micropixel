@@ -51,7 +51,13 @@ build_and_run app_controller \
     -pthread \
     -include "$workspace_root/tools/tests/firmware_stubs/runtime/app_runtime.hpp" \
     "$workspace_root/tools/tests/test_app_controller.cpp" \
-    "$workspace_root/firmware/espressif/main/app_controller.cpp"
+    "$workspace_root/firmware/espressif/main/host/controller/app_controller.cpp"
+
+build_and_run control_dispatcher \
+    -pthread \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_control_dispatcher.cpp" \
+    "$workspace_root/firmware/espressif/main/host/controller/control_dispatcher.cpp"
 
 build_and_run background_executor \
     -pthread \
@@ -61,7 +67,7 @@ build_and_run background_executor \
 build_and_run i2c_executor \
     -pthread \
     "$workspace_root/tools/tests/test_i2c_executor.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/common/i2c_executor.cpp"
+    "$workspace_root/firmware/espressif/main/platform/buses/i2c_executor.cpp"
 
 build_and_run_c watchdog_timer \
     -pthread \
@@ -71,7 +77,7 @@ build_and_run_c watchdog_timer \
 build_and_run system_gesture_router \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_system_gesture_router.cpp" \
-    "$workspace_root/firmware/espressif/main/host_ui/system_gesture_router.cpp"
+    "$workspace_root/firmware/espressif/main/host/ui/system_gesture_router.cpp"
 
 build_and_run hall_carousel \
     "$workspace_root/tools/tests/test_hall_carousel.cpp"
@@ -79,6 +85,17 @@ build_and_run hall_carousel \
 build_and_run guest_viewport \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_guest_viewport.cpp"
+
+build_and_run guest_display_transform \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_display_transform.cpp"
+
+build_and_run guest_layout \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_layout.cpp"
+
+build_and_run guest_psram \
+    "$workspace_root/tools/tests/test_guest_psram.cpp"
 
 build_and_run guest_button \
     -I "$workspace_root/guest" \
@@ -90,23 +107,23 @@ build_and_run ascii_line_framer \
 build_and_run usb_download_reset_detector \
     "$workspace_root/tools/tests/test_usb_download_reset_detector.cpp"
 
-build_and_run perceptual_control \
-    "$workspace_root/tools/tests/test_perceptual_control.cpp"
+build_and_run control_curves \
+    "$workspace_root/tools/tests/test_control_curves.cpp"
 
 build_and_run synth_mixer \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_synth_mixer.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/common/audio/synth_mixer.cpp"
+    "$workspace_root/firmware/espressif/main/platform/audio/audio_mixer.cpp"
 
 build_and_run system_shell \
     -pthread \
     "$workspace_root/tools/tests/test_system_shell.cpp" \
-    "$workspace_root/firmware/espressif/main/host_ui/system_shell.cpp"
+    "$workspace_root/firmware/espressif/main/host/ui/system_shell.cpp"
 
 build_and_run system_locale \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_system_locale.cpp" \
-    "$workspace_root/firmware/espressif/main/host_ui/system_locale.cpp"
+    "$workspace_root/firmware/espressif/main/host/ui/system_locale.cpp"
 
 build_and_run font_registry \
     -I "$workspace_root/guest" \
@@ -159,7 +176,7 @@ build_and_run gpio_service \
 build_and_run device_catalog \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_device_catalog.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/boards/metalio-claw4/device_catalog.cpp"
+    "$workspace_root/firmware/espressif/main/device/device_registry.cpp"
 
 build_and_run app_store \
     "$workspace_root/tools/tests/test_app_store.cpp" \
@@ -184,7 +201,7 @@ build_and_run remote_control_reconnect_policy \
 
 build_and_run system_time \
     "$workspace_root/tools/tests/test_system_time.cpp" \
-    "$workspace_root/firmware/espressif/main/system_time.cpp"
+    "$workspace_root/firmware/espressif/main/host/time/system_time.cpp"
 
 metadata_output_dir="$test_output_dir/package-metadata"
 mkdir -p "$metadata_output_dir"
@@ -206,6 +223,7 @@ root = Path(sys.argv[1])
             "zh": "中文测试",
         },
     },
+    "display": "square",
     "source": "unused.cpp",
 }, ensure_ascii=False), encoding="utf-8")
 PY

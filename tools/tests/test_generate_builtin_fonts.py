@@ -75,6 +75,7 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         requirements = generate_builtin_fonts.lvgl_symbol_requirements(
             lvgl / "src/font/lv_symbol_def.h",
             [
+                root / "firmware/espressif/main/host/ui",
                 root / "firmware/espressif/main/platform/lvgl",
                 lvgl / "src/widgets/keyboard/lv_keyboard.c",
                 lvgl / "src/widgets/dropdown/lv_dropdown.c",

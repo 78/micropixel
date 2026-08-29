@@ -43,6 +43,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.5.3
+  espressif/esp_codec_dev:
+    component_hash: 4779f31a3ba3f9b38aee1afe6ccb9ba8f6108dc3a6e77d39d7d714e9a215371b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.2
   espressif/esp_lcd_co5300:
     component_hash: 21f84c5c825509ebacbddb379555b49092ae165b3e19f0edfbf6f8eff8aa036d
     dependencies:
@@ -297,6 +307,7 @@ direct_dependencies:
 - esphome/micro-opus
 - espressif/button
 - espressif/cjson
+- espressif/esp_codec_dev
 - espressif/esp_lcd_co5300
 - espressif/esp_lvgl_adapter
 - espressif/esp_mmap_assets
@@ -306,6 +317,6 @@ direct_dependencies:
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: 6e00b5d94e4c38e92494695b508f5ee4f88681fa487efe6a4fd48f87516d263a
+manifest_hash: 320585d79d098cb9f7824f49c9318e187aa16c86cab0871596b14d5e206bbbea
 target: esp32s31
 version: 3.0.0

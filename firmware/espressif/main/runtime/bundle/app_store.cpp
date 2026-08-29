@@ -99,6 +99,7 @@ std::expected<InstalledApp, AppStoreError> InstalledFromFile(const bundlefs_file
     std::snprintf(app.app_id.data(), app.app_id.size(), "%s", reinterpret_cast<const char*>(metadata.app_id));
     std::snprintf(app.display_name.data(), app.display_name.size(), "%s",
                   reinterpret_cast<const char*>(metadata.display_name));
+    app.display_profile = metadata.display_profile;
     app.bundle_size = metadata.bundle_size;
     app.content_id = file_info.content_id;
     app.file = file;

@@ -1,7 +1,7 @@
 #include <cassert>
 #include <cstdint>
 
-#include "remote_control/reconnect_policy.hpp"
+#include "host/controller/remote/remote_reconnect_policy.hpp"
 
 using micropixel::firmware::remote_control::ReconnectBackoff;
 using micropixel::firmware::remote_control::ShouldResetIdentityForControlStatus;

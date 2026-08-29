@@ -1,11 +1,11 @@
 #include <cstdio>
 #include <vector>
 
-#include "host_ui/system_gesture_router.hpp"
+#include "host/ui/system_gesture_router.hpp"
 
 namespace {
 
-using micropixel::device::InputBackend;
+using micropixel::device::Input;
 using micropixel::device::KeyCode;
 using micropixel::device::KeyPhase;
 using micropixel::device::KeySample;
@@ -16,7 +16,7 @@ using micropixel::host_ui::SystemGestureRouter;
 using micropixel::host_ui::SystemUiAction;
 using micropixel::host_ui::SystemUiActionType;
 
-class FakeInputBackend final : public InputBackend {
+class FakeInput final : public Input {
    public:
     [[nodiscard]] int32_t GetInfo(micropixel_input_info_t& info) override {
         info = {};
@@ -91,7 +91,7 @@ bool Check(bool condition, const char* message) {
 }
 
 bool NormalTouchPassesThrough() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -105,7 +105,7 @@ bool NormalTouchPassesThrough() {
 }
 
 bool InjectedTouchTraversesPlatformAndSystemRouter() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -117,7 +117,7 @@ bool InjectedTouchTraversesPlatformAndSystemRouter() {
 }
 
 bool SemanticKeyReachesGuest() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindKeySink(CaptureGuestKey, &capture);
@@ -141,7 +141,7 @@ bool SemanticKeyReachesGuest() {
 }
 
 bool TouchAndKeyInputReportUserActivity() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.SetActivitySink(CaptureActivity, &capture);
@@ -157,7 +157,7 @@ bool TouchAndKeyInputReportUserActivity() {
 }
 
 bool TopGestureIsReserved() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -173,7 +173,7 @@ bool TopGestureIsReserved() {
 }
 
 bool TopGestureScalesFor480Display() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 480U, 480U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -192,7 +192,7 @@ bool TopGestureScalesFor480Display() {
 }
 
 bool BottomGestureIsReserved() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -208,7 +208,7 @@ bool BottomGestureIsReserved() {
 }
 
 bool BottomGestureRejectsIncidentalMovement() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -233,16 +233,33 @@ bool BottomGestureRejectsIncidentalMovement() {
     return Check(capture.system_actions.empty(), "short bottom-edge movement must not suspend");
 }
 
+bool BottomSideRegionsPassThrough() {
+    FakeInput input;
+    SystemGestureRouter router(input, 720U, 720U);
+    Capture capture;
+    router.BindTouchSink(CaptureGuest, &capture);
+    router.BindSystemActionSink(CaptureSystem, &capture);
+
+    (void)input.Emit(Sample(TouchPhase::kDown, 120U, 710U, 0U, 1U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 120U, 600U, 90000U, 1U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 120U, 600U, 110000U, 1U));
+    (void)input.Emit(Sample(TouchPhase::kDown, 600U, 710U, 200000U, 2U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 600U, 600U, 290000U, 2U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 600U, 600U, 310000U, 2U));
+    return Check(capture.guest_samples.size() == 6U, "bottom swipes outside the center third must reach Guest") &&
+           Check(capture.system_actions.empty(), "bottom side regions must not suspend");
+}
+
 bool RecognizedGestureQuarantinesReplacementTrack() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture guest_capture;
     Capture hall_capture;
     router.BindTouchSink(CaptureGuest, &guest_capture);
     router.BindSystemActionSink(CaptureSystem, &guest_capture);
 
-    (void)input.Emit(Sample(TouchPhase::kDown, 180U, 710U, 0U, 3U));
-    (void)input.Emit(Sample(TouchPhase::kMove, 180U, 600U, 90000U, 3U));
+    (void)input.Emit(Sample(TouchPhase::kDown, 360U, 710U, 0U, 3U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 360U, 600U, 90000U, 3U));
     router.BindTouchSink(CaptureGuest, &hall_capture);
 
     // GT911 reports a replacement track before synthesizing Up for the old
@@ -271,7 +288,7 @@ bool RecognizedGestureQuarantinesReplacementTrack() {
 }
 
 bool RejectedEdgeGestureReplaysCompleteSequence() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -288,7 +305,7 @@ bool RejectedEdgeGestureReplaysCompleteSequence() {
 }
 
 bool ReleasedEdgeTapReplaysDownAndUp() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -303,7 +320,7 @@ bool ReleasedEdgeTapReplaysDownAndUp() {
 }
 
 bool RejectedEdgeDragRetainsLatestMove() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -323,7 +340,7 @@ bool RejectedEdgeDragRetainsLatestMove() {
 }
 
 bool TimedOutCandidateReturnsToGuest() {
-    FakeInputBackend input;
+    FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
     Capture capture;
     router.BindTouchSink(CaptureGuest, &capture);
@@ -339,16 +356,15 @@ bool TimedOutCandidateReturnsToGuest() {
 }  // namespace
 
 int main() {
-    const bool passed = NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() &&
-                        SemanticKeyReachesGuest() && TouchAndKeyInputReportUserActivity() && TopGestureIsReserved() &&
-                        TopGestureScalesFor480Display() && BottomGestureIsReserved() &&
-                        BottomGestureRejectsIncidentalMovement() &&
-                        RecognizedGestureQuarantinesReplacementTrack() &&
-                        RejectedEdgeGestureReplaysCompleteSequence() && ReleasedEdgeTapReplaysDownAndUp() &&
-                        RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
+    const bool passed =
+        NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() && SemanticKeyReachesGuest() &&
+        TouchAndKeyInputReportUserActivity() && TopGestureIsReserved() && TopGestureScalesFor480Display() &&
+        BottomGestureIsReserved() && BottomGestureRejectsIncidentalMovement() && BottomSideRegionsPassThrough() &&
+        RecognizedGestureQuarantinesReplacementTrack() && RejectedEdgeGestureReplaysCompleteSequence() &&
+        ReleasedEdgeTapReplaysDownAndUp() && RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
     if (!passed) {
         return 1;
     }
-    std::puts("SystemGestureRouter host tests passed (13 cases).");
+    std::puts("SystemGestureRouter host tests passed (14 cases).");
     return 0;
 }

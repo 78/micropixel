@@ -6,7 +6,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "runtime/bundle/bundle_format.h"
-#include "task_policy.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::runtime {
 namespace {

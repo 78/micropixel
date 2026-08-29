@@ -2,7 +2,7 @@
 #include <cstring>
 #include <ctime>
 
-#include "system_time.hpp"
+#include "host/time/system_time.hpp"
 
 using micropixel::firmware::system_time::FormatBeijingClock;
 using micropixel::firmware::system_time::IsTrustedUtcTime;

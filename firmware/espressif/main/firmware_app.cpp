@@ -4,13 +4,15 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
-#include "host_controller.hpp"
-#include "host_ui/system_shell.hpp"
-#include "local_control/local_control_agent.hpp"
-#include "network_time.hpp"
+#include "host/controller/control_dispatcher.hpp"
+#include "host/controller/guest_log_buffer.hpp"
+#include "host/controller/host_controller.hpp"
+#include "host/controller/local/local_control_agent.hpp"
+#include "host/controller/remote/remote_control_agent.hpp"
+#include "host/time/network_time.hpp"
+#include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
 #include "platform/platform.hpp"
-#include "remote_control/remote_control_agent.hpp"
 #include "work/background_executor.hpp"
 
 namespace micropixel::firmware {
@@ -34,7 +36,13 @@ void FirmwareApp::Run() {
     }
     platform_.BindBackgroundExecutor(background_executor);
 
-    auto wifi_result = platform_.wifi().Initialize();
+    if (!platform_.Ready()) {
+        ESP_LOGE(kTag, "configured board did not publish a complete service set");
+        return;
+    }
+    const platform::PlatformServices& services = platform_.Services();
+
+    auto wifi_result = services.wifi->Initialize();
     if (!wifi_result) {
         ESP_LOGW(kTag, "Wi-Fi is unavailable for this boot: error=%u", static_cast<unsigned>(wifi_result.error()));
     } else {
@@ -48,17 +56,25 @@ void FirmwareApp::Run() {
     // Keep them out of app_main's bounded stack: RemoteControlAgent owns
     // several fixed-capacity protocol buffers even when remote control is
     // disabled.
-    static device::DeviceServices devices(platform_.graphics(), platform_.input(), platform_.audio(),
-                                          platform_.random(), platform_.devices(), platform_.sensors(),
-                                          platform_.gpio(), platform_.haptics(), platform_.battery());
-    static host_ui::SystemShell shell(platform_.system_ui());
-    static remote_control::RemoteControlAgent remote_control(platform_.wifi(), platform_.hardware_info());
-    static local_control::LocalControlAgent local_control(platform_.local_control(), remote_control);
+    static device::DeviceServices devices(*services.graphics, *services.input, *services.audio, *services.random,
+                                          *services.devices, *services.sensors, *services.gpio, *services.haptics,
+                                          *services.battery);
+    static host_ui::SystemShell shell(*services.system_ui);
+    static control::GuestLogBuffer guest_logs;
+    static control::ControlDispatcher controls(
+        [](void* context, const char* app_id) {
+            static_cast<control::GuestLogBuffer*>(context)->UpdateAppLifecycle(app_id);
+        },
+        &guest_logs);
+    static remote_control::RemoteControlAgent remote_control(*services.wifi, services.board_info, controls, guest_logs,
+                                                             shell.SupportsScreenCapture());
+    static local_control::LocalControlAgent local_control(*services.local_control, controls, guest_logs,
+                                                          services.board_info, *services.wifi);
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "local control is unavailable for this boot");
     }
-    HostController(devices, platform_.battery(), platform_.wifi(), platform_.power(), shell, remote_control,
-                   background_executor)
+    HostController(devices, *services.battery, *services.wifi, *services.power, shell, controls, guest_logs,
+                   remote_control, background_executor)
         .Run();
 }
 

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "abi/micropixel_abi.h"
-#include "device/input.hpp"
+#include "device/contracts/input.hpp"
 
 namespace micropixel::device {
 class InputService;

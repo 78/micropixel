@@ -4,7 +4,7 @@
 #include <iostream>
 #include <thread>
 
-#include "host_ui/system_shell.hpp"
+#include "host/ui/system_shell.hpp"
 
 namespace {
 
@@ -20,7 +20,7 @@ using micropixel::host_ui::SystemShell;
 using micropixel::host_ui::SystemUiAction;
 using micropixel::host_ui::SystemUiActionSink;
 using micropixel::host_ui::SystemUiActionType;
-using micropixel::host_ui::SystemUiBackend;
+using micropixel::host_ui::SystemUi;
 using micropixel::host_ui::SystemUiError;
 using micropixel::host_ui::WifiSettingsModel;
 
@@ -31,7 +31,7 @@ void Check(bool condition, const char* message) {
     }
 }
 
-class FakeSystemUi final : public SystemUiBackend {
+class FakeSystemUi final : public SystemUi {
    public:
     std::expected<void, SystemUiError> ShowHall(const HallModel&, SystemUiActionSink sink, void* context) override {
         sink_ = sink;
@@ -62,6 +62,7 @@ class FakeSystemUi final : public SystemUiBackend {
     std::expected<HallCoverModel, SystemUiError> CaptureGuestFrame(uint32_t, uint64_t) override {
         return HallCoverModel{};
     }
+    [[nodiscard]] bool SupportsScreenCapture() const override { return screen_capture_supported; }
     void ReleaseGuestSnapshot() override {}
 
     std::expected<void, SystemUiError> ShowSystemMenu(const SystemMenuModel&, SystemUiActionSink sink,
@@ -167,6 +168,7 @@ class FakeSystemUi final : public SystemUiBackend {
     uint32_t leave_status_calls{};
     uint32_t leave_hall_calls{};
     uint32_t show_shutdown_calls{};
+    bool screen_capture_supported{};
 
    private:
     SystemUiActionSink sink_{};
@@ -241,6 +243,14 @@ void HallStatusBarUpdatesReachTheShell() {
 
     shell.UpdateHallStatusBar(micropixel::host_ui::HallStatusBarModel{});
     Check(ui.update_hall_status_bar_calls == 1U, "Hall status-bar updates should reach the backend");
+}
+
+void ScreenCaptureCapabilityComesFromPresentation() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(!shell.SupportsScreenCapture(), "screen capture should be absent when the backend does not implement it");
+    ui.screen_capture_supported = true;
+    Check(shell.SupportsScreenCapture(), "screen capture should be advertised when the backend implements it");
 }
 
 void WifiStateNotificationsAreCoalescedAndSurviveScreenChanges() {
@@ -461,6 +471,7 @@ int main() {
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
     HallStatusBarUpdatesReachTheShell();
+    ScreenCaptureCapabilityComesFromPresentation();
     WifiStateNotificationsAreCoalescedAndSurviveScreenChanges();
     BatteryStateNotificationsAreCoalescedAndSurviveScreenChanges();
     RemoteCommandsWakePollingWithoutBecomingUiActions();
@@ -469,6 +480,6 @@ int main() {
     ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 12 cases\n";
+    std::cout << "system_shell tests passed: 13 cases\n";
     return 0;
 }

@@ -57,10 +57,10 @@ esp_err_t MetalioClaw4DisplayPipeline::DpiFramebuffers::Submit(uint8_t* buffer) 
 
 void MetalioClaw4DisplayPipeline::BindLvgl(lv_display_t* display) {
     display_ = display;
-    framebuffers_.Bind(display_, hardware_.Panel());
+    framebuffers_.Bind(display_, board_io_.Panel());
 }
 
-void MetalioClaw4DisplayPipeline::RebindPanel() { framebuffers_.Bind(display_, hardware_.Panel()); }
+void MetalioClaw4DisplayPipeline::RebindPanel() { framebuffers_.Bind(display_, board_io_.Panel()); }
 
 lvgl::DisplayCapabilities MetalioClaw4DisplayPipeline::Capabilities() const {
     return {.partial_flush = true,
@@ -73,11 +73,11 @@ lvgl::DisplayCapabilities MetalioClaw4DisplayPipeline::Capabilities() const {
 
 esp_err_t MetalioClaw4DisplayPipeline::Suspend() {
     framebuffers_.Bind(nullptr, nullptr);
-    return hardware_.SuspendDisplay();
+    return board_io_.SuspendDisplay();
 }
 
 esp_err_t MetalioClaw4DisplayPipeline::Resume() {
-    const esp_err_t status = hardware_.ResumeDisplay();
+    const esp_err_t status = board_io_.ResumeDisplay();
     if (status == ESP_OK) {
         RebindPanel();
     }
@@ -85,7 +85,7 @@ esp_err_t MetalioClaw4DisplayPipeline::Resume() {
 }
 
 esp_err_t MetalioClaw4DisplayPipeline::SetBrightness(uint32_t per_ten_thousand) {
-    return hardware_.SetBacklightOutputPerTenThousand(per_ten_thousand);
+    return board_io_.SetBacklightOutputPerTenThousand(per_ten_thousand);
 }
 
 }  // namespace micropixel::platform::metalio_claw4

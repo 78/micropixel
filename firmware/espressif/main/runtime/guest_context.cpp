@@ -24,7 +24,7 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       sensors_(devices_.sensors(), timers_),
       gpio_(devices_.gpio(), events_, timers_),
       haptics_(devices_.haptics(), events_, timers_),
-      resources_(package, background_executor),
+      resources_(package, background_executor, devices_.graphics()),
       audio_playback_(package, devices_.audio(), events_, clock_origin_us_),
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),

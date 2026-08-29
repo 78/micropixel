@@ -88,6 +88,7 @@ CONFIG_WAMR_LINEAR_MEMORY_IN_PSRAM=y
 CONFIG_WAMR_AOT_CODE_IN_PSRAM=y
 CONFIG_MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM=y
 CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES=128
+CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES=2097152
 
 CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS=2
 CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS=1000
@@ -103,7 +104,6 @@ CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
 # ESP32-P4 product path: retained Guest objects, PPA-assisted image copies,
 # and bounded dirty-region coalescing.
 CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4=y
-CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=y
 # All Ogg Opus decoders run serially on MicroPixel's one audio decode worker,
 # so one PSRAM-backed pseudostack is sufficient for every playback instance.
 CONFIG_OPUS_NONTHREADSAFE_PSEUDOSTACK=y
@@ -121,8 +121,8 @@ CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
 CONFIG_MICROPIXEL_LVGL_PPA_ACCEL=y
 CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS=4096
 CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT=y
-# The V1 status panel always offers the Host FPS/aggregate-CPU control. Keep
-# run-time accounting available; drawing and sampling remain off until enabled.
+# The V1 status panel always offers Guest-presented FPS/aggregate-CPU control.
+# Keep run-time accounting available; drawing and sampling remain off until enabled.
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
 CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y

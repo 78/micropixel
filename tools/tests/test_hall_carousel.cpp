@@ -1,21 +1,23 @@
 #include <cstdlib>
 #include <iostream>
 
-#include "platform/lvgl/ui/square_common/hall_carousel.hpp"
-#include "platform/lvgl/ui/square_common/hall_cover_cache_policy.hpp"
-#include "platform/lvgl/ui/square_common/hall_transition_policy.hpp"
-#include "platform/lvgl/ui/square_common/profiles/square_480_layout.hpp"
-#include "platform/lvgl/ui/square_common/profiles/square_720_layout.hpp"
+#include "host/ui/lvgl/square_common/hall_carousel.hpp"
+#include "host/ui/lvgl/square_common/hall_catalog.hpp"
+#include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
+#include "host/ui/lvgl/square_common/hall_transition_policy.hpp"
+#include "host/ui/lvgl/square_common/profiles/square_480_layout.hpp"
+#include "host/ui/lvgl/square_common/profiles/square_720_layout.hpp"
 
 namespace {
 
-namespace lvgl = micropixel::platform::lvgl;
-using HallCarousel = lvgl::square_common::HallCarouselPolicy<lvgl::square_common::profiles::square_720::Layout>;
-using lvgl::square_common::HallCoverCachePolicy;
-using lvgl::square_common::HallCoverCacheSlot;
-using lvgl::square_common::HallLaunchBackgroundPlan;
-using lvgl::square_common::HallVelocityTracker;
-using lvgl::square_common::PlanHallLaunchBackground;
+namespace host_ui = micropixel::host_ui;
+using HallCarousel =
+    host_ui::lvgl::square_common::HallCarouselPolicy<host_ui::lvgl::square_common::profiles::square_720::Layout>;
+using host_ui::lvgl::square_common::HallCoverCachePolicy;
+using host_ui::lvgl::square_common::HallCoverCacheSlot;
+using host_ui::lvgl::square_common::HallLaunchBackgroundPlan;
+using host_ui::lvgl::square_common::HallVelocityTracker;
+using host_ui::lvgl::square_common::PlanHallLaunchBackground;
 
 void Check(bool condition, const char* message) {
     if (!condition) {
@@ -36,7 +38,7 @@ void CapacityAndGeometry() {
 
 void Square480Geometry() {
     using Square480Carousel =
-        lvgl::square_common::HallCarouselPolicy<lvgl::square_common::profiles::square_480::Layout>;
+        host_ui::lvgl::square_common::HallCarouselPolicy<host_ui::lvgl::square_common::profiles::square_480::Layout>;
     Check(Square480Carousel::CardX(0U, 0) == 24 && Square480Carousel::CardX(3U, 0) == 456,
           "the 480 profile must expose the leading edge of its fourth card");
     Check(Square480Carousel::kCardWidth == 135 && Square480Carousel::kCardHeight == 174,
@@ -170,6 +172,30 @@ void HallLaunchBackgroundPolicy() {
           "an App switch without a cached baseline must render a clean fallback");
 }
 
+void HallResumePolicy() {
+    micropixel::host_ui::HallModel model{};
+    model.app_count = 2U;
+    model.apps[0].app_id = "blocks";
+    model.apps[1].app_id = "snake";
+    model.apps[1].running = true;
+    model.launch_enabled = true;
+    const uint32_t visible_count = host_ui::lvgl::square_common::HallVisibleAppCount(model);
+    const uint64_t signature = host_ui::lvgl::square_common::HallCatalogSignature(model, visible_count);
+    const bool retained_running[micropixel::host_ui::kMaxHallApps]{false, true};
+    Check(host_ui::lvgl::square_common::HallResumeModelMatches(model, visible_count, signature, visible_count,
+                                                               signature, retained_running, true, false),
+          "identical Hall state must reuse its retained scene");
+    model.apps[1].running = false;
+    Check(!host_ui::lvgl::square_common::HallResumeModelMatches(model, visible_count, signature, visible_count,
+                                                                signature, retained_running, true, false),
+          "a changed running App must invalidate the retained Hall scene");
+    model.apps[1].running = true;
+    model.firmware_update_available = true;
+    Check(!host_ui::lvgl::square_common::HallResumeModelMatches(model, visible_count, signature, visible_count,
+                                                                signature, retained_running, true, false),
+          "firmware-update state must participate in Hall resume matching");
+}
+
 }  // namespace
 
 int main() {
@@ -183,6 +209,7 @@ int main() {
     CoverCacheReplacementAfterAppUpdate();
     RepeatedThrowMomentum();
     HallLaunchBackgroundPolicy();
-    std::cout << "hall_carousel tests passed: 10 cases\n";
+    HallResumePolicy();
+    std::cout << "hall_carousel tests passed: 11 cases\n";
     return 0;
 }

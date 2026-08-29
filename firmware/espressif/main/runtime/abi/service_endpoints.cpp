@@ -423,9 +423,7 @@ ServiceDescriptor ResourceServiceEndpoint::Describe() const {
         .interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL,
         .max_request_bytes = MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES,
-        .max_response_bytes = sizeof(micropixel_texture_info_t) > sizeof(micropixel_font_info_t)
-                                  ? sizeof(micropixel_texture_info_t)
-                                  : sizeof(micropixel_font_info_t),
+        .max_response_bytes = sizeof(micropixel_adaptive_texture_info_t),
     };
 }
 
@@ -438,6 +436,16 @@ int32_t ResourceServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
         }
         return WriteResult<micropixel_texture_info_t>(context_.LoadTexture(wire.asset_id), response, response_capacity,
                                                       response_size_out);
+    }
+    if (method_id == MICROPIXEL_RESOURCE_METHOD_LOAD_ADAPTIVE_TEXTURE) {
+        micropixel_resource_load_adaptive_texture_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != sizeof(wire) || wire.reserved0 != 0U ||
+            wire.asset_id == 0U || wire.scale_numerator == 0U || wire.scale_denominator == 0U) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_adaptive_texture_info_t>(
+            context_.LoadAdaptiveTexture(wire.asset_id, wire.scale_numerator, wire.scale_denominator), response,
+            response_capacity, response_size_out);
     }
     if (method_id == MICROPIXEL_RESOURCE_METHOD_LOAD_FONT) {
         micropixel_resource_load_font_request_t wire{};

@@ -4,7 +4,8 @@
 #include <atomic>
 #include <cstdint>
 
-#include "device/graphics.hpp"
+#include "device/contracts/graphics.hpp"
+#include "device/device_services.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "runtime/bundle/bundle_reader.h"
@@ -19,13 +20,17 @@ namespace micropixel::runtime {
 
 class ResourceService final {
    public:
-    ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor);
+    ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor,
+                    device::GraphicsService& graphics);
     ResourceService(const ResourceService&) = delete;
     ResourceService& operator=(const ResourceService&) = delete;
     ~ResourceService();
 
     [[nodiscard]] bool valid() const;  // NOLINT(readability-identifier-naming)
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id);
+    [[nodiscard]] ServiceResult<micropixel_adaptive_texture_info_t> LoadAdaptiveTexture(uint32_t asset_id,
+                                                                                        uint32_t scale_numerator,
+                                                                                        uint32_t scale_denominator);
     [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture);
     [[nodiscard]] ServiceResult<device::FontResourceView> FindFont(uint32_t resource_id) const;
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateStreamingTexture(uint32_t width, uint32_t height,
@@ -40,17 +45,22 @@ class ResourceService final {
     struct Work final {
         ResourceService* service{};
         micropixel_bundle_asset_view_t asset{};
+        bool adaptive{};
+        uint32_t scale_numerator{1U};
+        uint32_t scale_denominator{1U};
     };
 
     static void ProcessEntry(void* argument);
     void Process(const Work& work);
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> AddAsset(const micropixel_bundle_asset_view_t& asset);
+    [[nodiscard]] int32_t LoadOwnedAsset(const Work& work, micropixel_texture_handle_t& texture_out);
     [[nodiscard]] micropixel_texture_info_t TextureInfo(micropixel_texture_handle_t texture,
                                                         const device::BitmapView& view) const;
 
     // AotPackage owns the mapping for the complete AppSession.
     micropixel_aot_package_t package_{};
     work::BackgroundExecutor& background_executor_;
+    device::GraphicsService& graphics_;
     SemaphoreHandle_t work_done_{};
     micropixel_texture_handle_t completed_texture_{};
     int32_t completed_status_{MICROPIXEL_STATUS_INTERNAL};

@@ -5,15 +5,15 @@
 #include <expected>
 
 #include "abi/micropixel_abi.h"
-#include "device/audio.hpp"
-#include "device/battery.hpp"
-#include "device/devices.hpp"
-#include "device/gpio.hpp"
-#include "device/graphics.hpp"
-#include "device/haptics.hpp"
-#include "device/input.hpp"
-#include "device/random.hpp"
-#include "device/sensors.hpp"
+#include "device/contracts/audio.hpp"
+#include "device/contracts/battery.hpp"
+#include "device/contracts/devices.hpp"
+#include "device/contracts/gpio.hpp"
+#include "device/contracts/graphics.hpp"
+#include "device/contracts/haptics.hpp"
+#include "device/contracts/input.hpp"
+#include "device/contracts/random.hpp"
+#include "device/contracts/sensors.hpp"
 
 namespace micropixel::device {
 
@@ -26,18 +26,18 @@ using DeviceResult = std::expected<Value, DeviceFailure>;
 
 class DevicesService final {
    public:
-    explicit DevicesService(DeviceCatalogBackend& backend) : backend_(backend) {}
+    explicit DevicesService(DeviceCatalog& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<micropixel_devices_list_response_t> List(uint16_t kind) const;
     [[nodiscard]] DeviceResult<micropixel_device_info_t> GetInfo(micropixel_device_id_t device) const;
 
    private:
-    DeviceCatalogBackend& backend_;
+    DeviceCatalog& implementation_;
 };
 
 class SensorsService final {
    public:
-    explicit SensorsService(SensorBackend& backend) : backend_(backend) {}
+    explicit SensorsService(Sensors& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<micropixel_sensor_info_t> GetInfo(micropixel_device_id_t device) const;
     [[nodiscard]] DeviceResult<void> Start(micropixel_device_id_t device, uint32_t interval_us) const;
@@ -45,12 +45,12 @@ class SensorsService final {
     void Stop(micropixel_device_id_t device) const;
 
    private:
-    SensorBackend& backend_;
+    Sensors& implementation_;
 };
 
 class GpioService final {
    public:
-    explicit GpioService(GpioBackend& backend) : backend_(backend) {}
+    explicit GpioService(Gpio& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<micropixel_gpio_info_t> GetInfo(micropixel_device_id_t device) const;
     [[nodiscard]] DeviceResult<void> Open(micropixel_device_id_t device, uint16_t mode, uint16_t pull, uint16_t edge,
@@ -64,12 +64,12 @@ class GpioService final {
     void Close(micropixel_device_id_t device) const;
 
    private:
-    GpioBackend& backend_;
+    Gpio& implementation_;
 };
 
 class HapticsService final {
    public:
-    explicit HapticsService(HapticsBackend& backend) : backend_(backend) {}
+    explicit HapticsService(Haptics& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<micropixel_haptics_info_t> GetInfo(micropixel_device_id_t device) const;
     [[nodiscard]] DeviceResult<void> Play(micropixel_device_id_t device, uint16_t strength_per_mille,
@@ -78,25 +78,25 @@ class HapticsService final {
     void SetCompletionSink(HapticCompletionSink sink, void* context) const;
 
    private:
-    HapticsBackend& backend_;
+    Haptics& implementation_;
 };
 
 class PowerInfoService final {
    public:
-    PowerInfoService(DeviceCatalogBackend& devices, BatteryBackend& battery) : devices_(devices), battery_(battery) {}
+    PowerInfoService(DeviceCatalog& devices, Battery& battery) : devices_(devices), battery_(battery) {}
 
     [[nodiscard]] DeviceResult<micropixel_power_info_response_t> Get(micropixel_device_id_t device);
 
    private:
-    DeviceCatalogBackend& devices_;
-    BatteryBackend& battery_;
+    DeviceCatalog& devices_;
+    Battery& battery_;
 };
 
 class GraphicsService final {
    public:
-    explicit GraphicsService(GraphicsBackend& backend) : backend_(backend) {}
+    explicit GraphicsService(Graphics& implementation) : implementation_(implementation) {}
 
-    [[nodiscard]] bool Available() const { return backend_.Available(); }
+    [[nodiscard]] bool Available() const { return implementation_.Available(); }
     [[nodiscard]] DeviceResult<micropixel_graphics_info_t> GetInfo() const;
     [[nodiscard]] DeviceResult<void> BeginFrame() const;
     [[nodiscard]] DeviceResult<void> Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const;
@@ -110,17 +110,18 @@ class GraphicsService final {
     [[nodiscard]] DeviceResult<void> UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                                   uint32_t height, const uint8_t* pixels, uint32_t stride) const;
     [[nodiscard]] DeviceResult<void> CommitBitmapUpdateFrame() const;
+    [[nodiscard]] DeviceResult<void> ScaleBitmap(const BitmapView& source, const BitmapView& destination) const;
     [[nodiscard]] DeviceResult<void> ShowLaunchBitmap(const BitmapView& bitmap) const;
     void DismissLaunchBitmap() const;
     void ReleaseGuestResources() const;
 
    private:
-    GraphicsBackend& backend_;
+    Graphics& implementation_;
 };
 
 class InputService final {
    public:
-    explicit InputService(InputBackend& backend) : backend_(backend) {}
+    explicit InputService(Input& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<micropixel_input_info_t> GetInfo() const;
     void BindTouchSink(TouchSink sink, void* context) const;
@@ -132,12 +133,12 @@ class InputService final {
     void SetActivitySink(InputActivitySink sink, void* context) const;
 
    private:
-    InputBackend& backend_;
+    Input& implementation_;
 };
 
 class AudioService final {
    public:
-    explicit AudioService(AudioBackend& backend) : backend_(backend) {}
+    explicit AudioService(Audio& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<micropixel_audio_info_t> GetInfo() const;
     [[nodiscard]] DeviceResult<void> PlayTone(const micropixel_audio_tone_t& tone) const;
@@ -154,26 +155,25 @@ class AudioService final {
     [[nodiscard]] DeviceResult<void> ResumeAll() const;
 
    private:
-    AudioBackend& backend_;
+    Audio& implementation_;
 };
 
 class RandomService final {
    public:
-    explicit RandomService(RandomBackend& backend) : backend_(backend) {}
+    explicit RandomService(Random& implementation) : implementation_(implementation) {}
 
     [[nodiscard]] DeviceResult<uint32_t> U32() const;
 
    private:
-    RandomBackend& backend_;
+    Random& implementation_;
 };
 
 // Value-owned service façade assembled by FirmwareApp and injected into each
-// Guest runtime session. Platform handles remain private to the board backend.
+// Guest runtime session. Concrete Platform objects remain outside Runtime.
 class DeviceServices final {
    public:
-    DeviceServices(GraphicsBackend& graphics, InputBackend& input, AudioBackend& audio, RandomBackend& random,
-                   DeviceCatalogBackend& devices, SensorBackend& sensors, GpioBackend& gpio, HapticsBackend& haptics,
-                   BatteryBackend& battery)
+    DeviceServices(Graphics& graphics, Input& input, Audio& audio, Random& random, DeviceCatalog& devices,
+                   Sensors& sensors, Gpio& gpio, Haptics& haptics, Battery& battery)
         : graphics_(graphics),
           input_(input),
           audio_(audio),

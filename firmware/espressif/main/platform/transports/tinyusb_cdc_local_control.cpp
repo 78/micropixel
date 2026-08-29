@@ -1,19 +1,19 @@
 #include "platform/transports/tinyusb_cdc_local_control.hpp"
 
-#include <array>
 #include <cstring>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_private/log_lock.h"
-#include "task_policy.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::transports {
 namespace {
 
 constexpr char kTag[] = "tinyusb_local_control";
 constexpr char kProtocolPrefix[] = "MPX1 ";
-constexpr uint32_t kTaskStackSize = 10U * 1024U;
+constexpr size_t kReadCapacity = 512U;
+constexpr uint32_t kTaskStackSize = 4U * 1024U;
 
 }  // namespace
 
@@ -28,7 +28,13 @@ esp_err_t TinyUsbCdcLocalControl::Start(DevelopmentCommandSink development_sink,
     development_context_ = development_context;
     command_ =
         static_cast<char*>(heap_caps_calloc(kCommandCapacity, sizeof(char), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (command_ == nullptr) {
+    io_workspace_ = static_cast<uint8_t*>(
+        heap_caps_calloc(kResponseCapacity, sizeof(uint8_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (command_ == nullptr || io_workspace_ == nullptr) {
+        heap_caps_free(command_);
+        command_ = nullptr;
+        heap_caps_free(io_workspace_);
+        io_workspace_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
     line_framer_.Bind(command_, kCommandCapacity);
@@ -36,6 +42,8 @@ esp_err_t TinyUsbCdcLocalControl::Start(DevelopmentCommandSink development_sink,
         pdPASS) {
         heap_caps_free(command_);
         command_ = nullptr;
+        heap_caps_free(io_workspace_);
+        io_workspace_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
     active_instance_.store(this, std::memory_order_release);
@@ -46,6 +54,8 @@ esp_err_t TinyUsbCdcLocalControl::Start(DevelopmentCommandSink development_sink,
         task_ = nullptr;
         heap_caps_free(command_);
         command_ = nullptr;
+        heap_caps_free(io_workspace_);
+        io_workspace_ = nullptr;
         return status;
     }
     ESP_LOGI(kTag, "TinyUSB CDC transport ready; protocol=MPX1, command_buffer=%zu", kCommandCapacity);
@@ -112,19 +122,18 @@ void TinyUsbCdcLocalControl::ReceiveEvent(int interface_number, cdcacm_event_t* 
 }
 
 void TinyUsbCdcLocalControl::Run() {
-    std::array<uint8_t, 512U> bytes{};
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         size_t received = 0U;
         do {
             received = 0U;
-            const esp_err_t status = tinyusb_cdcacm_read(interface_, bytes.data(), bytes.size(), &received);
+            const esp_err_t status = tinyusb_cdcacm_read(interface_, io_workspace_, kReadCapacity, &received);
             if (status != ESP_OK) {
                 ESP_LOGW(kTag, "TinyUSB CDC read failed: %s", esp_err_to_name(status));
                 break;
             }
             if (received > 0U) {
-                line_framer_.Consume(bytes.data(), received, [this](const char* command) { ProcessCommand(command); });
+                line_framer_.Consume(io_workspace_, received, [this](const char* command) { ProcessCommand(command); });
             }
             DrainResponses();
         } while (received > 0U);
@@ -151,23 +160,24 @@ void TinyUsbCdcLocalControl::DrainResponses() {
     if (source == nullptr || context == nullptr) {
         return;
     }
-    std::array<char, kResponseCapacity> response{};
-    while (source(context, response.data(), response.size())) {
-        const size_t length = ::strnlen(response.data(), response.size());
-        if (length == 0U || length == response.size()) {
+    auto* response = reinterpret_cast<char*>(io_workspace_);
+    std::memset(response, 0, kResponseCapacity);
+    while (source(context, response, kResponseCapacity)) {
+        const size_t length = ::strnlen(response, kResponseCapacity);
+        if (length == 0U || length == kResponseCapacity) {
             continue;
         }
         LockOutput();
         const char newline = '\n';
-        const bool written = WriteAll(&newline, sizeof(newline)) && WriteAll(response.data(), length) &&
-                             WriteAll(&newline, sizeof(newline));
+        const bool written =
+            WriteAll(&newline, sizeof(newline)) && WriteAll(response, length) && WriteAll(&newline, sizeof(newline));
         FlushOutput(1000U);
         UnlockOutput();
         if (!written) {
             ESP_LOGW(kTag, "local control response write failed");
             return;
         }
-        response = {};
+        std::memset(response, 0, kResponseCapacity);
     }
 }
 

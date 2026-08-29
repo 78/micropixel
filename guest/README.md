@@ -35,7 +35,11 @@ guest/
 录制的 BGM、对白和长音效使用 asset manifest 的 `ogg_opus` 格式；Host 内置 micro-opus 解码，App Bundle
 只携带压缩 Ogg，不需要打包 WAV 或 Guest codec。
 
-日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。`sources`、`localization`、
+日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。App 必须用一个简单的 `display` 字段声明逻辑
+画布：`square`、`landscape` 或 `portrait`。构建工具把这个声明编译进 Guest，SDK 初始化时读取物理屏幕
+尺寸并完成兼容性判断和坐标变换。`square` 可运行在任意比例的屏幕上，使用短边形成居中的 720×720
+逻辑画布；`landscape` 和 `portrait` 分别使用对应方向的完整屏幕，方向不符时由 SDK 统一退出。Host 不解释
+布局策略。`sources`、`localization`、
 `asset_manifest` 和 `audio/sfx.json` 是生成 Catalog、资源绑定、音效 profile、Wasm/AOT 与 Bundle 的
 唯一输入，不需要为每个 App 编写 build 脚本：
 
@@ -48,7 +52,12 @@ python3 tools/micropixel app install guest/apps/demo
 micropixel build
 micropixel package
 micropixel app install
+micropixel run
 ```
+
+这些命令默认读取当前目录的 `app.json`。`micropixel run` 会完成 development 构建、停止当前 Guest、
+安装、启动和日志跟随；`Ctrl-C` 不会停止设备上的 App。只需部署并启动时使用 `micropixel run --no-follow`。
+已经安装后也可运行 `micropixel app start --follow`，CLI 会从当前 manifest 推导 App ID。
 
 仓库中的 `tools/build_{blocks,snake,demo}_bundle.sh` 只是现有 CI 和 `tools/p4.sh` 的薄兼容入口，内部
 同样调用 `micropixel package`，不再维护第二套构建参数。完整产品基线仍可使用：
@@ -72,9 +81,10 @@ Guest 使用 wasi-sdk 33 的 no-exception libc++ profile。常用 header-only ST
 exception、RTTI、Guest thread 和 WASI import 仍不属于受支持能力，具体边界见
 [Guest C++ SDK](sdk/README.md#guest-stl-profile)。
 
-动态 STL 使用可增长的 Wasm linear memory。当前 P4 产品的单 Guest 策略上限为 8 MiB；Host 在启动 App
-时会根据最大连续 PSRAM 块下调实际上限并保留自身安全余量。Host 管理的 Texture/offscreen surface 使用
-另一份 PSRAM 配额，不占 Guest C++ heap。
+动态 STL 使用可增长的 Wasm linear memory。当前 P4 与 S31 的单 Guest 策略上限均为 8 MiB；Host 在启动
+App 时会根据最大连续 PSRAM 块下调实际上限，后续按需增长也必须保留自身安全水位。Host 管理的
+Texture/offscreen surface 不占 Guest C++ heap，也不预留固定累计配额；每次实际分配都根据当时可用 PSRAM
+动态准入。小游戏因此只占实际工作集，大游戏在设备仍有余量时可以继续加载资源。
 
 Guest 代码不得直接依赖 ESP-IDF 或具体开发板。需要访问设备能力时，应经 typed SDK 和
 [Runtime Host ABI](abi/README.md) 进入 Host。当前 Public API、错误策略和待冻结事项见

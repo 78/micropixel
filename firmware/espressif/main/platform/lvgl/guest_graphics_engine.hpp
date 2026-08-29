@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "device/graphics.hpp"
+#include "device/contracts/graphics.hpp"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -47,7 +47,7 @@ class GuestGraphicsEngine final {
     void Release();
 
     [[nodiscard]] lv_obj_t* FrameLocked() const { return guest_frame_; }
-    [[nodiscard]] uint32_t DisplayRefreshSequence() const { return display_refresh_sequence_; }
+    [[nodiscard]] uint32_t GuestPresentedFrameSequence() const { return guest_presented_frame_sequence_; }
     [[nodiscard]] bool RefreshSynchronizationAvailable() const { return display_refresh_ready_ != nullptr; }
     void DrainRefreshReady();
     void WaitForRefreshReady();
@@ -107,11 +107,16 @@ class GuestGraphicsEngine final {
     device::TextureAccess scene_texture_access_{};
     uint32_t graphics_frame_sequence_{};
     uint32_t display_refresh_sequence_{};
+    uint32_t guest_presented_frame_sequence_{};
     int64_t display_refresh_started_us_{};
     StaticSemaphore_t display_refresh_ready_storage_{};
     SemaphoreHandle_t display_refresh_ready_{};
     bool bitmap_update_frame_active_{};
     bool graphics_frame_active_{};
+    // A boolean deliberately coalesces any number of Guest updates into the
+    // single LVGL refresh that actually presents them.
+    bool guest_refresh_pending_{};
+    bool guest_refresh_active_{};
 };
 
 }  // namespace micropixel::platform::lvgl

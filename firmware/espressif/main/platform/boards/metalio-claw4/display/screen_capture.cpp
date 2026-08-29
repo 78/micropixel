@@ -9,8 +9,9 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "lvgl.h"
-#include "platform/drivers/input/gt911_input.hpp"
+#include "platform/input/gt911_input.hpp"
 #include "platform/lvgl/display/screen_capture.hpp"
+#include "platform/transports/development_display_control.hpp"
 #include "platform/transports/usb_serial_jtag_local_control.hpp"
 
 namespace micropixel::platform::metalio_claw4 {
@@ -20,7 +21,7 @@ constexpr char kTag[] = "micropixel_capture";
 
 struct DevelopmentCapture final {
     transports::UsbSerialJtagLocalControl transport{};
-    lvgl::ScreenCaptureDevelopment capture{};
+    transports::DevelopmentDisplayControl display_control{};
 };
 
 DevelopmentCapture& DevelopmentInstance() {
@@ -49,13 +50,13 @@ uint8_t* DisplayedFrameBuffer(lv_display_t* display, esp_lcd_panel_handle_t pane
 
 }  // namespace
 
-esp_err_t InitializeScreenCapture(lv_display_t* display, drivers::Gt911Input& touch_input, uint32_t width,
+esp_err_t InitializeScreenCapture(lv_display_t* display, input::Gt911Input& touch_input, uint32_t width,
                                   uint32_t height) {
     auto& development = DevelopmentInstance();
-    return development.capture.Start(display, touch_input, development.transport, width, height);
+    return development.display_control.Start(display, touch_input, development.transport, width, height);
 }
 
-device::LocalControlBackend& UsbLocalControlBackend() { return DevelopmentInstance().transport; }
+device::LocalControl& UsbLocalControl() { return DevelopmentInstance().transport; }
 
 std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(lv_display_t* display,
                                                                                 esp_lcd_panel_handle_t panel,

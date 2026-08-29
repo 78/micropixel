@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
+#include "runtime/memory/guest_psram.hpp"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -22,7 +23,6 @@ constexpr uint32_t kGuestAppHeapSize = 0U;
 constexpr uint32_t kWasmPageBytes = 64U * 1024U;
 constexpr uint32_t kGuestLinearMemoryMaxPages = CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES;
 constexpr uint32_t kGuestLinearMemoryMinimumPages = 2U;
-constexpr size_t kGuestLinearMemoryPsramReserve = 256U * 1024U;
 constexpr size_t kGuestLinearMemoryAllocationOverhead = 64U;
 // Keep small, latency-sensitive WAMR metadata in internal SRAM.  Module-load
 // buffers are larger and must not depend on finding a contiguous internal
@@ -33,7 +33,8 @@ constexpr char kTag[] = "micropixel_wamr";
 bool guest_memory_placement_logged;
 
 constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
-    constexpr size_t kReservedBytes = kGuestLinearMemoryPsramReserve + kGuestLinearMemoryAllocationOverhead;
+    constexpr size_t kReservedBytes =
+        CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES + kGuestLinearMemoryAllocationOverhead;
     const uint32_t available_pages =
         largest_psram_block > kReservedBytes
             ? static_cast<uint32_t>((largest_psram_block - kReservedBytes) / kWasmPageBytes)
@@ -41,7 +42,8 @@ constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
     return std::min(kGuestLinearMemoryMaxPages, available_pages);
 }
 
-static_assert(EffectiveGuestLinearMemoryPages(2U * 1024U * 1024U) == 27U);
+static_assert(EffectiveGuestLinearMemoryPages(2U * 1024U * 1024U) == 0U);
+static_assert(EffectiveGuestLinearMemoryPages(4U * 1024U * 1024U) == 31U);
 static_assert(EffectiveGuestLinearMemoryPages(32U * 1024U * 1024U) == kGuestLinearMemoryMaxPages);
 
 struct WamrAllocationHeader {
@@ -69,7 +71,8 @@ void* WamrMalloc(unsigned size) {
 
     const uint32_t caps =
         size >= kPsramAllocationThreshold ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT : MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-    void* origin = heap_caps_malloc(static_cast<size_t>(size) + kOverhead, caps);
+    void* origin = size >= kPsramAllocationThreshold ? AllocateGuestPsram(static_cast<size_t>(size) + kOverhead)
+                                                     : heap_caps_malloc(static_cast<size_t>(size) + kOverhead, caps);
     if (origin == nullptr) {
         LogAllocationFailure("malloc", size);
         return nullptr;
@@ -100,12 +103,43 @@ void* WamrRealloc(void* memory, unsigned size) {
 
     const auto* old_header = reinterpret_cast<const WamrAllocationHeader*>(memory) - 1;
     const unsigned old_size = old_header->size;
-    void* resized = WamrMalloc(size);
-    if (resized == nullptr) {
+    constexpr size_t kOverhead = sizeof(WamrAllocationHeader) + kWamrAllocationAlignment - 1U;
+    if (size > std::numeric_limits<size_t>::max() - kOverhead) {
+        LogAllocationFailure("realloc", size);
         return nullptr;
     }
-    std::memcpy(resized, memory, std::min(old_size, size));
-    WamrFree(memory);
+    const bool old_psram = old_size >= kPsramAllocationThreshold;
+    const bool new_psram = size >= kPsramAllocationThreshold;
+    const size_t old_allocation_bytes = static_cast<size_t>(old_size) + kOverhead;
+    const size_t new_allocation_bytes = static_cast<size_t>(size) + kOverhead;
+    const size_t psram_growth = new_psram ? (old_psram && new_allocation_bytes > old_allocation_bytes
+                                                 ? new_allocation_bytes - old_allocation_bytes
+                                                 : (old_psram ? 0U : new_allocation_bytes))
+                                          : 0U;
+    if (new_psram && !CanGrowGuestPsram(psram_growth)) {
+        LogAllocationFailure("realloc", size);
+        return nullptr;
+    }
+
+    void* old_origin = old_header->origin;
+    const size_t old_payload_offset = reinterpret_cast<uintptr_t>(memory) - reinterpret_cast<uintptr_t>(old_origin);
+    const uint32_t caps = new_psram ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT : MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    void* resized_origin = heap_caps_realloc(old_origin, new_allocation_bytes, caps);
+    if (resized_origin == nullptr) {
+        LogAllocationFailure("realloc", size);
+        return nullptr;
+    }
+    const uintptr_t resized_aligned =
+        (reinterpret_cast<uintptr_t>(resized_origin) + sizeof(WamrAllocationHeader) + kWamrAllocationAlignment - 1U) &
+        ~(kWamrAllocationAlignment - 1U);
+    auto* resized = reinterpret_cast<void*>(resized_aligned);
+    auto* preserved_payload = static_cast<uint8_t*>(resized_origin) + old_payload_offset;
+    if (resized != preserved_payload) {
+        std::memmove(resized, preserved_payload, std::min(old_size, size));
+    }
+    auto* resized_header = reinterpret_cast<WamrAllocationHeader*>(resized) - 1;
+    resized_header->origin = resized_origin;
+    resized_header->size = size;
     return resized;
 }
 
@@ -130,7 +164,7 @@ wasm_module_inst_t InstantiateGuest(wasm_module_t module, char* error_buf, uint3
     if (effective_max_pages < kGuestLinearMemoryMinimumPages) {
         std::snprintf(error_buf, error_buf_size,
                       "insufficient contiguous PSRAM for Guest linear memory: largest=%zu reserve=%zu", psram_largest,
-                      kGuestLinearMemoryPsramReserve);
+                      GuestPsramReserveBytes());
         return nullptr;
     }
     const uint64_t effective_max_bytes = static_cast<uint64_t>(effective_max_pages) * kWasmPageBytes;

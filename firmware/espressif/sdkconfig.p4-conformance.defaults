@@ -1,3 +1,2 @@
 # Synthetic Host events used by event-wait, touch-pressure, and Run-handler conformance Guests.
 CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=y
-CONFIG_MICROPIXEL_METALIO_CLAW4_AUDIO=n

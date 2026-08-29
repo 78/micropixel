@@ -13,7 +13,7 @@ void Require(bool condition) {
     }
 }
 
-class SensorBackend final : public micropixel::device::SensorBackend {
+class Sensors final : public micropixel::device::Sensors {
    public:
     [[nodiscard]] int32_t GetInfo(micropixel_device_id_t device, micropixel_sensor_info_t& info) const override {
         if (device != kSensor) {
@@ -55,7 +55,7 @@ class SensorBackend final : public micropixel::device::SensorBackend {
         return MICROPIXEL_STATUS_OK;
     }
 
-    void Stop(micropixel_device_id_t device) override {
+    void StopSampling(micropixel_device_id_t device) override {
         if (device == kSensor) {
             started = false;
             sample_ready = false;
@@ -76,7 +76,7 @@ class SensorBackend final : public micropixel::device::SensorBackend {
 }  // namespace
 
 int main() {
-    SensorBackend backend;
+    Sensors backend;
     micropixel::device::SensorsService devices{backend};
     micropixel::runtime::TimerService clock;
     micropixel::runtime::SensorService service{devices, clock};

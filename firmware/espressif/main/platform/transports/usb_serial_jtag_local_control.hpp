@@ -14,7 +14,7 @@
 namespace micropixel::platform::transports {
 
 // Owns the USB Serial/JTAG byte stream and line framing. MPX1 commands are
-// forwarded through LocalControlBackend; optional development commands (for
+// forwarded through LocalControl; optional development commands (for
 // example capture/touch injection) remain outside the product protocol.
 class UsbSerialJtagLocalControl final : public DevelopmentLocalControlTransport {
    public:
