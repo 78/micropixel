@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.9.4"
+VERSION = "0.10.0"
 MINIMUM_FIRMWARE_VERSION = "0.2.2"
 BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
