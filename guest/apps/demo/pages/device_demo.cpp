@@ -62,12 +62,9 @@ void AppendFixed2(Line& line, float value) {
 class DevicePage final {
    public:
     void Enter(DemoContext& context) {
-        for (uint32_t index = 0U; index < 3U; ++index) {
-            buttons_[index].SetBounds(BottomButtonRect(context, index, 3U));
-            buttons_[index].Reset();
-        }
         status_.Clear();
         RefreshCatalog(context);
+        LayoutButtons(context);
     }
 
     void Exit() { CloseSelected(); }
@@ -122,6 +119,7 @@ class DevicePage final {
         if (event.type() == micropixel::EventType::kDeviceAdded ||
             event.type() == micropixel::EventType::kDeviceRemoved) {
             RefreshCatalog(context);
+            LayoutButtons(context);
             return true;
         }
         return false;
@@ -148,35 +146,41 @@ class DevicePage final {
     }
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
-        const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
+        const int32_t center_x = PageCenterX(context);
         if (!selected_valid_) {
-            commands.DrawTextCentered(center_x, 190, "No devices discovered", DangerColor(),
+            commands.DrawTextCentered(center_x, PageY(context, 80, 90), "No devices discovered", DangerColor(),
                                       micropixel::SystemFont::kTitle);
-            commands.DrawTextCentered(center_x, 250, status_.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
+            commands.DrawTextCentered(center_x, PageY(context, 140, 150), status_.c_str(), MutedColor(),
+                                      micropixel::SystemFont::kMedium);
         } else {
             Line heading;
             heading.Append("Device ");
             heading.AppendUint(selected_index_ + 1U);
             heading.Append(" / ");
             heading.AppendUint(devices_.size());
-            commands.DrawTextCentered(center_x, 112, heading.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
-            commands.DrawTextCentered(center_x, 148, selected_.name.c_str(), micropixel::Color::White(),
+            commands.DrawTextCentered(center_x, PageY(context, 10, 12), heading.c_str(), MutedColor(),
+                                      micropixel::SystemFont::kMedium);
+            commands.DrawTextCentered(center_x, PageY(context, 40, 48), selected_.name.c_str(),
+                                      micropixel::Color::White(),
                                       micropixel::SystemFont::kLarge);
 
             Line identity;
             identity.Append(KindName(selected_.kind));
             identity.Append("   DeviceId ");
             identity.AppendUint(selected_.id.value());
-            commands.DrawTextCentered(center_x, 194, identity.c_str(), AccentColor(), micropixel::SystemFont::kMedium);
+            commands.DrawTextCentered(center_x, PageY(context, 78, 94), identity.c_str(), AccentColor(),
+                                      micropixel::SystemFont::kMedium);
             RenderSelected(context, commands, center_x);
-            commands.DrawTextCentered(center_x, static_cast<int32_t>(context.display.height()) - 132, status_.c_str(),
-                                      MutedColor(), micropixel::SystemFont::kMedium);
+            commands.DrawTextCentered(center_x, context.layout.page_content.y + context.layout.page_content.height - 30,
+                                      status_.c_str(), MutedColor(),
+                                      micropixel::SystemFont::kMedium);
         }
 
         DrawButton(commands, buttons_[0], "PREV", BlueColor());
-        DrawButton(commands, buttons_[1],
-                   selected_valid_ && selected_.kind == micropixel::DeviceKind::kGpioLine ? "READ" : "ACTION",
-                   AccentColor());
+        if (HasAction()) {
+            DrawButton(commands, buttons_[1],
+                       selected_.kind == micropixel::DeviceKind::kGpioLine ? "READ" : "ACTION", AccentColor());
+        }
         DrawButton(commands, buttons_[2], "NEXT", BlueColor());
     }
 
@@ -216,6 +220,54 @@ class DevicePage final {
         selected_index_ = static_cast<uint32_t>(index);
         CloseSelected();
         OpenSelected(context);
+        LayoutButtons(context);
+    }
+
+    [[nodiscard]] bool HasAction() const {
+        if (!selected_valid_) {
+            return false;
+        }
+        return selected_.kind == micropixel::DeviceKind::kHaptics ||
+               selected_.kind == micropixel::DeviceKind::kGpioLine ||
+               selected_.kind == micropixel::DeviceKind::kPower;
+    }
+
+    [[nodiscard]] bool ActionEnabled() const {
+        if (!HasAction()) {
+            return false;
+        }
+        if (selected_.kind == micropixel::DeviceKind::kHaptics) {
+            return haptic_.valid();
+        }
+        if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
+            return gpio_input_.valid();
+        }
+        return true;
+    }
+
+    void LayoutButtons(const DemoContext& context) {
+        if (HasAction()) {
+            LayoutButtonRow(context, buttons_);
+            buttons_[1].SetEnabled(ActionEnabled());
+            return;
+        }
+
+        constexpr std::array items{micropixel::ui::FlexItem::Grow(), micropixel::ui::FlexItem::Grow()};
+        std::array<micropixel::Rect, items.size()> rects{};
+        const int32_t horizontal_padding = context.layout.compact() ? 20 : 28;
+        const int32_t vertical_padding = context.layout.compact() ? 12 : 16;
+        auto result = micropixel::ui::ComputeFlexLayout(
+            context.layout.page_actions,
+            micropixel::ui::FlexLayout{.direction = micropixel::ui::FlexDirection::kHorizontal,
+                                       .padding = {vertical_padding, horizontal_padding, vertical_padding,
+                                                   horizontal_padding},
+                                       .gap_pixels = context.layout.compact() ? 10 : 14},
+            items, rects);
+        micropixel::Assert(result.has_value(), "demo.device: navigation button layout failed");
+        buttons_[0].SetBounds(rects[0]);
+        buttons_[1].SetBounds({});
+        buttons_[1].SetEnabled(false);
+        buttons_[2].SetBounds(rects[1]);
     }
 
     void OpenSelected(DemoContext& context) {
@@ -361,7 +413,7 @@ class DevicePage final {
         }
     }
 
-    void RenderSelected(DemoContext&, micropixel::Frame& commands, int32_t center_x) const {
+    void RenderSelected(DemoContext& context, micropixel::Frame& commands, int32_t center_x) const {
         if (selected_.kind == micropixel::DeviceKind::kSensor) {
             Line axes;
             if (sensor_kind_ == micropixel::SensorKind::kAcceleration && has_acceleration_) {
@@ -381,7 +433,7 @@ class DevicePage final {
             } else {
                 axes.Append("Waiting for the first cached sample...");
             }
-            commands.DrawTextCentered(center_x, 278, axes.c_str(), micropixel::Color::White(),
+            commands.DrawTextCentered(center_x, PageY(context, 135, 178), axes.c_str(), micropixel::Color::White(),
                                       micropixel::SystemFont::kMedium);
         } else if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
             Line gpio;
@@ -392,7 +444,7 @@ class DevicePage final {
             } else {
                 gpio.Append(gpio_value_ ? "   INPUT HIGH" : "   INPUT LOW");
             }
-            commands.DrawTextCentered(center_x, 278, gpio.c_str(), micropixel::Color::White(),
+            commands.DrawTextCentered(center_x, PageY(context, 135, 178), gpio.c_str(), micropixel::Color::White(),
                                       micropixel::SystemFont::kMedium);
         } else if (selected_.kind == micropixel::DeviceKind::kPower && has_power_) {
             Line power;
@@ -400,11 +452,11 @@ class DevicePage final {
             power.AppendUint(power_.battery_percent);
             power.Append("%   ");
             power.Append(power_.external_connected ? "external power" : "battery power");
-            commands.DrawTextCentered(center_x, 278, power.c_str(), micropixel::Color::White(),
+            commands.DrawTextCentered(center_x, PageY(context, 135, 178), power.c_str(), micropixel::Color::White(),
                                       micropixel::SystemFont::kMedium);
         } else {
-            commands.DrawTextCentered(center_x, 278, "Select devices by opaque DeviceId", micropixel::Color::White(),
-                                      micropixel::SystemFont::kMedium);
+            commands.DrawTextCentered(center_x, PageY(context, 135, 178), "Select devices by opaque DeviceId",
+                                      micropixel::Color::White(), micropixel::SystemFont::kMedium);
         }
     }
 
@@ -459,6 +511,8 @@ bool DeviceDemoOnEvent(DemoContext& context, const micropixel::Event& event) {
 bool DeviceDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
     return device_page.OnTouch(context, event);
 }
-void DeviceDemoRender(DemoContext& context, micropixel::Frame& commands) { device_page.Render(context, commands); }
+void DeviceDemoRender(DemoContext& context, micropixel::Frame& commands) {
+    device_page.Render(context, commands);
+}
 
 }  // namespace demo

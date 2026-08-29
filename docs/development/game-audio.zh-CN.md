@@ -1,4 +1,4 @@
-# 游戏音频设计与感知校准规范
+# 游戏音频设计与验收规范
 
 本文是所有 MicroPixel 游戏 Guest 的音频开发规范。新游戏和新增音效必须遵守本文；已有游戏修改音效时
 也必须继续通过相同的自动分析和真机验收。目标是让音效参数可审查、可计算、可回归，并保持不同游戏在
@@ -36,14 +36,13 @@ guest/apps/<game>/
 ```sh
 python3 tools/analyze_sfx.py \
   --manifest guest/apps/<game>/audio/sfx.json \
-  --device-profile firmware/espressif/main/platform/boards/metalio-claw4/audio/perceptual_profile.json \
   --emit-cpp-header build/apps/<game>/assets/<game>_sfx_profiles.hpp \
   --report build/apps/<game>/sfx-report.json \
   --check
 ```
 
 `--check` 不得从发布构建中省略。运行时代码必须包含生成头文件，并将其中的 `volume_per_mille`
-原样传给 Host；构建参数 `MICROPIXEL_SFX_DEVICE_PROFILE` 可以替换设备频响，但不能绕过检查。
+原样传给 Host。分析器只检查 Guest 生成的数字音频，不接受板型或扬声器频响配置。
 
 每次修改分析器、JSON schema 或游戏音效，还必须运行：
 
@@ -115,7 +114,7 @@ schema v2 的默认 limits 使用模板中的当前项目基线：
 新游戏合入前必须全部满足：
 
 - [ ] `audio/sfx.json` 是运行时所有音色参数的唯一来源；
-- [ ] 正式构建使用项目设备 profile、生成头文件与报告，并带 `--check`；
+- [ ] 正式构建生成数字音频分析报告和运行时头文件，并带 `--check`；
 - [ ] 所有效果没有 analyzer violation，评分不作为唯一通过条件；
 - [ ] 高频事件使用最坏触发率并检查重复暴露；
 - [ ] 与 Blocks/Snake 的同类事件完成跨游戏层级比较；
@@ -123,8 +122,8 @@ schema v2 的默认 limits 使用模板中的当前项目基线：
 - [ ] 正式 Bundle 构建通过，真机没有丢命令或 voice exhaustion；
 - [ ] 目标设备完成 A/B 试听，游戏特有取舍记录在 `audio/README.md`。
 
-设备 profile 当前若标记为 `uncalibrated-flat`，报告只能用于相对数字比较。得到校准麦克风扫频数据后，
-应更新或替换设备频响曲线，再复跑所有游戏；任何情况下都不要把这些指标表述为绝对声压或医学听力安全结论。
+分析报告只用于数字音频的相对比较，不能表述为绝对声压或医学听力安全结论。扬声器、结构腔体和安装方式
+造成的听感差异由目标设备上的 A/B 试听验收，不进入 Guest 的构建配置。
 
 ## 7. Ogg Opus 长音频
 

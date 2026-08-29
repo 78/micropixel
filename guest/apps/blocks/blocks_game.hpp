@@ -37,12 +37,12 @@ class BlocksGame final {
     void RasterizeCell(uint32_t column, uint32_t row, uint8_t visual);
     void PutCellPixel(uint32_t x, uint32_t y, Rgb color);
     [[nodiscard]] uint8_t VisualCell(uint32_t column, uint32_t row) const;
-    void RenderMiniPiece(micropixel::ui::ViewportFrame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
+    void RenderMiniPiece(micropixel::Frame& commands, Tetromino type, int32_t center_x, int32_t top, bool muted,
                          bool visible) const;
-    void RenderHeader(micropixel::ui::ViewportFrame& commands, const Theme& theme) const;
-    void RenderSidebar(micropixel::ui::ViewportFrame& commands, const Theme& theme) const;
-    void RenderStatusEffect(micropixel::ui::ViewportFrame& commands, const Theme& theme) const;
-    void RenderOverlay(micropixel::ui::ViewportFrame& commands) const;
+    void RenderHeader(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderSidebar(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderStatusEffect(micropixel::Frame& commands, const Theme& theme) const;
+    void RenderOverlay(micropixel::Frame& commands) const;
 
     [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
                                              uint16_t volume_per_mille, uint16_t attack_ms = 4U,
@@ -64,7 +64,6 @@ class BlocksGame final {
     blocks_strings::Catalog strings_;
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
-    micropixel::ui::Viewport viewport_;
     micropixel::Audio audio_;
     BlocksModel model_{};
     micropixel::Texture board_texture_{};

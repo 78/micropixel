@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.tap-counter",
+  "display": "square",
   "display_name": "Tap Counter",
   "source": "main.cpp",
   "sources": ["main.cpp"]

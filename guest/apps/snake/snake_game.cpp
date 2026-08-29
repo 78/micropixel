@@ -9,7 +9,6 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer
       strings_(snake_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
-      viewport_(renderer_info, {kScreenWidth, kScreenHeight}),
       audio_(audio),
       best_score_(best_score),
       audio_available_(audio_available) {
@@ -132,8 +131,7 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
     Render();
 }
 
-void SnakeGame::OnTouch(const micropixel::TouchEvent& physical_touch) {
-    const micropixel::TouchEvent touch = viewport_.ToLogical(physical_touch);
+void SnakeGame::OnTouch(const micropixel::TouchEvent& touch) {
     if (screen_ != Screen::kPlaying) {
         const micropixel::ui::ButtonUpdate update = screen_button_.OnTouch(touch);
         if (update.clicked) {

@@ -9,16 +9,35 @@ namespace demo {
 
 namespace {
 
-[[nodiscard]] micropixel::Rect AudioButtonRect(const DemoContext& context, uint32_t column, uint32_t row) {
-    constexpr int32_t kMargin = 42;
-    constexpr int32_t kGap = 16;
-    constexpr int32_t kTop = 260;
-    constexpr int32_t kHeight = 78;
-    constexpr int32_t kRowGap = 22;
-    const int32_t display_width = static_cast<int32_t>(context.display.width());
-    const int32_t width = (display_width - kMargin * 2 - kGap) / 2;
-    return micropixel::Rect{kMargin + static_cast<int32_t>(column) * (width + kGap),
-                            kTop + static_cast<int32_t>(row) * (kHeight + kRowGap), width, kHeight};
+void LayoutAudioButtons(const DemoContext& context, std::span<micropixel::ui::Button> buttons) {
+    constexpr std::array row_items{micropixel::ui::FlexItem::Grow(), micropixel::ui::FlexItem::Grow(),
+                                   micropixel::ui::FlexItem::Grow()};
+    std::array<micropixel::Rect, row_items.size()> rows{};
+    const micropixel::Rect button_area{
+        context.layout.page_content.x, PageY(context, 98, 150), context.layout.page_content.width,
+        context.layout.page_content.height - (context.layout.compact() ? 108 : 174)};
+    auto row_result = micropixel::ui::ComputeFlexLayout(
+        button_area,
+        micropixel::ui::FlexLayout{.direction = micropixel::ui::FlexDirection::kVertical,
+                                   .padding = {0, context.layout.compact() ? 20 : 42, 0,
+                                               context.layout.compact() ? 20 : 42},
+                                   .gap_pixels = context.layout.compact() ? 10 : 18},
+        row_items, rows);
+    micropixel::Assert(row_result.has_value(), "demo.audio: row layout failed");
+    constexpr std::array column_items{micropixel::ui::FlexItem::Grow(), micropixel::ui::FlexItem::Grow()};
+    for (uint32_t row = 0U; row < rows.size(); ++row) {
+        std::array<micropixel::Rect, 2U> columns{};
+        auto column_result = micropixel::ui::ComputeFlexLayout(
+            rows[row],
+            micropixel::ui::FlexLayout{.direction = micropixel::ui::FlexDirection::kHorizontal,
+                                       .gap_pixels = context.layout.compact() ? 10 : 16},
+            column_items, columns);
+        micropixel::Assert(column_result.has_value(), "demo.audio: column layout failed");
+        for (uint32_t column = 0U; column < columns.size(); ++column) {
+            buttons[row * 2U + column].SetBounds(columns[column]);
+            buttons[row * 2U + column].Reset();
+        }
+    }
 }
 
 class AudioPage final {
@@ -46,10 +65,9 @@ class AudioPage final {
                 compressed_available_ = false;
             }
         }
+        LayoutAudioButtons(context, buttons_);
         for (uint32_t index = 0U; index < 6U; ++index) {
-            buttons_[index].SetBounds(AudioButtonRect(context, index % 2U, index / 2U));
             buttons_[index].SetEnabled(available_);
-            buttons_[index].Reset();
         }
         buttons_[4].SetEnabled(compressed_available_);
     }
@@ -94,7 +112,7 @@ class AudioPage final {
             } else if (index == 4U) {
                 context.audio_playback.Reset();
                 auto played = context.app.audio().Play(
-                    context.audio_clip, micropixel::PlaybackOptions{.volume_per_mille = 500U, .loop = false});
+                    context.audio_clip, micropixel::PlaybackOptions{.volume_per_mille = 1000U, .loop = false});
                 if (played) {
                     context.audio_playback = static_cast<micropixel::Playback&&>(*played);
                     status_ = "Playing bundled Ogg Opus";
@@ -111,14 +129,16 @@ class AudioPage final {
     }
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
-        const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
+        const int32_t center_x = PageCenterX(context);
         Line capability;
         capability.Append("Sample rate: ");
         capability.AppendUint(sample_rate_);
         capability.Append(" Hz   Max voices: ");
         capability.AppendUint(max_voices_);
-        commands.DrawTextCentered(center_x, 126, capability.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(center_x, 184, status_, available_ ? AccentColor() : DangerColor(),
+        commands.DrawTextCentered(center_x, PageY(context, 12, 26), capability.c_str(), MutedColor(),
+                                  micropixel::SystemFont::kMedium);
+        commands.DrawTextCentered(center_x, PageY(context, 52, 82), status_,
+                                  available_ ? AccentColor() : DangerColor(),
                                   micropixel::SystemFont::kLarge);
 
         DrawButton(commands, buttons_[0], "SINE", BlueColor());
@@ -135,7 +155,7 @@ class AudioPage final {
             .waveform = waveform,
             .frequency_hz = frequency_hz,
             .duration = 500_ms,
-            .volume_per_mille = 90U,
+            .volume_per_mille = 500U,
             .attack = 8_ms,
             .release = 80_ms,
         };
@@ -168,6 +188,8 @@ bool AudioDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event)
     return audio_page.OnTouch(context, event);
 }
 
-void AudioDemoRender(DemoContext& context, micropixel::Frame& commands) { audio_page.Render(context, commands); }
+void AudioDemoRender(DemoContext& context, micropixel::Frame& commands) {
+    audio_page.Render(context, commands);
+}
 
 }  // namespace demo

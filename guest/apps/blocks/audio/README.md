@@ -1,7 +1,7 @@
-# Blocks 音效感知评估
+# Blocks 音效分析与试听验收
 
-本目录实现项目级[游戏音频设计与感知校准规范](../../../../docs/development/game-audio.zh-CN.md)；
-下文只记录 Blocks 的事件层级和设备校准细节。
+本目录实现项目级[游戏音频设计与验收规范](../../../../docs/development/game-audio.zh-CN.md)；
+下文只记录 Blocks 的事件层级和试听细节。
 
 `sfx.json` 是 Blocks 音效的唯一参数源。构建脚本先按 ESP32-P4 Host 的真实规则合成 16 kHz PCM，
 执行感知评估，再生成 Guest 使用的 `blocks_sfx_profiles.hpp`。运行时代码与分析器不再各维护一份参数。
@@ -12,7 +12,7 @@ Guest 不再定义 App master，历史的 45% 统一衰减已移除；设备整�
 
 - `short/target`：最响 50 ms 窗口的 RMS 及绝对目标，负责保证源波形充分使用数字动态范围；
 - `relative`：短时 RMS 相对快速落地音的层级；
-- `event A`：整段事件经过 A-weighting 和设备频响后的累计能量，用于暴露分析而非最低响度门禁；
+- `event A`：整段事件经过 A-weighting 后的累计能量，用于暴露分析而非最低响度门禁；
 - `repeat A`：按该事件最大触发频率折算的一秒重复暴露，用于约束移动/软降疲劳；
 - `peak`：数字峰值，防止混音削波和过强瞬态；
 - `HF ratio`：2 kHz 以上能量占比，作为尖锐度代理；
@@ -32,21 +32,13 @@ python3 tools/micropixel package guest/apps/blocks
 ```sh
 python3 tools/analyze_sfx.py \
   --manifest guest/apps/blocks/audio/sfx.json \
-  --device-profile firmware/espressif/main/platform/boards/metalio-claw4/audio/perceptual_profile.json \
   --report build/apps/blocks/sfx-report.json \
   --write-wavs build/apps/blocks/sfx-wavs \
   --check
 python3 -m unittest tools.tests.test_analyze_sfx -v
 ```
 
-设备频响文件使用按频率递增的 `[Hz, dB]` 点，分析器在对数频率轴上插值。当前仓库文件明确标记为
-`uncalibrated-flat`；它可完成相对数字感知比较，但不能声称绝对声压或听力安全。使用校准麦克风播放扫频并
-填写实测增益后，可通过环境变量让构建使用新的设备曲线：
-
-```sh
-MICROPIXEL_SFX_DEVICE_PROFILE=/absolute/path/measured-speaker-response.json \
-  python3 tools/micropixel package guest/apps/blocks
-```
+分析器只比较数字音频，不能声称绝对声压或听力安全，也不对具体板型和扬声器频响建模。
 
 快速落地是跨游戏参考音，50 ms RMS 固定为 `-14 dBFS`；移动/软降短时层级低 14 dB，自然落地低 8 dB。
 启动、消行和 Game Over 依靠时长与旋律取得辨识度，不靠超高瞬时电平。评分用于稳定地权衡和防止回归，

@@ -29,7 +29,7 @@ void SnakeGame::Render() {
     const uint32_t particle_slots = TakeSlots(optional, kParticlePoolSize);
     const uint32_t food_detail_slots = TakeSlots(optional, 4U);
 
-    micropixel::ui::ViewportFrame commands{renderer_.BeginFrame(), viewport_};
+    micropixel::Frame commands = renderer_.BeginFrame();
     commands.Clear(micropixel::Color::Rgb(5U, 5U, 5U));
 
     constexpr int32_t kPadding = 8;
@@ -164,16 +164,16 @@ micropixel::Rect SnakeGame::InterpolatedSlotRect(uint32_t slot, uint32_t index, 
     };
 }
 
-void SnakeGame::AppendPlaceholderRect(micropixel::ui::ViewportFrame& commands) const {
+void SnakeGame::AppendPlaceholderRect(micropixel::Frame& commands) const {
     commands.FillRect(micropixel::Rect{kBoardX - 8, kBoardY - 8, 1, 1}, micropixel::Color::Rgb(5U, 5U, 5U));
 }
 
-void SnakeGame::AppendPlaceholderText(micropixel::ui::ViewportFrame& commands) {
+void SnakeGame::AppendPlaceholderText(micropixel::Frame& commands) {
     commands.DrawText(micropixel::Point{kBoardX, kBoardY}, " ", micropixel::Color::Rgb(5U, 5U, 5U),
                       micropixel::SystemFont::kMedium);
 }
 
-void SnakeGame::FillClippedRect(micropixel::ui::ViewportFrame& commands, micropixel::Rect rect, micropixel::Color color) const {
+void SnakeGame::FillClippedRect(micropixel::Frame& commands, micropixel::Rect rect, micropixel::Color color) const {
     micropixel::Rect clipped{};
     if (ClipRectToScreen(rect, clipped)) {
         constexpr int32_t kPadding = 8;
@@ -189,7 +189,7 @@ void SnakeGame::FillClippedRect(micropixel::ui::ViewportFrame& commands, micropi
     AppendPlaceholderRect(commands);
 }
 
-void SnakeGame::RenderComboBar(micropixel::ui::ViewportFrame& commands) const {
+void SnakeGame::RenderComboBar(micropixel::Frame& commands) const {
     if (screen_ == Screen::kMenu) {
         micropixel::Assert(start_button_texture_.valid(), "snake: start button texture missing");
         micropixel::ui::DrawTextureButton(commands, screen_button_, start_button_texture_);
@@ -218,7 +218,7 @@ void SnakeGame::RenderComboBar(micropixel::ui::ViewportFrame& commands) const {
                                             : micropixel::Color::White());
 }
 
-void SnakeGame::RenderComboFlame(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+void SnakeGame::RenderComboFlame(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                                  uint32_t slots) const {
     uint32_t pulse = static_cast<uint32_t>((animation_time_us_ / 100000U) % 6U);
     uint32_t opacity = 105U + (pulse <= 3U ? pulse : 6U - pulse) * 25U;
@@ -240,7 +240,7 @@ void SnakeGame::RenderComboFlame(micropixel::ui::ViewportFrame& commands, int32_
     }
 }
 
-void SnakeGame::RenderTrails(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+void SnakeGame::RenderTrails(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                              uint32_t slots) const {
     uint32_t emitted = 0U;
     // The producer cycles through all twelve storage entries. Scan the entire
@@ -263,7 +263,7 @@ void SnakeGame::RenderTrails(micropixel::ui::ViewportFrame& commands, int32_t bo
     }
 }
 
-void SnakeGame::RenderFood(micropixel::ui::ViewportFrame& commands, const Food& food, int32_t board_x, int32_t board_y,
+void SnakeGame::RenderFood(micropixel::Frame& commands, const Food& food, int32_t board_x, int32_t board_y,
                            uint32_t detail_slots) const {
     if (food.cell.x < 0) {
         for (uint32_t index = 0U; index < detail_slots + 1U; ++index) {
@@ -288,7 +288,7 @@ void SnakeGame::RenderFood(micropixel::ui::ViewportFrame& commands, const Food& 
     }
 }
 
-void SnakeGame::RenderObstacles(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y,
+void SnakeGame::RenderObstacles(micropixel::Frame& commands, int32_t board_x, int32_t board_y,
                                 uint32_t detail_slots) const {
     for (uint32_t index = 0U; index < 5U; ++index) {
         if (index >= model_.obstacle_count()) {
@@ -308,7 +308,7 @@ void SnakeGame::RenderObstacles(micropixel::ui::ViewportFrame& commands, int32_t
     }
 }
 
-void SnakeGame::RenderSnake(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+void SnakeGame::RenderSnake(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                             uint32_t body_slots) const {
     uint32_t length = model_.length();
     Rgb accent = model_.invincible() ? Rgb{34U, 211U, 238U} : theme.accent;
@@ -364,7 +364,7 @@ void SnakeGame::RenderSnake(micropixel::ui::ViewportFrame& commands, int32_t boa
     commands.FillRect(micropixel::Rect{second_x, second_y, 4, 5}, micropixel::Color::Black());
 }
 
-void SnakeGame::RenderFoodBurst(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y) const {
+void SnakeGame::RenderFoodBurst(micropixel::Frame& commands, int32_t board_x, int32_t board_y) const {
     if (burst_remaining_us_ == 0U) {
         AppendPlaceholderRect(commands);
         return;
@@ -391,7 +391,7 @@ void SnakeGame::RenderFoodBurst(micropixel::ui::ViewportFrame& commands, int32_t
     commands.DrawTexture(micropixel::Point{x, y}, sheet, source);
 }
 
-void SnakeGame::RenderParticles(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+void SnakeGame::RenderParticles(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                                 uint32_t slots) const {
     for (uint32_t index = 0U; index < slots; ++index) {
         const Particle& particle = particles_[index];
@@ -412,7 +412,7 @@ void SnakeGame::RenderParticles(micropixel::ui::ViewportFrame& commands, int32_t
     }
 }
 
-void SnakeGame::RenderFlash(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
+void SnakeGame::RenderFlash(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme,
                             uint32_t slots) const {
     // Game Over has no board-wide color overlay. Preserve the same retained
     // slots without painting fake corner masks over the board artwork.
@@ -450,7 +450,7 @@ void SnakeGame::RenderFlash(micropixel::ui::ViewportFrame& commands, int32_t boa
     }
 }
 
-void SnakeGame::RenderOverlayRect(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y,
+void SnakeGame::RenderOverlayRect(micropixel::Frame& commands, int32_t board_x, int32_t board_y,
                                   const Theme& theme) const {
     constexpr int32_t kBoardSize = static_cast<int32_t>(kColumns) * kCellPitch;
     micropixel::Color color = micropixel::Color::Black();
@@ -462,15 +462,15 @@ void SnakeGame::RenderOverlayRect(micropixel::ui::ViewportFrame& commands, int32
     commands.FillRect(micropixel::Rect{board_x, board_y, kBoardSize, kBoardSize}, color, opacity);
 }
 
-void SnakeGame::RenderHeaderTexts(micropixel::ui::ViewportFrame& commands, const Theme& theme) const {
-    commands.DrawText(micropixel::Point{24, 8}, strings_.Get(snake_strings::Id::kAppTitle), AsColor(theme.text),
+void SnakeGame::RenderHeaderTexts(micropixel::Frame& commands, const Theme& theme) const {
+    commands.DrawText(micropixel::Point{24, 35}, strings_.Get(snake_strings::Id::kAppTitle), AsColor(theme.text),
                       micropixel::SystemFont::kTitle);
-    commands.DrawText(micropixel::Point{24, 47}, strings_.Get(snake_strings::Id::kBrandEdition),
-                      micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{24, 47}, " ", micropixel::Color::Rgb(5U, 5U, 5U),
+                      micropixel::SystemFont::kSmall);
     Line level;
     level.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
     level.AppendUint(model_.level());
-    commands.DrawText(micropixel::Point{172, 47}, level.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
+    commands.DrawText(micropixel::Point{460, 12}, level.c_str(), AsColor(theme.text), micropixel::SystemFont::kSmall);
     commands.DrawText(micropixel::Point{545, 12}, strings_.Get(snake_strings::Id::kLabelScore),
                       micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
     Line score;
@@ -508,7 +508,7 @@ void SnakeGame::RenderHeaderTexts(micropixel::ui::ViewportFrame& commands, const
                       micropixel::SystemFont::kSmall);
 }
 
-void SnakeGame::RenderPopups(micropixel::ui::ViewportFrame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const {
+void SnakeGame::RenderPopups(micropixel::Frame& commands, int32_t board_x, int32_t board_y, const Theme& theme) const {
     bool visible = screen_ == Screen::kPlaying && level_banner_us_ == 0U;
     for (uint32_t index = 0U; index < kPopupPoolSize; ++index) {
         const Popup& popup = popups_[index];
@@ -528,7 +528,7 @@ void SnakeGame::RenderPopups(micropixel::ui::ViewportFrame& commands, int32_t bo
     }
 }
 
-void SnakeGame::RenderOverlayTexts(micropixel::ui::ViewportFrame& commands, const Theme& theme) const {
+void SnakeGame::RenderOverlayTexts(micropixel::Frame& commands, const Theme& theme) const {
     uint32_t used = 0U;
     if (screen_ == Screen::kMenu) {
         commands.DrawTextCentered(360, ActionButtonTextY(kStartButtonRect),

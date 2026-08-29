@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.demo",
+  "display": "square",
   "display_name": "SDK Demo",
   "source": "main.cpp",
   "sources": [

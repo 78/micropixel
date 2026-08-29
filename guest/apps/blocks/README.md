@@ -34,6 +34,11 @@ python3 tools/micropixel package guest/apps/blocks
 触控操作覆盖整个 720×720 屏幕：任意位置点击旋转、水平拖动、慢速下拖软降、快速下划硬降、上划换块；
 轻点 HOLD 换块，轻点左上角标题区域暂停。从 HOLD 或标题区域起手的滑动仍按游戏手势处理，不会被按钮截断。
 
+游戏每消除 10 行提升一级。自动下落周期使用连续曲线
+`P(level) = 750 ms / ⁴√(1 + 8.58 × (level − 1))`：1 级为 750 ms、12 级约 240 ms、24 级约 200 ms。
+曲线没有人为速度上限，后期仍会持续变快，但相邻等级的变化会自然放缓；内部使用微秒精度，避免高等级因
+整数毫秒取整出现速度平台。软降和硬降仍允许熟练玩家主动加快节奏。
+
 渲染器把 10×20 棋盘按每 5 行拆为 4 个 `300×150 RGB888` offscreen surface。Guest 缓存 200 个
 visual-cell code，逻辑变化后重新合成活动块、Ghost 和落定棋盘，只对 code 改变的 `30×30` 格子调用
 `StreamingTexture::Update()`。每次 `SyncPlayfield()` 用一个 `TextureUpdateBatch` 包住全部写入；Host

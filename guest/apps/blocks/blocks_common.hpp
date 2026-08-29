@@ -32,7 +32,7 @@ constexpr int32_t kActionButtonHeight = 96;
 constexpr int32_t kActionButtonX = kScreenCenterX - kActionButtonWidth / 2;
 constexpr micropixel::SystemFont kActionButtonFont = micropixel::SystemFont::kLarge;
 constexpr int32_t kActionButtonFontHeight = 24;
-constexpr int32_t kActionButtonTextOpticalOffsetY = -2;
+constexpr int32_t kActionButtonTextOpticalOffsetY = -5;
 constexpr uint8_t kOverlayOpacity = 180U;
 constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
 constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButtonWidth, kActionButtonHeight};

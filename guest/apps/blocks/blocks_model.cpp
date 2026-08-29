@@ -16,6 +16,12 @@ constexpr uint16_t kShapeMasks[kTetrominoCount][4U] = {
 
 constexpr int8_t kKickOffsets[] = {0, -1, 1, -2, 2};
 
+// P(level) = 750 ms / fourth_root(1 + 8.58 * (level - 1)).
+// The curve passes approximately through (12, 240 ms) and (24, 200 ms), then
+// keeps accelerating forever while the change between adjacent levels softens.
+constexpr float kInitialDropPeriodUs = 750000.0F;
+constexpr float kDifficultyGrowthPerLevel = 8.58F;
+
 }  // namespace
 
 void BlocksModel::Reset(uint32_t random_seed) {
@@ -289,9 +295,11 @@ int32_t BlocksModel::ghost_y() const {
     }
 }
 
-uint32_t BlocksModel::drop_period_ms() const {
-    const uint32_t reduction = level_ > 1U ? (level_ - 1U) * 55U : 0U;
-    return reduction >= 650U ? 100U : 750U - reduction;
+uint32_t BlocksModel::drop_period_us() const {
+    const uint32_t level_index = level_ > 1U ? level_ - 1U : 0U;
+    const float curve_input = 1.0F + kDifficultyGrowthPerLevel * static_cast<float>(level_index);
+    const float fourth_root = __builtin_sqrtf(__builtin_sqrtf(curve_input));
+    return static_cast<uint32_t>(kInitialDropPeriodUs / fourth_root + 0.5F);
 }
 
 }  // namespace blocks

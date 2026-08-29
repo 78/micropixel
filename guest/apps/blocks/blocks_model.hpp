@@ -29,11 +29,12 @@ class BlocksModel final {
     [[nodiscard]] uint32_t level() const { return level_; }
     [[nodiscard]] uint32_t combo() const { return combo_; }
     [[nodiscard]] int32_t ghost_y() const;
-    [[nodiscard]] uint32_t drop_period_ms() const;
+    [[nodiscard]] uint32_t drop_period_us() const;
 
 #if defined(MICROPIXEL_MODEL_TESTING)
     void SetCellForTesting(uint32_t x, uint32_t y, uint8_t value) { board_[y][x] = value; }
     void SetActiveForTesting(ActivePiece piece) { active_ = piece; }
+    void SetLevelForTesting(uint32_t level) { level_ = level; }
 #endif
 
    private:

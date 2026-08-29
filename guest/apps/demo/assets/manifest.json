@@ -7,25 +7,404 @@
       "path": "source/launch-sdk-demo.png"
     },
     {
-      "name": "sprite.demo",
+      "name": "sprite.demo0",
       "format": "png",
       "path": "demo_sprite_sheet.png",
       "atlas": {
         "index": 0,
-        "canvas": [192, 192],
+        "canvas": [
+          256,
+          256
+        ],
         "frames": [
-          {"region": [158, 582, 40, 44], "canvas_position": [76, 76]},
-          {"region": [202, 458, 56, 60], "canvas_position": [68, 68]},
-          {"region": [86, 582, 68, 76], "canvas_position": [60, 60]},
-          {"region": [2, 582, 80, 96], "canvas_position": [56, 56]},
-          {"region": [106, 458, 92, 112], "canvas_position": [52, 52]},
-          {"region": [2, 458, 100, 120], "canvas_position": [48, 52]},
-          {"region": [138, 306, 108, 132], "canvas_position": [44, 48]},
-          {"region": [138, 154, 116, 144], "canvas_position": [40, 44]},
-          {"region": [138, 2, 124, 148], "canvas_position": [36, 44]},
-          {"region": [2, 2, 132, 148], "canvas_position": [32, 44]},
-          {"region": [2, 154, 132, 148], "canvas_position": [32, 44]},
-          {"region": [2, 306, 132, 148], "canvas_position": [32, 44]}
+          {
+            "region": [
+              0,
+              0,
+              52,
+              58
+            ],
+            "canvas_position": [
+              102,
+              102
+            ]
+          },
+          {
+            "region": [
+              54,
+              0,
+              69,
+              77
+            ],
+            "canvas_position": [
+              92,
+              92
+            ]
+          },
+          {
+            "region": [
+              125,
+              0,
+              69,
+              77
+            ],
+            "canvas_position": [
+              92,
+              92
+            ]
+          },
+          {
+            "region": [
+              196,
+              0,
+              82,
+              91
+            ],
+            "canvas_position": [
+              87,
+              87
+            ]
+          },
+          {
+            "region": [
+              280,
+              0,
+              84,
+              92
+            ],
+            "canvas_position": [
+              86,
+              86
+            ]
+          },
+          {
+            "region": [
+              366,
+              0,
+              86,
+              94
+            ],
+            "canvas_position": [
+              84,
+              84
+            ]
+          },
+          {
+            "region": [
+              0,
+              96,
+              99,
+              118
+            ],
+            "canvas_position": [
+              79,
+              79
+            ]
+          },
+          {
+            "region": [
+              101,
+              96,
+              101,
+              120
+            ],
+            "canvas_position": [
+              79,
+              78
+            ]
+          },
+          {
+            "region": [
+              204,
+              96,
+              108,
+              136
+            ],
+            "canvas_position": [
+              76,
+              76
+            ]
+          },
+          {
+            "region": [
+              314,
+              96,
+              112,
+              137
+            ],
+            "canvas_position": [
+              74,
+              75
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "sprite.demo1",
+      "format": "png",
+      "path": "demo_sprite_sheet_1.png",
+      "atlas": {
+        "index": 1,
+        "canvas": [
+          256,
+          256
+        ],
+        "frames": [
+          {
+            "region": [
+              0,
+              0,
+              112,
+              140
+            ],
+            "canvas_position": [
+              74,
+              74
+            ]
+          },
+          {
+            "region": [
+              114,
+              0,
+              123,
+              152
+            ],
+            "canvas_position": [
+              69,
+              73
+            ]
+          },
+          {
+            "region": [
+              239,
+              0,
+              127,
+              155
+            ],
+            "canvas_position": [
+              67,
+              71
+            ]
+          },
+          {
+            "region": [
+              368,
+              0,
+              127,
+              155
+            ],
+            "canvas_position": [
+              67,
+              71
+            ]
+          },
+          {
+            "region": [
+              0,
+              157,
+              135,
+              169
+            ],
+            "canvas_position": [
+              62,
+              67
+            ]
+          },
+          {
+            "region": [
+              137,
+              157,
+              138,
+              171
+            ],
+            "canvas_position": [
+              62,
+              67
+            ]
+          },
+          {
+            "region": [
+              277,
+              157,
+              145,
+              179
+            ],
+            "canvas_position": [
+              56,
+              66
+            ]
+          },
+          {
+            "region": [
+              0,
+              338,
+              146,
+              182
+            ],
+            "canvas_position": [
+              55,
+              63
+            ]
+          },
+          {
+            "region": [
+              148,
+              338,
+              146,
+              185
+            ],
+            "canvas_position": [
+              55,
+              63
+            ]
+          },
+          {
+            "region": [
+              296,
+              338,
+              155,
+              192
+            ],
+            "canvas_position": [
+              52,
+              63
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "sprite.demo2",
+      "format": "png",
+      "path": "demo_sprite_sheet_2.png",
+      "atlas": {
+        "index": 2,
+        "canvas": [
+          256,
+          256
+        ],
+        "frames": [
+          {
+            "region": [
+              0,
+              0,
+              156,
+              191
+            ],
+            "canvas_position": [
+              51,
+              64
+            ]
+          },
+          {
+            "region": [
+              158,
+              0,
+              158,
+              194
+            ],
+            "canvas_position": [
+              51,
+              62
+            ]
+          },
+          {
+            "region": [
+              318,
+              0,
+              162,
+              193
+            ],
+            "canvas_position": [
+              49,
+              63
+            ]
+          },
+          {
+            "region": [
+              482,
+              0,
+              163,
+              193
+            ],
+            "canvas_position": [
+              49,
+              63
+            ]
+          },
+          {
+            "region": [
+              0,
+              196,
+              166,
+              193
+            ],
+            "canvas_position": [
+              47,
+              63
+            ]
+          },
+          {
+            "region": [
+              168,
+              196,
+              166,
+              193
+            ],
+            "canvas_position": [
+              47,
+              63
+            ]
+          },
+          {
+            "region": [
+              336,
+              196,
+              166,
+              193
+            ],
+            "canvas_position": [
+              47,
+              63
+            ]
+          },
+          {
+            "region": [
+              0,
+              391,
+              167,
+              192
+            ],
+            "canvas_position": [
+              46,
+              64
+            ]
+          },
+          {
+            "region": [
+              169,
+              391,
+              167,
+              192
+            ],
+            "canvas_position": [
+              46,
+              64
+            ]
+          },
+          {
+            "region": [
+              338,
+              391,
+              168,
+              193
+            ],
+            "canvas_position": [
+              45,
+              63
+            ]
+          }
         ]
       }
     },

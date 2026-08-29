@@ -11,10 +11,7 @@ constexpr const char* kCounterKey = "demo.counter";
 class StoragePage final {
    public:
     void Enter(DemoContext& context) {
-        for (uint32_t index = 0U; index < 2U; ++index) {
-            buttons_[index].SetBounds(BottomButtonRect(context, index, 2U));
-            buttons_[index].Reset();
-        }
+        LayoutButtonRow(context, buttons_);
         auto stored = context.app.storage().GetU32(kCounterKey);
         if (stored.has_value()) {
             counter_ = stored.value();
@@ -55,18 +52,26 @@ class StoragePage final {
     }
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
-        const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 130, "The value survives app and device restarts.", MutedColor(),
+        const int32_t center_x = PageCenterX(context);
+        commands.DrawTextCentered(center_x, PageY(context, 16, 30), "The value survives app and device restarts.",
+                                  MutedColor(),
                                   micropixel::SystemFont::kMedium);
-        commands.FillRect(micropixel::Rect{56, 198, static_cast<int32_t>(context.display.width()) - 112, 260},
-                          PanelColor());
+        const micropixel::Rect panel{context.layout.page_content.x + (context.layout.compact() ? 24 : 56),
+                                     PageY(context, 66, 98),
+                                     context.layout.page_content.width - (context.layout.compact() ? 48 : 112),
+                                     context.layout.compact() ? 190 : 260};
+        commands.FillRect(panel, PanelColor());
 
         Line value;
         value.Append("COUNTER  ");
         value.AppendUint(counter_);
-        commands.DrawTextCentered(center_x, 278, value.c_str(), AccentColor(), micropixel::SystemFont::kTitle);
-        commands.DrawTextCentered(center_x, 370, status_, micropixel::Color::White(), micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(center_x, 414, "KVStore::GetU32 / SetU32", MutedColor(),
+        commands.DrawTextCentered(center_x, panel.y + (context.layout.compact() ? 48 : 80), value.c_str(),
+                                  AccentColor(), context.layout.compact() ? micropixel::SystemFont::kLarge
+                                                                          : micropixel::SystemFont::kTitle);
+        commands.DrawTextCentered(center_x, panel.y + (context.layout.compact() ? 112 : 172), status_,
+                                  micropixel::Color::White(), micropixel::SystemFont::kMedium);
+        commands.DrawTextCentered(center_x, panel.y + (context.layout.compact() ? 152 : 216),
+                                  "KVStore::GetU32 / SetU32", MutedColor(),
                                   micropixel::SystemFont::kSmall);
 
         DrawButton(commands, buttons_[0], "ADD + SAVE", AccentColor());
@@ -89,6 +94,8 @@ bool StorageDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& even
     return storage_page.OnTouch(context, event);
 }
 
-void StorageDemoRender(DemoContext& context, micropixel::Frame& commands) { storage_page.Render(context, commands); }
+void StorageDemoRender(DemoContext& context, micropixel::Frame& commands) {
+    storage_page.Render(context, commands);
+}
 
 }  // namespace demo

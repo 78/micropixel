@@ -9,7 +9,6 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
       strings_(blocks_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
-      viewport_(renderer_info, {static_cast<int32_t>(kScreenWidth), static_cast<int32_t>(kScreenHeight)}),
       audio_(audio),
       best_score_(best_score),
       audio_available_(audio_available) {
@@ -114,7 +113,7 @@ void BlocksGame::OnTimer(const micropixel::TimerEvent& tick) {
     }
 
     gravity_accumulated_us_ += delta_us;
-    const uint64_t period_us = static_cast<uint64_t>(model_.drop_period_ms()) * 1000U;
+    const uint64_t period_us = model_.drop_period_us();
     if (gravity_accumulated_us_ >= period_us) {
         gravity_accumulated_us_ -= period_us;
         if (gravity_accumulated_us_ >= period_us) {
@@ -259,8 +258,7 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
     }
 }
 
-void BlocksGame::OnTouch(const micropixel::TouchEvent& physical_touch) {
-    const micropixel::TouchEvent touch = viewport_.ToLogical(physical_touch);
+void BlocksGame::OnTouch(const micropixel::TouchEvent& touch) {
     if (screen_ != Screen::kPlaying) {
         const micropixel::ui::ButtonUpdate update = screen_button_.OnTouch(touch);
         if (update.clicked) {

@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.orbit-pad",
+  "display": "square",
   "display_name": "Orbit Pad",
   "source": "main.cpp",
   "sources": ["main.cpp"]

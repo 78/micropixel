@@ -7,20 +7,31 @@ namespace demo {
 
 namespace {
 
-static_assert(demo_assets::sprite_atlas_count == 1U, "demo: expected one sprite atlas");
-constexpr uint64_t kAtlasFramePeriodUs = 20000U;
+static_assert(demo_assets::sprite_atlas_count == kDemoAtlasSheetCount, "demo: unexpected sprite atlas count");
+static_assert(demo_assets::sprite_atlas_frame_count == 10U, "demo: unexpected frames per sprite atlas");
+constexpr uint64_t kAtlasFramePeriodUs = 16667U;
+constexpr uint32_t kAtlasTotalFrameCount =
+    demo_assets::sprite_atlas_count * demo_assets::sprite_atlas_frame_count;
+
+[[nodiscard]] bool AtlasTexturesValid(const DemoContext& context) {
+    for (const micropixel::Texture& texture : context.atlas_textures) {
+        if (!texture.valid()) {
+            return false;
+        }
+    }
+    return true;
+}
 
 class ResourceAtlasPage final {
    public:
     void Enter(DemoContext& context) {
-        animation_running_ = context.atlas_texture.valid();
+        animation_running_ = AtlasTexturesValid(context);
+        LayoutButtonRow(context, buttons_);
         for (uint32_t index = 0U; index < 2U; ++index) {
-            buttons_[index].SetBounds(BottomButtonRect(context, index, 2U));
-            buttons_[index].SetEnabled(context.atlas_texture.valid());
-            buttons_[index].Reset();
+            buttons_[index].SetEnabled(animation_running_);
         }
-        context.app.log().Info(context.atlas_texture.valid() ? "demo.resource: atlas texture ready"
-                                                             : "demo.resource: atlas texture unavailable");
+        context.app.log().Info(animation_running_ ? "demo.resource: atlas textures ready"
+                                                  : "demo.resource: atlas textures unavailable");
     }
 
     [[nodiscard]] bool OnTimer(DemoContext&, const micropixel::TimerEvent& event) {
@@ -33,7 +44,7 @@ class ResourceAtlasPage final {
             return false;
         }
         accumulated_us_ %= kAtlasFramePeriodUs;
-        frame_ = static_cast<uint32_t>((frame_ + elapsed_frames) % demo_assets::sprite_atlas_frame_count);
+        frame_ = static_cast<uint32_t>((frame_ + elapsed_frames) % kAtlasTotalFrameCount);
         return true;
     }
 
@@ -50,46 +61,55 @@ class ResourceAtlasPage final {
                 animation_running_ = !animation_running_;
             } else {
                 animation_running_ = false;
-                frame_ = (frame_ + 1U) % demo_assets::sprite_atlas_frame_count;
+                frame_ = (frame_ + 1U) % kAtlasTotalFrameCount;
             }
         }
         return redraw;
     }
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
-        const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 118, "AssetId and frame rectangles come from the asset manifest.",
+        const int32_t center_x = PageCenterX(context);
+        commands.DrawTextCentered(center_x, PageY(context, 8, 16),
+                                  "30-frame RGBA atlas, native pixels and alpha blend.",
                                   MutedColor(), micropixel::SystemFont::kMedium);
-        if (!context.atlas_texture.valid()) {
-            commands.DrawTextCentered(center_x, 300, "Atlas texture failed to load", DangerColor(),
+        if (!AtlasTexturesValid(context)) {
+            commands.DrawTextCentered(center_x, PageY(context, 130, 220), "Atlas texture failed to load",
+                                      DangerColor(),
                                       micropixel::SystemFont::kLarge);
             return;
         }
 
-        const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[0];
-        const demo_assets::AtlasFrame& frame = atlas.frames[frame_];
-        const int32_t canvas_x = center_x - static_cast<int32_t>(demo_assets::sprite_canvas_width / 2U);
-        const int32_t canvas_y = 190;
-        commands.FillRect(micropixel::Rect{canvas_x, canvas_y, static_cast<int32_t>(demo_assets::sprite_canvas_width),
-                                           static_cast<int32_t>(demo_assets::sprite_canvas_height)},
-                          PanelColor());
-        commands.DrawTexture(micropixel::Point{canvas_x + frame.canvas_x, canvas_y + frame.canvas_y},
-                             context.atlas_texture,
+        const uint32_t atlas_index = frame_ / demo_assets::sprite_atlas_frame_count;
+        const uint32_t atlas_frame = frame_ % demo_assets::sprite_atlas_frame_count;
+        const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[atlas_index];
+        const demo_assets::AtlasFrame& frame = atlas.frames[atlas_frame];
+        constexpr int32_t kCanvasWidth = static_cast<int32_t>(demo_assets::sprite_canvas_width);
+        constexpr int32_t kCanvasHeight = static_cast<int32_t>(demo_assets::sprite_canvas_height);
+        const int32_t animation_center_y = PageY(context, 128, 180);
+        const micropixel::Point canvas_origin{center_x - kCanvasWidth / 2,
+                                              animation_center_y - kCanvasHeight / 2};
+        const micropixel::Point sprite_position{canvas_origin.x + frame.canvas_x,
+                                                canvas_origin.y + frame.canvas_y};
+        commands.DrawTexture(sprite_position, context.atlas_textures[atlas_index],
                              micropixel::Rect{static_cast<int32_t>(frame.x), static_cast<int32_t>(frame.y),
-                                              static_cast<int32_t>(frame.width), static_cast<int32_t>(frame.height)});
+                                              static_cast<int32_t>(frame.width), static_cast<int32_t>(frame.height)},
+                             224U);
 
         Line status;
         status.Append("Frame ");
         status.AppendUint(frame_ + 1U);
         status.Append(" / ");
-        status.AppendUint(demo_assets::sprite_atlas_frame_count);
-        status.Append("   PNG ");
-        status.AppendUint(context.atlas_texture.width());
-        status.Append("x");
-        status.AppendUint(context.atlas_texture.height());
-        commands.DrawTextCentered(center_x, 424, status.c_str(), micropixel::Color::White(),
+        status.AppendUint(kAtlasTotalFrameCount);
+        status.Append("   Sheet ");
+        status.AppendUint(atlas_index + 1U);
+        status.Append(" / ");
+        status.AppendUint(demo_assets::sprite_atlas_count);
+        const int32_t status_y = animation_center_y + (context.layout.compact() ? 108 : 144);
+        commands.DrawTextCentered(center_x, status_y,
+                                  status.c_str(), micropixel::Color::White(),
                                   micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(center_x, 468, animation_running_ ? "ANIMATING" : "PAUSED",
+        commands.DrawTextCentered(center_x, status_y + (context.layout.compact() ? 32 : 44),
+                                  animation_running_ ? "ANIMATING / ALPHA 224" : "PAUSED / ALPHA 224",
                                   animation_running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
         DrawButton(commands, buttons_[0], animation_running_ ? "PAUSE" : "PLAY", AccentColor());
@@ -111,16 +131,19 @@ micropixel::Timer CreateResourceAtlasTicker(micropixel::Application& app) {
     return app.timers().Every(micropixel::Duration::Microseconds(kAtlasFramePeriodUs));
 }
 
-micropixel::Texture LoadDemoAtlas(micropixel::Application& app) {
-    const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[0];
-    auto result = app.resources().LoadTexture(atlas.asset);
-    if (!result.has_value()) {
-        return micropixel::Texture{};
+DemoAtlasTextures LoadDemoAtlases(micropixel::Application& app) {
+    DemoAtlasTextures textures{};
+    for (uint32_t index = 0U; index < kDemoAtlasSheetCount; ++index) {
+        const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[index];
+        auto result = app.resources().LoadTexture(atlas.asset);
+        if (!result.has_value()) {
+            return DemoAtlasTextures{};
+        }
+        textures[index] = static_cast<micropixel::Texture&&>(result.value());
+        micropixel::Assert(textures[index].width() == atlas.width && textures[index].height() == atlas.height,
+                           "demo.resource: atlas dimensions disagree with manifest");
     }
-    micropixel::Texture texture = static_cast<micropixel::Texture&&>(result.value());
-    micropixel::Assert(texture.width() == atlas.width && texture.height() == atlas.height,
-                       "demo.resource: atlas dimensions disagree with manifest");
-    return texture;
+    return textures;
 }
 
 void ResourceAtlasDemoEnter(DemoContext& context) { resource_atlas_page.Enter(context); }

@@ -71,6 +71,32 @@ void TestHoldIsLimitedUntilLock() {
     assert(model.hold_available());
 }
 
+void TestLeisureDifficultyCurve() {
+    blocks::BlocksModel model;
+    model.Reset(4U);
+
+    struct ExpectedPeriod final {
+        uint32_t level;
+        uint32_t period_us;
+    };
+    constexpr ExpectedPeriod kExpected[] = {
+        {1U, 750000U},   {2U, 426304U},   {6U, 291370U},   {11U, 245715U}, {12U, 239992U},
+        {13U, 234879U}, {24U, 199852U},  {74U, 149860U},  {124U, 131556U}, {200U, 116657U},
+    };
+    for (const ExpectedPeriod expected : kExpected) {
+        model.SetLevelForTesting(expected.level);
+        assert(model.drop_period_us() == expected.period_us);
+    }
+
+    uint32_t previous_period_us = 750000U;
+    for (uint32_t level = 1U; level <= 200U; ++level) {
+        model.SetLevelForTesting(level);
+        const uint32_t period_us = model.drop_period_us();
+        assert(period_us < previous_period_us || level == 1U);
+        previous_period_us = period_us;
+    }
+}
+
 uint32_t NextRandom(uint32_t& state) {
     state = state * 1664525U + 1013904223U;
     return state;
@@ -136,6 +162,7 @@ int main() {
     TestHorizontalBoundsAndHardDrop();
     TestSingleLineClearAndScoring();
     TestHoldIsLimitedUntilLock();
+    TestLeisureDifficultyCurve();
     TestRandomPlayAndRenderRunBound();
     return 0;
 }

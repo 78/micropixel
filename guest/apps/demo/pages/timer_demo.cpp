@@ -14,10 +14,7 @@ class TimerPage final {
         elapsed_us_ = 0U;
         tick_count_ = 0U;
         running_ = true;
-        for (uint32_t index = 0U; index < 3U; ++index) {
-            buttons_[index].SetBounds(BottomButtonRect(context, index, 3U));
-            buttons_[index].Reset();
-        }
+        LayoutButtonRow(context, buttons_);
         context.app.log().Info("demo.timer: entered; shared 100 ms Timer is running");
     }
 
@@ -54,28 +51,32 @@ class TimerPage final {
     }
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
-        const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 130, "A Host Timer drives this page every 100 ms.", MutedColor(),
+        const int32_t center_x = PageCenterX(context);
+        commands.DrawTextCentered(center_x, PageY(context, 14, 30), "A Host Timer drives this page every 100 ms.",
+                                  MutedColor(),
                                   micropixel::SystemFont::kMedium);
 
         Line elapsed;
         elapsed.Append("Elapsed: ");
         elapsed.AppendUint(elapsed_us_ / 1000U);
         elapsed.Append(" ms");
-        commands.DrawTextCentered(center_x, 238, elapsed.c_str(), AccentColor(), micropixel::SystemFont::kTitle);
+        commands.DrawTextCentered(center_x, PageY(context, 82, 138), elapsed.c_str(), AccentColor(),
+                                  context.layout.compact() ? micropixel::SystemFont::kLarge
+                                                           : micropixel::SystemFont::kTitle);
 
         Line ticks;
         ticks.Append("Timer events: ");
         ticks.AppendUint(tick_count_);
-        commands.DrawTextCentered(center_x, 310, ticks.c_str(), micropixel::Color::White(),
+        commands.DrawTextCentered(center_x, PageY(context, 138, 210), ticks.c_str(), micropixel::Color::White(),
                                   micropixel::SystemFont::kLarge);
 
         Line clock;
         clock.Append("Clock::Now(): ");
         clock.AppendUint(context.app.clock().Now().microseconds());
         clock.Append(" us");
-        commands.DrawTextCentered(center_x, 366, clock.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
-        commands.DrawTextCentered(center_x, 422, running_ ? "RUNNING" : "PAUSED",
+        commands.DrawTextCentered(center_x, PageY(context, 190, 266), clock.c_str(), MutedColor(),
+                                  micropixel::SystemFont::kMedium);
+        commands.DrawTextCentered(center_x, PageY(context, 240, 322), running_ ? "RUNNING" : "PAUSED",
                                   running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
         DrawButton(commands, buttons_[0], "START", AccentColor());
@@ -106,6 +107,8 @@ bool TimerDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event)
     return timer_page.OnTouch(context, event);
 }
 
-void TimerDemoRender(DemoContext& context, micropixel::Frame& commands) { timer_page.Render(context, commands); }
+void TimerDemoRender(DemoContext& context, micropixel::Frame& commands) {
+    timer_page.Render(context, commands);
+}
 
 }  // namespace demo

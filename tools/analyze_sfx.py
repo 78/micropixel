@@ -106,27 +106,6 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def load_device_profile(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return {
-            "device": "flat digital reference",
-            "calibration": "uncalibrated-flat",
-            "frequency_response_db": [[20, 0.0], [8000, 0.0]],
-        }
-    data = json.loads(path.read_text(encoding="utf-8"))
-    _require(data.get("schema_version") == 1, "device profile schema_version must be 1")
-    points = data.get("frequency_response_db")
-    _require(isinstance(points, list) and len(points) >= 2, "device profile needs at least two response points")
-    previous = 0.0
-    for point in points:
-        _require(isinstance(point, list) and len(point) == 2, "frequency response points must be [Hz, dB]")
-        frequency, gain = point
-        _require(isinstance(frequency, (int, float)) and frequency > previous, "response frequencies must increase")
-        _require(isinstance(gain, (int, float)), "response gain must be numeric")
-        previous = float(frequency)
-    return data
-
-
 def _wave_sample(waveform: str, phase: int, noise: int, sine_table: list[int]) -> tuple[int, int]:
     if waveform == "sine":
         return sine_table[(phase >> 24) & 0xFF], noise
@@ -215,21 +194,6 @@ def _a_weighting_db(frequency: float) -> float:
     return 20.0 * math.log10(numerator / denominator) + 2.0
 
 
-def _response_gain_db(profile: dict[str, Any], frequency: float) -> float:
-    points = profile["frequency_response_db"]
-    if frequency <= points[0][0]:
-        return float(points[0][1])
-    if frequency >= points[-1][0]:
-        return float(points[-1][1])
-    log_frequency = math.log(frequency)
-    for left, right in zip(points, points[1:]):
-        if frequency <= right[0]:
-            span = math.log(right[0]) - math.log(left[0])
-            position = (log_frequency - math.log(left[0])) / span
-            return float(left[1]) + (float(right[1]) - float(left[1])) * position
-    raise AssertionError("unreachable response interpolation")
-
-
 def _db(value: float, power: bool = False) -> float:
     if value <= 1.0e-20:
         return -200.0
@@ -247,35 +211,33 @@ def _maximum_window_rms_dbfs(samples: list[float], sample_rate: int, window_ms: 
     return _db(math.sqrt(maximum_energy / window_frames))
 
 
-def analyze_samples(samples: list[float], sample_rate: int, profile: dict[str, Any], max_rate_hz: float) -> dict[str, float]:
+def analyze_samples(samples: list[float], sample_rate: int, max_rate_hz: float) -> dict[str, float]:
     fft_size = 1
     while fft_size < len(samples):
         fft_size <<= 1
     spectrum = _fft([complex(sample, 0.0) for sample in samples] + [0j] * (fft_size - len(samples)))
     weighted_energy_spectrum = 0.0
-    response_energy_spectrum = 0.0
+    total_energy_spectrum = 0.0
     high_energy_spectrum = 0.0
     centroid_numerator = 0.0
     for index in range(fft_size // 2 + 1):
         frequency = index * sample_rate / fft_size
         multiplicity = 1.0 if index == 0 or index == fft_size // 2 else 2.0
         power = abs(spectrum[index]) ** 2 * multiplicity
-        response_gain = 10.0 ** (_response_gain_db(profile, max(20.0, frequency)) / 10.0)
-        adjusted_power = power * response_gain
-        response_energy_spectrum += adjusted_power
-        centroid_numerator += frequency * adjusted_power
+        total_energy_spectrum += power
+        centroid_numerator += frequency * power
         if frequency >= 2000.0:
-            high_energy_spectrum += adjusted_power
+            high_energy_spectrum += power
         a_gain = 10.0 ** (_a_weighting_db(frequency) / 10.0)
-        weighted_energy_spectrum += adjusted_power * a_gain
+        weighted_energy_spectrum += power * a_gain
     weighted_energy = weighted_energy_spectrum / fft_size
     event_level = _db(weighted_energy / sample_rate, power=True)
     repetition_level = event_level + 10.0 * math.log10(max_rate_hz)
     peak = max(abs(sample) for sample in samples)
     transient = max(abs(samples[index] - samples[index - 1]) for index in range(1, len(samples)))
     rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
-    centroid = centroid_numerator / response_energy_spectrum if response_energy_spectrum else 0.0
-    high_ratio = high_energy_spectrum / response_energy_spectrum if response_energy_spectrum else 0.0
+    centroid = centroid_numerator / total_energy_spectrum if total_energy_spectrum else 0.0
+    high_ratio = high_energy_spectrum / total_energy_spectrum if total_energy_spectrum else 0.0
     return {
         "duration_ms": len(samples) * 1000.0 / sample_rate,
         "rms_dbfs": _db(rms),
@@ -290,14 +252,14 @@ def analyze_samples(samples: list[float], sample_rate: int, profile: dict[str, A
     }
 
 
-def analyze_manifest(manifest: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+def analyze_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     sample_rate = manifest["sample_rate_hz"]
     analyses: dict[str, dict[str, Any]] = {}
     rendered: dict[str, list[float]] = {}
     for name, effect in manifest["effects"].items():
         samples = synthesize_effect(effect, sample_rate)
         rendered[name] = samples
-        metrics = analyze_samples(samples, sample_rate, profile, float(effect["max_rate_hz"]))
+        metrics = analyze_samples(samples, sample_rate, float(effect["max_rate_hz"]))
         analyses[name] = {**metrics, "target_relative_db": float(effect["target_relative_db"])}
     reference_name = manifest["reference_effect"]
     reference_momentary = analyses[reference_name]["momentary_rms_dbfs"]
@@ -342,8 +304,6 @@ def analyze_manifest(manifest: dict[str, Any], profile: dict[str, Any]) -> dict[
         "schema_version": 2,
         "sample_rate_hz": sample_rate,
         "reference_effect": manifest["reference_effect"],
-        "device": profile.get("device", "unknown"),
-        "calibration": profile.get("calibration", "unknown"),
         "effects": analyses,
         "violations": violations,
         "_rendered": rendered,
@@ -409,8 +369,7 @@ def write_wavs(report: dict[str, Any], directory: Path) -> None:
 
 def printable_report(report: dict[str, Any]) -> str:
     lines = [
-        f"SFX perceptual report: {report['device']} ({report['calibration']}), "
-        f"{report['sample_rate_hz']} Hz, Guest gain=unity",
+        f"SFX digital audio report: {report['sample_rate_hz']} Hz, Guest gain=unity",
         "effect       score  short/target  relative  event A  repeat A  peak    HF ratio  jump/peak  gain hint",
     ]
     for name, metrics in report["effects"].items():
@@ -426,7 +385,7 @@ def printable_report(report: dict[str, Any]) -> str:
         lines.append("violations:")
         lines.extend(f"  - {violation}" for violation in report["violations"])
     else:
-        lines.append("perceptual constraints passed")
+        lines.append("digital audio constraints passed")
     return "\n".join(lines)
 
 
@@ -437,16 +396,14 @@ def serializable_report(report: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--device-profile", type=Path)
     parser.add_argument("--emit-cpp-header", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--write-wavs", type=Path)
-    parser.add_argument("--check", action="store_true", help="fail when a perceptual constraint is violated")
+    parser.add_argument("--check", action="store_true", help="fail when a digital audio constraint is violated")
     args = parser.parse_args()
     try:
         manifest = load_manifest(args.manifest)
-        profile = load_device_profile(args.device_profile)
-        report = analyze_manifest(manifest, profile)
+        report = analyze_manifest(manifest)
         if args.emit_cpp_header:
             emit_cpp_header(manifest, args.emit_cpp_header)
         if args.report:

@@ -21,7 +21,17 @@ test，也不为每项能力生成独立 AOT；协议、错误和边界验证继
 
 首页、返回按钮和各页面操作按钮共用 `sdk/ui/button.hpp`：按下时用带 opacity 的 `FillRect()` 叠加反馈，
 移出按钮会撤销按下态，只有移回并在按钮内松开才触发动作。这个应用也因此直接覆盖 Renderer
-alpha blend 的实际交互路径，不需要为 Graphics 再单独做一页。
+alpha blend 的实际交互路径，不需要为 Graphics 再单独做一页。BACK 使用比绘制边界额外大 6 px 的
+独立命中区域；Devices 页只为 Haptics、GPIO 和 Power 显示中间操作按钮，其他设备让 PREV/NEXT 均分整行。
+
+界面直接使用 `RendererInfo` 返回的物理坐标。`sdk/ui/layout.hpp` 的 `ComputeFlexLayout()` 在启动时计算
+页面分区和首页菜单，在页面进入时计算操作按钮；480×480 使用单列紧凑布局，720×720 使用两列展开布局。
+布局结果同时用于绘制和 Button 命中，触摸不做坐标转换。Flex 只分配矩形，不缩放 Texture。
+
+Resource 页在两种屏幕上使用同一套 2× 物理规格的 RGBA 爆炸素材；30 帧平均放入三张紧凑 Atlas，
+每张纹理都不超过 Host 的 720×720 限制。页面保留固定动画中心，不绘制或放大测试 canvas；各帧按
+`canvas_position` 以物理像素 1:1 叠加在页面背景上。draw opacity 224 与素材 alpha 相乘，用来验收
+texture alpha blend，不触发软件纹理缩放。
 
 Devices 页不写死板型设备：它先用 `Devices::List()` 获得固定容量快照，再用不透明 `DeviceId` 调用
 对应能力对象。PREV/NEXT 可以遍历全部设备；加速度计和磁力计显示 typed event；选中 GPIO 后会以下拉
@@ -29,12 +39,20 @@ Devices 页不写死板型设备：它先用 `Devices::List()` 获得固定容�
 300 ms 震动，PowerInfo 显示电池与外部供电状态。
 离开页面时所有已打开对象通过 move-only RAII 自动释放。
 
-Resource 页使用 `assets/manifest.json` 描述一张 12 帧 PNG atlas；同一个 manifest 还把
+`tools/generate_demo_explosion_atlas.py` 以原始 12 帧 RGBA 素材为输入，在离线阶段使用预乘 Alpha
+时间插值生成 30 帧，把爆炸对象相对上一版放大 2 倍，再裁边打包成三张、每张 10 帧的 PNG Atlas；
+设备端不做插值或缩放。Resource 页以 60 FPS 串联播放三张 Atlas；同一个 manifest 还把
 `demo_music.ogg` 声明为 `ogg_opus` asset，Audio 页用它验收 Host 内置的 Ogg demux 和 micro-opus 解码。
 构建阶段只生成
 `build/apps/demo/generated/demo_assets.hpp`，页面从这个头文件取得 `AssetId` 和帧布局。Demo 面向
 SDK 初次使用者，界面文案直接使用英文字符串，避免给最小 App 引入不必要的 Localization 样板。
 Blocks 和 Snake 展示完整的静态 Catalog 国际化方式。
+
+重新生成爆炸 Atlas 及其 manifest 帧区域：
+
+```sh
+python3 tools/generate_demo_explosion_atlas.py --frames 30 --update-manifest
+```
 
 ## 构建与烧录
 

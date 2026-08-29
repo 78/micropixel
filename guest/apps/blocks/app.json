@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.blocks",
+  "display": "square",
   "display_name": {
     "default": "en",
     "values": {

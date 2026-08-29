@@ -52,12 +52,15 @@ class InputPage final {
     }
 
     void Render(DemoContext& context, micropixel::Frame& commands) {
-        const int32_t center_x = static_cast<int32_t>(context.display.width() / 2U);
-        commands.DrawTextCentered(center_x, 116, "Touch and drag with one or more fingers.", MutedColor(),
+        const int32_t center_x = PageCenterX(context);
+        commands.DrawTextCentered(center_x, PageY(context, 12, 20), "Touch and drag with one or more fingers.",
+                                  MutedColor(),
                                   micropixel::SystemFont::kMedium);
-        commands.FillRect(micropixel::Rect{28, 158, static_cast<int32_t>(context.display.width()) - 56,
-                                           static_cast<int32_t>(context.display.height()) - 254},
-                          PanelColor());
+        const micropixel::Rect canvas{context.layout.page_content.x + (context.layout.compact() ? 20 : 28),
+                                      PageY(context, 52, 64),
+                                      context.layout.page_content.width - (context.layout.compact() ? 40 : 56),
+                                      context.layout.page_content.height - (context.layout.compact() ? 100 : 126)};
+        commands.FillRect(canvas, PanelColor());
 
         for (const TouchPoint& point : points_) {
             if (!point.active) {
@@ -65,15 +68,15 @@ class InputPage final {
             }
             int32_t x = static_cast<int32_t>(point.x) - 22;
             int32_t y = static_cast<int32_t>(point.y) - 22;
-            const int32_t maximum_x = static_cast<int32_t>(context.display.width()) - 44;
-            const int32_t maximum_y = static_cast<int32_t>(context.display.height()) - 44;
-            if (x < 0) {
-                x = 0;
+            const int32_t maximum_x = canvas.x + canvas.width - 44;
+            const int32_t maximum_y = canvas.y + canvas.height - 44;
+            if (x < canvas.x) {
+                x = canvas.x;
             } else if (x > maximum_x) {
                 x = maximum_x;
             }
-            if (y < 100) {
-                y = 100;
+            if (y < canvas.y) {
+                y = canvas.y;
             } else if (y > maximum_y) {
                 y = maximum_y;
             }
@@ -85,8 +88,9 @@ class InputPage final {
         status.AppendUint(event_count_);
         status.Append("   Random::U32(): ");
         status.AppendUint(last_random_);
-        commands.DrawTextCentered(center_x, static_cast<int32_t>(context.display.height()) - 60, status.c_str(),
-                                  micropixel::Color::White(), micropixel::SystemFont::kMedium);
+        commands.DrawTextCentered(center_x, context.layout.page_content.y + context.layout.page_content.height - 28,
+                                  status.c_str(), micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
     }
 
    private:
@@ -130,6 +134,8 @@ bool InputDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event)
     return input_page.OnTouch(context, event);
 }
 
-void InputDemoRender(DemoContext& context, micropixel::Frame& commands) { input_page.Render(context, commands); }
+void InputDemoRender(DemoContext& context, micropixel::Frame& commands) {
+    input_page.Render(context, commands);
+}
 
 }  // namespace demo
