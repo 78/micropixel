@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -37,6 +37,45 @@ def api_token(device_id: str) -> str:
 
 
 class MicroPixelCliTest(unittest.TestCase):
+    def test_usb_screenshot_uses_binary_safe_display_framing(self) -> None:
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.responses = bytearray()
+
+            def write(self, data: bytes) -> int:
+                if data == b"MICROPIXEL_CAPTURE\n":
+                    jpeg = b"\xff\xd8binary\x00\nMICROPIXEL_CAPTURE_END 999\n\xff\xd9"
+                    self.responses.extend(
+                        b"\nMICROPIXEL_CAPTURE_BEGIN 7 480 480 JPEG "
+                        + str(len(jpeg)).encode("ascii")
+                        + b" DISPLAY\n"
+                        + jpeg
+                        + b"\nMICROPIXEL_CAPTURE_END 7\n"
+                    )
+                else:
+                    fields = data.decode("ascii").strip().split()
+                    if fields[2] != "HELLO":
+                        raise AssertionError(f"unexpected operation {fields[2]}")
+                    self.responses.extend(f"\nMPX1 {fields[1]} OK HELLO 1 3072 8388608\n".encode("ascii"))
+                return len(data)
+
+            def read(self, size: int) -> bytes:
+                data = bytes(self.responses[:size])
+                del self.responses[:size]
+                return data
+
+            def close(self) -> None:
+                pass
+
+        with patch.object(CLI, "discover_usb_port", return_value="/dev/fake"), patch.object(
+            CLI, "open_usb_serial", return_value=FakeSerial()
+        ):
+            with CLI.UsbControlClient(None, 1.0) as client:
+                jpeg, width, height = client.capture_screen()
+        self.assertEqual((width, height), (480, 480))
+        self.assertTrue(jpeg.startswith(b"\xff\xd8"))
+        self.assertTrue(jpeg.endswith(b"\xff\xd9"))
+
     def test_usb_transport_lists_controls_and_installs_apps(self) -> None:
         class FakeSerial:
             def __init__(self) -> None:
@@ -59,6 +98,32 @@ class MicroPixelCliTest(unittest.TestCase):
                     )
                 elif operation == "APP_START":
                     detail = "RESULT app_started"
+                elif operation == "APP_LAST_ERROR":
+                    diagnostic_detail = base64.b64encode(b"Exception: out of bounds memory access").decode("ascii")
+                    detail = f"APP_ERROR micropixel.demo run guest_trap 0 0 {diagnostic_detail}"
+                elif operation == "LOG_READ":
+                    message = base64.b64encode(b"guest ready").decode("ascii")
+                    detail = f"LOG_PAGE 0000000000000001 1 0 0 1 1 12345 2 vendor.demo {message}"
+                elif operation == "INPUT_SEQUENCE":
+                    operations = json.loads(base64.b64decode(fields[3], validate=True))
+                    if len(operations) != 2 or operations[0].get("type") != "key":
+                        raise AssertionError("unexpected input sequence")
+                    detail = "RESULT input_sequence_completed"
+                elif operation == "FIRMWARE_STATUS":
+                    detail = "RESULT firmware_status 3 1 1 0 0.2.5"
+                elif operation == "DEVICE_STATUS":
+                    version = base64.b64encode(b"0.2.4").decode("ascii")
+                    board = base64.b64encode(b"ESP-Mosaico").decode("ascii")
+                    chip = base64.b64encode(b"ESP32-S31").decode("ascii")
+                    detail = (
+                        f"DEVICE_STATUS {version} {board} {chip} 1234 - not_running 1 65536 25165824 "
+                        "100000 200000 480 480 1 1 1"
+                    )
+                elif operation == "DEVICE_TASKS":
+                    name = base64.b64encode(b"main").decode("ascii")
+                    detail = f"TASK_PAGE 1 1 1 1 0 999 1 {name},7,0,5,5,123,4096"
+                elif operation == "DEVICE_REBOOT":
+                    detail = "RESULT rebooting"
                 elif operation == "APP_INSTALL_BEGIN":
                     self.expected_size = int(fields[4])
                     self.installed.clear()
@@ -95,6 +160,23 @@ class MicroPixelCliTest(unittest.TestCase):
                 catalog = client.list_apps()
                 self.assertEqual(catalog["apps"][0]["displayName"], "Demo")
                 self.assertEqual(client.action("APP_START", "vendor.demo")["result"]["message"], "app_started")
+                self.assertEqual(client.last_app_error()["code"], "guest_trap")
+                cursor, has_more, truncated, entries = client.read_log(None)
+                self.assertEqual(cursor, "0000000000000001:1")
+                self.assertFalse(has_more)
+                self.assertFalse(truncated)
+                self.assertEqual(entries[0]["message"], "guest ready")
+                input_result = client.input_sequence(
+                    [
+                        {"type": "key", "code": "confirm", "phase": "down"},
+                        {"type": "key", "code": "confirm", "phase": "up", "delayMs": 80},
+                    ]
+                )
+                self.assertEqual(input_result["result"]["message"], "input_sequence_completed")
+                self.assertEqual(client.firmware_status()["latestVersion"], "0.2.5")
+                self.assertEqual(client.device_status()["hardware"]["board"], "ESP-Mosaico")
+                self.assertEqual(client.task_diagnostics()["tasks"][0]["name"], "main")
+                self.assertEqual(client.action("DEVICE_REBOOT")["result"]["message"], "rebooting")
                 with tempfile.TemporaryDirectory() as directory:
                     bundle = bytearray(CLI.BUNDLE_ALIGNMENT)
                     bundle[:8] = CLI.BUNDLE_MAGIC
@@ -148,6 +230,7 @@ class MicroPixelCliTest(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "app_id": "vendor.fixture",
+                        "display": "landscape",
                         "display_name": {"default": "en", "values": {"en": "Fixture"}},
                         "localization": {
                             "default": "en",
@@ -162,6 +245,7 @@ class MicroPixelCliTest(unittest.TestCase):
             output_dir = root / "out"
 
             def fake_build(args: argparse.Namespace) -> None:
+                self.assertEqual(args.display_profile, "landscape")
                 Path(args.output_dir_override).mkdir(parents=True, exist_ok=True)
                 (Path(args.output_dir_override) / "fixture.aot").write_bytes(b"fixture-aot")
 
@@ -195,6 +279,7 @@ class MicroPixelCliTest(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "app_id": "vendor.fixture",
+                        "display": "square",
                         "display_name": "Fixture",
                         "source": "../outside.cpp",
                         "sources": ["../outside.cpp"],
@@ -208,9 +293,47 @@ class MicroPixelCliTest(unittest.TestCase):
     def test_build_package_and_install_default_to_current_project(self) -> None:
         self.assertEqual(CLI.parser().parse_args(["build"]).source, ".")
         self.assertEqual(CLI.parser().parse_args(["package"]).project, ".")
+        run = CLI.parser().parse_args(["run"])
+        self.assertEqual(run.project, ".")
+        self.assertEqual(run.profile, "development")
+        self.assertTrue(run.follow)
+        self.assertFalse(CLI.parser().parse_args(["run", "--no-follow"]).follow)
         self.assertEqual(CLI.parser().parse_args(["app", "install"]).project_or_bundle, ".")
+        self.assertIsNone(CLI.parser().parse_args(["app", "start", "--follow"]).app_id)
         with self.assertRaises(SystemExit):
             CLI.parser().parse_args(["install"])
+
+    def test_current_project_supplies_app_id_for_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.cpp").write_text("int fixture = 1;\n", encoding="utf-8")
+            (root / "app.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "app_id": "vendor.fixture",
+                        "display": "square",
+                        "display_name": "Fixture",
+                        "source": "main.cpp",
+                        "sources": ["main.cpp"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(CLI.current_project_app_id(root), "vendor.fixture")
+
+    def test_canonical_and_legacy_command_names_are_both_parsed(self) -> None:
+        canonical = CLI.parser().parse_args(["bundle", "validate", "demo.bundle.bin"])
+        self.assertEqual((canonical.command, canonical.bundle_command), ("bundle", "validate"))
+        paired = CLI.parser().parse_args(["auth", "pair", "--connection-code", "ABCD-1234"])
+        self.assertEqual((paired.command, paired.auth_command), ("auth", "pair"))
+        artifact = CLI.parser().parse_args(["artifact", "upload", "demo.bundle.bin"])
+        self.assertEqual((artifact.command, artifact.artifact_command), ("artifact", "upload"))
+        self.assertEqual(CLI.parser().parse_args(["validate", "demo.bundle.bin"]).command, "validate")
+        self.assertEqual(
+            CLI.parser().parse_args(["auth", "login", "--connection-code", "ABCD-1234"]).auth_command,
+            "login",
+        )
 
     def test_process_environment_overrides_local_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -431,6 +554,242 @@ class MicroPixelCliTest(unittest.TestCase):
             CLI.execute_network(args, client)
         self.assertEqual(client.request, ("POST", "/device/runtime/foreground/stop", {}))
         self.assertEqual(client.assert_job, ({"id": "job-id"}, 15.0))
+
+    def test_start_can_attach_to_guest_logs(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[tuple[str, str, object]] = []
+
+            def device_path(self, suffix: str = "") -> str:
+                return f"/device{suffix}"
+
+            def json(
+                self,
+                method: str,
+                path: str,
+                body: object = None,
+                timeout: float = 30.0,
+                **_options: object,
+            ) -> dict[str, object]:
+                self.requests.append((method, path, body))
+                if path == "/device":
+                    return {"online": True, "status": {"firmwareVersion": "0.2.2"}}
+                return {"id": "start-job"}
+
+            def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            command="app",
+            app_command="start",
+            app_id="vendor.demo",
+            follow=True,
+            interval=0.25,
+            timeout=15.0,
+            command_timeout_ms=10_000,
+            idempotency_key=None,
+        )
+        with patch.object(CLI, "stream_network_logs") as stream, redirect_stdout(io.StringIO()):
+            CLI.execute_network(args, client)
+        self.assertIn(("POST", "/device/apps/vendor.demo/actions/start", {}), client.requests)
+        stream.assert_called_once_with(
+            client,
+            cursor=None,
+            lines=None,
+            follow=True,
+            interval=0.25,
+            timeout=15.0,
+            command_timeout_ms=10_000,
+        )
+
+    def test_install_can_start_and_attach_using_bundle_app_id(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[tuple[str, str, object]] = []
+
+            def device_path(self, suffix: str = "") -> str:
+                return f"/device{suffix}"
+
+            def json(self, method: str, path: str, body: object = None, timeout: float = 30.0) -> dict[str, object]:
+                self.requests.append((method, path, body))
+                if path == "/device":
+                    return {"online": True, "status": {"firmwareVersion": "0.2.2"}}
+                return {"id": path}
+
+            def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            command="app",
+            app_command="install",
+            bundle="demo.bundle.bin",
+            app_id="vendor.demo",
+            start=True,
+            follow=True,
+            interval=0.5,
+            timeout=20.0,
+            command_timeout_ms=None,
+            idempotency_key=None,
+        )
+        with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), patch.object(
+            CLI, "stream_network_logs"
+        ) as stream, redirect_stdout(io.StringIO()):
+            CLI.execute_network(args, client)
+        self.assertIn(("POST", "/device/apps/install", {"packageId": "package-id"}), client.requests)
+        self.assertIn(("POST", "/device/apps/vendor.demo/actions/start", {}), client.requests)
+        stream.assert_called_once()
+
+    def test_run_stops_installs_starts_and_attaches_over_remote(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[tuple[str, str, object]] = []
+
+            def device_path(self, suffix: str = "") -> str:
+                return f"/device{suffix}"
+
+            def json(
+                self,
+                method: str,
+                path: str,
+                body: object = None,
+                timeout: float = 30.0,
+                **_options: object,
+            ) -> dict[str, object]:
+                self.requests.append((method, path, body))
+                if method == "GET":
+                    return {
+                        "online": True,
+                        "status": {
+                            "firmwareVersion": "0.2.2",
+                            "runtime": {
+                                "foregroundSessionId": "session-old",
+                                "runtimeSessions": [
+                                    {
+                                        "sessionId": "session-old",
+                                        "appId": "vendor.old",
+                                        "foreground": True,
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                return {"id": path}
+
+            def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            bundle="demo.bundle.bin",
+            app_id="vendor.demo",
+            follow=True,
+            interval=0.25,
+            timeout=20.0,
+            command_timeout_ms=None,
+            idempotency_key=None,
+        )
+        with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), patch.object(
+            CLI, "stream_network_logs"
+        ) as stream, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            CLI.run_network_app(args, client)
+
+        mutating_requests = [request for request in client.requests if request[0] == "POST"]
+        self.assertEqual(
+            mutating_requests,
+            [
+                ("POST", "/device/runtime/foreground/stop", {}),
+                ("POST", "/device/apps/install", {"packageId": "package-id"}),
+                ("POST", "/device/apps/vendor.demo/actions/start", {}),
+            ],
+        )
+        stream.assert_called_once()
+
+    def test_run_restores_previous_remote_app_when_install_fails(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[tuple[str, str, object]] = []
+
+            def device_path(self, suffix: str = "") -> str:
+                return f"/device{suffix}"
+
+            def json(
+                self,
+                method: str,
+                path: str,
+                body: object = None,
+                timeout: float = 30.0,
+                **_options: object,
+            ) -> dict[str, object]:
+                self.requests.append((method, path, body))
+                if method == "GET":
+                    return {
+                        "online": True,
+                        "status": {
+                            "firmwareVersion": "0.2.2",
+                            "runtime": {
+                                "foregroundSessionId": "session-old",
+                                "runtimeSessions": [{"sessionId": "session-old", "appId": "vendor.old"}],
+                            },
+                        },
+                    }
+                return {"id": path}
+
+            def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
+                if job["id"] == "/device/apps/install":
+                    raise CLI.CliError("install failed")
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            bundle="demo.bundle.bin",
+            app_id="vendor.demo",
+            follow=False,
+            interval=2.0,
+            timeout=20.0,
+            command_timeout_ms=None,
+            idempotency_key=None,
+        )
+        with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(CLI.CliError, "install failed"):
+                CLI.run_network_app(args, client)
+        self.assertIn(("POST", "/device/apps/vendor.old/actions/start", {}), client.requests)
+
+    def test_run_stops_installs_starts_and_attaches_over_usb(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.operations: list[tuple[str, object]] = []
+
+            def device_status(self) -> dict[str, object]:
+                return {"runtime": {"activeAppId": "vendor.old"}}
+
+            def action(self, operation: str, app_id: str | None = None) -> dict[str, object]:
+                self.operations.append((operation, app_id))
+                return {"status": "succeeded"}
+
+            def install(self, bundle: Path) -> dict[str, object]:
+                self.operations.append(("INSTALL", bundle))
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            bundle="demo.bundle.bin",
+            app_id="vendor.demo",
+            follow=True,
+            interval=0.5,
+        )
+        with patch.object(CLI, "stream_usb_logs") as stream, redirect_stderr(io.StringIO()):
+            CLI.run_usb_app(args, client)
+        self.assertEqual(
+            client.operations,
+            [
+                ("APP_STOP", None),
+                ("INSTALL", Path("demo.bundle.bin")),
+                ("APP_START", "vendor.demo"),
+            ],
+        )
+        stream.assert_called_once()
 
     def test_job_failure_formats_app_diagnostic_for_humans_and_agents(self) -> None:
         message = CLI.job_failure_message(

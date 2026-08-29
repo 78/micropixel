@@ -49,7 +49,7 @@
 
 当前项目已经具备可复用的基础：
 
-- `SystemShell` 和各板级 `SystemUiBackend` 管理 System Settings；
+- `SystemShell` 和共享 `SquareSystemUi` 管理 System Settings；
 - `AppController` 管理单一 Guest 的启动、暂停、恢复和停止；
 - Bundle v1 reader 可从统一 `app_store` 只读映射并验证 AOT 与资源；
 - Guest 的 `log_write` 已有长度限制并进入 ESP 日志；
@@ -239,7 +239,7 @@ Gateway 校验签名、时间、audience、目标 `device_id`、当前在线连�
 
 ### 8.1 菜单接入
 
-在 `SystemMenuItem`、`SystemUiActionType`、`SystemUiBackend` 和各平台详情页中增加 Remote Control。它与 Wi-Fi、System Information、Manage Apps 同属 Host 原生 UI。
+在 `SystemMenuItem`、`SystemUiActionType`、`SystemUi` 和共享详情页中增加 Remote Control。它与 Wi-Fi、System Information、Manage Apps 同属 Host 原生 UI。
 
 System Settings 行显示摘要：
 
@@ -288,17 +288,19 @@ Remote Control 设置存于 `sys_store/control`：
 建议新增 Host 模块：
 
 ```text
-firmware/espressif/main/remote_control/
-  remote_control_agent.*       # 生命周期和状态机
-  control_transport.*          # HTTP/3 消息和重连
-  device_identity.*            # NVS 身份与设备 credential
-  command_dispatcher.*         # 有界队列、超时、幂等
-  artifact_transfer.*          # App 包下载、截图上传
-  control_protocol.*           # 版本化 wire schema
-  app_log_broker.*             # Guest 日志 ring 和 cursor
+firmware/espressif/main/host/controller/
+  control_types.hpp              # Local/Remote 共用的传输无关命令和快照
+  control_dispatcher.*           # 有界队列、结果路由和生命周期通知
+  remote/
+    remote_control_agent.*       # 远程生命周期、HTTP/3 状态机和 artifact 传输
+    remote_control_protocol.*    # 版本化 wire schema
+    remote_identity_store.*      # NVS 身份与设备 credential
+    remote_guest_log_buffer.*    # Guest 日志 ring 和 cursor
+    remote_reconnect_policy.hpp  # 可测试的重连/退避策略
 ```
 
-具体名称可调整，但职责必须保持分离。
+后续如果 HTTP/3 transport 或 artifact 流程继续增长，应在 `remote/` 内再拆独立实现文件，但仍只通过
+`ControlDispatcher` 与 Host Controller 交换命令和结果。
 
 ### 9.1 任务与队列
 
@@ -463,9 +465,9 @@ Control 协议的 `source` 固定为 `app_store`；运行状态使用 `running`�
 
 ### 11.3 截图
 
-把现有截图实现拆分为传输无关的 `device::ScreenCapture` contract：
+把现有截图实现拆分为传输无关的 `ScreenCapture` Presentation 接口：
 
-- Metalio-Claw4 backend 负责冻结当前显示 framebuffer，并用 ESP32-P4 JPEG 外设编码；
+- Metalio-Claw4 `ScreenCapture` 实现负责冻结当前显示 framebuffer，并用 ESP32-P4 JPEG 外设编码；
 - USB 开发截图和 Remote Control artifact 均使用 SoC JPEG 外设编码；USB transport 使用带长度的二进制
   JPEG framing，并可选择 LVGL 逻辑场景或显示提交缓冲；
 - 同时只允许一个截图 Job；
@@ -690,7 +692,10 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 
 ### 15.1 页面与对话框
 
-1. **Connect Device**：未登录或 Console 会话失效时只显示连接码输入和文档入口；验证失败显示明确错误；
+公开网站首页固定为 `/`，承载产品定位、SDK 能力和 Quickstart 入口；Developer Docs 位于 `/docs/*`；
+需要配对的设备控制台固定为 `/console/`，不再占用网站根路径。
+
+1. **Connect Device**：未登录或 Console 会话失效时只显示连接码输入、首页和文档入口；验证失败显示明确错误；
 2. **Device Overview**：登录后的唯一工作台页面，第一行放当前 App 和系统信息，第二行放最新屏幕截图/交互入口
    和带滚动的已安装 App 列表；任务列表、固件升级和重启设备依次位于系统信息卡片右上角，不使用功能 Tab；
 3. **Apps 对话框**：App Store 列表、安装、升级、卸载、启动、停止；
@@ -699,7 +704,9 @@ Caddy 负责 TLS、HTTP/3、静态文件和反向代理。TypeScript 服务负�
 6. **Tasks 对话框**：紧凑展示 FreeRTOS 任务、区间 CPU 和精确字节的最低剩余栈；
 7. **API Token 对话框**：右上角入口，默认签发全部设备权限，Token 只展示一次；
 8. **Firmware Update 对话框**：由系统信息卡片右上角进入，显示当前版本、目标版本、大小、SHA-256 摘要和更新说明，确认后创建可跟踪的 OTA Job；
-9. **Developer / Agent Docs**：SDK、构建、API 和完整调试闭环。
+9. **Developer / Agent Docs**：SDK、构建、API 和完整调试闭环；
+10. **全局会话操作**：Console 顶部始终提供返回网站首页和退出登录；退出会清除浏览器保存的 Console Token，
+    停止当前实时流并回到 `/console/` 的连接码页面。
 
 ### 15.2 实时状态
 
@@ -764,14 +771,25 @@ Agent 页面既要能读，也要能被工具稳定解析：
 micropixel new
 micropixel build
 micropixel package
-micropixel validate
-micropixel app install
-micropixel app start <app-id>
+micropixel run [project]
+micropixel run --no-follow
+micropixel bundle validate <bundle>
+micropixel auth pair --connection-code <code>
+micropixel app install [project]
+micropixel app install --start --follow
+micropixel app start [app-id] --follow
 micropixel logs --follow
 micropixel input sequence <file> --screenshot <jpeg>
 ```
 
 CLI 最终调用仓库现有 guest build 和 package 逻辑，避免维护第二套参数。
+`build`、`package` 和 `app install` 默认使用当前目录；`app start` 省略 App ID 时从当前 `app.json` 推导。
+启动后跟随日志复用同一 Guest log cursor，用户中断跟随不停止 App。旧的 `validate`、`auth login` 和
+`app upload` 在 0.9.x 兼容期保留弃用别名。
+
+`run` 是显式的开发部署编排，不使用文件监听：先在本地完成 development profile 的 package，再记录并
+停止当前 Guest、安装、启动和跟随日志。package 失败不改变设备；安装或启动失败时 CLI 尽力恢复此前运行的
+App。普通 `app install` 和 Host 仍保持“运行中拒绝安装”的安全语义，不隐式停止 App。
 
 ### 17.2 托管构建
 
@@ -823,7 +841,8 @@ Control API 进程本身绝不直接执行用户 CMake、Clang 或脚本。
 当前实现已经从骨架推进到可编译的只读诊断和首批运行控制：
 
 - `control/apis` 使用 Fastify 实现无数据库 bootstrap、HS256 设备凭据、内存在线表、单次连接码、Console/API Token、设备与 Console 两条 NDJSON 长连接、设备事件入口、资源型 Job API、日志快照和文件 screenshot/package artifact；Console 长连接推送 presence、Job 和事件，并在 heartbeat 中主动结算超时；
-- `control/console` 未登录或会话失效时只显示连接码输入和文档入口；登录后使用单页 Overview 和按场景打开的对话框，不暴露 Console 会话凭据或期限。右上角可签发默认包含全部设备权限的 7 天、30 天或永久 API Token；App 列表连接后自动同步，每项操作都有持续回执与可展开的完整结果；
+- `control/site` 从同一份首页内容构建公开网站 `/`，并在 `/docs/*` 发布人类与机器文档；
+- `control/console` 固定发布在 `/console/`。未登录或会话失效时只显示连接码、首页和文档入口；登录后使用单页 Overview 和按场景打开的对话框，不暴露 Console 会话凭据或期限。顶部可返回首页、主动退出并清除本地 Console 会话，也可签发默认包含全部设备权限的 7 天、30 天或永久 API Token；App 列表连接后自动同步，每项操作都有持续回执与可展开的完整结果；
 - System Settings 已增加 Remote Control 页面，启用状态保存在 `sys_store/control`，设备身份也独立保存在该命名空间；
 - Runtime 通过抽象 `GuestLogSink` 把 Guest `log_write` 复制到 PSRAM 中的 1024 条固定环形缓存（约 1.1 MiB），网络层不反向依赖 Remote Control；`logs.read` 使用绑定 App Session 的不透明 cursor，每个结果最多返回 48 条，由 Console 在日志对话框中根据 `hasMore` 连续追赶积压；服务端不调度轮询，设备不主动上传；
 - Host 与网络 Agent 之间使用 PSRAM 后备的固定容量命令/结果队列；网络任务不直接调用 WAMR、LVGL 或驱动；

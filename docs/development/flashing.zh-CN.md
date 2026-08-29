@@ -79,8 +79,7 @@ bash tools/s31.sh build-host
 bash tools/s31.sh flash-host /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX --reset  # 从应用启动开始抓日志
-python3 tools/capture_screen.py /dev/cu.usbmodemXXXX logical.jpg --source logical --expect-size 480x480
-python3 tools/capture_screen.py /dev/cu.usbmodemXXXX display.jpg --source display --expect-size 480x480
+python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX screenshot --output screenshot.jpg
 bash tools/s31.sh build-null
 bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
 ```
@@ -180,9 +179,9 @@ macOS/Linux 端口通常形如 `/dev/cu.usbmodemXXXX` 或 `/dev/ttyACM0`；Windo
 `--port`。端口自动探测同样按 ESP32 USB Serial/JTAG 的 VID/PID 工作。当前实现已在 macOS 真机验证；
 Windows 使用 pyserial 的 COM 端口后端，代码路径受支持，但尚未完成项目真机验证。
 
-该协议依赖正在运行的 Host 固件，不适用于下载模式或 bootloader。monitor、esptool、截图脚本和本地控制
-共享板卡的 USB CDC 端口，不能同时占用。`capture_screen.py` 在 P4 与 S31 上使用相同 JPEG framing；S31
-可分别抓取 LVGL 逻辑场景和当前显示提交缓冲，以定位面板传输类问题。
+该协议依赖正在运行的 Host 固件，不适用于下载模式或 bootloader。monitor、esptool 和本地控制共享板卡的
+USB CDC 端口，不能同时占用。截图统一使用 `micropixel --transport usb screenshot`，在 P4 与 S31 上使用
+相同的 JPEG framing，并只抓取当前显示提交缓冲。
 
 ## 7. Conformance 配置与串口调试
 

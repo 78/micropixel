@@ -30,7 +30,7 @@ BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
 BUNDLE_ALIGNMENT = 64 * 1024
 GUEST_LINEAR_MEMORY_ABSOLUTE_MAX_BYTES = 16 * 1024 * 1024
-NETWORK_COMMANDS = frozenset({"device", "firmware", "app", "logs", "screenshot", "input", "job"})
+NETWORK_COMMANDS = frozenset({"device", "firmware", "app", "artifact", "logs", "screenshot", "input", "job"})
 ALL_API_SCOPES = (
     "device:read",
     "device:manage",
@@ -442,6 +442,243 @@ class UsbControlClient:
             raise CliError(f"Device returned an unexpected action result: {detail}")
         return {"status": "succeeded", "result": {"message": fields[1]}, "transport": "usb"}
 
+    def last_app_error(self) -> dict[str, Any]:
+        fields = self.request("APP_LAST_ERROR").split()
+        if fields == ["APP_ERROR", "NONE"]:
+            return {"error": None, "transport": "usb"}
+        if len(fields) != 7 or fields[0] != "APP_ERROR":
+            raise CliError("Device returned a malformed App diagnostic")
+        try:
+            detail = base64.b64decode(fields[6], validate=True).decode("utf-8")
+            exit_code = int(fields[5]) if fields[4] == "1" else None
+        except (ValueError, UnicodeDecodeError) as error:
+            raise CliError("Device returned an invalid App diagnostic") from error
+        diagnostic: dict[str, Any] = {
+            "appId": fields[1],
+            "phase": fields[2],
+            "code": fields[3],
+            "detail": detail,
+        }
+        if exit_code is not None:
+            diagnostic["exitCode"] = exit_code
+        recommendation = app_failure_recommendation(diagnostic)
+        if recommendation:
+            diagnostic["recommendation"] = recommendation
+        return diagnostic
+
+    def read_log(self, cursor: str | None) -> tuple[str, bool, bool, list[dict[str, Any]]]:
+        session = "-"
+        sequence = 0
+        if cursor:
+            session, separator, sequence_text = cursor.rpartition(":")
+            if not separator or not session:
+                raise CliError("USB log cursor is invalid")
+            try:
+                sequence = int(sequence_text)
+            except ValueError as error:
+                raise CliError("USB log cursor is invalid") from error
+        fields = self.request("LOG_READ", f"{session} {sequence}").split()
+        if len(fields) < 6 or fields[0] != "LOG_PAGE":
+            raise CliError("Device returned a malformed Guest log page")
+        try:
+            next_sequence = int(fields[2])
+            truncated = fields[3] == "1"
+            has_more = fields[4] == "1"
+            count = int(fields[5])
+        except ValueError as error:
+            raise CliError("Device returned an invalid Guest log page") from error
+        entries: list[dict[str, Any]] = []
+        if count == 1:
+            if len(fields) != 11:
+                raise CliError("Device returned a malformed Guest log entry")
+            try:
+                message = base64.b64decode(fields[10], validate=True).decode("utf-8", "replace")
+                entries.append(
+                    {
+                        "sequence": int(fields[6]),
+                        "timestampUs": int(fields[7]),
+                        "level": {1: "debug", 2: "info", 3: "warning", 4: "error"}.get(
+                            int(fields[8]), "unknown"
+                        ),
+                        "appId": fields[9],
+                        "message": message,
+                    }
+                )
+            except ValueError as error:
+                raise CliError("Device returned an invalid Guest log entry") from error
+        elif count != 0 or len(fields) != 6:
+            raise CliError("Device returned an inconsistent Guest log page")
+        return f"{fields[1]}:{next_sequence}", has_more, truncated, entries
+
+    def input_sequence(self, operations: list[dict[str, Any]]) -> dict[str, Any]:
+        encoded = base64.b64encode(json.dumps(operations, separators=(",", ":")).encode("utf-8")).decode("ascii")
+        if len(encoded) > 4096:
+            raise CliError("Input sequence is too large for the USB control channel")
+        return self.action("INPUT_SEQUENCE", encoded)
+
+    def firmware_status(self) -> dict[str, Any]:
+        result = self.action("FIRMWARE_STATUS")
+        message = result["result"]["message"]
+        fields = message.split()
+        if len(fields) != 6 or fields[0] != "firmware_status":
+            raise CliError("Device returned a malformed firmware status")
+        try:
+            state_number = int(fields[1])
+            progress = int(fields[4])
+        except ValueError as error:
+            raise CliError("Device returned an invalid firmware status") from error
+        states = ["unknown", "checking", "current", "available", "downloading", "verifying", "installing", "failed"]
+        return {
+            "state": states[state_number] if 0 <= state_number < len(states) else "unknown",
+            "updateAvailable": fields[2] == "1",
+            "installable": fields[3] == "1",
+            "progressPercent": progress,
+            "latestVersion": None if fields[5] == "-" else fields[5],
+            "transport": "usb",
+        }
+
+    def device_status(self) -> dict[str, Any]:
+        fields = self.request("DEVICE_STATUS").split()
+        if len(fields) != 17 or fields[0] != "DEVICE_STATUS":
+            raise CliError("Device returned a malformed status snapshot")
+        try:
+            version, board, chip = (
+                base64.b64decode(value, validate=True).decode("utf-8") for value in fields[1:4]
+            )
+            numbers = [int(value) for value in fields[4:5] + fields[7:14]]
+        except (ValueError, UnicodeDecodeError) as error:
+            raise CliError("Device returned an invalid status snapshot") from error
+        uptime, app_count, store_used, store_total, internal_free, psram_free, width, height = numbers
+        active_app = None if fields[5] == "-" else fields[5]
+        return {
+            "online": True,
+            "transport": "usb",
+            "port": self.port,
+            "firmware": {"version": version},
+            "hardware": {
+                "board": board,
+                "chip": chip,
+                "display": {"widthPixels": width, "heightPixels": height},
+            },
+            "memory": {"internalSram": {"freeBytes": internal_free}, "psram": {"freeBytes": psram_free}},
+            "storage": {
+                "appStore": {
+                    "usedBytes": store_used,
+                    "totalBytes": store_total,
+                    "freeBytes": max(0, store_total - store_used),
+                }
+            },
+            "runtime": {
+                "activeAppId": active_app,
+                "lifecycle": fields[6],
+                "installedAppCount": app_count,
+                "uptimeMs": uptime,
+            },
+            "network": {
+                "available": fields[14] == "1",
+                "enabled": fields[15] == "1",
+                "connected": fields[16] == "1",
+            },
+        }
+
+    def task_diagnostics(self) -> dict[str, Any]:
+        offset = 0
+        tasks: list[dict[str, Any]] = []
+        total_count = 0
+        total_runtime = 0
+        truncated = False
+        states = ["running", "ready", "blocked", "suspended", "deleted", "invalid"]
+        while True:
+            fields = self.request("DEVICE_TASKS", str(offset)).split()
+            if len(fields) < 8 or fields[0] != "TASK_PAGE":
+                raise CliError("Device returned a malformed task diagnostics page")
+            try:
+                available = fields[1] == "1"
+                next_offset, captured_count, total_count, truncated_number, total_runtime, page_count = map(
+                    int, fields[2:8]
+                )
+            except ValueError as error:
+                raise CliError("Device returned invalid task diagnostics") from error
+            truncated = truncated_number != 0
+            if page_count == 1:
+                if len(fields) != 9:
+                    raise CliError("Device returned a malformed task descriptor")
+                parts = fields[8].split(",")
+                if len(parts) != 7:
+                    raise CliError("Device returned a malformed task descriptor")
+                try:
+                    name = base64.b64decode(parts[0], validate=True).decode("utf-8")
+                    task_number, state, priority, base_priority, runtime, stack = map(int, parts[1:])
+                except (ValueError, UnicodeDecodeError) as error:
+                    raise CliError("Device returned an invalid task descriptor") from error
+                tasks.append(
+                    {
+                        "name": name,
+                        "taskNumber": task_number,
+                        "state": states[state] if 0 <= state < len(states) else "invalid",
+                        "priority": priority,
+                        "basePriority": base_priority,
+                        "runtimeCounter": runtime,
+                        "stackHighWaterMarkBytes": stack,
+                    }
+                )
+            elif page_count != 0 or len(fields) != 8:
+                raise CliError("Device returned inconsistent task diagnostics pagination")
+            if next_offset >= captured_count:
+                break
+            if next_offset <= offset:
+                raise CliError("Device did not advance task diagnostics pagination")
+            offset = next_offset
+        return {
+            "available": available,
+            "taskCount": total_count,
+            "truncated": truncated,
+            "totalRuntimeCounter": total_runtime,
+            "tasks": tasks,
+        }
+
+    def capture_screen(self) -> tuple[bytes, int, int]:
+        if self.device is None:
+            raise CliError("USB device is not open")
+        begin = b"\nMICROPIXEL_CAPTURE_BEGIN "
+        command = b"MICROPIXEL_CAPTURE\n"
+        deadline = time.monotonic() + min(self.timeout, 60.0)
+        next_request = 0.0
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if begin not in self.received and now >= next_request:
+                self.device.write(command)
+                next_request = now + 2.0
+            start = self.received.find(begin)
+            if start >= 0:
+                header_end = self.received.find(b"\n", start + 1)
+                if header_end >= 0:
+                    fields = bytes(self.received[start + len(begin) : header_end]).split()
+                    if len(fields) != 6 or fields[3] != b"JPEG":
+                        del self.received[: header_end + 1]
+                        continue
+                    sequence, width, height = map(int, fields[:3])
+                    jpeg_size = int(fields[4])
+                    captured_source = fields[5].decode("ascii")
+                    jpeg_start = header_end + 1
+                    jpeg_end = jpeg_start + jpeg_size
+                    marker = f"\nMICROPIXEL_CAPTURE_END {sequence}\n".encode("ascii")
+                    marker_end = jpeg_end + len(marker)
+                    if len(self.received) >= marker_end:
+                        jpeg = bytes(self.received[jpeg_start:jpeg_end])
+                        if self.received[jpeg_end:marker_end] != marker or not jpeg.startswith(b"\xff\xd8") or not jpeg.endswith(b"\xff\xd9"):
+                            raise CliError("USB screenshot payload is corrupted")
+                        if captured_source != "DISPLAY":
+                            raise CliError("USB screenshot source does not match the request")
+                        del self.received[:marker_end]
+                        return jpeg, width, height
+            block = self.device.read(16384)
+            if block:
+                self.received.extend(block)
+                if begin not in self.received and len(self.received) > 128 * 1024:
+                    del self.received[:-64 * 1024]
+        raise CliError(f"Timed out waiting for USB screenshot on {self.port}")
+
     def install(self, bundle_path: Path) -> dict[str, Any]:
         details = validate_bundle(bundle_path)
         data = bundle_path.read_bytes()
@@ -650,7 +887,7 @@ def save_dotenv_token(path: Path, token: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def run_auth_login(args: argparse.Namespace) -> None:
+def run_auth_pair(args: argparse.Namespace) -> None:
     environment = project_environment(Path.cwd())
     base_url = args.control_url.rstrip("/") if args.control_url else control_url(environment)
     if args.control_url:
@@ -681,6 +918,10 @@ def run_auth_login(args: argparse.Namespace) -> None:
             "Note: the current shell already exports a different MICROPIXEL_API_TOKEN; unset it to use the saved token.",
             file=sys.stderr,
         )
+
+
+# Kept for callers that imported the 0.9.x script as a Python module.
+run_auth_login = run_auth_pair
 
 
 def _run_build_sources(args: argparse.Namespace) -> None:
@@ -748,6 +989,10 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         "size": (["-Oz"], ["-Wl,--strip-all"], ["--opt-level=3", "--size-level=3"]),
     }
     compile_flags, link_flags, aot_flags = profiles[args.profile]
+    display_profiles = {"square": 1, "landscape": 2, "portrait": 3}
+    display_profile = getattr(args, "display_profile", "square")
+    if display_profile not in display_profiles:
+        raise CliError("Guest display profile must be square, landscape, or portrait")
     include_flags = ["-I", str(root / "guest")]
     if generated_include:
         include_flags.extend(["-I", generated_include])
@@ -773,6 +1018,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             "-Wall",
             "-Wextra",
             "-Werror",
+            f"-DMICROPIXEL_APP_DISPLAY_PROFILE={display_profiles[display_profile]}",
             *include_flags,
             "-Wl,--no-entry",
             "-Wl,--shared-memory",
@@ -882,6 +1128,8 @@ def load_project_manifest(path: Path) -> ProjectManifest:
     sources: list[Path] = []
     raw_sources = value.get("sources")
     if package_type == "app":
+        if value.get("display") not in {"square", "landscape", "portrait"}:
+            raise CliError("App project display must be square, landscape, or portrait")
         if raw_sources is None:
             raw_source = value.get("source")
             raw_sources = [raw_source] if raw_source is not None else None
@@ -951,28 +1199,18 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
 
     sfx_manifest = project.path.parent / "audio/sfx.json"
     if sfx_manifest.is_file():
-        environment = project_environment(Path.cwd())
-        default_profile = (
-            sdk_root()
-            / "firmware/espressif/main/platform/boards/metalio-claw4/audio/perceptual_profile.json"
-        )
-        profile = Path(environment.get("MICROPIXEL_SFX_DEVICE_PROFILE", str(default_profile))).expanduser()
-        subprocess.run(
-            [
-                sys.executable,
-                str(_tool_path("analyze_sfx.py")),
-                "--manifest",
-                str(sfx_manifest),
-                "--device-profile",
-                str(profile),
-                "--emit-cpp-header",
-                str(generated_dir / f"{project.name}_sfx_profiles.hpp"),
-                "--report",
-                str(output_dir / "sfx-report.json"),
-                "--check",
-            ],
-            check=True,
-        )
+        analyze_command = [
+            sys.executable,
+            str(_tool_path("analyze_sfx.py")),
+            "--manifest",
+            str(sfx_manifest),
+            "--emit-cpp-header",
+            str(generated_dir / f"{project.name}_sfx_profiles.hpp"),
+            "--report",
+            str(output_dir / "sfx-report.json"),
+            "--check",
+        ]
+        subprocess.run(analyze_command, check=True)
 
     resource_pack = None
     if project.asset_manifest is not None:
@@ -1004,6 +1242,7 @@ def build_project(project: ProjectManifest, profile: str, output_dir: Path) -> P
         extra_source=[str(source) for source in project.sources[1:]],
         name=project.name,
         profile=profile,
+        display_profile=project.value["display"],
         generated_include_override=generated_dir,
         output_dir_override=output_dir,
     )
@@ -1025,6 +1264,7 @@ def package_project(
             extra_source=[str(source) for source in project.sources[1:]],
             name=project.name,
             profile=profile,
+            display_profile=project.value["display"],
             generated_include_override=generated_dir,
             output_dir_override=output_dir,
         )
@@ -1094,6 +1334,32 @@ def install_input(args: argparse.Namespace) -> Path:
     return target.resolve()
 
 
+def run_input(args: argparse.Namespace) -> Path:
+    manifest_path = resolve_project_manifest(args.project)
+    if manifest_path is None:
+        raise CliError("run requires a project directory or app.json")
+    project = load_project_manifest(manifest_path)
+    if project.package_type != "app":
+        raise CliError("run requires an App project, not a Component Package")
+    return package_project(
+        project,
+        args.profile,
+        project_output_directory(project, args.output_dir),
+        args.output,
+    )
+
+
+def current_project_app_id(directory: Path | None = None) -> str:
+    root = directory or Path.cwd()
+    manifest_path = resolve_project_manifest(root)
+    if manifest_path is None:
+        raise CliError("app start requires an App ID outside a directory containing app.json")
+    project = load_project_manifest(manifest_path)
+    if project.package_type != "app":
+        raise CliError("app start cannot start a Component Package project")
+    return project.package_id
+
+
 def upload(client: ControlClient, bundle_path: Path) -> dict[str, Any]:
     require_compatible_firmware(client)
     details = validate_bundle(bundle_path)
@@ -1146,6 +1412,205 @@ def print_log_entries(entries: list[dict[str, Any]]) -> None:
         app_id = entry.get("appId", "guest")
         message = entry.get("message", "")
         print(f"{sequence:>6} {level:<5} {app_id}: {message}")
+
+
+def stream_network_logs(
+    client: ControlClient,
+    *,
+    cursor: str | None,
+    lines: int | None,
+    follow: bool,
+    interval: float,
+    timeout: float,
+    command_timeout_ms: int | None,
+) -> None:
+    initial_entries: list[dict[str, Any]] = []
+    catching_up = lines is not None
+    try:
+        while True:
+            cursor, has_more, entries = pull_logs(client, cursor, timeout, command_timeout_ms)
+            if catching_up:
+                initial_entries.extend(entries)
+                if lines == 0:
+                    initial_entries.clear()
+                elif lines is not None and len(initial_entries) > lines:
+                    del initial_entries[:-lines]
+            else:
+                print_log_entries(entries)
+            if catching_up and not has_more:
+                print_log_entries(initial_entries)
+                catching_up = False
+            if not follow and not has_more:
+                break
+            if not has_more:
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nStopped following logs; the App is still running.", file=sys.stderr)
+
+
+def stream_usb_logs(
+    client: UsbControlClient,
+    *,
+    cursor: str | None,
+    lines: int | None,
+    follow: bool,
+    interval: float,
+) -> None:
+    initial_entries: list[dict[str, Any]] = []
+    catching_up = lines is not None
+    try:
+        while True:
+            cursor, has_more, truncated, entries = client.read_log(cursor)
+            if truncated:
+                print("micropixel: retained Guest logs were truncated before this cursor", file=sys.stderr)
+            if catching_up:
+                initial_entries.extend(entries)
+                if lines == 0:
+                    initial_entries.clear()
+                elif lines is not None and len(initial_entries) > lines:
+                    del initial_entries[:-lines]
+            else:
+                print_log_entries(entries)
+            if catching_up and not has_more:
+                print_log_entries(initial_entries)
+                catching_up = False
+            if not follow and not has_more:
+                break
+            if not has_more:
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nStopped following logs; the App is still running.", file=sys.stderr)
+
+
+def active_remote_app_id(snapshot: dict[str, Any]) -> str | None:
+    status = snapshot.get("status")
+    runtime = status.get("runtime") if isinstance(status, dict) else None
+    sessions = runtime.get("runtimeSessions") if isinstance(runtime, dict) else None
+    if not isinstance(sessions, list):
+        return None
+    foreground_session_id = runtime.get("foregroundSessionId")
+    ordered = sorted(
+        (session for session in sessions if isinstance(session, dict)),
+        key=lambda session: session.get("sessionId") != foreground_session_id,
+    )
+    for session in ordered:
+        app_id = session.get("appId")
+        if isinstance(app_id, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", app_id) is not None:
+            return app_id
+    return None
+
+
+def remote_app_action(
+    client: ControlClient,
+    args: argparse.Namespace,
+    app_id: str,
+    action: str,
+    idempotency_scope: str,
+) -> dict[str, Any]:
+    encoded_app_id = quote_identifier(app_id)
+    job = create_job(
+        client,
+        args,
+        "POST",
+        client.device_path(f"/apps/{encoded_app_id}/actions/{action}"),
+        {},
+        idempotency_scope=idempotency_scope,
+    )
+    return client.wait_job(job, args.timeout)
+
+
+def restore_remote_app(client: ControlClient, args: argparse.Namespace, app_id: str | None) -> None:
+    if app_id is None:
+        return
+    try:
+        remote_app_action(client, args, app_id, "start", "run-restore")
+        print(f"Restored previously running App {app_id}.", file=sys.stderr)
+    except CliError as error:
+        print(f"micropixel: could not restore previously running App {app_id}: {error}", file=sys.stderr)
+
+
+def run_network_app(args: argparse.Namespace, client: ControlClient) -> None:
+    snapshot = client.json("GET", client.device_path())
+    previous_app_id = active_remote_app_id(snapshot)
+    require_compatible_firmware(client)
+
+    stop_job = create_job(
+        client,
+        args,
+        "POST",
+        client.device_path("/runtime/foreground/stop"),
+        {},
+        idempotency_scope="run-stop",
+    )
+    client.wait_job(stop_job, args.timeout)
+    if previous_app_id is not None:
+        print(f"Stopped {previous_app_id}.", file=sys.stderr)
+
+    try:
+        package = upload(client, Path(args.bundle))
+        package_id = package.get("packageId")
+        install_job = create_job(
+            client,
+            args,
+            "POST",
+            client.device_path("/apps/install"),
+            {"packageId": package_id},
+            idempotency_scope="run-install",
+        )
+        client.wait_job(install_job, args.timeout)
+        print(f"Installed {args.app_id}.", file=sys.stderr)
+        remote_app_action(client, args, args.app_id, "start", "run-start")
+        print(f"Started {args.app_id}.", file=sys.stderr)
+    except CliError:
+        restore_remote_app(client, args, previous_app_id)
+        raise
+
+    if args.follow:
+        print("Following Guest logs; press Ctrl-C to detach.", file=sys.stderr)
+        stream_network_logs(
+            client,
+            cursor=None,
+            lines=None,
+            follow=True,
+            interval=args.interval,
+            timeout=args.timeout,
+            command_timeout_ms=getattr(args, "command_timeout_ms", None),
+        )
+
+
+def restore_usb_app(client: UsbControlClient, app_id: str | None) -> None:
+    if app_id is None:
+        return
+    try:
+        client.action("APP_START", app_id)
+        print(f"Restored previously running App {app_id}.", file=sys.stderr)
+    except CliError as error:
+        print(f"micropixel: could not restore previously running App {app_id}: {error}", file=sys.stderr)
+
+
+def run_usb_app(args: argparse.Namespace, client: UsbControlClient) -> None:
+    status = client.device_status()
+    runtime = status.get("runtime")
+    previous_app_id = runtime.get("activeAppId") if isinstance(runtime, dict) else None
+    if not isinstance(previous_app_id, str):
+        previous_app_id = None
+
+    client.action("APP_STOP")
+    if previous_app_id is not None:
+        print(f"Stopped {previous_app_id}.", file=sys.stderr)
+
+    try:
+        client.install(Path(args.bundle))
+        print(f"Installed {args.app_id}.", file=sys.stderr)
+        client.action("APP_START", args.app_id)
+        print(f"Started {args.app_id}.", file=sys.stderr)
+    except CliError:
+        restore_usb_app(client, previous_app_id)
+        raise
+
+    if args.follow:
+        print("Following Guest logs; press Ctrl-C to detach.", file=sys.stderr)
+        stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval)
 
 
 def non_negative_int(value: str) -> int:
@@ -1339,6 +1804,8 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
             print_json({**diagnostic, **({"recommendation": recommendation} if recommendation else {})})
         else:
             print_json(response)
+    elif args.command == "artifact" and args.artifact_command == "upload":
+        print_json(upload(client, Path(args.bundle)))
     elif args.command == "app" and args.app_command == "upload":
         print_json(upload(client, Path(args.bundle)))
     elif args.command == "app" and args.app_command == "install":
@@ -1346,6 +1813,28 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
         package_id = package.get("packageId")
         job = create_job(client, args, "POST", client.device_path("/apps/install"), {"packageId": package_id})
         print_json(client.wait_job(job, args.timeout))
+        if getattr(args, "start", False):
+            require_compatible_firmware(client)
+            app_id = quote_identifier(args.app_id)
+            start_job = create_job(
+                client,
+                args,
+                "POST",
+                client.device_path(f"/apps/{app_id}/actions/start"),
+                {},
+                idempotency_scope="start",
+            )
+            print_json(client.wait_job(start_job, args.timeout))
+            if getattr(args, "follow", False):
+                stream_network_logs(
+                    client,
+                    cursor=None,
+                    lines=None,
+                    follow=True,
+                    interval=args.interval,
+                    timeout=args.timeout,
+                    command_timeout_ms=getattr(args, "command_timeout_ms", None),
+                )
     elif args.command == "app" and args.app_command in {"start", "stop"}:
         if args.app_command == "stop" and args.app_id is None:
             job = create_job(client, args, "POST", client.device_path("/runtime/foreground/stop"), {})
@@ -1357,36 +1846,30 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
         action = args.app_command
         job = create_job(client, args, "POST", client.device_path(f"/apps/{app_id}/actions/{action}"), {})
         print_json(client.wait_job(job, args.timeout))
+        if args.app_command == "start" and getattr(args, "follow", False):
+            stream_network_logs(
+                client,
+                cursor=None,
+                lines=None,
+                follow=True,
+                interval=args.interval,
+                timeout=args.timeout,
+                command_timeout_ms=getattr(args, "command_timeout_ms", None),
+            )
     elif args.command == "app" and args.app_command == "uninstall":
         app_id = quote_identifier(args.app_id)
         job = create_job(client, args, "DELETE", client.device_path(f"/apps/{app_id}"))
         print_json(client.wait_job(job, args.timeout))
     elif args.command == "logs":
-        cursor = args.cursor
-        initial_entries: list[dict[str, Any]] = []
-        catching_up = args.lines is not None
-        try:
-            while True:
-                cursor, has_more, entries = pull_logs(
-                    client, cursor, args.timeout, getattr(args, "command_timeout_ms", None)
-                )
-                if catching_up:
-                    initial_entries.extend(entries)
-                    if args.lines == 0:
-                        initial_entries.clear()
-                    elif len(initial_entries) > args.lines:
-                        del initial_entries[:-args.lines]
-                else:
-                    print_log_entries(entries)
-                if catching_up and not has_more:
-                    print_log_entries(initial_entries)
-                    catching_up = False
-                if not args.follow and not has_more:
-                    break
-                if not has_more:
-                    time.sleep(args.interval)
-        except KeyboardInterrupt:
-            print("\nStopped following logs.", file=sys.stderr)
+        stream_network_logs(
+            client,
+            cursor=args.cursor,
+            lines=args.lines,
+            follow=args.follow,
+            interval=args.interval,
+            timeout=args.timeout,
+            command_timeout_ms=getattr(args, "command_timeout_ms", None),
+        )
     elif args.command == "screenshot":
         job = create_job(client, args, "POST", client.device_path("/screenshots"), {})
         completed = client.wait_job(job, args.timeout)
@@ -1409,24 +1892,74 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
 
 
 def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
-    if args.command != "app":
-        raise CliError("USB transport currently supports only app list/install/start/stop/uninstall")
-    if args.app_command == "list":
+    if args.command == "device" and args.device_command == "status":
+        print_json(client.device_status())
+    elif args.command == "device" and args.device_command == "diagnostics":
+        print_json({**client.device_status(), "taskDiagnostics": client.task_diagnostics()})
+    elif args.command == "device" and args.device_command == "reboot":
+        print_json(client.action("DEVICE_REBOOT"))
+    elif args.command == "app" and args.app_command == "list":
         catalog = client.list_apps()
         if args.running:
             apps = [app for app in catalog["apps"] if app.get("active") is True]
             catalog = {**catalog, "apps": apps, "count": len(apps)}
         print_json(catalog)
-    elif args.app_command == "install":
+    elif args.command == "app" and args.app_command == "last-error":
+        print_json(client.last_app_error())
+    elif args.command == "app" and args.app_command == "install":
         print_json(client.install(Path(args.bundle)))
-    elif args.app_command == "start":
+        if getattr(args, "start", False):
+            print_json(client.action("APP_START", args.app_id))
+            if getattr(args, "follow", False):
+                stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval)
+    elif args.command == "app" and args.app_command == "start":
         print_json(client.action("APP_START", args.app_id))
-    elif args.app_command == "stop":
+        if getattr(args, "follow", False):
+            stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval)
+    elif args.command == "app" and args.app_command == "stop":
         print_json(client.action("APP_STOP", args.app_id))
-    elif args.app_command == "uninstall":
+    elif args.command == "app" and args.app_command == "uninstall":
         print_json(client.action("APP_UNINSTALL", args.app_id))
+    elif args.command == "logs":
+        stream_usb_logs(
+            client,
+            cursor=args.cursor,
+            lines=args.lines,
+            follow=args.follow,
+            interval=args.interval,
+        )
+    elif args.command == "screenshot":
+        jpeg, _width, _height = client.capture_screen()
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(jpeg)
+        print(output)
+    elif args.command == "input":
+        operations = input_operations(args)
+        capture_requested = any(operation.get("type") == "screenshot" for operation in operations)
+        input_only = [operation for operation in operations if operation.get("type") != "screenshot"]
+        completed = (
+            client.input_sequence(input_only)
+            if input_only
+            else {"status": "succeeded", "result": {"message": "no_input"}, "transport": "usb"}
+        )
+        if capture_requested:
+            jpeg, width, height = client.capture_screen()
+            if args.screenshot:
+                output = Path(args.screenshot)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(jpeg)
+                completed["result"]["screenshot"] = {
+                    "path": str(output), "width": width, "height": height, "mediaType": "image/jpeg"
+                }
+        print_json(completed)
+    elif args.command == "firmware" and args.firmware_command == "status":
+        print_json(client.firmware_status())
+    elif args.command == "firmware" and args.firmware_command == "update":
+        print_json(client.action("FIRMWARE_UPDATE"))
     else:
-        raise CliError(f"app {args.app_command} is not available over USB")
+        suffix = getattr(args, "app_command", getattr(args, "device_command", ""))
+        raise CliError(f"{args.command} {suffix}".strip() + " is not available over USB")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1459,15 +1992,40 @@ def parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
 
-    validate = commands.add_parser("validate", help="Validate a Bundle v1 header")
+    run = commands.add_parser("run", help="Build, install, start, and attach to an App project")
+    run.add_argument("project", nargs="?", default=".", help="Project directory or app.json (default: .)")
+    run.add_argument("--profile", choices=["development", "release", "size"], default="development")
+    run.add_argument("--output-dir", help="Build output directory")
+    run.add_argument("--output", help="Bundle output path")
+    run.add_argument(
+        "--no-follow",
+        dest="follow",
+        action="store_false",
+        help="Return after starting instead of following Guest logs",
+    )
+    run.add_argument("--interval", type=float, default=2.0, help="Seconds between log polls (default: 2)")
+    run.set_defaults(follow=True)
+
+    bundle = commands.add_parser("bundle", help="Inspect and validate MicroPixel Bundles")
+    bundle_modes = bundle.add_subparsers(dest="bundle_command", required=True)
+    bundle_validate = bundle_modes.add_parser("validate", help="Validate a Bundle v1 header")
+    bundle_validate.add_argument("bundle")
+
+    validate = commands.add_parser("validate", help="Deprecated alias for 'bundle validate'")
     validate.add_argument("bundle")
 
-    auth = commands.add_parser("auth", help="Connect a device and save a permanent API token")
+    auth = commands.add_parser("auth", help="Pair a device and manage Control API authentication")
     auth_modes = auth.add_subparsers(dest="auth_command", required=True)
-    login = auth_modes.add_parser("login", help="Exchange a device connection code for a permanent API token")
-    login.add_argument("--connection-code", required=True, help="One-time code shown on the device")
-    login.add_argument("--env-file", default=".env", help="Local environment file to update (default: .env)")
-    login.add_argument("--control-url", help="Control API origin (default: MICROPIXEL_CONTROL_URL or production)")
+
+    def add_pair_options(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--connection-code", required=True, help="One-time code shown on the device")
+        command.add_argument("--env-file", default=".env", help="Local environment file to update (default: .env)")
+        command.add_argument("--control-url", help="Control API origin (default: MICROPIXEL_CONTROL_URL or production)")
+
+    pair = auth_modes.add_parser("pair", help="Exchange a device connection code for a permanent API token")
+    add_pair_options(pair)
+    login = auth_modes.add_parser("login", help="Deprecated alias for 'auth pair'")
+    add_pair_options(login)
 
     device = commands.add_parser("device", help="Read device connection state and runtime diagnostics")
     device_modes = device.add_subparsers(dest="device_command", required=True)
@@ -1482,13 +2040,13 @@ def parser() -> argparse.ArgumentParser:
     firmware_modes.add_parser("status", help="Show the installed and latest firmware versions")
     firmware_update = firmware_modes.add_parser("update", help="Install the latest firmware on the device")
 
-    app = commands.add_parser("app", help="List, install, run, inspect, and remove Apps")
+    app = commands.add_parser("app", help="List, install, start, stop, inspect, and uninstall Apps")
     app_modes = app.add_subparsers(dest="app_command", required=True)
     app_list = app_modes.add_parser("list", help="Refresh and list installed Apps")
     app_list.add_argument("--running", action="store_true", help="Show only Apps that are active or suspended")
     app_list.add_argument("--cached", action="store_true", help="Read the last catalog without refreshing the device")
     app_modes.add_parser("last-error", help="Show the most recent AOT load, launch, or runtime failure")
-    upload_command = app_modes.add_parser("upload", help="Upload a Bundle without installing it")
+    upload_command = app_modes.add_parser("upload", help="Deprecated alias for 'artifact upload'")
     upload_command.add_argument("bundle")
     install = app_modes.add_parser("install", help="Build if needed, then upload and install an App")
     install.add_argument(
@@ -1497,12 +2055,24 @@ def parser() -> argparse.ArgumentParser:
     install.add_argument("--profile", choices=["development", "release", "size"], default="release")
     install.add_argument("--output-dir", help="Build output directory")
     install.add_argument("--output", help="Bundle output path when building a project")
+    install.add_argument("--start", action="store_true", help="Start the App after it is installed")
+    install.add_argument("-f", "--follow", action="store_true", help="Follow Guest logs after starting the App")
+    install.add_argument("--interval", type=float, default=2.0, help="Seconds between log polls (default: 2)")
     start = app_modes.add_parser("start", help="Start an installed App")
-    start.add_argument("app_id")
+    start.add_argument("app_id", nargs="?", help="App ID; inferred from ./app.json when omitted")
+    start.add_argument("-f", "--follow", action="store_true", help="Follow Guest logs after the App starts")
+    start.add_argument("--interval", type=float, default=2.0, help="Seconds between log polls (default: 2)")
     stop = app_modes.add_parser("stop", help="Stop an App or whichever App owns the runtime")
     stop.add_argument("app_id", nargs="?", help="App ID; omit to stop whichever App owns the runtime")
     uninstall = app_modes.add_parser("uninstall", help="Uninstall an App from the device")
     uninstall.add_argument("app_id")
+
+    artifact = commands.add_parser("artifact", help="Manage remote Control API artifacts")
+    artifact_modes = artifact.add_subparsers(dest="artifact_command", required=True)
+    artifact_upload = artifact_modes.add_parser(
+        "upload", help="Upload a Bundle without installing it (remote transport only)"
+    )
+    artifact_upload.add_argument("bundle")
     logs = commands.add_parser("logs", help="Read logs from the current Guest App")
     logs.add_argument("--follow", action="store_true")
     logs.add_argument(
@@ -1567,6 +2137,7 @@ def parser() -> argparse.ArgumentParser:
         diagnostics,
         reboot,
         firmware_update,
+        run,
         app_list,
         install,
         start,
@@ -1589,22 +2160,51 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.command == "validate":
+            print("micropixel: 'validate' is deprecated; use 'bundle validate'", file=sys.stderr)
+        if args.command == "auth" and args.auth_command == "login":
+            print("micropixel: 'auth login' is deprecated; use 'auth pair'", file=sys.stderr)
+        if args.command == "app" and args.app_command == "upload":
+            print("micropixel: 'app upload' is deprecated; use 'artifact upload'", file=sys.stderr)
+
         if args.command == "build":
             run_build(args)
         elif args.command == "package":
             run_package(args)
+        elif args.command == "run":
+            bundle = run_input(args)
+            args.bundle = str(bundle)
+            args.app_id = validate_bundle(bundle)["appId"]
+            if args.transport == "usb":
+                with UsbControlClient(args.port, args.timeout) as client:
+                    run_usb_app(args, client)
+            else:
+                run_network_app(args, ControlClient(ControlConfig.load(Path.cwd())))
         elif args.command == "app" and args.app_command == "install":
+            if args.follow and not args.start:
+                raise CliError("app install --follow requires --start")
             bundle = install_input(args)
             args.bundle = str(bundle)
+            args.app_id = validate_bundle(bundle)["appId"]
             if args.transport == "usb":
                 with UsbControlClient(args.port, args.timeout) as client:
                     execute_usb(args, client)
             else:
                 execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
+        elif args.command == "app" and args.app_command == "start":
+            if args.app_id is None:
+                args.app_id = current_project_app_id()
+            if args.transport == "usb":
+                with UsbControlClient(args.port, args.timeout) as client:
+                    execute_usb(args, client)
+            else:
+                execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
+        elif args.command == "bundle" and args.bundle_command == "validate":
+            print_json(validate_bundle(Path(args.bundle)))
         elif args.command == "validate":
             print_json(validate_bundle(Path(args.bundle)))
-        elif args.command == "auth" and args.auth_command == "login":
-            run_auth_login(args)
+        elif args.command == "auth" and args.auth_command in {"pair", "login"}:
+            run_auth_pair(args)
         elif args.command in NETWORK_COMMANDS:
             if args.transport == "usb":
                 with UsbControlClient(args.port, getattr(args, "timeout", 300.0)) as client:
