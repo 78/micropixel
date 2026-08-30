@@ -183,7 +183,7 @@ class SquareSystemUiState final {
    private:
     static bool HostPointerTouchSink(void* context, const device::TouchSample& sample);
     static theme::Mode ThemeMode(host_ui::SystemThemeMode mode);
-    void RefreshPerformanceOverlayLocked();
+    void RefreshPerformanceOverlayLocked(bool refresh_sample);
     void ShowStartingScreenLocked();
     void PrepareGuestFrameLocked(lv_obj_t* guest_frame, bool created_guest_frame, bool& needs_present);
     void ResetHallLocked();
