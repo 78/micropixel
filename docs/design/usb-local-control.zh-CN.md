@@ -2,7 +2,7 @@
 
 USB 本地控制是产品 Host 的开发能力。Metalio-Claw4 使用 ESP32 USB Serial/JTAG，ESP-Mosaico 使用板载
 USB 2.0 HS OTG 上的 TinyUSB CDC；两者向 `micropixel` CLI 提供设备状态与任务诊断、固件更新、App 管理、
-Guest 日志、最近错误、截图和输入注入，不新增 Guest ABI，也不允许原始 Flash、NVS 或任意 Host 函数访问。
+Host/App 统一日志、最近错误、截图和输入注入，不新增 Guest ABI，也不允许原始 Flash、NVS 或任意 Host 函数访问。
 
 ## 1. 分层
 
@@ -44,7 +44,7 @@ MPX1 <request-id> ERROR <stable-error-code>
 - `APP_INSTALL_CHUNK <offset> <base64-data>`；
 - `APP_INSTALL_COMMIT`；
 - `APP_INSTALL_ABORT`。
-- `LOG_READ <session-id|-> <after-sequence>`：从 Host 共享的有界 Guest 日志环读取一条并分页；
+- `LOG_READ <session-id|-> <after-sequence> [all|host|app]`：从 Host 共享的有界系统日志环读取一条并分页；省略来源时按旧协议只读 App 日志；
 - `INPUT_SEQUENCE <base64-json>`：提交与 Remote Control 相同上限的触控/按键序列。
 
 `GuestLogBuffer` 属于 Host Controller 层，由组合根创建。Runtime 直接写入，remote 与 USB 只读取，因此关闭

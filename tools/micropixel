@@ -498,7 +498,7 @@ class UsbControlClient:
             diagnostic["recommendation"] = recommendation
         return diagnostic
 
-    def read_log(self, cursor: str | None) -> tuple[str, bool, bool, list[dict[str, Any]]]:
+    def read_log(self, cursor: str | None, source: str = "all") -> tuple[str, bool, bool, list[dict[str, Any]]]:
         session = "-"
         sequence = 0
         if cursor:
@@ -509,22 +509,25 @@ class UsbControlClient:
                 sequence = int(sequence_text)
             except ValueError as error:
                 raise CliError("USB log cursor is invalid") from error
-        fields = self.request("LOG_READ", f"{session} {sequence}").split()
+        fields = self.request("LOG_READ", f"{session} {sequence} {source}").split()
         if len(fields) < 6 or fields[0] != "LOG_PAGE":
-            raise CliError("Device returned a malformed Guest log page")
+            raise CliError("Device returned a malformed system log page")
         try:
             next_sequence = int(fields[2])
             truncated = fields[3] == "1"
             has_more = fields[4] == "1"
             count = int(fields[5])
         except ValueError as error:
-            raise CliError("Device returned an invalid Guest log page") from error
+            raise CliError("Device returned an invalid system log page") from error
         entries: list[dict[str, Any]] = []
         if count == 1:
-            if len(fields) != 11:
-                raise CliError("Device returned a malformed Guest log entry")
+            if len(fields) not in {11, 12}:
+                raise CliError("Device returned a malformed system log entry")
             try:
-                message = base64.b64decode(fields[10], validate=True).decode("utf-8", "replace")
+                source_name = fields[9] if len(fields) == 12 else "app"
+                app_id = fields[10] if len(fields) == 12 else fields[9]
+                message_field = fields[11] if len(fields) == 12 else fields[10]
+                message = base64.b64decode(message_field, validate=True).decode("utf-8", "replace")
                 entries.append(
                     {
                         "sequence": int(fields[6]),
@@ -532,14 +535,15 @@ class UsbControlClient:
                         "level": {1: "debug", 2: "info", 3: "warning", 4: "error"}.get(
                             int(fields[8]), "unknown"
                         ),
-                        "appId": fields[9],
+                        "source": source_name,
+                        "appId": "" if app_id == "-" else app_id,
                         "message": message,
                     }
                 )
             except ValueError as error:
-                raise CliError("Device returned an invalid Guest log entry") from error
+                raise CliError("Device returned an invalid system log entry") from error
         elif count != 0 or len(fields) != 6:
-            raise CliError("Device returned an inconsistent Guest log page")
+            raise CliError("Device returned an inconsistent system log page")
         return f"{fields[1]}:{next_sequence}", has_more, truncated, entries
 
     def input_sequence(self, operations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1418,19 +1422,24 @@ def pull_logs(
     client: ControlClient,
     cursor: str | None,
     timeout_seconds: float,
+    source: str,
     command_timeout_ms: int | None = None,
 ) -> tuple[str | None, bool, list[dict[str, Any]]]:
+    body = {"cursor": cursor, "source": source}
     if command_timeout_ms is None:
-        command = client.json("POST", client.device_path("/logs/read"), {"cursor": cursor})
+        command = client.json("POST", client.device_path("/logs/read"), body)
     else:
         command = client.json(
             "POST",
             client.device_path("/logs/read"),
-            {"cursor": cursor},
+            body,
             command_timeout_ms=command_timeout_ms,
         )
     client.wait_job(command, timeout_seconds)
-    query = "" if cursor is None else f"?cursor={urllib.parse.quote(cursor, safe='')}"
+    query_values = {"source": source}
+    if cursor is not None:
+        query_values["cursor"] = cursor
+    query = f"?{urllib.parse.urlencode(query_values)}"
     snapshot = client.json("GET", client.device_path(f"/logs{query}"))
     entries = snapshot.get("entries", [])
     normalized_entries = [entry for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
@@ -1446,9 +1455,11 @@ def print_log_entries(entries: list[dict[str, Any]]) -> None:
     for entry in entries:
         sequence = entry.get("sequence", "-")
         level = str(entry.get("level", "info")).upper()
-        app_id = entry.get("appId", "guest")
+        source = str(entry.get("source", "app"))
+        app_id = entry.get("appId")
         message = entry.get("message", "")
-        print(f"{sequence:>6} {level:<5} {app_id}: {message}")
+        prefix = f"[APP {app_id or 'unknown'}]" if source == "app" else "[HOST]"
+        print(f"{sequence:>6} {level:<5} {prefix} {message}")
 
 
 def stream_network_logs(
@@ -1460,12 +1471,13 @@ def stream_network_logs(
     interval: float,
     timeout: float,
     command_timeout_ms: int | None,
+    source: str,
 ) -> None:
     initial_entries: list[dict[str, Any]] = []
     catching_up = lines is not None
     try:
         while True:
-            cursor, has_more, entries = pull_logs(client, cursor, timeout, command_timeout_ms)
+            cursor, has_more, entries = pull_logs(client, cursor, timeout, source, command_timeout_ms)
             if catching_up:
                 initial_entries.extend(entries)
                 if lines == 0:
@@ -1492,14 +1504,15 @@ def stream_usb_logs(
     lines: int | None,
     follow: bool,
     interval: float,
+    source: str,
 ) -> None:
     initial_entries: list[dict[str, Any]] = []
     catching_up = lines is not None
     try:
         while True:
-            cursor, has_more, truncated, entries = client.read_log(cursor)
+            cursor, has_more, truncated, entries = client.read_log(cursor, source)
             if truncated:
-                print("micropixel: retained Guest logs were truncated before this cursor", file=sys.stderr)
+                print("micropixel: retained system logs were truncated before this cursor", file=sys.stderr)
             if catching_up:
                 initial_entries.extend(entries)
                 if lines == 0:
@@ -1612,6 +1625,7 @@ def run_network_app(args: argparse.Namespace, client: ControlClient) -> None:
             interval=args.interval,
             timeout=args.timeout,
             command_timeout_ms=getattr(args, "command_timeout_ms", None),
+            source="app",
         )
 
 
@@ -1655,7 +1669,7 @@ def run_usb_app(args: argparse.Namespace, client: UsbControlClient) -> None:
 
     if args.follow:
         print("Following Guest logs; press Ctrl-C to detach.", file=sys.stderr)
-        stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval)
+        stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval, source="app")
 
 
 def non_negative_int(value: str) -> int:
@@ -1879,6 +1893,7 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
                     interval=args.interval,
                     timeout=args.timeout,
                     command_timeout_ms=getattr(args, "command_timeout_ms", None),
+                    source="app",
                 )
     elif args.command == "app" and args.app_command in {"start", "stop"}:
         if args.app_command == "stop" and args.app_id is None:
@@ -1900,6 +1915,7 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
                 interval=args.interval,
                 timeout=args.timeout,
                 command_timeout_ms=getattr(args, "command_timeout_ms", None),
+                source="app",
             )
     elif args.command == "app" and args.app_command == "uninstall":
         app_id = quote_identifier(args.app_id)
@@ -1914,6 +1930,7 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
             interval=args.interval,
             timeout=args.timeout,
             command_timeout_ms=getattr(args, "command_timeout_ms", None),
+            source=getattr(args, "source", "all"),
         )
     elif args.command == "screenshot":
         job = create_job(client, args, "POST", client.device_path("/screenshots"), {})
@@ -1956,11 +1973,11 @@ def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
         if getattr(args, "start", False):
             print_json(client.action("APP_START", args.app_id))
             if getattr(args, "follow", False):
-                stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval)
+                stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval, source="app")
     elif args.command == "app" and args.app_command == "start":
         print_json(client.action("APP_START", args.app_id))
         if getattr(args, "follow", False):
-            stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval)
+            stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval, source="app")
     elif args.command == "app" and args.app_command == "stop":
         print_json(client.action("APP_STOP", args.app_id))
     elif args.command == "app" and args.app_command == "uninstall":
@@ -1972,6 +1989,7 @@ def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
             lines=args.lines,
             follow=args.follow,
             interval=args.interval,
+            source=getattr(args, "source", "all"),
         )
     elif args.command == "screenshot":
         jpeg, _width, _height = client.capture_screen()
@@ -2118,7 +2136,7 @@ def parser() -> argparse.ArgumentParser:
         "upload", help="Upload a Bundle without installing it (remote transport only)"
     )
     artifact_upload.add_argument("bundle")
-    logs = commands.add_parser("logs", help="Read logs from the current Guest App")
+    logs = commands.add_parser("logs", help="Read retained Host and App logs")
     logs.add_argument("--follow", action="store_true")
     logs.add_argument(
         "-n",
@@ -2128,6 +2146,12 @@ def parser() -> argparse.ArgumentParser:
         help="Show only the latest N retained log entries before following",
     )
     logs.add_argument("--cursor", help="Opaque cursor returned by a previous log read")
+    logs.add_argument(
+        "--source",
+        choices=["all", "host", "app"],
+        default="all",
+        help="Select all, Host, or App logs (default: all)",
+    )
     logs.add_argument("--interval", type=float, default=2.0)
     screenshot = commands.add_parser("screenshot", help="Capture a JPEG screenshot")
     screenshot.add_argument("--output", default="micropixel-screenshot.jpg")

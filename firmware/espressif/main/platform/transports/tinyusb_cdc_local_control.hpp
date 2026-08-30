@@ -33,7 +33,7 @@ class TinyUsbCdcLocalControl final : public DevelopmentLocalControlTransport {
 
    private:
     static constexpr size_t kCommandCapacity = 4608U;
-    static constexpr size_t kResponseCapacity = 1024U;
+    static constexpr size_t kResponseCapacity = 2048U;
 
     static void TaskEntry(void* context);
     static void ReceiveEvent(int interface_number, cdcacm_event_t* event);

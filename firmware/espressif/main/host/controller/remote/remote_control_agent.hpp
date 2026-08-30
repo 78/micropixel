@@ -15,9 +15,9 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "host/controller/control_dispatcher.hpp"
-#include "host/controller/guest_log_buffer.hpp"
 #include "host/controller/remote/remote_control_protocol.hpp"
 #include "host/controller/remote/remote_identity_store.hpp"
+#include "host/logging/system_log_buffer.hpp"
 #include "host/ui/system_ui.hpp"
 
 struct cJSON;
@@ -34,7 +34,7 @@ namespace micropixel::firmware::remote_control {
 class RemoteControlAgent final {
    public:
     RemoteControlAgent(device::Wifi& wifi, const device::BoardInfo& board_info, control::ControlDispatcher& controls,
-                       control::GuestLogBuffer& guest_logs, bool screen_capture_supported);
+                       logging::SystemLogBuffer& system_logs, bool screen_capture_supported);
     RemoteControlAgent(const RemoteControlAgent&) = delete;
     RemoteControlAgent& operator=(const RemoteControlAgent&) = delete;
     ~RemoteControlAgent();
@@ -134,8 +134,8 @@ class RemoteControlAgent final {
     [[nodiscard]] bool PostSystemInformation(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostTaskDiagnostics(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostInstalledApps(void* client, const Identity& identity, const char* command_id);
-    [[nodiscard]] bool PostGuestLogs(void* client, const Identity& identity, const char* command_id,
-                                     uint64_t after_sequence);
+    [[nodiscard]] bool PostSystemLogs(void* client, const Identity& identity, const char* command_id,
+                                      uint64_t after_sequence, logging::LogSourceFilter filter);
     [[nodiscard]] bool RefreshFirmwareRelease(void* client);
     [[nodiscard]] bool ApplyFirmwareUpdate(void* client, const Identity& identity, const cJSON* params,
                                            const char* command_id, const FirmwareStatusPublisher& publish_status);
@@ -172,7 +172,7 @@ class RemoteControlAgent final {
     uint64_t published_runtime_snapshot_generation_{};
     static constexpr size_t kTaskDiagnosticCapacity = 48U;
     uint64_t previous_total_runtime_{};
-    control::GuestLogBuffer& guest_logs_;
+    logging::SystemLogBuffer& system_logs_;
     StaticQueue_t command_queue_storage_{};
     std::array<uint8_t, sizeof(Command) * kCommandQueueCapacity> command_queue_bytes_{};
     QueueHandle_t command_queue_{};

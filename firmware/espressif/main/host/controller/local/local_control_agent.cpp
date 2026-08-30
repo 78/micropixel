@@ -167,9 +167,9 @@ bool ParseKeyCode(const char* text, device::KeyCode& code) {
 }  // namespace
 
 LocalControlAgent::LocalControlAgent(device::LocalControl& transport, control::ControlDispatcher& controls,
-                                     control::GuestLogBuffer& guest_logs, const device::BoardInfo& board_info,
+                                     logging::SystemLogBuffer& system_logs, const device::BoardInfo& board_info,
                                      device::Wifi& wifi)
-    : transport_(transport), controls_(controls), guest_logs_(guest_logs), board_info_(board_info), wifi_(wifi) {
+    : transport_(transport), controls_(controls), system_logs_(system_logs), board_info_(board_info), wifi_(wifi) {
     response_queue_bytes_ = static_cast<uint8_t*>(
         heap_caps_calloc(kResponseQueueCapacity, sizeof(Response), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     void* command_workspace_storage =
@@ -439,8 +439,11 @@ void LocalControlAgent::HandleAppLastError(uint32_t request_id, std::string_view
 void LocalControlAgent::HandleLogRead(uint32_t request_id, std::string_view arguments) {
     const std::string_view session = TakeToken(arguments);
     const std::string_view sequence_text = TakeToken(arguments);
+    const std::string_view source_text = TakeToken(arguments);
     uint64_t after_sequence = 0U;
-    if (session.empty() || !ParseUnsigned(sequence_text, after_sequence) || !TrimLeft(arguments).empty()) {
+    logging::LogSourceFilter source_filter{};
+    if (session.empty() || !ParseUnsigned(sequence_text, after_sequence) ||
+        !logging::ParseLogSourceFilter(source_text, source_filter) || !TrimLeft(arguments).empty()) {
         (void)QueueResponse(request_id, "ERROR", "invalid_cursor");
         return;
     }
@@ -453,7 +456,8 @@ void LocalControlAgent::HandleLogRead(uint32_t request_id, std::string_view argu
         std::snprintf(session_text.data(), session_text.size(), "%.*s", static_cast<int>(session.size()),
                       session.data());
     }
-    const auto page = guest_logs_.ReadOne(session == "-" ? nullptr : session_text.data(), after_sequence);
+    const auto page =
+        system_logs_.ReadOne(session == "-" ? nullptr : session_text.data(), after_sequence, source_filter);
     const char* current_session = page.session_id[0] != '\0' ? page.session_id.data() : "-";
     if (!page.has_entry) {
         std::array<char, 160U> detail{};
@@ -473,11 +477,12 @@ void LocalControlAgent::HandleLogRead(uint32_t request_id, std::string_view argu
     }
     auto& detail = command_workspace_->detail;
     detail = {};
+    const char* app_id = page.entry.app_id[0] != '\0' ? page.entry.app_id.data() : "-";
     const int length = std::snprintf(
-        detail.data(), detail.size(), "LOG_PAGE %s %" PRIu64 " %u %u 1 %" PRIu64 " %" PRIu64 " %" PRIu32 " %s %.*s",
+        detail.data(), detail.size(), "LOG_PAGE %s %" PRIu64 " %u %u 1 %" PRIu64 " %" PRIu64 " %" PRIu32 " %s %s %.*s",
         current_session, page.next_sequence, page.truncated ? 1U : 0U, page.has_more ? 1U : 0U, page.entry.sequence,
-        page.entry.timestamp_us, page.entry.level, page.entry.app_id.data(), static_cast<int>(encoded_size),
-        encoded_message.data());
+        page.entry.timestamp_us, page.entry.level, logging::LogSourceText(page.entry.source), app_id,
+        static_cast<int>(encoded_size), encoded_message.data());
     if (length <= 0 || static_cast<size_t>(length) >= detail.size()) {
         (void)QueueResponse(request_id, "ERROR", "response_too_large");
         return;

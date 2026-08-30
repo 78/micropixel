@@ -3,7 +3,6 @@
 list(APPEND micropixel_sources
     "host/controller/app_controller.cpp"
     "host/controller/control_dispatcher.cpp"
-    "host/controller/guest_log_buffer.cpp"
     "host/controller/host_controller.cpp"
     "host/controller/host_power_coordinator.cpp"
     "host/controller/local/local_control_agent.cpp"

@@ -6,7 +6,9 @@ namespace micropixel::platform::esp_mosaico::battery_policy {
 
 inline constexpr int16_t kCurrentDirectionThresholdMa = 5;
 
-[[nodiscard]] constexpr bool IsCharging(int16_t current_ma) { return current_ma > kCurrentDirectionThresholdMa; }
+[[nodiscard]] constexpr bool IsCharging(int16_t current_ma, bool full_charged) {
+    return !full_charged && current_ma > kCurrentDirectionThresholdMa;
+}
 
 [[nodiscard]] constexpr bool IsDischarging(int16_t current_ma) { return current_ma < -kCurrentDirectionThresholdMa; }
 

@@ -32,24 +32,6 @@ extern "C" int32_t micropixel_runtime_log_write(wasm_exec_env_t exec_env, uint32
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
 
-    const char* message = bytes != nullptr ? reinterpret_cast<const char*>(bytes) : "";
-    switch (level) {
-        case MICROPIXEL_LOG_DEBUG:
-            ESP_LOGD(kTag, "guest: %.*s", static_cast<int>(length), message);
-            break;
-        case MICROPIXEL_LOG_INFO:
-            ESP_LOGI(kTag, "guest: %.*s", static_cast<int>(length), message);
-            break;
-        case MICROPIXEL_LOG_WARNING:
-            ESP_LOGW(kTag, "guest: %.*s", static_cast<int>(length), message);
-            break;
-        case MICROPIXEL_LOG_ERROR:
-            ESP_LOGE(kTag, "guest: %.*s", static_cast<int>(length), message);
-            break;
-        default:
-            break;
-    }
-
     auto* context = GetContext(exec_env);
     if (context != nullptr) {
         context->WriteLog(level, bytes, length);

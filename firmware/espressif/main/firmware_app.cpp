@@ -5,10 +5,10 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "host/controller/control_dispatcher.hpp"
-#include "host/controller/guest_log_buffer.hpp"
 #include "host/controller/host_controller.hpp"
 #include "host/controller/local/local_control_agent.hpp"
 #include "host/controller/remote/remote_control_agent.hpp"
+#include "host/logging/system_log_buffer.hpp"
 #include "host/time/network_time.hpp"
 #include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
@@ -61,20 +61,20 @@ void FirmwareApp::Run() {
     static device::DeviceServices devices(*services.graphics, services.board_info.display, *services.input,
                                           *services.audio, *services.random, *services.devices, *services.sensors,
                                           *services.gpio, *services.haptics, *services.battery);
-    static control::GuestLogBuffer guest_logs;
+    logging::SystemLogBuffer& system_logs = logging::SystemLogs();
     static control::ControlDispatcher controls(
         [](void* context, const char* app_id) {
-            static_cast<control::GuestLogBuffer*>(context)->UpdateAppLifecycle(app_id);
+            static_cast<logging::SystemLogBuffer*>(context)->UpdateAppLifecycle(app_id);
         },
-        &guest_logs);
-    static remote_control::RemoteControlAgent remote_control(*services.wifi, services.board_info, controls, guest_logs,
+        &system_logs);
+    static remote_control::RemoteControlAgent remote_control(*services.wifi, services.board_info, controls, system_logs,
                                                              shell.SupportsScreenCapture());
-    static local_control::LocalControlAgent local_control(*services.local_control, controls, guest_logs,
+    static local_control::LocalControlAgent local_control(*services.local_control, controls, system_logs,
                                                           services.board_info, *services.wifi);
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "local control is unavailable for this boot");
     }
-    HostController(devices, *services.battery, *services.wifi, *services.power, shell, controls, guest_logs,
+    HostController(devices, *services.battery, *services.wifi, *services.power, shell, controls, system_logs,
                    remote_control, background_executor)
         .Run();
 }

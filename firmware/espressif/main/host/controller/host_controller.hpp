@@ -21,8 +21,10 @@ class BackgroundExecutor;
 namespace micropixel::firmware {
 namespace control {
 class ControlDispatcher;
-class GuestLogBuffer;
 }  // namespace control
+namespace logging {
+class SystemLogBuffer;
+}
 namespace remote_control {
 class RemoteControlAgent;
 }
@@ -34,7 +36,7 @@ class HostController final {
    public:
     HostController(device::DeviceServices& devices, device::Battery& battery, device::Wifi& wifi, device::Power& power,
                    host_ui::SystemShell& shell, control::ControlDispatcher& controls,
-                   control::GuestLogBuffer& guest_logs, remote_control::RemoteControlAgent& remote_control,
+                   logging::SystemLogBuffer& system_logs, remote_control::RemoteControlAgent& remote_control,
                    work::BackgroundExecutor& background_executor);
     ~HostController();
     HostController(const HostController&) = delete;
@@ -49,7 +51,7 @@ class HostController final {
     device::Power& power_;
     host_ui::SystemShell& shell_;
     control::ControlDispatcher& controls_;
-    control::GuestLogBuffer& guest_logs_;
+    logging::SystemLogBuffer& system_logs_;
     remote_control::RemoteControlAgent& remote_control_;
     work::BackgroundExecutor& background_executor_;
     HostPowerStateMachine power_state_{};

@@ -629,6 +629,7 @@ class MicroPixelCliTest(unittest.TestCase):
             interval=0.25,
             timeout=15.0,
             command_timeout_ms=10_000,
+            source="app",
             idempotency_key=None,
         )
         with patch.object(CLI, "stream_network_logs") as stream, redirect_stdout(io.StringIO()):
@@ -642,6 +643,7 @@ class MicroPixelCliTest(unittest.TestCase):
             interval=0.25,
             timeout=15.0,
             command_timeout_ms=10_000,
+            source="app",
         )
 
     def test_install_can_start_and_attach_using_bundle_app_id(self) -> None:
@@ -1107,7 +1109,7 @@ class MicroPixelCliTest(unittest.TestCase):
 
         client = Client()
         args = argparse.Namespace(
-            command="logs", cursor=None, lines=2, follow=False, interval=0.0, timeout=15.0
+            command="logs", cursor=None, lines=2, follow=False, interval=0.0, timeout=15.0, source="all"
         )
         output = io.StringIO()
         with redirect_stdout(output):
@@ -1116,7 +1118,7 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(client.read_cursors, [None, "after-two"])
         self.assertEqual(
             output.getvalue().splitlines(),
-            ["     3 WARN  demo: three", "     4 ERROR demo: four"],
+            ["     3 WARN  [APP demo] three", "     4 ERROR [APP demo] four"],
         )
 
         client = Client()
@@ -1125,7 +1127,7 @@ class MicroPixelCliTest(unittest.TestCase):
         with redirect_stdout(output):
             CLI.execute_network(args, client)
         self.assertEqual(
-            [line.rsplit(": ", 1)[-1] for line in output.getvalue().splitlines()],
+            [line.split("] ", 1)[-1] for line in output.getvalue().splitlines()],
             ["one", "two", "three", "four"],
         )
 
@@ -1160,20 +1162,21 @@ class MicroPixelCliTest(unittest.TestCase):
                 return {"status": "succeeded"}
 
         args = argparse.Namespace(
-            command="logs", cursor=None, lines=1, follow=True, interval=0.0, timeout=15.0
+            command="logs", cursor=None, lines=1, follow=True, interval=0.0, timeout=15.0, source="all"
         )
         output = io.StringIO()
         with patch.object(CLI.time, "sleep", side_effect=[None, KeyboardInterrupt]), redirect_stdout(output):
             CLI.execute_network(args, Client())
 
         self.assertEqual(
-            [line.rsplit(": ", 1)[-1] for line in output.getvalue().splitlines()],
+            [line.split("] ", 1)[-1] for line in output.getvalue().splitlines()],
             ["recent", "new"],
         )
 
     def test_logs_lines_accepts_short_and_long_options(self) -> None:
         self.assertEqual(CLI.parser().parse_args(["logs", "-n", "0"]).lines, 0)
         self.assertEqual(CLI.parser().parse_args(["logs", "--lines", "12"]).lines, 12)
+        self.assertEqual(CLI.parser().parse_args(["logs", "--source", "host"]).source, "host")
         with self.assertRaises(SystemExit):
             CLI.parser().parse_args(["logs", "-n", "-1"])
 

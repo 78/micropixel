@@ -405,12 +405,12 @@ struct RemoteControlAgent::TaskContext final {
 };
 
 RemoteControlAgent::RemoteControlAgent(device::Wifi& wifi, const device::BoardInfo& board_info,
-                                       control::ControlDispatcher& controls, control::GuestLogBuffer& guest_logs,
+                                       control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
                                        bool screen_capture_supported)
     : controls_(controls),
       wifi_(wifi),
       board_info_(board_info),
-      guest_logs_(guest_logs),
+      system_logs_(system_logs),
       screen_capture_supported_(screen_capture_supported) {
     void* cold_storage = heap_caps_calloc(1U, sizeof(ColdState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (cold_storage != nullptr) {
@@ -423,8 +423,8 @@ RemoteControlAgent::RemoteControlAgent(device::Wifi& wifi, const device::BoardIn
     command_queue_ = xQueueCreateStatic(kCommandQueueCapacity, sizeof(Command), command_queue_bytes_.data(),
                                         &command_queue_storage_);
     stopped_semaphore_ = xSemaphoreCreateBinaryStatic(&stopped_semaphore_storage_);
-    if (!guest_logs_.valid()) {
-        ESP_LOGW(kTag, "Guest log ring is unavailable");
+    if (!system_logs_.valid()) {
+        ESP_LOGW(kTag, "System log ring is unavailable");
     }
     app_lifecycle_.fill('\0');
     if (CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST[0] == '\0') {
@@ -1304,11 +1304,12 @@ bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identit
     return PostCommandResult(client, identity, command_id, true, result);
 }
 
-bool RemoteControlAgent::PostGuestLogs(void* client, const Identity& identity, const char* command_id,
-                                       uint64_t after_sequence) {
+bool RemoteControlAgent::PostSystemLogs(void* client, const Identity& identity, const char* command_id,
+                                        uint64_t after_sequence, logging::LogSourceFilter filter) {
     uint64_t next_cursor = after_sequence;
     bool has_entries = false;
-    cJSON* result = guest_logs_.CreatePayload(after_sequence, kGuestLogResponseCapacity, next_cursor, has_entries);
+    cJSON* result =
+        system_logs_.CreatePayload(after_sequence, kGuestLogResponseCapacity, filter, next_cursor, has_entries);
     (void)next_cursor;
     (void)has_entries;
     if (result == nullptr) {
@@ -2121,8 +2122,18 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
                 uint64_t after_sequence =
                     cJSON_IsObject(cursor) ? JsonNonNegativeUint64(cursor, "afterSequence", 0U) : 0U;
                 const char* cursor_session = cJSON_IsObject(cursor) ? JsonString(cursor, "appSessionId") : nullptr;
-                after_sequence = guest_logs_.NormalizeCursor(cursor_session, after_sequence);
-                (void)PostGuestLogs(client, identity, command_id, after_sequence);
+                const char* source_text = cJSON_IsObject(params) ? JsonString(params, "source") : nullptr;
+                logging::LogSourceFilter source_filter{};
+                if (!logging::ParseLogSourceFilter(source_text != nullptr ? source_text : "app", source_filter)) {
+                    cJSON* result = cJSON_CreateObject();
+                    if (result != nullptr) {
+                        (void)cJSON_AddStringToObject(result, "error", "invalid_log_source");
+                    }
+                    (void)PostCommandResult(client, identity, command_id, false, result);
+                } else {
+                    after_sequence = system_logs_.NormalizeCursor(cursor_session, after_sequence);
+                    (void)PostSystemLogs(client, identity, command_id, after_sequence, source_filter);
+                }
             } else if (name != nullptr && std::strcmp(name, "screen.capture") == 0 && !screen_capture_supported_) {
                 (void)PostUnsupportedCommandResult(client, identity, command_id);
             } else if (name != nullptr &&

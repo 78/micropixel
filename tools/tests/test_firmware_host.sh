@@ -125,6 +125,9 @@ build_and_run ascii_line_framer \
 build_and_run usb_download_reset_detector \
     "$workspace_root/tools/tests/test_usb_download_reset_detector.cpp"
 
+build_and_run usb_cdc_early_log_buffer \
+    "$workspace_root/tools/tests/test_usb_cdc_early_log_buffer.cpp"
+
 build_and_run control_curves \
     "$workspace_root/tools/tests/test_control_curves.cpp"
 
@@ -135,6 +138,9 @@ build_and_run synth_mixer \
 
 build_and_run mosaico_battery_power_policy \
     "$workspace_root/tools/tests/test_mosaico_battery_power_policy.cpp"
+
+build_and_run hall_battery_policy \
+    "$workspace_root/tools/tests/test_hall_battery_policy.cpp"
 
 build_and_run system_shell \
     -pthread \

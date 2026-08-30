@@ -5,6 +5,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "platform/boards/esp-mosaico/battery_power_policy.hpp"
+#include "platform/boards/esp-mosaico/battery_profile.hpp"
 
 namespace micropixel::platform::esp_mosaico {
 namespace {
@@ -22,7 +23,7 @@ BatteryPeripheral::~BatteryPeripheral() {
 }
 
 void BatteryPeripheral::Initialize(i2c_master_bus_handle_t bus, buses::I2cExecutor& executor) {
-    fuel_gauge_.Bind(bus);
+    fuel_gauge_.Bind(bus, &battery_profile::kProfile);
     executor_ = &executor;
     const esp_err_t status = executor.Invoke(
         buses::I2cExecutor::Priority::kLow,
@@ -73,9 +74,17 @@ device::BatterySnapshot BatteryPeripheral::RefreshOnWorker() {
     if (!fuel_gauge_.Read(sample, now_us) || !fuel_gauge_.ReadStateOfCharge(percent, now_us)) {
         return last_snapshot_;
     }
-    const bool charging = battery_policy::IsCharging(sample.current_ma);
+    const bool charging = battery_policy::IsCharging(sample.current_ma, sample.full_charged);
     const bool discharging = battery_policy::IsDischarging(sample.current_ma);
     const bool external_power_connected = battery_policy::ExternalPowerConnected(sample.current_ma);
+    if (!previous.available || previous.charging != charging || previous.discharging != discharging ||
+        last_full_charged_ != sample.full_charged) {
+        ESP_LOGI(kTag, "sample: soc=%u%% voltage=%u mV current=%d mA status=0x%04x full=%s charging=%s external=%s",
+                 static_cast<unsigned>(percent), static_cast<unsigned>(sample.voltage_mv),
+                 static_cast<int>(sample.current_ma), static_cast<unsigned>(sample.battery_status),
+                 sample.full_charged ? "yes" : "no", charging ? "yes" : "no", external_power_connected ? "yes" : "no");
+    }
+    last_full_charged_ = sample.full_charged;
     last_snapshot_ = {
         .percent = percent,
         .available = true,

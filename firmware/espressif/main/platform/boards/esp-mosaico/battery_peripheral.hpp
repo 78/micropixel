@@ -27,6 +27,7 @@ class BatteryPeripheral final : public device::Battery {
     buses::I2cExecutor* executor_{};
     drivers::Bq27220 fuel_gauge_{};
     device::BatterySnapshot last_snapshot_{};
+    bool last_full_charged_{};
     esp_timer_handle_t refresh_timer_{};
     std::atomic<bool> refresh_pending_{};
     std::atomic<device::BatteryStateChangeSink> state_change_sink_{};

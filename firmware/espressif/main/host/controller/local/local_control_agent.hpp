@@ -14,7 +14,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "host/controller/control_dispatcher.hpp"
-#include "host/controller/guest_log_buffer.hpp"
+#include "host/logging/system_log_buffer.hpp"
 
 namespace micropixel::firmware::local_control {
 
@@ -23,7 +23,7 @@ namespace micropixel::firmware::local_control {
 class LocalControlAgent final {
    public:
     LocalControlAgent(device::LocalControl& transport, control::ControlDispatcher& controls,
-                      control::GuestLogBuffer& guest_logs, const device::BoardInfo& board_info, device::Wifi& wifi);
+                      logging::SystemLogBuffer& system_logs, const device::BoardInfo& board_info, device::Wifi& wifi);
     ~LocalControlAgent();
     LocalControlAgent(const LocalControlAgent&) = delete;
     LocalControlAgent& operator=(const LocalControlAgent&) = delete;
@@ -32,7 +32,7 @@ class LocalControlAgent final {
     void Stop();
 
    private:
-    static constexpr size_t kResponseCapacity = 1024U;
+    static constexpr size_t kResponseCapacity = 2048U;
     static constexpr UBaseType_t kResponseQueueCapacity = 8U;
 
     struct Response final {
@@ -42,7 +42,7 @@ class LocalControlAgent final {
     struct CommandWorkspace final {
         Response response{};
         std::array<char, kResponseCapacity> detail{};
-        std::array<unsigned char, 700U> encoded{};
+        std::array<unsigned char, 1400U> encoded{};
     };
 
     struct InstallSession final {
@@ -85,7 +85,7 @@ class LocalControlAgent final {
 
     device::LocalControl& transport_;
     control::ControlDispatcher& controls_;
-    control::GuestLogBuffer& guest_logs_;
+    logging::SystemLogBuffer& system_logs_;
     const device::BoardInfo& board_info_;
     device::Wifi& wifi_;
     StaticQueue_t response_queue_storage_{};

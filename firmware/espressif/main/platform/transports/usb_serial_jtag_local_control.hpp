@@ -35,7 +35,7 @@ class UsbSerialJtagLocalControl final : public DevelopmentLocalControlTransport 
 
    private:
     static constexpr size_t kCommandCapacity = 4608U;
-    static constexpr size_t kResponseCapacity = 1024U;
+    static constexpr size_t kResponseCapacity = 2048U;
 
     static void TaskEntry(void* context);
     static void UsbDriverEvent(usj_select_notif_t event, int* task_woken);

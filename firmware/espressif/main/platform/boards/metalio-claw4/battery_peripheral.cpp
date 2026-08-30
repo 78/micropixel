@@ -109,7 +109,7 @@ device::BatterySnapshot BatteryPeripheral::RefreshOnWorker() {
     last_percent_ = Filter(EstimatePercent(fuel_sample.voltage_mv), now_us);
     sample_available_ = true;
 
-    const bool charging = fuel_sample.current_ma > kChargingThresholdMa;
+    const bool charging = !fuel_sample.full_charged && fuel_sample.current_ma > kChargingThresholdMa;
     const bool discharging = fuel_sample.current_ma < -kChargingThresholdMa;
     if (!charging_available_ || charging != charging_ || discharging != discharging_) {
         const char* direction = charging ? "charging" : (discharging ? "discharging" : "idle");

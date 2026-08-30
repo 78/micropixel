@@ -30,9 +30,10 @@
 #include "freertos/task.h"
 #include "host/controller/app_controller.hpp"
 #include "host/controller/control_dispatcher.hpp"
-#include "host/controller/guest_log_buffer.hpp"
+#include "host/controller/hall_battery_policy.hpp"
 #include "host/controller/host_power_coordinator.hpp"
 #include "host/controller/remote/remote_control_agent.hpp"
+#include "host/logging/system_log_buffer.hpp"
 #include "host/time/system_time.hpp"
 #include "host/ui/system_settings_store.hpp"
 #include "host/ui/system_shell.hpp"
@@ -147,7 +148,9 @@ host_ui::HallWifiModel MakeHallWifiModel(const device::WifiSnapshot& wifi) {
 }
 
 host_ui::HallBatteryModel MakeHallBatteryModel(const device::BatterySnapshot& battery) {
-    const bool charging = battery.external_power_available ? battery.external_power_connected : battery.charging;
+    const bool charging =
+        hall_battery_policy::ShowCharging(battery.charging_available, battery.charging,
+                                          battery.external_power_available, battery.external_power_connected);
     return {.percent = battery.percent, .available = battery.available, .charging = charging};
 }
 
@@ -2924,7 +2927,8 @@ class ActiveHost final {
 
 HostController::HostController(device::DeviceServices& devices, device::Battery& battery, device::Wifi& wifi,
                                device::Power& power, host_ui::SystemShell& shell, control::ControlDispatcher& controls,
-                               control::GuestLogBuffer& guest_logs, remote_control::RemoteControlAgent& remote_control,
+                               logging::SystemLogBuffer& system_logs,
+                               remote_control::RemoteControlAgent& remote_control,
                                work::BackgroundExecutor& background_executor)
     : devices_(devices),
       battery_(battery),
@@ -2932,7 +2936,7 @@ HostController::HostController(device::DeviceServices& devices, device::Battery&
       power_(power),
       shell_(shell),
       controls_(controls),
-      guest_logs_(guest_logs),
+      system_logs_(system_logs),
       remote_control_(remote_control),
       background_executor_(background_executor) {
     battery_.SetStateChangeSink(
@@ -3044,7 +3048,7 @@ void HostController::Run() {
     controls_.UpdateAppLifecycle(nullptr, "not_running");
 
     auto runtime_result =
-        runtime::AppRuntime::Initialize(devices_, background_executor_, locale.effective(), &guest_logs_);
+        runtime::AppRuntime::Initialize(devices_, background_executor_, locale.effective(), &system_logs_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
         RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, *catalog,

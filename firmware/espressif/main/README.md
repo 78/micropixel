@@ -44,6 +44,8 @@ main/
 ├── firmware_app.hpp
 ├── host/
 │   ├── CMakeLists.txt
+│   ├── logging/
+│   │   └── system_log_buffer.*    # Host/App 统一有界日志总线与 ESP_LOG 接管
 │   ├── controller/
 │   │   ├── CMakeLists.txt
 │   │   ├── app_controller.*
@@ -54,7 +56,7 @@ main/
 │   │   │   └── local_control_agent.*
 │   │   └── remote/
 │   │       ├── remote_control_{agent,protocol}.*
-│   │       ├── remote_{guest_log_buffer,identity_store}.*
+│   │       ├── remote_identity_store.*
 │   │       └── remote_reconnect_policy.hpp
 │   ├── time/
 │   │   ├── network_time.*
@@ -302,7 +304,8 @@ main/
   fallback。过渡合成器分别维护无运行卡片的静态大厅 baseline 和当前动画工作背景；从挂起 App 切换到
   另一个 App 时复用静态 baseline，不在启动关键路径重新缓存带 `RUNNING` 卡片的大厅。大厅顶部由 Host
   显示基于 LVGL 内置 Wi-Fi 字形生成的 RSSI 分级图标和 LVGL 多档电池图标；
-  USB 或无线外部电源接入时，电池图标立即切换为绿色充电符号，断开后恢复当前电量档位；
+  BQ27220 确认存在充电电流且尚未报告 Full Charged 时，电池图标切换为绿色充电符号；满电或充电停止后
+  恢复当前电量档位。USB 或无线外部电源连接状态独立用于自动休眠策略，不再替代充电状态；
   蜂窝信号使用 Host 绘制的分级信号柱，真实蜂窝能力可用前不显示。状态层使用 LVGL primitive 和单次
   半透明合成；亮度、主音量及居中的 Guest 实际呈现 FPS/聚合 CPU 小蒙层均由 Host 控制。性能蒙层只在
   Guest App 前台运行时显示；App Hall、系统菜单、Status Layer、启动页和挂起状态均隐藏。FPS 只在包含
@@ -321,7 +324,9 @@ main/
 - `platform/boards/esp-mosaico/` 是 ESP32-S31 的 P0/P1 产品组合：复用原生 Wi-Fi policy、共享 App Hall/
   Status Layer、480 方屏 layout、逻辑坐标变换、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
   组合 CO5300、`78/esp_lcd_touch_cst92xx`、ES8311 codec、BQ27220、数字振动电机、供电和引脚；音频 tone/PCM mixer 与
-  Host 对数主音量曲线复用 `platform/audio/`，codec 控制与 Touch/Battery 共用 I²C executor。P4/S31
+  Host 对数主音量曲线复用 `platform/audio/`，codec 控制与 Touch/Battery 共用 I²C executor。BQ27220 在同一
+  executor 上应用官方 80 mAh fixed-EDV profile，并读取 SOC、电流和 Full Charged 状态；大厅只在确认仍有
+  充电电流且未满电时显示充电符号，外部供电连接状态继续独立用于自动休眠策略。P4/S31
   的转场使用同一时间线与 PPA SRM 封装；S31 在
   原生 RGB565 中完成缩放/合成，再以独立的 1:1 PPA pass 生成 CO5300 线序，普通 LVGL flush 也使用相同
   的硬件打包原则，正常帧路径不做 CPU 整图逐像素颜色转换。BMI270 加速度/陀螺仪与两颗 BMM150 使用

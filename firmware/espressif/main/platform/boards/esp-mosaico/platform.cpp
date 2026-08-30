@@ -231,6 +231,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
           graphics_(lvgl::MakeGuestGraphicsOperations(graphics_context_)),
           presentation_(state_),
           system_ui_(state_.ui, presentation_) {
+        (void)BeginUsbCdcEarlyLogCapture();
         state_.ui.BindThemeChanged(
             [](void* context) {
                 static_cast<board_detail::MosaicoBoardState*>(context)->panel_transition.ReleaseBackground();
