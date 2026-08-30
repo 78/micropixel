@@ -1,7 +1,7 @@
 # Host 固件构建与烧录指南
 
 本文说明如何构建和烧录 Metalio-Claw4（ESP32-P4）产品固件，以及如何构建和烧录
-ESP-Mosaico（ESP32-S31）bring-up 固件。以下命令均在仓库根目录执行。
+ESP-Mosaico（ESP32-S31）预览固件。以下命令均在仓库根目录执行。
 
 ## 1. 准备环境
 
@@ -70,12 +70,13 @@ bash tools/p4.sh monitor "$P4_PORT"     # 持续查看串口；Ctrl+] 退出
 bash tools/p4.sh fullclean-host
 ```
 
-## ESP32-S31 / ESP-Mosaico bring-up
+## ESP32-S31 / ESP-Mosaico 预览版
 
 ESP-Mosaico 使用 ESP32-S31 preview target 和独立 build 目录：
 
 ```sh
 bash tools/s31.sh build-host
+bash tools/s31.sh build-release  # 发布用：Host + Blocks/Snake/Demo + 完整浏览器镜像
 bash tools/s31.sh flash-host /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX --reset  # 从应用启动开始抓日志
@@ -86,6 +87,10 @@ bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
 
 只有一台匹配的 S31 时可以省略端口，也可用 `S31_PORT` 指定；默认 `S31_BAUD=460800`。`s31-null` 是依赖
 方向编译门禁，没有 flash 或 monitor 能力。
+
+`build-release` 生成 `build/host-esp32s31-mosaico/micropixel-full.bin`，供在线烧录页使用。完整镜像中的
+App Store 固定包含 Blocks、Snake 和 SDK Demo 三个集成 App；生成器从 ESP-IDF 的
+`flasher_args.json` 读取 S31 的 16 MiB Flash 容量并拒绝任何越界区域。
 
 ESP-Mosaico 板载 Type-C 连接的是 USB 2.0 HS OTG，而不是左侧模块接口引出的 USB Serial/JTAG。Host
 固件在平台启动时初始化 TinyUSB CDC 控制台，因此应用启动后 Type-C 会重新枚举并可通过同一接口查看日志；

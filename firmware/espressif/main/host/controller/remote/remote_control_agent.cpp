@@ -1550,7 +1550,9 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     }
     Http3Request request{};
     request.method = "GET";
-    request.path = std::string("/firmware/releases/latest?currentVersion=") + current->version;
+    const char* release_target = std::strcmp(board_info_.host_chip, "ESP32-S31") == 0 ? "esp-mosaico" : "metalio-claw4";
+    request.path =
+        std::string("/firmware/releases/latest?currentVersion=") + current->version + "&target=" + release_target;
     std::unique_ptr<Http3Stream> stream = ClientFrom(client).Open(request);
     if (!stream || stream->GetStatus(kRequestTimeoutMs) != 200) {
         std::lock_guard<std::mutex> lock(model_mutex_);

@@ -9,7 +9,6 @@ import struct
 from pathlib import Path
 
 
-FLASH_SIZE_BYTES = 32 * 1024 * 1024
 PARTITION_TABLE_OFFSET = 0x8000
 PARTITION_MAGIC = b"\xaa\x50"
 PARTITION_ENTRY_SIZE = 32
@@ -22,6 +21,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--app-store-image", type=Path)
     return parser.parse_args()
+
+
+def flash_size_bytes(configuration: object) -> int:
+    if not isinstance(configuration, dict):
+        raise SystemExit("flasher_args.json must contain an object")
+    flash_settings = configuration.get("flash_settings")
+    raw_size = flash_settings.get("flash_size") if isinstance(flash_settings, dict) else None
+    if not isinstance(raw_size, str):
+        raise SystemExit("flasher_args.json does not contain flash_settings.flash_size")
+    normalized = raw_size.strip().upper()
+    multiplier = 1024 * 1024 if normalized.endswith("MB") else 1024 if normalized.endswith("KB") else 0
+    if multiplier == 0:
+        raise SystemExit(f"unsupported flash size: {raw_size}")
+    try:
+        size = int(normalized[:-2], 10) * multiplier
+    except ValueError as error:
+        raise SystemExit(f"unsupported flash size: {raw_size}") from error
+    if size <= 0:
+        raise SystemExit(f"unsupported flash size: {raw_size}")
+    return size
 
 
 def find_partition(partition_table: bytes, label: str) -> tuple[int, int]:
@@ -43,6 +62,7 @@ def main() -> None:
     args = parse_args()
     build_dir = args.build_dir.resolve()
     configuration = json.loads((build_dir / "flasher_args.json").read_text(encoding="utf-8"))
+    capacity = flash_size_bytes(configuration)
     flash_files = configuration.get("flash_files")
     if not isinstance(flash_files, dict) or not flash_files:
         raise SystemExit("flasher_args.json does not contain flash_files")
@@ -57,7 +77,7 @@ def main() -> None:
             raise SystemExit(f"flash input is missing or outside the build directory: {raw_file}")
         data = source.read_bytes()
         end = offset + len(data)
-        if offset < 0 or not data or end > FLASH_SIZE_BYTES:
+        if offset < 0 or not data or end > capacity:
             raise SystemExit(f"invalid flash region: {raw_offset} {raw_file}")
         regions.append((offset, end, source, data))
 
@@ -78,6 +98,10 @@ def main() -> None:
         regions.append(
             (app_store_offset, app_store_offset + len(app_store_data), app_store_path, app_store_data)
         )
+
+    for offset, end, source, _data in regions:
+        if offset < 0 or end > capacity:
+            raise SystemExit(f"flash region exceeds {capacity} byte device capacity: {source.name}")
 
     regions.sort(key=lambda item: item[0])
     for previous, current in zip(regions, regions[1:]):

@@ -41,6 +41,8 @@ firmware_dir="$workspace_root/firmware/espressif"
 host_build_dir="${S31_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s31-mosaico}"
 sdkconfig_path="${S31_SDKCONFIG:-$host_build_dir/sdkconfig.release}"
 sdkconfig_defaults="${S31_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.s31.defaults}"
+system_shell_output_dir="${S31_SYSTEM_SHELL_OUTPUT_DIR:-$workspace_root/build/system-shell-s31}"
+release_app_store_image="$system_shell_output_dir/app-store-release.bin"
 host_config_prepared=false
 
 usage() {
@@ -49,6 +51,8 @@ Usage: bash tools/s31.sh COMMAND [PORT] [--reset]
 
 ESP32-S31 board aliases backed by the common firmware profile tool:
   build-host      Incrementally build only the ESP-Mosaico Host.
+  build-release   Build the Host and the three release Apps, then create a
+                  browser-flashable full image for ESP-Mosaico.
   flash-host      Flash the already-built Host; preserve app_store and do not
                   rebuild or rewrite SDK Demo/App Bundles.
   build-mosaico   Compatibility alias for build-host.
@@ -224,6 +228,37 @@ build_profile() {
     fi
 }
 
+build_app_package() {
+    local app_name="$1"
+    local app_dir="$workspace_root/guest/apps/$app_name"
+    local app_build_dir="$workspace_root/build/apps/$app_name"
+
+    python3 "$workspace_root/tools/micropixel" package "$app_dir" \
+        --profile "${MICROPIXEL_GUEST_PROFILE:-release}" \
+        --output-dir "$app_build_dir" \
+        --output "$app_build_dir/$app_name.bundle.bin"
+}
+
+build_release() {
+    echo "==> Building ESP-Mosaico release Apps: Blocks, Snake, and SDK Demo"
+    build_app_package blocks
+    build_app_package snake
+    build_app_package demo
+    build_profile esp-mosaico
+    mkdir -p "$system_shell_output_dir"
+    python3 "$workspace_root/tools/build_app_store_image.py" \
+        --app-store-size 0x0800000 \
+        --output "$release_app_store_image" \
+        "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/snake/snake.bundle.bin" \
+        "$workspace_root/build/apps/demo/demo.bundle.bin"
+    echo "==> Creating ESP-Mosaico browser image with Blocks, Snake, and SDK Demo"
+    python3 "$workspace_root/tools/build_full_firmware_image.py" \
+        --build-dir "$host_build_dir" \
+        --app-store-image "$release_app_store_image" \
+        --output "$host_build_dir/micropixel-full.bin"
+}
+
 run_serial_action() {
     local action="$1"
     local requested_port="$2"
@@ -246,6 +281,11 @@ case "$command_name" in
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         require_idf
         build_profile esp-mosaico
+        ;;
+    build-release)
+        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+        require_idf
+        build_release
         ;;
     build-null)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
