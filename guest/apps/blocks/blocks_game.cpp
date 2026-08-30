@@ -2,6 +2,18 @@
 
 namespace blocks {
 
+namespace {
+
+constexpr int32_t kHardDropMinimumTravel = 80;
+constexpr uint64_t kHardDropMaximumDurationUs = 200000U;
+
+[[nodiscard]] bool IsHardDropGesture(int32_t dx, int32_t dy, uint64_t elapsed_us) {
+    return dy >= kHardDropMinimumTravel && elapsed_us <= kHardDropMaximumDurationUs &&
+           AbsoluteValue(dy) > AbsoluteValue(dx);
+}
+
+}  // namespace
+
 BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer renderer,
                        micropixel::RendererInfo renderer_info, micropixel::Audio audio, bool audio_available,
                        uint32_t best_score)
@@ -136,7 +148,6 @@ void BlocksGame::OnTimer(const micropixel::TimerEvent& tick) {
 void BlocksGame::ResetGesture() {
     gesture_active_ = false;
     gesture_moved_ = false;
-    gesture_vertical_drag_ = false;
     gesture_started_in_pause_ = false;
     gesture_started_in_hold_ = false;
     gesture_touch_id_ = 0U;
@@ -149,7 +160,6 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
         }
         gesture_active_ = true;
         gesture_moved_ = false;
-        gesture_vertical_drag_ = false;
         gesture_touch_id_ = touch.id();
         gesture_start_x_ = touch.x();
         gesture_start_y_ = touch.y();
@@ -186,10 +196,9 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
             gesture_anchor_x_ += direction * kCellPitch;
             dx = static_cast<int32_t>(touch.x()) - gesture_anchor_x_;
         }
-        while (elapsed_us >= 180000U && dy >= kCellPitch && AbsoluteValue(dy) > AbsoluteValue(dx)) {
+        while (dy >= kCellPitch && AbsoluteValue(dy) > AbsoluteValue(dx)) {
             const LockOutcome outcome = model_.SoftDrop();
             gesture_moved_ = true;
-            gesture_vertical_drag_ = true;
             HandleOutcome(outcome);
             if (outcome.moved && !played_move_sound) {
                 PlayMoveSound();
@@ -219,15 +228,14 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
         return;
     }
 
+    const bool hard_drop = IsHardDropGesture(total_dx, total_dy, elapsed_us);
     const bool was_moved = gesture_moved_;
-    const bool was_vertical_drag = gesture_vertical_drag_;
     const bool started_in_pause = gesture_started_in_pause_;
     const bool started_in_hold = gesture_started_in_hold_;
     ResetGesture();
     bool interface_changed = false;
     bool visual_changed = false;
-    if (!was_vertical_drag && total_dy >= 80 && elapsed_us <= 300000U &&
-        AbsoluteValue(total_dy) > AbsoluteValue(total_dx)) {
+    if (hard_drop) {
         const LockOutcome outcome = model_.HardDrop();
         HandleOutcome(outcome);
         interface_changed = outcome.locked;

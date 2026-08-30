@@ -183,8 +183,9 @@ python3 tools/micropixel --transport usb --port "$P4_PORT" app uninstall micropi
 ```
 
 `micropixel --transport usb app install guest/apps/demo` 会先按正式流程构建和打包，再通过同一协议安装；
-传入现有 `.bundle.bin` 时则直接安装。安装、
-升级和卸载仍由 HostController 串行执行；运行中的 Guest 必须先停止。Bundle 数据使用分块确认传输，
+传入现有 `.bundle.bin` 时则直接安装。`app install` 和 `run` 会在终端显示安装进度：`0–99%` 跟随已确认的
+Bundle 分块，设备完成校验、BundleFS 写时复制和 Catalog 提交后显示 `100%`。安装、升级和卸载仍由
+HostController 串行执行；运行中的 Guest 必须先停止。Bundle 数据使用分块确认传输，
 设备重新计算 SHA-256，并在完整 Bundle/AOT/资源校验通过后提交 BundleFS Catalog。
 
 macOS/Linux 端口通常形如 `/dev/cu.usbmodemXXXX` 或 `/dev/ttyACM0`；Windows 端口形如 `COM7`，可直接传给

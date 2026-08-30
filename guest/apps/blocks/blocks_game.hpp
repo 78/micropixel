@@ -101,7 +101,6 @@ class BlocksGame final {
     alignas(4) uint8_t cell_pixels_[kCellPitch * kCellPitch * 3U]{};
     bool gesture_active_{};
     bool gesture_moved_{};
-    bool gesture_vertical_drag_{};
     bool gesture_started_in_pause_{};
     bool gesture_started_in_hold_{};
     bool audio_available_{};

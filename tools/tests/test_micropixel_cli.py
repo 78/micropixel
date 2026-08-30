@@ -37,6 +37,23 @@ def api_token(device_id: str) -> str:
 
 
 class MicroPixelCliTest(unittest.TestCase):
+    def test_terminal_progress_redraws_interactively_and_ends_with_newline(self) -> None:
+        class TtyBuffer(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        stream = TtyBuffer()
+        progress = CLI.TerminalProgress("Installing vendor.demo", stream)
+        progress.update(0)
+        progress.update(50)
+        progress.update(100)
+        progress.close()
+
+        output = stream.getvalue()
+        self.assertIn("\rInstalling vendor.demo: [------------", output)
+        self.assertIn(" 50%", output)
+        self.assertTrue(output.endswith("100%\n"))
+
     def test_usb_screenshot_uses_binary_safe_display_framing(self) -> None:
         class FakeSerial:
             def __init__(self) -> None:
@@ -185,8 +202,12 @@ class MicroPixelCliTest(unittest.TestCase):
                     struct.pack_into("<I", bundle, 88, 11)
                     path = Path(directory) / "demo.bundle.bin"
                     path.write_bytes(bundle)
-                    result = client.install(path)
+                    progress: list[int] = []
+                    result = client.install(path, progress.append)
                 self.assertEqual(result["result"]["message"], "app_installed")
+                self.assertEqual(progress[0], 0)
+                self.assertEqual(progress[-2:], [99, 100])
+                self.assertEqual(progress, sorted(progress))
                 self.assertEqual(bytes(fake.installed), bytes(bundle))
         self.assertTrue(fake.closed)
 
@@ -788,8 +809,12 @@ class MicroPixelCliTest(unittest.TestCase):
                 self.operations.append((operation, app_id))
                 return {"status": "succeeded"}
 
-            def install(self, bundle: Path) -> dict[str, object]:
+            def install(self, bundle: Path, progress_callback: object = None) -> dict[str, object]:
                 self.operations.append(("INSTALL", bundle))
+                if callable(progress_callback):
+                    progress_callback(0)
+                    progress_callback(50)
+                    progress_callback(100)
                 return {"status": "succeeded"}
 
         client = Client()

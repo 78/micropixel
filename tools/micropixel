@@ -21,7 +21,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TextIO
 
 
 VERSION = "0.10.0"
@@ -47,6 +47,38 @@ EMBEDDED_BUNDLE_BUILDER: str | None = None
 
 class CliError(RuntimeError):
     pass
+
+
+class TerminalProgress:
+    BAR_WIDTH = 24
+
+    def __init__(self, label: str, stream: TextIO | None = None) -> None:
+        self.label = label
+        self.stream = stream if stream is not None else sys.stderr
+        self.interactive = self.stream.isatty()
+        self.last_percent = -1
+        self.line_active = False
+
+    def update(self, progress_percent: int) -> None:
+        percent = min(max(progress_percent, 0), 100)
+        if percent == self.last_percent:
+            return
+        if not self.interactive and percent not in {0, 99, 100} and percent // 10 <= self.last_percent // 10:
+            return
+        self.last_percent = percent
+        if self.interactive:
+            completed = percent * self.BAR_WIDTH // 100
+            bar = "#" * completed + "-" * (self.BAR_WIDTH - completed)
+            ending = "\n" if percent == 100 else ""
+            print(f"\r{self.label}: [{bar}] {percent:3d}%", end=ending, file=self.stream, flush=True)
+            self.line_active = percent != 100
+            return
+        print(f"{self.label}: {percent}%", file=self.stream, flush=True)
+
+    def close(self) -> None:
+        if self.line_active:
+            print(file=self.stream, flush=True)
+            self.line_active = False
 
 
 @dataclass(frozen=True)
@@ -679,7 +711,11 @@ class UsbControlClient:
                     del self.received[:-64 * 1024]
         raise CliError(f"Timed out waiting for USB screenshot on {self.port}")
 
-    def install(self, bundle_path: Path) -> dict[str, Any]:
+    def install(
+        self,
+        bundle_path: Path,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> dict[str, Any]:
         details = validate_bundle(bundle_path)
         data = bundle_path.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
@@ -694,6 +730,8 @@ class UsbControlClient:
         if len(ready_fields) != 2 or ready_fields[0] != "INSTALL_READY":
             raise CliError(f"Device rejected the USB install session: {ready}")
         chunk_size = min(self.CHUNK_SIZE, int(ready_fields[1]))
+        if progress_callback is not None:
+            progress_callback(0)
         try:
             for offset in range(0, len(data), chunk_size):
                 chunk = data[offset : offset + chunk_size]
@@ -703,6 +741,8 @@ class UsbControlClient:
                 expected = offset + len(chunk)
                 if acknowledgment != f"INSTALL_CHUNK {expected}":
                     raise CliError(f"Device acknowledged an unexpected install offset: {acknowledgment}")
+                if progress_callback is not None:
+                    progress_callback(min(99, expected * 99 // len(data)))
             self._send(request_id, "APP_INSTALL_COMMIT")
             completed = self._read_response(request_id, self.timeout)
         except Exception:
@@ -714,6 +754,8 @@ class UsbControlClient:
         fields = completed.split(maxsplit=1)
         if len(fields) != 2 or fields[0] != "RESULT":
             raise CliError(f"Device returned an unexpected install result: {completed}")
+        if progress_callback is not None:
+            progress_callback(100)
         return {
             "status": "succeeded",
             "result": {"message": fields[1], "appId": details["appId"], "sizeBytes": len(data)},
@@ -1583,6 +1625,14 @@ def restore_usb_app(client: UsbControlClient, app_id: str | None) -> None:
         print(f"micropixel: could not restore previously running App {app_id}: {error}", file=sys.stderr)
 
 
+def install_usb_with_progress(client: UsbControlClient, bundle: Path, app_id: str) -> dict[str, Any]:
+    progress = TerminalProgress(f"Installing {app_id}")
+    try:
+        return client.install(bundle, progress.update)
+    finally:
+        progress.close()
+
+
 def run_usb_app(args: argparse.Namespace, client: UsbControlClient) -> None:
     status = client.device_status()
     runtime = status.get("runtime")
@@ -1595,7 +1645,7 @@ def run_usb_app(args: argparse.Namespace, client: UsbControlClient) -> None:
         print(f"Stopped {previous_app_id}.", file=sys.stderr)
 
     try:
-        client.install(Path(args.bundle))
+        install_usb_with_progress(client, Path(args.bundle), args.app_id)
         print(f"Installed {args.app_id}.", file=sys.stderr)
         client.action("APP_START", args.app_id)
         print(f"Started {args.app_id}.", file=sys.stderr)
@@ -1902,7 +1952,7 @@ def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
     elif args.command == "app" and args.app_command == "last-error":
         print_json(client.last_app_error())
     elif args.command == "app" and args.app_command == "install":
-        print_json(client.install(Path(args.bundle)))
+        print_json(install_usb_with_progress(client, Path(args.bundle), args.app_id))
         if getattr(args, "start", False):
             print_json(client.action("APP_START", args.app_id))
             if getattr(args, "follow", False):
