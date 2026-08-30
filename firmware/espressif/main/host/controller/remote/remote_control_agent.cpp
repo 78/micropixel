@@ -16,6 +16,7 @@
 #include "client/http3_client.h"
 #include "device/contracts/wifi.hpp"
 #include "esp_app_desc.h"
+#include "esp_app_format.h"
 #include "esp_chip_info.h"
 #include "esp_err.h"
 #include "esp_flash.h"
@@ -75,6 +76,9 @@ const char* ProtocolErrorMessage(const char* code) {
     if (std::strcmp(code, "app_active") == 0) return "Another App Session is already active.";
     if (std::strcmp(code, "host_command_queue_full") == 0) return "The Host command queue is full.";
     if (std::strcmp(code, "artifact_upload_failed") == 0) return "A result artifact could not be uploaded.";
+    if (std::strcmp(code, "firmware_target_mismatch") == 0) {
+        return "The firmware image targets a different chip.";
+    }
     return "The device command failed; inspect error.details for diagnostics.";
 }
 
@@ -1550,7 +1554,9 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     }
     Http3Request request{};
     request.method = "GET";
-    const char* release_target = std::strcmp(board_info_.host_chip, "ESP32-S31") == 0 ? "esp-mosaico" : "metalio-claw4";
+    const bool is_s31 = std::strcmp(board_info_.host_chip, "ESP32-S31") == 0;
+    const char* release_target = is_s31 ? "esp-mosaico" : "metalio-claw4";
+    const char* release_chip = is_s31 ? "ESP32-S31" : "ESP32-P4";
     request.path =
         std::string("/firmware/releases/latest?currentVersion=") + current->version + "&target=" + release_target;
     std::unique_ptr<Http3Stream> stream = ClientFrom(client).Open(request);
@@ -1580,6 +1586,8 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     }
     cJSON* root = cJSON_ParseWithLength(reinterpret_cast<const char*>(response_bytes.data()), received);
     const char* version = root != nullptr ? JsonString(root, "version") : nullptr;
+    const char* target = root != nullptr ? JsonString(root, "target") : nullptr;
+    const char* chip = root != nullptr ? JsonString(root, "chip") : nullptr;
     const char* path = root != nullptr ? JsonString(root, "downloadUrl") : nullptr;
     const char* sha256 = root != nullptr ? JsonString(root, "sha256") : nullptr;
     uint32_t size = 0U;
@@ -1589,12 +1597,13 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     const bool available = cJSON_IsTrue(available_item);
     const bool installable = cJSON_IsTrue(installable_item);
     constexpr char kExpectedPrefix[] = "/firmware/releases/";
-    const bool valid = version != nullptr && std::strlen(version) < host_ui::kFirmwareVersionTextCapacity &&
-                       path != nullptr && std::strlen(path) < firmware_download_path_.size() &&
-                       std::strncmp(path, kExpectedPrefix, sizeof(kExpectedPrefix) - 1U) == 0 &&
-                       std::strchr(path + sizeof(kExpectedPrefix) - 1U, '/') == nullptr &&
-                       JsonUint(root, "sizeBytes", kMaxFirmwareBytes, size) && size != 0U &&
-                       ParseSha256(sha256, digest);
+    const bool valid =
+        version != nullptr && std::strlen(version) < host_ui::kFirmwareVersionTextCapacity && target != nullptr &&
+        std::strcmp(target, release_target) == 0 && chip != nullptr && std::strcmp(chip, release_chip) == 0 &&
+        path != nullptr && std::strlen(path) < firmware_download_path_.size() &&
+        std::strncmp(path, kExpectedPrefix, sizeof(kExpectedPrefix) - 1U) == 0 &&
+        std::strchr(path + sizeof(kExpectedPrefix) - 1U, '/') == nullptr &&
+        JsonUint(root, "sizeBytes", kMaxFirmwareBytes, size) && size != 0U && ParseSha256(sha256, digest);
     if (valid) {
         std::lock_guard<std::mutex> lock(model_mutex_);
         CopyText(model_.latest_firmware_version, version);
@@ -1614,6 +1623,7 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     }
     cJSON_Delete(root);
     if (!valid) {
+        ESP_LOGE(kTag, "Invalid firmware release metadata: expected target=%s chip=%s", release_target, release_chip);
         std::lock_guard<std::mutex> lock(model_mutex_);
         model_.firmware_update_state = host_ui::FirmwareUpdateState::kFailed;
         model_.firmware_update_available = false;
@@ -1724,6 +1734,18 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
     if (!hash_ok) {
         heap_caps_free(image);
         return finish(false, "firmware_hash_mismatch");
+    }
+
+    const auto* image_header =
+        size >= sizeof(esp_image_header_t) ? reinterpret_cast<const esp_image_header_t*>(image) : nullptr;
+    const uint16_t image_chip_id = image_header != nullptr ? static_cast<uint16_t>(image_header->chip_id)
+                                                           : static_cast<uint16_t>(ESP_CHIP_ID_INVALID);
+    if (image_header == nullptr || image_header->magic != ESP_IMAGE_HEADER_MAGIC ||
+        image_chip_id != CONFIG_IDF_FIRMWARE_CHIP_ID) {
+        ESP_LOGE(kTag, "OTA image target mismatch: expected chip ID=%u image chip ID=%u",
+                 static_cast<unsigned>(CONFIG_IDF_FIRMWARE_CHIP_ID), static_cast<unsigned>(image_chip_id));
+        heap_caps_free(image);
+        return finish(false, "firmware_target_mismatch");
     }
 
     {

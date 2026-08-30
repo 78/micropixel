@@ -234,3 +234,7 @@ bash tools/p4.sh monitor "$P4_PORT"
 - `Serial port not found`：设备重新枚举后端口名已变，重新执行 `ls /dev/cu.usbmodem*`；
 - `No serial data received`：选错 CDC 端口、USB 线不支持数据，或设备未进入可下载状态；
 - 多台设备串口名重用：再次运行 `esptool chip-id`，以 MAC 而不是端口名确认目标。
+- ESP-MOSAICO `0.2.4` 或更早版本的 OTA 在 99% 报 `ESP_ERR_OTA_VALIDATE_FAILED`：这些预览固件早于多板型
+  release target，更新检查会落到兼容旧 P4 的默认目录并下载 P4 镜像。先用 `bash tools/s31.sh flash-host`
+  进行一次保留 NVS 与 `app_store` 的 USB Host 更新；`0.3.0` 及以后版本会显式请求 `esp-mosaico`，后续可
+  正常 OTA。不要把服务器默认 target 改成 S31，否则会让同版本的旧 P4 设备下载错误镜像。

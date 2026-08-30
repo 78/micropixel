@@ -6,7 +6,7 @@ if(NOT IDF_TARGET IN_LIST MICROPIXEL_SUPPORTED_TARGETS)
     message(FATAL_ERROR "MicroPixel supports only ESP32-P4 and ESP32-S31")
 endif()
 idf_build_set_property(DEPENDENCIES_LOCK dependencies.lock.${IDF_TARGET})
-set(PROJECT_VER "0.3.1")
+set(PROJECT_VER "0.3.2")
 project(micropixel)
 
 # esp-hosted 2.x still starts its SDIO transport from a C constructor. With
