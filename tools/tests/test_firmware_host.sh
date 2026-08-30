@@ -15,6 +15,15 @@ if [[ ! -x "$cc" ]]; then
     exit 2
 fi
 
+http3_component_dir="$workspace_root/firmware/espressif/components/78__esp-http3"
+if [[ ! -f "$http3_component_dir/src/tls/tls_handshake.cc" ]]; then
+    http3_component_dir="$workspace_root/firmware/espressif/managed_components/78__esp-http3"
+fi
+if [[ ! -f "$http3_component_dir/src/tls/tls_handshake.cc" ]]; then
+    echo "esp-http3 component not found; build the Host before running Host tests" >&2
+    exit 2
+fi
+
 mkdir -p "$test_output_dir"
 
 build_and_run() {
@@ -219,9 +228,9 @@ build_and_run bundlefs_16k_mmu \
     "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
 
 build_and_run http3_tls_parser \
-    -I "$workspace_root/firmware/espressif/components/78__esp-http3/include" \
+    -I "$http3_component_dir/include" \
     "$workspace_root/tools/tests/test_http3_tls_parser.cpp" \
-    "$workspace_root/firmware/espressif/components/78__esp-http3/src/tls/tls_handshake.cc"
+    "$http3_component_dir/src/tls/tls_handshake.cc"
 
 build_and_run remote_control_reconnect_policy \
     "$workspace_root/tools/tests/test_remote_control_reconnect_policy.cpp"
