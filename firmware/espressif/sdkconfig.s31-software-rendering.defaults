@@ -1,0 +1,3 @@
+# ESP32-S31 A/B profile: keep the QSPI transport unchanged while preventing
+# MicroPixel from registering any PPA or DMA2D graphics client.
+CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING=y

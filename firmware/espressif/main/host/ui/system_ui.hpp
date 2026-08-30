@@ -305,6 +305,7 @@ struct SystemInformationModel final {
     std::array<char, kSystemInformationTextCapacity> display_interface{};
     std::array<char, kSystemInformationTextCapacity> resolution{};
     std::array<char, kSystemInformationTextCapacity> touch_controller{};
+    std::array<char, kSystemInformationTextCapacity> graphics_acceleration{};
     std::array<char, kSystemInformationTextCapacity> uptime{};
     std::array<char, kSystemInformationTextCapacity> last_reset{};
     MemoryStatisticsModel internal_sram{};

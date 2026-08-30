@@ -242,6 +242,56 @@ software-image（318,605 px / 42.036 ms）、78 次 front-to-back DMA2D（118,87
 121 次 panel submit（12.957 ms）和 121 次 VSYNC wait（727.958 ms）。这些是诊断窗口而非性能承诺；
 统计是 display adapter 全局聚合，系统浮层、特效和其他 LVGL damage 也会计入。
 
+### 5.5 S31 纯软件渲染 A/B
+
+ESP-Mosaico 提供默认关闭的 `CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING` 实验开关。打开后 Host 不注册
+PPA 或 DMA2D client：App Surface、纹理缩放和 LVGL draw 走 CPU，display shadow 使用 CPU 行拷贝，
+App Hall 与 Status Layer 的硬件转场降级为普通 LVGL/直接切换。CO5300 的 QSPI transport DMA 保持不变，
+因此该实验只隔离图形加速器，不改变面板总线配置。
+
+使用独立 build directory 和 sdkconfig，避免污染正常 S31 增量构建：
+
+```sh
+export S31_HOST_BUILD_DIR="$PWD/build/host-esp32s31-mosaico-software"
+export S31_SDKCONFIG="$S31_HOST_BUILD_DIR/sdkconfig.release"
+export S31_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.s31.defaults;$PWD/firmware/espressif/sdkconfig.s31-software-rendering.defaults"
+bash tools/s31.sh build-host
+bash tools/s31.sh flash-host
+bash tools/s31.sh monitor --reset
+```
+
+启动日志必须同时出现 `PPA/DMA2D disabled`、`App Surface compositor: CPU-only` 和
+`displayed shadow copy backend: cpu`。Scene 聚合日志中的 `hw=fill/blend/scale/dma2d` 应始终为零，
+`cpu` 计数增长。A/B 时使用同一个 App、关卡、操作序列和日志窗口，比较 `display refresh ... total=`、
+Scene 提交间隔、触控响应和画面完整性；转场是否降级属于预期差异，不应混入稳态帧率结论。
+
+S31 不提供标准 RISC-V Vector Extension 编译目标，不能启用 LVGL 的 `LV_DRAW_SW_ASM_RISCV_V`；否则
+LVGL 会编译其 RVV C 模拟层而非向量指令。P4 的 LVGL draw buffer 使用 64-byte base alignment 和
+48-byte stride alignment；48 是 16-byte CPU/SIMD 对齐与 3-byte RGB888 pixel 的最小公倍数。S31 同样
+保留 64-byte base alignment，但全局 stride 必须保持紧凑：当前 ESP LVGL/PPA partial RGB565 bridge
+按 packed row 寻址，不读取实际 draw-buffer stride，全局补齐会导致按下态裂纹和系统浮层 snapshot 失败。
+App Surface 和它的 layer cache 不经过 LVGL draw-buffer allocator，因此仍单独把 RGB888 storage width
+补齐到 16 pixels，并保留逻辑宽度。App Hall cover cache 跟随各板当前的 LVGL RGB888 stride policy，
+避免 descriptor stride 与实际缓存布局不一致。
+
+S31 真机在 PSRAM 中以 127×127 像素比较 `LV_DRAW_SW_ASM_NONE` 和 `LV_DRAW_SW_ASM_RISCV_V`。后者在
+当前工具链中没有生成 RVV 指令，而是进入 LVGL 的 C 模拟层；每像素耗时如下（越低越好）：
+
+| LVGL software operation | ASM none | RISCV_V 模拟层 |
+|---|---:|---:|
+| opaque RGB888 fill（对齐 stride） | 10 ns/px | 101 ns/px |
+| alpha RGB888 fill | 57 ns/px | 385 ns/px |
+| RGB888 image blend | 50 ns/px | 73 ns/px |
+| ARGB8888 image blend | 139 ns/px | 927 ns/px |
+
+因此两个产品 profile 都显式保留 `LV_DRAW_SW_ASM_NONE`。同一探针还显示，将 127×3=381-byte 的紧凑
+RGB888 stride 补齐到 384 bytes 后，opaque fill 从约 20 ns/px 降为约 10 ns/px；其他混合操作基本持平。
+
+App Surface 的 CPU fallback 现在直接调用 LVGL software blend kernels：纯色填充和等尺寸 blit 不经过
+额外中间 buffer；scale 使用 16 行一批、64-byte 对齐的固定 PSRAM scratch 调用 `lv_draw_sw_transform()`，
+再写入目标 surface。scratch 在 graphics engine 初始化时一次分配，绘制热路径不分配内存。纹理预缩放也
+复用同一路径；只有 scratch 不可用或输入无法由 LVGL 表示时，才保留原 reference compositor 作为安全降级。
+
 ## 6. PPA/DMA2D 面积微基准
 
 2026-08-30 在 ESP-Mosaico/S31 上使用与 App Surface 相同的 PSRAM、RGB888/BGRA8888 格式和 blocking

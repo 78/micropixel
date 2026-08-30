@@ -35,6 +35,9 @@ struct BoardInfo final {
     const char* wifi_coprocessor{"Unknown"};
     const char* touch_controller{"Unknown"};
     DisplayInfo display{};
+    // Graphics engines enabled by the current firmware profile, rather than
+    // accelerators merely supported by the SoC.
+    const char* graphics_acceleration{"CPU only"};
 };
 
 }  // namespace micropixel::device

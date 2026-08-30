@@ -6,8 +6,11 @@
 
 namespace micropixel::host_ui::lvgl::square_common {
 
-[[nodiscard]] constexpr uint32_t HallCoverStride(uint32_t size) { return size * 3U; }
-[[nodiscard]] constexpr uint32_t HallCoverBytes(uint32_t size) { return HallCoverStride(size) * size; }
+// Use the active LVGL RGB888 stride policy. Keeping this behind a function
+// avoids duplicating LV_DRAW_BUF_STRIDE_ALIGN in Host UI code and lets each
+// board profile supply its configured alignment.
+[[nodiscard]] uint32_t HallCoverStride(uint32_t size);
+[[nodiscard]] uint32_t HallCoverBytes(uint32_t size);
 
 void MaskHallCoverRgb888(uint8_t* destination, uint32_t size, uint32_t corner_radius, uint32_t top_background_rgb,
                          uint32_t bottom_background_rgb);

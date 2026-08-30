@@ -150,6 +150,19 @@ menu "MicroPixel board backends"
 
     endchoice
 
+    config MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+        bool "Disable PPA and DMA2D on ESP-Mosaico"
+        depends on MICROPIXEL_BOARD_ESP_MOSAICO
+        default n
+        help
+            Experimental A/B profile for measuring ESP32-S31 graphics without
+            Pixel Processing Accelerator or DMA2D assistance. App Surface and
+            resource scaling use their CPU implementations, the panel shadow
+            uses CPU row copies, and hardware-only system transitions fall back
+            to the ordinary LVGL/direct presentation path. The QSPI panel still
+            uses its transport DMA; this option disables graphics accelerators,
+            not the display bus itself.
+
     config MICROPIXEL_MOSAICO_LCD_QSPI_DRIVE_CAP
         int "ESP-Mosaico LCD QSPI drive strength (0-3)"
         depends on MICROPIXEL_BOARD_ESP_MOSAICO
@@ -163,7 +176,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PPA_ACCEL
         bool "Use PPA for eligible LVGL RGB888 draw operations"
-        depends on MICROPIXEL_DISPLAY_PPA
+        depends on MICROPIXEL_DISPLAY_PPA && !MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
         default y
         help
             Register the ESP LVGL adapter's PPA Fill/Blend handler on a target

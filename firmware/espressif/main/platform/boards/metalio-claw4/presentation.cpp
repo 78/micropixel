@@ -24,6 +24,7 @@
 #if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
 #include "src/draw/snapshot/lv_snapshot.h"
 #endif
+#include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
 #include "platform/adapters/graphics_adapter.hpp"
 #include "platform/boards/metalio-claw4/battery_peripheral.hpp"
 #include "platform/boards/metalio-claw4/board_config.hpp"
@@ -261,7 +262,8 @@ void MetalioClaw4Presentation::BeforeHallRebuildLocked() { state_.touch_input.Cl
 bool MetalioClaw4Presentation::RetainNativeCover(const host_ui::HallCoverModel& source,
                                                  host_ui::HallCoverModel& prepared) {
     if (source.format != host_ui::HallCoverFormat::kRgb888 || source.data != state_.guest_snapshot_pixels ||
-        source.width == 0U || source.height != source.width || source.stride != source.width * 3U ||
+        source.width == 0U || source.height != source.width ||
+        source.stride != host_ui::lvgl::square_common::HallCoverStride(source.width) ||
         source.size != source.stride * source.height) {
         return false;
     }

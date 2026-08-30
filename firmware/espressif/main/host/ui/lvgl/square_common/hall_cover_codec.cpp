@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 
+#include "lvgl.h"
 #include "platform/lvgl/display/jpeg_cover_decoder.hpp"
 #include "platform/lvgl/display/png_cover_decoder.hpp"
 
@@ -29,6 +30,10 @@ void ScaleRgb888Cover(const host_ui::HallCoverModel& source, uint32_t target_siz
 }
 
 }  // namespace
+
+uint32_t HallCoverStride(uint32_t size) { return LV_DRAW_BUF_STRIDE(size, LV_COLOR_FORMAT_RGB888); }
+
+uint32_t HallCoverBytes(uint32_t size) { return HallCoverStride(size) * size; }
 
 void MaskHallCoverRgb888(uint8_t* destination, uint32_t size, uint32_t radius, uint32_t top_background_rgb,
                          uint32_t bottom_background_rgb) {

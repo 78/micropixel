@@ -232,8 +232,8 @@ bool VirtualizedHallPolicy::PrepareSource(const host_ui::HallCoverModel& source,
             return false;
         }
     } else {
-        const uint64_t expected_stride = static_cast<uint64_t>(source.width) * 3U;
-        if (expected_stride != source.stride || expected_stride * source.height != source.size) {
+        const uint64_t minimum_stride = static_cast<uint64_t>(source.width) * 3U;
+        if (source.stride < minimum_stride || static_cast<uint64_t>(source.stride) * source.height > source.size) {
             return false;
         }
     }

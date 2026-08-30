@@ -569,6 +569,7 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
     std::snprintf(model.resolution.data(), model.resolution.size(), "%" PRIu32 " x %" PRIu32 " / %s",
                   board_info.display.width_pixels, board_info.display.height_pixels, board_info.display.pixel_format);
     CopySystemInformationText(model.touch_controller, board_info.touch_controller);
+    CopySystemInformationText(model.graphics_acceleration, board_info.graphics_acceleration);
     CopySystemInformationText(model.last_reset, ResetReasonText(esp_reset_reason()));
 
     const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time()) / 1000000U;

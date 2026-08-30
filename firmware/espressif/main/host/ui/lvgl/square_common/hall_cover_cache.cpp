@@ -151,13 +151,14 @@ void HallCoverCache::Process(const Job& job) {
     const uint32_t allocation_bytes = (bytes + kAlignment - 1U) / kAlignment * kAlignment;
     auto* pixels = static_cast<uint8_t*>(
         heap_caps_aligned_calloc(kAlignment, allocation_bytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    const bool decoded =
+    bool decoded =
         pixels != nullptr && DecodeHallCoverRgb888(job.source, config_.target_size, config_.corner_radius,
                                                    config_.top_background_rgb, config_.bottom_background_rgb, pixels);
     if (decoded) {
         lv_draw_buf_t draw_buf{};
-        if (lv_draw_buf_init(&draw_buf, config_.target_size, config_.target_size, LV_COLOR_FORMAT_RGB888,
-                             HallCoverStride(config_.target_size), pixels, bytes) == LV_RESULT_OK) {
+        decoded = lv_draw_buf_init(&draw_buf, config_.target_size, config_.target_size, LV_COLOR_FORMAT_RGB888,
+                                   HallCoverStride(config_.target_size), pixels, bytes) == LV_RESULT_OK;
+        if (decoded) {
             lv_draw_buf_flush_cache(&draw_buf, nullptr);
         }
     }

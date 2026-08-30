@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 
 #include "driver/gpio.h"
@@ -21,6 +22,11 @@ namespace {
 
 constexpr char kTag[] = "mosaico_display";
 constexpr uint32_t kAllocationAlignment = 128U;
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+constexpr char kShadowCopyBackend[] = "cpu";
+#else
+constexpr char kShadowCopyBackend[] = "dma2d";
+#endif
 
 }  // namespace
 
@@ -133,11 +139,13 @@ esp_err_t MosaicoDisplayPipeline::BindLvgl(lv_display_t* display) {
     if (displayed_shadow_ == nullptr) {
         return ESP_ERR_NO_MEM;
     }
+#if !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
     async_color_convert_config_t dma2d_config{};
     dma2d_config.backlog = 1U;
     dma2d_config.dma_burst_size = 128U;
     ESP_RETURN_ON_ERROR(esp_async_color_convert_install_dma2d(&dma2d_config, &shadow_copy_dma2d_), kTag,
                         "install displayed-shadow DMA2D copier failed");
+#endif
 
     display_ = display;
     adapter_flush_cb_ = display_->flush_cb;
@@ -148,15 +156,21 @@ esp_err_t MosaicoDisplayPipeline::BindLvgl(lv_display_t* display) {
     lv_display_set_flush_cb(display_, Flush);
     ESP_RETURN_ON_ERROR(esp_lv_adapter_set_area_rounder_cb(display_, RoundArea, this), kTag,
                         "configure QSPI area alignment failed");
+    ESP_LOGI(kTag, "displayed shadow copy backend: %s", kShadowCopyBackend);
     return ESP_OK;
 }
 
 lvgl::DisplayCapabilities MosaicoDisplayPipeline::Capabilities() const {
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+    constexpr bool kGraphicsAcceleration = false;
+#else
+    constexpr bool kGraphicsAcceleration = true;
+#endif
     return {.partial_flush = true,
             .tearing_effect_sync = false,
             .direct_framebuffers = false,
-            .ppa = true,
-            .dma2d = true,
+            .ppa = kGraphicsAcceleration,
+            .dma2d = kGraphicsAcceleration,
             .hardware_jpeg = true};
 }
 
@@ -192,7 +206,7 @@ void MosaicoDisplayPipeline::Flush(lv_display_t* display, const lv_area_t* area,
                          "panel submit #%" PRIu32 ": area=%dx%d+%d+%d shadow=%s totals=submits:%" PRIu32 "/%" PRIu64
                          "px copies:%" PRIu32 "/%" PRIu64 "px",
                          owner->panel_submit_count_, area->x2 - area->x1 + 1, area->y2 - area->y1 + 1, area->x1,
-                         area->y1, shadow_copied ? "dma2d" : "none", owner->panel_submit_count_,
+                         area->y1, shadow_copied ? kShadowCopyBackend : "none", owner->panel_submit_count_,
                          owner->panel_submit_pixels_, owner->shadow_copy_count_, owner->shadow_copy_pixels_);
             }
         }
@@ -225,6 +239,18 @@ bool MosaicoDisplayPipeline::CaptureDisplayedShadow(lv_display_t* display, const
     if (active == nullptr || active->header.stride % 2U != 0U) {
         return false;
     }
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+    constexpr uint32_t kRgb565BytesPerPixel = 2U;
+    const uint32_t copy_bytes = area_width * kRgb565BytesPerPixel;
+    uint8_t* destination =
+        displayed_shadow_ +
+        (static_cast<uint32_t>(area->y1) * geometry_.width + static_cast<uint32_t>(area->x1)) * kRgb565BytesPerPixel;
+    for (uint32_t row = 0U; row < area_height; ++row) {
+        std::memcpy(destination + row * geometry_.width * kRgb565BytesPerPixel, pixels + row * active->header.stride,
+                    copy_bytes);
+    }
+    constexpr bool copied = true;
+#else
     async_color_convert_request_t copy{};
     copy.src_buffer = pixels;
     copy.src_stride = active->header.stride / 2U;
@@ -240,6 +266,7 @@ bool MosaicoDisplayPipeline::CaptureDisplayedShadow(lv_display_t* display, const
     copy.dst_color_format = ESP_COLOR_FOURCC_RGB16;
     const bool copied =
         shadow_copy_dma2d_ != nullptr && esp_color_convert_blocking(shadow_copy_dma2d_, &copy, -1) == ESP_OK;
+#endif
     if (!copied || area->x1 != 0 || area->x2 != static_cast<int32_t>(geometry_.width) - 1) {
         return copied;
     }

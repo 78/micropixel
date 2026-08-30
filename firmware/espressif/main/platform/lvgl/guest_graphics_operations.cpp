@@ -9,6 +9,7 @@ GuestGraphicsOperationsContext& Binding(void* context) {
     return *static_cast<GuestGraphicsOperationsContext*>(context);
 }
 
+#if !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
 constexpr uint32_t kPpaScaleFractionSteps = 16U;
 
 bool ExactPpaScale(uint32_t source, uint32_t destination, float& scale_out) {
@@ -20,6 +21,7 @@ bool ExactPpaScale(uint32_t source, uint32_t destination, float& scale_out) {
     scale_out = static_cast<float>(quantized) / static_cast<float>(kPpaScaleFractionSteps);
     return true;
 }
+#endif
 
 void ScaleBitmapNearest(const device::BitmapView& source, const device::BitmapView& destination,
                         uint32_t bytes_per_pixel) {
@@ -50,13 +52,10 @@ int32_t ScaleBitmap(GuestGraphicsOperationsContext& binding, const device::Bitma
         source.flags != 0U || destination.flags != 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    ppa_srm_color_mode_t mode{};
     uint32_t bytes_per_pixel = 0U;
     if (source.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888) {
-        mode = PPA_SRM_COLOR_MODE_RGB888;
         bytes_per_pixel = 3U;
     } else if (source.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888) {
-        mode = PPA_SRM_COLOR_MODE_ARGB8888;
         bytes_per_pixel = 4U;
     } else {
         return MICROPIXEL_STATUS_UNSUPPORTED;
@@ -66,6 +65,14 @@ int32_t ScaleBitmap(GuestGraphicsOperationsContext& binding, const device::Bitma
         destination.size < destination.stride * destination.height) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+    if (!binding.engine->ScaleBitmapSoftware(source, destination)) {
+        ScaleBitmapNearest(source, destination, bytes_per_pixel);
+    }
+    return MICROPIXEL_STATUS_OK;
+#else
+    const ppa_srm_color_mode_t mode =
+        source.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888 ? PPA_SRM_COLOR_MODE_RGB888 : PPA_SRM_COLOR_MODE_ARGB8888;
     float scale_x = 0.0F;
     float scale_y = 0.0F;
     if (!ExactPpaScale(source.width, destination.width, scale_x) ||
@@ -75,7 +82,9 @@ int32_t ScaleBitmap(GuestGraphicsOperationsContext& binding, const device::Bitma
         // uninitialized macro-block band. Resource loading is off the frame
         // path, so use one exact CPU pass when the hardware ratio cannot
         // represent the requested dimensions; drawing remains a 1:1 blit.
-        ScaleBitmapNearest(source, destination, bytes_per_pixel);
+        if (!binding.engine->ScaleBitmapSoftware(source, destination)) {
+            ScaleBitmapNearest(source, destination, bytes_per_pixel);
+        }
         return MICROPIXEL_STATUS_OK;
     }
     if (!binding.texture_scaler.Ready() && binding.texture_scaler.Initialize() != ESP_OK) {
@@ -101,6 +110,7 @@ int32_t ScaleBitmap(GuestGraphicsOperationsContext& binding, const device::Bitma
         .scale_y = scale_y,
     });
     return status == ESP_OK ? MICROPIXEL_STATUS_OK : MICROPIXEL_STATUS_INTERNAL;
+#endif
 }
 
 }  // namespace

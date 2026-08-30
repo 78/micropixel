@@ -14,4 +14,5 @@ list(APPEND micropixel_sources
     "platform/lvgl/fonts/font_registry.cpp"
     "platform/lvgl/guest_graphics_engine.cpp"
     "platform/lvgl/guest_graphics_operations.cpp"
+    "platform/lvgl/lvgl_software_pixel_compositor.cpp"
 )

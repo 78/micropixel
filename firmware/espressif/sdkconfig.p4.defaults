@@ -166,3 +166,10 @@ CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y
 # Remote Control either skips trust-chain verification in development or uses
 # its configured single DER trust anchor. The Mozilla root bundle is unused.
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
+# Keep every LVGL row 16-byte aligned without producing a fractional RGB888
+# physical width: lcm(16-byte SIMD alignment, 3-byte RGB888 pixel) = 48 bytes.
+CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=48
+CONFIG_LV_DRAW_BUF_ALIGN=64
+# Neither Xtensa P4 nor RISC-V S31 has an LVGL assembly backend supported by
+# this build. Keep the generic optimized C kernels selected explicitly.
+CONFIG_LV_DRAW_SW_ASM_NONE=y

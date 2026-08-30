@@ -256,6 +256,9 @@ class EspMosaicoBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(sensors_.BeginInitialize(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
                             "start Mosaico sensor discovery failed");
         ESP_RETURN_ON_ERROR(InitializeDisplay(state_), board_detail::kTag, "initialize Mosaico display failed");
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+        ESP_LOGI(board_detail::kTag, "S31 graphics experiment: PPA/DMA2D disabled; hardware transitions unavailable");
+#else
         ESP_RETURN_ON_ERROR(
             state_.panel_transition.Initialize(
                 state_.display, board_detail::kWidth, board_detail::kHeight,
@@ -263,6 +266,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
                 state_.display_pipeline.ShadowCopyDma2d(), state_.display_pipeline.DisplayedShadow(),
                 state_.display_pipeline.DisplayedShadowReady()),
             board_detail::kTag, "initialize CO5300 direct transition compositor failed");
+#endif
         ESP_RETURN_ON_ERROR(state_.guest_graphics.Initialize(state_.display, nullptr), board_detail::kTag,
                             "initialize shared Guest graphics failed");
 
@@ -321,6 +325,11 @@ class EspMosaicoBoard final : public Board, public device::Power {
                             .left_pixels = 24U,
                         },
                 },
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+            .graphics_acceleration = "CPU only",
+#else
+            .graphics_acceleration = "PPA + DMA2D",
+#endif
         }};
         registration.SetGraphics(graphics_);
         registration.SetInput(state_.ui.Input());

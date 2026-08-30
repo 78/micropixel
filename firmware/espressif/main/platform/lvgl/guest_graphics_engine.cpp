@@ -14,6 +14,8 @@ namespace {
 
 constexpr char kTag[] = "guest_graphics";
 constexpr size_t kAppSurfaceAlignment = 64U;
+constexpr uint32_t kAppSurfaceStrideAlignmentPixels = 16U;
+constexpr uint32_t kAppSurfaceTransformScratchRows = 16U;
 
 uint16_t SceneWireInstanceCount(const uint8_t* bytes, uint32_t length) {
     micropixel_graphics_scene_header_t header{};
@@ -77,7 +79,11 @@ void StyleFullscreenContainer(lv_obj_t* container, int32_t width, int32_t height
 }  // namespace
 
 GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts)
-    : width_(width), height_(height), fonts_(fonts), bitmap_font_rasterizer_(fonts) {}
+    : width_(width),
+      height_(height),
+      hardware_pixel_compositor_(software_pixel_compositor_),
+      fonts_(fonts),
+      bitmap_font_rasterizer_(fonts) {}
 
 bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_handle_t font) {
     return context != nullptr && static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font) != nullptr;
@@ -92,16 +98,37 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebuff
         return ESP_ERR_NO_MEM;
     }
     display_ = display;
+    if (width_ > 0 && static_cast<uint32_t>(width_) <= UINT32_MAX / (4U * kAppSurfaceTransformScratchRows)) {
+        const uint64_t scratch_bytes =
+            (static_cast<uint64_t>(width_) * 4U * kAppSurfaceTransformScratchRows + kAppSurfaceAlignment - 1U) &
+            ~(kAppSurfaceAlignment - 1U);
+        if (scratch_bytes <= UINT32_MAX && scratch_bytes <= SIZE_MAX) {
+            software_transform_scratch_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+                kAppSurfaceAlignment, static_cast<size_t>(scratch_bytes), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (software_transform_scratch_ != nullptr) {
+                software_transform_scratch_bytes_ = static_cast<uint32_t>(scratch_bytes);
+                software_pixel_compositor_.SetTransformScratch(software_transform_scratch_,
+                                                               software_transform_scratch_bytes_);
+            }
+        }
+    }
+    if (software_transform_scratch_ == nullptr) {
+        ESP_LOGW(kTag, "LVGL software scale scratch unavailable; reference CPU scale remains active");
+    }
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
     esp_lv_adapter_display_telemetry_t discarded{};
     (void)esp_lv_adapter_display_telemetry_take(&discarded);
 #endif
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+    ESP_LOGI(kTag, "App Surface compositor: CPU-only S31 experiment");
+#else
     const esp_err_t compositor_status =
         hardware_pixel_compositor_.Initialize(CONFIG_MICROPIXEL_APP_SURFACE_HW_MIN_AREA_PIXELS);
     if (compositor_status != ESP_OK) {
         ESP_LOGW(kTag, "hardware pixel compositor partially unavailable: %s; CPU fallback remains active",
                  esp_err_to_name(compositor_status));
     }
+#endif
     (void)framebuffers;
     lv_display_add_event_cb(display_, DisplayRefreshStartEvent, LV_EVENT_REFR_START, this);
     lv_display_add_event_cb(display_, DisplayRefreshReadyEvent, LV_EVENT_REFR_READY, this);
@@ -237,12 +264,16 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
     if (app_surface_compositor_.has_value()) {
         return true;
     }
-    if (app_surface_allocation_failed_ || width_ <= 0 || height_ <= 0 || width_ > INT32_MAX / 3) {
+    if (app_surface_allocation_failed_ || width_ <= 0 || height_ <= 0 ||
+        static_cast<uint32_t>(width_) > UINT32_MAX - (kAppSurfaceStrideAlignmentPixels - 1U)) {
         return false;
     }
-    const uint64_t pixel_bytes = static_cast<uint64_t>(width_) * static_cast<uint32_t>(height_) * 3U;
+    const uint32_t storage_width = (static_cast<uint32_t>(width_) + kAppSurfaceStrideAlignmentPixels - 1U) &
+                                   ~(kAppSurfaceStrideAlignmentPixels - 1U);
+    const uint64_t stride = static_cast<uint64_t>(storage_width) * 3U;
+    const uint64_t pixel_bytes = stride * static_cast<uint32_t>(height_);
     const uint64_t allocation_bytes = (pixel_bytes + kAppSurfaceAlignment - 1U) & ~(kAppSurfaceAlignment - 1U);
-    if (pixel_bytes == 0U || allocation_bytes > UINT32_MAX || allocation_bytes > SIZE_MAX / 2U) {
+    if (stride > UINT32_MAX || pixel_bytes == 0U || allocation_bytes > UINT32_MAX || allocation_bytes > SIZE_MAX / 2U) {
         app_surface_allocation_failed_ = true;
         return false;
     }
@@ -268,6 +299,7 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
     };
     app_surface_pixel_bytes_ = static_cast<uint32_t>(pixel_bytes);
     app_surface_allocation_bytes_ = static_cast<uint32_t>(allocation_bytes);
+    app_surface_stride_ = static_cast<uint32_t>(stride);
     app_surface_layer_pixels_ = app_surface_pixels_ + app_surface_allocation_bytes_;
     app_surface_compositor_.emplace(
         app_surface_operation_storage_, app_surface_operation_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
@@ -277,7 +309,7 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
         .size = app_surface_allocation_bytes_,
         .width = static_cast<uint32_t>(width_),
         .height = static_cast<uint32_t>(height_),
-        .stride = static_cast<uint32_t>(width_) * 3U,
+        .stride = app_surface_stride_,
         .format = graphics::SurfacePixelFormat::kBgr888,
     });
     app_surface_image_descriptor_ = {};
@@ -285,13 +317,14 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
     app_surface_image_descriptor_.header.cf = LV_COLOR_FORMAT_RGB888;
     app_surface_image_descriptor_.header.w = static_cast<uint32_t>(width_);
     app_surface_image_descriptor_.header.h = static_cast<uint32_t>(height_);
-    app_surface_image_descriptor_.header.stride = static_cast<uint32_t>(width_) * 3U;
+    app_surface_image_descriptor_.header.stride = app_surface_stride_;
     app_surface_image_descriptor_.data_size = app_surface_pixel_bytes_;
     app_surface_image_descriptor_.data = app_surface_pixels_;
     ESP_LOGI(kTag,
-             "App Surface ready: %" PRId32 "x%" PRId32 " RGB888 pixels=%" PRIu32 " layer-cache=%" PRIu32
-             " scene=%zu bytes",
-             width_, height_, app_surface_pixel_bytes_, app_surface_allocation_bytes_,
+             "App Surface ready: %" PRId32 "x%" PRId32 " RGB888 stride=%" PRIu32 " pixels=%" PRIu32
+             " layer-cache=%" PRIu32 " transform-scratch=%" PRIu32 " scene=%zu bytes",
+             width_, height_, app_surface_stride_, app_surface_pixel_bytes_, app_surface_allocation_bytes_,
+             software_transform_scratch_bytes_,
              2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES * sizeof(graphics::AppDrawOperation));
     return true;
 }
@@ -302,7 +335,7 @@ graphics::PixelSurface GuestGraphicsEngine::AppSurfacePixels() const {
         .size = app_surface_allocation_bytes_,
         .width = static_cast<uint32_t>(width_),
         .height = static_cast<uint32_t>(height_),
-        .stride = static_cast<uint32_t>(width_) * 3U,
+        .stride = app_surface_stride_,
         .format = graphics::SurfacePixelFormat::kBgr888,
     };
 }
@@ -383,6 +416,7 @@ void GuestGraphicsEngine::ReleaseAppSurfaceLocked() {
     app_surface_layer_pixels_ = nullptr;
     app_surface_pixel_bytes_ = 0U;
     app_surface_allocation_bytes_ = 0U;
+    app_surface_stride_ = 0U;
     app_surface_image_descriptor_ = {};
     app_surface_allocation_failed_ = false;
     app_surface_frame_sequence_ = 0U;
@@ -734,6 +768,10 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
                  elapsed_us, invalidated ? "yes" : "no");
     }
     return MICROPIXEL_STATUS_OK;
+}
+
+bool GuestGraphicsEngine::ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination) {
+    return software_pixel_compositor_.ScaleBitmap(source, destination);
 }
 
 }  // namespace micropixel::platform::lvgl

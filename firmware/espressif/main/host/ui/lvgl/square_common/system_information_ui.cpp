@@ -91,6 +91,7 @@ void SystemDetailUi::RenderSystemInformationLocked() {
     InformationRow(layout_, display, "Panel", system_information_model_.panel.data());
     InformationRow(layout_, display, "Interface", system_information_model_.display_interface.data());
     InformationRow(layout_, display, "Resolution", system_information_model_.resolution.data());
+    InformationRow(layout_, display, "2D acceleration", system_information_model_.graphics_acceleration.data());
     InformationRow(layout_, display, "Touch", system_information_model_.touch_controller.data());
 
     SectionLabel(scroll, "MEMORY");

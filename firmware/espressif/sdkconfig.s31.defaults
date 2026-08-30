@@ -94,3 +94,11 @@ CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION=720
 CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y
 # CONFIG_MBEDTLS_HAVE_TIME_DATE is not set
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
+# The S31 LVGL/PPA display bridge currently addresses partial RGB565 buffers
+# as tightly packed rows. Keep LVGL's global stride packed; persistent
+# MicroPixel-owned RGB888 surfaces apply their own 16-pixel stride alignment.
+CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1
+CONFIG_LV_DRAW_BUF_ALIGN=64
+# S31 has no standard RISC-V Vector Extension target; LVGL's RISCV_V selection
+# would use its portable vector emulation here and is substantially slower.
+CONFIG_LV_DRAW_SW_ASM_NONE=y

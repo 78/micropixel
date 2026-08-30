@@ -22,7 +22,7 @@ struct HardwarePixelCompositorStats final {
 // alpha/format combinations or unavailable clients retain exact CPU semantics.
 class EspPixelCompositor final : public PixelCompositor {
    public:
-    EspPixelCompositor() = default;
+    explicit EspPixelCompositor(PixelCompositor& software) : software_(software) {}
     EspPixelCompositor(const EspPixelCompositor&) = delete;
     EspPixelCompositor& operator=(const EspPixelCompositor&) = delete;
     ~EspPixelCompositor() override;
@@ -45,7 +45,7 @@ class EspPixelCompositor final : public PixelCompositor {
     [[nodiscard]] bool TryBlend(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                 SurfaceRect destination_rect, uint8_t opacity);
 
-    SoftwarePixelCompositor software_{};
+    PixelCompositor& software_;
     ppa_client_handle_t fill_client_{};
     ppa_client_handle_t scale_client_{};
     ppa_client_handle_t blend_client_{};

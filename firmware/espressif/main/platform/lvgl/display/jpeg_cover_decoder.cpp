@@ -71,7 +71,7 @@ bool DecodeJpegCoverRgb888(const uint8_t* source, uint32_t source_size, uint32_t
                            uint32_t declared_height, uint8_t* destination, uint32_t target_width,
                            uint32_t target_height, uint32_t target_stride) {
     if (source == nullptr || source_size == 0U || destination == nullptr || target_width == 0U || target_height == 0U ||
-        target_stride != target_width * 3U) {
+        target_width > UINT32_MAX / 3U || target_stride < target_width * 3U) {
         return false;
     }
 

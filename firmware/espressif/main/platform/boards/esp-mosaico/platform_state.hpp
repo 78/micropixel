@@ -35,7 +35,11 @@ inline constexpr uint32_t kDisplayFrameStride = static_cast<uint32_t>(kWidth) * 
 inline constexpr uint32_t kDisplayFrameBytes = kDisplayFrameStride * static_cast<uint32_t>(kHeight);
 inline constexpr uint32_t kDisplayFrameAllocationBytes =
     (kDisplayFrameBytes + kTransitionAlignment - 1U) / kTransitionAlignment * kTransitionAlignment;
+#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+inline constexpr bool kEnableLvglAdapterPpaAccel = false;
+#else
 inline constexpr bool kEnableLvglAdapterPpaAccel = CONFIG_MICROPIXEL_LVGL_PPA_ACCEL;
+#endif
 
 struct MosaicoBoardState final {
     buses::I2cExecutor i2c_executor{};

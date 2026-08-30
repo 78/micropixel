@@ -446,6 +446,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
                     .height_pixels = static_cast<uint32_t>(board_detail::kHeight),
                     .refresh_rate_hz = 60U,
                 },
+            .graphics_acceleration = "PPA + DMA2D",
         }};
         registration.SetGraphics(graphics_);
         registration.SetInput(state_.ui.Input());

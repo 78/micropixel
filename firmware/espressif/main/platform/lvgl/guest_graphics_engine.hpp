@@ -16,6 +16,7 @@
 #include "platform/lvgl/display/display_pipeline.hpp"
 #include "platform/lvgl/fonts/bitmap_font_rasterizer.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
+#include "platform/lvgl/lvgl_software_pixel_compositor.hpp"
 
 namespace micropixel::platform::lvgl {
 
@@ -46,6 +47,7 @@ class GuestGraphicsEngine final {
     [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                        uint32_t height, const uint8_t* pixels, uint32_t stride);
     [[nodiscard]] int32_t CommitBitmapUpdateFrame();
+    [[nodiscard]] bool ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination);
     void Release();
 
     [[nodiscard]] lv_obj_t* FrameLocked() const { return guest_frame_; }
@@ -87,12 +89,16 @@ class GuestGraphicsEngine final {
     lv_image_dsc_t app_surface_image_descriptor_{};
     uint8_t* app_surface_pixels_{};
     uint8_t* app_surface_layer_pixels_{};
+    uint8_t* software_transform_scratch_{};
     uint32_t app_surface_pixel_bytes_{};
     uint32_t app_surface_allocation_bytes_{};
+    uint32_t app_surface_stride_{};
+    uint32_t software_transform_scratch_bytes_{};
     graphics::AppDrawOperation* app_surface_operation_storage_{};
     graphics::GuestSceneNode* guest_scene_node_storage_{};
     graphics::GuestSceneSpriteInstance* guest_scene_instance_storage_{};
-    graphics::EspPixelCompositor hardware_pixel_compositor_{};
+    LvglSoftwarePixelCompositor software_pixel_compositor_{};
+    graphics::EspPixelCompositor hardware_pixel_compositor_;
     std::optional<graphics::AppSurfaceCompositor> app_surface_compositor_{};
     std::optional<graphics::GuestScene> guest_scene_{};
     DirtyRegionCoalescer dirty_region_coalescer_{};
