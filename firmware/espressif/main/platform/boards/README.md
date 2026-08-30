@@ -56,7 +56,8 @@ properties.
 
 The ESP-Mosaico P0/P1 profile proves ESP32-S31 target selection, WAMR/AOT
 configuration, 16 KiB MMU-page-safe BundleFS, native Wi-Fi, CO5300 display,
-CST9217 interrupt-driven touch, BQ27220 battery, ES8311/NS4150B audio and the
+the `78/esp_lcd_touch_cst92xx` interrupt-driven touch component, BQ27220
+battery, ES8311/NS4150B audio and the
 digital vibration motor. It reuses the shared App Hall, Status Layer,
 fixed-capacity audio engine, logical-coordinate/layout profiles, transition timeline and
 PPA/DMA2D primitives. Both physical boards also use the same Graphics contract

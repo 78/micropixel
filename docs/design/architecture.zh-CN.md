@@ -119,7 +119,7 @@ Host LVGL 实现统一使用 `micropixel::host_ui::lvgl::square_common` namespac
 HostController 不因板名变化。系统信息和 Remote Control 的板型描述统一读取 `device::BoardInfo`。
 `bash tools/p4.sh build-null` 和 `bash tools/s31.sh build-null` 是各 SoC 的
 硬件无关依赖方向编译门禁，不生成可烧录的产品镜像。ESP-Mosaico 的 P0/P1 profile 已接入 Runtime、
-BundleFS、native Wi-Fi、板级供电、官方 CO5300 显示和 CST9217 中断触摸，并复用 App Hall、Status Layer、
+BundleFS、native Wi-Fi、板级供电、CO5300 显示和 `78/esp_lcd_touch_cst92xx` 中断触摸组件，并复用 App Hall、Status Layer、
 ES8311/NS4150B 音频、BQ27220 电池与数字振动电机，并复用共享固定容量音频引擎、
 逻辑坐标变换、分辨率 layout profile、系统转场时间线及 PPA/DMA2D 图形原语。P4 的 RGB888 framebuffer
 提交与 S31 的 RGB565/QSPI 提交留在各自 display pipeline；缩放、位图复制和颜色转换不回退为正常帧路径的

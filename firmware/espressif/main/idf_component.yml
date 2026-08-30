@@ -34,8 +34,8 @@ dependencies:
     version: "^1.6.2"
     rules:
       - if: "target == esp32s31"
-  waveshare/esp_lcd_touch_cst9217:
-    version: "1.0.4"
+  78/esp_lcd_touch_cst92xx:
+    version: "^0.1.0"
     rules:
       - if: "target == esp32s31"
   espressif/esp_new_jpeg:

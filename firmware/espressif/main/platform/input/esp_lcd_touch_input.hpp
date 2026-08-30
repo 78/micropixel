@@ -18,7 +18,7 @@ namespace micropixel::platform::input {
 // work; all bus access and Guest/Host event delivery runs on the executor task.
 class EspLcdTouchInput final : public device::Input {
    public:
-    EspLcdTouchInput(int32_t width, int32_t height);
+    EspLcdTouchInput(int32_t width, int32_t height, uint8_t max_touch_points);
 
     [[nodiscard]] esp_err_t Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor);
     [[nodiscard]] esp_err_t Start(lv_display_t* display);
@@ -45,6 +45,7 @@ class EspLcdTouchInput final : public device::Input {
 
     int32_t width_{};
     int32_t height_{};
+    uint8_t max_touch_points_{};
     esp_lcd_touch_handle_t touch_{};
     lv_display_t* display_{};
     buses::I2cExecutor* executor_{};

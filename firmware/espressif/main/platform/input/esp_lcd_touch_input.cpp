@@ -10,15 +10,16 @@ namespace micropixel::platform::input {
 namespace {
 
 constexpr char kTag[] = "micropixel_touch";
-
 }  // namespace
 
 EspLcdTouchInput* EspLcdTouchInput::active_instance_ = nullptr;
 
-EspLcdTouchInput::EspLcdTouchInput(int32_t width, int32_t height) : width_(width), height_(height) {}
+EspLcdTouchInput::EspLcdTouchInput(int32_t width, int32_t height, uint8_t max_touch_points)
+    : width_(width), height_(height), max_touch_points_(max_touch_points) {}
 
 esp_err_t EspLcdTouchInput::Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor) {
-    if (touch == nullptr || width_ <= 0 || height_ <= 0) {
+    if (touch == nullptr || width_ <= 0 || height_ <= 0 || max_touch_points_ == 0U ||
+        max_touch_points_ > MICROPIXEL_MAX_TOUCH_POINTS) {
         return ESP_ERR_INVALID_ARG;
     }
     touch_ = touch;
@@ -81,7 +82,7 @@ int32_t EspLcdTouchInput::GetInfo(micropixel_input_info_t& info) {
     info.capabilities = 0U;
     info.logical_width = width_;
     info.logical_height = height_;
-    info.max_touch_points = MICROPIXEL_MAX_TOUCH_POINTS;
+    info.max_touch_points = max_touch_points_;
     return MICROPIXEL_STATUS_OK;
 }
 

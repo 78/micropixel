@@ -137,7 +137,7 @@ menu "MicroPixel board backends"
         select MICROPIXEL_DISPLAY_LVGL
         select MICROPIXEL_DISPLAY_PPA
         help
-            Bring up the official CO5300/CST9217 display and touch drivers with the
+            Bring up the CO5300 display and 78/esp_lcd_touch_cst92xx driver with the
             shared Runtime, Guest graphics engine and native ESP32-S31 Wi-Fi.
             Audio, sensors, battery, NAND and module discovery remain outside
             the initial HMI integration.

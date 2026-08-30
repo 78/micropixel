@@ -9,7 +9,7 @@
 #include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_lcd_panel_io.h"
-#include "esp_lcd_touch_cst9217.h"
+#include "esp_lcd_touch_cst92xx.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_sleep.h"
@@ -119,7 +119,7 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
         return ESP_ERR_INVALID_STATE;
     }
     esp_lcd_panel_io_i2c_config_t io_config{};
-    io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_CST9217_ADDRESS;
+    io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_CST92XX_ADDRESS;
     io_config.scl_speed_hz = 400000U;
     io_config.control_phase_bytes = 1U;
     io_config.dc_bit_offset = 0U;
@@ -128,7 +128,7 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
     io_config.flags.disable_control_phase = true;
     io_config.transaction_timeout_ms = 100U;
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(state.i2c_bus, &io_config, &state.touch_io), board_detail::kTag,
-                        "create CST9217 panel IO failed");
+                        "create CST92xx panel IO failed");
 
     esp_lcd_touch_config_t touch_config{};
     touch_config.x_max = board_detail::kWidth - 1;
@@ -137,9 +137,9 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
     touch_config.int_gpio_num = esp_mosaico::board::kTouchInterrupt;
     touch_config.levels.reset = 0;
     touch_config.levels.interrupt = 0;
-    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_cst9217(state.touch_io, &touch_config, &state.touch), board_detail::kTag,
-                        "initialize CST9217 failed");
-    ESP_LOGI(board_detail::kTag, "CST9217 ready: interrupt GPIO%d shared I2C0",
+    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_cst92xx(state.touch_io, &touch_config, &state.touch), board_detail::kTag,
+                        "initialize CST92xx failed");
+    ESP_LOGI(board_detail::kTag, "CST92xx ready: interrupt GPIO%d shared I2C0",
              static_cast<int>(esp_mosaico::board::kTouchInterrupt));
     return ESP_OK;
 }
@@ -242,7 +242,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_RETURN_ON_ERROR(InitializeUsbCdcConsole(), board_detail::kTag, "initialize Type-C USB CDC console failed");
-        ESP_LOGI(board_detail::kTag, "initializing ESP-Mosaico with official CO5300/CST9217 drivers");
+        ESP_LOGI(board_detail::kTag, "initializing ESP-Mosaico with CO5300 and CST92xx drivers");
         ESP_RETURN_ON_ERROR(power_.Initialize(), board_detail::kTag, "initialize Mosaico power control failed");
         ESP_RETURN_ON_ERROR(status_led_.Initialize(), board_detail::kTag, "initialize Mosaico status LED failed");
         ESP_RETURN_ON_ERROR(status_led_.Set(true), board_detail::kTag, "turn on Mosaico startup status LED failed");
@@ -252,7 +252,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(state_.i2c_executor.Initialize(), board_detail::kTag,
                             "start shared Mosaico I2C executor failed");
         ESP_RETURN_ON_ERROR(state_.touch_input.Initialize(state_.touch, state_.i2c_executor), board_detail::kTag,
-                            "bind CST9217 input failed");
+                            "bind CST92xx input failed");
         ESP_RETURN_ON_ERROR(sensors_.BeginInitialize(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
                             "start Mosaico sensor discovery failed");
         ESP_RETURN_ON_ERROR(InitializeDisplay(state_), board_detail::kTag, "initialize Mosaico display failed");
@@ -304,7 +304,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
             .board = "ESP-Mosaico V1.0",
             .host_chip = "ESP32-S31",
             .wifi_coprocessor = "Native ESP32-S31",
-            .touch_controller = "CST9217",
+            .touch_controller = "CST92xx",
             .display =
                 {
                     .driver = "CO5300",

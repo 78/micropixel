@@ -6,6 +6,7 @@
 #include "driver/i2c_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch.h"
+#include "esp_lcd_touch_cst92xx.h"
 #include "host/ui/lvgl/square_common/profiles/square_480.hpp"
 #include "lvgl.h"
 #include "platform/boards/esp-mosaico/board_config.hpp"
@@ -51,7 +52,7 @@ struct MosaicoBoardState final {
     lvgl::FontRegistry fonts{};
     lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts};
     PanelTransitionCompositor panel_transition{};
-    input::EspLcdTouchInput touch_input{kWidth, kHeight};
+    input::EspLcdTouchInput touch_input{kWidth, kHeight, ESP_LCD_TOUCH_CST92XX_MAX_POINTS};
     host_ui::lvgl::square_common::SquareSystemUiState ui{touch_input, guest_graphics, panel_transition,
                                                          ui_profile::kSystemUiProfile};
     transports::TinyUsbCdcLocalControl local_control{};

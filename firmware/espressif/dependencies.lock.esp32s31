@@ -9,6 +9,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.0
+  78/esp_lcd_touch_cst92xx:
+    component_hash: 0f15c208ad1af61dd87e732898efb8bdddd777119cfdb7fd8e363d5be14eda30
+    dependencies:
+    - name: espressif/esp_lcd_touch
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.1.0
   esphome/micro-opus:
     component_hash: c4cec51b6e45b9b660bf8725a10c65f46485ff8b37ff664e4da3fd738301c71e
     dependencies:
@@ -299,22 +313,9 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.5.0
-  waveshare/esp_lcd_touch_cst9217:
-    component_hash: 27a00845832b7987cacf4c4125cbed5415d940987583065b01870ac080930856
-    dependencies:
-    - name: espressif/esp_lcd_touch
-      registry_url: https://components.espressif.com
-      require: public
-      version: ^1.1.0
-    - name: idf
-      require: private
-      version: '>=4.4.2'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.0.4
 direct_dependencies:
 - 78/esp-http3
+- 78/esp_lcd_touch_cst92xx
 - esphome/micro-opus
 - espressif/button
 - espressif/cjson
@@ -327,7 +328,6 @@ direct_dependencies:
 - espressif/libpng
 - idf
 - lvgl/lvgl
-- waveshare/esp_lcd_touch_cst9217
-manifest_hash: b070a2bf691e655718f6ee536d9c90cfe11ff8a460aa129001bfea5a380d854f
+manifest_hash: b688061ca0aa9720cf2491f5ca13b90e29f4bdcf07fff890d9f05694b240d526
 target: esp32s31
 version: 3.0.0

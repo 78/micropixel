@@ -320,7 +320,7 @@ main/
   I²S、codec 和功放就绪；只有 App Suspend、Stop 或 Session 销毁后，原有 10 秒静音空闲计时才允许关闭输出。
 - `platform/boards/esp-mosaico/` 是 ESP32-S31 的 P0/P1 产品组合：复用原生 Wi-Fi policy、共享 App Hall/
   Status Layer、480 方屏 layout、逻辑坐标变换、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
-  组合官方 CO5300、CST9217、ES8311 codec、BQ27220、数字振动电机、供电和引脚；音频 tone/PCM mixer 与
+  组合 CO5300、`78/esp_lcd_touch_cst92xx`、ES8311 codec、BQ27220、数字振动电机、供电和引脚；音频 tone/PCM mixer 与
   Host 对数主音量曲线复用 `platform/audio/`，codec 控制与 Touch/Battery 共用 I²C executor。P4/S31
   的转场使用同一时间线与 PPA SRM 封装；S31 在
   原生 RGB565 中完成缩放/合成，再以独立的 1:1 PPA pass 生成 CO5300 线序，普通 LVGL flush 也使用相同

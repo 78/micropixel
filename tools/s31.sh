@@ -62,7 +62,7 @@ ESP32-S31 board aliases backed by the common firmware profile tool:
   flash-mosaico   Deprecated compatibility alias for flash-host; no build.
   monitor         Monitor without rebuilding; pass --reset to capture boot logs.
 
-The ESP-Mosaico profile enables the CO5300 display, CST9217-compatible touch,
+The ESP-Mosaico profile enables the CO5300 display, 78/esp_lcd_touch_cst92xx touch,
 ES8311 audio, BMI270 plus dual BMM150 sensors, battery/power-key handling,
 safe expansion GPIO, native Wi-Fi and the shared Runtime. NAND, microphone
 capture and module discovery remain outside the current first-stage scope.

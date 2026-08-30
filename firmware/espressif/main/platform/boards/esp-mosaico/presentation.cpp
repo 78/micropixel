@@ -14,7 +14,6 @@
 #include "esp_heap_caps.h"
 #include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_io.h"
-#include "esp_lcd_touch_cst9217.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_memory_utils.h"

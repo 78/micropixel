@@ -102,7 +102,7 @@ ROM，随后按同一 USB 物理位置等待 ROM 产品名并在同一个 esptoo
 写入前单独运行 `chip-id`：rev0 S31 的一次性 ROM 下载状态会被探测连接关闭时的控制线变化消耗掉。该闭环已
 在 macOS 真机验证；首次烧录、应用固件损坏或应用 CDC 未启动时，仍需按板卡说明手动进入 ROM 下载模式。
 
-当前 `esp-mosaico` 第一阶段 profile 已接入 CO5300 显示、CST9217-compatible 中断触摸、ES8311 音频、
+当前 `esp-mosaico` 第一阶段 profile 已接入 CO5300 显示、`78/esp_lcd_touch_cst92xx` 中断触摸组件、ES8311 音频、
 BMI270、双 BMM150、BQ27220 主动刷新、POWER/Function Button、状态 LED、白名单扩展 GPIO、板级 3V3
 电源、light sleep、共用 Runtime、BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D
 转场；RGB565/QSPI 只作为板级 presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。

@@ -20,4 +20,4 @@ list(APPEND micropixel_sources
     "platform/transports/tinyusb_cdc_local_control.cpp"
 )
 
-list(APPEND micropixel_requires esp_codec_dev esp_lcd_co5300 waveshare__esp_lcd_touch_cst9217)
+list(APPEND micropixel_requires esp_codec_dev esp_lcd_co5300)
