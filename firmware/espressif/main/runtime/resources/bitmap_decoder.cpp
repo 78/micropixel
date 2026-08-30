@@ -69,8 +69,8 @@ bool PreflightPng(const micropixel_bundle_asset_view_t& asset, uint32_t& width, 
     }
     width = ReadBigEndian32(asset.data + 16U);
     height = ReadBigEndian32(asset.data + 20U);
-    const size_t output_size = static_cast<size_t>(width) * height * 4U;
-    return ValidDecodedSize(width, height, 4U, output_size);
+    const size_t minimum_output_size = static_cast<size_t>(width) * height * 3U;
+    return ValidDecodedSize(width, height, 3U, minimum_output_size);
 }
 
 bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, device::BitmapView& view) {
@@ -157,23 +157,26 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& 
     if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
         png_set_expand_gray_1_2_4_to_8(png);
     }
-    const bool has_transparency = png_get_valid(png, info, PNG_INFO_tRNS) != 0U;
-    if (has_transparency) {
+    const bool has_transparency_chunk = png_get_valid(png, info, PNG_INFO_tRNS) != 0U;
+    const bool has_alpha = (color_type & PNG_COLOR_MASK_ALPHA) != 0 || has_transparency_chunk;
+    if (has_transparency_chunk) {
         png_set_tRNS_to_alpha(png);
     }
     if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
         png_set_gray_to_rgb(png);
     }
-    if ((color_type & PNG_COLOR_MASK_ALPHA) == 0 && !has_transparency) {
-        png_set_add_alpha(png, UINT8_MAX, PNG_FILLER_AFTER);
-    }
-    // LVGL's ARGB8888 byte layout on this little-endian target is BGRA.
+    // LVGL's RGB888/ARGB8888 byte layouts on this little-endian target are
+    // BGR/BGRA. Preserve opaque PNGs as three-byte pixels so App Surface can
+    // route unscaled copies through DMA2D instead of alpha blending them.
     png_set_bgr(png);
     png_read_update_info(png, info);
 
-    const size_t output_size = static_cast<size_t>(width) * height * 4U;
-    if (!ValidDecodedSize(width, height, 4U, output_size) || png_get_channels(png, info) != 4U ||
-        png_get_rowbytes(png, info) != static_cast<size_t>(width) * 4U) {
+    const uint32_t bytes_per_pixel = has_alpha ? 4U : 3U;
+    const uint32_t pixel_format = has_alpha ? MICROPIXEL_PIXEL_FORMAT_BGRA8888 : MICROPIXEL_PIXEL_FORMAT_BGR888;
+    const size_t output_size = static_cast<size_t>(width) * height * bytes_per_pixel;
+    if (!ValidDecodedSize(width, height, bytes_per_pixel, output_size) ||
+        png_get_channels(png, info) != bytes_per_pixel ||
+        png_get_rowbytes(png, info) != static_cast<size_t>(width) * bytes_per_pixel) {
         png_error(png, "unsupported PNG bitmap pixel layout");
     }
     decoded = static_cast<uint8_t*>(AllocateAlignedGuestPsram(64U, output_size));
@@ -182,15 +185,15 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, device::BitmapView& 
     }
 
     for (uint32_t row = 0U; row < height; ++row) {
-        png_read_row(png, const_cast<uint8_t*>(decoded) + static_cast<size_t>(row) * width * 4U, nullptr);
+        png_read_row(png, const_cast<uint8_t*>(decoded) + static_cast<size_t>(row) * width * bytes_per_pixel, nullptr);
     }
     png_read_end(png, info);
     png_destroy_read_struct(&png, &info, nullptr);
 
     auto* pixels = const_cast<uint8_t*>(decoded);
-    view = {pixels, static_cast<uint32_t>(output_size), width, height, width * 4U, MICROPIXEL_PIXEL_FORMAT_BGRA8888};
-    ESP_LOGI(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu output=%p", width, height, output_size,
-             pixels);
+    view = {pixels, static_cast<uint32_t>(output_size), width, height, width * bytes_per_pixel, pixel_format};
+    ESP_LOGI(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu format=%" PRIu32 " output=%p", width,
+             height, output_size, pixel_format, pixels);
     return true;
 }
 

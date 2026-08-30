@@ -118,7 +118,131 @@ SpriteBatch instance 容量；稳定移动的 wire 通常只有 2–6 条 record
 每次优化都应同时核对 wire record/instance/bytes、damage regions/pixels、operation replay、硬件/CPU
 fallback 和 panel submit。只降低某一段计时但扩大 damage 或增加最终 panel 像素，不算有效优化。
 
-## 5. PPA/DMA2D 面积微基准
+## 5. Metalio-Claw4 渲染路径与复制基线
+
+2026-08-30 使用 Metalio-Claw4/P4 720×720 RGB888 产品 profile 复测当前 Snake。测试使用 release Host、
+正式 Snake Bundle 和屏幕上的 1 秒性能采样；游戏为 Level 1、初始长度 1、无粒子和 shake 的稳定直行。
+120 个 Scene 提交窗口从 `#6000` 到 `#6120`，对应约 2 秒、10 个逻辑格。窗口内保持 60 FPS，CPU 约
+31%。不保存原始串口日志或设备标识。
+
+稳定窗口端点的普通帧均为 `wire=2rec/5inst/268B`、`normalize=5/patch`、`damage=1/2001 pixels` 和
+`replays=6`。`2001 pixels` 是 29×69 的小区域，只占 720×720 屏幕的约 0.39%。三个无特效的
+Display refresh 检查点为 6.84 ms、14.59 ms 和 8.48 ms；其中按秒更新的性能浮层也会加入 LVGL damage，
+所以这些检查点只用于确认 60 Hz 预算，不替代分段计时窗口。
+
+### 5.1 移动一格产生的 App Surface 操作
+
+Level 1 每 200 ms 移动一格，60 Hz 插值会为一格提交约 12 个 Scene。当时的硬件计数在 120 帧窗口中的
+优化前差量如下；`DMA2D copy` 只统计 `AppSurfaceCompositor` 自己的 copy，不包含 LVGL 双 framebuffer
+同步：
+
+| App Surface primitive | 120 帧差量 | 平均每帧 | 平均每格 |
+|---|---:|---:|---:|
+| PPA opaque fill | 535 | 4.46 | 53.5 |
+| PPA BGRA blend | 226 | 1.88 | 22.6 |
+| PPA scale | 0 | 0 | 0 |
+| App Surface DMA2D copy | 0 | 0 | 0 |
+| CPU fallback | 240 | 2.00 | 24.0 |
+| 合计 | 1,001 | 8.34 | 100.1 |
+
+这个结果可以从 Snake 的 retained Scene 拆成两部分：
+
+1. 仅蛇移动时，每个插值帧先恢复一个 damage 背景，再重放 board、两个 15×15 trail、29×29 head 和
+   两个 4×5 eye。12 帧合计为 48 次 PPA fill、12 次 board blend 和 24 次很小的 CPU eye fill，共
+   84 次 primitive；
+2. food atlas 以 16 帧/600 ms 独立动画，每格期间平均更换约 5.3 次 source frame。每次需要恢复 food
+   damage，并重放 board 和 food，平均再增加约 5.3 次 fill 和 10.6 次 blend。两部分相加与真机的
+   100.1 次/格一致。
+
+普通移动没有像素几何变形。board 是 625×625 到 625×625，food 是 43×43 到 43×43，snake/trail/eye
+本来就是实心矩形；因此没有 scale、rotation 或 resample。位置插值表现为重新 fill 新坐标，不是把旧蛇
+位图做 transform。测量时 PNG decoder 把 opaque board PNG 也展开为 BGRA8888，所以 damage 下的 board
+恢复走 PPA blend，而不是 BGR888 DMA2D copy。
+
+随后实现 opaque PNG 保留 BGR888。相同的 120 Scene frame 初始 Level 1 窗口中，board 的 PPA blend 从
+约 17.2 次/格迁移为 17.4 次/格 App Surface DMA2D copy；剩余约 5.4 次/格 blend 对应透明 food。fill
+仍约 54.1 次/格，scale 仍为 0，两个小 eye fill 继续走 CPU。也就是说优化只改变 opaque board 的像素
+primitive，没有扩大 damage、改变 Scene 提交数或引入图像变形；board decoded texture 同时由 4 B/px
+降为 3 B/px。
+
+### 5.2 App Surface 到 MIPI-DPI panel
+
+Metalio-Claw4 的最终路径与 Mosaico QSPI panel 不同：
+
+```text
+Guest Scene patch
+  -> AppSurfaceCompositor 在 720×720 RGB888 PSRAM Surface 上重画 damage
+  -> LVGL 将 App Surface 的 dirty RGB888 区域画到当前 back framebuffer
+  -> LVGL 同步上一 front framebuffer 尚未被本帧覆盖的旧 dirty 残片
+  -> DOUBLE_DIRECT 提交完整 framebuffer 指针
+  -> MIPI-DPI 在 VSYNC 切换 framebuffer，并持续扫描 RGB888
+```
+
+逐层的复制语义如下：
+
+| 边界 | 普通 Level 1 每格 | 实际语义 |
+|---|---:|---|
+| App Surface 内部（优化前） | 0 次 DMA2D copy、0 次 scale | 小区域由 PPA fill/blend 和两个 CPU eye fill 重建；opaque PNG 优化后的变化见 5.1 |
+| App Surface → back framebuffer | 约 17.4 次 CPU image span、90.4 KiB、4.29 ms | opaque RGB888 image 当前走 LVGL CPU fallback；调用数会因一个 refresh 内的多个 dirty region 高于 12 |
+| front → back 同步 | 约 11.2 次 DMA2D submit、68.5 KiB、4.06 ms | `refr_sync_areas()` 只复制上帧 dirty 中未被本帧覆盖的残片；多数当前 damage 已覆盖的区域无需同步 |
+| back framebuffer → panel | 12 次 pointer submit，0 次整屏 pixel copy | DOUBLE_DIRECT 的 buffer 已经是 DPI framebuffer；含整帧 cache clean 的 driver call 平均约 0.12–0.14 ms/帧 |
+| framebuffer cache maintenance | 12 个整屏地址范围 | 每帧仍传入 720×720×3 B，即 1.5552 MB；每格约 18.66 MB、60 Hz 时约 93.31 MB/s 的地址范围，但地址范围不能当作实际耗时 |
+| MIPI-DPI scanout | 12 次整屏扫描 | 每格读取约 18.66 MB；这是持续显示带宽，不是软件图像复制 |
+
+以上数字来自关闭性能浮层后的聚合探针，不是由 damage 数量反推。探针分别包围 LVGL RGB888 软件
+image fallback、板级 `buf_copy_cb` 的 blocking DMA2D 和 DOUBLE_DIRECT submit。初次分析使用临时探针；
+后续已整理为默认关闭的持续 telemetry。
+简单直行窗口内，120 次 CPU image span 用时 1.381 秒，共复制 213,007 pixels、耗时 29.645 ms；按
+Level 1 每秒 5 格归一化，就是表中的 17.4 次、30,848 pixels 和 4.29 ms/格。另一个无 shake 的 3.205 秒
+窗口内，front → back 完成 180 次 DMA2D submit，共 365,896 pixels、耗时 65.114 ms，对应 11.2 次、
+22,833 pixels 和 4.06 ms/格。
+
+这也修正了原来的“front → back 约 17 次/格”推算：food 和 snake damage 会增加 App Surface 的软件
+image span，但 LVGL 在同步另一 framebuffer 时会扣掉本帧即将重画的交集，所以实际 DMA2D submit 更少。
+这些数字仍是典型值而非协议常量；粒子、HUD、damage coalescing 和 shake 都会改变区域数与面积。
+
+### 5.3 DOUBLE_DIRECT 分段耗时
+
+同一批 P4 真机数据中，一个 60 refresh 的纯 Level 1 窗口测得 panel driver call 共 7.063 ms，即
+0.118 ms/帧；另一个 180 refresh 无 shake 窗口为 0.134 ms/帧。这个 call 已包含 DPI driver 对完整
+1.5552 MB framebuffer 地址范围的 cache writeback 和 pointer submit，因此 cache writeback 自身不会高于
+约 0.12–0.14 ms/帧。它目前不是 Snake 的主要瓶颈。
+
+submit 后等待下一次 framebuffer switch 平均为 5.6–5.7 ms/帧。这个数主要表示调用落在当前 VSYNC 周期
+中的相位，不是 5.7 ms 的像素复制或可直接消除的 CPU 工作；等待期间 LVGL task 阻塞，panel 仍在扫描。
+因此不能把 `display refresh total` 或 VSYNC wait 全部归因于 cache clean。
+
+### 5.4 大面积特效例外和后续优化
+
+shake 使用的是 retained Layer translation 特例。进入时先把 641×641 Game Layer 捕获到 cache，后续帧用
+DMA2D copy 移动快照；不做 scale。真机日志在进入/退出时看到约 411k–415k damage、`layer-cache=yes` 和
+`scale=0`，因此不能把这个尖峰混入普通移动的每格计数。
+
+分段统计后已完成前两项改进：
+
+1. opaque PNG 在 decode 后保留 BGR888，使 board damage 从 PPA BGRA blend 变为 DMA2D copy，同时减少
+   25% 的 decoded texture 容量；不能简单把 raw asset 放在 flash 后假设 DMA2D 一定可直接读取；
+2. 将临时探针整理为默认关闭的聚合 telemetry，分开记录 App Surface → FB CPU span、front → back
+   DMA2D 和 panel submit/VSYNC wait，不混入 App Surface 的 `hw=.../dma2d:`；
+3. dirty-row cache clean 暂不进入实现。完整 cache range 虽然是 93.31 MB/s，但实测 driver call 只有
+   0.12–0.14 ms/帧；除非后续 profile 显示它在更复杂场景显著增长，否则不值得先承担多 dirty region、
+   PPA/DMA cache ownership、overlay、transition 和 VSYNC 正确性的风险。
+
+App Surface 和 LVGL PPA 硬件选择继续沿用 Mosaico 已有方案：P4/S31 共用一个 `100 pixels` 面积门槛，
+裁剪后目标区域 `< 100` pixels 走 CPU、`>= 100` pixels 才允许走硬件；格式、对齐、mask 等其他硬件条件
+不满足时仍回退 CPU。copy、fill、blend、scale 不拆分，也不增加板级调度配置。下面的微基准用于解释
+固定成本和观察回归，不再作为拆分阈值的实施建议。
+
+持续统计由 `CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY` 控制，默认关闭。打开后 Host 每 120 个
+Scene frame 输出一条独立聚合记录；关闭时 RGB888 software-image、framebuffer DMA2D、panel submit 和
+VSYNC wait 路径均不调用计时函数，也不更新计数器。
+
+实现后的 Metalio 真机复测确认四组字段都能被采集。一个稳定的 120 Scene frame 窗口记录到 175 次
+software-image（318,605 px / 42.036 ms）、78 次 front-to-back DMA2D（118,872 px / 20.722 ms）、
+121 次 panel submit（12.957 ms）和 121 次 VSYNC wait（727.958 ms）。这些是诊断窗口而非性能承诺；
+统计是 display adapter 全局聚合，系统浮层、特效和其他 LVGL damage 也会计入。
+
+## 6. PPA/DMA2D 面积微基准
 
 2026-08-30 在 ESP-Mosaico/S31 上使用与 App Surface 相同的 PSRAM、RGB888/BGRA8888 格式和 blocking
 driver API 进行一次性微基准。每组先预热四次，再按面积执行 6–300 次；表中为单次平均耗时。`PPA 2x`
@@ -148,7 +272,6 @@ driver API 进行一次性微基准。每组先预热四次，再按面积执行
 | PPA 2× scale | 16×16 | 24×24 | 约 270 px |
 | PPA opaque fill | 16×16 | 24×24 | 约 420 px |
 
-因此一个统一的 `100 px` 硬件门槛只适合做保守 bring-up，不适合作为最终调度策略。候选 S31 门槛可从
-copy/fill 512 px、blend 1,024 px、scale 320 px 开始，再用真实 Snake/Blocks 帧做端到端 A/B。P4 需要独立
-复测，不能直接继承 S31 的交叉点；最终配置应按 SoC 和 operation 分开，而不是由 Guest 或 Sprite API
-暴露硬件选择。
+这些交叉区间说明统一门槛会让部分小图元承担额外的固定成本，但当前产品选择保持 Mosaico 与 P4 的共享
+实现和单一 `100 pixels` 面积门槛，不按 SoC 或 operation 分叉。后续只有端到端 telemetry 显示该成本
+成为主要瓶颈时，才重新评估调度策略；硬件选择始终不暴露给 Guest 或 Sprite API。

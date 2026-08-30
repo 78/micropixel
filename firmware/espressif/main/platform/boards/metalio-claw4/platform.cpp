@@ -130,7 +130,15 @@ void CopyImageBuffer(lv_draw_buf_t* destination, const lv_area_t* destination_ar
         copy.copy_height = static_cast<uint32_t>(line_count);
         copy.src_color_format = ESP_COLOR_FOURCC_BGR24;
         copy.dst_color_format = ESP_COLOR_FOURCC_BGR24;
+#if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
+        const int64_t copy_started_us = esp_timer_get_time();
+#endif
         if (esp_color_convert_blocking(dma2d, &copy, -1) == ESP_OK) {
+#if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
+            esp_lv_adapter_display_telemetry_record_framebuffer_dma2d(
+                static_cast<uint64_t>(line_width) * line_count,
+                static_cast<uint64_t>(esp_timer_get_time() - copy_started_us));
+#endif
             return;
         }
     }

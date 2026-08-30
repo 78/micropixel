@@ -92,6 +92,10 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebuff
         return ESP_ERR_NO_MEM;
     }
     display_ = display;
+#if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
+    esp_lv_adapter_display_telemetry_t discarded{};
+    (void)esp_lv_adapter_display_telemetry_take(&discarded);
+#endif
     const esp_err_t compositor_status =
         hardware_pixel_compositor_.Initialize(CONFIG_MICROPIXEL_APP_SURFACE_HW_MIN_AREA_PIXELS);
     if (compositor_status != ESP_OK) {
@@ -450,6 +454,22 @@ int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textu
                  hardware.ppa_fills, hardware.ppa_blends, hardware.ppa_scales, hardware.dma2d_copies,
                  hardware.software_fallbacks);
     }
+#if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
+    if ((sequence % 120U) == 0U) {
+        esp_lv_adapter_display_telemetry_t telemetry{};
+        if (esp_lv_adapter_display_telemetry_take(&telemetry)) {
+            ESP_LOGI(kTag,
+                     "display telemetry (120 scene frames): sw-image=%" PRIu64 "/%" PRIu64 "px/%" PRIu64
+                     "us fb-dma2d=%" PRIu64 "/%" PRIu64 "px/%" PRIu64 "us panel-submit=%" PRIu64 "/%" PRIu64
+                     "us vsync-wait=%" PRIu64 "/%" PRIu64 "us",
+                     telemetry.software_image_calls, telemetry.software_image_pixels,
+                     telemetry.software_image_elapsed_us, telemetry.framebuffer_dma2d_calls,
+                     telemetry.framebuffer_dma2d_pixels, telemetry.framebuffer_dma2d_elapsed_us,
+                     telemetry.panel_submit_calls, telemetry.panel_submit_elapsed_us, telemetry.panel_vsync_wait_calls,
+                     telemetry.panel_vsync_wait_elapsed_us);
+        }
+    }
+#endif
 
     if (presentation_hooks_.prepare_frame_locked != nullptr) {
         presentation_hooks_.prepare_frame_locked(presentation_hooks_.context, guest_frame_, created_guest_frame,

@@ -1,4 +1,14 @@
 dependencies:
+  78/esp-http3:
+    component_hash: 0e53baf99e59446bf540a35d61ed110d0ebfeb7e0062d7a93a3706c8b5220368
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=6.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.6.0
   esphome/micro-opus:
     component_hash: c4cec51b6e45b9b660bf8725a10c65f46485ff8b37ff664e4da3fd738301c71e
     dependencies:
@@ -312,6 +322,7 @@ dependencies:
       type: service
     version: 9.5.0
 direct_dependencies:
+- 78/esp-http3
 - esphome/micro-opus
 - espressif/button
 - espressif/cjson
@@ -324,6 +335,6 @@ direct_dependencies:
 - espressif/libpng
 - idf
 - lvgl/lvgl
-manifest_hash: 320585d79d098cb9f7824f49c9318e187aa16c86cab0871596b14d5e206bbbea
+manifest_hash: b070a2bf691e655718f6ee536d9c90cfe11ff8a460aa129001bfea5a380d854f
 target: esp32p4
 version: 3.0.0
