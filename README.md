@@ -34,7 +34,8 @@ git submodule update --init --recursive
 - ESP-IDF 6.1，并已通过其 `export.sh` 设置 `IDF_PATH`；当前验证基线使用 commit
   `6a9c44fe7e725af45cb99293ae38afd7d481f1e3`；
 - 带 wasm32 backend 的 Clang（设置 `WASI_CLANG`，或设置 `WASI_SDK_PATH`）；
-- MicroPixel WAMR fork 固定 commit `482b17e07fc46e80ffd23e5290871d42c49748e7` 构建的 `wamrc`，目标为
+- MicroPixel WAMR fork 的 `wamr-host/esp-idf-psram` 分支，固定 commit
+  `541ac74fc73c20af419cc14aa5925abb204383c7` 构建的 `wamrc`，目标为
   `RISCV32_ILP32F`、AOT format v6（设置 `WAMRC`）；上游 WAMR 2.4.3 至 2.4.5 的 AOT v5 不兼容；
 - Python 3；烧录和串口工具的 Python 依赖见 `requirements-dev.txt`。
 
