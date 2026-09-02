@@ -3,6 +3,8 @@
 /benchmarks/
 /legacy/
 /tmp/
+/firmware/espressif/dependencies.lock.*
+/control/package-lock.json
 /firmware/espressif/components/78__esp-http3
 /.codex-tmp/
 /.private/
