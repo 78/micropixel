@@ -42,7 +42,9 @@ class Bmi270Vector final : public VectorSensor {
    public:
     Bmi270Vector(Bmi270& device, Bmi270::Kind kind) : device_(device), kind_(kind) {}
 
-    [[nodiscard]] esp_err_t Initialize(i2c_master_bus_handle_t) override { return ESP_ERR_INVALID_STATE; }
+    [[nodiscard]] esp_err_t Initialize(i2c_master_bus_handle_t bus) override {
+        return device_.available() ? ESP_OK : device_.Initialize(bus);
+    }
     [[nodiscard]] esp_err_t Configure(uint32_t interval_us) override { return device_.Configure(kind_, interval_us); }
     [[nodiscard]] esp_err_t Suspend() override { return device_.Suspend(kind_); }
     [[nodiscard]] esp_err_t Read(float (&values)[3]) override { return device_.Read(kind_, values); }

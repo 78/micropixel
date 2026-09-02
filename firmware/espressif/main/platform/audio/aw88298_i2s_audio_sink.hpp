@@ -4,14 +4,13 @@
 
 namespace micropixel::platform::audio {
 
-struct Es8311CodecConfig final {
-    float amplifier_voltage{3.3F};
-    float codec_dac_voltage{3.3F};
+struct Aw88298CodecConfig final {
+    int pa_gain{15};
 };
 
-class Es8311I2sAudioSink final : public I2sCodecAudioSink {
+class Aw88298I2sAudioSink final : public I2sCodecAudioSink {
    public:
-    Es8311I2sAudioSink(I2sCodecAudioConfig common, Es8311CodecConfig codec)
+    Aw88298I2sAudioSink(I2sCodecAudioConfig common, Aw88298CodecConfig codec)
         : I2sCodecAudioSink(common), codec_(codec) {}
 
    protected:
@@ -19,7 +18,7 @@ class Es8311I2sAudioSink final : public I2sCodecAudioSink {
                                                       const audio_codec_gpio_if_t* gpio) override;
 
    private:
-    Es8311CodecConfig codec_{};
+    Aw88298CodecConfig codec_{};
 };
 
 }  // namespace micropixel::platform::audio

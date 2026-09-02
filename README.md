@@ -4,7 +4,7 @@
 访问图形、输入、音频、存储和资源服务，不直接依赖芯片 SDK 或开发板类型。
 
 当前产品固件运行在 ESP32-P4 + [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4)；
-ESP32-S31 + ESP-Mosaico、ESP32-S3 + ESP32-S3-BOX-3 和立创开发板 SZPI ESP32-S3 作为 preview profile
+ESP32-S31 + ESP-Mosaico、ESP32-S3 + ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 作为 preview profile
 同步维护。Host 使用
 ESP-IDF 6.1 和固定 commit 的 [WAMR fork](https://github.com/78/wasm-micro-runtime)，Guest 使用受限
 C++23 API，并按设备编译为 RISC-V 32-bit 或 ESP32-S3 Xtensa AOT format v6。项目正式名称为
@@ -113,7 +113,7 @@ bash tools/s31.sh build-null
 ```
 
 ESP32-S3-BOX-3 preview 固定使用 40 行 PSRAM 双缓冲，并提供 Host、Xtensa AOT App 与浏览器完整镜像；
-立创开发板 SZPI ESP32-S3 复用同一套 S3 Runtime、Xtensa Guest 和 40 行显示基线：
+立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 复用同一套 S3 Runtime 与 Xtensa Guest 基线：
 
 ```sh
 bash tools/s3.sh build-host
@@ -121,6 +121,8 @@ bash tools/s3.sh build-release
 bash tools/s3.sh flash-all /dev/cu.usbmodemXXXX
 bash tools/s3.sh build-szpi
 bash tools/s3.sh flash-szpi /dev/cu.usbmodemXXXX
+bash tools/s3.sh build-cores3
+bash tools/s3.sh flash-cores3 /dev/cu.usbmodemXXXX
 ```
 
 SDK Demo 单独通过 USB 增量安装，不烧录 Host：

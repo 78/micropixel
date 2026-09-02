@@ -92,6 +92,10 @@ build_and_run system_gesture_router \
     "$workspace_root/tools/tests/test_system_gesture_router.cpp" \
     "$workspace_root/firmware/espressif/main/host/ui/system_gesture_router.cpp"
 
+build_and_run host_pointer_event_queue \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_host_pointer_event_queue.cpp"
+
 build_and_run hall_carousel \
     "$workspace_root/tools/tests/test_hall_carousel.cpp"
 

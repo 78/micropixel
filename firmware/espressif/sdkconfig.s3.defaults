@@ -6,8 +6,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.s3.csv"
 # ESP32-S3 preview boards use the native USB Serial/JTAG peripheral for the preview console.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
-# Supported S3 modules use octal PSRAM. Guest linear memory and bounded Host
-# workspaces use it through explicit capability allocations.
+# Most S3 profiles use octal PSRAM. Boards with Quad PSRAM override this in
+# their board defaults. Guest linear memory and bounded Host workspaces use it
+# through explicit capability allocations.
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

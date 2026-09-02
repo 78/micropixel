@@ -94,7 +94,7 @@ ESP-IDF transport callbacks and board-level scheduling wrappers.
 
 ### esp_codec_dev
 
-ESP-Mosaico and ESP32-S3 ES8311 initialization use `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
+ESP-Mosaico and ESP32-S3 ES8311/AW88298 initialization use `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
 
 - upstream: <https://components.espressif.com/components/espressif/esp_codec_dev>, Apache-2.0;
 - scope: ES8311 codec configuration and the ESP-IDF I2S data interface; MicroPixel supplies the shared-I2C-executor
@@ -111,6 +111,15 @@ sequence from Espressif's `esp-box-3` BSP 3.2.0:
 - upstream: <https://github.com/espressif/esp-bsp/tree/master/bsp/esp-box-3>, Apache-2.0;
 - scope: only the board-specific I2C, display, touch and backlight facts needed by MicroPixel are maintained locally;
   the upstream BSP component is not linked, so it does not constrain the shared codec or LVGL dependency versions.
+
+### M5Stack CoreS3 board definitions
+
+The M5Stack CoreS3 backend derives its pin assignments, controller selection and power sequencing from Espressif's
+`m5stack_core_s3` BSP:
+
+- upstream: <https://github.com/espressif/esp-bsp/tree/master/bsp/m5stack_core_s3>, Apache-2.0;
+- scope: board-specific I2C, display, touch, AW88298 audio and AXP2101/AW9523 power-control facts are maintained
+  locally; the upstream BSP component is not linked.
 
 ### micro-opus and libopus
 

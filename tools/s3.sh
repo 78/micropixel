@@ -43,6 +43,7 @@ apps_output_dir="${S3_APPS_OUTPUT_DIR:-$workspace_root/build/esp-box-3-apps}"
 apps_store="$apps_output_dir/app-store.bin"
 host_build_dir="${S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-box-3}"
 szpi_host_build_dir="${SZPI_S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-szpi}"
+cores3_host_build_dir="${CORES3_S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-cores3}"
 xtensa_wamrc="${XTENSA_WAMRC:-$workspace_root/build/tools/wamrc-xtensa/wamrc}"
 
 usage() {
@@ -70,10 +71,17 @@ LCKFB SZPI ESP32-S3 preview commands:
                       Monitor the SZPI Host; optionally reset to capture boot.
   port-szpi [PORT]    Resolve and verify the selected SZPI serial port.
 
+M5Stack CoreS3 preview commands:
+  build-cores3          Build the Quad-PSRAM CoreS3 Host.
+  flash-cores3 [PORT]   Flash the already-built Host, preserving app_store.
+  monitor-cores3 [PORT] [--reset]
+                        Monitor the CoreS3 Host; optionally reset to capture boot.
+  port-cores3 [PORT]    Resolve and verify the selected CoreS3 serial port.
+
 S3_PORT, S3_BAUD and MICROPIXEL_REMOTE_CONTROL_* may be set in the repository-root
 .env. Explicit environment variables and a command-line PORT take precedence.
-The preview Host includes panel, touch, backlight, native Wi-Fi, ES8311/I2S
-audio, Host-owned hardware mute, IMU and Pmod GPIO.
+Each preview profile selects its own panel, touch, codec, power and sensor
+wiring while reusing the ESP32-S3 Runtime and Xtensa Guest baseline.
 EOF
 }
 
@@ -335,6 +343,11 @@ case "$command_name" in
         require_idf
         build_profile szpi-esp32s3 "$szpi_host_build_dir" sdkconfig.s3.defaults sdkconfig.s3-szpi.defaults
         ;;
+    build-cores3)
+        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+        require_idf
+        build_profile m5stack-cores3 "$cores3_host_build_dir" sdkconfig.s3.defaults sdkconfig.s3-cores3.defaults
+        ;;
     build-wamrc)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         bash "$workspace_root/tools/build_wamrc_xtensa.sh"
@@ -367,6 +380,15 @@ case "$command_name" in
             profile_action szpi-esp32s3 flash-built
         fi
         ;;
+    flash-cores3)
+        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        require_idf
+        if [[ -n "${1:-}" ]]; then
+            profile_action m5stack-cores3 flash-built --port "$1"
+        else
+            profile_action m5stack-cores3 flash-built
+        fi
+        ;;
     flash-apps)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
@@ -395,6 +417,11 @@ case "$command_name" in
         require_idf
         monitor_profile szpi-esp32s3 "$@"
         ;;
+    monitor-cores3)
+        [[ $# -le 2 ]] || { usage >&2; exit 2; }
+        require_idf
+        monitor_profile m5stack-cores3 "$@"
+        ;;
     port)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
@@ -404,6 +431,11 @@ case "$command_name" in
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
         resolve_profile_port szpi-esp32s3 "${1:-${SZPI_S3_PORT:-}}"
+        ;;
+    port-cores3)
+        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        require_idf
+        resolve_profile_port m5stack-cores3 "${1:-${CORES3_S3_PORT:-}}"
         ;;
     *)
         usage >&2

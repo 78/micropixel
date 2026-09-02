@@ -330,6 +330,10 @@ main/
   保存的设备主音量。板载 ICM-42607-P 通过共享 I2C executor 发布加速度和角速度；Pmod 排除 USB 的
   GPIO19/20 与 Dock I2C 的 GPIO40/41 后发布其余 12 路 GPIO。AHT30 位于外接 SENSOR 扩展板，不作为主机
   内建设备注册。板级音频、Wi-Fi 或传感器初始化失败只降级对应能力，不阻断 Hall、USB local control 或 Runtime。
+- `platform/boards/m5stack-cores3/` 复用同一套 320×240 S3 UI、Guest Graphics、原生 Wi-Fi、USB local
+  control、I²C executor 和 BMI270 Peripheral，板级只组合 ILI9342C、FT6336U、AXP2101/AW9523 供电与
+  AW88298 单声道音频。`platform/audio/I2sCodecAudioSink` 统一拥有 I²S、DMA、采样转换和
+  `esp_codec_dev` 生命周期，ES8311 与 AW88298 各自只实现 codec 创建配置。
 - `platform/boards/esp-mosaico/` 是 ESP32-S31 的 P0/P1 产品组合：复用原生 Wi-Fi policy、共享 App Hall/
   Status Layer、480 方屏 layout、逻辑坐标变换、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
   组合 CO5300、`78/esp_lcd_touch_cst92xx`、ES8311 codec、BQ27220、数字振动电机、供电和引脚；音频 tone/PCM mixer 与

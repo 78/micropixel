@@ -11,8 +11,8 @@ Firmware 文件职责以 [Espressif main README](../../firmware/espressif/main/R
 
 MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产品基线为：
 
-- Host：ESP32-P4 + Metalio-Claw4 是产品 profile；ESP32-S31 + ESP-Mosaico、ESP32-S3-BOX-3 与立创
-  SZPI ESP32-S3 是同步维护的 preview profile；三个芯片 target 使用 ESP-IDF 6.1；
+- Host：ESP32-P4 + Metalio-Claw4 是产品 profile；ESP32-S31 + ESP-Mosaico、ESP32-S3-BOX-3、立创
+  SZPI ESP32-S3 与 M5Stack CoreS3 是同步维护的 preview profile；三个芯片 target 使用 ESP-IDF 6.1；
 - Runtime：MicroPixel WAMR fork 固定 commit、AOT format v6，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
 - Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长，P4、S31 与 S3 的当前策略上限均为
@@ -37,6 +37,7 @@ app_main
         │   ├── ESP-Mosaico                  # ESP32-S31 preview board
         │   ├── ESP32-S3-BOX-3               # ESP32-S3 preview board
         │   ├── SZPI ESP32-S3                # 立创开发板 preview
+        │   ├── M5Stack CoreS3                # ESP32-S3 preview board
         │   └── Null                          # 硬件无关编译基线
         ├── DeviceServices
         │   ├── Graphics / Input / Audio / Random

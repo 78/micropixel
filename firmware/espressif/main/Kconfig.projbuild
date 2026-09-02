@@ -118,6 +118,16 @@ menu "MicroPixel board backends"
             BOOT key, expansion GPIO, Guest Graphics and App Hall. Camera,
             microphone and SD card remain outside the preview profile.
 
+    config MICROPIXEL_BOARD_M5STACK_CORES3
+        bool "M5Stack CoreS3 preview profile"
+        depends on IDF_TARGET_ESP32S3
+        help
+            Bring up the M5Stack CoreS3 ILI9342C display, FT6336U touch,
+            AW88298 speaker, AXP2101 battery/power control, BMI270 sensors,
+            native Wi-Fi, Guest Graphics and App Hall. Camera,
+            microphone, RTC, proximity sensor and SD card remain outside this
+            preview profile.
+
     config MICROPIXEL_BOARD_NULL
         bool "Null board"
         help
@@ -177,6 +187,14 @@ menu "MicroPixel board backends"
         default n
         help
             Let CPU rendering overlap the previous ST7789 SPI transfer. This
+            remains partial rendering and does not allocate two framebuffers.
+
+    config MICROPIXEL_CORES3_LVGL_DOUBLE_BUFFER
+        bool "Use two LVGL partial buffers on M5Stack CoreS3"
+        depends on MICROPIXEL_BOARD_M5STACK_CORES3
+        default n
+        help
+            Let CPU rendering overlap the previous ILI9342C SPI transfer. This
             remains partial rendering and does not allocate two framebuffers.
 
     config MICROPIXEL_MOSAICO_LVGL_DOUBLE_BUFFER

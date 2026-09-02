@@ -27,6 +27,7 @@ class FirmwareProfileTest(unittest.TestCase):
                 "s3-null",
                 "esp-box-3",
                 "szpi-esp32s3",
+                "m5stack-cores3",
             },
         )
         self.assertTrue(self.profiles["metalio-claw4"].flash)
@@ -46,6 +47,8 @@ class FirmwareProfileTest(unittest.TestCase):
         self.assertTrue(self.profiles["esp-box-3"].monitor)
         self.assertTrue(self.profiles["szpi-esp32s3"].flash)
         self.assertTrue(self.profiles["szpi-esp32s3"].monitor)
+        self.assertTrue(self.profiles["m5stack-cores3"].flash)
+        self.assertTrue(self.profiles["m5stack-cores3"].monitor)
 
     def test_p4_command_uses_non_preview_target_and_defaults(self) -> None:
         profile = self.profiles["metalio-claw4"]
@@ -135,6 +138,11 @@ class FirmwareProfileTest(unittest.TestCase):
         )
         self.assertIn("sdkconfig.s3-szpi.defaults", szpi_defaults)
         self.assertNotIn("sdkconfig.s3-null.defaults", szpi_defaults)
+        cores3_defaults = ";".join(
+            str(path) for path in self.profiles["m5stack-cores3"].sdkconfig_defaults
+        )
+        self.assertIn("sdkconfig.s3-cores3.defaults", cores3_defaults)
+        self.assertNotIn("sdkconfig.s3-null.defaults", cores3_defaults)
 
     def test_environment_can_override_profile_paths(self) -> None:
         profile = firmware.load_profiles(

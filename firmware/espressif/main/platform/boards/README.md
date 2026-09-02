@@ -85,6 +85,11 @@ devices independently. Audio silicon implements `AudioOutputPeripheral`; the sha
 Guest↔Hall presentation implements the complete `DisplayTransition` interface;
 a board without it returns no transition interface.
 
+Register-controlled I²S codecs reuse `platform/audio/I2sCodecAudioSink` for
+bus serialization, DMA, sample conversion and lifecycle. Codec-specific
+classes such as ES8311 and AW88298 only construct their own `audio_codec_if_t`;
+their register configuration must not be mixed into another codec's class.
+
 Sensors, GPIO and haptics are Peripherals with board-local Channel values. The
 board never assigns a public `DeviceId`, wire kind or capability bits. It calls
 `AddSensor`, `AddGpio` or `AddHaptics` with its Peripheral, local Channel and a

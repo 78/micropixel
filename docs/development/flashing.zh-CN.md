@@ -1,7 +1,7 @@
 # Host 固件构建与烧录指南
 
 本文说明如何构建和烧录 Metalio-Claw4（ESP32-P4）产品固件，以及 ESP-Mosaico（ESP32-S31）、
-ESP32-S3-BOX-3 和立创开发板 SZPI ESP32-S3 预览固件。以下命令均在仓库根目录执行。
+ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 预览固件。以下命令均在仓库根目录执行。
 
 ## 1. 准备环境
 
@@ -115,7 +115,7 @@ down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange statu
 触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 
-## ESP32-S3 / ESP32-S3-BOX-3 与立创 SZPI 预览版
+## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI 与 M5Stack CoreS3 预览版
 
 BOX-3 正式预览配置固定使用 40 MHz SPI、40 行 PSRAM partial buffer 和双缓冲：
 
@@ -137,6 +137,14 @@ ESP32-S3，默认使用原生 USB Serial/JTAG。
 bash tools/s3.sh build-szpi
 bash tools/s3.sh flash-szpi /dev/cu.usbmodemXXXX
 bash tools/s3.sh monitor-szpi /dev/cu.usbmodemXXXX --reset
+```
+
+M5Stack CoreS3 使用 Quad PSRAM、ILI9342C/FT6336U、AW88298 和 AXP2101/AW9523 板级组合：
+
+```sh
+bash tools/s3.sh build-cores3
+bash tools/s3.sh flash-cores3 /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor-cores3 /dev/cu.usbmodemXXXX --reset
 ```
 
 Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo

@@ -9,7 +9,9 @@
 #include "esp_err.h"
 #include "esp_lv_adapter.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lvgl.h"
+#include "platform/lvgl/host_pointer_event_queue.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::platform::lvgl {
@@ -47,45 +49,43 @@ class HostPointerRouter final {
     }
 
     [[nodiscard]] bool Inject(const device::TouchSample& sample) {
-        portENTER_CRITICAL(&lock_);
-        if (!enabled_) {
-            portEXIT_CRITICAL(&lock_);
-            return true;
-        }
-        if (sample.phase == device::TouchPhase::kDown && !touch_active_) {
-            touch_active_ = true;
-            touch_id_ = sample.id;
-        } else if (!touch_active_ || sample.id != touch_id_) {
-            portEXIT_CRITICAL(&lock_);
-            return true;
-        }
-        const uint32_t next_head = (queue_head_ + 1U) % QueueCapacity;
-        if (next_head == queue_tail_) {
-            queue_tail_ = (queue_tail_ + 1U) % QueueCapacity;
-        }
-        queue_[queue_head_] = sample;
-        queue_head_ = next_head;
-        if (sample.phase == device::TouchPhase::kUp || sample.phase == device::TouchPhase::kCancel) {
-            touch_active_ = false;
-            release_queued_ = true;
-        }
-        portEXIT_CRITICAL(&lock_);
-        if (indev_ != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
-            lv_timer_t* read_timer = lv_indev_get_read_timer(indev_);
-            if (read_timer != nullptr) {
-                lv_timer_resume(read_timer);
-                lv_timer_ready(read_timer);
+        for (;;) {
+            portENTER_CRITICAL(&lock_);
+            if (!enabled_) {
+                portEXIT_CRITICAL(&lock_);
+                return true;
             }
-            esp_lv_adapter_unlock();
+            const bool starts_touch = sample.phase == device::TouchPhase::kDown && !touch_active_;
+            if (!starts_touch &&
+                (!touch_active_ || sample.id != touch_id_ || sample.phase == device::TouchPhase::kDown)) {
+                portEXIT_CRITICAL(&lock_);
+                return true;
+            }
+            const HostPointerPushResult push_result = queue_.Push(sample);
+            if (push_result != HostPointerPushResult::kFull) {
+                if (starts_touch) {
+                    touch_active_ = true;
+                    touch_id_ = sample.id;
+                } else if (sample.phase == device::TouchPhase::kUp || sample.phase == device::TouchPhase::kCancel) {
+                    touch_active_ = false;
+                    release_queued_ = true;
+                }
+                portEXIT_CRITICAL(&lock_);
+                WakeReader();
+                return true;
+            }
+            portEXIT_CRITICAL(&lock_);
+
+            // A queue containing only Down/Up/Cancel records must apply
+            // backpressure rather than orphaning LVGL's pointer state.
+            WakeReader();
+            vTaskDelay(1U);
         }
-        (void)esp_lv_adapter_request_wake();
-        return true;
     }
 
     void SetEnabledLocked(bool enabled) {
         portENTER_CRITICAL(&lock_);
-        queue_head_ = 0U;
-        queue_tail_ = 0U;
+        queue_.Clear();
         pointer_state_ = LV_INDEV_STATE_RELEASED;
         touch_active_ = false;
         release_queued_ = false;
@@ -100,7 +100,7 @@ class HostPointerRouter final {
 
     [[nodiscard]] bool Busy() {
         portENTER_CRITICAL(&lock_);
-        const bool busy = touch_active_ || release_queued_ || queue_head_ != queue_tail_;
+        const bool busy = touch_active_ || release_queued_ || !queue_.empty();
         portEXIT_CRITICAL(&lock_);
         return busy;
     }
@@ -116,9 +116,8 @@ class HostPointerRouter final {
         bool sample_read = false;
         bool pointer_released = false;
         portENTER_CRITICAL(&router->lock_);
-        if (router->queue_tail_ != router->queue_head_) {
-            const device::TouchSample& sample = router->queue_[router->queue_tail_];
-            router->queue_tail_ = (router->queue_tail_ + 1U) % QueueCapacity;
+        device::TouchSample sample{};
+        if (router->queue_.Pop(sample)) {
             router->point_ = {.x = sample.x, .y = sample.y};
             router->pointer_state_ =
                 sample.phase == device::TouchPhase::kDown || sample.phase == device::TouchPhase::kMove
@@ -132,7 +131,7 @@ class HostPointerRouter final {
         }
         data->point = router->point_;
         data->state = router->enabled_ ? router->pointer_state_ : LV_INDEV_STATE_RELEASED;
-        data->continue_reading = router->queue_tail_ != router->queue_head_;
+        data->continue_reading = !router->queue_.empty();
         portEXIT_CRITICAL(&router->lock_);
         if (sample_read && router->display_ != nullptr) {
             RequestDisplayRefresh(router->display_);
@@ -142,17 +141,27 @@ class HostPointerRouter final {
         }
     }
 
+    void WakeReader() {
+        if (indev_ != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+            lv_timer_t* read_timer = lv_indev_get_read_timer(indev_);
+            if (read_timer != nullptr) {
+                lv_timer_resume(read_timer);
+                lv_timer_ready(read_timer);
+            }
+            esp_lv_adapter_unlock();
+        }
+        (void)esp_lv_adapter_request_wake();
+    }
+
     lv_display_t* display_{};
     lv_indev_t* indev_{};
     PointerReleasedSink released_sink_{};
     void* released_context_{};
     portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
-    std::array<device::TouchSample, QueueCapacity> queue_{};
+    HostPointerEventQueue<QueueCapacity> queue_{};
     lv_point_t point_{};
     lv_indev_state_t pointer_state_{LV_INDEV_STATE_RELEASED};
     uint32_t touch_id_{};
-    uint32_t queue_head_{};
-    uint32_t queue_tail_{};
     bool enabled_{};
     bool touch_active_{};
     bool release_queued_{};

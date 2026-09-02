@@ -136,5 +136,26 @@
     "preview": true,
     "flash": true,
     "monitor": true
+  },
+  "m5stack-cores3": {
+    "description": "M5Stack CoreS3 preview Host",
+    "target": "esp32s3",
+    "chip_markers": [
+      "ESP32-S3"
+    ],
+    "build_dir": "build/host-esp32s3-cores3",
+    "build_dir_env": "CORES3_S3_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.s3.defaults",
+      "firmware/espressif/sdkconfig.s3-cores3.defaults"
+    ],
+    "port_env": "CORES3_S3_PORT",
+    "baud_env": "CORES3_S3_BAUD",
+    "default_baud": 921600,
+    "preview": true,
+    "flash": true,
+    "monitor": true
   }
 }

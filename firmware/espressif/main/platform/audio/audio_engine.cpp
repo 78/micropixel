@@ -283,11 +283,15 @@ void AudioTask(void* argument) {
             if (!ShouldStopAudioOutput(app_foreground, idle_chunks, idle_grace_chunks, playable_voice)) {
                 continue;
             }
-            status = sink.Stop();
-            if (status == ESP_OK && power_controller != nullptr) {
+            if (power_controller != nullptr) {
+                // Shutdown closes the codec and disables I2S exactly once
+                // before its rail is removed. A persistent sink instead uses
+                // Stop() so it can be restarted without reconstruction.
                 sink.Shutdown();
                 sink_initialized = false;
                 status = power_controller->PowerOffAudio();
+            } else {
+                status = sink.Stop();
             }
             if (status == ESP_OK && first_output_transition) {
                 ESP_LOGI(kTag, "audio output returned to idle after %lu ms grace",
