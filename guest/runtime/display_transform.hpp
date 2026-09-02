@@ -117,6 +117,38 @@ struct LogicalInsets final {
             .height = height > 0 && mapped_height <= 0 ? 1 : mapped_height};
 }
 
+// Map a source rectangle into an adaptively decoded texture. Independently
+// rounded origins and extents preserve 1:1 copies for atlas frames, but two
+// half-pixel round-ups can otherwise place the far edge one pixel past the
+// decoded texture. Valid logical source rectangles are clamped to that edge.
+[[nodiscard]] constexpr PhysicalRect MapTextureRect(int32_t x, int32_t y, int32_t width, int32_t height,
+                                                    uint32_t logical_width, uint32_t logical_height,
+                                                    uint32_t physical_width, uint32_t physical_height) {
+    PhysicalRect mapped =
+        MapSizedRect(x, y, width, height, logical_width, logical_height, physical_width, physical_height);
+    const bool contained = x >= 0 && y >= 0 && width > 0 && height > 0 &&
+                           static_cast<int64_t>(x) + width <= logical_width &&
+                           static_cast<int64_t>(y) + height <= logical_height;
+    if (!contained || physical_width == 0U || physical_height == 0U) {
+        return mapped;
+    }
+    if (mapped.x >= static_cast<int32_t>(physical_width)) {
+        mapped.x = static_cast<int32_t>(physical_width - 1U);
+    }
+    if (mapped.y >= static_cast<int32_t>(physical_height)) {
+        mapped.y = static_cast<int32_t>(physical_height - 1U);
+    }
+    const int32_t available_width = static_cast<int32_t>(physical_width) - mapped.x;
+    const int32_t available_height = static_cast<int32_t>(physical_height) - mapped.y;
+    if (mapped.width > available_width) {
+        mapped.width = available_width;
+    }
+    if (mapped.height > available_height) {
+        mapped.height = available_height;
+    }
+    return mapped;
+}
+
 [[nodiscard]] constexpr PhysicalRect MapSceneSizedRect(const DisplayTransform& transform, int32_t x, int32_t y,
                                                        int32_t width, int32_t height) {
     return MapSizedRect(x, y, width, height, transform.logical_width, transform.logical_height,

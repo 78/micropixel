@@ -73,6 +73,24 @@ bool ValidBitmap(const device::BitmapView& bitmap) {
            static_cast<uint64_t>(bitmap.stride) * bitmap.height <= bitmap.size;
 }
 
+bool NormalizeRoundedTextureExtent(int32_t origin, int32_t& extent, uint32_t limit) {
+    if (origin < 0 || extent <= 0 || limit == 0U) {
+        return false;
+    }
+    const int64_t far_edge = static_cast<int64_t>(origin) + extent;
+    if (far_edge <= limit) {
+        return true;
+    }
+    // Older Guest SDKs independently rounded an adaptive atlas frame's origin
+    // and extent. Two half-pixel round-ups can exceed the decoded far edge by
+    // exactly one pixel even though the authored source rectangle was valid.
+    if (far_edge == static_cast<int64_t>(limit) + 1 && extent > 1) {
+        --extent;
+        return true;
+    }
+    return false;
+}
+
 uint32_t RequiredMask(uint16_t opcode) {
     if (opcode == MICROPIXEL_GRAPHICS_SCENE_OP_RECT) {
         return kRectMask;
@@ -573,7 +591,7 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
         }
     }
     for (uint16_t index = 0U; index < node_count; ++index) {
-        const GuestSceneNode& node = scratch_[index];
+        GuestSceneNode& node = scratch_[index];
         if (node.parent_container_id > container_count) {
             return false;
         }
@@ -590,12 +608,18 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
         } else if (node.kind == GuestSceneNodeKind::kTexture) {
             device::BitmapView bitmap{};
             if (!ValidRect(node.x, node.y, node.width, node.height, logical_width, logical_height) ||
-                node.texture == 0U || node.source_x < 0 || node.source_y < 0 || node.source_width <= 0 ||
-                node.source_height <= 0 || bitmap_resolver == nullptr ||
-                !bitmap_resolver(bitmap_context, node.texture, bitmap) || !ValidBitmap(bitmap) ||
-                static_cast<int64_t>(node.source_x) + node.source_width > bitmap.width ||
-                static_cast<int64_t>(node.source_y) + node.source_height > bitmap.height) {
+                node.texture == 0U || bitmap_resolver == nullptr ||
+                !bitmap_resolver(bitmap_context, node.texture, bitmap) || !ValidBitmap(bitmap)) {
                 return false;
+            }
+            const int32_t original_source_width = node.source_width;
+            const int32_t original_source_height = node.source_height;
+            if (!NormalizeRoundedTextureExtent(node.source_x, node.source_width, bitmap.width) ||
+                !NormalizeRoundedTextureExtent(node.source_y, node.source_height, bitmap.height)) {
+                return false;
+            }
+            if (node.source_width != original_source_width || node.source_height != original_source_height) {
+                node_changes_[index] |= MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
             }
         } else if (node.kind == GuestSceneNodeKind::kSpriteBatch) {
             device::BitmapView bitmap{};
@@ -607,19 +631,27 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
                 return false;
             }
             for (uint16_t instance_index = 0U; instance_index < node.batch_capacity; ++instance_index) {
-                const GuestSceneSpriteInstance& instance =
-                    scratch_instances_[node.batch_instance_offset + instance_index];
+                GuestSceneSpriteInstance& instance = scratch_instances_[node.batch_instance_offset + instance_index];
                 if ((instance.flags & MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBLE) == 0U) {
                     continue;
                 }
                 if (!ValidRect(instance.x, instance.y, instance.width, instance.height, logical_width,
                                logical_height) ||
-                    !ValidRgb888(instance.rgb888) ||
-                    (textured && (instance.source_x < 0 || instance.source_y < 0 || instance.source_width <= 0 ||
-                                  instance.source_height <= 0 ||
-                                  static_cast<int64_t>(instance.source_x) + instance.source_width > bitmap.width ||
-                                  static_cast<int64_t>(instance.source_y) + instance.source_height > bitmap.height))) {
+                    !ValidRgb888(instance.rgb888)) {
                     return false;
+                }
+                if (textured) {
+                    const int32_t original_source_width = instance.source_width;
+                    const int32_t original_source_height = instance.source_height;
+                    if (!NormalizeRoundedTextureExtent(instance.source_x, instance.source_width, bitmap.width) ||
+                        !NormalizeRoundedTextureExtent(instance.source_y, instance.source_height, bitmap.height)) {
+                        return false;
+                    }
+                    if (instance.source_width != original_source_width ||
+                        instance.source_height != original_source_height) {
+                        instance_changes_[node.batch_instance_offset + instance_index] |=
+                            MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT;
+                    }
                 }
             }
         } else if (node.x < 0 || node.x > logical_width || node.y < 0 || node.y >= logical_height ||

@@ -183,11 +183,12 @@ class SceneWriter final {
                     : detail::MapSceneSizedRect(display, instance.destination.x, instance.destination.y,
                                                 instance.destination.width, instance.destination.height);
             const detail::PhysicalRect source =
-                batch.texture == 0U ? detail::PhysicalRect{}
-                                    : detail::MapSizedRect(instance.source.x, instance.source.y, instance.source.width,
-                                                           instance.source.height, batch.texture_logical_width,
-                                                           batch.texture_logical_height, batch.texture_physical_width,
-                                                           batch.texture_physical_height);
+                batch.texture == 0U
+                    ? detail::PhysicalRect{}
+                    : detail::MapTextureRect(instance.source.x, instance.source.y, instance.source.width,
+                                             instance.source.height, batch.texture_logical_width,
+                                             batch.texture_logical_height, batch.texture_physical_width,
+                                             batch.texture_physical_height);
             const micropixel_graphics_scene_sprite_instance_t wire{
                 .x = destination.x,
                 .y = destination.y,
@@ -828,7 +829,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
             value.node.record.size = sizeof(value);
             added = writer.Add(value);
         } else if (node.kind == SceneNodeKind::kSprite) {
-            const detail::PhysicalRect source = detail::MapSizedRect(
+            const detail::PhysicalRect source = detail::MapTextureRect(
                 node.source.x, node.source.y, node.source.width, node.source.height, node.texture_logical_width,
                 node.texture_logical_height, node.texture_physical_width, node.texture_physical_height);
             auto value = micropixel_graphics_scene_texture_record_t{

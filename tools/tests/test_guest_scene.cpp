@@ -212,6 +212,16 @@ micropixel_graphics_scene_node_link_record_t Link(uint16_t node, uint16_t parent
 
 bool ResolveBitmap(void*, micropixel_texture_handle_t texture, micropixel::device::BitmapView& view) {
     static const std::array<uint8_t, 12U> pixels{};
+    if (texture == 8U) {
+        view = {.data = pixels.data(),
+                .size = 128U * 43U * 3U,
+                .width = 128U,
+                .height = 43U,
+                .stride = 128U * 3U,
+                .pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888,
+                .flags = 0U};
+        return true;
+    }
     if (texture != 7U) {
         return false;
     }
@@ -426,6 +436,55 @@ void SpriteBatchInstancesPatchIndependently() {
     assert(scene.Instances()[0].x == 0 && scene.Instances()[1].x == 5);
 }
 
+void AdaptiveAtlasFarEdgeRoundingIsNormalized() {
+    SceneStorage<1U, 1U> storage;
+    graphics::GuestScene& scene = storage.scene;
+
+    const micropixel_graphics_scene_sprite_batch_record_t batch{
+        .node = {.record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_SPRITE_BATCH,
+                            .size = sizeof(micropixel_graphics_scene_sprite_batch_record_t)},
+                 .node_id = 0U,
+                 .layer_id = 0U,
+                 .flags = MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE,
+                 .property_mask = kBatchMask},
+        .texture = 8U,
+        .capacity = 1U,
+        .opacity = 255U,
+        .reserved0 = 0U,
+    };
+    const micropixel_graphics_scene_sprite_instance_t rounded_instance{
+        .x = 0,
+        .y = 0,
+        .width = 4,
+        .height = 2,
+        .source_x = 0,
+        .source_y = 22,
+        .source_width = 128,
+        .source_height = 22,
+        .opacity = 255U,
+        .flags = MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBLE,
+        .reserved0 = 0U,
+    };
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 4U, 0U, 1U, 1U, 0U, 1U);
+    keyframe.Add(Background(0U));
+    keyframe.Add(batch);
+    keyframe.AddInstances(0U, 0U, kInstanceMask, {rounded_instance});
+    const auto& keyframe_bytes = keyframe.Finish();
+    assert(scene.Apply(keyframe_bytes.data(), static_cast<uint32_t>(keyframe_bytes.size()), 8, 4, ResolveBitmap,
+                       nullptr, ValidateFont, nullptr) == MICROPIXEL_STATUS_OK);
+    assert(scene.Instances()[0].source_y == 22 && scene.Instances()[0].source_height == 21);
+
+    auto invalid_instance = rounded_instance;
+    invalid_instance.source_height = 23;
+    Message invalid(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 5U, 0U, 1U, 1U, 0U, 1U);
+    invalid.Add(Background(0U));
+    invalid.Add(batch);
+    invalid.AddInstances(0U, 0U, kInstanceMask, {invalid_instance});
+    const auto& invalid_bytes = invalid.Finish();
+    assert(scene.Apply(invalid_bytes.data(), static_cast<uint32_t>(invalid_bytes.size()), 8, 4, ResolveBitmap, nullptr,
+                       ValidateFont, nullptr) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+}
+
 void ContainerTreeIsValidatedAndPatchedAtomically() {
     SceneStorage<4U, 1U> storage;
     graphics::GuestScene& scene = storage.scene;
@@ -497,6 +556,7 @@ int main() {
     SmallerKeyframeRemovesOldNodes();
     TextureReplacementRequiresACompleteKindChange();
     SpriteBatchInstancesPatchIndependently();
+    AdaptiveAtlasFarEdgeRoundingIsNormalized();
     ContainerTreeIsValidatedAndPatchedAtomically();
     SceneTransactionsSerializeNetPropertyChanges();
     return 0;

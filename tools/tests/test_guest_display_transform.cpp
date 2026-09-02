@@ -21,6 +21,7 @@ int main() {
     using micropixel::detail::MapSceneRect;
     using micropixel::detail::MapSceneSizedRect;
     using micropixel::detail::MapSceneVectorX;
+    using micropixel::detail::MapTextureRect;
     using micropixel::detail::ScaleCoordinate;
 
     const auto square_720 = MakeDisplayTransform(720U, 720U);
@@ -55,6 +56,10 @@ int main() {
     const auto atlas_frame = micropixel::detail::MapSizedRect(25, 50, 25, 25, 100U, 100U, 67U, 67U);
     Check(atlas_frame.x == 17 && atlas_frame.y == 34 && atlas_frame.width == 17 && atlas_frame.height == 17,
           "adaptive atlas source rectangles must map against decoded texture dimensions");
+    const auto atlas_lower_half = MapTextureRect(0, 32, 192, 32, 192U, 64U, 128U, 43U);
+    Check(atlas_lower_half.x == 0 && atlas_lower_half.y == 22 && atlas_lower_half.width == 128 &&
+              atlas_lower_half.height == 21,
+          "adaptive atlas source rectangles must not round past the decoded far edge");
 
     const auto landscape = MakeDisplayTransform(1280U, 720U);
     Check(landscape.logical_width == 1280U && landscape.logical_height == 720U,
