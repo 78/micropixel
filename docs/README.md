@@ -11,7 +11,7 @@
 - [游戏音频规范](development/game-audio.zh-CN.md)：当前 App 的合成音效格式、感知约束和构建门禁；
 - [定时器与大厅空闲功耗](development/timers-and-idle-power.zh-CN.md)：LVGL、`esp_timer`、周期唤醒和事件化边界；
 - [Graphics 性能诊断](development/graphics-performance.zh-CN.md)：Scene、compositor 和显示链路的分段测量方法；
-- [ESP32-S3-BOX-3 适配指南](development/esp32-s3-box-3-bring-up.zh-CN.md)：BOX-3 与立创 SZPI S3
+- [ESP32-S3-BOX-3 适配指南](development/esp32-s3-box-3-bring-up.zh-CN.md)：BOX-3、立创 SZPI S3 与 M5Stack CoreS3
   共用的 Xtensa AOT、RGB565 直通、320×240 Host UI、分阶段 bring-up 和最大能力测量矩阵；
 - [Host 构建与烧录指南](development/flashing.zh-CN.md)：P4 产品与 S31/S3 preview 的环境、设备识别、烧录和排错；
 - [USB 本地控制协议](design/usb-local-control.zh-CN.md)：CLI 本地 App 管理、日志、截图、输入和安全边界；

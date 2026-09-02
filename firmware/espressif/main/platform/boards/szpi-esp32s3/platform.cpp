@@ -100,6 +100,7 @@ class SzpiEsp32S3Board final : public Board {
         BoardRegistration registration{{
             .board = "LCKFB SZPI ESP32-S3",
             .host_chip = "ESP32-S3",
+            .firmware_target = "szpi-esp32s3",
             .wifi_coprocessor = "Native ESP32-S3",
             .touch_controller = state_.touch_name,
             .display =

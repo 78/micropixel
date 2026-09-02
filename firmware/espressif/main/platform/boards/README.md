@@ -77,8 +77,10 @@ hardware validation and must not be guessed from Metalio-Claw4. The POWER switch
 Function button, status LED, battery refresh and explicit light-sleep/power-off path
 are present; NAND App Store and module discovery remain P2.
 
-Every Board implementation submits one `BoardRegistration`. The minimum is
-only `device::BoardInfo{.board = "..."}`; add Graphics/Input/System UI when
+Every Board implementation submits one `BoardRegistration`. A hardware release
+profile supplies both its human-readable `board` and stable `firmware_target`;
+the latter selects OTA artifacts because several boards can share one chip.
+Add Graphics/Input/System UI when
 the display path is ready, then add audio, battery, Wi-Fi, power and external
 devices independently. Audio silicon implements `AudioOutputPeripheral`; the shared
 `AudioEngine` owns mixing and public Audio behavior. A board with accelerated

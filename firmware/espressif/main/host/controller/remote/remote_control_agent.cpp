@@ -1107,6 +1107,7 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
         esp_chip_info(&chip);
         (void)cJSON_AddStringToObject(hardware, "board", board_info.board);
         (void)cJSON_AddStringToObject(hardware, "chip", board_info.host_chip);
+        (void)cJSON_AddStringToObject(hardware, "firmwareTarget", board_info.firmware_target);
         (void)cJSON_AddNumberToObject(hardware, "revision", chip.revision);
         (void)cJSON_AddNumberToObject(hardware, "cores", chip.cores);
         (void)cJSON_AddNumberToObject(hardware, "cpuFrequencyMhz", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
@@ -1593,10 +1594,16 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     }
     Http3Request request{};
     request.method = "GET";
-    const bool is_s31 = std::strcmp(board_info_.host_chip, "ESP32-S31") == 0;
-    const bool is_s3 = std::strcmp(board_info_.host_chip, "ESP32-S3") == 0;
-    const char* release_target = is_s31 ? "esp-mosaico" : is_s3 ? "esp-box-3" : "metalio-claw4";
-    const char* release_chip = is_s31 ? "ESP32-S31" : is_s3 ? "ESP32-S3" : "ESP32-P4";
+    const char* release_target = board_info_.firmware_target;
+    const char* release_chip = board_info_.host_chip;
+    if (release_target == nullptr || release_target[0] == '\0' || release_chip == nullptr || release_chip[0] == '\0') {
+        std::lock_guard<std::mutex> lock(model_mutex_);
+        model_.firmware_update_state = host_ui::FirmwareUpdateState::kFailed;
+        model_.firmware_update_available = false;
+        model_.firmware_update_installable = false;
+        CopyText(model_.firmware_update_message, "Firmware target unavailable");
+        return false;
+    }
     request.path =
         std::string("/firmware/releases/latest?currentVersion=") + current->version + "&target=" + release_target;
     std::unique_ptr<Http3Stream> stream = ClientFrom(client).Open(request);

@@ -76,7 +76,7 @@ ESP-Mosaico 使用 ESP32-S31 preview target 和独立 build 目录：
 
 ```sh
 bash tools/s31.sh build-host
-bash tools/s31.sh build-release  # 发布用：Host + Blocks/Snake/Demo + 完整浏览器镜像
+bash tools/s31.sh build-release  # 发布用：Host + Blocks/Snake/Tilt/Demo + 完整浏览器镜像
 bash tools/s31.sh flash-host /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX --reset  # 从应用启动开始抓日志
@@ -89,7 +89,7 @@ bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
 方向编译门禁，没有 flash 或 monitor 能力。
 
 `build-release` 生成 `build/host-esp32s31-mosaico/micropixel-full.bin`，供在线烧录页使用。完整镜像中的
-App Store 固定包含 Blocks、Snake 和 SDK Demo 三个集成 App；生成器从 ESP-IDF 的
+App Store 固定包含 Blocks、Snake、Tilt 和 SDK Demo 四个集成 App；生成器从 ESP-IDF 的
 `flasher_args.json` 读取 S31 的 16 MiB Flash 容量并拒绝任何越界区域。
 
 ESP-Mosaico 板载 Type-C 连接的是 USB 2.0 HS OTG，而不是左侧模块接口引出的 USB Serial/JTAG。Host
@@ -149,6 +149,21 @@ bash tools/s3.sh monitor cores3 /dev/cu.usbmodemXXXX --reset
 
 `build-release`、`flash-apps` 和 `flash-all` 同样接受 `szpi` 或 `cores3`；不写 `BOARD` 时保持原行为，默认
 操作 BOX-3。原有带 `-szpi`、`-cores3` 后缀的命令仍是兼容别名。
+
+五板固件发布使用同一 `PROJECT_VER`，逐个生成 OTA `micropixel.bin` 与浏览器完整镜像
+`micropixel-full.bin`：
+
+```sh
+bash tools/p4.sh build-release
+bash tools/s31.sh build-release
+bash tools/s3.sh build-release box3
+bash tools/s3.sh build-release szpi
+bash tools/s3.sh build-release cores3
+```
+
+发布目录由 `control/firmware-release.jsonc` 统一声明。三款 S3 虽共享芯片和 Xtensa App Store，但 Host
+镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户选择具体板型并只用芯片识别做
+系列校验。固件镜像属于生成物，不提交到 Git；部署网站/API 时必须让配置中的五组相对路径都可读。
 
 Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo
 时使用产品固件的 USB 本地控制通道增量安装，不进入 ROM 下载态，也不重写 Host：

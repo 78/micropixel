@@ -1,8 +1,8 @@
 # ESP32-S3-BOX-3 适配与能力探索指南
 
 本文是 ESP32-S3-BOX-3 preview 的长期维护指南。它记录目标架构、历史验证阶段、RGB565 数据路径、
-最大能力测量方法和完成门槛。当前产品仍是 ESP32-P4 + Metalio-Claw4；ESP32-S31 + ESP-Mosaico 与
-ESP32-S3-BOX-3 是同步维护的 preview profile。
+最大能力测量方法和完成门槛。当前产品仍是 ESP32-P4 + Metalio-Claw4；ESP32-S31 + ESP-Mosaico，
+以及 ESP32-S3-BOX-3、立创 SZPI ESP32-S3、M5Stack CoreS3 是同步维护的 preview profile。
 
 当前状态：P0 已完成编译、Bundle 和 BOX-3 真机验收；P1 已完成官方 BSP display/touch/backlight
 接入、CPU-only RGB565 panel 路径和真机时钟/缓冲对照；P2 已完成 Guest Graphics、资源与 streaming
@@ -15,7 +15,7 @@ displayed shadow、USB JPEG 截图和 Guest/Hall 生命周期真机验收。最�
 不阻断 display、USB 或 App Runtime 启动。扬声器可听与侧边 Mute 的立即静音/恢复已完成真机听感确认。
 P5 的 AOT target 元数据、CLI 自动选 target 和安装写入前 compatibility preflight 已完成。板载 IMU、
 Pmod GPIO、OTA、Web Console 和 preview 发布目录也已接入。P0/P1 等名称只表示下文的 BOX-3 历史验证阶段，
-不再对应活动配置或命令；当前同时维护 `esp-box-3` 与 `szpi-esp32s3` preview profile，并将 LVGL object
+不再对应活动配置或命令；当前同时维护 `esp-box-3`、`szpi-esp32s3` 与 `m5stack-cores3` preview profile，并将 LVGL object
 pool、relocated AOT text 和非映射 AOT package buffer 放入 PSRAM。
 
 ## 1. 目标与非目标
@@ -216,10 +216,10 @@ P0 完成前不开始复制 Board 外设代码。
 bash tools/s3.sh build-null
 bash tools/s3.sh build-wamrc
 
-# 单一 BOX-3 preview
-bash tools/s3.sh build-release
-bash tools/s3.sh flash-all PORT
-bash tools/s3.sh monitor PORT --reset
+# 三款 S3 preview；BOARD 为 box3、szpi 或 cores3
+bash tools/s3.sh build-release BOARD
+bash tools/s3.sh flash-all BOARD PORT
+bash tools/s3.sh monitor BOARD PORT --reset
 ```
 
 `monitor` 默认不复位，适合查看正在运行的固件；需要完整启动日志时显式传 `--reset`。若原生 USB
@@ -489,8 +489,9 @@ BOX-3 没有 MicroPixel 当前产品板的电池、震动马达和电源 latch�
 - [x] CLI 根据设备芯片选择 AOT target，离线 package 必须显式 target；
 - [x] 安装前做 AOT compatibility preflight；
 - [x] 16 MiB Flash 使用双 3.5 MiB OTA 分区和 8 MiB `app_store`，Xtensa Host 镜像空间通过构建校验；
-- [x] 固件 OTA、Remote Control 和 Web Console 统一使用 `esp-box-3` target；
-- [x] `build-release` 生成 Host、三个 Xtensa AOT App 和浏览器完整镜像，发布目录包含 BOX-3 preview；
+- [x] 固件 OTA、Remote Control 和 Web Console 使用板型级 target；三款 S3 分别为 `esp-box-3`、
+  `szpi-esp32s3` 和 `m5stack-cores3`，不再只凭芯片推断；
+- [x] `build-release` 生成 Host、Demo/Blocks/Snake/Tilt 四个 Xtensa AOT App 和浏览器完整镜像，发布目录包含三款 S3 preview；
 - BundleFS 在 S3 MMU page、跨块 mmap、安装和卸载路径通过；
 - P4/S31 的 RISC-V package、RGB888/RGB565 presentation 和现有 60 Hz 基线不得回归；
 - 更新 README、架构、Firmware、Guest、烧录和第三方 notices。
@@ -650,13 +651,17 @@ bash tools/s31.sh build-host
 bash tools/tests/test_firmware_host.sh
 python3 -m unittest tools.tests.test_firmware tools.tests.test_micropixel_cli -v
 
-# ESP32-S3 compile gate 与 BOX-3 preview
+# ESP32-S3 compile gate 与三款板型 preview
 bash tools/s3.sh build-null
-bash tools/s3.sh build-host
+bash tools/s3.sh build-host box3
+bash tools/s3.sh build-host szpi
+bash tools/s3.sh build-host cores3
 bash tools/s3.sh build-apps
 
-# 最终 BOX-3 Host（RGB565、40 MHz，配置不随 A/B 改动）
-bash tools/s3.sh build-release
+# 最终三款 S3 Host 与浏览器完整镜像
+bash tools/s3.sh build-release box3
+bash tools/s3.sh build-release szpi
+bash tools/s3.sh build-release cores3
 ```
 
 BOX-3 preview 完成必须同时满足：

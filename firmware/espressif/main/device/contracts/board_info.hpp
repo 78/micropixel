@@ -32,6 +32,10 @@ struct DisplayInfo final {
 struct BoardInfo final {
     const char* board{"Unknown"};
     const char* host_chip{"Unknown"};
+    // Stable identifier used by the release catalog. Multiple boards can use
+    // the same chip, so OTA selection must not infer this value from
+    // host_chip.
+    const char* firmware_target{"unknown"};
     const char* wifi_coprocessor{"Unknown"};
     const char* touch_controller{"Unknown"};
     DisplayInfo display{};

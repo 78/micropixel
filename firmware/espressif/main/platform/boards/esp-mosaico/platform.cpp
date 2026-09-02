@@ -308,6 +308,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
         BoardRegistration registration{{
             .board = "ESP-Mosaico V1.0",
             .host_chip = "ESP32-S31",
+            .firmware_target = "esp-mosaico",
             .wifi_coprocessor = "Native ESP32-S31",
             .touch_controller = "CST92xx",
             .display =

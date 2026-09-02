@@ -1,13 +1,13 @@
 # Guest C++ SDK
 
-状态：**0.11.0，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
+状态：**0.12.0，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
 `app.timers().After/Every()` 创建。`WaitEvent/WaitEventFor/PollEvent` 只用于短期等待或协议级控制。
 
 ## 工具链兼容性
 
-SDK 0.11.0 生成的 Guest 必须使用公开的
+SDK 0.12.0 生成的 Guest 必须使用公开的
 [MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime) 固定 commit
-`482b17e07fc46e80ffd23e5290871d42c49748e7` 编译为 AOT format v6。该编译器当前仍自报
+`4dbe3b6efe776fde06468e47f342c1d351879cf0` 编译为 AOT format v6。该编译器当前仍自报
 `wamrc 2.4.3`，但上游 WAMR 2.4.3、2.4.4 和 2.4.5 Release 都生成不兼容的 AOT v5；因此
 `wamrc --version` 不是兼容性判断依据。安装步骤和产物头检查见 MicroPixel Developer 的
 [开发环境](https://micropixel.ai/docs/environment/)页面。
@@ -473,7 +473,7 @@ auto title = scene.CreateLabel({24, 24}, "Hello", micropixel::Color::White(),
 ```
 
 `SystemFont::{kSmall,kMedium,kLarge,kTitle}` 的实际字体和像素大小由 Host 决定。这样 Host 后续可在不改变
-应用或 wire schema 的情况下选择不同语言字体；SDK 0.11.0 暂不提供翻译目录或语言包 API。
+应用或 wire schema 的情况下选择不同语言字体；SDK 0.12.0 暂不提供翻译目录或语言包 API。
 
 `sdk/symbols.hpp` 提供所有 SystemFont role 都保证存在的稳定 UTF-8 图标，包括上下左右、播放/暂停、
 确认/关闭、音量、文件、连接和电池状态。Guest 只提交普通文本，不包含 LVGL header，也不持有 Host 字体

@@ -113,6 +113,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
         BoardRegistration registration{{
             .board = "M5Stack CoreS3",
             .host_chip = "ESP32-S3",
+            .firmware_target = "m5stack-cores3",
             .wifi_coprocessor = "Native ESP32-S3",
             .touch_controller = state_.touch_name,
             .display =

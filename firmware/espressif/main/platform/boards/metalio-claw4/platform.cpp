@@ -435,6 +435,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
         BoardRegistration registration{{
             .board = "Metalio-Claw4",
             .host_chip = "ESP32-P4",
+            .firmware_target = "metalio-claw4",
             .wifi_coprocessor = "ESP32-C5",
             .touch_controller = "GT911",
             .display =

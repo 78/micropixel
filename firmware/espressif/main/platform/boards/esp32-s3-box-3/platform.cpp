@@ -118,6 +118,7 @@ class Esp32S3Box3Board final : public Board {
         BoardRegistration registration{{
             .board = "ESP32-S3-BOX-3 (P4)",
             .host_chip = "ESP32-S3",
+            .firmware_target = "esp-box-3",
             .wifi_coprocessor = "Native ESP32-S3",
             .touch_controller = state_.touch_name,
             .display =
