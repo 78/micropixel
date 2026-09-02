@@ -120,32 +120,35 @@ down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange statu
 BOX-3 正式预览配置固定使用 40 MHz SPI、40 行 PSRAM partial buffer 和双缓冲：
 
 ```sh
-bash tools/s3.sh build-host
-bash tools/s3.sh build-release  # Host + Blocks/Snake/Demo + 完整浏览器镜像
-bash tools/s3.sh flash-all /dev/cu.usbmodemXXXX
-bash tools/s3.sh monitor /dev/cu.usbmodemXXXX --reset
+bash tools/s3.sh build-host box3
+bash tools/s3.sh build-release box3  # Host + Blocks/Snake/Tilt/Demo + 完整浏览器镜像
+bash tools/s3.sh flash-all box3 /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor box3 /dev/cu.usbmodemXXXX --reset
 ```
 
 `build-release` 生成 `build/host-esp32s3-box-3/micropixel.bin` 和 `micropixel-full.bin`；完整镜像包含
-三个 Xtensa AOT App。`flash-all` 烧录 Host 和对应的 8 MiB `app_store` 内容。烧录入口会先确认端口连接的是
+四个 Xtensa AOT App。`flash-all` 烧录 Host 和对应的 8 MiB `app_store` 内容。烧录入口会先确认端口连接的是
 ESP32-S3，默认使用原生 USB Serial/JTAG。
 
 立创 SZPI ESP32-S3 使用同一套 40 行 PSRAM 双缓冲和 Xtensa Guest 基线，板级显示、触控与传感器接线
 由独立 profile 提供：
 
 ```sh
-bash tools/s3.sh build-szpi
-bash tools/s3.sh flash-szpi /dev/cu.usbmodemXXXX
-bash tools/s3.sh monitor-szpi /dev/cu.usbmodemXXXX --reset
+bash tools/s3.sh build-host szpi
+bash tools/s3.sh flash-host szpi /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor szpi /dev/cu.usbmodemXXXX --reset
 ```
 
 M5Stack CoreS3 使用 Quad PSRAM、ILI9342C/FT6336U、AW88298 和 AXP2101/AW9523 板级组合：
 
 ```sh
-bash tools/s3.sh build-cores3
-bash tools/s3.sh flash-cores3 /dev/cu.usbmodemXXXX
-bash tools/s3.sh monitor-cores3 /dev/cu.usbmodemXXXX --reset
+bash tools/s3.sh build-host cores3
+bash tools/s3.sh flash-host cores3 /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor cores3 /dev/cu.usbmodemXXXX --reset
 ```
+
+`build-release`、`flash-apps` 和 `flash-all` 同样接受 `szpi` 或 `cores3`；不写 `BOARD` 时保持原行为，默认
+操作 BOX-3。原有带 `-szpi`、`-cores3` 后缀的命令仍是兼容别名。
 
 Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo
 时使用产品固件的 USB 本地控制通道增量安装，不进入 ROM 下载态，也不重写 Host：

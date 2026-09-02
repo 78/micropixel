@@ -113,17 +113,19 @@ bash tools/s31.sh build-null
 ```
 
 ESP32-S3-BOX-3 preview 固定使用 40 行 PSRAM 双缓冲，并提供 Host、Xtensa AOT App 与浏览器完整镜像；
-立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 复用同一套 S3 Runtime 与 Xtensa Guest 基线：
+立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 复用同一套 S3 Runtime、Xtensa Guest 和发布命令。`BOARD`
+可取 `box3`（默认）、`szpi` 或 `cores3`：
 
 ```sh
-bash tools/s3.sh build-host
-bash tools/s3.sh build-release
-bash tools/s3.sh flash-all /dev/cu.usbmodemXXXX
-bash tools/s3.sh build-szpi
-bash tools/s3.sh flash-szpi /dev/cu.usbmodemXXXX
-bash tools/s3.sh build-cores3
-bash tools/s3.sh flash-cores3 /dev/cu.usbmodemXXXX
+bash tools/s3.sh build-host box3
+bash tools/s3.sh build-host szpi
+bash tools/s3.sh build-host cores3
+bash tools/s3.sh build-release cores3
+bash tools/s3.sh flash-all cores3 /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor cores3 /dev/cu.usbmodemXXXX --reset
 ```
+
+原有 `build-szpi`、`flash-szpi`、`build-cores3`、`flash-cores3` 等命令继续作为兼容别名。
 
 SDK Demo 单独通过 USB 增量安装，不烧录 Host：
 

@@ -5,6 +5,15 @@ workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 idf_path_override="${IDF_PATH:-}"
 s3_port_override="${S3_PORT:-}"
 s3_baud_override="${S3_BAUD:-}"
+szpi_port_override="${SZPI_S3_PORT:-}"
+szpi_baud_override="${SZPI_S3_BAUD:-}"
+cores3_port_override="${CORES3_S3_PORT:-}"
+cores3_baud_override="${CORES3_S3_BAUD:-}"
+s3_host_build_dir_override="${S3_HOST_BUILD_DIR:-}"
+szpi_host_build_dir_override="${SZPI_S3_HOST_BUILD_DIR:-}"
+cores3_host_build_dir_override="${CORES3_S3_HOST_BUILD_DIR:-}"
+s3_apps_output_dir_override="${S3_APPS_OUTPUT_DIR:-}"
+xtensa_wamrc_override="${XTENSA_WAMRC:-}"
 remote_control_host_override="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
 remote_control_port_override="${MICROPIXEL_REMOTE_CONTROL_PORT:-}"
 remote_control_tls_override="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-}"
@@ -24,6 +33,33 @@ fi
 if [[ -n "$s3_baud_override" ]]; then
     S3_BAUD="$s3_baud_override"
 fi
+if [[ -n "$szpi_port_override" ]]; then
+    SZPI_S3_PORT="$szpi_port_override"
+fi
+if [[ -n "$szpi_baud_override" ]]; then
+    SZPI_S3_BAUD="$szpi_baud_override"
+fi
+if [[ -n "$cores3_port_override" ]]; then
+    CORES3_S3_PORT="$cores3_port_override"
+fi
+if [[ -n "$cores3_baud_override" ]]; then
+    CORES3_S3_BAUD="$cores3_baud_override"
+fi
+if [[ -n "$s3_host_build_dir_override" ]]; then
+    S3_HOST_BUILD_DIR="$s3_host_build_dir_override"
+fi
+if [[ -n "$szpi_host_build_dir_override" ]]; then
+    SZPI_S3_HOST_BUILD_DIR="$szpi_host_build_dir_override"
+fi
+if [[ -n "$cores3_host_build_dir_override" ]]; then
+    CORES3_S3_HOST_BUILD_DIR="$cores3_host_build_dir_override"
+fi
+if [[ -n "$s3_apps_output_dir_override" ]]; then
+    S3_APPS_OUTPUT_DIR="$s3_apps_output_dir_override"
+fi
+if [[ -n "$xtensa_wamrc_override" ]]; then
+    XTENSA_WAMRC="$xtensa_wamrc_override"
+fi
 if [[ -n "$remote_control_host_override" ]]; then
     MICROPIXEL_REMOTE_CONTROL_HOST="$remote_control_host_override"
 fi
@@ -39,7 +75,7 @@ fi
 
 firmware_dir="$workspace_root/firmware/espressif"
 common_max_task_name_len="$(sed -n 's/^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=//p' "$firmware_dir/sdkconfig.defaults")"
-apps_output_dir="${S3_APPS_OUTPUT_DIR:-$workspace_root/build/esp-box-3-apps}"
+apps_output_dir="${S3_APPS_OUTPUT_DIR:-$workspace_root/build/esp32s3-apps}"
 apps_store="$apps_output_dir/app-store.bin"
 host_build_dir="${S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-box-3}"
 szpi_host_build_dir="${SZPI_S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-szpi}"
@@ -48,38 +84,41 @@ xtensa_wamrc="${XTENSA_WAMRC:-$workspace_root/build/tools/wamrc-xtensa/wamrc}"
 
 usage() {
     cat <<'EOF'
-Usage: bash tools/s3.sh COMMAND [PORT]
+Usage: bash tools/s3.sh COMMAND [BOARD] [PORT] [--reset]
 
-ESP32-S3-BOX-3 preview commands:
+Boards: box3 (default), szpi, cores3
+
+Common ESP32-S3 preview commands:
   build-null          Compile the ESP32-S3 hardware-independent Null gate.
-  build-host          Build the 40-line PSRAM double-buffer preview Host.
+  build-host [BOARD]  Build one board Host.
   build-wamrc         Build locked WAMR 2.4.3 wamrc with the Xtensa LLVM backend.
   build-apps          Build Demo, Blocks, Snake and Tilt Xtensa AOT Bundles plus app_store.
-  build-release       Build the BOX-3 Host and release Apps, then create the
-                      browser-flashable micropixel-full.bin preview image.
-  flash-host [PORT]   Flash the already-built preview Host, preserving app_store.
-  flash-apps [PORT]   Flash only the generated preview app_store image.
-  flash-all [PORT]    Build the preview release, then flash Host and App Store.
-  monitor [PORT] [--reset]
-                      Monitor the preview Host; optionally reset to capture boot.
-  port [PORT]         Resolve and verify the selected ESP32-S3 serial port.
+  build-release [BOARD]
+                      Build one Host and release Apps, then create its
+                      browser-flashable micropixel-full.bin image.
+  flash-host [BOARD] [PORT]
+                      Flash the already-built Host, preserving app_store.
+  flash-apps [BOARD] [PORT]
+                      Flash only the shared ESP32-S3 app_store image.
+  flash-all [BOARD] [PORT]
+                      Build and flash one Host plus the shared App Store.
+  monitor [BOARD] [PORT] [--reset]
+                      Monitor one Host; optionally reset to capture boot.
+  port [BOARD] [PORT] Resolve and verify one board serial port.
 
-LCKFB SZPI ESP32-S3 preview commands:
-  build-szpi          Build the 40-line PSRAM double-buffer Host.
-  flash-szpi [PORT]  Flash the already-built Host, preserving app_store.
+Compatibility aliases:
+  build-szpi          Alias for build-host szpi.
+  flash-szpi [PORT]   Alias for flash-host szpi [PORT].
   monitor-szpi [PORT] [--reset]
-                      Monitor the SZPI Host; optionally reset to capture boot.
-  port-szpi [PORT]    Resolve and verify the selected SZPI serial port.
-
-M5Stack CoreS3 preview commands:
-  build-cores3          Build the Quad-PSRAM CoreS3 Host.
-  flash-cores3 [PORT]   Flash the already-built Host, preserving app_store.
+  port-szpi [PORT]
+  build-cores3        Alias for build-host cores3.
+  flash-cores3 [PORT] Alias for flash-host cores3 [PORT].
   monitor-cores3 [PORT] [--reset]
-                        Monitor the CoreS3 Host; optionally reset to capture boot.
-  port-cores3 [PORT]    Resolve and verify the selected CoreS3 serial port.
+  port-cores3 [PORT]
 
-S3_PORT, S3_BAUD and MICROPIXEL_REMOTE_CONTROL_* may be set in the repository-root
-.env. Explicit environment variables and a command-line PORT take precedence.
+S3_PORT/S3_BAUD, SZPI_S3_PORT/SZPI_S3_BAUD, CORES3_S3_PORT/CORES3_S3_BAUD
+and MICROPIXEL_REMOTE_CONTROL_* may be set in the repository-root .env.
+Explicit environment variables and a command-line PORT take precedence.
 Each preview profile selects its own panel, touch, codec, power and sensor
 wiring while reusing the ESP32-S3 Runtime and Xtensa Guest baseline.
 EOF
@@ -117,6 +156,16 @@ build_profile() {
     local profile="$1"
     local build_dir="$2"
     shift 2
+    local partial_buffer_height=""
+    local default_path
+    for default_path in "$@"; do
+        local configured_height
+        configured_height="$(sed -n 's/^CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=//p' \
+            "$firmware_dir/$default_path")"
+        if [[ -n "$configured_height" ]]; then
+            partial_buffer_height="$configured_height"
+        fi
+    done
     local remote_host="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
     local remote_port="${MICROPIXEL_REMOTE_CONTROL_PORT:-8443}"
     local allow_unverified="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-y}"
@@ -172,8 +221,12 @@ build_profile() {
         updated="$(mktemp "${sdkconfig_path}.XXXXXX")"
         awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
-            -v max_task_name_len="$common_max_task_name_len" '
-            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_max_task_name_len = 0 }
+            -v max_task_name_len="$common_max_task_name_len" \
+            -v partial_buffer_height="$partial_buffer_height" '
+            BEGIN {
+                saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0
+                saw_max_task_name_len = 0; saw_partial_buffer_height = 0
+            }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
@@ -201,6 +254,15 @@ build_profile() {
                 saw_max_task_name_len = 1
                 next
             }
+            /^CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=/ {
+                if (partial_buffer_height != "") {
+                    print "CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=" partial_buffer_height
+                } else {
+                    print
+                }
+                saw_partial_buffer_height = 1
+                next
+            }
             { print }
             END {
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
@@ -211,6 +273,9 @@ build_profile() {
                 }
                 if (!saw_ca) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64=\"" trusted_ca "\""
                 if (!saw_max_task_name_len) print "CONFIG_FREERTOS_MAX_TASK_NAME_LEN=" max_task_name_len
+                if (!saw_partial_buffer_height && partial_buffer_height != "") {
+                    print "CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=" partial_buffer_height
+                }
             }
         ' "$sdkconfig_path" >"$updated"
         if ! cmp -s "$updated" "$sdkconfig_path"; then
@@ -221,7 +286,6 @@ build_profile() {
     fi
 
     local defaults=("$firmware_dir/sdkconfig.defaults")
-    local default_path
     for default_path in "$@"; do
         defaults+=("$firmware_dir/$default_path")
     done
@@ -246,8 +310,74 @@ resolve_profile_port() {
     fi
 }
 
-resolve_port() {
-    resolve_profile_port esp-box-3 "${1:-${S3_PORT:-}}"
+is_board_name() {
+    case "${1:-}" in
+        box3 | esp-box-3 | szpi | szpi-esp32s3 | cores3 | m5stack-cores3) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+select_board() {
+    case "${1:-box3}" in
+        box3 | esp-box-3)
+            board_name="box3"
+            board_title="ESP32-S3-BOX-3"
+            board_profile="esp-box-3"
+            board_build_dir="$host_build_dir"
+            board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-box-3.defaults)
+            board_baud="${S3_BAUD:-921600}"
+            ;;
+        szpi | szpi-esp32s3)
+            board_name="szpi"
+            board_title="LCKFB SZPI ESP32-S3"
+            board_profile="szpi-esp32s3"
+            board_build_dir="$szpi_host_build_dir"
+            board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-szpi.defaults)
+            board_baud="${SZPI_S3_BAUD:-921600}"
+            ;;
+        cores3 | m5stack-cores3)
+            board_name="cores3"
+            board_title="M5Stack CoreS3"
+            board_profile="m5stack-cores3"
+            board_build_dir="$cores3_host_build_dir"
+            board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-cores3.defaults)
+            board_baud="${CORES3_S3_BAUD:-921600}"
+            ;;
+        *)
+            echo "Unknown ESP32-S3 board: $1 (expected box3, szpi, or cores3)" >&2
+            exit 2
+            ;;
+    esac
+}
+
+split_optional_board() {
+    selected_board="box3"
+    remaining_arguments=("$@")
+    if (( ${#remaining_arguments[@]} > 0 )) && is_board_name "${remaining_arguments[0]}"; then
+        selected_board="${remaining_arguments[0]}"
+        remaining_arguments=("${remaining_arguments[@]:1}")
+    fi
+}
+
+build_board() {
+    select_board "$1"
+    build_profile "$board_profile" "$board_build_dir" "${board_defaults[@]}"
+}
+
+flash_board() {
+    local selected="$1"
+    local requested="${2:-}"
+    select_board "$selected"
+    local arguments=()
+    if [[ -n "$requested" ]]; then arguments+=(--port "$requested"); fi
+    profile_action "$board_profile" flash-built "${arguments[@]}"
+}
+
+resolve_board_port() {
+    local selected="$1"
+    local requested="${2:-}"
+    select_board "$selected"
+    resolve_profile_port "$board_profile" "$requested"
 }
 
 build_apps() {
@@ -274,23 +404,25 @@ build_apps() {
 }
 
 build_release() {
-    echo "==> Building ESP32-S3-BOX-3 preview Apps: Blocks, Snake, Tilt, and SDK Demo"
+    select_board "$1"
+    echo "==> Building shared ESP32-S3 preview Apps: Blocks, Snake, Tilt, and SDK Demo"
     build_apps
-    build_profile esp-box-3 "$host_build_dir" \
-        sdkconfig.s3.defaults sdkconfig.s3-box-3.defaults
-    echo "==> Creating ESP32-S3-BOX-3 browser image with Blocks, Snake, Tilt, and SDK Demo"
+    build_profile "$board_profile" "$board_build_dir" "${board_defaults[@]}"
+    echo "==> Creating $board_title browser image with Blocks, Snake, Tilt, and SDK Demo"
     python "$workspace_root/tools/build_full_firmware_image.py" \
-        --build-dir "$host_build_dir" \
+        --build-dir "$board_build_dir" \
         --app-store-image "$apps_store" \
-        --output "$host_build_dir/micropixel-full.bin"
+        --output "$board_build_dir/micropixel-full.bin"
 }
 
 flash_apps() {
-    local requested="${1:-}"
+    local selected="$1"
+    local requested="${2:-}"
     local port
+    select_board "$selected"
     [[ -f "$apps_store" ]] || build_apps
-    port="$(resolve_port "$requested")"
-    python -m esptool --chip esp32s3 --port "$port" --baud "${S3_BAUD:-921600}" \
+    port="$(resolve_board_port "$board_name" "$requested")"
+    python -m esptool --chip esp32s3 --port "$port" --baud "$board_baud" \
         write-flash 0x800000 "$apps_store"
 }
 
@@ -334,19 +466,19 @@ case "$command_name" in
         profile_action s3-null build
         ;;
     build-host)
-        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+        [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        build_profile esp-box-3 "$host_build_dir" sdkconfig.s3.defaults sdkconfig.s3-box-3.defaults
+        build_board "${1:-box3}"
         ;;
     build-szpi)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         require_idf
-        build_profile szpi-esp32s3 "$szpi_host_build_dir" sdkconfig.s3.defaults sdkconfig.s3-szpi.defaults
+        build_board szpi
         ;;
     build-cores3)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         require_idf
-        build_profile m5stack-cores3 "$cores3_host_build_dir" sdkconfig.s3.defaults sdkconfig.s3-cores3.defaults
+        build_board cores3
         ;;
     build-wamrc)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
@@ -358,59 +490,46 @@ case "$command_name" in
         build_apps
         ;;
     build-release)
-        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
-        require_idf
-        build_release
-        ;;
-    flash-host)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        if [[ -n "${1:-}" ]]; then
-            profile_action esp-box-3 flash-built --port "$1"
-        else
-            profile_action esp-box-3 flash-built
-        fi
+        build_release "${1:-box3}"
+        ;;
+    flash-host)
+        split_optional_board "$@"
+        [[ ${#remaining_arguments[@]} -le 1 ]] || { usage >&2; exit 2; }
+        require_idf
+        flash_board "$selected_board" "${remaining_arguments[0]:-}"
         ;;
     flash-szpi)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        if [[ -n "${1:-}" ]]; then
-            profile_action szpi-esp32s3 flash-built --port "$1"
-        else
-            profile_action szpi-esp32s3 flash-built
-        fi
+        flash_board szpi "${1:-}"
         ;;
     flash-cores3)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        if [[ -n "${1:-}" ]]; then
-            profile_action m5stack-cores3 flash-built --port "$1"
-        else
-            profile_action m5stack-cores3 flash-built
-        fi
+        flash_board cores3 "${1:-}"
         ;;
     flash-apps)
-        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        split_optional_board "$@"
+        [[ ${#remaining_arguments[@]} -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        flash_apps "${1:-}"
+        flash_apps "$selected_board" "${remaining_arguments[0]:-}"
         ;;
     flash-all)
-        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        split_optional_board "$@"
+        [[ ${#remaining_arguments[@]} -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        build_release
-        arguments=()
-        if [[ -n "${1:-}" ]]; then arguments+=(--port "$1"); fi
-        if (( ${#arguments[@]} )); then
-            profile_action esp-box-3 flash-built "${arguments[@]}"
-        else
-            profile_action esp-box-3 flash-built
-        fi
-        flash_apps "${1:-}"
+        build_release "$selected_board"
+        flash_board "$selected_board" "${remaining_arguments[0]:-}"
+        flash_apps "$selected_board" "${remaining_arguments[0]:-}"
         ;;
     monitor)
-        [[ $# -le 2 ]] || { usage >&2; exit 2; }
+        split_optional_board "$@"
+        [[ ${#remaining_arguments[@]} -le 2 ]] || { usage >&2; exit 2; }
         require_idf
-        monitor_profile esp-box-3 "$@"
+        select_board "$selected_board"
+        monitor_profile "$board_profile" "${remaining_arguments[@]}"
         ;;
     monitor-szpi)
         [[ $# -le 2 ]] || { usage >&2; exit 2; }
@@ -423,9 +542,10 @@ case "$command_name" in
         monitor_profile m5stack-cores3 "$@"
         ;;
     port)
-        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        split_optional_board "$@"
+        [[ ${#remaining_arguments[@]} -le 1 ]] || { usage >&2; exit 2; }
         require_idf
-        resolve_port "${1:-}"
+        resolve_board_port "$selected_board" "${remaining_arguments[0]:-}"
         ;;
     port-szpi)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
