@@ -36,9 +36,7 @@ void PngError(png_structp png, png_const_charp) { png_longjmp(png, 1); }
 
 void PngWarning(png_structp, png_const_charp) {}
 
-png_voidp PngPsramAlloc(png_structp, png_alloc_size_t size) {
-    return heap_caps_malloc(size, kBitmapPsramCapabilities);
-}
+png_voidp PngPsramAlloc(png_structp, png_alloc_size_t size) { return heap_caps_malloc(size, kBitmapPsramCapabilities); }
 
 void PngPsramFree(png_structp, png_voidp memory) { heap_caps_free(memory); }
 
@@ -95,8 +93,7 @@ bool DecodeJpeg(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_
         const uint64_t output_size_64 = static_cast<uint64_t>(header.width) * header.height * bytes_per_pixel;
         if (ValidDecodedSize(header.width, header.height, bytes_per_pixel, output_size_64)) {
             const size_t output_size = static_cast<size_t>(output_size_64);
-            auto* output =
-                static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, kBitmapPsramCapabilities));
+            auto* output = static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, kBitmapPsramCapabilities));
             if (output != nullptr) {
                 io.outbuf = output;
                 if (jpeg_dec_process(decoder, &io) == JPEG_ERR_OK) {
@@ -216,8 +213,7 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_o
     }
 
     if (rgb565) {
-        row_buffer = static_cast<uint8_t*>(heap_caps_malloc(static_cast<size_t>(width) * 3U,
-                                                            kBitmapPsramCapabilities));
+        row_buffer = static_cast<uint8_t*>(heap_caps_malloc(static_cast<size_t>(width) * 3U, kBitmapPsramCapabilities));
         if (row_buffer == nullptr) {
             png_error(png, "PNG RGB565 row allocation failed");
         }
@@ -260,8 +256,7 @@ bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, Deco
                                                 ? 4U
                                                 : (pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
     if (width == 0U || height == 0U || width > UINT16_MAX || height > UINT16_MAX || bytes_per_pixel == 0U ||
-        stride_alignment_pixels == 0U ||
-        (stride_alignment_pixels & (stride_alignment_pixels - 1U)) != 0U ||
+        stride_alignment_pixels == 0U || (stride_alignment_pixels & (stride_alignment_pixels - 1U)) != 0U ||
         width > UINT32_MAX - (stride_alignment_pixels - 1U)) {
         return false;
     }

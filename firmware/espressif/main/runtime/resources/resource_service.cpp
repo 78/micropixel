@@ -46,7 +46,9 @@ ResourceService::~ResourceService() {
     }
 }
 
-bool ResourceService::valid() const { return work_done_ != nullptr && background_executor_.valid() && bitmaps_.valid(); }
+bool ResourceService::valid() const {
+    return work_done_ != nullptr && background_executor_.valid() && bitmaps_.valid();
+}
 
 micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle_t texture,
                                                        const device::BitmapView& view) const {

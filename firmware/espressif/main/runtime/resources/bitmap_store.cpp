@@ -78,8 +78,7 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
             .height = static_cast<uint16_t>(view.height),
             .stride = static_cast<uint16_t>(view.stride),
             .pixel_format = static_cast<uint8_t>(view.pixel_format),
-            .flags = static_cast<uint8_t>(view.flags | kGuestReference |
-                                          (owned ? static_cast<uint32_t>(kOwned) : 0U) |
+            .flags = static_cast<uint8_t>(view.flags | kGuestReference | (owned ? static_cast<uint32_t>(kOwned) : 0U) |
                                           (mutable_pixels ? static_cast<uint32_t>(kMutablePixels) : 0U)),
         };
         ++live_count_;
