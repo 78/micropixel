@@ -4,22 +4,30 @@
 访问图形、输入、音频、存储和资源服务，不直接依赖芯片 SDK 或开发板类型。
 
 当前产品固件运行在 ESP32-P4 + [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4)；
-ESP32-S31 + ESP-Mosaico P0/P1 作为 preview bring-up profile 同步维护。Host 使用 ESP-IDF 6.1 和固定
-commit 的 [WAMR fork](https://github.com/78/wasm-micro-runtime)，Guest 使用受限 C++23 API，并由同一
-fork commit 的 `wamrc` 编译为 RISC-V 32-bit AOT format v6。项目正式名称为 MicroPixel，ABI 目前仍在演进中。
+ESP32-S31 + ESP-Mosaico、ESP32-S3 + ESP32-S3-BOX-3 和立创开发板 SZPI ESP32-S3 作为 preview profile
+同步维护。Host 使用
+ESP-IDF 6.1 和固定 commit 的 [WAMR fork](https://github.com/78/wasm-micro-runtime)，Guest 使用受限
+C++23 API，并按设备编译为 RISC-V 32-bit 或 ESP32-S3 Xtensa AOT format v6。项目正式名称为
+MicroPixel，ABI 目前仍在演进中。
 
 ## 目录
 
 ```text
 .
-├── firmware/espressif/      # ESP32-P4 产品、ESP32-S31 preview 与 WAMR fork submodule
+├── firmware/espressif/      # ESP32-P4 产品、S31/S3 preview 与 WAMR fork submodule
 ├── guest/                   # ABI、Runtime、C++ SDK、应用和 conformance tests
 ├── docs/                    # 当前架构、开发规范和硬件来源
 └── tools/                   # 构建、打包、烧录、串口和静态检查脚本
 ```
 
-`build/`、`artifacts/`、ESP-IDF 的 `managed_components/` 和生成的 `sdkconfig` 都是本地输出，
+`build/`、`artifacts/`、ESP-IDF 的 `managed_components/`、生成的 `sdkconfig` 和
+`firmware/espressif/dependencies.lock.*` 都是本地输出，
 不会进入版本控制。历史性能实验、真机日志和一次性测试数据也不作为项目源码发布。
+
+P4、S31 与 S3 共用 ESP-IDF 的 `managed_components/`。所有通过
+`tools/firmware.py` 发起的 build、带 build 的 flash 和 fullclean 都持有
+`build/.esp-idf-managed-components.lock` 文件锁；并发命令会等待前一个命令完成，避免不同 target
+在配置或编译期间互相替换依赖。
 
 克隆后先初始化 WAMR submodule：
 
@@ -35,7 +43,7 @@ git submodule update --init --recursive
   `6a9c44fe7e725af45cb99293ae38afd7d481f1e3`；
 - 带 wasm32 backend 的 Clang（设置 `WASI_CLANG`，或设置 `WASI_SDK_PATH`）；
 - MicroPixel WAMR fork 的 `wamr-host/esp-idf-psram` 分支，固定 commit
-  `541ac74fc73c20af419cc14aa5925abb204383c7` 构建的 `wamrc`，目标为
+  `4dbe3b6efe776fde06468e47f342c1d351879cf0` 构建的 `wamrc`，目标为
   `RISCV32_ILP32F`、AOT format v6（设置 `WAMRC`）；上游 WAMR 2.4.3 至 2.4.5 的 AOT v5 不兼容；
 - Python 3；烧录和串口工具的 Python 依赖见 `requirements-dev.txt`。
 
@@ -48,7 +56,7 @@ python3 -m pip install -r requirements-dev.txt
 
 本机默认的 `IDF_PATH`、`P4_PORT`/`P4_BAUD`、`S31_PORT`/`S31_BAUD` 和
 `MICROPIXEL_REMOTE_CONTROL_HOST` 可写在被 Git 忽略的根目录
-`.env` 中；`tools/p4.sh` 与 `tools/s31.sh` 会自动加载，并将远控地址写入生成的
+`.env` 中；`tools/p4.sh`、`tools/s31.sh` 与 `tools/s3.sh` 会自动加载，并将远控地址写入生成的
 `CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST`。显式环境变量或命令行端口优先级更高。
 
 Host 的 ESP-IDF 命令统一由 `tools/firmware.py` 读取 `tools/firmware_profiles.json` 生成；`p4.sh` 和
@@ -77,7 +85,9 @@ python3 tools/micropixel --transport usb run guest/apps/demo
 安装后的 CLI 可在项目目录直接运行 `micropixel --transport usb run`，默认读取当前目录的 `app.json`。
 `micropixel run` 会以 development profile
 构建，停止当前 Guest，安装并启动目标 App，然后持续输出日志；按 `Ctrl-C` 只退出日志跟随，App 继续运行。
-只需本地 AOT 或正式 Bundle 时，再单独使用项目级 `micropixel build` 或 `micropixel package`。
+连接设备时，`run` 和 `app install` 会根据设备芯片自动选择 AOT target，并在安装写入前拒绝不兼容 Bundle。
+只需本地 AOT 或正式 Bundle 时，再单独使用项目级 `micropixel build`；离线正式打包必须显式选择 target，
+例如 `micropixel package --aot-target riscv32-ilp32f` 或 `micropixel package --aot-target xtensa`。
 仓库级 Host 与集成构建仍使用：
 
 ```sh
@@ -100,6 +110,17 @@ bash tools/s31.sh build-host
 bash tools/s31.sh flash-host /dev/cu.usbmodemXXXX
 bash tools/s31.sh monitor /dev/cu.usbmodemXXXX
 bash tools/s31.sh build-null
+```
+
+ESP32-S3-BOX-3 preview 固定使用 40 行 PSRAM 双缓冲，并提供 Host、Xtensa AOT App 与浏览器完整镜像；
+立创开发板 SZPI ESP32-S3 复用同一套 S3 Runtime、Xtensa Guest 和 40 行显示基线：
+
+```sh
+bash tools/s3.sh build-host
+bash tools/s3.sh build-release
+bash tools/s3.sh flash-all /dev/cu.usbmodemXXXX
+bash tools/s3.sh build-szpi
+bash tools/s3.sh flash-szpi /dev/cu.usbmodemXXXX
 ```
 
 SDK Demo 单独通过 USB 增量安装，不烧录 Host：
@@ -127,6 +148,7 @@ bash tools/p4.sh flash-apps
 Token：
 
 ```sh
+python3 tools/micropixel port list
 python3 tools/micropixel --transport usb app list
 python3 tools/micropixel --transport usb app install guest/apps/demo
 python3 tools/micropixel --transport usb app start micropixel.demo
@@ -166,6 +188,7 @@ micropixel --transport usb run
 - [Guest–Host ABI](guest/abi/README.md)
 - [C/C++ 代码风格](docs/development/code-style.zh-CN.md)
 - [定时器与大厅空闲功耗](docs/development/timers-and-idle-power.zh-CN.md)
+- [ESP32-S3-BOX-3 适配与能力探索指南](docs/development/esp32-s3-box-3-bring-up.zh-CN.md)
 - [Host 构建与烧录指南](docs/development/flashing.zh-CN.md)
 
 文档索引、维护规则和硬件官方来源见 [Documentation](docs/README.md)。

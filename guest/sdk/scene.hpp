@@ -7,6 +7,26 @@ namespace micropixel {
 
 class SceneState;
 class SceneUpdate;
+class Renderer;
+class Container;
+class ContainerNode;
+class ShapeNode;
+class RoundedRectNode;
+class SpriteNode;
+class SurfaceNode;
+class LabelNode;
+class SpriteBatch;
+
+namespace ui {
+class FlexContainer;
+struct FlexContainerProperties;
+class GridContainer;
+struct GridContainerProperties;
+class ImageButton;
+struct ImageButtonProperties;
+class TextButton;
+struct TextButtonProperties;
+}  // namespace ui
 
 struct SceneDescriptor final {
     uint32_t logical_width{};
@@ -14,12 +34,21 @@ struct SceneDescriptor final {
     Color background{Color::Black()};
 };
 
-struct LayerProperties final {
+struct ContainerProperties final {
+    // Empty means no additional clip; the parent clip is inherited.
     Rect clip{};
     Point translation{};
     int16_t z_order{};
     uint8_t opacity{255U};
     bool visible{true};
+};
+
+struct RoundedRectStyle final {
+    Color fill{Color::Black()};
+    Color stroke{Color::Black()};
+    uint32_t radius{};
+    uint32_t stroke_width{};
+    uint8_t opacity{255U};
 };
 
 struct SpriteInstance final {
@@ -33,22 +62,71 @@ struct SpriteInstance final {
 class NodeHandle {
    public:
     constexpr NodeHandle() = default;
-    [[nodiscard]] constexpr bool valid() const { return state_ != nullptr; }
+    [[nodiscard]] bool valid() const;
+    // Terminal on a successful Present(). If the SceneUpdate rolls back, the
+    // handle becomes valid again. Repeated destruction of a stale handle is a
+    // no-op.
+    void Destroy(SceneUpdate& update);
     void SetVisible(SceneUpdate& update, bool visible);
-    void SetLayer(SceneUpdate& update, Layer layer);
 
    protected:
-    constexpr NodeHandle(SceneState* state, uint16_t id) : state_(state), id_(id) {}
+    constexpr NodeHandle(SceneState* state, uint16_t id, uint32_t generation)
+        : state_(state), id_(id), generation_(generation) {}
     SceneState* state_{};
     uint16_t id_{};
+    uint32_t generation_{};
 
-    friend class Scene;
+    friend class Container;
+    friend class SceneState;
 };
 
-class Layer final {
+// Common child-creation surface for the Scene root and retained containers.
+// The receiver is always the parent, so child coordinates are local to it.
+class Container {
    public:
-    constexpr Layer() = default;
-    [[nodiscard]] constexpr bool valid() const { return state_ != nullptr && id_ != 0U; }
+    constexpr Container() = default;
+    [[nodiscard]] bool valid() const;
+    [[nodiscard]] Point ToScene(Point local) const;
+    [[nodiscard]] Point ToLocal(Point scene) const;
+
+    [[nodiscard]] ContainerNode CreateContainer(const ContainerProperties& properties = {});
+    [[nodiscard]] ShapeNode CreateShape(Rect rect, Color color, uint8_t opacity = 255U);
+    [[nodiscard]] RoundedRectNode CreateRoundedRect(Rect rect, const RoundedRectStyle& style);
+    [[nodiscard]] SpriteNode CreateSprite(const Texture& texture, Rect destination, Rect source,
+                                          uint8_t opacity = 255U);
+    [[nodiscard]] SurfaceNode CreateSurfaceNode(const StreamingTexture& surface, Rect destination, Rect source,
+                                                uint8_t opacity = 255U);
+    [[nodiscard]] SpriteBatch CreateSpriteBatch(const Texture& texture, uint16_t capacity, uint8_t opacity = 255U);
+    // A textureless batch is a batch of colored quads and maps directly to
+    // accelerated fills. It is the preferred representation for grid games.
+    [[nodiscard]] SpriteBatch CreateSpriteBatch(uint16_t capacity, uint8_t opacity = 255U);
+    [[nodiscard]] LabelNode CreateLabel(Point position, const char* text, Color color,
+                                        SystemFont font = SystemFont::kMedium, bool centered = false);
+    [[nodiscard]] ui::ImageButton CreateImageButton(const Texture& texture,
+                                                    const ui::ImageButtonProperties& properties);
+    [[nodiscard]] ui::FlexContainer CreateFlexContainer(const ui::FlexContainerProperties& properties);
+    [[nodiscard]] ui::GridContainer CreateGridContainer(const ui::GridContainerProperties& properties);
+    [[nodiscard]] ui::TextButton CreateTextButton(const ui::TextButtonProperties& properties);
+
+   protected:
+    constexpr Container(SceneState* state, uint16_t id, uint32_t generation)
+        : state_(state), id_(id), generation_(generation) {}
+    [[nodiscard]] SpriteBatch CreateSpriteBatchInternal(uint32_t texture, uint16_t capacity, uint8_t opacity);
+    [[nodiscard]] Point SceneTranslation() const;
+    SceneState* state_{};
+    uint16_t id_{};
+    uint32_t generation_{};
+
+    friend class SceneState;
+};
+
+// Non-drawing retained node. Containers form a tree rooted at Scene, provide a
+// local coordinate space to descendants, and own their complete subtree.
+class ContainerNode final : public Container {
+   public:
+    constexpr ContainerNode() = default;
+    [[nodiscard]] Result<void> Destroy();
+    void Destroy(SceneUpdate& update);
     void SetClip(SceneUpdate& update, Rect clip);
     void SetTranslation(SceneUpdate& update, Point translation);
     void SetOpacity(SceneUpdate& update, uint8_t opacity);
@@ -56,11 +134,10 @@ class Layer final {
     void SetZOrder(SceneUpdate& update, int16_t z_order);
 
    private:
-    constexpr Layer(SceneState* state, uint8_t id) : state_(state), id_(id) {}
-    SceneState* state_{};
-    uint8_t id_{};
+    constexpr ContainerNode(SceneState* state, uint16_t id, uint32_t generation) : Container(state, id, generation) {}
 
-    friend class Scene;
+    friend class Container;
+    friend class SceneState;
     friend class NodeHandle;
 };
 
@@ -73,7 +150,22 @@ class ShapeNode final : public NodeHandle {
 
    private:
     using NodeHandle::NodeHandle;
-    friend class Scene;
+    friend class Container;
+};
+
+class RoundedRectNode final : public NodeHandle {
+   public:
+    constexpr RoundedRectNode() = default;
+    void SetRect(SceneUpdate& update, Rect rect);
+    void SetFillColor(SceneUpdate& update, Color color);
+    void SetStrokeColor(SceneUpdate& update, Color color);
+    void SetRadius(SceneUpdate& update, uint32_t radius);
+    void SetStrokeWidth(SceneUpdate& update, uint32_t stroke_width);
+    void SetOpacity(SceneUpdate& update, uint8_t opacity);
+
+   private:
+    using NodeHandle::NodeHandle;
+    friend class Container;
 };
 
 class SpriteNode final : public NodeHandle {
@@ -86,7 +178,7 @@ class SpriteNode final : public NodeHandle {
 
    private:
     using NodeHandle::NodeHandle;
-    friend class Scene;
+    friend class Container;
 };
 
 class SurfaceNode final : public NodeHandle {
@@ -98,7 +190,7 @@ class SurfaceNode final : public NodeHandle {
 
    private:
     using NodeHandle::NodeHandle;
-    friend class Scene;
+    friend class Container;
 };
 
 class LabelNode final : public NodeHandle {
@@ -112,7 +204,7 @@ class LabelNode final : public NodeHandle {
 
    private:
     using NodeHandle::NodeHandle;
-    friend class Scene;
+    friend class Container;
 };
 
 class SpriteBatch final : public NodeHandle {
@@ -125,11 +217,11 @@ class SpriteBatch final : public NodeHandle {
     void SetInstanceVisible(SceneUpdate& update, uint16_t instance_id, bool visible);
 
    private:
-    constexpr SpriteBatch(SceneState* state, uint16_t id, uint16_t capacity)
-        : NodeHandle(state, id), capacity_(capacity) {}
+    constexpr SpriteBatch(SceneState* state, uint16_t id, uint32_t generation, uint16_t capacity)
+        : NodeHandle(state, id, generation), capacity_(capacity) {}
     uint16_t capacity_{};
 
-    friend class Scene;
+    friend class Container;
 };
 
 class SceneUpdate final {
@@ -149,15 +241,17 @@ class SceneUpdate final {
     bool active_{};
 
     friend class Scene;
+    friend class Container;
     friend class NodeHandle;
-    friend class Layer;
+    friend class ContainerNode;
     friend class ShapeNode;
+    friend class RoundedRectNode;
     friend class SpriteNode;
     friend class SpriteBatch;
     friend class LabelNode;
 };
 
-class Scene final {
+class Scene final : public Container {
    public:
     Scene(const Scene&) = delete;
     Scene& operator=(const Scene&) = delete;
@@ -166,31 +260,18 @@ class Scene final {
     ~Scene();
 
     [[nodiscard]] SceneUpdate BeginUpdate();
+    template <typename Function>
+    [[nodiscard]] Result<void> Update(Function&& function) {
+        auto update = BeginUpdate();
+        static_cast<Function&&>(function)(update);
+        return update.Present();
+    }
     void SetBackground(SceneUpdate& update, Color color);
-    [[nodiscard]] Layer CreateLayer(const LayerProperties& properties);
-    [[nodiscard]] ShapeNode CreateShape(Rect rect, Color color, Layer layer = Layer{nullptr, 0U},
-                                        uint8_t opacity = 255U);
-    [[nodiscard]] SpriteNode CreateSprite(const Texture& texture, Rect destination, Rect source,
-                                          Layer layer = Layer{nullptr, 0U}, uint8_t opacity = 255U);
-    [[nodiscard]] SurfaceNode CreateSurfaceNode(const StreamingTexture& surface, Rect destination, Rect source,
-                                                Layer layer = Layer{nullptr, 0U}, uint8_t opacity = 255U);
-    [[nodiscard]] SpriteBatch CreateSpriteBatch(const Texture& texture, uint16_t capacity,
-                                                Layer layer = Layer{nullptr, 0U}, uint8_t opacity = 255U);
-    // A textureless batch is a batch of colored quads and maps directly to
-    // accelerated fills. It is the preferred representation for grid games.
-    [[nodiscard]] SpriteBatch CreateSpriteBatch(uint16_t capacity, Layer layer = Layer{nullptr, 0U},
-                                                uint8_t opacity = 255U);
-    [[nodiscard]] LabelNode CreateLabel(Point position, const char* text, Color color,
-                                        SystemFont font = SystemFont::kMedium, Layer layer = Layer{nullptr, 0U},
-                                        bool centered = false);
     [[nodiscard]] uint16_t node_count() const;
 
    private:
     struct CapabilityToken {};
     explicit Scene(CapabilityToken, const SceneDescriptor& descriptor);
-    [[nodiscard]] SpriteBatch CreateSpriteBatchInternal(uint32_t texture, uint16_t capacity, Layer layer,
-                                                        uint8_t opacity);
-    SceneState* state_{};
 
     friend class Renderer;
 };

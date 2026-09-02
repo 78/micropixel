@@ -2,14 +2,25 @@
 
 #include <algorithm>
 
+#include "esp_attr.h"
 #include "esp_lv_adapter.h"
 #include "esp_memory_utils.h"
+#include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "sdkconfig.h"
+#include "src/misc/cache/instance/lv_image_cache.h"
+#include "src/misc/cache/instance/lv_image_header_cache.h"
 
 namespace micropixel::host_ui::lvgl::square_common {
 namespace {
+
+#if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+EXT_RAM_BSS_ATTR SquareSystemUiHallStorage g_hall_storage;
+#else
+SquareSystemUiHallStorage g_hall_storage;
+#endif
 
 void StyleFullscreen(lv_obj_t* object, uint32_t background, int32_t width, int32_t height) {
     lv_obj_set_pos(object, 0, 0);
@@ -43,6 +54,18 @@ uint32_t LaunchBackgroundRgb888(const device::BitmapView& bitmap) {
     return bottom_left == bottom_right ? bottom_left : top_left;
 }
 
+void DropLaunchImageCacheLocked(lv_image_dsc_t& descriptor) {
+    if (descriptor.data != nullptr) {
+        // Variable images are cached by the descriptor address. The launch
+        // descriptor is a long-lived member while its PSRAM pixel allocation
+        // belongs to one AppSession, so clearing/reusing the descriptor without
+        // dropping both caches can resurrect pixels freed by the prior App.
+        lv_image_cache_drop(&descriptor);
+        lv_image_header_cache_drop(&descriptor);
+        descriptor = {};
+    }
+}
+
 }  // namespace
 
 SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
@@ -57,6 +80,17 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
                         .corner_radius = static_cast<uint32_t>(profile.hall_card.radius),
                         .top_background_rgb = theme::kHallBackground,
                         .bottom_background_rgb = theme::kHallCardBackground}),
+      hall_cover_descriptors(g_hall_storage.cover_descriptors),
+      hall_cover_sources(g_hall_storage.cover_sources),
+      hall_idle_cover_sources(g_hall_storage.idle_cover_sources),
+      hall_app_presentations(g_hall_storage.app_presentations),
+      hall_cards(g_hall_storage.cards),
+      hall_cover_images(g_hall_storage.cover_images),
+      hall_cover_placeholders(g_hall_storage.cover_placeholders),
+      hall_install_progress_arcs(g_hall_storage.install_progress_arcs),
+      hall_install_progress_labels(g_hall_storage.install_progress_labels),
+      hall_card_press_overlays(g_hall_storage.card_press_overlays),
+      hall_app_running(g_hall_storage.app_running),
       guest_graphics_(guest_graphics),
       transition_(transition) {}
 
@@ -99,6 +133,12 @@ esp_err_t SquareSystemUiState::InitializeLocked(lv_display_t* initialized_displa
         display = nullptr;
         return status;
     }
+    const uint8_t layer_gesture_distance =
+        gesture_thresholds::ScaleExtentToUint8(profile.square.height, gesture_thresholds::kLayerGestureDistance);
+    const uint8_t layer_gesture_min_velocity =
+        gesture_thresholds::ScaleExtentToUint8(profile.square.height, gesture_thresholds::kLayerGestureMinVelocity);
+    lv_indev_set_gesture_min_distance(host_pointer.indev(), layer_gesture_distance);
+    lv_indev_set_gesture_min_velocity(host_pointer.indev(), layer_gesture_min_velocity);
     ShowStartingScreenLocked();
     return ESP_OK;
 }
@@ -145,19 +185,21 @@ lv_obj_t* SquareSystemUiState::PrepareSystemPageRootLocked() {
     ResetHallLocked();
     lv_obj_clean(page_root);
     lv_obj_set_style_bg_color(page_root, lv_color_hex(theme::kMenuBackground), 0);
-    launch_image_descriptor = {};
+    DropLaunchImageCacheLocked(launch_image_descriptor);
     return page_root;
 }
 
 void SquareSystemUiState::DeleteRootLocked() {
+    DropLaunchImageCacheLocked(launch_image_descriptor);
     if (root != nullptr) {
         ResetHallLocked();
         lv_obj_delete(root);
         root = nullptr;
     }
     hall_scene_ui.ResetLocked();
-    launch_image_descriptor = {};
 }
+
+void SquareSystemUiState::DropLaunchBitmapLocked() { DropLaunchImageCacheLocked(launch_image_descriptor); }
 
 void SquareSystemUiState::ResetHallPresentationLocked() { ResetHallLocked(); }
 
@@ -211,7 +253,8 @@ void SquareSystemUiState::ShowStartingScreenLocked() {
 
 int32_t SquareSystemUiState::ShowLaunchBitmap(const device::BitmapView& bitmap) {
     const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 3U;
-    const uint32_t maximum_dimension = std::max(bitmap.width, bitmap.height);
+    const uint64_t minimum_stride = static_cast<uint64_t>(bitmap.width) * bytes_per_pixel;
+    const uint64_t required_size = static_cast<uint64_t>(bitmap.stride) * bitmap.height;
     if (display == nullptr || root == nullptr || bitmap.data == nullptr ||
         (!esp_ptr_in_drom(bitmap.data) && !esp_ptr_external_ram(bitmap.data)) ||
         (bitmap.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
@@ -219,7 +262,7 @@ int32_t SquareSystemUiState::ShowLaunchBitmap(const device::BitmapView& bitmap) 
         bitmap.width == 0U || bitmap.height == 0U ||
         (!profile.scale_oversized_launch_bitmap &&
          (bitmap.width > profile.square.width || bitmap.height > profile.square.height)) ||
-        bitmap.stride != bitmap.width * bytes_per_pixel || bitmap.size != bitmap.stride * bitmap.height) {
+        bitmap.stride < minimum_stride || bitmap.size != required_size) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     if (esp_ptr_external_ram(bitmap.data)) {
@@ -238,6 +281,7 @@ int32_t SquareSystemUiState::ShowLaunchBitmap(const device::BitmapView& bitmap) 
     if (before_launch_presentation_locked_ != nullptr) {
         before_launch_presentation_locked_(before_launch_presentation_context_);
     }
+    DropLaunchImageCacheLocked(launch_image_descriptor);
     ResetHallLocked();
     lv_obj_clean(root);
     const uint32_t background =
@@ -245,7 +289,6 @@ int32_t SquareSystemUiState::ShowLaunchBitmap(const device::BitmapView& bitmap) 
             ? LaunchBackgroundRgb888(bitmap)
             : theme::kLoadingBackground;
     lv_obj_set_style_bg_color(root, lv_color_hex(background), 0);
-    launch_image_descriptor = {};
     launch_image_descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
     launch_image_descriptor.header.cf =
         bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
@@ -256,9 +299,21 @@ int32_t SquareSystemUiState::ShowLaunchBitmap(const device::BitmapView& bitmap) 
     launch_image_descriptor.data = bitmap.data;
     lv_obj_t* image = lv_image_create(root);
     lv_image_set_src(image, &launch_image_descriptor);
-    if (profile.scale_oversized_launch_bitmap && maximum_dimension > profile.square.width) {
-        lv_image_set_scale(
-            image, static_cast<uint16_t>(256U * static_cast<uint32_t>(profile.square.width) / maximum_dimension));
+    if (profile.scale_oversized_launch_bitmap) {
+        // Keep the launch art clear of the screen edges and the loading label.
+        // Use one uniform scale so non-square launch assets retain their aspect
+        // ratio, and never enlarge a smaller source bitmap.
+        constexpr uint32_t kLaunchAreaNumerator = 3U;
+        constexpr uint32_t kLaunchAreaDenominator = 4U;
+        const uint32_t maximum_width = profile.square.width * kLaunchAreaNumerator / kLaunchAreaDenominator;
+        const uint32_t maximum_height = profile.square.height * kLaunchAreaNumerator / kLaunchAreaDenominator;
+        const uint32_t width_scale = static_cast<uint32_t>(static_cast<uint64_t>(256U) * maximum_width / bitmap.width);
+        const uint32_t height_scale =
+            static_cast<uint32_t>(static_cast<uint64_t>(256U) * maximum_height / bitmap.height);
+        const uint32_t scale = std::min<uint32_t>({256U, width_scale, height_scale});
+        if (scale < 256U) {
+            lv_image_set_scale(image, static_cast<uint16_t>(scale));
+        }
     }
     lv_obj_center(image);
     lv_obj_t* label = lv_label_create(root);

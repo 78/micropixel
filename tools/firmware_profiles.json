@@ -10,6 +10,7 @@
     "sdkconfig_name": "sdkconfig.release",
     "sdkconfig_env": "P4_SDKCONFIG",
     "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
       "firmware/espressif/sdkconfig.p4.defaults"
     ],
     "sdkconfig_defaults_env": "P4_SDKCONFIG_DEFAULTS",
@@ -27,6 +28,7 @@
     "build_dir_env": "P4_NULL_HOST_BUILD_DIR",
     "sdkconfig_name": "sdkconfig.release",
     "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
       "firmware/espressif/sdkconfig.p4.defaults",
       "firmware/espressif/sdkconfig.p4-null.defaults"
     ],
@@ -45,6 +47,7 @@
     "sdkconfig_name": "sdkconfig.release",
     "sdkconfig_env": "S31_SDKCONFIG",
     "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
       "firmware/espressif/sdkconfig.s31.defaults"
     ],
     "sdkconfig_defaults_env": "S31_SDKCONFIG_DEFAULTS",
@@ -69,11 +72,69 @@
     "build_dir_env": "S31_NULL_HOST_BUILD_DIR",
     "sdkconfig_name": "sdkconfig.release",
     "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
       "firmware/espressif/sdkconfig.s31.defaults",
       "firmware/espressif/sdkconfig.s31-null.defaults"
     ],
     "preview": true,
     "flash": false,
     "monitor": false
+  },
+  "s3-null": {
+    "description": "ESP32-S3 hardware-independent compile gate",
+    "target": "esp32s3",
+    "build_dir": "build/host-esp32s3-null",
+    "build_dir_env": "S3_NULL_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.s3.defaults",
+      "firmware/espressif/sdkconfig.s3-null.defaults"
+    ],
+    "preview": false,
+    "flash": false,
+    "monitor": false
+  },
+  "esp-box-3": {
+    "description": "ESP32-S3-BOX-3 preview Host",
+    "target": "esp32s3",
+    "chip_markers": [
+      "ESP32-S3"
+    ],
+    "build_dir": "build/host-esp32s3-box-3",
+    "build_dir_env": "S3_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.s3.defaults",
+      "firmware/espressif/sdkconfig.s3-box-3.defaults"
+    ],
+    "port_env": "S3_PORT",
+    "baud_env": "S3_BAUD",
+    "default_baud": 921600,
+    "preview": true,
+    "flash": true,
+    "monitor": true
+  },
+  "szpi-esp32s3": {
+    "description": "LCKFB SZPI ESP32-S3 preview Host",
+    "target": "esp32s3",
+    "chip_markers": [
+      "ESP32-S3"
+    ],
+    "build_dir": "build/host-esp32s3-szpi",
+    "build_dir_env": "SZPI_S3_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.s3.defaults",
+      "firmware/espressif/sdkconfig.s3-szpi.defaults"
+    ],
+    "port_env": "SZPI_S3_PORT",
+    "baud_env": "SZPI_S3_BAUD",
+    "default_baud": 921600,
+    "preview": true,
+    "flash": true,
+    "monitor": true
   }
 }

@@ -102,6 +102,13 @@ AppController::~AppController() {
 }
 
 std::expected<void, AppControllerError> AppController::Start(const runtime::InstalledApp& app) {
+    micropixel_system_launch_arguments_response_t launch_arguments{};
+    launch_arguments.size = sizeof(launch_arguments);
+    return Start(app, launch_arguments);
+}
+
+std::expected<void, AppControllerError> AppController::Start(
+    const runtime::InstalledApp& app, const micropixel_system_launch_arguments_response_t& launch_arguments) {
     if (completion_queue_ == nullptr) {
         return std::unexpected(AppControllerError::kUnavailable);
     }
@@ -119,6 +126,7 @@ std::expected<void, AppControllerError> AppController::Start(const runtime::Inst
     }
 
     selected_app_ = app;
+    launch_arguments_ = launch_arguments;
     stop_requested_.store(false, std::memory_order_release);
     state_.store(AppLifecycleState::kStarting, std::memory_order_release);
     (void)xQueueReset(completion_queue_);
@@ -235,7 +243,8 @@ std::expected<std::optional<runtime::AppRunOutcome>, AppControllerError> AppCont
 
 void* AppController::RunSession(void* context) {
     auto& controller = *static_cast<AppController*>(context);
-    runtime::AppRunOutcome outcome = controller.runtime_.RunApp(controller.selected_app_, SessionReady, &controller);
+    runtime::AppRunOutcome outcome =
+        controller.runtime_.RunApp(controller.selected_app_, controller.launch_arguments_, SessionReady, &controller);
     if (controller.stop_requested_.load(std::memory_order_acquire) &&
         outcome.completion == runtime::AppCompletion::kFailed) {
         outcome.completion = runtime::AppCompletion::kStopped;

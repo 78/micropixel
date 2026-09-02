@@ -109,6 +109,8 @@ void SystemShell::LeaveHall() { ui_.LeaveHall(); }
 
 void SystemShell::PauseHallCoverLoading() { ui_.PauseHallCoverLoading(); }
 
+void SystemShell::PrepareAppLaunch(uint32_t app_index) { ui_.PrepareAppLaunch(app_index); }
+
 std::expected<void, SystemUiError> SystemShell::RestoreGuestView() { return ui_.RestoreGuestView(); }
 
 void SystemShell::WatchGuestActions() {

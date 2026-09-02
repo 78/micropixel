@@ -14,11 +14,16 @@ constexpr uint32_t kNodeBaseMask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE |
                                    MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY | MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER;
 constexpr uint32_t kNodeVisualMask = kNodeBaseMask | MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
 constexpr uint32_t kRectMask = kNodeVisualMask;
+constexpr uint32_t kRoundedRectMask = kNodeVisualMask;
 constexpr uint32_t kTextureMask = kNodeVisualMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
 constexpr uint32_t kTextMask = kNodeVisualMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
 constexpr uint32_t kSpriteBatchMask = kNodeBaseMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
 constexpr uint32_t kLayerMask = MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP | MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION |
                                 MICROPIXEL_GRAPHICS_SCENE_LAYER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER;
+constexpr uint32_t kContainerMask =
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE;
 constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY;
@@ -39,11 +44,22 @@ bool ValidRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t logi
            static_cast<int64_t>(y) + height <= logical_height;
 }
 
+bool ValidTranslatedRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t translate_x, int32_t translate_y,
+                         int32_t logical_width, int32_t logical_height) {
+    const int64_t translated_x = static_cast<int64_t>(x) + translate_x;
+    const int64_t translated_y = static_cast<int64_t>(y) + translate_y;
+    return translated_x >= 0 && translated_y >= 0 && width > 0 && height > 0 && translated_x + width <= logical_width &&
+           translated_y + height <= logical_height;
+}
+
 uint32_t BitmapBytesPerPixel(uint32_t format) {
     if (format == MICROPIXEL_PIXEL_FORMAT_BGR888) {
         return 3U;
     }
-    return format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U;
+    if (format == MICROPIXEL_PIXEL_FORMAT_BGRA8888) {
+        return 4U;
+    }
+    return format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U;
 }
 
 bool ValidBitmap(const device::BitmapView& bitmap) {
@@ -61,6 +77,9 @@ uint32_t RequiredMask(uint16_t opcode) {
     if (opcode == MICROPIXEL_GRAPHICS_SCENE_OP_RECT) {
         return kRectMask;
     }
+    if (opcode == MICROPIXEL_GRAPHICS_SCENE_OP_ROUNDED_RECT) {
+        return kRoundedRectMask;
+    }
     if (opcode == MICROPIXEL_GRAPHICS_SCENE_OP_TEXTURE) {
         return kTextureMask;
     }
@@ -71,6 +90,9 @@ uint32_t RequiredMask(uint16_t opcode) {
 }
 
 GuestSceneNodeKind NodeKind(uint16_t opcode) {
+    if (opcode == MICROPIXEL_GRAPHICS_SCENE_OP_ROUNDED_RECT) {
+        return GuestSceneNodeKind::kRoundedRect;
+    }
     if (opcode == MICROPIXEL_GRAPHICS_SCENE_OP_TEXTURE) {
         return GuestSceneNodeKind::kTexture;
     }
@@ -100,14 +122,21 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
     micropixel_graphics_scene_header_t header{};
     if (capacity_ == 0U || capacity_ > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES || instance_capacity_ == 0U ||
         instance_capacity_ > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES || current_ == nullptr || scratch_ == nullptr ||
-        current_instances_ == nullptr || scratch_instances_ == nullptr || logical_width <= 0 || logical_height <= 0 ||
-        !Read(bytes, length, 0U, header) || header.magic != MICROPIXEL_GRAPHICS_SCENE_MAGIC ||
+        current_instances_ == nullptr || scratch_instances_ == nullptr || containers_ == nullptr ||
+        scratch_containers_ == nullptr || draw_node_order_ == nullptr || scratch_draw_node_order_ == nullptr ||
+        logical_width <= 0 || logical_height <= 0 || !Read(bytes, length, 0U, header) ||
+        header.magic != MICROPIXEL_GRAPHICS_SCENE_MAGIC ||
         header.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
         header.interface_minor > MICROPIXEL_GRAPHICS_INTERFACE_MINOR || header.flags != 0U ||
         header.total_size != length || header.node_count > capacity_ ||
         header.batch_instance_count > instance_capacity_ ||
-        static_cast<uint32_t>(header.node_count) + header.batch_instance_count > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES ||
-        header.layer_count > MICROPIXEL_GRAPHICS_MAX_LAYERS) {
+        static_cast<uint32_t>(header.node_count) + header.batch_instance_count > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    const bool container_protocol = header.interface_minor >= 2U;
+    const uint16_t max_containers =
+        container_protocol ? MICROPIXEL_GRAPHICS_MAX_CONTAINERS : MICROPIXEL_GRAPHICS_MAX_LAYERS;
+    if (header.container_count > max_containers) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     const bool keyframe = header.kind == MICROPIXEL_GRAPHICS_SCENE_KEYFRAME;
@@ -116,27 +145,30 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         (keyframe && (header.generation == 0U || header.base_revision != 0U || header.revision != 1U)) ||
         (patch &&
          (!valid_ || revision_ == UINT32_MAX || header.generation != generation_ || header.base_revision != revision_ ||
-          header.revision != revision_ + 1U || header.node_count != node_count_ || header.layer_count != layer_count_ ||
-          header.batch_instance_count != batch_instance_count_))) {
+          header.revision != revision_ + 1U || header.node_count != node_count_ ||
+          header.container_count != container_count_ || header.batch_instance_count != batch_instance_count_))) {
         return patch ? MICROPIXEL_STATUS_STALE_STATE : MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
 
     std::memset(node_changes_, 0, sizeof(node_changes_));
-    std::memset(layer_changes_, 0, sizeof(layer_changes_));
+    std::memset(container_changes_, 0, sizeof(container_changes_));
     std::memset(instance_changes_, 0, sizeof(instance_changes_));
+    std::memset(scratch_draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(scratch_draw_node_order_[0]));
     last_apply_was_keyframe_ = false;
     background_changed_ = false;
+    tree_order_changed_ = false;
+    tree_order_changed_ = keyframe;
 
     uint16_t scratch_node_count = header.node_count;
-    uint16_t scratch_layer_count = header.layer_count;
+    uint16_t scratch_container_count = header.container_count;
     uint16_t scratch_batch_instance_count = header.batch_instance_count;
     uint32_t scratch_background = background_rgb888_;
     if (keyframe) {
         for (uint16_t index = 0U; index < capacity_; ++index) {
             scratch_[index] = {};
         }
-        for (GuestSceneLayer& layer : scratch_layers_) {
-            layer = {};
+        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++index) {
+            scratch_containers_[index] = {};
         }
         for (uint16_t index = 0U; index < instance_capacity_; ++index) {
             scratch_instances_[index] = {};
@@ -146,8 +178,8 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         for (uint16_t index = 0U; index < node_count_; ++index) {
             scratch_[index] = current_[index];
         }
-        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_LAYERS; ++index) {
-            scratch_layers_[index] = layers_[index];
+        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++index) {
+            scratch_containers_[index] = containers_[index];
         }
         for (uint16_t index = 0U; index < batch_instance_count_; ++index) {
             scratch_instances_[index] = current_instances_[index];
@@ -156,7 +188,8 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
 
     bool background_seen = false;
     bool node_seen[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
-    bool layer_seen[MICROPIXEL_GRAPHICS_MAX_LAYERS + 1U]{};
+    bool container_seen[MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U]{};
+    bool node_link_seen[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
     bool instance_seen[MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES]{};
     uint16_t next_instance_offset = 0U;
     uint8_t batch_count = 0U;
@@ -178,13 +211,13 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             background_changed_ = true;
         } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_LAYER) {
             micropixel_graphics_scene_layer_record_t value{};
-            if (record.size != sizeof(value) || !Read(bytes, length, offset, value) || value.layer_id == 0U ||
-                value.layer_id > scratch_layer_count || value.reserved0 != 0U || layer_seen[value.layer_id] ||
-                value.property_mask == 0U || (value.property_mask & ~kLayerMask) != 0U ||
-                (keyframe && value.property_mask != kLayerMask)) {
+            if (container_protocol || record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
+                value.layer_id == 0U || value.layer_id > scratch_container_count || value.reserved0 != 0U ||
+                container_seen[value.layer_id] || value.property_mask == 0U ||
+                (value.property_mask & ~kLayerMask) != 0U || (keyframe && value.property_mask != kLayerMask)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
-            GuestSceneLayer& layer = scratch_layers_[value.layer_id];
+            GuestSceneContainer& layer = scratch_containers_[value.layer_id];
             if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP) != 0U) {
                 layer.clip_x = value.clip_x;
                 layer.clip_y = value.clip_y;
@@ -205,8 +238,71 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER) != 0U) {
                 layer.z_order = value.z_order;
             }
-            layer_seen[value.layer_id] = true;
-            layer_changes_[value.layer_id] = static_cast<uint8_t>(value.property_mask);
+            if (!ValidRect(layer.clip_x, layer.clip_y, layer.width, layer.height, logical_width, logical_height) ||
+                !ValidTranslatedRect(layer.clip_x, layer.clip_y, layer.width, layer.height, layer.translate_x,
+                                     layer.translate_y, logical_width, logical_height)) {
+                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+            }
+            layer.parent_container_id = 0U;
+            layer.sibling_order = value.layer_id;
+            container_seen[value.layer_id] = true;
+            container_changes_[value.layer_id] = static_cast<uint8_t>(value.property_mask);
+            tree_order_changed_ =
+                tree_order_changed_ || (value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER) != 0U;
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_CONTAINER) {
+            micropixel_graphics_scene_container_record_t value{};
+            if (!container_protocol || record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
+                value.container_id == 0U || value.container_id > scratch_container_count ||
+                value.parent_container_id > scratch_container_count ||
+                value.parent_container_id == value.container_id || value.reserved0 != 0U ||
+                container_seen[value.container_id] || value.property_mask == 0U ||
+                (value.property_mask & ~kContainerMask) != 0U || (keyframe && value.property_mask != kContainerMask)) {
+                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+            }
+            GuestSceneContainer& container = scratch_containers_[value.container_id];
+            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE) != 0U) {
+                container.parent_container_id = value.parent_container_id;
+                container.sibling_order = value.sibling_order;
+            } else if (value.parent_container_id != container.parent_container_id ||
+                       value.sibling_order != container.sibling_order) {
+                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+            }
+            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP) != 0U) {
+                container.clip_x = value.clip_x;
+                container.clip_y = value.clip_y;
+                container.width = value.width;
+                container.height = value.height;
+            }
+            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION) != 0U) {
+                container.translate_x = value.translate_x;
+                container.translate_y = value.translate_y;
+            }
+            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE) != 0U) {
+                if (value.visible > 1U) {
+                    return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+                }
+                container.opacity = value.opacity;
+                container.visible = value.visible != 0U;
+            }
+            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER) != 0U) {
+                container.z_order = value.z_order;
+            }
+            container_seen[value.container_id] = true;
+            container_changes_[value.container_id] = static_cast<uint8_t>(value.property_mask);
+            tree_order_changed_ =
+                tree_order_changed_ || (value.property_mask & (MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
+                                                               MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE)) != 0U;
+        } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_NODE_LINK) {
+            micropixel_graphics_scene_node_link_record_t value{};
+            if (!container_protocol || !keyframe || record.size != sizeof(value) ||
+                !Read(bytes, length, offset, value) || value.node_id >= scratch_node_count ||
+                value.parent_container_id > scratch_container_count || value.reserved0 != 0U ||
+                node_link_seen[value.node_id] || !node_seen[value.node_id]) {
+                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+            }
+            scratch_[value.node_id].parent_container_id = value.parent_container_id;
+            scratch_[value.node_id].sibling_order = value.sibling_order;
+            node_link_seen[value.node_id] = true;
         } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_BATCH_INSTANCES) {
             micropixel_graphics_scene_batch_instances_record_t value{};
             if (!Read(bytes, length, offset, value) || value.batch_node_id >= scratch_node_count ||
@@ -260,7 +356,9 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             micropixel_graphics_scene_node_header_t node_header{};
             const uint32_t required_mask = RequiredMask(record.opcode);
             if (required_mask == 0U || !Read(bytes, length, offset, node_header) ||
-                node_header.node_id >= scratch_node_count || node_header.layer_id > scratch_layer_count ||
+                node_header.node_id >= scratch_node_count ||
+                (container_protocol ? node_header.container_id != 0U
+                                    : node_header.layer_id > scratch_container_count) ||
                 node_seen[node_header.node_id] || node_header.property_mask == 0U ||
                 (node_header.property_mask & ~(required_mask | MICROPIXEL_GRAPHICS_SCENE_NODE_KIND)) != 0U ||
                 (keyframe && node_header.property_mask != (required_mask | MICROPIXEL_GRAPHICS_SCENE_NODE_KIND))) {
@@ -281,8 +379,9 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                 node = {};
                 node.kind = NodeKind(record.opcode);
             }
-            if ((node_header.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER) != 0U) {
-                node.layer_id = node_header.layer_id;
+            if (!container_protocol && (node_header.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER) != 0U) {
+                node.parent_container_id = node_header.layer_id;
+                node.sibling_order = static_cast<uint16_t>(MICROPIXEL_GRAPHICS_MAX_LAYERS + 1U + node_header.node_id);
             }
             if ((node_header.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY) != 0U) {
                 node.visible = (node_header.flags & MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE) != 0U;
@@ -303,6 +402,26 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                 }
                 if ((value.node.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE) != 0U) {
                     node.rgb888 = value.rgb888;
+                    node.opacity = value.opacity;
+                }
+            } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_ROUNDED_RECT) {
+                micropixel_graphics_scene_rounded_rect_record_t value{};
+                if (record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
+                    (value.node.flags & ~MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE) != 0U || value.reserved0[0] != 0U ||
+                    value.reserved0[1] != 0U || value.reserved0[2] != 0U) {
+                    return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+                }
+                if ((value.node.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY) != 0U) {
+                    node.x = value.x;
+                    node.y = value.y;
+                    node.width = value.width;
+                    node.height = value.height;
+                    node.radius = value.radius;
+                    node.stroke_width = value.stroke_width;
+                }
+                if ((value.node.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE) != 0U) {
+                    node.rgb888 = value.fill_rgb888;
+                    node.stroke_rgb888 = value.stroke_rgb888;
                     node.opacity = value.opacity;
                 }
             } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_TEXTURE) {
@@ -398,12 +517,12 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         for (uint16_t node = 0U; node < scratch_node_count; ++node) {
-            if (!node_seen[node]) {
+            if (!node_seen[node] || (container_protocol && !node_link_seen[node])) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
         }
-        for (uint16_t layer = 1U; layer <= scratch_layer_count; ++layer) {
-            if (!layer_seen[layer]) {
+        for (uint16_t layer = 1U; layer <= scratch_container_count; ++layer) {
+            if (!container_seen[layer]) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
         }
@@ -414,17 +533,16 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         }
     }
     if (!ValidateResult(logical_width, logical_height, bitmap_resolver, bitmap_context, font_validator, font_context,
-                        scratch_node_count, scratch_layer_count, scratch_batch_instance_count)) {
+                        scratch_node_count, scratch_container_count, scratch_batch_instance_count)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
 
     std::swap(current_, scratch_);
     std::swap(current_instances_, scratch_instances_);
-    for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_LAYERS; ++index) {
-        layers_[index] = scratch_layers_[index];
-    }
+    std::swap(containers_, scratch_containers_);
+    std::swap(draw_node_order_, scratch_draw_node_order_);
     node_count_ = scratch_node_count;
-    layer_count_ = scratch_layer_count;
+    container_count_ = scratch_container_count;
     batch_instance_count_ = scratch_batch_instance_count;
     background_rgb888_ = scratch_background;
     generation_ = header.generation;
@@ -436,24 +554,37 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
 
 bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, device::BitmapResolver bitmap_resolver,
                                 void* bitmap_context, device::FontValidator font_validator, void* font_context,
-                                uint16_t node_count, uint16_t layer_count, uint16_t batch_instance_count) const {
-    for (uint16_t index = 1U; index <= layer_count; ++index) {
-        const GuestSceneLayer& layer = scratch_layers_[index];
-        if (!ValidRect(layer.clip_x, layer.clip_y, layer.width, layer.height, logical_width, logical_height) ||
-            layer.translate_x < -32 || layer.translate_x > 32 || layer.translate_y < -32 || layer.translate_y > 32 ||
-            !ValidRect(layer.clip_x + layer.translate_x, layer.clip_y + layer.translate_y, layer.width, layer.height,
-                       logical_width, logical_height)) {
+                                uint16_t node_count, uint16_t container_count, uint16_t batch_instance_count) {
+    for (uint16_t index = 1U; index <= container_count; ++index) {
+        const GuestSceneContainer& container = scratch_containers_[index];
+        const bool inherited_clip =
+            container.clip_x == 0 && container.clip_y == 0 && container.width == 0 && container.height == 0;
+        if (container.parent_container_id > container_count || container.parent_container_id == index ||
+            (!inherited_clip && !ValidRect(container.clip_x, container.clip_y, container.width, container.height,
+                                           logical_width, logical_height))) {
             return false;
+        }
+        uint16_t ancestor = container.parent_container_id;
+        for (uint16_t depth = 0U; ancestor != 0U && depth <= container_count; ++depth) {
+            ancestor = scratch_containers_[ancestor].parent_container_id;
+            if (depth == container_count) {
+                return false;
+            }
         }
     }
     for (uint16_t index = 0U; index < node_count; ++index) {
         const GuestSceneNode& node = scratch_[index];
-        if (node.layer_id > layer_count) {
+        if (node.parent_container_id > container_count) {
             return false;
         }
         if (node.kind == GuestSceneNodeKind::kRect) {
             if (!ValidRect(node.x, node.y, node.width, node.height, logical_width, logical_height) ||
                 !ValidRgb888(node.rgb888)) {
+                return false;
+            }
+        } else if (node.kind == GuestSceneNodeKind::kRoundedRect) {
+            if (!ValidRect(node.x, node.y, node.width, node.height, logical_width, logical_height) ||
+                !ValidRgb888(node.rgb888) || !ValidRgb888(node.stroke_rgb888)) {
                 return false;
             }
         } else if (node.kind == GuestSceneNodeKind::kTexture) {
@@ -499,27 +630,129 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
             return false;
         }
     }
-    return true;
+    for (uint16_t container = 1U; container <= container_count; ++container) {
+        for (uint16_t other = static_cast<uint16_t>(container + 1U); other <= container_count; ++other) {
+            if (scratch_containers_[container].parent_container_id == scratch_containers_[other].parent_container_id &&
+                scratch_containers_[container].sibling_order == scratch_containers_[other].sibling_order) {
+                return false;
+            }
+        }
+        for (uint16_t node = 0U; node < node_count; ++node) {
+            if (scratch_containers_[container].parent_container_id == scratch_[node].parent_container_id &&
+                scratch_containers_[container].sibling_order == scratch_[node].sibling_order) {
+                return false;
+            }
+        }
+    }
+    for (uint16_t node = 0U; node < node_count; ++node) {
+        for (uint16_t other = static_cast<uint16_t>(node + 1U); other < node_count; ++other) {
+            if (scratch_[node].parent_container_id == scratch_[other].parent_container_id &&
+                scratch_[node].sibling_order == scratch_[other].sibling_order) {
+                return false;
+            }
+        }
+    }
+    return BuildDrawOrder(node_count, container_count);
+}
+
+bool GuestScene::BuildDrawOrder(uint16_t node_count, uint16_t container_count) {
+    uint16_t output_count = 0U;
+    return AppendChildren(0U, node_count, container_count, output_count) && output_count == node_count;
+}
+
+bool GuestScene::AppendChildren(uint16_t parent_id, uint16_t node_count, uint16_t container_count,
+                                uint16_t& output_count) {
+    bool have_last = false;
+    int16_t last_z = INT16_MIN;
+    uint16_t last_sibling = 0U;
+    while (true) {
+        bool found = false;
+        bool selected_container = false;
+        uint16_t selected_id = 0U;
+        int16_t selected_z = INT16_MAX;
+        uint16_t selected_sibling = UINT16_MAX;
+        for (uint16_t container_id = 1U; container_id <= container_count; ++container_id) {
+            const GuestSceneContainer& container = scratch_containers_[container_id];
+            if (container.parent_container_id != parent_id ||
+                (have_last && (container.z_order < last_z ||
+                               (container.z_order == last_z && container.sibling_order <= last_sibling)))) {
+                continue;
+            }
+            if (!found || container.z_order < selected_z ||
+                (container.z_order == selected_z && container.sibling_order < selected_sibling)) {
+                found = true;
+                selected_container = true;
+                selected_id = container_id;
+                selected_z = container.z_order;
+                selected_sibling = container.sibling_order;
+            }
+        }
+        for (uint16_t node_id = 0U; node_id < node_count; ++node_id) {
+            const GuestSceneNode& node = scratch_[node_id];
+            constexpr int16_t node_z = 0;
+            if (node.parent_container_id != parent_id ||
+                (have_last && (node_z < last_z || (node_z == last_z && node.sibling_order <= last_sibling)))) {
+                continue;
+            }
+            if (!found || node_z < selected_z || (node_z == selected_z && node.sibling_order < selected_sibling)) {
+                found = true;
+                selected_container = false;
+                selected_id = node_id;
+                selected_z = node_z;
+                selected_sibling = node.sibling_order;
+            }
+        }
+        if (!found) {
+            return true;
+        }
+        last_z = selected_z;
+        last_sibling = selected_sibling;
+        have_last = true;
+        if (selected_container) {
+            if (!AppendChildren(selected_id, node_count, container_count, output_count)) {
+                return false;
+            }
+        } else {
+            if (output_count >= node_count) {
+                return false;
+            }
+            scratch_draw_node_order_[output_count++] = selected_id;
+        }
+    }
+}
+
+uint32_t GuestScene::AncestorChanges(uint16_t container_id) const {
+    uint32_t changes = 0U;
+    for (uint16_t depth = 0U; container_id != 0U && depth < container_count_; ++depth) {
+        changes |= container_changes_[container_id];
+        container_id = containers_[container_id].parent_container_id;
+    }
+    return changes;
 }
 
 void GuestScene::Reset() {
     node_count_ = 0U;
-    layer_count_ = 0U;
+    container_count_ = 0U;
     batch_instance_count_ = 0U;
     background_rgb888_ = 0U;
     generation_ = 0U;
     revision_ = 0U;
     std::memset(node_changes_, 0, sizeof(node_changes_));
-    std::memset(layer_changes_, 0, sizeof(layer_changes_));
+    std::memset(container_changes_, 0, sizeof(container_changes_));
     std::memset(instance_changes_, 0, sizeof(instance_changes_));
+    if (draw_node_order_ != nullptr && scratch_draw_node_order_ != nullptr) {
+        std::memset(draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(draw_node_order_[0]));
+        std::memset(scratch_draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(scratch_draw_node_order_[0]));
+    }
     last_apply_was_keyframe_ = false;
     background_changed_ = false;
+    tree_order_changed_ = false;
     valid_ = false;
-    for (GuestSceneLayer& layer : layers_) {
-        layer = {};
-    }
-    for (GuestSceneLayer& layer : scratch_layers_) {
-        layer = {};
+    if (containers_ != nullptr && scratch_containers_ != nullptr) {
+        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++index) {
+            containers_[index] = {};
+            scratch_containers_[index] = {};
+        }
     }
 }
 

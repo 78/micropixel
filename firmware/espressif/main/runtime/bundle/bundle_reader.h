@@ -19,6 +19,7 @@ typedef struct {
     const micropixel_bundle_section_t* sections;
     uint32_t section_count;
     uint32_t launch_asset_id;
+    uint32_t aot_flags;
     uint8_t app_id[MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U];
     uint32_t mapping_handle;
 } micropixel_aot_package_t;

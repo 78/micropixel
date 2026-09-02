@@ -1,0 +1,4 @@
+# Hardware-independent ESP32-S3 compile gate. This profile never auto-runs an
+# App and is not flashable through tools/firmware.py.
+CONFIG_MICROPIXEL_BOARD_NULL=y
+# CONFIG_MICROPIXEL_SMOKE_AUTORUN_FIRST_APP is not set

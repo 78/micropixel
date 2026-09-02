@@ -62,8 +62,20 @@ The upstream MIT notice follows:
 ## ESP-IDF managed components
 
 ESP-IDF, LVGL, and components resolved from the Espressif Component Registry are build dependencies and are not
-vendored in this repository. Exact resolved versions are recorded in `dependencies.lock` files. Their own license
-terms apply when they are downloaded or redistributed in a binary release.
+vendored in this repository. Version constraints are declared in `firmware/espressif/main/idf_component.yml`;
+ESP-IDF-generated target lock files are local build outputs and are not version-controlled. Each component's own
+license terms apply when it is downloaded or redistributed in a binary release.
+
+## Espressif flasher stub
+
+The browser firmware installer loads the ESP32-S31 RAM flasher binary from the `esp-flasher-stub` npm package:
+
+- upstream: <https://github.com/espressif/esp-flasher-stub>;
+- package/version: `esp-flasher-stub` 1.2.2;
+- license: Apache-2.0 OR MIT.
+
+The package retains the complete Apache-2.0 and MIT license texts. MicroPixel uses the unmodified ESP32-S31 JSON
+artifact and implements only the Web Serial upload and protocol integration around it.
 
 ## Bosch SensorAPI
 
@@ -82,14 +94,23 @@ ESP-IDF transport callbacks and board-level scheduling wrappers.
 
 ### esp_codec_dev
 
-ESP-Mosaico ES8311 initialization uses `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
+ESP-Mosaico and ESP32-S3 ES8311 initialization use `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
 
 - upstream: <https://components.espressif.com/components/espressif/esp_codec_dev>, Apache-2.0;
 - scope: ES8311 codec configuration and the ESP-IDF I2S data interface; MicroPixel supplies the shared-I2C-executor
   control interface and keeps Host master-volume attenuation in its fixed-capacity audio backend.
 
-The exact resolved version is recorded in the ESP32-S31 dependency lock, and the downloaded component retains its
-complete license file.
+The declared version constraint is recorded in `firmware/espressif/main/idf_component.yml`, and the downloaded
+component retains its complete license file.
+
+### ESP-BOX-3 board definitions
+
+The native ESP32-S3-BOX-3 backend derives its pin assignments, controller selection and vendor display initialization
+sequence from Espressif's `esp-box-3` BSP 3.2.0:
+
+- upstream: <https://github.com/espressif/esp-bsp/tree/master/bsp/esp-box-3>, Apache-2.0;
+- scope: only the board-specific I2C, display, touch and backlight facts needed by MicroPixel are maintained locally;
+  the upstream BSP component is not linked, so it does not constrain the shared codec or LVGL dependency versions.
 
 ### micro-opus and libopus
 
@@ -111,14 +132,15 @@ Component Registry:
 - Espressif integration: <https://github.com/espressif/esp-usb/tree/master/device/esp_tinyusb>, Apache-2.0;
 - TinyUSB upstream: <https://github.com/hathach/tinyusb>, MIT.
 
-The exact resolved versions are recorded in the ESP32-S31 dependency lock, and the downloaded components retain
-their complete license files.
+The declared version constraints are recorded in `firmware/espressif/main/idf_component.yml`, and the downloaded
+components retain their complete license files.
 
-## Font Awesome Wi-Fi glyph
+## Font Awesome glyphs
 
-`firmware/espressif/main/platform/lvgl/ui/square_720/icons/wifi_status_icons.c` contains fixed-size alpha masks derived
-from the Font Awesome 5 Wi-Fi glyph bundled with LVGL. The weak and medium variants preserve the source glyph's
-baseline and footprint:
+MicroPixel's generated `builtin-latin-v1` semantic fonts include the public SDK symbol set from the Font Awesome 5
+font bundled with LVGL. `firmware/espressif/main/platform/lvgl/ui/square_720/icons/wifi_status_icons.c` additionally
+contains fixed-size alpha masks derived from its Wi-Fi glyph. The weak and medium Wi-Fi variants preserve the source
+glyph's baseline and footprint:
 
 - upstream: <https://fontawesome.com>;
 - copyright: Copyright 2022 Fonticons, Inc.;

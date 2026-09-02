@@ -59,6 +59,14 @@ std::expected<StatusLayerPresentation, host_ui::SystemUiError> PresentStatusLaye
     uint64_t trigger_timestamp_us, host_ui::SystemUiActionSink action_sink, void* action_context,
     bool allow_software_animation) {
     const int64_t started_us = esp_timer_get_time();
+    // Page changes such as System Settings -> Hall request an asynchronous
+    // LVGL refresh. Flush that damage before the hardware compositor freezes
+    // the direct framebuffers; otherwise it can retain the previous page as
+    // the status layer's background and restore that stale frame on dismiss.
+    if (display != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+        lv_refr_now(display);
+        esp_lv_adapter_unlock();
+    }
     const bool hardware_started = transition.BeginStatusLayerTransition(
         true, ui.TransitionScrimRgb(), ui.TransitionScrimOpacity(), trigger_timestamp_us);
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {

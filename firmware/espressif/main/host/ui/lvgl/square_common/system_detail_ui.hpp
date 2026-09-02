@@ -137,6 +137,8 @@ class SystemDetailUi final {
     lv_obj_t* power_switch_{};
     lv_obj_t* power_timeout_{};
     std::array<lv_obj_t*, 3> appearance_options_{};
+    lv_obj_t* remote_control_scroll_{};
+    int32_t remote_control_scroll_offset_{};
     platform::lvgl::AnimatedDisplayRefresh power_animation_refresh_{};
     std::array<AppBinding, host_ui::kMaxHallApps> app_bindings_{};
     uint32_t app_management_selected_index_{};
@@ -149,6 +151,8 @@ class SystemDetailUi final {
     int64_t app_management_probe_render_ready_us_{};
     bool app_management_probe_armed_{};
     bool remote_control_off_confirmation_visible_{};
+    bool remote_control_scroll_gesture_active_{};
+    bool remote_control_render_pending_{};
     bool updating_{};
     Screen active_screen_{Screen::kNone};
 };

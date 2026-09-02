@@ -12,7 +12,6 @@
 #include "esp_timer.h"
 #include "runtime/guest_context.hpp"
 #include "runtime/guest_log_sink.hpp"
-#include "runtime/resources/bitmap_decoder.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "runtime/wamr/watchdog.h"
 #include "sdkconfig.h"
@@ -42,69 +41,18 @@ AppSessionFailure MakeFailure(AppSessionError code, const micropixel_aot_package
     return failure;
 }
 
-std::expected<bool, AppSessionError> ShowLaunchBitmap(const AotPackage& package, device::GraphicsService& graphics,
-                                                      std::unique_ptr<DecodedBitmap>& decoded_out) {
-    if (!graphics.Available() || package.raw().launch_asset_id == 0U) {
-        return false;
-    }
-    micropixel_bundle_asset_view_t asset{};
-    if (!micropixel_bundle_find_asset(&package.raw(), package.raw().launch_asset_id, &asset)) {
-        ESP_LOGE(kTag, "launch asset is missing from its Bundle");
-        return std::unexpected(AppSessionError::kLaunchBitmap);
-    }
-    device::BitmapView bitmap{};
-    if (asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG || asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG) {
-        decoded_out = std::make_unique<DecodedBitmap>();
-        if (decoded_out == nullptr || !DecodeBitmap(asset, *decoded_out)) {
-            // A high-resolution Hall cover must never prevent its App from
-            // launching merely because the optional splash could not fit.
-            ESP_LOGW(kTag, "PNG launch splash skipped; Hall cover remains usable");
-            decoded_out.reset();
-            return false;
-        }
-        bitmap = decoded_out->view();
-    } else {
-        return std::unexpected(AppSessionError::kLaunchBitmap);
-    }
-    if (!graphics.ShowLaunchBitmap(bitmap)) {
-        ESP_LOGE(kTag, "unable to display the Bundle launch bitmap");
-        return std::unexpected(AppSessionError::kLaunchBitmap);
-    }
-    return true;
-}
-
-class LaunchBitmapGuard final {
-   public:
-    explicit LaunchBitmapGuard(device::GraphicsService* graphics) : graphics_(graphics) {}
-    LaunchBitmapGuard(const LaunchBitmapGuard&) = delete;
-    LaunchBitmapGuard& operator=(const LaunchBitmapGuard&) = delete;
-    ~LaunchBitmapGuard() {
-        if (graphics_ != nullptr) {
-            graphics_->DismissLaunchBitmap();
-        }
-    }
-
-    void Release() { graphics_ = nullptr; }
-
-   private:
-    device::GraphicsService* graphics_{};
-};
-
 }  // namespace
 
 AppSession::AppSession(device::DeviceServices& devices, AotPackage package, LoadedModule module, GuestInstance guest,
                        wasm_function_inst_t entry, std::unique_ptr<GuestContext> context,
-                       std::unique_ptr<GuestContextBinding> context_binding,
-                       std::unique_ptr<DecodedBitmap> launch_bitmap, bool launch_visible)
+                       std::unique_ptr<GuestContextBinding> context_binding)
     : devices_(devices),
       package_(std::move(package)),
       module_(std::move(module)),
       guest_(std::move(guest)),
       entry_(entry),
       context_(std::move(context)),
-      context_binding_(std::move(context_binding)),
-      launch_bitmap_(std::move(launch_bitmap)),
-      launch_visible_(launch_visible) {}
+      context_binding_(std::move(context_binding)) {}
 
 AppSession::AppSession(AppSession&& other) noexcept
     : devices_(other.devices_),
@@ -114,42 +62,28 @@ AppSession::AppSession(AppSession&& other) noexcept
       entry_(std::exchange(other.entry_, nullptr)),
       context_(std::move(other.context_)),
       context_binding_(std::move(other.context_binding_)),
-      launch_bitmap_(std::move(other.launch_bitmap_)),
-      stop_requested_(other.stop_requested_.load(std::memory_order_acquire)),
-      launch_visible_(std::exchange(other.launch_visible_, false)) {}
+      stop_requested_(other.stop_requested_.load(std::memory_order_acquire)) {}
 
-AppSession::~AppSession() {
-    if (launch_visible_) {
-        devices_.graphics().DismissLaunchBitmap();
-    }
-}
+AppSession::~AppSession() = default;
 
-std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceServices& devices,
-                                                                work::BackgroundExecutor& background_executor,
-                                                                const bundlefs_file_t& file,
-                                                                std::string_view effective_locale,
-                                                                GuestLogSink* log_sink) {
+std::expected<AppSession, AppSessionFailure> AppSession::Create(
+    device::DeviceServices& devices, work::BackgroundExecutor& background_executor, const bundlefs_file_t& file,
+    std::string_view effective_locale, const micropixel_system_launch_arguments_response_t& launch_arguments,
+    GuestLogSink* log_sink) {
+    int64_t stage_started_us = esp_timer_get_time();
+    ESP_LOGI(kTag, "AppSession stage begin: package");
     auto package_result = AotPackage::Load(file);
     if (!package_result) {
         ESP_LOGE(kTag, "unable to read the configured AOT package");
         return std::unexpected(MakeFailure(AppSessionError::kPackageLoad, "unable to read the configured AOT package"));
     }
     AotPackage package = std::move(*package_result);
+    ESP_LOGI(kTag, "AppSession stage complete: package elapsed=%" PRId64 " us bytes=%" PRIu32,
+             esp_timer_get_time() - stage_started_us, package.size());
     micropixel_log_heap_state("AOT package loaded");
 
-    auto& graphics = devices.graphics();
-    std::unique_ptr<DecodedBitmap> launch_bitmap;
-    auto launch_result = ShowLaunchBitmap(package, graphics, launch_bitmap);
-    if (!launch_result) {
-        return std::unexpected(
-            MakeFailure(launch_result.error(), package.raw(), "unable to display the launch bitmap"));
-    }
-    const bool launch_visible = *launch_result;
-    // The LVGL image directly references the Bundle mmap. Delete it before
-    // AotPackage unmaps on every construction failure. A completed session
-    // transfers the same duty to AppSession's destructor.
-    LaunchBitmapGuard launch_guard{launch_visible ? &graphics : nullptr};
-
+    stage_started_us = esp_timer_get_time();
+    ESP_LOGI(kTag, "AppSession stage begin: AOT module load");
     auto module_result = LoadedModule::Load(package);
     if (!module_result) {
         ESP_LOGE(kTag, "AOT load failed: %s", module_result.error().message.data());
@@ -157,6 +91,8 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceSe
             MakeFailure(AppSessionError::kModuleLoad, package.raw(), module_result.error().message.data()));
     }
     LoadedModule module = std::move(*module_result);
+    ESP_LOGI(kTag, "AppSession stage complete: AOT module load elapsed=%" PRId64 " us",
+             esp_timer_get_time() - stage_started_us);
     micropixel_log_heap_state("AOT module loaded");
 
     auto guest_result = GuestInstance::Instantiate(module.get());
@@ -182,8 +118,8 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceSe
                                            "AOT module does not export __micropixel_start"));
     }
 
-    auto context = std::unique_ptr<GuestContext>(
-        new (std::nothrow) GuestContext(package.raw(), devices, background_executor, effective_locale, log_sink));
+    auto context = std::unique_ptr<GuestContext>(new (std::nothrow) GuestContext(
+        package.raw(), devices, background_executor, effective_locale, launch_arguments, log_sink));
     if (context == nullptr || !context->valid()) {
         ESP_LOGE(kTag, "unable to initialize bounded Guest services");
         return std::unexpected(
@@ -198,8 +134,7 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(device::DeviceSe
     }
 
     AppSession session(devices, std::move(package), std::move(module), std::move(guest), entry, std::move(context),
-                       std::move(context_binding), std::move(launch_bitmap), launch_visible);
-    launch_guard.Release();
+                       std::move(context_binding));
     return std::expected<AppSession, AppSessionFailure>{std::move(session)};
 }
 

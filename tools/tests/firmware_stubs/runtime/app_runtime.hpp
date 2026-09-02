@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 
+#include "abi/micropixel_abi.h"
 #include "freertos/FreeRTOS.h"
 
 namespace micropixel::runtime {
@@ -46,10 +47,12 @@ class AppRuntime final {
         kCompleteThenFail,
     };
 
-    [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app, AppSessionReadySink ready_sink = nullptr,
-                                       void* ready_context = nullptr) {
+    [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app,
+                                       const micropixel_system_launch_arguments_response_t& launch_arguments,
+                                       AppSessionReadySink ready_sink = nullptr, void* ready_context = nullptr) {
         {
             std::lock_guard lock(mutex_);
+            launch_arguments_ = launch_arguments;
             active_ = true;
             started_ = true;
             returned_ = false;
@@ -191,6 +194,11 @@ class AppRuntime final {
         return force_stop_requests_;
     }
 
+    [[nodiscard]] micropixel_system_launch_arguments_response_t launch_arguments() const {
+        std::lock_guard lock(mutex_);
+        return launch_arguments_;
+    }
+
    private:
     mutable std::mutex mutex_;
     std::condition_variable changed_;
@@ -199,6 +207,7 @@ class AppRuntime final {
     uint32_t resume_requests_{};
     uint32_t stop_requests_{};
     uint32_t force_stop_requests_{};
+    micropixel_system_launch_arguments_response_t launch_arguments_{};
     bool active_{};
     bool started_{};
     bool ready_allowed_{};

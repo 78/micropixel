@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <utility>
 
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
@@ -499,7 +500,7 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
     lv_obj_set_pos(state_.root, 0, 0);
     lv_obj_set_style_opa(state_.root, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state_.root, lv_color_hex(theme::kHallBackground), 0);
-    state_.launch_image_descriptor = {};
+    state_.DropLaunchBitmapLocked();
     state_.hall_scene_ui.DrawLocked(state_.root, state_.profile.hall_scene, model, visible_count,
                                     {.carousel_event = CarouselEvent,
                                      .carousel_context = this,
@@ -600,8 +601,13 @@ void VirtualizedHallPolicy::UpdateInstallProgress(uint32_t app_index, uint8_t pr
 
 void VirtualizedHallPolicy::PauseCoverLoading() { state_.hall_cover_cache.Pause(); }
 
+void VirtualizedHallPolicy::PrepareLaunch(uint32_t app_index) {
+    pending_launch_index_ = app_index < state_.hall_app_count ? app_index : host_ui::kMaxHallApps;
+}
+
 void VirtualizedHallPolicy::Leave() {
     PauseCoverLoading();
+    const uint32_t launch_index = std::exchange(pending_launch_index_, host_ui::kMaxHallApps);
     const uint32_t running = RunningAppIndex();
     const uint32_t app_count = state_.hall_app_count;
     state_.UnbindHostPointerTouchSink();
@@ -618,6 +624,20 @@ void VirtualizedHallPolicy::Leave() {
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         state_.hall_app_count = 0U;
         return;
+    }
+    device::BitmapView launch_cover{};
+    if (launch_index < app_count) {
+        const lv_image_dsc_t& descriptor = state_.hall_cover_descriptors[launch_index];
+        if (descriptor.data != nullptr && descriptor.header.cf == LV_COLOR_FORMAT_RGB888 && descriptor.header.w > 0U &&
+            descriptor.header.h > 0U && descriptor.header.stride > 0U &&
+            descriptor.data_size == descriptor.header.stride * descriptor.header.h) {
+            launch_cover = {.data = descriptor.data,
+                            .size = descriptor.data_size,
+                            .width = descriptor.header.w,
+                            .height = descriptor.header.h,
+                            .stride = descriptor.header.stride,
+                            .pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888};
+        }
     }
     state_.SetHostPointerEnabledLocked(false);
     state_.DrainGuestRefreshReady();
@@ -636,13 +656,23 @@ void VirtualizedHallPolicy::Leave() {
     lv_obj_set_pos(state_.root, 0, 0);
     lv_obj_set_style_opa(state_.root, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state_.root, lv_color_hex(theme::kHallBackground), 0);
-    state_.launch_image_descriptor = {};
+    state_.DropLaunchBitmapLocked();
     platform::lvgl::RequestDisplayRefresh(state_.display);
     esp_lv_adapter_unlock();
     state_.WaitForGuestRefreshReady();
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         ResetLocked();
         esp_lv_adapter_unlock();
+    }
+    if (launch_cover.data != nullptr) {
+        const int32_t status = state_.ShowLaunchBitmap(launch_cover);
+        if (status == MICROPIXEL_STATUS_OK) {
+            ESP_LOGI(kTag, "retained Hall card as native-size App launch cover: index=%" PRIu32 " size=%" PRIu32,
+                     launch_index, launch_cover.width);
+        } else {
+            ESP_LOGW(kTag, "unable to retain Hall card as App launch cover: index=%" PRIu32 " status=%" PRId32,
+                     launch_index, status);
+        }
     }
 }
 

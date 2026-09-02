@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.smoke-test",
+  "title": "Runtime Smoke Test",
+  "sources": ["main.cpp"]
+}

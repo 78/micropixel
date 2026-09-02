@@ -6,16 +6,17 @@
 ## 一句话理解项目
 
 MicroPixel 是运行在 Espressif MCU 上的 WebAssembly 应用运行时：产品固件面向 ESP32-P4 +
-Metalio-Claw4，ESP32-S31 + ESP-Mosaico 作为 preview bring-up profile；Host 基于 ESP-IDF 6.1 和固定
-commit 的 WAMR fork AOT v6，Guest 使用受限 C++23 SDK，通过稳定的 Service ABI 访问图形、
+Metalio-Claw4；ESP32-S31 + ESP-Mosaico、ESP32-S3 + ESP32-S3-BOX-3 和立创 SZPI ESP32-S3 作为
+preview profile。Host 基于 ESP-IDF 6.1 和固定 commit 的 WAMR fork AOT v6，Guest 使用受限 C++23 SDK，通过稳定的 Service ABI 访问图形、
 输入、音频、存储和资源，不直接依赖芯片或板级 SDK。
 
 当前产品基线：
 
-- 硬件：ESP32-P4 + Metalio-Claw4 产品 profile；ESP32-S31 + ESP-Mosaico preview profile；
+- 硬件：ESP32-P4 + Metalio-Claw4 产品 profile；ESP32-S31 + ESP-Mosaico、ESP32-S3-BOX-3 和立创
+  SZPI ESP32-S3 preview profile；
 - Host：ESP-IDF 6.1，一个长驻 `AppRuntime`，同时最多一个 Guest `AppSession`；
-- Guest：Wasm32 + RISC-V 32-bit AOT，单线程事件模型；
-- 分发：Bundle v1；P4 使用 24 MiB、S31 NOR bring-up 使用 8 MiB 可写 `app_store`。BundleFS v2 使用
+- Guest：Wasm32 + RISC-V 32-bit 或 ESP32-S3 Xtensa AOT，单线程事件模型；
+- 分发：Bundle v1；P4 使用 24 MiB、S31/S3 使用 8 MiB 可写 `app_store`。BundleFS v2 使用
   离散 64 KiB 数据块、写时复制和四个 16 KiB Catalog Bank，并兼容迁移旧 v1，不依赖 NVS Catalog；
 - 系统 UI：Host 原生 App Hall、Status Layer、系统菜单和系统手势；
 - 集成 App：Blocks、Snake、Demo，以及 Tap Counter、Color Lab、Pixel Sketch、Orbit Pad 四个 Showcase Bundle。
@@ -46,6 +47,8 @@ app_main
       ├─ Platform
       │   ├─ Metalio-Claw4                # ESP32-P4 product
       │   ├─ ESP-Mosaico                  # ESP32-S31 preview bring-up
+      │   ├─ ESP32-S3-BOX-3               # ESP32-S3 preview
+      │   ├─ SZPI ESP32-S3                # 立创开发板 preview
       │   └─ Null                          # 硬件无关编译基线
       ├─ DeviceServices                    # 硬件无关契约
       ├─ AppRuntime
@@ -142,6 +145,10 @@ bash tools/p4.sh build-host
 # ESP32-S31 / ESP-Mosaico preview Host
 bash tools/s31.sh build-host
 
+# ESP32-S3 preview Host
+bash tools/s3.sh build-host
+bash tools/s3.sh build-szpi
+
 # System Shell + 七个示例 App + App Store 集成
 bash tools/p4.sh build-all
 
@@ -158,9 +165,9 @@ bash tools/tests/test_firmware_host.sh
 python3 -m unittest tools.tests.test_analyze_sfx -v
 
 # 正式 App Bundle
-python3 tools/micropixel package guest/apps/blocks
-python3 tools/micropixel package guest/apps/snake
-python3 tools/micropixel package guest/apps/demo
+python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
+python3 tools/micropixel package guest/apps/snake --aot-target riscv32-ilp32f
+python3 tools/micropixel package guest/apps/demo --aot-target riscv32-ilp32f
 
 # Shell 语法
 bash -n tools/*.sh
@@ -177,7 +184,8 @@ bash -n tools/*.sh
 
 ## 生成物、第三方与安全
 
-- `build/`、`artifacts/`、`managed_components/`、生成的 `sdkconfig`、AOT/Wasm/Bundle/Flash 镜像和报告
+- `build/`、`artifacts/`、`managed_components/`、生成的 `sdkconfig`、`dependencies.lock.*`、
+  AOT/Wasm/Bundle/Flash 镜像和报告
   是本地产物，不直接编辑，不提交。
 - 音频生成头文件和资源 pack 由构建脚本生成；修改其源 JSON、素材或生成器。
 - `firmware/espressif/components/wasm-micro-runtime/` 是固定 commit 的 WAMR fork/submodule。除非任务明确

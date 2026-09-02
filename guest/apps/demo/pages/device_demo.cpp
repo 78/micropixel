@@ -63,11 +63,16 @@ class DevicePage final {
    public:
     void Enter(DemoContext& context) {
         status_.Clear();
+        page_container_ = context.root_container.CreateContainer();
+        CreateButtons(context);
         RefreshCatalog(context);
         LayoutButtons(context);
     }
 
-    void Exit() { CloseSelected(); }
+    void Exit() {
+        CloseSelected();
+        micropixel::Assert(page_container_.Destroy().has_value(), "demo.device: destroy page failed");
+    }
 
     [[nodiscard]] bool OnTimer(DemoContext& context, const micropixel::TimerEvent&) {
         ++timer_ticks_;
@@ -82,6 +87,19 @@ class DevicePage final {
             }
             acceleration_ = sample->value;
             has_acceleration_ = true;
+            return true;
+        }
+        if (gyroscope_.valid()) {
+            auto sample = gyroscope_.Read();
+            if (!sample) {
+                if (sample.error().code() == micropixel::ErrorCode::kWouldBlock) {
+                    return false;
+                }
+                SetError("Gyroscope read failed: ", sample.error());
+                return true;
+            }
+            angular_velocity_ = sample->value;
+            has_angular_velocity_ = true;
             return true;
         }
         if (magnetometer_.valid()) {
@@ -170,22 +188,49 @@ class DevicePage final {
             commands.CenteredText(center_x, PageY(context, 78, 94), identity.c_str(), AccentColor(),
                                   micropixel::SystemFont::kMedium);
             RenderSelected(context, commands, center_x);
-            commands.CenteredText(center_x, context.layout.page_content.y + context.layout.page_content.height - 30,
+            commands.CenteredText(center_x, context.layout.page_content.y + context.layout.page_content.height - 58,
                                   status_.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
         }
 
-        DrawButton(commands, buttons_[0], "PREV", BlueColor());
+        auto previous_bounds = buttons_[0].SetBounds(commands.scene_update(), button_bounds_[0]);
+        auto next_bounds = buttons_[2].SetBounds(commands.scene_update(), button_bounds_[2]);
+        micropixel::Assert(previous_bounds.has_value() && next_bounds.has_value(),
+                           "demo.device: navigation button layout failed");
+        buttons_[0].SetEnabled(commands.scene_update(), true);
+        buttons_[0].SetVisible(commands.scene_update(), true);
+        buttons_[2].SetEnabled(commands.scene_update(), true);
+        buttons_[2].SetVisible(commands.scene_update(), true);
         if (HasAction()) {
             const char* action = "ACTION";
             if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
                 action = gpio_output_.valid() ? "TOGGLE" : "READ";
             }
-            DrawButton(commands, buttons_[1], action, AccentColor());
+            auto action_bounds = buttons_[1].SetBounds(commands.scene_update(), button_bounds_[1]);
+            auto action_text = buttons_[1].SetText(commands.scene_update(), action);
+            micropixel::Assert(action_bounds.has_value() && action_text.has_value(),
+                               "demo.device: action button update failed");
+            buttons_[1].SetEnabled(commands.scene_update(), ActionEnabled());
+            buttons_[1].SetVisible(commands.scene_update(), true);
+        } else {
+            buttons_[1].SetEnabled(commands.scene_update(), false);
+            buttons_[1].SetVisible(commands.scene_update(), false);
         }
-        DrawButton(commands, buttons_[2], "NEXT", BlueColor());
     }
 
    private:
+    void CreateButtons(DemoContext& context) {
+        std::array<micropixel::Rect, 3U> bounds{};
+        LayoutButtonRow(context, bounds);
+        constexpr const char* labels[3]{"PREV", "ACTION", "NEXT"};
+        const micropixel::Color backgrounds[3]{BlueColor(), AccentColor(), BlueColor()};
+        for (uint32_t index = 0U; index < 3U; ++index) {
+            buttons_[index] = page_container_.CreateTextButton(
+                {.bounds = bounds[index],
+                 .text = labels[index],
+                 .style = {.background = backgrounds[index], .font = micropixel::SystemFont::kLarge}});
+        }
+    }
+
     void RefreshCatalog(DemoContext& context) {
         CloseSelected();
         auto listed = context.app.devices().List();
@@ -247,8 +292,7 @@ class DevicePage final {
 
     void LayoutButtons(const DemoContext& context) {
         if (HasAction()) {
-            LayoutButtonRow(context, buttons_);
-            buttons_[1].SetEnabled(ActionEnabled());
+            LayoutButtonRow(context, button_bounds_);
             return;
         }
 
@@ -264,10 +308,9 @@ class DevicePage final {
                 .gap_pixels = context.layout.compact() ? 10 : 14},
             items, rects);
         micropixel::Assert(result.has_value(), "demo.device: navigation button layout failed");
-        buttons_[0].SetBounds(rects[0]);
-        buttons_[1].SetBounds({});
-        buttons_[1].SetEnabled(false);
-        buttons_[2].SetBounds(rects[1]);
+        button_bounds_[0] = rects[0];
+        button_bounds_[1] = {};
+        button_bounds_[2] = rects[1];
     }
 
     void OpenSelected(DemoContext& context) {
@@ -294,6 +337,14 @@ class DevicePage final {
                 if (opened) {
                     accelerometer_ = std::move(*opened);
                     ConfigureSensor(accelerometer_);
+                } else {
+                    SetError("Sensor open failed: ", opened.error());
+                }
+            } else if (sensor_kind_ == micropixel::SensorKind::kAngularVelocity) {
+                auto opened = context.app.sensors().Open<micropixel::AngularVelocity>(selected_.id);
+                if (opened) {
+                    gyroscope_ = std::move(*opened);
+                    ConfigureSensor(gyroscope_);
                 } else {
                     SetError("Sensor open failed: ", opened.error());
                 }
@@ -352,12 +403,14 @@ class DevicePage final {
 
     void CloseSelected() {
         accelerometer_.Reset();
+        gyroscope_.Reset();
         magnetometer_.Reset();
         gpio_input_.Reset();
         gpio_output_.Reset();
         haptic_.Reset();
         selected_valid_ = false;
         has_acceleration_ = false;
+        has_angular_velocity_ = false;
         has_magnetic_field_ = false;
         has_power_ = false;
         has_gpio_value_ = false;
@@ -450,6 +503,13 @@ class DevicePage final {
                 AppendFixed2(axes, acceleration_.meters_per_second_squared.y);
                 axes.Append("  z ");
                 AppendFixed2(axes, acceleration_.meters_per_second_squared.z);
+            } else if (sensor_kind_ == micropixel::SensorKind::kAngularVelocity && has_angular_velocity_) {
+                axes.Append("rad/s  x ");
+                AppendFixed2(axes, angular_velocity_.radians_per_second.x);
+                axes.Append("  y ");
+                AppendFixed2(axes, angular_velocity_.radians_per_second.y);
+                axes.Append("  z ");
+                AppendFixed2(axes, angular_velocity_.radians_per_second.z);
             } else if (sensor_kind_ == micropixel::SensorKind::kMagneticField && has_magnetic_field_) {
                 axes.Append("uT  x ");
                 AppendFixed2(axes, magnetic_field_.microtesla.x);
@@ -505,11 +565,13 @@ class DevicePage final {
     micropixel::GpioInfo gpio_info_{};
     micropixel::PowerState power_{};
     micropixel::Accelerometer accelerometer_{};
+    micropixel::Gyroscope gyroscope_{};
     micropixel::Magnetometer magnetometer_{};
     micropixel::GpioInput gpio_input_{};
     micropixel::GpioOutput gpio_output_{};
     micropixel::Haptic haptic_{};
     micropixel::Acceleration acceleration_{};
+    micropixel::AngularVelocity angular_velocity_{};
     micropixel::MagneticField magnetic_field_{};
     micropixel::SensorKind sensor_kind_{micropixel::SensorKind::kAcceleration};
     Line status_{};
@@ -517,11 +579,14 @@ class DevicePage final {
     uint32_t timer_ticks_{};
     bool selected_valid_{};
     bool has_acceleration_{};
+    bool has_angular_velocity_{};
     bool has_magnetic_field_{};
     bool has_power_{};
     bool has_gpio_value_{};
     bool gpio_value_{};
-    micropixel::ui::Button buttons_[3]{};
+    micropixel::ContainerNode page_container_{};
+    micropixel::ui::TextButton buttons_[3]{};
+    std::array<micropixel::Rect, 3U> button_bounds_{};
 };
 
 [[clang::no_destroy]] DevicePage device_page;

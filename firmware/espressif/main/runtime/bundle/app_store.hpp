@@ -15,6 +15,7 @@ enum class AppStoreError : uint8_t {
     kUnavailable,
     kCatalogCorrupt,
     kInvalidPackage,
+    kIncompatibleAotTarget,
     kHashMismatch,
     kAppIdMismatch,
     kCatalogFull,

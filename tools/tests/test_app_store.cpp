@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -67,15 +68,37 @@ std::array<uint8_t, BUNDLEFS_SHA256_SIZE> Hash(const std::vector<uint8_t>& data)
     return digest;
 }
 
-std::vector<uint8_t> MakeBundle(std::string_view app_id, uint8_t fill) {
+uint32_t HeaderHash(const micropixel_bundle_header_t& input) {
+    micropixel_bundle_header_t header = input;
+    header.header_hash = 0U;
+    uint32_t value = 2166136261U;
+    for (const uint8_t byte : std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&header), sizeof(header))) {
+        value ^= byte;
+        value *= 16777619U;
+    }
+    return value;
+}
+
+std::vector<uint8_t> MakeBundle(
+    std::string_view app_id, uint8_t fill,
+    uint32_t aot_target_mask = MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F) {
     std::vector<uint8_t> bundle(MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT, fill);
+    const bool component = app_id.starts_with("fonts.");
     micropixel_bundle_header_t header{};
     std::memcpy(header.magic, MICROPIXEL_BUNDLE_MAGIC, sizeof(header.magic));
     header.version = MICROPIXEL_BUNDLE_VERSION;
     header.header_size = sizeof(header);
     header.bundle_size = bundle.size();
+    header.toc_offset = sizeof(header);
     header.app_id_length = app_id.size();
+    header.section_count = 1U;
+    header.framework_abi_version = MICROPIXEL_BUNDLE_FRAMEWORK_ABI_VERSION;
     std::memcpy(header.app_id, app_id.data(), app_id.size());
+    micropixel_bundle_section_t section{};
+    section.kind = component ? MICROPIXEL_BUNDLE_SECTION_APP_METADATA : MICROPIXEL_BUNDLE_SECTION_AOT;
+    section.reserved0 = component ? MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE : aot_target_mask;
+    std::memcpy(bundle.data() + header.toc_offset, &section, sizeof(section));
+    header.header_hash = HeaderHash(header);
     std::memcpy(bundle.data(), &header, sizeof(header));
     return bundle;
 }
@@ -140,6 +163,23 @@ void TestIdentityAndCapacityErrors() {
           "request AppId must match Bundle header");
     Check(micropixel::runtime::UninstallApp("missing").error() == micropixel::runtime::AppStoreError::kNotFound,
           "missing App uninstall must be reported");
+
+    auto incompatible = MakeBundle("xtensa", 0x61U, MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3);
+    Check(micropixel::runtime::InstallApp(Request(incompatible, "xtensa")).error() ==
+                  micropixel::runtime::AppStoreError::kIncompatibleAotTarget &&
+              !writer_active && staged.data.empty(),
+          "wrong-architecture AOT must be rejected before BundleFS staging begins");
+    auto legacy = MakeBundle("legacy", 0x62U, MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE);
+    Check(micropixel::runtime::InstallApp(Request(legacy, "legacy")).error() ==
+                  micropixel::runtime::AppStoreError::kIncompatibleAotTarget &&
+              !writer_active && staged.data.empty(),
+          "legacy App without AOT target metadata must be rejected before BundleFS staging begins");
+    auto ambiguous = MakeBundle("ambiguous", 0x63U, MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F |
+                                                        MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3);
+    Check(micropixel::runtime::InstallApp(Request(ambiguous, "ambiguous")).error() ==
+                  micropixel::runtime::AppStoreError::kInvalidPackage &&
+              !writer_active && staged.data.empty(),
+          "one AOT payload cannot claim multiple architecture bits");
 }
 
 void TestNewestInstallIsListedFirst() {

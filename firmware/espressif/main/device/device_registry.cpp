@@ -1,6 +1,11 @@
 #include "device/device_registry.hpp"
 
+#include <algorithm>
 #include <cstring>
+
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+#include "esp_heap_caps.h"
+#endif
 
 namespace micropixel::device {
 namespace {
@@ -9,13 +14,29 @@ constexpr micropixel_device_id_t kRegistryDeviceIdBase = 0x01000000U;
 
 }  // namespace
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+void DeviceRegistry::EntryDeleter::operator()(Entry* entries) const { heap_caps_free(entries); }
+#endif
+
+bool DeviceRegistry::InitializeStorage() {
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+    if (entries_ == nullptr) {
+        entries_.reset(static_cast<Entry*>(
+            heap_caps_calloc(kMaximumDeviceCount, sizeof(Entry), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+    }
+    return entries_ != nullptr;
+#else
+    return true;
+#endif
+}
+
 void DeviceRegistry::Reset() {
     for (uint32_t index = 0U; index < count_; ++index) {
-        if (entries_[index].route_kind == RouteKind::kHaptics) {
-            static_cast<HapticsPeripheral*>(entries_[index].peripheral)->SetCompletionSink(nullptr, nullptr);
+        if (Entries()[index].route_kind == RouteKind::kHaptics) {
+            static_cast<HapticsPeripheral*>(Entries()[index].peripheral)->SetCompletionSink(nullptr, nullptr);
         }
     }
-    entries_ = {};
+    std::fill_n(Entries(), kMaximumDeviceCount, Entry{});
     count_ = 0U;
     ++generation_;
     if (generation_ == 0U) {
@@ -59,17 +80,17 @@ bool DeviceRegistry::RegisterHaptics(HapticsPeripheral& peripheral, PeripheralCh
 
 bool DeviceRegistry::Add(uint16_t kind, uint64_t capabilities, const char* name, RouteKind route_kind, void* peripheral,
                          PeripheralChannelId channel) {
-    if (count_ >= entries_.size() || kind == MICROPIXEL_DEVICE_KIND_ANY || name == nullptr ||
+    if (count_ >= kMaximumDeviceCount || kind == MICROPIXEL_DEVICE_KIND_ANY || name == nullptr ||
         (route_kind != RouteKind::kNone && peripheral == nullptr)) {
         return false;
     }
     for (uint32_t index = 0U; index < count_; ++index) {
-        if (entries_[index].route_kind == route_kind && entries_[index].peripheral == peripheral &&
-            entries_[index].channel == channel && route_kind != RouteKind::kNone) {
+        if (Entries()[index].route_kind == route_kind && Entries()[index].peripheral == peripheral &&
+            Entries()[index].channel == channel && route_kind != RouteKind::kNone) {
             return false;
         }
     }
-    Entry& entry = entries_[count_];
+    Entry& entry = Entries()[count_];
     entry.device = kRegistryDeviceIdBase | (count_ + 1U);
     entry.kind = kind;
     entry.capabilities = capabilities;
@@ -91,7 +112,7 @@ int32_t DeviceRegistry::GetByIndex(uint32_t index, micropixel_device_info_t& inf
     if (index >= count_) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
-    const Entry& entry = entries_[index];
+    const Entry& entry = Entries()[index];
     info_out = {};
     info_out.size = sizeof(info_out);
     info_out.kind = entry.kind;
@@ -105,7 +126,7 @@ int32_t DeviceRegistry::GetByIndex(uint32_t index, micropixel_device_info_t& inf
 
 int32_t DeviceRegistry::GetById(micropixel_device_id_t device, micropixel_device_info_t& info_out) const {
     for (uint32_t index = 0U; index < count_; ++index) {
-        if (entries_[index].device == device) {
+        if (Entries()[index].device == device) {
             return GetByIndex(index, info_out);
         }
     }
@@ -114,8 +135,8 @@ int32_t DeviceRegistry::GetById(micropixel_device_id_t device, micropixel_device
 
 DeviceRegistry::Entry* DeviceRegistry::Find(micropixel_device_id_t device) {
     for (uint32_t index = 0U; index < count_; ++index) {
-        if (entries_[index].device == device) {
-            return &entries_[index];
+        if (Entries()[index].device == device) {
+            return &Entries()[index];
         }
     }
     return nullptr;
@@ -127,7 +148,7 @@ const DeviceRegistry::Entry* DeviceRegistry::Find(micropixel_device_id_t device)
 
 DeviceRegistry::Entry* DeviceRegistry::Find(GpioPeripheral& peripheral, PeripheralChannelId channel) {
     for (uint32_t index = 0U; index < count_; ++index) {
-        Entry& entry = entries_[index];
+        Entry& entry = Entries()[index];
         if (entry.route_kind == RouteKind::kGpio && entry.peripheral == &peripheral && entry.channel == channel) {
             return &entry;
         }
@@ -137,7 +158,7 @@ DeviceRegistry::Entry* DeviceRegistry::Find(GpioPeripheral& peripheral, Peripher
 
 DeviceRegistry::Entry* DeviceRegistry::Find(HapticsPeripheral& peripheral, PeripheralChannelId channel) {
     for (uint32_t index = 0U; index < count_; ++index) {
-        Entry& entry = entries_[index];
+        Entry& entry = Entries()[index];
         if (entry.route_kind == RouteKind::kHaptics && entry.peripheral == &peripheral && entry.channel == channel) {
             return &entry;
         }
@@ -232,14 +253,14 @@ int32_t DeviceRegistry::SetPwmDuty(micropixel_device_id_t device, uint16_t duty_
 
 void DeviceRegistry::SuspendEvents() {
     for (uint32_t index = 0U; index < count_; ++index) {
-        Entry& entry = entries_[index];
+        Entry& entry = Entries()[index];
         if (entry.route_kind != RouteKind::kGpio) {
             continue;
         }
         bool seen = false;
         for (uint32_t prior = 0U; prior < index; ++prior) {
             seen = seen ||
-                   (entries_[prior].route_kind == RouteKind::kGpio && entries_[prior].peripheral == entry.peripheral);
+                   (Entries()[prior].route_kind == RouteKind::kGpio && Entries()[prior].peripheral == entry.peripheral);
         }
         if (!seen) {
             static_cast<GpioPeripheral*>(entry.peripheral)->SuspendEvents();
@@ -249,14 +270,14 @@ void DeviceRegistry::SuspendEvents() {
 
 int32_t DeviceRegistry::ResumeEvents() {
     for (uint32_t index = 0U; index < count_; ++index) {
-        Entry& entry = entries_[index];
+        Entry& entry = Entries()[index];
         if (entry.route_kind != RouteKind::kGpio) {
             continue;
         }
         bool seen = false;
         for (uint32_t prior = 0U; prior < index; ++prior) {
             seen = seen ||
-                   (entries_[prior].route_kind == RouteKind::kGpio && entries_[prior].peripheral == entry.peripheral);
+                   (Entries()[prior].route_kind == RouteKind::kGpio && Entries()[prior].peripheral == entry.peripheral);
         }
         if (!seen) {
             const int32_t status = static_cast<GpioPeripheral*>(entry.peripheral)->ResumeEvents();
@@ -317,14 +338,14 @@ void DeviceRegistry::SetCompletionSink(HapticCompletionSink sink, void* context)
     haptic_completion_sink_ = sink;
     haptic_completion_context_ = sink == nullptr ? nullptr : context;
     for (uint32_t index = 0U; index < count_; ++index) {
-        Entry& entry = entries_[index];
+        Entry& entry = Entries()[index];
         if (entry.route_kind != RouteKind::kHaptics) {
             continue;
         }
         bool seen = false;
         for (uint32_t prior = 0U; prior < index; ++prior) {
-            seen = seen || (entries_[prior].route_kind == RouteKind::kHaptics &&
-                            entries_[prior].peripheral == entry.peripheral);
+            seen = seen || (Entries()[prior].route_kind == RouteKind::kHaptics &&
+                            Entries()[prior].peripheral == entry.peripheral);
         }
         if (!seen) {
             static_cast<HapticsPeripheral*>(entry.peripheral)->SetCompletionSink(OnHapticsFinished, this);

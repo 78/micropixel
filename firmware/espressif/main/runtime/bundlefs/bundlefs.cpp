@@ -646,13 +646,16 @@ bundlefs_error_t MapFileState(const esp_partition_t* partition, const FileState&
 
 bundlefs_error_t HashFile(const esp_partition_t* partition, const FileState& file,
                           std::array<uint8_t, BUNDLEFS_SHA256_SIZE>& digest) {
-    std::array<uint8_t, kFlashChunkSize> buffer{};
+    auto buffer = AllocateWorkspace<std::array<uint8_t, kFlashChunkSize>>();
+    if (buffer == nullptr) {
+        return BUNDLEFS_ERR_UNAVAILABLE;
+    }
     psa_hash_operation_t operation = PSA_HASH_OPERATION_INIT;
     bool valid = psa_crypto_init() == PSA_SUCCESS && psa_hash_setup(&operation, PSA_ALG_SHA_256) == PSA_SUCCESS;
     for (uint32_t offset = 0U; valid && offset < file.size;) {
-        const uint32_t chunk = std::min<uint32_t>(buffer.size(), file.size - offset);
-        valid = ReadFileState(partition, file, offset, buffer.data(), chunk) == BUNDLEFS_OK &&
-                psa_hash_update(&operation, buffer.data(), chunk) == PSA_SUCCESS;
+        const uint32_t chunk = std::min<uint32_t>(buffer->size(), file.size - offset);
+        valid = ReadFileState(partition, file, offset, buffer->data(), chunk) == BUNDLEFS_OK &&
+                psa_hash_update(&operation, buffer->data(), chunk) == PSA_SUCCESS;
         offset += chunk;
     }
     size_t digest_size = 0U;

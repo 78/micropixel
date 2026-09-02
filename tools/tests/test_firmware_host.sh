@@ -36,6 +36,7 @@ build_and_run() {
         -Wall -Wextra -Werror \
         -I "$workspace_root/tools/tests/firmware_stubs" \
         -I "$workspace_root/firmware/espressif/main" \
+        -I "$workspace_root/guest" \
         "$@" \
         -o "$test_binary"
     "$test_binary"
@@ -73,6 +74,9 @@ build_and_run background_executor \
     "$workspace_root/tools/tests/test_background_executor.cpp" \
     "$workspace_root/firmware/espressif/main/work/background_executor.cpp"
 
+build_and_run remote_control_defaults \
+    "$workspace_root/tools/tests/test_remote_control_defaults.cpp"
+
 build_and_run i2c_executor \
     -pthread \
     "$workspace_root/tools/tests/test_i2c_executor.cpp" \
@@ -106,6 +110,11 @@ build_and_run guest_layout \
 build_and_run guest_psram \
     "$workspace_root/tools/tests/test_guest_psram.cpp"
 
+build_and_run bitmap_store \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_bitmap_store.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/resources/bitmap_store.cpp"
+
 build_and_run pixel_compositor \
     "$workspace_root/tools/tests/test_pixel_compositor.cpp" \
     "$workspace_root/firmware/espressif/main/platform/graphics/pixel_compositor.cpp"
@@ -124,9 +133,29 @@ build_and_run guest_scene \
     "$workspace_root/firmware/espressif/main/platform/graphics/guest_scene.cpp" \
     "$workspace_root/firmware/espressif/main/device/text.cpp"
 
+build_and_run guest_scene_lifecycle \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_scene_lifecycle.cpp"
+
 build_and_run guest_button \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_guest_button.cpp"
+
+build_and_run guest_text_button \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_text_button.cpp"
+
+build_and_run guest_image_button \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_image_button.cpp"
+
+build_and_run guest_label \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_label.cpp"
+
+build_and_run guest_ui_descriptions \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_guest_ui_descriptions.cpp"
 
 build_and_run ascii_line_framer \
     "$workspace_root/tools/tests/test_ascii_line_framer.cpp"
@@ -162,6 +191,22 @@ build_and_run system_locale \
     "$workspace_root/firmware/espressif/main/host/ui/system_locale.cpp"
 
 build_and_run font_registry \
+    -I "$workspace_root/guest" \
+    -I "$workspace_root/tools/tests/font_cbin_stubs" \
+    "$workspace_root/tools/tests/test_font_registry.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp"
+
+build_and_run font_registry_box3 \
+    -DCONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3=1 \
+    -I "$workspace_root/guest" \
+    -I "$workspace_root/tools/tests/font_cbin_stubs" \
+    "$workspace_root/tools/tests/test_font_registry.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp"
+
+build_and_run font_registry_mosaico \
+    -DCONFIG_MICROPIXEL_BOARD_ESP_MOSAICO=1 \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
     "$workspace_root/tools/tests/test_font_registry.cpp" \
@@ -264,6 +309,7 @@ root = Path(sys.argv[1])
 PY
 python3 "$workspace_root/tools/build_app_bundle.py" \
     --aot "$metadata_output_dir/tiny.aot" \
+    --aot-target riscv32-ilp32f \
     --app-manifest "$metadata_output_dir/app.json" \
     --output "$metadata_output_dir/localized.bundle.bin"
 MICROPIXEL_TEST_LOCALE=zh-CN \
@@ -278,6 +324,7 @@ MICROPIXEL_EXPECT_PACKAGE_TYPE=app \
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/localized.bundle.bin"
 python3 "$workspace_root/tools/build_app_bundle.py" \
     --aot "$metadata_output_dir/tiny.aot" \
+    --aot-target riscv32-ilp32f \
     --app-manifest "$metadata_output_dir/app.json" \
     --legacy-metadata-v1 \
     --output "$metadata_output_dir/legacy.bundle.bin"

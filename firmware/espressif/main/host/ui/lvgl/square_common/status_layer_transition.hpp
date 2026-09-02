@@ -22,6 +22,19 @@ class StatusLayerTransition {
     virtual void CancelStatusLayerTransition() = 0;
 };
 
+// Boards without a display compositor still use the complete status-layer UI,
+// but present it as a static LVGL frame instead of allocating transition
+// buffers. This keeps the fallback explicit at the presentation boundary.
+class StaticStatusLayerTransition final : public StatusLayerTransition {
+   public:
+    [[nodiscard]] bool BeginStatusLayerTransition(bool, uint32_t, uint8_t, uint64_t) override { return false; }
+    [[nodiscard]] bool AnimateStatusLayerLocked(lv_obj_t*, int32_t, int32_t, bool, uint32_t, uint64_t) override {
+        return false;
+    }
+    [[nodiscard]] bool FinishStatusLayerTransition(bool) override { return false; }
+    void CancelStatusLayerTransition() override {}
+};
+
 struct StatusLayerPresentation final {
     bool hardware_accelerated{};
     uint32_t elapsed_us{};

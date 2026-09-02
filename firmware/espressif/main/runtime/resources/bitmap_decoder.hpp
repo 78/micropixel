@@ -20,13 +20,16 @@ class DecodedBitmap final {
     void ReleaseOwnership();
 
    private:
-    friend bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, DecodedBitmap& decoded);
+    friend bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_opaque_format,
+                             DecodedBitmap& decoded);
     friend bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, DecodedBitmap& bitmap,
                                uint32_t stride_alignment_pixels);
     device::BitmapView view_{};
 };
 
 [[nodiscard]] bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, DecodedBitmap& decoded);
+[[nodiscard]] bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_opaque_format,
+                                DecodedBitmap& decoded);
 [[nodiscard]] bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, DecodedBitmap& bitmap,
                                   uint32_t stride_alignment_pixels = 1U);
 

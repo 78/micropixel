@@ -1,6 +1,10 @@
 #include "platform/buses/i2c_executor.hpp"
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+#include "freertos/idf_additions.h"
+#endif
 #include "work/task_policy.hpp"
 
 namespace micropixel::platform::buses {
@@ -45,8 +49,15 @@ esp_err_t I2cExecutor::Initialize() {
 
     stopping_.store(false, std::memory_order_release);
     TaskHandle_t worker = nullptr;
-    if (xTaskCreatePinnedToCore(WorkerEntry, "micropixel_i2c", kWorkerStackBytes, this, task_policy::kI2cPriority,
-                                &worker, kWorkerCore) != pdPASS) {
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    const BaseType_t task_created = xTaskCreatePinnedToCoreWithCaps(WorkerEntry, "micropixel_i2c", kWorkerStackBytes,
+                                                                    this, task_policy::kI2cPriority, &worker,
+                                                                    kWorkerCore, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    const BaseType_t task_created = xTaskCreatePinnedToCore(WorkerEntry, "micropixel_i2c", kWorkerStackBytes, this,
+                                                            task_policy::kI2cPriority, &worker, kWorkerCore);
+#endif
+    if (task_created != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     worker_.store(worker, std::memory_order_release);

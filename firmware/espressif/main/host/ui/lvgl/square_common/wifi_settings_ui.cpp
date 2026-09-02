@@ -182,8 +182,10 @@ void WifiSettingsUi::RenderLocked() {
 
     if (!model_.enabled) {
         lv_obj_t* hint = CreateSystemPanel(content, layout);
-        (void)CreateSystemLabel(hint, "Turn on Wi-Fi to view and connect to networks.", layout.body_font,
-                                theme::kSecondaryText);
+        (void)CreateSystemLabel(
+            hint,
+            layout.width <= 320 ? "Enable Wi-Fi to view networks." : "Turn on Wi-Fi to view and connect to networks.",
+            layout.body_font, theme::kSecondaryText);
     } else if (scan_view_) {
         (void)CreateSystemLabel(content, model_.scanning ? "SCANNING..." : "AVAILABLE NETWORKS", layout.detail_font,
                                 theme::kSecondaryText);

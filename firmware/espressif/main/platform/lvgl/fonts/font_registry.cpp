@@ -7,9 +7,14 @@
 #include "platform/lvgl/fonts/font_cbin_loader.hpp"
 
 extern "C" {
+extern const lv_font_t font_builtin_latin_10;
+extern const lv_font_t font_builtin_latin_12;
 extern const lv_font_t font_builtin_latin_14;
+extern const lv_font_t font_builtin_latin_16;
 extern const lv_font_t font_builtin_latin_18;
+extern const lv_font_t font_builtin_latin_20;
 extern const lv_font_t font_builtin_latin_24;
+extern const lv_font_t font_builtin_latin_26;
 extern const lv_font_t font_builtin_latin_32;
 }
 
@@ -25,18 +30,34 @@ uint16_t DynamicHandle(uint32_t index, uint16_t generation) {
     return static_cast<uint16_t>(kDynamicHandleBit | ((generation & kDynamicGenerationMask) << 3U) | index);
 }
 
-SystemFontSet BuiltinFontSet() {
-    return SystemFontSet{.fonts = {
-                             &font_builtin_latin_14,
-                             &font_builtin_latin_18,
-                             &font_builtin_latin_24,
-                             &font_builtin_latin_32,
-                         }};
-}
-
-}  // namespace
-
-const lv_font_t* BuiltinLatinFont(SystemFontRole role) {
+const lv_font_t* ProfileFont(SystemFontRole role) {
+#if CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3 || CONFIG_MICROPIXEL_BOARD_SZPI_ESP32S3
+    switch (role) {
+        case SystemFontRole::kTitle:
+            return &font_builtin_latin_18;
+        case SystemFontRole::kLarge:
+            return &font_builtin_latin_14;
+        case SystemFontRole::kMedium:
+            return &font_builtin_latin_12;
+        case SystemFontRole::kSmall:
+        case SystemFontRole::kCount:
+        default:
+            return &font_builtin_latin_10;
+    }
+#elif CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO
+    switch (role) {
+        case SystemFontRole::kTitle:
+            return &font_builtin_latin_26;
+        case SystemFontRole::kLarge:
+            return &font_builtin_latin_20;
+        case SystemFontRole::kMedium:
+            return &font_builtin_latin_16;
+        case SystemFontRole::kSmall:
+        case SystemFontRole::kCount:
+        default:
+            return &font_builtin_latin_14;
+    }
+#else
     switch (role) {
         case SystemFontRole::kTitle:
             return &font_builtin_latin_32;
@@ -49,7 +70,17 @@ const lv_font_t* BuiltinLatinFont(SystemFontRole role) {
         default:
             return &font_builtin_latin_14;
     }
+#endif
 }
+
+SystemFontSet BuiltinFontSet() {
+    return SystemFontSet{.fonts = {ProfileFont(SystemFontRole::kSmall), ProfileFont(SystemFontRole::kMedium),
+                                   ProfileFont(SystemFontRole::kLarge), ProfileFont(SystemFontRole::kTitle)}};
+}
+
+}  // namespace
+
+const lv_font_t* BuiltinLatinFont(SystemFontRole role) { return ProfileFont(role); }
 
 FontRegistry::FontRegistry() : active_(BuiltinFontSet()) {}
 

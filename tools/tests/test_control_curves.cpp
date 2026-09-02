@@ -6,6 +6,7 @@
 
 namespace {
 
+using micropixel::platform::audio::ApplyHostOutputGain;
 using micropixel::platform::audio::kVolumeControlScale;
 using micropixel::platform::audio::ScaleOutputSample;
 using micropixel::platform::audio::VolumeOutputPerTenThousand;
@@ -30,8 +31,7 @@ bool VolumeCurveHasExpectedAnchors() {
            Check(VolumeOutputPerTenThousand(15U) == 531U, "fifteen percent must follow the dB curve") &&
            Check(VolumeOutputPerTenThousand(50U) == 1778U,
                  "fifty percent volume must be fifteen dB below full scale") &&
-           Check(VolumeOutputPerTenThousand(90U) == 7079U,
-                 "ninety percent volume must be three dB below full scale") &&
+           Check(VolumeOutputPerTenThousand(90U) == 7079U, "ninety percent volume must be three dB below full scale") &&
            Check(VolumeOutputPerTenThousand(100U) == kVolumeControlScale,
                  "one hundred percent must remain full output") &&
            Check(VolumeOutputPerTenThousand(255U) == kVolumeControlScale,
@@ -43,8 +43,7 @@ bool BrightnessZeroUsesTheSafePanelFloor() {
                  "zero percent brightness must retain a visible panel output") &&
            Check(BrightnessOutputPerTenThousand(1U) == kBrightnessOutputFloor,
                  "one percent brightness must remain at the rounded safe panel floor") &&
-           Check(BrightnessOutputPerTenThousand(10U) == 361U,
-                 "ten percent brightness must follow the gamma curve") &&
+           Check(BrightnessOutputPerTenThousand(10U) == 361U, "ten percent brightness must follow the gamma curve") &&
            Check(BrightnessOutputPerTenThousand(50U) == 2411U,
                  "fifty percent brightness must reserve range for the upper half") &&
            Check(BrightnessOutputPerTenThousand(90U) == 7993U,
@@ -88,12 +87,19 @@ bool AudioOutputIsTransparentAndSaturatesSafely() {
            Check(ScaleOutputSample(4000, 65535U) == 4000, "out-of-range master volume must clamp safely");
 }
 
+bool HardwareMuteDoesNotOverwriteMasterVolume() {
+    constexpr uint16_t saved_volume = 5000U;
+    return Check(ApplyHostOutputGain(4000, saved_volume, true) == 0, "hardware mute must zero the Host output") &&
+           Check(ApplyHostOutputGain(4000, saved_volume, false) == 2000,
+                 "hardware unmute must restore the unchanged master-volume gain");
+}
+
 }  // namespace
 
 int main() {
     return VolumeCurveHasExpectedAnchors() && BrightnessZeroUsesTheSafePanelFloor() &&
                    BrightnessCurveSupportsABoardSpecificFloor() && LaterSliderStepsHaveMoreOutputRange() &&
-                   AudioOutputIsTransparentAndSaturatesSafely()
+                   AudioOutputIsTransparentAndSaturatesSafely() && HardwareMuteDoesNotOverwriteMasterVolume()
                ? 0
                : 1;
 }

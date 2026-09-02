@@ -879,8 +879,8 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
         const uint32_t toc_end = mapped_header->toc_offset + mapped_header->section_count * sizeof(*section);
         if (section->size == 0U || section->offset < toc_end || (section->offset & 63U) != 0U ||
             section->offset > mapped_header->bundle_size ||
-            section->size > mapped_header->bundle_size - section->offset || section->flags != 0U ||
-            section->reserved0 != 0U || section->reserved1 != 0U) {
+            section->size > mapped_header->bundle_size - section->offset ||
+            (section->kind != MICROPIXEL_BUNDLE_SECTION_AOT && section->flags != 0U) || section->reserved1 != 0U) {
             bundlefs_munmap(&bundlefs_mapping);
             return false;
         }
@@ -899,17 +899,25 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
             return false;
         }
         if (section->kind == MICROPIXEL_BUNDLE_SECTION_AOT) {
+            const bool valid_threading_flags = (section->flags & ~MICROPIXEL_BUNDLE_AOT_FLAG_MASK) == 0U &&
+                                               ((section->flags & MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY) == 0U ||
+                                                (section->flags & MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED) != 0U);
             if (aot_section != NULL || section->id != 0U ||
                 section->format != MICROPIXEL_BUNDLE_FORMAT_AOT_RELOCATABLE || section->width != 0U ||
-                section->height != 0U || section->stride != 0U) {
+                section->height != 0U || section->stride != 0U || !valid_threading_flags ||
+                (section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE &&
+                 section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F &&
+                 section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3)) {
                 bundlefs_munmap(&bundlefs_mapping);
                 return false;
             }
             aot_section = section;
         } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_ASSET) {
             const bool audio = section->format == MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS;
-            if (section->id == 0U || section->format < MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 ||
-                (section->format > MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 && !audio) ||
+            const bool bitmap = section->format >= MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
+                                section->format <= MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
+            const bool raw_rgb565 = section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565;
+            if (section->reserved0 != 0U || section->id == 0U || (!bitmap && !raw_rgb565 && !audio) ||
                 (audio && (section->width != 0U || section->height != 0U || section->stride != 0U)) ||
                 (!audio && (section->width == 0U || section->height == 0U)) ||
                 (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
@@ -917,7 +925,9 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
                   (uint64_t)section->stride * section->height != section->size)) ||
                 (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 &&
                  (section->stride != section->width * 4U ||
-                  (uint64_t)section->stride * section->height != section->size))) {
+                  (uint64_t)section->stride * section->height != section->size)) ||
+                (raw_rgb565 && (section->stride != section->width * 2U ||
+                                (uint64_t)section->stride * section->height != section->size))) {
                 bundlefs_munmap(&bundlefs_mapping);
                 return false;
             }
@@ -937,7 +947,7 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
             }
         } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_APP_METADATA) {
             const bool legacy = section->format == MICROPIXEL_BUNDLE_FORMAT_UTF8;
-            if (metadata_found || section->id != 0U ||
+            if (metadata_found || section->id != 0U || section->reserved0 != 0U ||
                 section->size >
                     (legacy ? MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH : MICROPIXEL_BUNDLE_METADATA_MAX_LENGTH) ||
                 (!legacy && section->format != MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON) ||
@@ -948,7 +958,8 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
             }
             metadata_found = true;
         } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_FONT) {
-            if (section->id == 0U || section->format != MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 || section->width != 0U ||
+            if (section->reserved0 != 0U || section->id == 0U ||
+                section->format != MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 || section->width != 0U ||
                 section->height != 0U || section->stride != 0U) {
                 bundlefs_munmap(&bundlefs_mapping);
                 return false;
@@ -969,11 +980,7 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
         return false;
     }
 
-#if CONFIG_MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM
     const uint32_t payload_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-#else
-    const uint32_t payload_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-#endif
     uint8_t* payload = heap_caps_malloc(aot_section->size, payload_caps);
     if (payload == NULL) {
         bundlefs_munmap(&bundlefs_mapping);
@@ -993,6 +1000,7 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
     package_out->sections = sections;
     package_out->section_count = mapped_header->section_count;
     package_out->launch_asset_id = mapped_header->launch_asset_id;
+    package_out->aot_flags = aot_section->flags;
     memcpy(package_out->app_id, mapped_header->app_id, mapped_header->app_id_length);
     package_out->mapping_handle = bundlefs_mapping.mapping_handle;
     ESP_LOGI(TAG, "Bundle mapped: app=%s virtual=%p bytes=%" PRIu32, package_out->app_id, bundle_bytes,

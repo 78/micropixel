@@ -1,7 +1,6 @@
 #include "host/ui/lvgl/square_common/guest_gesture_hint_ui.hpp"
 
-#include <algorithm>
-
+#include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
@@ -19,9 +18,9 @@ void GuestGestureHintUi::ShowLocked(lv_display_t* display) {
     }
     if (indicator_ == nullptr) {
         const int32_t display_width = lv_display_get_horizontal_resolution(display);
-        const int32_t indicator_width = std::max<int32_t>(80, display_width / 5);
-        const int32_t indicator_height = std::max<int32_t>(6, display_width / 90);
-        const int32_t bottom_margin = std::max<int32_t>(10, display_width / 48);
+        const int32_t indicator_width = gesture_thresholds::GestureHintWidth(display_width);
+        const int32_t indicator_height = gesture_thresholds::GestureHintHeight(display_width);
+        const int32_t bottom_margin = gesture_thresholds::GestureHintBottomMargin(display_width);
         indicator_ = lv_obj_create(lv_screen_active());
         lv_obj_set_size(indicator_, indicator_width, indicator_height);
         lv_obj_align(indicator_, LV_ALIGN_BOTTOM_MID, 0, -bottom_margin);

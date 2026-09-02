@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -15,6 +16,7 @@ constexpr char kTag[] = "micropixel_guest";
 
 GuestContext::GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
                            work::BackgroundExecutor& background_executor, std::string_view effective_locale,
+                           const micropixel_system_launch_arguments_response_t& launch_arguments,
                            GuestLogSink* log_sink)
     : devices_(devices),
       log_sink_(log_sink),
@@ -30,7 +32,7 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       touch_events_(events_, devices_.input(), clock_origin_us_),
       key_events_(events_, devices_.input(), clock_origin_us_),
       timer_endpoint_(*this),
-      system_endpoint_(effective_locale),
+      system_endpoint_(effective_locale, launch_arguments),
       storage_endpoint_(*this),
       resource_endpoint_(*this),
       random_endpoint_(*this),
@@ -48,6 +50,15 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
     (void)std::snprintf(app_id_.data(), app_id_.size(), "%s", reinterpret_cast<const char*>(package.app_id));
     const auto audio_result = devices_.audio().ResumeAll();
     audio_foreground_ready_ = audio_result || audio_result.error().status == MICROPIXEL_STATUS_UNSUPPORTED;
+    if (!valid()) {
+        ESP_LOGE(kTag,
+                 "Guest service init failed: events=%u timers=%u sensors=%u gpio=%u haptics=%u resources=%u "
+                 "audio=%u storage=%u foreground=%u internal_free=%zu internal_largest=%zu",
+                 events_.valid(), timers_.valid(), sensors_.valid(), gpio_.valid(), haptics_.valid(),
+                 resources_.valid(), audio_playback_.valid(), storage_.valid(), audio_foreground_ready_,
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    }
 }
 
 GuestContext::~GuestContext() {
@@ -231,7 +242,9 @@ ServiceResult<void> GuestContext::UpdateStreamingTexture(const micropixel_stream
     }
     const uint32_t bytes_per_pixel = texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
                                          ? 3U
-                                         : (texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
+                                         : (texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
+                                                ? 4U
+                                                : (texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
     if (pixels == nullptr || update.width == 0U || update.height == 0U || bytes_per_pixel == 0U ||
         static_cast<uint64_t>(update.x) + update.width > texture->width ||
         static_cast<uint64_t>(update.y) + update.height > texture->height ||

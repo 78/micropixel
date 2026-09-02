@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/system_gesture_router.hpp"
 
 namespace {
@@ -15,6 +16,7 @@ using micropixel::device::TouchSink;
 using micropixel::host_ui::SystemGestureRouter;
 using micropixel::host_ui::SystemUiAction;
 using micropixel::host_ui::SystemUiActionType;
+namespace gesture_thresholds = micropixel::host_ui::gesture_thresholds;
 
 class FakeInput final : public Input {
    public:
@@ -191,6 +193,50 @@ bool TopGestureScalesFor480Display() {
                  "480px top gesture must open the status layer");
 }
 
+bool TopGestureThresholdsScaleFor320x240Display() {
+    FakeInput input;
+    SystemGestureRouter router(input, 320U, 240U);
+    Capture capture;
+    router.BindTouchSink(CaptureGuest, &capture);
+    router.BindSystemActionSink(CaptureSystem, &capture);
+
+    // The top edge band is 10% of the screen height, matching the 24-row
+    // Hall status bar. The 56/720 travel distance becomes 19 rows.
+    (void)input.Emit(Sample(TouchPhase::kDown, 160U, 23U, 0U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 160U, 42U, 100000U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 160U, 42U, 120000U));
+    if (!Check(capture.guest_samples.empty(), "recognized 240px top gesture must not leak to Guest") ||
+        !Check(capture.system_actions.size() == 1U, "240px top gesture must emit exactly one System action") ||
+        !Check(capture.system_actions[0].type == SystemUiActionType::kOpenStatusLayer,
+               "240px top gesture must open the status layer")) {
+        return false;
+    }
+
+    FakeInput outside_input;
+    SystemGestureRouter outside_router(outside_input, 320U, 240U);
+    Capture outside_capture;
+    outside_router.BindTouchSink(CaptureGuest, &outside_capture);
+    outside_router.BindSystemActionSink(CaptureSystem, &outside_capture);
+    (void)outside_input.Emit(Sample(TouchPhase::kDown, 160U, 24U, 0U));
+    (void)outside_input.Emit(Sample(TouchPhase::kMove, 160U, 60U, 100000U));
+    (void)outside_input.Emit(Sample(TouchPhase::kUp, 160U, 60U, 120000U));
+    return Check(outside_capture.guest_samples.size() == 3U,
+                 "top swipe outside the proportional edge band must reach Guest") &&
+           Check(outside_capture.system_actions.empty(),
+                 "top swipe outside the proportional edge band must not open the status layer");
+}
+
+bool LayerGestureThresholdsScaleFor320x240Display() {
+    return Check(gesture_thresholds::ScaleExtent(720, gesture_thresholds::kLayerGestureDistance) == 50,
+                 "720px layer gesture distance must preserve its original threshold") &&
+           Check(gesture_thresholds::ScaleExtent(720, gesture_thresholds::kLayerGestureMinVelocity) == 3,
+                 "720px layer gesture velocity must preserve its original threshold") &&
+           Check(gesture_thresholds::ScaleExtent(240, gesture_thresholds::kLayerGestureDistance) == 17,
+                 "240px layer gesture distance must scale to 17 rows") &&
+           Check(gesture_thresholds::ScaleExtent(240, gesture_thresholds::kLayerGestureMinVelocity) == 1,
+                 "240px layer gesture velocity must scale to one row per sample");
+}
+
 bool BottomGestureIsReserved() {
     FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
@@ -207,6 +253,39 @@ bool BottomGestureIsReserved() {
                  "bottom gesture must suspend to Hall");
 }
 
+bool BottomGestureThresholdsScaleFor320x240Display() {
+    FakeInput input;
+    SystemGestureRouter router(input, 320U, 240U);
+    Capture capture;
+    router.BindTouchSink(CaptureGuest, &capture);
+    router.BindSystemActionSink(CaptureSystem, &capture);
+
+    // The bottom edge band is 7/120 of the screen height, covering the hint
+    // from its y=226 top edge. The 56/720 travel distance becomes 19 rows.
+    (void)input.Emit(Sample(TouchPhase::kDown, 160U, 226U, 0U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 160U, 207U, 100000U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 160U, 207U, 120000U));
+    if (!Check(capture.guest_samples.empty(), "recognized 240px bottom gesture must not leak to Guest") ||
+        !Check(capture.system_actions.size() == 1U, "240px bottom gesture must emit exactly one System action") ||
+        !Check(capture.system_actions[0].type == SystemUiActionType::kSuspendToHall,
+               "240px bottom gesture must suspend to Hall")) {
+        return false;
+    }
+
+    FakeInput outside_input;
+    SystemGestureRouter outside_router(outside_input, 320U, 240U);
+    Capture outside_capture;
+    outside_router.BindTouchSink(CaptureGuest, &outside_capture);
+    outside_router.BindSystemActionSink(CaptureSystem, &outside_capture);
+    (void)outside_input.Emit(Sample(TouchPhase::kDown, 160U, 225U, 0U));
+    (void)outside_input.Emit(Sample(TouchPhase::kMove, 160U, 190U, 100000U));
+    (void)outside_input.Emit(Sample(TouchPhase::kUp, 160U, 190U, 120000U));
+    return Check(outside_capture.guest_samples.size() == 3U,
+                 "bottom swipe outside the proportional edge band must reach Guest") &&
+           Check(outside_capture.system_actions.empty(),
+                 "bottom swipe outside the proportional edge band must not suspend");
+}
+
 bool BottomGestureRejectsIncidentalMovement() {
     FakeInput input;
     SystemGestureRouter router(input, 720U, 720U);
@@ -214,12 +293,12 @@ bool BottomGestureRejectsIncidentalMovement() {
     router.BindTouchSink(CaptureGuest, &capture);
     router.BindSystemActionSink(CaptureSystem, &capture);
 
-    // A swipe beginning outside the final 32 rows belongs to the Guest even
+    // A swipe beginning outside the final 42 rows belongs to the Guest even
     // when it travels far enough to resemble the old System gesture.
-    (void)input.Emit(Sample(TouchPhase::kDown, 360U, 680U, 0U));
-    (void)input.Emit(Sample(TouchPhase::kMove, 358U, 580U, 90000U));
-    (void)input.Emit(Sample(TouchPhase::kUp, 358U, 580U, 110000U));
-    if (!Check(capture.guest_samples.size() == 3U, "bottom swipe outside the reserved 32 rows must reach Guest") ||
+    (void)input.Emit(Sample(TouchPhase::kDown, 360U, 677U, 0U));
+    (void)input.Emit(Sample(TouchPhase::kMove, 358U, 577U, 90000U));
+    (void)input.Emit(Sample(TouchPhase::kUp, 358U, 577U, 110000U));
+    if (!Check(capture.guest_samples.size() == 3U, "bottom swipe outside the reserved 42 rows must reach Guest") ||
         !Check(capture.system_actions.empty(), "bottom swipe outside reserved rows must not suspend")) {
         return false;
     }
@@ -356,15 +435,17 @@ bool TimedOutCandidateReturnsToGuest() {
 }  // namespace
 
 int main() {
-    const bool passed =
-        NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() && SemanticKeyReachesGuest() &&
-        TouchAndKeyInputReportUserActivity() && TopGestureIsReserved() && TopGestureScalesFor480Display() &&
-        BottomGestureIsReserved() && BottomGestureRejectsIncidentalMovement() && BottomSideRegionsPassThrough() &&
-        RecognizedGestureQuarantinesReplacementTrack() && RejectedEdgeGestureReplaysCompleteSequence() &&
-        ReleasedEdgeTapReplaysDownAndUp() && RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
+    const bool passed = NormalTouchPassesThrough() && InjectedTouchTraversesPlatformAndSystemRouter() &&
+                        SemanticKeyReachesGuest() && TouchAndKeyInputReportUserActivity() && TopGestureIsReserved() &&
+                        TopGestureScalesFor480Display() && TopGestureThresholdsScaleFor320x240Display() &&
+                        LayerGestureThresholdsScaleFor320x240Display() && BottomGestureIsReserved() &&
+                        BottomGestureThresholdsScaleFor320x240Display() && BottomGestureRejectsIncidentalMovement() &&
+                        BottomSideRegionsPassThrough() && RecognizedGestureQuarantinesReplacementTrack() &&
+                        RejectedEdgeGestureReplaysCompleteSequence() && ReleasedEdgeTapReplaysDownAndUp() &&
+                        RejectedEdgeDragRetainsLatestMove() && TimedOutCandidateReturnsToGuest();
     if (!passed) {
         return 1;
     }
-    std::puts("SystemGestureRouter host tests passed (14 cases).");
+    std::puts("SystemGestureRouter host tests passed (17 cases).");
     return 0;
 }

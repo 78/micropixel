@@ -1,0 +1,11 @@
+# ESP32-S3 16 MiB preview layout. The final 8 MiB remains a writable BundleFS
+# app_store so every S3 board uses the same install and launch path.
+# Name,       Type, SubType, Offset,   Size,       Flags
+nvs,          data, nvs,     0x009000, 0x006000,
+phy_init,     data, phy,     0x00f000, 0x001000,
+otadata,      data, ota,     0x010000, 0x002000,
+runtime_nvs,  data, nvs,     0x012000, 0x010000,
+ota_0,        app,  ota_0,   0x030000, 0x380000,
+ota_1,        app,  ota_1,   0x3b0000, 0x380000,
+sys_store,    data, nvs,     0x730000, 0x0d0000,
+app_store,    data, 0x40,    0x800000, 0x0800000,

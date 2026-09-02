@@ -24,18 +24,23 @@ constexpr uint32_t kNodeMask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE | MICRO
 constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY;
+constexpr uint32_t kContainerMask =
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE;
 
 class SceneMessage final {
    public:
     SceneMessage(uint16_t kind, uint32_t generation, uint32_t base_revision, uint32_t revision, uint16_t node_count,
-                 uint16_t batch_instance_count, uint16_t layer_count = 0U)
+                 uint16_t batch_instance_count, uint16_t layer_count = 0U, uint16_t interface_minor = 1U)
         : kind_(kind),
           generation_(generation),
           base_revision_(base_revision),
           revision_(revision),
           node_count_(node_count),
           layer_count_(layer_count),
-          batch_instance_count_(batch_instance_count) {
+          batch_instance_count_(batch_instance_count),
+          interface_minor_(interface_minor) {
         bytes_.resize(sizeof(micropixel_graphics_scene_header_t));
     }
 
@@ -69,7 +74,7 @@ class SceneMessage final {
         const micropixel_graphics_scene_header_t header{
             .magic = MICROPIXEL_GRAPHICS_SCENE_MAGIC,
             .interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-            .interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR,
+            .interface_minor = interface_minor_,
             .kind = kind_,
             .flags = 0U,
             .total_size = static_cast<uint32_t>(bytes_.size()),
@@ -94,6 +99,7 @@ class SceneMessage final {
     uint16_t layer_count_{};
     uint16_t batch_instance_count_{};
     uint16_t record_count_{};
+    uint16_t interface_minor_{};
     std::vector<uint8_t> bytes_{};
 };
 
@@ -137,9 +143,15 @@ struct Fixture final {
     std::array<graphics::GuestSceneNode, 16U> second_nodes{};
     std::array<graphics::GuestSceneSpriteInstance, 16U> first_instances{};
     std::array<graphics::GuestSceneSpriteInstance, 16U> second_instances{};
+    std::array<graphics::GuestSceneContainer, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U> first_containers{};
+    std::array<graphics::GuestSceneContainer, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U> second_containers{};
+    std::array<uint16_t, 16U> first_draw_order{};
+    std::array<uint16_t, 16U> second_draw_order{};
     graphics::GuestScene scene{
-        first_nodes.data(),     second_nodes.data(),     static_cast<uint16_t>(first_nodes.size()),
-        first_instances.data(), second_instances.data(), static_cast<uint16_t>(first_instances.size())};
+        first_nodes.data(),      second_nodes.data(),      static_cast<uint16_t>(first_nodes.size()),
+        first_instances.data(),  second_instances.data(),  static_cast<uint16_t>(first_instances.size()),
+        first_containers.data(), second_containers.data(), first_draw_order.data(),
+        second_draw_order.data()};
     graphics::AppSurfaceCompositor compositor{first_operations.data(), second_operations.data(),
                                               static_cast<uint32_t>(first_operations.size()), pixels, kNoOverdraw};
 
@@ -191,6 +203,40 @@ micropixel_graphics_scene_rect_record_t Rect(uint16_t id, int32_t x, int32_t y, 
             .reserved0 = {}};
 }
 
+micropixel_graphics_scene_container_record_t Container(uint16_t id, uint16_t parent, uint16_t sibling,
+                                                       int32_t translate_x, uint8_t opacity = 255U, bool visible = true,
+                                                       uint32_t mask = kContainerMask) {
+    return {
+        .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_CONTAINER,
+                   .size = sizeof(micropixel_graphics_scene_container_record_t)},
+        .container_id = id,
+        .parent_container_id = parent,
+        .property_mask = mask,
+        .clip_x = id == 1U ? 0 : 0,
+        .clip_y = 0,
+        .width = id == 1U ? 8 : 0,
+        .height = id == 1U ? 2 : 0,
+        .translate_x = translate_x,
+        .translate_y = 0,
+        .z_order = 0,
+        .opacity = opacity,
+        .visible = static_cast<uint8_t>(visible ? 1U : 0U),
+        .sibling_order = sibling,
+        .reserved0 = 0U,
+    };
+}
+
+micropixel_graphics_scene_node_link_record_t Link(uint16_t node, uint16_t parent, uint16_t sibling) {
+    return {
+        .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_NODE_LINK,
+                   .size = sizeof(micropixel_graphics_scene_node_link_record_t)},
+        .node_id = node,
+        .parent_container_id = parent,
+        .sibling_order = sibling,
+        .reserved0 = 0U,
+    };
+}
+
 void InitialSceneRendersTheWholePersistentSurface() {
     Fixture fixture;
     std::array<uint8_t, 8U * 4U * 3U> storage{};
@@ -206,6 +252,58 @@ void InitialSceneRendersTheWholePersistentSurface() {
     assert(storage[0] == 0x03U && storage[1] == 0x02U && storage[2] == 0x01U);
     const size_t red = (1U * 8U + 2U) * 3U;
     assert(storage[red] == 0U && storage[red + 1U] == 0U && storage[red + 2U] == 255U);
+}
+
+void SmallerKeyframeClearsRemovedNodes() {
+    Fixture fixture;
+    std::array<uint8_t, 8U * 2U * 3U> storage{};
+    auto surface = BgrSurface(storage, 8U, 2U);
+
+    SceneMessage initial(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 1U, 0U, 1U, 2U, 0U);
+    initial.Add(Background(0U));
+    initial.Add(Rect(0U, 0, 0, 2, 1, 0xff0000U));
+    initial.Add(Rect(1U, 4, 0, 2, 1, 0x00ff00U));
+    assert(fixture.Apply(initial.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+    assert(fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr).status ==
+           graphics::AppSurfaceStatus::kOk);
+    const size_t removed_pixel = 4U * 3U;
+    assert(storage[removed_pixel] == 0U && storage[removed_pixel + 1U] == 255U && storage[removed_pixel + 2U] == 0U);
+
+    SceneMessage smaller(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 2U, 0U, 1U, 1U, 0U);
+    smaller.Add(Background(0U));
+    smaller.Add(Rect(0U, 0, 0, 2, 1, 0xff0000U));
+    assert(fixture.Apply(smaller.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+    const auto result = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(result.status == graphics::AppSurfaceStatus::kOk);
+    assert(result.visual_changed && result.damage_pixels >= 2U);
+    assert(storage[removed_pixel] == 0U && storage[removed_pixel + 1U] == 0U && storage[removed_pixel + 2U] == 0U);
+}
+
+void NestedContainersPropagateVisualStateWithOnePatch() {
+    Fixture fixture;
+    std::array<uint8_t, 8U * 2U * 3U> storage{};
+    auto surface = BgrSurface(storage, 8U, 2U);
+
+    SceneMessage keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 9U, 0U, 1U, 1U, 0U, 2U, 2U);
+    keyframe.Add(Background(0U));
+    keyframe.Add(Container(1U, 0U, 0U, 1, 128U));
+    keyframe.Add(Container(2U, 1U, 1U, 1));
+    keyframe.Add(Rect(0U, 0, 0, 2, 1, 0xff0000U));
+    keyframe.Add(Link(0U, 2U, 2U));
+    assert(fixture.Apply(keyframe.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+    const auto initial = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(initial.status == graphics::AppSurfaceStatus::kOk);
+    const size_t translated_pixel = 2U * 3U;
+    assert(storage[translated_pixel] == 0U && storage[translated_pixel + 1U] == 0U &&
+           storage[translated_pixel + 2U] >= 127U && storage[translated_pixel + 2U] <= 128U);
+
+    SceneMessage patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 9U, 1U, 2U, 1U, 0U, 2U, 2U);
+    patch.Add(Container(1U, 0U, 0U, 1, 128U, false, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE));
+    assert(fixture.Apply(patch.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+    const auto hidden = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(hidden.status == graphics::AppSurfaceStatus::kOk && hidden.incremental_normalization);
+    assert(storage[translated_pixel] == 0U && storage[translated_pixel + 1U] == 0U &&
+           storage[translated_pixel + 2U] == 0U);
 }
 
 void SpriteBatchPatchDamagesOnlyOldTailAndNewHead() {
@@ -448,8 +546,7 @@ void DamageRegionsMergeLargeOverlapButNotUnrelatedSourcesAtCapacity() {
     const uint8_t source{};
     assert(overlapping.Add(&source, {.x = 0U, .y = 0U, .width = 200U, .height = 200U}, kNoOverdraw));
     assert(overlapping.Add(&source, {.x = 4U, .y = 2U, .width = 200U, .height = 200U}, kNoOverdraw));
-    assert(overlapping.Size() == 1U && overlapping[0U].rect.width == 204U &&
-           overlapping[0U].rect.height == 202U);
+    assert(overlapping.Size() == 1U && overlapping[0U].rect.width == 204U && overlapping[0U].rect.height == 202U);
 
     graphics::DamageRegionSet<2U> unrelated;
     const uint8_t second_source{};
@@ -498,6 +595,8 @@ void DamageRegionsRejectInvalidRectanglesAndResetMetrics() {
 
 int main() {
     InitialSceneRendersTheWholePersistentSurface();
+    SmallerKeyframeClearsRemovedNodes();
+    NestedContainersPropagateVisualStateWithOnePatch();
     SpriteBatchPatchDamagesOnlyOldTailAndNewHead();
     StreamingSurfaceDamageMapsToItsDestination();
     AtlasFramePatchDamagesOnlyTheSpriteBounds();

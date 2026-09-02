@@ -24,12 +24,34 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 
-VERSION = "0.10.1"
-MINIMUM_FIRMWARE_VERSION = "0.2.2"
+VERSION = "0.11.0"
+MINIMUM_FIRMWARE_VERSION = "0.4.0"
 BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
 BUNDLE_ALIGNMENT = 64 * 1024
+BUNDLE_HEADER = struct.Struct("<8sIIII64sIIIIIIIIII")
+BUNDLE_SECTION = struct.Struct("<IIIIIIIIIIII")
 GUEST_LINEAR_MEMORY_ABSOLUTE_MAX_BYTES = 16 * 1024 * 1024
+AOT_TARGET_FLAGS = {
+    "riscv32-ilp32f": (
+        "--target=riscv32",
+        "--target-abi=ilp32f",
+        "--cpu=generic-rv32",
+        "--cpu-features=+m,+a,+f,+c,+zicsr,+zifencei",
+    ),
+    "xtensa": ("--target=xtensa", "--cpu=esp32s3"),
+}
+AOT_TARGET_MASKS = {
+    "riscv32-ilp32f": 1,
+    "xtensa": 2,
+}
+AOT_TARGET_NAMES = {value: key for key, value in AOT_TARGET_MASKS.items()}
+AOT_FLAG_THREADING_DECLARED = 1 << 0
+AOT_FLAG_SHARED_MEMORY = 1 << 1
+AOT_FLAG_MASK = AOT_FLAG_THREADING_DECLARED | AOT_FLAG_SHARED_MEMORY
+DEFAULT_AOT_TARGET = "riscv32-ilp32f"
+LAUNCH_ARGUMENT_MAX_COUNT = 16
+LAUNCH_ARGUMENT_MAX_BYTES = 512
 NETWORK_COMMANDS = frozenset({"device", "firmware", "app", "artifact", "logs", "screenshot", "input", "job"})
 ALL_API_SCOPES = (
     "device:read",
@@ -47,6 +69,27 @@ EMBEDDED_BUNDLE_BUILDER: str | None = None
 
 class CliError(RuntimeError):
     pass
+
+
+def validate_launch_arguments(arguments: list[str]) -> list[str]:
+    if len(arguments) > LAUNCH_ARGUMENT_MAX_COUNT:
+        raise CliError(f"at most {LAUNCH_ARGUMENT_MAX_COUNT} launch arguments are supported")
+    total_bytes = 0
+    for argument in arguments:
+        if "\0" in argument:
+            raise CliError("launch arguments cannot contain NUL bytes")
+        total_bytes += len(argument.encode("utf-8")) + 1
+    if total_bytes > LAUNCH_ARGUMENT_MAX_BYTES:
+        raise CliError(f"launch arguments exceed the {LAUNCH_ARGUMENT_MAX_BYTES}-byte limit")
+    return arguments
+
+
+def encode_launch_arguments(arguments: list[str]) -> str:
+    validate_launch_arguments(arguments)
+    if not arguments:
+        return ""
+    payload = b"".join(argument.encode("utf-8") + b"\0" for argument in arguments)
+    return base64.b64encode(payload).decode("ascii")
 
 
 class TerminalProgress:
@@ -90,6 +133,7 @@ class ProjectManifest:
     name: str
     sources: tuple[Path, ...]
     asset_manifest: Path | None
+    threading: str
 
 
 def sdk_root() -> Path:
@@ -276,23 +320,38 @@ class ControlClient:
             time.sleep(0.5)
 
 
-def discover_usb_port(explicit_port: str | None) -> str:
-    if explicit_port:
-        return explicit_port
+ESPRESSIF_USB_VENDOR_ID = 0x303A
+MICROPIXEL_USB_PRODUCT_IDS = frozenset({0x1001, 0x4001})
+
+
+def usb_serial_ports() -> list[Any]:
     try:
         from serial.tools import list_ports
     except ImportError as error:
         raise CliError("USB transport requires pyserial; install requirements-dev.txt") from error
+    return list(list_ports.comports())
+
+
+def is_micropixel_usb_candidate(port: Any) -> bool:
+    product = str(getattr(port, "product", "") or "")
+    return getattr(port, "vid", None) == ESPRESSIF_USB_VENDOR_ID and (
+        getattr(port, "pid", None) in MICROPIXEL_USB_PRODUCT_IDS or product.startswith("MicroPixel ")
+    )
+
+
+def discover_usb_port(explicit_port: str | None) -> str:
+    if explicit_port:
+        return explicit_port
     candidates = [
         port.device
-        for port in list_ports.comports()
-        if port.vid == 0x303A and port.pid == 0x1001
+        for port in usb_serial_ports()
+        if is_micropixel_usb_candidate(port)
     ]
     if not candidates:
-        raise CliError("No ESP32 USB Serial/JTAG device found; connect the device or pass --port")
+        raise CliError("No MicroPixel USB device found; connect the device, run 'port list', or pass --port")
     if len(candidates) != 1:
         shown = ", ".join(sorted(candidates))
-        raise CliError(f"Multiple ESP32 USB Serial/JTAG devices found ({shown}); pass --port")
+        raise CliError(f"Multiple MicroPixel USB devices found ({shown}); pass --port")
     return candidates[0]
 
 
@@ -467,8 +526,18 @@ class UsbControlClient:
             "port": self.port,
         }
 
-    def action(self, operation: str, app_id: str | None = None) -> dict[str, Any]:
-        detail = self.request(operation, app_id or "")
+    def action(
+        self,
+        operation: str,
+        app_id: str | None = None,
+        launch_arguments: list[str] | None = None,
+    ) -> dict[str, Any]:
+        detail = app_id or ""
+        if launch_arguments:
+            if operation != "APP_START" or app_id is None:
+                raise CliError("launch arguments can only be supplied to APP_START")
+            detail = f"{app_id} {encode_launch_arguments(launch_arguments)}"
+        detail = self.request(operation, detail)
         fields = detail.split(maxsplit=1)
         if len(fields) != 2 or fields[0] != "RESULT":
             raise CliError(f"Device returned an unexpected action result: {detail}")
@@ -767,6 +836,49 @@ class UsbControlClient:
         }
 
 
+def list_local_ports(include_all: bool = False, probe_timeout: float = 2.0) -> dict[str, Any]:
+    if probe_timeout <= 0:
+        raise CliError("port list --timeout must be greater than zero")
+    results: list[dict[str, Any]] = []
+    port_infos = sorted(usb_serial_ports(), key=lambda value: str(value.device))
+    for port_info in port_infos:
+        candidate = is_micropixel_usb_candidate(port_info)
+        if not include_all and not candidate:
+            continue
+        product = getattr(port_info, "product", None)
+        description = getattr(port_info, "description", None)
+        manufacturer = getattr(port_info, "manufacturer", None)
+        vid = getattr(port_info, "vid", None)
+        pid = getattr(port_info, "pid", None)
+        port: dict[str, Any] = {
+            "port": str(port_info.device),
+            "deviceName": product or description or str(port_info.device),
+            "microPixelCandidate": candidate,
+        }
+        if manufacturer:
+            port["manufacturer"] = str(manufacturer)
+        if isinstance(vid, int) and isinstance(pid, int):
+            port["usbId"] = f"{vid:04X}:{pid:04X}"
+        if candidate:
+            try:
+                with UsbControlClient(str(port_info.device), probe_timeout) as client:
+                    status = client.device_status()
+                hardware = status.get("hardware")
+                firmware = status.get("firmware")
+                port.update(
+                    {
+                        "available": True,
+                        "board": hardware.get("board") if isinstance(hardware, dict) else None,
+                        "chip": hardware.get("chip") if isinstance(hardware, dict) else None,
+                        "firmwareVersion": firmware.get("version") if isinstance(firmware, dict) else None,
+                    }
+                )
+            except CliError as error:
+                port.update({"available": False, "error": str(error)})
+        results.append(port)
+    return {"ports": results, "count": len(results)}
+
+
 def job_failure_message(job_id: str, status: str, error: Any) -> str:
     if isinstance(error, dict):
         code = error.get("code")
@@ -820,7 +932,7 @@ def semantic_version(value: str) -> tuple[int, int, int] | None:
     return tuple(map(int, matched.groups())) if matched else None
 
 
-def require_compatible_firmware(client: ControlClient) -> None:
+def require_compatible_firmware(client: ControlClient) -> dict[str, Any]:
     snapshot = client.json("GET", client.device_path())
     if snapshot.get("online") is not True:
         raise CliError("The device is offline. Bring it online before installing or starting an App.")
@@ -834,6 +946,69 @@ def require_compatible_firmware(client: ControlClient) -> None:
             f"Device firmware {shown} is not compatible with MicroPixel SDK/CLI {VERSION}. "
             f"Upgrade the device to firmware {MINIMUM_FIRMWARE_VERSION} or later, then retry."
         )
+    return snapshot
+
+
+def require_compatible_usb_firmware(status: dict[str, Any]) -> None:
+    firmware = status.get("firmware")
+    firmware_version = firmware.get("version") if isinstance(firmware, dict) else None
+    current = semantic_version(firmware_version) if isinstance(firmware_version, str) else None
+    minimum = semantic_version(MINIMUM_FIRMWARE_VERSION)
+    if current is None or minimum is None or current < minimum:
+        shown = firmware_version if isinstance(firmware_version, str) and firmware_version else "unknown"
+        raise CliError(
+            f"Device firmware {shown} is not compatible with MicroPixel SDK/CLI {VERSION}. "
+            f"Upgrade the device to firmware {MINIMUM_FIRMWARE_VERSION} or later, then retry."
+        )
+
+
+def _hardware_chip(value: object) -> object:
+    if not isinstance(value, dict):
+        return None
+    hardware = value.get("hardware")
+    if isinstance(hardware, dict) and hardware.get("chip") is not None:
+        return hardware.get("chip")
+    status = value.get("status")
+    if isinstance(status, dict):
+        chip = _hardware_chip(status)
+        if chip is not None:
+            return chip
+        system_information = status.get("systemInformation")
+        chip = _hardware_chip(system_information)
+        if chip is not None:
+            return chip
+    return None
+
+
+def network_device_aot_target(client: ControlClient) -> str:
+    snapshot = require_compatible_firmware(client)
+    chip = _hardware_chip(snapshot)
+    if chip is None:
+        system_information = client.json("GET", client.device_path("/system-info"))
+        chip = _hardware_chip(system_information)
+    return aot_target_for_chip(chip)
+
+
+def usb_device_aot_target(client: UsbControlClient) -> str:
+    status = client.device_status()
+    require_compatible_usb_firmware(status)
+    return aot_target_for_chip(_hardware_chip(status))
+
+
+def prepare_connected_bundle(
+    args: argparse.Namespace,
+    expected_target: str,
+    prepare: Callable[[argparse.Namespace], Path],
+) -> Path:
+    requested_target = getattr(args, "aot_target", None)
+    if requested_target is not None and requested_target != expected_target:
+        raise CliError(
+            f"--aot-target {requested_target} is incompatible with the connected device, which requires {expected_target}"
+        )
+    args.aot_target = expected_target
+    bundle = prepare(args)
+    require_bundle_target(bundle, expected_target)
+    return bundle
 
 
 def app_failure_recommendation(diagnostic: dict[str, Any]) -> str | None:
@@ -847,17 +1022,113 @@ def app_failure_recommendation(diagnostic: dict[str, Any]) -> str | None:
     return None
 
 
+def fnv1a32(data: bytes) -> int:
+    value = 0x811C9DC5
+    for byte in data:
+        value ^= byte
+        value = (value * 0x01000193) & 0xFFFFFFFF
+    return value
+
+
 def validate_bundle(path: Path) -> dict[str, Any]:
     data = path.read_bytes()
     if len(data) < BUNDLE_HEADER_SIZE or len(data) % BUNDLE_ALIGNMENT or data[:8] != BUNDLE_MAGIC:
         raise CliError("Not a 64 KiB-aligned MicroPixel Bundle v1")
-    version, header_size, bundle_size = struct.unpack_from("<III", data, 8)
-    app_id_length = struct.unpack_from("<I", data, 88)[0]
-    if version != 1 or header_size != BUNDLE_HEADER_SIZE or bundle_size != len(data) or not 1 <= app_id_length <= 64:
+    fields = BUNDLE_HEADER.unpack_from(data)
+    (
+        _magic,
+        version,
+        header_size,
+        bundle_size,
+        toc_offset,
+        app_id_field,
+        app_id_length,
+        section_count,
+        framework_abi_version,
+        _launch_asset_id,
+        header_hash,
+        reserved0,
+        reserved1,
+        reserved2,
+        reserved3,
+        reserved4,
+    ) = fields
+    if (
+        version != 1
+        or header_size != BUNDLE_HEADER_SIZE
+        or bundle_size != len(data)
+        or toc_offset != BUNDLE_HEADER_SIZE
+        or not 1 <= app_id_length <= 64
+        or not 1 <= section_count <= 128
+        or toc_offset + section_count * BUNDLE_SECTION.size > len(data)
+        or framework_abi_version != 1
+        or any((reserved0, reserved1, reserved2, reserved3, reserved4))
+    ):
         raise CliError("Invalid MicroPixel Bundle v1 header")
-    app_id = data[24:88][:app_id_length].decode("ascii")
+    hash_fields = list(fields)
+    hash_fields[10] = 0
+    if fnv1a32(BUNDLE_HEADER.pack(*hash_fields)) != header_hash:
+        raise CliError("Invalid MicroPixel Bundle v1 header hash")
+    app_id = app_id_field[:app_id_length].decode("ascii")
+    if any(app_id_field[app_id_length:]):
+        raise CliError("Invalid MicroPixel Bundle v1 App ID padding")
     quote_identifier(app_id)
-    return {"appId": app_id, "sizeBytes": len(data)}
+    aot_sections = 0
+    aot_target_mask = 0
+    aot_flags = 0
+    for index in range(section_count):
+        section = BUNDLE_SECTION.unpack_from(data, toc_offset + index * BUNDLE_SECTION.size)
+        if section[0] == 1:
+            aot_sections += 1
+            aot_flags = section[9]
+            aot_target_mask = section[10]
+            if aot_flags & ~AOT_FLAG_MASK or (
+                aot_flags & AOT_FLAG_SHARED_MEMORY and not aot_flags & AOT_FLAG_THREADING_DECLARED
+            ):
+                raise CliError("Invalid MicroPixel Bundle v1 AOT threading metadata")
+            if aot_target_mask not in {0, *AOT_TARGET_NAMES}:
+                raise CliError("Invalid MicroPixel Bundle v1 AOT target metadata")
+    if aot_sections > 1:
+        raise CliError("Invalid MicroPixel Bundle v1 AOT target metadata")
+    return {
+        "appId": app_id,
+        "sizeBytes": len(data),
+        "aotTarget": AOT_TARGET_NAMES.get(aot_target_mask),
+        "threading": (
+            "shared-memory"
+            if aot_flags & AOT_FLAG_SHARED_MEMORY
+            else "none"
+            if aot_flags & AOT_FLAG_THREADING_DECLARED
+            else None
+        ),
+        "hasAot": aot_sections == 1,
+    }
+
+
+def aot_target_for_chip(chip: object) -> str:
+    if not isinstance(chip, str) or not chip.strip():
+        raise CliError("Device did not report its Host chip; cannot select an AOT target")
+    normalized = chip.strip().upper()
+    if normalized == "ESP32-S3":
+        return "xtensa"
+    if normalized in {"ESP32-P4", "ESP32-S31"}:
+        return "riscv32-ilp32f"
+    raise CliError(f"Device Host chip {chip!r} has no supported MicroPixel AOT target")
+
+
+def require_bundle_target(bundle: Path, expected_target: str) -> dict[str, Any]:
+    details = validate_bundle(bundle)
+    if details["hasAot"]:
+        actual_target = details["aotTarget"]
+        if actual_target is None:
+            raise CliError(
+                "App Bundle has no AOT target metadata; rebuild it with the current MicroPixel CLI before installing"
+            )
+        if actual_target != expected_target:
+            raise CliError(
+                f"App Bundle targets {actual_target}, but the connected device requires {expected_target}"
+            )
+    return details
 
 
 def print_json(value: Any) -> None:
@@ -970,6 +1241,43 @@ def run_auth_pair(args: argparse.Namespace) -> None:
 run_auth_login = run_auth_pair
 
 
+def guest_build_profile_flags(profile: str, aot_target: str) -> tuple[list[str], list[str], list[str]]:
+    profiles = {
+        "development": (["-O1", "-g"], [], ["--opt-level=1", "--size-level=3"]),
+        "release": (
+            ["-Oz"],
+            ["-Wl,--strip-all"],
+            ["--opt-level=3", "--size-level=3", "--call-stack-features=ip,func-idx"],
+        ),
+        "size": (
+            ["-Oz"],
+            ["-Wl,--strip-all"],
+            ["--opt-level=3", "--size-level=3", "--call-stack-features=ip,func-idx"],
+        ),
+    }
+    compile_flags, link_flags, aot_flags = profiles[profile]
+    if aot_target == "xtensa":
+        # Xtensa l32r can address literals only in the preceding 256 KiB.
+        # WAMR's size-level 0 asks LLVM to emit literal islands for modules
+        # whose generated text exceeds that range.
+        aot_flags = [flag for flag in aot_flags if not flag.startswith("--size-level=")]
+        aot_flags.append("--size-level=0")
+    return list(compile_flags), list(link_flags), list(aot_flags)
+
+
+def guest_threading_flags(threading: str) -> tuple[str, list[str], list[str], list[str]]:
+    if threading == "none":
+        return "wasm32-wasip1", [], [], []
+    if threading == "shared-memory":
+        return (
+            "wasm32-wasip1-threads",
+            ["-matomics", "-mbulk-memory"],
+            ["-Wl,--shared-memory"],
+            ["--enable-multi-thread"],
+        )
+    raise CliError("Guest threading must be none or shared-memory")
+
+
 def _run_build_sources(args: argparse.Namespace) -> None:
     root = sdk_root()
     name = args.name or Path(args.source).stem
@@ -982,6 +1290,12 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             raise CliError(f"Guest source not found: {source}")
 
     environment = project_environment(Path.cwd())
+    aot_target = getattr(args, "aot_target", None) or environment.get(
+        "MICROPIXEL_AOT_TARGET", DEFAULT_AOT_TARGET
+    ).strip()
+    if aot_target not in AOT_TARGET_FLAGS:
+        choices = ", ".join(AOT_TARGET_FLAGS)
+        raise CliError(f"Unsupported AOT target {aot_target!r}; choose one of: {choices}")
     wasi_clangxx = environment.get("WASI_CLANGXX", "").strip()
     if not wasi_clangxx and environment.get("WASI_CLANG", "").strip().endswith("clang"):
         wasi_clangxx = f"{environment['WASI_CLANG'].strip()[:-5]}clang++"
@@ -998,8 +1312,16 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     wamrc = environment.get("WAMRC", "").strip()
     if not wamrc:
         candidates = (
-            root / "build/tools/wamrc-2.4.3-riscv32-ilp32f",
-            root / "build/tools/wamrc-host-build-llvm19/wamrc",
+            (
+                root / "build/tools/wamrc-xtensa/wamrc",
+                root / "build/tools/wamrc-xtensa/wamrc-2.4.3",
+            )
+            if aot_target == "xtensa"
+            else (
+                root / "build/tools/wamrc-2.4.3-riscv32-ilp32f",
+                root / "build/tools/wamrc-host-build-llvm19/wamrc",
+                root / "build/tools/wamrc-host-build-llvm19/wamrc-2.4.3",
+            )
         )
         wamrc = next((str(candidate) for candidate in candidates if os.access(candidate, os.X_OK)), "")
     if not wamrc:
@@ -1029,12 +1351,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    profiles = {
-        "development": (["-O1", "-g"], [], ["--opt-level=1", "--size-level=3"]),
-        "release": (["-O2"], ["-Wl,--strip-all"], ["--opt-level=3", "--size-level=3"]),
-        "size": (["-Oz"], ["-Wl,--strip-all"], ["--opt-level=3", "--size-level=3"]),
-    }
-    compile_flags, link_flags, aot_flags = profiles[args.profile]
+    compile_flags, link_flags, aot_flags = guest_build_profile_flags(args.profile, aot_target)
+    threading = getattr(args, "threading", "none")
+    target, thread_compile_flags, thread_link_flags, thread_aot_flags = guest_threading_flags(threading)
     include_flags = ["-I", str(root / "guest")]
     if generated_include:
         include_flags.extend(["-I", generated_include])
@@ -1044,12 +1363,11 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     subprocess.run(
         [
             wasi_clangxx,
-            "--target=wasm32-wasip1-threads",
+            f"--target={target}",
             "-std=c++23",
             "-nostdlib",
             "-ffreestanding",
-            "-matomics",
-            "-mbulk-memory",
+            *thread_compile_flags,
             "-mno-reference-types",
             *compile_flags,
             "-fno-exceptions",
@@ -1062,7 +1380,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             "-Werror",
             *include_flags,
             "-Wl,--no-entry",
-            "-Wl,--shared-memory",
+            *thread_link_flags,
             f"-Wl,--max-memory={GUEST_LINEAR_MEMORY_ABSOLUTE_MAX_BYTES}",
             "-Wl,-z,stack-size=16384",
             "-Wl,--gc-sections",
@@ -1078,7 +1396,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             str(root / "guest/runtime/cxx_runtime.cpp"),
             str(root / "guest/runtime/startup.cpp"),
             str(root / "guest/runtime/sdk.cpp"),
-            str(root / "guest/runtime/scene.cpp"),
+            str(root / "guest/runtime/scene_graph.cpp"),
             *(str(source) for source in sources),
             "-lc++",
             "-o",
@@ -1089,12 +1407,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     subprocess.run(
         [
             wamrc,
-            "--target=riscv32",
-            "--target-abi=ilp32f",
-            "--cpu=generic-rv32",
-            "--cpu-features=+m,+a,+f,+c,+zicsr,+zifencei",
+            *AOT_TARGET_FLAGS[aot_target],
             "--bounds-checks=1",
-            "--enable-multi-thread",
+            *thread_aot_flags,
             "--enable-memory-profiling",
             "--disable-ref-types",
             "--disable-simd",
@@ -1106,7 +1421,10 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         ],
         check=True,
     )
-    print(f"P4 Guest built ({args.profile}):\n{wasm_output}\n{aot_output}")
+    print(
+        f"Guest built ({args.profile}, AOT target {aot_target}, threading {threading}):"
+        f"\n{wasm_output}\n{aot_output}"
+    )
 
 
 def _tool_path(name: str) -> Path:
@@ -1198,6 +1516,14 @@ def load_project_manifest(path: Path) -> ProjectManifest:
         if not asset_manifest.is_file():
             raise CliError(f"Asset manifest not found: {asset_manifest}")
 
+    threading = value.get("threading", "none")
+    if package_type == "component":
+        if "threading" in value:
+            raise CliError("Component projects cannot declare Guest threading")
+        threading = "none"
+    elif threading not in {"none", "shared-memory"}:
+        raise CliError("app.json threading must be none or shared-memory")
+
     return ProjectManifest(
         path=path.resolve(),
         value=value,
@@ -1206,6 +1532,7 @@ def load_project_manifest(path: Path) -> ProjectManifest:
         name=name,
         sources=tuple(sources),
         asset_manifest=asset_manifest,
+        threading=threading,
     )
 
 
@@ -1275,7 +1602,9 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
     return generated_dir, resource_pack
 
 
-def build_project(project: ProjectManifest, profile: str, output_dir: Path) -> Path | None:
+def build_project(
+    project: ProjectManifest, profile: str, output_dir: Path, aot_target: str | None = None
+) -> Path | None:
     generated_dir, _ = prepare_project(project, output_dir)
     if project.package_type == "component":
         print(f"Component resources prepared: {output_dir}")
@@ -1285,8 +1614,10 @@ def build_project(project: ProjectManifest, profile: str, output_dir: Path) -> P
         extra_source=[str(source) for source in project.sources[1:]],
         name=project.name,
         profile=profile,
+        aot_target=aot_target,
         generated_include_override=generated_dir,
         output_dir_override=output_dir,
+        threading=project.threading,
     )
     _run_build_sources(build_args)
     return output_dir / f"{project.name}.aot"
@@ -1297,17 +1628,22 @@ def package_project(
     profile: str,
     output_dir: Path,
     output: str | None,
+    aot_target: str | None = None,
 ) -> Path:
     generated_dir, resource_pack = prepare_project(project, output_dir)
     aot_output: Path | None = None
     if project.package_type == "app":
+        if aot_target not in AOT_TARGET_FLAGS:
+            raise CliError("App packaging requires an explicit --aot-target")
         build_args = argparse.Namespace(
             source=str(project.sources[0]),
             extra_source=[str(source) for source in project.sources[1:]],
             name=project.name,
             profile=profile,
+            aot_target=aot_target,
             generated_include_override=generated_dir,
             output_dir_override=output_dir,
+            threading=project.threading,
         )
         _run_build_sources(build_args)
         aot_output = output_dir / f"{project.name}.aot"
@@ -1319,7 +1655,7 @@ def package_project(
     )
     arguments = ["--app-manifest", str(project.path), "--output", str(bundle_output)]
     if aot_output is not None:
-        arguments.extend(["--aot", str(aot_output)])
+        arguments.extend(["--aot", str(aot_output), "--aot-target", aot_target])
     if resource_pack is not None:
         arguments.extend(["--resource-pack", str(resource_pack)])
     _run_bundle_builder(arguments)
@@ -1337,7 +1673,12 @@ def run_build(args: argparse.Namespace) -> None:
     if args.extra_source:
         raise CliError("Extra source arguments are not allowed when building an app.json project")
     project = load_project_manifest(manifest_path)
-    build_project(project, args.profile, project_output_directory(project, args.output_dir))
+    build_project(
+        project,
+        args.profile,
+        project_output_directory(project, args.output_dir),
+        getattr(args, "aot_target", None),
+    )
 
 
 def run_package(args: argparse.Namespace) -> Path:
@@ -1350,11 +1691,14 @@ def run_package(args: argparse.Namespace) -> Path:
     if manifest_path is None:
         raise CliError("package requires a project directory or app.json")
     project = load_project_manifest(manifest_path)
+    if project.package_type == "app" and getattr(args, "aot_target", None) is None:
+        raise CliError("Offline App packaging requires --aot-target")
     return package_project(
         project,
         args.profile,
         project_output_directory(project, args.output_dir),
         args.output,
+        getattr(args, "aot_target", None),
     )
 
 
@@ -1368,6 +1712,7 @@ def install_input(args: argparse.Namespace) -> Path:
             args.profile,
             project_output_directory(project, args.output_dir),
             args.output,
+            getattr(args, "aot_target", None),
         )
     if not target.is_file():
         raise CliError("install requires a project directory, app.json, or Bundle v1 file")
@@ -1387,6 +1732,7 @@ def run_input(args: argparse.Namespace) -> Path:
         args.profile,
         project_output_directory(project, args.output_dir),
         args.output,
+        getattr(args, "aot_target", None),
     )
 
 
@@ -1401,9 +1747,13 @@ def current_project_app_id(directory: Path | None = None) -> str:
     return project.package_id
 
 
-def upload(client: ControlClient, bundle_path: Path) -> dict[str, Any]:
+def upload(
+    client: ControlClient, bundle_path: Path, expected_target: str | None = None
+) -> dict[str, Any]:
     require_compatible_firmware(client)
-    details = validate_bundle(bundle_path)
+    details = require_bundle_target(
+        bundle_path, expected_target or network_device_aot_target(client)
+    )
     payload, _ = client.request(
         "POST",
         client.device_path("/packages"),
@@ -1556,6 +1906,7 @@ def remote_app_action(
     app_id: str,
     action: str,
     idempotency_scope: str,
+    launch_arguments: list[str] | None = None,
 ) -> dict[str, Any]:
     encoded_app_id = quote_identifier(app_id)
     job = create_job(
@@ -1563,7 +1914,7 @@ def remote_app_action(
         args,
         "POST",
         client.device_path(f"/apps/{encoded_app_id}/actions/{action}"),
-        {},
+        {"launchArguments": validate_launch_arguments(launch_arguments)} if action == "start" and launch_arguments else {},
         idempotency_scope=idempotency_scope,
     )
     return client.wait_job(job, args.timeout)
@@ -1597,7 +1948,7 @@ def run_network_app(args: argparse.Namespace, client: ControlClient) -> None:
         print(f"Stopped {previous_app_id}.", file=sys.stderr)
 
     try:
-        package = upload(client, Path(args.bundle))
+        package = upload(client, Path(args.bundle), getattr(args, "aot_target", None))
         package_id = package.get("packageId")
         install_job = create_job(
             client,
@@ -1609,7 +1960,7 @@ def run_network_app(args: argparse.Namespace, client: ControlClient) -> None:
         )
         client.wait_job(install_job, args.timeout)
         print(f"Installed {args.app_id}.", file=sys.stderr)
-        remote_app_action(client, args, args.app_id, "start", "run-start")
+        remote_app_action(client, args, args.app_id, "start", "run-start", getattr(args, "launch_arguments", []))
         print(f"Started {args.app_id}.", file=sys.stderr)
     except CliError:
         restore_remote_app(client, args, previous_app_id)
@@ -1639,7 +1990,13 @@ def restore_usb_app(client: UsbControlClient, app_id: str | None) -> None:
         print(f"micropixel: could not restore previously running App {app_id}: {error}", file=sys.stderr)
 
 
-def install_usb_with_progress(client: UsbControlClient, bundle: Path, app_id: str) -> dict[str, Any]:
+def install_usb_with_progress(
+    client: UsbControlClient,
+    bundle: Path,
+    app_id: str,
+    expected_target: str | None = None,
+) -> dict[str, Any]:
+    require_bundle_target(bundle, expected_target or usb_device_aot_target(client))
     progress = TerminalProgress(f"Installing {app_id}")
     try:
         return client.install(bundle, progress.update)
@@ -1659,9 +2016,13 @@ def run_usb_app(args: argparse.Namespace, client: UsbControlClient) -> None:
         print(f"Stopped {previous_app_id}.", file=sys.stderr)
 
     try:
-        install_usb_with_progress(client, Path(args.bundle), args.app_id)
+        install_usb_with_progress(client, Path(args.bundle), args.app_id, getattr(args, "aot_target", None))
         print(f"Installed {args.app_id}.", file=sys.stderr)
-        client.action("APP_START", args.app_id)
+        launch_arguments = getattr(args, "launch_arguments", [])
+        if launch_arguments:
+            client.action("APP_START", args.app_id, launch_arguments)
+        else:
+            client.action("APP_START", args.app_id)
         print(f"Started {args.app_id}.", file=sys.stderr)
     except CliError:
         restore_usb_app(client, previous_app_id)
@@ -1864,11 +2225,11 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
         else:
             print_json(response)
     elif args.command == "artifact" and args.artifact_command == "upload":
-        print_json(upload(client, Path(args.bundle)))
+        print_json(upload(client, Path(args.bundle), getattr(args, "aot_target", None)))
     elif args.command == "app" and args.app_command == "upload":
-        print_json(upload(client, Path(args.bundle)))
+        print_json(upload(client, Path(args.bundle), getattr(args, "aot_target", None)))
     elif args.command == "app" and args.app_command == "install":
-        package = upload(client, Path(args.bundle))
+        package = upload(client, Path(args.bundle), getattr(args, "aot_target", None))
         package_id = package.get("packageId")
         job = create_job(client, args, "POST", client.device_path("/apps/install"), {"packageId": package_id})
         print_json(client.wait_job(job, args.timeout))
@@ -1904,7 +2265,12 @@ def execute_network(args: argparse.Namespace, client: ControlClient) -> None:
             require_compatible_firmware(client)
         app_id = quote_identifier(args.app_id)
         action = args.app_command
-        job = create_job(client, args, "POST", client.device_path(f"/apps/{app_id}/actions/{action}"), {})
+        action_body = (
+            {"launchArguments": validate_launch_arguments(getattr(args, "launch_arguments", []))}
+            if action == "start" and getattr(args, "launch_arguments", [])
+            else {}
+        )
+        job = create_job(client, args, "POST", client.device_path(f"/apps/{app_id}/actions/{action}"), action_body)
         print_json(client.wait_job(job, args.timeout))
         if args.app_command == "start" and getattr(args, "follow", False):
             stream_network_logs(
@@ -1969,13 +2335,22 @@ def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
     elif args.command == "app" and args.app_command == "last-error":
         print_json(client.last_app_error())
     elif args.command == "app" and args.app_command == "install":
-        print_json(install_usb_with_progress(client, Path(args.bundle), args.app_id))
+        print_json(
+            install_usb_with_progress(
+                client, Path(args.bundle), args.app_id, getattr(args, "aot_target", None)
+            )
+        )
         if getattr(args, "start", False):
             print_json(client.action("APP_START", args.app_id))
             if getattr(args, "follow", False):
                 stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval, source="app")
     elif args.command == "app" and args.app_command == "start":
-        print_json(client.action("APP_START", args.app_id))
+        launch_arguments = getattr(args, "launch_arguments", [])
+        print_json(
+            client.action("APP_START", args.app_id, launch_arguments)
+            if launch_arguments
+            else client.action("APP_START", args.app_id)
+        )
         if getattr(args, "follow", False):
             stream_usb_logs(client, cursor=None, lines=None, follow=True, interval=args.interval, source="app")
     elif args.command == "app" and args.app_command == "stop":
@@ -2042,11 +2417,13 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("extra_source", nargs="*")
     build.add_argument("--name")
     build.add_argument("--profile", choices=["development", "release", "size"], default="development")
+    build.add_argument("--aot-target", choices=tuple(AOT_TARGET_FLAGS), default=None)
     build.add_argument("--output-dir", help="Build output directory")
 
     package = commands.add_parser("package", help="Build an app.json project into an installable Bundle v1")
     package.add_argument("project", nargs="?", default=".", help="Project directory or app.json (default: .)")
     package.add_argument("--profile", choices=["development", "release", "size"], default="release")
+    package.add_argument("--aot-target", choices=tuple(AOT_TARGET_FLAGS), default=None)
     package.add_argument("--output-dir", help="Build output directory")
     package.add_argument("--output", help="Bundle output path")
     package.add_argument(
@@ -2058,6 +2435,7 @@ def parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="Build, install, start, and attach to an App project")
     run.add_argument("project", nargs="?", default=".", help="Project directory or app.json (default: .)")
     run.add_argument("--profile", choices=["development", "release", "size"], default="development")
+    run.add_argument("--aot-target", choices=tuple(AOT_TARGET_FLAGS), default=None)
     run.add_argument("--output-dir", help="Build output directory")
     run.add_argument("--output", help="Bundle output path")
     run.add_argument(
@@ -2068,6 +2446,7 @@ def parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--interval", type=float, default=2.0, help="Seconds between log polls (default: 2)")
     run.set_defaults(follow=True)
+    run.set_defaults(launch_arguments=[])
 
     bundle = commands.add_parser("bundle", help="Inspect and validate MicroPixel Bundles")
     bundle_modes = bundle.add_subparsers(dest="bundle_command", required=True)
@@ -2098,6 +2477,14 @@ def parser() -> argparse.ArgumentParser:
     diagnostics.add_argument("--cached", action="store_true", help="Read the last snapshot without refreshing the device")
     reboot = device_modes.add_parser("reboot", help="Reboot the device")
 
+    port = commands.add_parser("port", help="Discover local serial ports and MicroPixel hardware")
+    port_modes = port.add_subparsers(dest="port_command", required=True)
+    port_list = port_modes.add_parser("list", help="List local MicroPixel ports, boards, and chip types")
+    port_list.add_argument(
+        "--all", action="store_true", help="Include serial ports that are not MicroPixel candidates"
+    )
+    port_list.add_argument("--timeout", type=float, default=2.0, help="Handshake timeout per candidate port")
+
     firmware = commands.add_parser("firmware", help="Check or install device firmware updates")
     firmware_modes = firmware.add_subparsers(dest="firmware_command", required=True)
     firmware_modes.add_parser("status", help="Show the installed and latest firmware versions")
@@ -2116,6 +2503,7 @@ def parser() -> argparse.ArgumentParser:
         "project_or_bundle", nargs="?", default=".", help="Project directory, app.json, or Bundle v1 (default: .)"
     )
     install.add_argument("--profile", choices=["development", "release", "size"], default="release")
+    install.add_argument("--aot-target", choices=tuple(AOT_TARGET_FLAGS), default=None)
     install.add_argument("--output-dir", help="Build output directory")
     install.add_argument("--output", help="Bundle output path when building a project")
     install.add_argument("--start", action="store_true", help="Start the App after it is installed")
@@ -2125,6 +2513,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("app_id", nargs="?", help="App ID; inferred from ./app.json when omitted")
     start.add_argument("-f", "--follow", action="store_true", help="Follow Guest logs after the App starts")
     start.add_argument("--interval", type=float, default=2.0, help="Seconds between log polls (default: 2)")
+    start.set_defaults(launch_arguments=[])
     stop = app_modes.add_parser("stop", help="Stop an App or whichever App owns the runtime")
     stop.add_argument("app_id", nargs="?", help="App ID; omit to stop whichever App owns the runtime")
     uninstall = app_modes.add_parser("uninstall", help="Uninstall an App from the device")
@@ -2226,9 +2615,27 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def main() -> int:
-    args = parser().parse_args()
+def parse_command_line(arguments: list[str] | None = None) -> argparse.Namespace:
+    raw = list(sys.argv[1:] if arguments is None else arguments)
+    if "--" not in raw:
+        return parser().parse_args(raw)
+    separator = raw.index("--")
     try:
+        parsed = parser().parse_args(raw[:separator])
+    except SystemExit:
+        return parser().parse_args(raw)
+    supports_launch_arguments = parsed.command == "run" or (
+        parsed.command == "app" and getattr(parsed, "app_command", None) == "start"
+    )
+    if not supports_launch_arguments:
+        return parser().parse_args(raw)
+    parsed.launch_arguments = validate_launch_arguments(raw[separator + 1 :])
+    return parsed
+
+
+def main() -> int:
+    try:
+        args = parse_command_line()
         if args.command == "validate":
             print("micropixel: 'validate' is deprecated; use 'bundle validate'", file=sys.stderr)
         if args.command == "auth" and args.auth_command == "login":
@@ -2241,25 +2648,33 @@ def main() -> int:
         elif args.command == "package":
             run_package(args)
         elif args.command == "run":
-            bundle = run_input(args)
-            args.bundle = str(bundle)
-            args.app_id = validate_bundle(bundle)["appId"]
             if args.transport == "usb":
                 with UsbControlClient(args.port, args.timeout) as client:
+                    bundle = prepare_connected_bundle(args, usb_device_aot_target(client), run_input)
+                    args.bundle = str(bundle)
+                    args.app_id = validate_bundle(bundle)["appId"]
                     run_usb_app(args, client)
             else:
-                run_network_app(args, ControlClient(ControlConfig.load(Path.cwd())))
+                client = ControlClient(ControlConfig.load(Path.cwd()))
+                bundle = prepare_connected_bundle(args, network_device_aot_target(client), run_input)
+                args.bundle = str(bundle)
+                args.app_id = validate_bundle(bundle)["appId"]
+                run_network_app(args, client)
         elif args.command == "app" and args.app_command == "install":
             if args.follow and not args.start:
                 raise CliError("app install --follow requires --start")
-            bundle = install_input(args)
-            args.bundle = str(bundle)
-            args.app_id = validate_bundle(bundle)["appId"]
             if args.transport == "usb":
                 with UsbControlClient(args.port, args.timeout) as client:
+                    bundle = prepare_connected_bundle(args, usb_device_aot_target(client), install_input)
+                    args.bundle = str(bundle)
+                    args.app_id = validate_bundle(bundle)["appId"]
                     execute_usb(args, client)
             else:
-                execute_network(args, ControlClient(ControlConfig.load(Path.cwd())))
+                client = ControlClient(ControlConfig.load(Path.cwd()))
+                bundle = prepare_connected_bundle(args, network_device_aot_target(client), install_input)
+                args.bundle = str(bundle)
+                args.app_id = validate_bundle(bundle)["appId"]
+                execute_network(args, client)
         elif args.command == "app" and args.app_command == "start":
             if args.app_id is None:
                 args.app_id = current_project_app_id()
@@ -2274,6 +2689,8 @@ def main() -> int:
             print_json(validate_bundle(Path(args.bundle)))
         elif args.command == "auth" and args.auth_command in {"pair", "login"}:
             run_auth_pair(args)
+        elif args.command == "port" and args.port_command == "list":
+            print_json(list_local_ports(args.all, args.timeout))
         elif args.command in NETWORK_COMMANDS:
             if args.transport == "usb":
                 with UsbControlClient(args.port, getattr(args, "timeout", 300.0)) as client:

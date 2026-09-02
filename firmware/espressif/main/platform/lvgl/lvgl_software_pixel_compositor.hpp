@@ -7,6 +7,12 @@
 
 namespace micropixel::platform::lvgl {
 
+struct SoftwarePixelCompositorStats final {
+    uint64_t blit_pixels{};
+    uint64_t rgb888_to_rgb565_pixels{};
+    uint64_t alpha_blend_pixels{};
+};
+
 // LVGL-backed CPU implementation used by the App Surface compositor. Scaling
 // consumes a caller-owned, fixed-capacity row-batch scratch buffer and is
 // deliberately non-reentrant, matching the single display-task render model.
@@ -20,15 +26,19 @@ class LvglSoftwarePixelCompositor final : public graphics::PixelCompositor {
     [[nodiscard]] bool Blit(graphics::ConstPixelSurface source, graphics::SurfaceRect source_rect,
                             graphics::PixelSurface destination, graphics::SurfaceRect destination_rect,
                             uint8_t opacity) override;
+    [[nodiscard]] SoftwarePixelCompositorStats Stats() const { return stats_; }
 
    private:
     [[nodiscard]] bool TransformBlit(graphics::ConstPixelSurface source, graphics::SurfaceRect source_rect,
                                      graphics::PixelSurface destination, graphics::SurfaceRect destination_rect,
                                      graphics::SurfaceRect clipped, uint8_t opacity);
+    void RecordBlit(graphics::ConstPixelSurface source, graphics::PixelSurface destination,
+                    graphics::SurfaceRect clipped, uint8_t opacity);
 
     graphics::SoftwarePixelCompositor reference_{};
     uint8_t* transform_scratch_{};
     uint32_t transform_scratch_size_{};
+    SoftwarePixelCompositorStats stats_{};
 };
 
 }  // namespace micropixel::platform::lvgl

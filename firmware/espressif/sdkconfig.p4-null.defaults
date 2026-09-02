@@ -1,4 +1,3 @@
 # Compile-only profile for checking the hardware-independent Runtime/Device path.
 # CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4 is not set
 CONFIG_MICROPIXEL_BOARD_NULL=y
-CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n

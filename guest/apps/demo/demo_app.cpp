@@ -73,10 +73,25 @@ void EnterPage(PageId page, DemoContext& context) {
 }
 
 void ExitPage(PageId page, DemoContext& context) {
-    if (page == PageId::kAudio) {
-        AudioDemoExit(context);
-    } else if (page == PageId::kDevices) {
-        DeviceDemoExit(context);
+    switch (page) {
+        case PageId::kTimer:
+            TimerDemoExit(context);
+            return;
+        case PageId::kStorage:
+            StorageDemoExit(context);
+            return;
+        case PageId::kResourceAtlas:
+            ResourceAtlasDemoExit(context);
+            return;
+        case PageId::kAudio:
+            AudioDemoExit(context);
+            return;
+        case PageId::kDevices:
+            DeviceDemoExit(context);
+            return;
+        case PageId::kInput:
+        case PageId::kHome:
+            return;
     }
 }
 
@@ -125,31 +140,28 @@ void RenderPageContent(PageId page, DemoContext& context, DemoView& view) {
     }
 }
 
-void RenderHome(DemoContext& context, std::span<const micropixel::ui::Button> menu_buttons) {
+void RenderHome(DemoContext& context, micropixel::ContainerNode& home_container,
+                std::span<micropixel::ui::TextButton> menu_buttons, micropixel::ui::TextButton& back_button) {
     context.view.Update([&](DemoView& view) {
+        home_container.SetVisible(view.scene_update(), true);
+        back_button.SetVisible(view.scene_update(), false);
+        for (micropixel::ui::TextButton& button : menu_buttons) {
+            button.Sync(view.scene_update());
+        }
         view.CenteredText(context.layout.home_header.center_x(), context.layout.home_header.y + 8,
                           "MICROPIXEL SDK DEMO", micropixel::Color::White(),
                           context.layout.compact() ? micropixel::SystemFont::kLarge : micropixel::SystemFont::kTitle);
         view.CenteredText(context.layout.home_header.center_x(),
                           context.layout.home_header.y + (context.layout.compact() ? 44 : 54),
                           "One app / six focused modules", MutedColor(), micropixel::SystemFont::kMedium);
-        for (uint32_t index = 0U; index < menu_buttons.size(); ++index) {
-            const micropixel::ui::Button& button = menu_buttons[index];
-            const micropixel::Rect bounds = button.bounds();
-            view.Panel(bounds, PanelColor());
-            view.Panel({bounds.x, bounds.y, context.layout.compact() ? 4 : 6, bounds.height}, AccentColor());
-            view.Panel(bounds, micropixel::Color::Black(), button.pressed() ? 48U : 0U);
-            view.Text({bounds.x + (context.layout.compact() ? 18 : 24),
-                       bounds.y + (bounds.height - 24) / 2 + kButtonTextOpticalOffsetY + (button.pressed() ? 1 : 0)},
-                      kPages[index].label, micropixel::Color::White(),
-                      context.layout.compact() ? micropixel::SystemFont::kMedium : micropixel::SystemFont::kLarge);
-        }
     });
 }
 
-void RenderPage(DemoContext& context, PageId page, const micropixel::ui::Button& back_button) {
+void RenderPage(DemoContext& context, PageId page, micropixel::ContainerNode& home_container,
+                micropixel::ui::TextButton& back_button) {
     context.view.Update([&](DemoView& view) {
-        DrawButton(view, back_button, "BACK", PanelColor());
+        home_container.SetVisible(view.scene_update(), false);
+        back_button.SetVisible(view.scene_update(), true);
         const int32_t title_left =
             back_button.bounds().x + back_button.bounds().width + (context.layout.compact() ? 12 : 20);
         const int32_t title_right =
@@ -242,21 +254,29 @@ int DemoAppMain() {
 
     DemoAtlasTextures atlas_textures = LoadDemoAtlases(app);
     DemoLayout layout = BuildDemoLayout(display);
-    micropixel::Scene scene = renderer.CreateScene(
-        {.logical_width = display.width(), .logical_height = display.height(), .background = BackgroundColor()});
-    micropixel::Layer layer = scene.CreateLayer({.clip = layout.screen});
-    DemoView view(scene, layer, atlas_textures);
-    DemoContext context{app, renderer, input, layout, atlas_textures, view};
+    micropixel::Scene scene = renderer.CreateScene(BackgroundColor());
+    micropixel::ContainerNode view_container = scene.CreateContainer({.z_order = 0});
+    micropixel::ContainerNode controls_container = scene.CreateContainer({.z_order = 1});
+    DemoView view(scene, view_container);
+    DemoContext context{app, input, layout, atlas_textures, scene, controls_container, view};
     micropixel::Timer ticker = CreateDemoTicker(app);
     micropixel::Timer atlas_ticker = CreateResourceAtlasTicker(app);
     std::optional<micropixel::Timer> device_ticker{};
     PageId active_page = PageId::kHome;
-    std::array<micropixel::ui::Button, kPageCount> menu_buttons{};
+    micropixel::ContainerNode home_container = controls_container.CreateContainer();
+    std::array<micropixel::ui::TextButton, kPageCount> menu_buttons{};
     for (uint32_t index = 0U; index < kPageCount; ++index) {
-        menu_buttons[index].SetBounds(context.layout.menu_buttons[index]);
+        menu_buttons[index] = home_container.CreateTextButton(
+            {.bounds = context.layout.menu_buttons[index],
+             .text = kPages[index].label,
+             .style = {.background = PanelColor(), .font = micropixel::SystemFont::kMedium}});
     }
-    micropixel::ui::Button back_button{context.layout.back_button, 6U};
-    RenderHome(context, menu_buttons);
+    micropixel::ui::TextButton back_button = controls_container.CreateTextButton(
+        {.bounds = context.layout.back_button,
+         .text = "BACK",
+         .style = {.background = PanelColor(), .font = micropixel::SystemFont::kLarge},
+         .hit_padding = 6U});
+    RenderHome(context, home_container, menu_buttons, back_button);
     app.log().Info("demo: ready; select a module on screen");
 
     app.Run([&](const micropixel::Event& event) {
@@ -292,10 +312,6 @@ int DemoAppMain() {
                     ExitPage(active_page, context);
                     device_ticker.reset();
                     active_page = PageId::kHome;
-                    back_button.Reset();
-                    for (micropixel::ui::Button& button : menu_buttons) {
-                        button.Reset();
-                    }
                     redraw = true;
                 } else if (!back_update.handled) {
                     redraw = HandleTouch(active_page, context, *touch) || redraw;
@@ -306,10 +322,6 @@ int DemoAppMain() {
                     redraw = update.redraw() || redraw;
                     if (update.clicked) {
                         active_page = kPages[index].id;
-                        for (micropixel::ui::Button& button : menu_buttons) {
-                            button.Reset();
-                        }
-                        back_button.Reset();
                         EnterPage(active_page, context);
                         if (active_page == PageId::kDevices) {
                             device_ticker.emplace(CreateDeviceTicker(app));
@@ -325,9 +337,9 @@ int DemoAppMain() {
 
         if (redraw) {
             if (active_page == PageId::kHome) {
-                RenderHome(context, menu_buttons);
+                RenderHome(context, home_container, menu_buttons, back_button);
             } else {
-                RenderPage(context, active_page, back_button);
+                RenderPage(context, active_page, home_container, back_button);
             }
         }
     });

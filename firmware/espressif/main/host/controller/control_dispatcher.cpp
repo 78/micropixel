@@ -24,6 +24,8 @@ void SetSink(std::atomic<Sink>& destination, std::atomic<void*>& destination_con
 
 ControlDispatcher::ControlDispatcher(GuestLogLifecycleSink guest_log_lifecycle_sink, void* guest_log_lifecycle_context)
     : guest_log_lifecycle_sink_(guest_log_lifecycle_sink), guest_log_lifecycle_context_(guest_log_lifecycle_context) {
+    snapshot_ =
+        static_cast<HostSnapshot*>(heap_caps_calloc(1U, sizeof(HostSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     host_command_queue_bytes_ = static_cast<uint8_t*>(
         heap_caps_calloc(kHostCommandQueueCapacity, sizeof(HostCommand), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     remote_result_queue_bytes_ = static_cast<uint8_t*>(
@@ -57,9 +59,12 @@ ControlDispatcher::~ControlDispatcher() {
     }
     heap_caps_free(host_command_queue_bytes_);
     heap_caps_free(remote_result_queue_bytes_);
+    heap_caps_free(snapshot_);
 }
 
-bool ControlDispatcher::valid() const { return host_command_queue_ != nullptr && remote_result_queue_ != nullptr; }
+bool ControlDispatcher::valid() const {
+    return snapshot_ != nullptr && host_command_queue_ != nullptr && remote_result_queue_ != nullptr;
+}
 
 bool ControlDispatcher::QueueCommand(const HostCommand& command, bool local) {
     const ControlSource expected_source = local ? ControlSource::kLocal : ControlSource::kRemote;
@@ -114,9 +119,9 @@ bool ControlDispatcher::PollRemoteResult(HostResult& result) {
 void ControlDispatcher::UpdateInstalledApps(const CatalogSnapshot& catalog) {
     {
         std::lock_guard lock(snapshot_mutex_);
-        snapshot_.catalog = catalog;
-        snapshot_.catalog.count =
-            std::min(snapshot_.catalog.count, static_cast<uint32_t>(snapshot_.catalog.apps.size()));
+        snapshot_->catalog = catalog;
+        snapshot_->catalog.count =
+            std::min(snapshot_->catalog.count, static_cast<uint32_t>(snapshot_->catalog.apps.size()));
     }
     const CatalogSink sink = catalog_sink_.load(std::memory_order_acquire);
     if (sink != nullptr) {
@@ -127,9 +132,9 @@ void ControlDispatcher::UpdateInstalledApps(const CatalogSnapshot& catalog) {
 void ControlDispatcher::UpdateAppLifecycle(const char* app_id, const char* lifecycle) {
     {
         std::lock_guard lock(snapshot_mutex_);
-        std::snprintf(snapshot_.active_app_id.data(), snapshot_.active_app_id.size(), "%s",
+        std::snprintf(snapshot_->active_app_id.data(), snapshot_->active_app_id.size(), "%s",
                       app_id != nullptr ? app_id : "");
-        std::snprintf(snapshot_.lifecycle.data(), snapshot_.lifecycle.size(), "%s",
+        std::snprintf(snapshot_->lifecycle.data(), snapshot_->lifecycle.size(), "%s",
                       lifecycle != nullptr ? lifecycle : "not_running");
     }
     if (guest_log_lifecycle_sink_ != nullptr) {
@@ -143,13 +148,13 @@ void ControlDispatcher::UpdateAppLifecycle(const char* app_id, const char* lifec
 
 void ControlDispatcher::UpdateLastAppDiagnostic(const AppDiagnostic& diagnostic) {
     std::lock_guard lock(snapshot_mutex_);
-    snapshot_.last_app_diagnostic = diagnostic;
-    snapshot_.has_last_app_diagnostic = true;
+    snapshot_->last_app_diagnostic = diagnostic;
+    snapshot_->has_last_app_diagnostic = true;
 }
 
 void ControlDispatcher::CopySnapshot(HostSnapshot& snapshot) const {
     std::lock_guard lock(snapshot_mutex_);
-    snapshot = snapshot_;
+    snapshot = *snapshot_;
 }
 
 bool ControlDispatcher::BeginInstallActivity(ControlSource source, const char* command_id, const char* app_id) {

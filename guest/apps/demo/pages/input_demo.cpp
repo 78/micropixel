@@ -72,13 +72,13 @@ class InputPage final {
         function.Append(function_pressed_ ? "PRESSED" : "RELEASED");
         function.Append("   events: ");
         function.AppendUint(key_event_count_);
-        commands.CenteredText(center_x, PageY(context, 40, 48), function.c_str(),
+        commands.CenteredText(center_x, PageY(context, 54, 62), function.c_str(),
                               function_pressed_ ? AccentColor() : micropixel::Color::White(),
                               micropixel::SystemFont::kMedium);
         const micropixel::Rect canvas{context.layout.page_content.x + (context.layout.compact() ? 20 : 28),
-                                      PageY(context, 72, 82),
+                                      PageY(context, 104, 112),
                                       context.layout.page_content.width - (context.layout.compact() ? 40 : 56),
-                                      context.layout.page_content.height - (context.layout.compact() ? 120 : 144)};
+                                      context.layout.page_content.height - (context.layout.compact() ? 176 : 184)};
         commands.Panel(canvas, PanelColor());
 
         for (const TouchPoint& point : points_) {
@@ -108,7 +108,7 @@ class InputPage final {
         status.Append("   Random::U32(): ");
         status.AppendUint(last_random_);
         commands.CenteredText(center_x, context.layout.page_content.y + context.layout.page_content.height - 28,
-                              status.c_str(), micropixel::Color::White(), micropixel::SystemFont::kMedium);
+                              status.c_str(), micropixel::Color::White(), micropixel::SystemFont::kSmall);
     }
 
    private:

@@ -20,6 +20,7 @@
 #include "platform/lvgl/guest_graphics_engine.hpp"
 #include "platform/transports/development_display_control.hpp"
 #include "platform/transports/tinyusb_cdc_local_control.hpp"
+#include "soc/soc_caps.h"
 
 namespace micropixel::platform::esp_mosaico::detail {
 
@@ -36,10 +37,11 @@ inline constexpr uint32_t kDisplayFrameStride = static_cast<uint32_t>(kWidth) * 
 inline constexpr uint32_t kDisplayFrameBytes = kDisplayFrameStride * static_cast<uint32_t>(kHeight);
 inline constexpr uint32_t kDisplayFrameAllocationBytes =
     (kDisplayFrameBytes + kTransitionAlignment - 1U) / kTransitionAlignment * kTransitionAlignment;
+static_assert(SOC_PPA_SUPPORTED);
 #if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
 inline constexpr bool kEnableLvglAdapterPpaAccel = false;
 #else
-inline constexpr bool kEnableLvglAdapterPpaAccel = CONFIG_MICROPIXEL_LVGL_PPA_ACCEL;
+inline constexpr bool kEnableLvglAdapterPpaAccel = true;
 #endif
 
 struct MosaicoBoardState final {

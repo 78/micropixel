@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_480_layout.hpp"
 #include "host/ui/lvgl/square_common/square_ui_state.hpp"
 
@@ -80,17 +81,23 @@ inline constexpr HallSceneLayout kHallSceneLayout{
     .status_text_width = 432,
     .status_bar =
         {
-            .time = {.x = 40, .y = 10},
+            .height = 40,
+            .padding_left = 40,
+            .padding_right = 28,
+            .item_gap = 8,
+            .battery_gap = 7,
             .time_width = 54,
-            .cellular = {.x = 314, .y = 12, .width = 16, .height = 11},
-            .wifi = {.x = 338, .y = 11},
+            .cellular = {.width = 16, .height = 11},
             .wifi_scale = 256U,
-            .battery = {.x = 373, .y = 6},
             .battery_width = 24,
-            .battery_percent = {.x = 404, .y = 10},
             .battery_percent_width = 48,
         },
 };
+
+static_assert(gesture_thresholds::ScaleExtent(Layout::kHeight, gesture_thresholds::kTopReservedEdge) >=
+              kHallSceneLayout.status_bar.height);
+static_assert(gesture_thresholds::ScaleExtent(Layout::kHeight, gesture_thresholds::kBottomReservedEdge) >=
+              gesture_thresholds::GestureHintBottomExtent(Layout::kWidth));
 
 inline constexpr SystemMenuLayout kSystemMenuLayout{
     .width = Layout::kWidth,

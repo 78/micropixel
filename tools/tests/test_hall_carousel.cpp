@@ -5,6 +5,7 @@
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
 #include "host/ui/lvgl/square_common/hall_transition_policy.hpp"
+#include "host/ui/lvgl/square_common/profiles/landscape_320_layout.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_480_layout.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_720_layout.hpp"
 
@@ -45,6 +46,18 @@ void Square480Geometry() {
           "the 480 profile must own independent card geometry");
     Check(Square480Carousel::MaxOffset(7U) == 576,
           "the shared carousel policy must derive scrolling from the 480 layout");
+}
+
+void Landscape320Geometry() {
+    using Landscape320Carousel =
+        host_ui::lvgl::square_common::HallCarouselPolicy<host_ui::lvgl::square_common::profiles::landscape_320::Layout>;
+    Check(Landscape320Carousel::CardX(0U, 0) == 12 && Landscape320Carousel::CardX(3U, 0) == 300,
+          "the 320 landscape profile must show three cards and the leading edge of its fourth card");
+    Check(Landscape320Carousel::kCardWidth == 88 && Landscape320Carousel::kCardHeight == 120,
+          "the 320 landscape profile must own compact card geometry");
+    Check(Landscape320Carousel::MaxOffset(7U) == 384 &&
+              Landscape320Carousel::CardX(6U, Landscape320Carousel::MaxOffset(7U)) == 204,
+          "the final 320 landscape view must align its last three cards inside the viewport");
 }
 
 void DragClampingAndDirection() {
@@ -201,6 +214,7 @@ void HallResumePolicy() {
 int main() {
     CapacityAndGeometry();
     Square480Geometry();
+    Landscape320Geometry();
     DragClampingAndDirection();
     VelocityAndFreeInertia();
     ContinuousIndicator();
@@ -210,6 +224,6 @@ int main() {
     RepeatedThrowMomentum();
     HallLaunchBackgroundPolicy();
     HallResumePolicy();
-    std::cout << "hall_carousel tests passed: 11 cases\n";
+    std::cout << "hall_carousel tests passed: 12 cases\n";
     return 0;
 }

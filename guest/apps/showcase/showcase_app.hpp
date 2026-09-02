@@ -29,23 +29,20 @@ class ShowcaseApp final {
           app_(),
           renderer_(app_.renderer()),
           display_(renderer_.info()),
-          scene_(renderer_.CreateScene({.logical_width = display_.width(),
-                                        .logical_height = display_.height(),
-                                        .background = micropixel::Color::Rgb(8U, 17U, 31U)})) {
+          scene_(renderer_.CreateScene(micropixel::Color::Rgb(8U, 17U, 31U))) {
         micropixel::Assert(display_.width() == 720U && display_.height() == 720U,
                            "showcase: requires a square display");
         RandomizePalette();
-        layer_ = scene_.CreateLayer(
-            {.clip = {0, 0, static_cast<int32_t>(display_.width()), static_cast<int32_t>(display_.height())}});
-        accent_bar_ = scene_.CreateShape({40, 42, 10, 62}, config_.accent, layer_);
-        shapes_ = scene_.CreateSpriteBatch(100U, layer_);
-        title_ = scene_.CreateLabel({72, 46}, config_.title, micropixel::Color::White(), micropixel::SystemFont::kTitle,
-                                    layer_);
-        subtitle_ = scene_.CreateLabel({72, 92}, config_.subtitle, micropixel::Color::Rgb(145U, 164U, 189U),
-                                       micropixel::SystemFont::kMedium, layer_);
+        root_container_ = scene_.CreateContainer();
+        accent_bar_ = root_container_.CreateShape({40, 42, 10, 62}, config_.accent);
+        shapes_ = root_container_.CreateSpriteBatch(100U);
+        title_ = root_container_.CreateLabel({72, 46}, config_.title, micropixel::Color::White(),
+                                             micropixel::SystemFont::kTitle);
+        subtitle_ = root_container_.CreateLabel({72, 92}, config_.subtitle, micropixel::Color::Rgb(145U, 164U, 189U),
+                                                micropixel::SystemFont::kMedium);
         for (micropixel::LabelNode& label : mode_labels_) {
-            label = scene_.CreateLabel({360, 620}, " ", micropixel::Color::White(), micropixel::SystemFont::kMedium,
-                                       layer_, true);
+            label = root_container_.CreateLabel({360, 620}, " ", micropixel::Color::White(),
+                                                micropixel::SystemFont::kMedium, true);
         }
     }
 
@@ -144,28 +141,29 @@ class ShowcaseApp final {
     }
 
     void Render() {
-        auto update = scene_.BeginUpdate();
-        for (uint16_t index = 0U; index < shapes_.capacity(); ++index) {
-            shapes_.SetInstanceVisible(update, index, false);
-        }
-        for (micropixel::LabelNode& label : mode_labels_) {
-            label.SetVisible(update, false);
-        }
-        switch (config_.mode) {
-            case Mode::kTapCounter:
-                RenderTapCounter(update);
-                break;
-            case Mode::kColorLab:
-                RenderColorLab(update);
-                break;
-            case Mode::kPixelSketch:
-                RenderPixelSketch(update);
-                break;
-            case Mode::kOrbitPad:
-                RenderOrbitPad(update);
-                break;
-        }
-        micropixel::Assert(update.Present().has_value(), "showcase: scene update failed");
+        auto presented = scene_.Update([&](micropixel::SceneUpdate& update) {
+            for (uint16_t index = 0U; index < shapes_.capacity(); ++index) {
+                shapes_.SetInstanceVisible(update, index, false);
+            }
+            for (micropixel::LabelNode& label : mode_labels_) {
+                label.SetVisible(update, false);
+            }
+            switch (config_.mode) {
+                case Mode::kTapCounter:
+                    RenderTapCounter(update);
+                    break;
+                case Mode::kColorLab:
+                    RenderColorLab(update);
+                    break;
+                case Mode::kPixelSketch:
+                    RenderPixelSketch(update);
+                    break;
+                case Mode::kOrbitPad:
+                    RenderOrbitPad(update);
+                    break;
+            }
+        });
+        micropixel::Assert(presented.has_value(), "showcase: scene update failed");
     }
 
     void RenderTapCounter(micropixel::SceneUpdate& update) {
@@ -238,7 +236,7 @@ class ShowcaseApp final {
     micropixel::Renderer renderer_;
     micropixel::RendererInfo display_;
     micropixel::Scene scene_;
-    micropixel::Layer layer_{};
+    micropixel::ContainerNode root_container_{};
     micropixel::ShapeNode accent_bar_{};
     micropixel::SpriteBatch shapes_{};
     micropixel::LabelNode title_{};

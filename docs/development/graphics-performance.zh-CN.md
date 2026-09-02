@@ -120,10 +120,12 @@ fallback 和 panel submit。只降低某一段计时但扩大 damage 或增加�
 
 ## 5. Metalio-Claw4 渲染路径与复制基线
 
-2026-08-30 使用 Metalio-Claw4/P4 720×720 RGB888 产品 profile 复测当前 Snake。测试使用 release Host、
+2026-08-30 使用 Metalio-Claw4/P4 720×720 RGB888 产品 profile 复测当时仍使用 opaque board PNG 的
+Snake。测试使用 release Host、
 正式 Snake Bundle 和屏幕上的 1 秒性能采样；游戏为 Level 1、初始长度 1、无粒子和 shake 的稳定直行。
 120 个 Scene 提交窗口从 `#6000` 到 `#6120`，对应约 2 秒、10 个逻辑格。窗口内保持 60 FPS，CPU 约
-31%。不保存原始串口日志或设备标识。
+31%。不保存原始串口日志或设备标识。2026-08-31 起 Snake 的纯色棋盘背景改为 `RoundedRectNode`，下列
+数据保留为 opaque texture decode/copy 的历史基线，不再代表当前 Bundle 的 primitive 构成。
 
 稳定窗口端点的普通帧均为 `wire=2rec/5inst/268B`、`normalize=5/patch`、`damage=1/2001 pixels` 和
 `replays=6`。`2001 pixels` 是 29×69 的小区域，只占 720×720 屏幕的约 0.39%。三个无特效的
@@ -220,8 +222,9 @@ DMA2D copy 移动快照；不做 scale。真机日志在进入/退出时看到�
 
 分段统计后已完成前两项改进：
 
-1. opaque PNG 在 decode 后保留 BGR888，使 board damage 从 PPA BGRA blend 变为 DMA2D copy，同时减少
-   25% 的 decoded texture 容量；不能简单把 raw asset 放在 flash 后假设 DMA2D 一定可直接读取；
+1. opaque PNG 在 decode 后保留 BGR888，使当时的 board damage 从 PPA BGRA blend 变为 DMA2D copy，
+   同时减少 25% 的 decoded texture 容量；Snake 后续已将这张纯色 board PNG 删除并改用
+   `RoundedRectNode`，但该格式策略仍适用于确实包含位图细节的 opaque asset；
 2. 将临时探针整理为默认关闭的聚合 telemetry，分开记录 App Surface → FB CPU span、front → back
    DMA2D 和 panel submit/VSYNC wait，不混入 App Surface 的 `hw=.../dma2d:`；
 3. dirty-row cache clean 暂不进入实现。完整 cache range 虽然是 93.31 MB/s，但实测 driver call 只有
@@ -254,7 +257,7 @@ App Hall 与 Status Layer 的硬件转场降级为普通 LVGL/直接切换。CO5
 ```sh
 export S31_HOST_BUILD_DIR="$PWD/build/host-esp32s31-mosaico-software"
 export S31_SDKCONFIG="$S31_HOST_BUILD_DIR/sdkconfig.release"
-export S31_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.s31.defaults;$PWD/firmware/espressif/sdkconfig.s31-software-rendering.defaults"
+export S31_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.defaults;$PWD/firmware/espressif/sdkconfig.s31.defaults;$PWD/firmware/espressif/sdkconfig.s31-software-rendering.defaults"
 bash tools/s31.sh build-host
 bash tools/s31.sh flash-host
 bash tools/s31.sh monitor --reset
@@ -291,6 +294,52 @@ App Surface 的 CPU fallback 现在直接调用 LVGL software blend kernels：�
 额外中间 buffer；scale 使用 16 行一批、64-byte 对齐的固定 PSRAM scratch 调用 `lv_draw_sw_transform()`，
 再写入目标 surface。scratch 在 graphics engine 初始化时一次分配，绘制热路径不分配内存。纹理预缩放也
 复用同一路径；只有 scratch 不可用或输入无法由 LVGL 表示时，才保留原 reference compositor 作为安全降级。
+
+### 5.6 S31 LVGL draw buffer 高度 A/B
+
+2026-09-01 在同一台 ESP-Mosaico/S31 上重新比较三种明确配置：40 行双缓冲、480 行单缓冲和 480 行
+双缓冲。三组均为 RGB565 PSRAM draw buffer、320 MHz CPU、250 MHz PSRAM、相同的 QSPI/TE/DMA2D
+displayed-shadow 路径，并保持 Wi-Fi 和 Remote Control 运行。单双缓冲由临时 sdkconfig defaults 显式选择；
+板级实现不再隐式强制双缓冲。测试 workload 每帧完整 invalidate 480×480 屏幕并绘制滚动色条；表中丢弃
+首个预热窗口，聚合随后 35–50 秒稳定数据。临时 benchmark 配置和源码在数据确认后已删除。
+
+| Target | buffer 高度 | 存储 | 缓冲数 | draw buffer 总量 | flush/帧 | FPS | render/帧 | refresh/帧 | 完整性异常 |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| ESP-Mosaico/S31 | 40 行 | PSRAM | 2（双缓冲） | 76,800 B | 12 | 21.00 | 45.71 ms | 46.16 ms | 0 |
+| ESP-Mosaico/S31 | 480 行 | PSRAM | 1（单缓冲） | 460,800 B | 1 | 26.10 | 36.27 ms | 36.71 ms | 0 |
+| ESP-Mosaico/S31 | 480 行 | PSRAM | 2（双缓冲） | 921,600 B | 1 | 31.07 | 30.12 ms | 30.56 ms | 0 |
+
+480 行单缓冲相对 40 行双缓冲多使用 384,000 B（375 KiB）PSRAM，FPS 提升约 24.3%，refresh 时延下降
+约 20.5%；这部分是减少重复 object traversal 和 flush 次数的收益。保持 480 行再从单缓冲改为双缓冲，
+额外使用 460,800 B（450 KiB）PSRAM，FPS 又提升约 19.0%，refresh 时延再下降约 16.7%；这部分是 CPU
+render 与 SPI/DMA/displayed-shadow 路径重叠的收益。因此 S31 的全屏双缓冲胜出不是行数混淆造成的，
+480 行和双缓冲各自都有可测收益。三组均为 0 面积异常，没有 panic 或 reset；S31 保留 480 行 PSRAM
+双缓冲产品默认值。这里的 FPS 是最坏方向的整屏 invalidate 吞吐，不代表 App Hall 或典型局部 damage
+刷新帧率。
+
+### 5.7 ESP32-S3-BOX-3 LVGL draw buffer 高度与缓冲数 A/B
+
+同日使用同一台 ESP32-S3-BOX-3 比较 40 行双缓冲、80 行双缓冲、240 行单缓冲和 240 行双缓冲。四组均为
+RGB565 PSRAM draw buffer、240 MHz CPU、80 MHz PSRAM、40 MHz SPI DMA，并运行与 S31 同构的 320×240
+全屏滚动色条 workload。每组的生成 sdkconfig、启动日志和屏幕 capture 都同时标明高度与单双缓冲；表中
+聚合 45–60 秒稳定窗口。
+
+| Target | buffer 高度 | 存储 | 缓冲数 | draw buffer 总量 | flush/帧 | FPS | render/帧 | refresh/帧 | 完整性异常 |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| ESP32-S3-BOX-3 | 40 行 | PSRAM | 2（双缓冲） | 51,200 B | 6 | 22.17 | 43.12 ms | 43.53 ms | 0 |
+| ESP32-S3-BOX-3 | 80 行 | PSRAM | 2（双缓冲） | 102,400 B | 3 | 22.55 | 42.46 ms | 42.87 ms | 0 |
+| ESP32-S3-BOX-3 | 240 行 | PSRAM | 1（单缓冲） | 153,600 B | 1 | 19.78 | 48.67 ms | 49.09 ms | 0 |
+| ESP32-S3-BOX-3 | 240 行 | PSRAM | 2（双缓冲） | 307,200 B | 1 | 23.41 | 40.83 ms | 41.24 ms | 0 |
+
+S3 没有 S31 的 PPA/DMA2D displayed-shadow 路径。240 行单缓冲虽然把 flush 从每帧 6 次降为 1 次，
+但更大的 PSRAM 连续绘制工作集令 FPS 相对 40 行双缓冲下降约 10.8%，refresh 时延增加约 12.8%。同为
+240 行时，双缓冲相对单缓冲提升约 18.3% FPS，说明 CPU render 与 SPI DMA 的重叠对全屏 buffer 至关
+重要。最终 240 行双缓冲比 40 行双缓冲快约 5.6%，refresh 时延低约 5.3%，代价是多用 256,000 B
+（250 KiB）PSRAM。四组均为 0 面积异常；在没有典型产品 workload 数据证明这 5.6% 的最坏方向吞吐
+80 行双缓冲相对 40 行双缓冲多使用 51,200 B（50 KiB）PSRAM，但 FPS 只提升约 1.7%，refresh 时延只
+下降约 1.5%，不足以证明常驻增加这部分内存值得。240 行双缓冲虽再快约 3.7%，却还要多使用 200 KiB。
+因此 S3 preview 保留 40 行 PSRAM 双缓冲作为默认；80/240 行组合只保留测试数据，不再保留可构建的
+benchmark profile。
 
 ## 6. PPA/DMA2D 面积微基准
 

@@ -21,6 +21,7 @@ class VirtualizedHallPolicy final {
     void UpdateStatusBar(const host_ui::HallStatusBarModel& model);
     void UpdateInstallProgress(uint32_t app_index, uint8_t progress_percent);
     void PauseCoverLoading();
+    void PrepareLaunch(uint32_t app_index);
     void Leave();
 
    private:
@@ -55,6 +56,7 @@ class VirtualizedHallPolicy final {
 
     SquareSystemUiState& state_;
     SquarePresentation& presentation_;
+    uint32_t pending_launch_index_{host_ui::kMaxHallApps};
 };
 
 }  // namespace micropixel::host_ui::lvgl::square_common

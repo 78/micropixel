@@ -11,18 +11,18 @@ Firmware 文件职责以 [Espressif main README](../../firmware/espressif/main/R
 
 MicroPixel 是面向嵌入式设备的 WebAssembly 应用运行时。当前产品基线为：
 
-- Host：ESP32-P4 + Metalio-Claw4 是产品 profile；ESP32-S31 + ESP-Mosaico P0/P1 是同步维护的 preview
-  bring-up profile；两者使用 ESP-IDF 6.1；
+- Host：ESP32-P4 + Metalio-Claw4 是产品 profile；ESP32-S31 + ESP-Mosaico、ESP32-S3-BOX-3 与立创
+  SZPI ESP32-S3 是同步维护的 preview profile；三个芯片 target 使用 ESP-IDF 6.1；
 - Runtime：MicroPixel WAMR fork 固定 commit、AOT format v6，同时最多运行一个 Guest `AppSession`；
 - Guest：受限 C++23 profile，不直接依赖 ESP-IDF、LVGL 或板级 SDK；
-- Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长，P4 与 S31 的当前策略上限均为
+- Guest 内存：Wasm linear memory 位于 PSRAM、按 64 KiB page 增长，P4、S31 与 S3 的当前策略上限均为
   8 MiB；实例化时按最大连续 PSRAM 块自适应下调，后续增长也必须保留 Host 安全水位。Host-owned
   Bitmap/offscreen surface 不预留累计配额，而是在每次实际分配时使用同一安全水位做动态准入；
-- App 分发：Bundle v1 封装 AOT、资源和 App metadata；P4 的 24 MiB 与 S31 NOR bring-up 的 8 MiB
-  可写 App Store 都由 BundleFS v2 以离散 64 KiB 块和四个 16 KiB Catalog Bank 提供写时复制事务；
+- App 分发：Bundle v1 封装 AOT、资源和 App metadata；P4 的 24 MiB 与 S31/S3 的 8 MiB 可写 App Store
+  都由 BundleFS v2 以离散 64 KiB 块和四个 16 KiB Catalog Bank 提供写时复制事务；
 - 系统 UI：Host 原生 App Hall、Status Layer 和系统手势，不作为 Guest App 运行。
 
-当前不承诺 ESP32-S3 产品适配、多 Guest 并行、Guest 多线程、生产级在线 App 分发、网络 Service、
+当前不承诺把 ESP32-S3 preview 提升为产品 profile、多 Guest 并行、Guest 多线程、生产级在线 App 分发、网络 Service、
 Camera Service 或通用 Widget Server。Remote Control 的开发版在线安装已经进入代码基线，但 package
 数字签名、BundleFS 真机断电恢复矩阵和 TLS 负向真机矩阵仍是发布门槛。BundleFS 的块号表允许物理块
 离散分布，卸载后的块可直接复用，不依赖连续 extent GC。
@@ -35,6 +35,8 @@ app_main
         ├── Platform
         │   ├── Metalio-Claw4                # ESP32-P4 product board
         │   ├── ESP-Mosaico                  # ESP32-S31 preview board
+        │   ├── ESP32-S3-BOX-3               # ESP32-S3 preview board
+        │   ├── SZPI ESP32-S3                # 立创开发板 preview
         │   └── Null                          # 硬件无关编译基线
         ├── DeviceServices
         │   ├── Graphics / Input / Audio / Random
@@ -271,13 +273,18 @@ Guest event。最后一个 edge input 释放或 App Suspend 时卸载对应 ISR 
 公开 Graphics 使用 retained scene graph：
 
 ```text
-Renderer -> Scene -> Layer -> Sprite / SpriteBatch / Shape / Label / SurfaceNode
+Renderer -> Scene(root) -> ContainerNode -> ContainerNode / Sprite / SpriteBatch / Shape / Label / SurfaceNode
 Resources -> Texture / Font
 Renderer -> StreamingTexture / TextureUpdateBatch -> SurfaceNode
 ```
 
-- 一个 Guest 同时只有一个 Active Scene。Scene 是唯一根节点，Layer 用于世界/HUD 分组、clip、opacity、
-  z-order 和整体 translation；
+- 一个 Guest 同时只有一个 Active Scene。Scene 是隐式根，`ContainerNode` 可任意嵌套，用于页面、面板、
+  对话框、世界/HUD 分组以及子树的 clip、opacity、visibility、z-order 和整体 translation；
+- `Scene` 与 `ContainerNode` 共同实现 Public SDK 的 `Container` 创建接口。创建调用的 receiver 就是 parent：
+  `scene.CreateContainer()`、`page.CreateContainer()`、`dialog.CreateLabel()`；不保留把 parent 作为参数的第二套
+  Create API。组合控件也使用 `page.CreateTextButton()`。点语法必须让代码嵌套关系与 retained tree 一致；
+- Drawable geometry 和子 Container translation 都相对直接父 Container。Touch event 仍以 Scene 逻辑坐标
+  投递；`Container::ToLocal()` / `ToScene()` 用于跨坐标空间，高层控件在命中测试前自动转成本地坐标；
 - `Sprite` 适合有独立身份的纹理对象，`SpriteBatch` 适合蛇身、方块、爆炸、粒子和 tile；`Shape` v1
   提供矩形，`Label` 使用 Host 字形缓存，`SurfaceNode` 显示可局部更新的 `StreamingTexture`；
 - `Point`、`Rect` 和 `Size` 是 Renderer 与 Input 共用的逻辑坐标 value；显示尺寸只由 `RendererInfo`
@@ -287,17 +294,28 @@ Renderer -> StreamingTexture / TextureUpdateBatch -> SurfaceNode
   Guest SDK 向外取整为逻辑 `RendererInfo::safe_area_insets()` / `safe_area()`；圆角和异形屏适配由布局消费
   这一通用几何值，不把板名、面板型号或经验 padding 写进 App；
 - 逻辑坐标变换属于 Guest SDK：SDK 根据物理屏幕建立短边为 720 的逻辑画布，并在序列化 Scene 前把
-  geometry、Layer translation、atlas source rect 和语义字体统一 lower 为物理值。Graphics wire 与 Host
+  geometry、Container translation、atlas source rect 和语义字体统一 lower 为物理值。Graphics wire 与 Host
   `GuestScene` 只处理物理坐标，不复制 Guest 的 layout 兼容判断；Scene descriptor 必须匹配当前
   `RendererInfo` 的逻辑尺寸；
 - `SceneUpdate` 聚合一次逻辑更新并以 `Present()` 原子发布；失败时 Host current scene 不变；
+- 常用路径可用 `Renderer::CreateScene(background)` 自动采用当前逻辑尺寸，并用 `Scene::Update(lambda)` 包装
+  单次事务；显式 descriptor 和 `BeginUpdate()` / `Present()` 继续用于 conformance 与需要手工控制事务的代码；
+- Scene node 和 Container 使用固定槽位及 generation handle，显式 `Destroy()` 在提交成功后归还槽位；
+  销毁 Container 会递归销毁完整子树；创建和销毁都可参加 SceneUpdate，失败时恢复旧 handle、失效本事务
+  新建 handle，并通过 generation 防止回滚创建与后续槽位复用发生别名；
+- 页面生命周期可按产品需要选择常驻或按需：常驻页面通过根 Container 的 visibility 切换；按需页面进入时
+  创建子树、退出时只销毁页面根 Container。两种策略不得把同一页面的对象拆成无所有权关系的平行分组；
+- Guest App 可使用完整 C++23 STL 管理 handle 和页面模型；例如 Demo 的绘制节点用 `std::vector` 随当前
+  需求增长，并在同一 SceneUpdate 销毁多余节点。Host/ABI 的节点、Container、instance 和 wire 容量仍是
+  显式 capability，不因 Guest 动态容器而取消；
 - Guest Scene 事务以 touched slot 为工作集：setter 对无变化值直接返回，普通 patch 只扫描触碰过的
-  node/layer/instance；Host compositor 根据最近一次成功 wire 的 property mask 增量更新 normalized
-  operation。keyframe、结构变化和 Layer z-order 变化仍保留完整验证、展开与排序路径；
+  node/container/instance；Host compositor 根据最近一次成功 wire 的 property mask 增量更新 normalized
+  operation。keyframe、结构变化和 Container z-order 变化仍保留完整验证、展开与排序路径；
 - Graphics wire 首次发布完整 Scene keyframe，普通更新发布属性 patch。Patch 携带
   `scene_generation + base_revision + revision`，Host 在固定容量 scratch scene 中完整验证后才原子交换；
-  revision 不匹配时 SDK 下一次自动发布 keyframe；
-- 局部震动只 patch Layer translation；Sprite 动画只 patch source、destination、opacity 或 visibility；
+  revision 不匹配时 SDK 下一次自动发布 keyframe；节点创建、销毁和 Container 级联销毁同样发布新 keyframe，
+  并把存活节点按创建顺序压缩为连续 wire Node ID；
+- 局部震动和控件移动只 patch Container translation；Sprite 动画只 patch source、destination、opacity 或 visibility；
   SceneUpdate 以 `BeginUpdate()` 时的状态计算净差量，属性在同一事务中改回原值时不进入 wire。Snake 的
   body ring 复用尾槽，普通移动只发送尾槽、独立头部/眼睛和少量颜色分段边界的真实变化，不随蛇长线性
   重发整个 SpriteBatch；
@@ -349,6 +367,13 @@ Bundle v1 当前使用 128-byte header 和 48-byte section，section 可包含 A
 metadata。Bundle reader 在创建 WAMR instance 前完成 magic、hash、范围、对齐、格式和唯一性检查。
 Bundle 文件由 [BundleFS](bundlefs.zh-CN.md) 保存；Catalog 位于 `app_store` 自身，不使用 NVS，也没有
 预置 App 或连续 extent 的特殊语义。
+
+每个 AOT section 的 `reserved0` 保存 CPU target bitmap：bit 0 为 RISC-V `ilp32f`，bit 1 为 ESP32-S3
+Xtensa，`0` 只用于没有该元数据的旧 Bundle。当前每个 AOT section 必须恰好设置一个已知 bit，v1 reader
+仍要求 App 恰好包含一个 AOT section；新安装在任何 BundleFS staging write 前校验 target，旧或不匹配的
+AOT 会被拒绝。把 target mask 绑定到 section 而不是 header，为未来一个 Bundle 携带多个架构 payload
+保留了格式空间；各 section mask 的 OR 就是 Bundle 支持的架构集合，但多 AOT 的选择、唯一性和容量策略
+尚未启用。
 
 设备能力与 App 权限必须分开建模：
 

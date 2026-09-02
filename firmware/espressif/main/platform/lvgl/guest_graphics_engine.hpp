@@ -10,7 +10,9 @@
 #include "lvgl.h"
 #include "platform/graphics/app_surface_compositor.hpp"
 #include "platform/graphics/damage_region_set.hpp"
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
 #include "platform/graphics/esp_pixel_compositor.hpp"
+#endif
 #include "platform/graphics/guest_scene.hpp"
 #include "platform/lvgl/display/dirty_region_coalescer.hpp"
 #include "platform/lvgl/display/display_pipeline.hpp"
@@ -30,7 +32,8 @@ struct GuestPresentationHooks final {
 
 class GuestGraphicsEngine final {
    public:
-    GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts);
+    GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts,
+                        graphics::SurfacePixelFormat app_surface_format = graphics::SurfacePixelFormat::kBgr888);
 
     void SetPresentationHooks(GuestPresentationHooks hooks) { presentation_hooks_ = hooks; }
     [[nodiscard]] esp_err_t Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers);
@@ -83,6 +86,7 @@ class GuestGraphicsEngine final {
 
     int32_t width_{};
     int32_t height_{};
+    graphics::SurfacePixelFormat app_surface_format_{graphics::SurfacePixelFormat::kBgr888};
     lv_display_t* display_{};
     lv_obj_t* guest_frame_{};
     lv_obj_t* app_surface_image_{};
@@ -97,8 +101,12 @@ class GuestGraphicsEngine final {
     graphics::AppDrawOperation* app_surface_operation_storage_{};
     graphics::GuestSceneNode* guest_scene_node_storage_{};
     graphics::GuestSceneSpriteInstance* guest_scene_instance_storage_{};
+    graphics::GuestSceneContainer* guest_scene_container_storage_{};
+    uint16_t* guest_scene_draw_order_storage_{};
     LvglSoftwarePixelCompositor software_pixel_compositor_{};
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
     graphics::EspPixelCompositor hardware_pixel_compositor_;
+#endif
     std::optional<graphics::AppSurfaceCompositor> app_surface_compositor_{};
     std::optional<graphics::GuestScene> guest_scene_{};
     DirtyRegionCoalescer dirty_region_coalescer_{};

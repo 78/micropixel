@@ -49,9 +49,12 @@ class UnavailableGraphics final : public device::Graphics {
 
     [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
                                        uint32_t height, const uint8_t* pixels, uint32_t stride) override {
-        const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-                                             ? 3U
-                                             : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
+        const uint32_t bytes_per_pixel =
+            bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
+                ? 3U
+                : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
+                       ? 4U
+                       : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
         if (bitmap.data == nullptr || pixels == nullptr || width == 0U || height == 0U || bytes_per_pixel == 0U ||
             (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || x + width > bitmap.width ||
             y + height > bitmap.height || stride != width * bytes_per_pixel) {

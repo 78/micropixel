@@ -29,6 +29,12 @@ constexpr int32_t ScaleOutputSample(int32_t sample, uint16_t master_volume) {
     return scaled > 32767 ? 32767 : (scaled < -32768 ? -32768 : static_cast<int32_t>(scaled));
 }
 
+// Hardware mute is an independent Host gate: it silences the current sample
+// without rewriting the persisted/user-selected master-volume value.
+constexpr int32_t ApplyHostOutputGain(int32_t sample, uint16_t master_volume, bool hardware_muted) {
+    return hardware_muted ? 0 : ScaleOutputSample(sample, master_volume);
+}
+
 }  // namespace micropixel::platform::audio
 
 #endif

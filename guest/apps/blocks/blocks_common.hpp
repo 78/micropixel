@@ -15,39 +15,50 @@ constexpr uint32_t kScreenWidth = 720U;
 constexpr uint32_t kScreenHeight = 720U;
 constexpr int32_t kBoardX = 98;
 constexpr int32_t kBoardY = 76;
-constexpr int32_t kBoardAssetWidth = 524;
-constexpr int32_t kBoardAssetHeight = 600;
+constexpr int32_t kBoardAreaWidth = 524;
+constexpr int32_t kBoardAreaHeight = 600;
 constexpr int32_t kCellPitch = 30;
 constexpr int32_t kPlayfieldWidth = static_cast<int32_t>(kBoardColumns) * kCellPitch;
 constexpr int32_t kPlayfieldHeight = static_cast<int32_t>(kBoardRows) * kCellPitch;
 constexpr int32_t kSidebarX = 328;
-constexpr int32_t kSidebarWidth = kBoardAssetWidth - kSidebarX;
+constexpr int32_t kSidebarWidth = kBoardAreaWidth - kSidebarX;
+constexpr micropixel::Rect kSidebarPanelRects[] = {
+    {kBoardX + kSidebarX, kBoardY, kSidebarWidth, 127},       {kBoardX + kSidebarX, kBoardY + 142, kSidebarWidth, 127},
+    {kBoardX + kSidebarX, kBoardY + 284, kSidebarWidth, 101}, {kBoardX + kSidebarX, kBoardY + 400, kSidebarWidth, 101},
+    {kBoardX + kSidebarX, kBoardY + 516, kSidebarWidth, 84},
+};
+constexpr uint32_t kSidebarPanelCount = sizeof(kSidebarPanelRects) / sizeof(kSidebarPanelRects[0]);
 constexpr int32_t kPlayfieldCenterX = kBoardX + kPlayfieldWidth / 2;
 constexpr int32_t kScreenCenterX = static_cast<int32_t>(kScreenWidth) / 2;
 constexpr uint64_t kRenderTargetPeriodUs = 16667U;
 constexpr uint32_t kDefaultRandomSeed = 0x4b10c5e7U;
 
-constexpr int32_t kActionButtonWidth = 280;
-constexpr int32_t kActionButtonHeight = 96;
+[[nodiscard]] constexpr int32_t ContentOffsetX(uint32_t display_width) {
+    return display_width > kScreenWidth ? static_cast<int32_t>((display_width - kScreenWidth) / 2U) : 0;
+}
+
+[[nodiscard]] constexpr int32_t ContentOffsetY(uint32_t display_height) {
+    return display_height > kScreenHeight ? static_cast<int32_t>((display_height - kScreenHeight) / 2U) : 0;
+}
+
+constexpr int32_t kActionButtonWidth = 360;
+constexpr int32_t kActionButtonHeight = 120;
+constexpr uint16_t kActionButtonHitPadding = 8U;
+constexpr uint32_t kActionButtonCornerRadius = 30U;
 constexpr int32_t kActionButtonX = kScreenCenterX - kActionButtonWidth / 2;
 constexpr micropixel::SystemFont kActionButtonFont = micropixel::SystemFont::kLarge;
-constexpr int32_t kActionButtonFontHeight = 24;
-constexpr int32_t kActionButtonTextOpticalOffsetY = -5;
-constexpr uint8_t kOverlayOpacity = 180U;
-constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
-constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButtonWidth, kActionButtonHeight};
-constexpr micropixel::Rect kGameOverOverlayRect{60, kBoardY, 600, kBoardAssetHeight};
-constexpr micropixel::Rect kPauseTouchRect{0, 0, 180, kBoardY};
+constexpr uint8_t kOverlayOpacity = 128U;
+constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 286, kActionButtonWidth, kActionButtonHeight};
+constexpr micropixel::Rect kGameOverOverlayRect{0, kBoardY, static_cast<int32_t>(kScreenWidth),
+                                                static_cast<int32_t>(kScreenHeight) - kBoardY};
+constexpr micropixel::Rect kPauseTouchRect{0, 0, 300, kBoardY};
 constexpr micropixel::Rect kHoldTouchRect{kBoardX + kSidebarX, kBoardY, kSidebarWidth, 126};
 constexpr micropixel::Rect kPlayTouchRect{0, 0, static_cast<int32_t>(kScreenWidth),
                                           static_cast<int32_t>(kScreenHeight)};
 
-[[nodiscard]] constexpr int32_t ActionButtonTextY(micropixel::Rect bounds) {
-    return bounds.y + (bounds.height - kActionButtonFontHeight) / 2 + kActionButtonTextOpticalOffsetY;
-}
-
 enum class Tetromino : uint8_t { kI, kJ, kL, kO, kS, kT, kZ };
 enum class Screen : uint8_t { kMenu, kPlaying, kPaused, kGameOver };
+enum class GestureAxis : uint8_t { kUndecided, kHorizontal, kVertical };
 
 struct Cell final {
     int8_t x{};
@@ -112,6 +123,23 @@ using Line = micropixel::FixedString<96U>;
 [[nodiscard]] inline Rgb ColorForTetromino(Tetromino type) { return kTetrominoColors[static_cast<uint32_t>(type)]; }
 
 [[nodiscard]] inline int32_t AbsoluteValue(int32_t value) { return value < 0 ? -value : value; }
+
+// Wait until the finger has moved far enough to establish intent, then require
+// the winning axis to lead by 3:2. Blocks keeps the returned axis locked for
+// the rest of the touch so small-display jitter cannot turn a drop into a
+// horizontal move.
+[[nodiscard]] inline GestureAxis ClassifyGestureAxis(int32_t dx, int32_t dy) {
+    constexpr int32_t kDirectionSlop = 24;
+    const int32_t absolute_dx = AbsoluteValue(dx);
+    const int32_t absolute_dy = AbsoluteValue(dy);
+    if (absolute_dy >= kDirectionSlop && absolute_dy * 2 >= absolute_dx * 3) {
+        return GestureAxis::kVertical;
+    }
+    if (absolute_dx >= kDirectionSlop && absolute_dx * 2 >= absolute_dy * 3) {
+        return GestureAxis::kHorizontal;
+    }
+    return GestureAxis::kUndecided;
+}
 
 }  // namespace blocks
 

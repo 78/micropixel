@@ -10,20 +10,21 @@ constexpr uint8_t kGhostVisual = 0x40U;
 constexpr uint8_t kActiveVisual = 0x80U;
 constexpr uint8_t kFlashVisual = 0xe0U;
 constexpr Rgb kScreenBackground{5U, 5U, 5U};
-constexpr Rgb kBoardBackground{10U, 10U, 10U};
-constexpr Rgb kGridColor{18U, 18U, 18U};
+// Keep these on stable RGB565 gray levels. The menu's 50% black overlay
+// preserves them as neutral 8/16-level grays instead of quantizing individual
+// channels differently near black.
+constexpr Rgb kBoardBackground{16U, 16U, 16U};
+constexpr Rgb kGridColor{32U, 32U, 32U};
 constexpr Rgb kBorderColor{38U, 38U, 38U};
 constexpr Rgb kBestScoreColor{196U, 144U, 38U};
-constexpr micropixel::Point kTitlePosition{47, 8};
-constexpr micropixel::Point kLevelPosition{460, 12};
-constexpr micropixel::Point kScoreLabelPosition{545, 12};
-constexpr micropixel::Point kScoreValuePosition{545, 33};
-constexpr micropixel::Point kBestLabelPosition{645, 12};
-constexpr micropixel::Point kBestValuePosition{635, 33};
-constexpr int32_t kStatusX = 428;
-constexpr int32_t kComboBarX = 380;
-constexpr int32_t kHudEdgePadding = 12;
-constexpr int32_t kGameOverContentOffsetY = -32;
+
+uint32_t LogicalStrokeWidth(uint32_t logical_extent, uint32_t physical_extent) {
+    if (physical_extent == 0U) {
+        return 1U;
+    }
+    const uint32_t width = (logical_extent + physical_extent - 1U) / physical_extent;
+    return width == 0U ? 1U : width;
+}
 
 Rgb MixRgb(Rgb foreground, Rgb background, uint8_t opacity) {
     const uint32_t inverse = 255U - opacity;
@@ -71,19 +72,6 @@ void SetLabel(micropixel::LabelNode& node, micropixel::SceneUpdate& update, micr
     node.SetVisible(update, visible);
 }
 
-micropixel::Point SafeTitlePosition(micropixel::Point position, const micropixel::RendererInfo& info) {
-    const int32_t safe_left = static_cast<int32_t>(info.safe_area_insets().left) + kHudEdgePadding;
-    if (position.x < safe_left) {
-        position.x = safe_left;
-    }
-    return position;
-}
-
-micropixel::Point ShiftLeftOfSafeRight(micropixel::Point position, const micropixel::RendererInfo& info) {
-    position.x -= static_cast<int32_t>(info.safe_area_insets().right);
-    return position;
-}
-
 void SetSolid(micropixel::SpriteBatch& batch, micropixel::SceneUpdate& update, uint16_t id, micropixel::Rect rect,
               micropixel::Color color, bool visible = true) {
     batch.SetInstance(update, id, {.destination = rect, .color = color, .opacity = 255U, .visible = visible});
@@ -95,7 +83,7 @@ void BlocksGame::InitializePlayfieldSurfaces() {
     static_assert(kBoardRows % kPlayfieldSurfaceCount == 0U);
     for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
         auto result = renderer_.CreateStreamingTexture({static_cast<uint32_t>(kPlayfieldWidth), kSurfaceHeight},
-                                                       micropixel::PixelFormat::kBgr888);
+                                                       micropixel::PixelFormat::kRgb565);
         micropixel::Assert(result.has_value(), "blocks: streaming surface allocation failed");
         playfield_surfaces_[index] = static_cast<micropixel::StreamingTexture&&>(result.value());
     }
@@ -126,15 +114,20 @@ uint8_t BlocksGame::VisualCell(uint32_t column, uint32_t row) const {
 }
 
 void BlocksGame::PutCellPixel(uint32_t x, uint32_t y, Rgb color) {
-    const uint32_t offset = (y * static_cast<uint32_t>(kCellPitch) + x) * 3U;
-    cell_pixels_[offset] = color.blue;
-    cell_pixels_[offset + 1U] = color.green;
-    cell_pixels_[offset + 2U] = color.red;
+    const uint16_t packed = static_cast<uint16_t>(((static_cast<uint16_t>(color.red) >> 3U) << 11U) |
+                                                  ((static_cast<uint16_t>(color.green) >> 2U) << 5U) |
+                                                  (static_cast<uint16_t>(color.blue) >> 3U));
+    const uint32_t offset = (y * static_cast<uint32_t>(kCellPitch) + x) * 2U;
+    cell_pixels_[offset] = static_cast<uint8_t>(packed);
+    cell_pixels_[offset + 1U] = static_cast<uint8_t>(packed >> 8U);
 }
 
 void BlocksGame::RasterizeCell(uint32_t column, uint32_t row, uint8_t visual) {
     const uint32_t origin_x = column * static_cast<uint32_t>(kCellPitch);
     const uint32_t origin_y = row * static_cast<uint32_t>(kCellPitch);
+    const uint32_t vertical_grid_width = LogicalStrokeWidth(renderer_info_.width(), renderer_info_.physical_width());
+    const uint32_t horizontal_grid_width =
+        LogicalStrokeWidth(renderer_info_.height(), renderer_info_.physical_height());
     for (uint32_t y = 0U; y < static_cast<uint32_t>(kCellPitch); ++y) {
         for (uint32_t x = 0U; x < static_cast<uint32_t>(kCellPitch); ++x) {
             const int32_t global_x = static_cast<int32_t>(origin_x + x);
@@ -145,8 +138,9 @@ void BlocksGame::RasterizeCell(uint32_t column, uint32_t row, uint8_t visual) {
                 InsideRoundedRect(global_x - 2, global_y - 2, kPlayfieldWidth - 4, kPlayfieldHeight - 4, 12);
             if (outer) {
                 color = inner ? kBoardBackground : kBorderColor;
-                if (inner &&
-                    ((global_x != 0 && global_x % kCellPitch == 0) || (global_y != 0 && global_y % kCellPitch == 0))) {
+                const bool vertical_grid = global_x != 0 && x < vertical_grid_width;
+                const bool horizontal_grid = global_y != 0 && y < horizontal_grid_width;
+                if (inner && (vertical_grid || horizontal_grid)) {
                     color = kGridColor;
                 }
             }
@@ -196,7 +190,7 @@ void BlocksGame::SyncPlayfield() {
             const int32_t local_y = static_cast<int32_t>(row % kRowsPerSurface) * kCellPitch;
             micropixel::Assert(playfield_surfaces_[surface_index]
                                    .Update({static_cast<int32_t>(column) * kCellPitch, local_y, kCellPitch, kCellPitch},
-                                           cell_pixels_, sizeof(cell_pixels_), static_cast<uint32_t>(kCellPitch) * 3U)
+                                           cell_pixels_, sizeof(cell_pixels_), static_cast<uint32_t>(kCellPitch) * 2U)
                                    .has_value(),
                                "blocks: surface cell update failed");
             visual_cells_[cache_index] = visual;
@@ -210,36 +204,81 @@ void BlocksGame::InitializeScene() {
     if (scene_initialized_) {
         return;
     }
-    micropixel::Assert(board_texture_.valid() && start_button_texture_.valid() && restart_button_texture_.valid(),
-                       "blocks: retained scene textures missing");
-    layer_ = scene_.CreateLayer(
-        {.clip = {0, 0, static_cast<int32_t>(renderer_info_.width()), static_cast<int32_t>(renderer_info_.height())}});
-    board_node_ = scene_.CreateSprite(board_texture_, {kBoardX, kBoardY, kBoardAssetWidth, kBoardAssetHeight},
-                                      {0, 0, kBoardAssetWidth, kBoardAssetHeight}, layer_);
+    root_container_ = scene_.CreateContainer(
+        {.clip = {0, 0, static_cast<int32_t>(kScreenWidth), static_cast<int32_t>(kScreenHeight)},
+         .translation = {ContentOffsetX(renderer_info_.width()), ContentOffsetY(renderer_info_.height())}});
     for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
         const int32_t y = kBoardY + static_cast<int32_t>(index * kSurfaceHeight);
-        playfield_nodes_[index] = scene_.CreateSurfaceNode(
+        playfield_nodes_[index] = root_container_.CreateSurfaceNode(
             playfield_surfaces_[index], {kBoardX, y, kPlayfieldWidth, static_cast<int32_t>(kSurfaceHeight)},
-            {0, 0, kPlayfieldWidth, static_cast<int32_t>(kSurfaceHeight)}, layer_);
+            {0, 0, kPlayfieldWidth, static_cast<int32_t>(kSurfaceHeight)});
     }
-    mini_piece_batch_ = scene_.CreateSpriteBatch(24U, layer_);
-    status_batch_ = scene_.CreateSpriteBatch(2U, layer_);
-    for (micropixel::LabelNode& label : header_labels_) {
-        label = scene_.CreateLabel({0, 0}, " ", micropixel::Color::White(), micropixel::SystemFont::kSmall, layer_);
+    for (uint32_t index = 0U; index < kSidebarPanelCount; ++index) {
+        sidebar_panels_[index] = root_container_.CreateRoundedRect(
+            kSidebarPanelRects[index],
+            {.fill = AsColor(kBoardBackground), .stroke = AsColor(kBorderColor), .radius = 12, .stroke_width = 3});
     }
+    mini_piece_batch_ = root_container_.CreateSpriteBatch(24U);
+    status_batch_ = root_container_.CreateSpriteBatch(2U);
+    const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
+    const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
+    hud_ = root_container_.CreateFlexContainer(
+        {.bounds = {safe_left, 0, static_cast<int32_t>(kScreenWidth) - safe_left - safe_right, kBoardY},
+         .layout = {.direction = micropixel::ui::FlexDirection::kHorizontal,
+                    .padding = {2, 8, 2, 8},
+                    .gap_pixels = 8,
+                    .distribution = micropixel::ui::FlexDistribution::kSpaceBetween,
+                    .alignment = micropixel::ui::FlexAlignment::kCenter}});
+    const micropixel::Color muted = micropixel::Color::Rgb(115U, 115U, 115U);
+    hud_.CreateLabel(strings_.Get(blocks_strings::Id::kAppTitle),
+                     {.color = micropixel::Color::White(), .font = micropixel::SystemFont::kMedium});
+    hud_.CreateLabel("LVL 1", {.font = micropixel::SystemFont::kSmall});
+    auto& hud_stats = hud_.CreateGridContainer({.rows = 2, .columns = 2, .column_gap = 12});
+    hud_stats.CreateLabel(strings_.Get(blocks_strings::Id::kLabelScore),
+                          {.color = muted, .font = micropixel::SystemFont::kSmall});
+    hud_stats.CreateLabel(strings_.Get(blocks_strings::Id::kLabelBest),
+                          {.color = muted, .font = micropixel::SystemFont::kSmall});
+    hud_stats.CreateLabel("0000", {.font = micropixel::SystemFont::kSmall});
+    hud_stats.CreateLabel("0000", {.color = AsColor(kBestScoreColor), .font = micropixel::SystemFont::kSmall});
     for (micropixel::LabelNode& label : sidebar_labels_) {
-        label = scene_.CreateLabel({0, 0}, " ", micropixel::Color::White(), micropixel::SystemFont::kSmall, layer_);
+        label = root_container_.CreateLabel({0, 0}, " ", micropixel::Color::White(), micropixel::SystemFont::kSmall);
     }
     status_label_ =
-        scene_.CreateLabel({428, 31}, " ", micropixel::Color::White(), micropixel::SystemFont::kSmall, layer_, true);
-    overlay_node_ = scene_.CreateShape({kBoardX, kBoardY, kBoardAssetWidth, kBoardAssetHeight},
-                                       micropixel::Color::Black(), layer_, kOverlayOpacity);
-    button_node_ = scene_.CreateSprite(start_button_texture_, kStartButtonRect,
-                                       {0, 0, kActionButtonWidth, kActionButtonHeight}, layer_);
-    for (micropixel::LabelNode& label : overlay_labels_) {
-        label = scene_.CreateLabel({kScreenCenterX, 300}, " ", micropixel::Color::White(),
-                                   micropixel::SystemFont::kLarge, layer_, true);
-    }
+        root_container_.CreateLabel({428, 31}, " ", micropixel::Color::White(), micropixel::SystemFont::kSmall, true);
+    overlay_node_ = root_container_.CreateShape({kBoardX, kBoardY, kBoardAreaWidth, kBoardAreaHeight},
+                                                micropixel::Color::Black(), kOverlayOpacity);
+    action_button_ = root_container_.CreateTextButton({.bounds = kStartButtonRect,
+                                                       .text = strings_.Get(blocks_strings::Id::kActionStart),
+                                                       .style = {.background = micropixel::Color::Rgb(52U, 211U, 153U),
+                                                                 .text = micropixel::Color::Black(),
+                                                                 .font = kActionButtonFont,
+                                                                 .corner_radius = kActionButtonCornerRadius},
+                                                       .hit_padding = kActionButtonHitPadding});
+    game_over_panel_ =
+        root_container_.CreateFlexContainer({.bounds = kGameOverOverlayRect,
+                                             .layout = {.direction = micropixel::ui::FlexDirection::kVertical,
+                                                        .gap_pixels = 15,
+                                                        .distribution = micropixel::ui::FlexDistribution::kCenter,
+                                                        .alignment = micropixel::ui::FlexAlignment::kCenter},
+                                             .visible = false});
+    game_over_panel_.CreateLabel(
+        strings_.Get(blocks_strings::Id::kGameOverTitle),
+        {.color = micropixel::Color::Rgb(244U, 63U, 94U), .font = micropixel::SystemFont::kLarge});
+    game_over_panel_.CreateLabel("0000", {.font = micropixel::SystemFont::kLarge});
+    auto& stats = game_over_panel_.CreateGridContainer({.columns = 2, .row_gap = 10});
+    stats.CreateLabel(strings_.Get(blocks_strings::Id::kLabelLines),
+                      {.color = micropixel::Color::Rgb(115U, 115U, 115U), .font = micropixel::SystemFont::kSmall});
+    stats.CreateLabel(strings_.Get(blocks_strings::Id::kLabelLevel),
+                      {.color = micropixel::Color::Rgb(115U, 115U, 115U), .font = micropixel::SystemFont::kSmall});
+    stats.CreateLabel("0");
+    stats.CreateLabel("1");
+    game_over_panel_.CreateTextButton({.bounds = {0, 0, kActionButtonWidth, kActionButtonHeight},
+                                       .text = strings_.Get(blocks_strings::Id::kActionRestart),
+                                       .style = {.background = micropixel::Color::White(),
+                                                 .text = micropixel::Color::Rgb(69U, 10U, 10U),
+                                                 .font = kActionButtonFont,
+                                                 .corner_radius = kActionButtonCornerRadius},
+                                       .hit_padding = kActionButtonHitPadding});
     scene_initialized_ = true;
 }
 
@@ -291,50 +330,62 @@ void BlocksGame::RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first
 }
 
 void BlocksGame::RenderHeader(micropixel::SceneUpdate& update, const Theme& theme) {
-    SetLabel(header_labels_[0], update, SafeTitlePosition(kTitlePosition, renderer_info_),
-             strings_.Get(blocks_strings::Id::kAppTitle), AsColor(theme.text), micropixel::SystemFont::kTitle);
-    Line level;
-    level.Append(strings_.Get(blocks_strings::Id::kLabelLevelShort));
-    level.AppendUint(model_.level());
-    SetLabel(header_labels_[1], update, ShiftLeftOfSafeRight(kLevelPosition, renderer_info_), level.c_str(),
-             AsColor(theme.text), micropixel::SystemFont::kSmall);
-    SetLabel(header_labels_[2], update, ShiftLeftOfSafeRight(kScoreLabelPosition, renderer_info_),
-             strings_.Get(blocks_strings::Id::kLabelScore), micropixel::Color::Rgb(115U, 115U, 115U),
-             micropixel::SystemFont::kSmall);
+    hud_.label(0U).SetColor(update, AsColor(theme.text));
+    Line center;
+    const bool combo_active = screen_ == Screen::kPlaying && model_.combo() > 1U;
+    if (combo_active) {
+        center.Append(strings_.Get(blocks_strings::Id::kEffectComboPrefix));
+        center.AppendUint(model_.combo());
+    } else {
+        center.Append(strings_.Get(blocks_strings::Id::kLabelLevelShort));
+        center.AppendUint(model_.level());
+    }
+    micropixel::Assert(hud_.label(1U).SetText(update, center.c_str()).has_value(), "blocks: HUD center invalid");
+    hud_.label(1U).SetColor(update, combo_active ? micropixel::Color::Rgb(251U, 191U, 36U) : AsColor(theme.text));
     Line score;
     score.AppendPadded4(model_.score());
-    SetLabel(header_labels_[3], update, ShiftLeftOfSafeRight(kScoreValuePosition, renderer_info_), score.c_str(),
-             micropixel::Color::White(), micropixel::SystemFont::kLarge);
-    SetLabel(header_labels_[4], update, ShiftLeftOfSafeRight(kBestLabelPosition, renderer_info_),
-             strings_.Get(blocks_strings::Id::kLabelBest), micropixel::Color::Rgb(115U, 115U, 115U),
-             micropixel::SystemFont::kSmall);
+    micropixel::Assert(hud_.grid(0U).SetText(update, 1U, 0U, score.c_str()).has_value(), "blocks: HUD score invalid");
     Line best;
     best.AppendPadded4(best_score_ > model_.score() ? best_score_ : model_.score());
-    SetLabel(header_labels_[5], update, ShiftLeftOfSafeRight(kBestValuePosition, renderer_info_), best.c_str(),
-             AsColor(kBestScoreColor), micropixel::SystemFont::kLarge);
+    micropixel::Assert(hud_.grid(0U).SetText(update, 1U, 1U, best.c_str()).has_value(), "blocks: HUD best invalid");
+    auto hud_layout = hud_.Layout(update);
+    if (!hud_layout.has_value()) {
+        Line diagnostic;
+        diagnostic.Append("blocks: HUD layout failed: ");
+        diagnostic.Append(hud_layout.error().name());
+        diagnostic.Append(" title=");
+        diagnostic.AppendUint(hud_.label(0U).intrinsic_size().width);
+        diagnostic.Append(" center=");
+        diagnostic.AppendUint(hud_.label(1U).intrinsic_size().width);
+        diagnostic.Append(" stats=");
+        diagnostic.AppendUint(hud_.grid(0U).intrinsic_size().width);
+        app_.log().Error(diagnostic.c_str());
+    }
+    micropixel::Assert(hud_layout.has_value(), "blocks: HUD layout failed");
 }
 
 void BlocksGame::RenderSidebar(micropixel::SceneUpdate& update, const Theme& theme) {
-    const int32_t left = kBoardX + kSidebarX + 18;
+    const int32_t left = kSidebarPanelRects[0].x + 18;
     const micropixel::Color muted = micropixel::Color::Rgb(115U, 115U, 115U);
-    SetLabel(sidebar_labels_[0], update, {left, kBoardY + 14}, strings_.Get(blocks_strings::Id::kLabelHold),
-             model_.hold_available() ? AsColor(theme.text) : muted, micropixel::SystemFont::kMedium);
-    SetLabel(sidebar_labels_[1], update, {left, kBoardY + 156}, strings_.Get(blocks_strings::Id::kLabelNext),
-             AsColor(theme.text), micropixel::SystemFont::kMedium);
+    SetLabel(sidebar_labels_[0], update, {left, kSidebarPanelRects[0].y + 12},
+             strings_.Get(blocks_strings::Id::kLabelHold), model_.hold_available() ? AsColor(theme.text) : muted,
+             micropixel::SystemFont::kSmall);
+    SetLabel(sidebar_labels_[1], update, {left, kSidebarPanelRects[1].y + 12},
+             strings_.Get(blocks_strings::Id::kLabelNext), AsColor(theme.text), micropixel::SystemFont::kSmall);
     Line level;
     level.Append(strings_.Get(blocks_strings::Id::kLabelLevelPrefix));
     level.AppendUint(model_.level());
-    SetLabel(sidebar_labels_[2], update, {left, kBoardY + 310}, level.c_str(), AsColor(theme.text),
-             micropixel::SystemFont::kLarge);
+    SetLabel(sidebar_labels_[2], update, {left, kSidebarPanelRects[2].y + 32}, level.c_str(), AsColor(theme.text),
+             micropixel::SystemFont::kSmall);
     Line lines;
     lines.Append(strings_.Get(blocks_strings::Id::kLabelLinesPrefix));
     lines.AppendUint(model_.lines());
-    SetLabel(sidebar_labels_[3], update, {left, kBoardY + 426}, lines.c_str(), AsColor(theme.text),
-             micropixel::SystemFont::kLarge);
-    SetLabel(sidebar_labels_[4], update, {left, kBoardY + 548}, strings_.Get(blocks_strings::Id::kHintTapRotate), muted,
+    SetLabel(sidebar_labels_[3], update, {left, kSidebarPanelRects[3].y + 32}, lines.c_str(), AsColor(theme.text),
              micropixel::SystemFont::kSmall);
-    SetLabel(sidebar_labels_[5], update, {left, kBoardY + 574}, strings_.Get(blocks_strings::Id::kHintSwipeAnywhere),
-             muted, micropixel::SystemFont::kSmall);
+    SetLabel(sidebar_labels_[4], update, {left, kSidebarPanelRects[4].y + 10},
+             strings_.Get(blocks_strings::Id::kHintTapRotate), muted, micropixel::SystemFont::kSmall);
+    SetLabel(sidebar_labels_[5], update, {left, kSidebarPanelRects[4].y + 46},
+             strings_.Get(blocks_strings::Id::kHintSwipeAnywhere), muted, micropixel::SystemFont::kSmall);
 }
 
 void BlocksGame::RenderStatusEffect(micropixel::SceneUpdate& update, const Theme& theme) {
@@ -356,72 +407,59 @@ void BlocksGame::RenderStatusEffect(micropixel::SceneUpdate& update, const Theme
         SetLabel(status_label_, update, {kBoardX + kPlayfieldWidth / 2, y}, points.c_str(), AsColor(theme.text),
                  micropixel::SystemFont::kLarge);
     } else if (screen_ == Screen::kPlaying && model_.combo() > 1U) {
-        const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
-        SetSolid(status_batch_, update, 0U, {kComboBarX - safe_right, 54, 96, 4},
+        const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
+        const micropixel::Rect center_bounds = hud_.label(1U).bounds();
+        const uint32_t full_width = static_cast<uint32_t>(center_bounds.width);
+        const uint32_t width = model_.combo() > 5U ? full_width : (full_width * model_.combo()) / 6U;
+        const int32_t bar_x = safe_left + center_bounds.x;
+        const int32_t bar_y = center_bounds.y + center_bounds.height - 4;
+        SetSolid(status_batch_, update, 0U, {bar_x, bar_y, center_bounds.width, 4},
                  micropixel::Color::Rgb(38U, 38U, 38U));
-        const uint32_t width = model_.combo() > 5U ? 96U : model_.combo() * 16U;
-        SetSolid(status_batch_, update, 1U, {kComboBarX - safe_right, 54, static_cast<int32_t>(width), 4},
+        SetSolid(status_batch_, update, 1U, {bar_x, bar_y, static_cast<int32_t>(width), 4},
                  micropixel::Color::Rgb(251U, 191U, 36U));
-        Line combo;
-        combo.Append(strings_.Get(blocks_strings::Id::kEffectComboPrefix));
-        combo.AppendUint(model_.combo());
-        status_label_.SetCentered(update, true);
-        SetLabel(status_label_, update, {kStatusX - safe_right, 31}, combo.c_str(),
-                 micropixel::Color::Rgb(251U, 191U, 36U), micropixel::SystemFont::kSmall);
     }
 }
 
 void BlocksGame::RenderOverlay(micropixel::SceneUpdate& update) {
-    for (micropixel::LabelNode& label : overlay_labels_) {
-        label.SetVisible(update, false);
-    }
     if (screen_ == Screen::kPlaying) {
         overlay_node_.SetVisible(update, false);
-        button_node_.SetVisible(update, false);
+        action_button_.SetVisible(update, false);
+        game_over_panel_.SetVisible(update, false);
         return;
     }
     const bool game_over = screen_ == Screen::kGameOver;
     overlay_node_.SetVisible(update, true);
     overlay_node_.SetRect(update, game_over ? kGameOverOverlayRect
-                                            : micropixel::Rect{kBoardX, kBoardY, kBoardAssetWidth, kBoardAssetHeight});
+                                            : micropixel::Rect{kBoardX, kBoardY, kBoardAreaWidth, kBoardAreaHeight});
     overlay_node_.SetColor(update, game_over ? micropixel::Color::Rgb(69U, 10U, 10U) : micropixel::Color::Black());
-    overlay_node_.SetOpacity(update, kOverlayOpacity);
-    button_node_.SetVisible(update, true);
-    button_node_.SetTexture(update, game_over ? restart_button_texture_ : start_button_texture_);
-    button_node_.SetDestination(update, game_over ? kRestartButtonRect : kStartButtonRect);
-    button_node_.SetOpacity(update, screen_button_.pressed() ? 160U : 255U);
-    uint16_t slot = 0U;
-    const auto label = [&](int32_t x, int32_t y, const char* text, micropixel::Color color,
-                           micropixel::SystemFont font) {
-        SetLabel(overlay_labels_[slot++], update, {x, y}, text, color, font);
-    };
-    if (!game_over) {
-        label(kScreenCenterX, ActionButtonTextY(kStartButtonRect),
-              strings_.Get(screen_ == Screen::kMenu ? blocks_strings::Id::kActionStart
-                                                    : blocks_strings::Id::kActionContinue),
-              micropixel::Color::Black(), kActionButtonFont);
+    overlay_node_.SetOpacity(update, game_over ? 255U : kOverlayOpacity);
+    game_over_panel_.SetVisible(update, game_over);
+    action_button_.SetVisible(update, !game_over);
+    if (game_over) {
+        Line score;
+        score.AppendPadded4(model_.score());
+        micropixel::Assert(game_over_panel_.label(1U).SetText(update, score.c_str()).has_value(),
+                           "blocks: game over score invalid");
+        Line lines;
+        lines.AppendUint(model_.lines());
+        micropixel::Assert(game_over_panel_.grid(0U).SetText(update, 1U, 0U, lines.c_str()).has_value(),
+                           "blocks: game over lines invalid");
+        Line level;
+        level.AppendUint(model_.level());
+        micropixel::Assert(game_over_panel_.grid(0U).SetText(update, 1U, 1U, level.c_str()).has_value(),
+                           "blocks: game over level invalid");
+        micropixel::Assert(game_over_panel_.Layout(update).has_value(), "blocks: game over layout failed");
+        game_over_panel_.text_button(0U).Sync(update);
         return;
     }
-    label(kScreenCenterX, 260 + kGameOverContentOffsetY, strings_.Get(blocks_strings::Id::kGameOverTitle),
-          micropixel::Color::Rgb(244U, 63U, 94U), micropixel::SystemFont::kLarge);
-    Line score;
-    score.AppendPadded4(model_.score());
-    label(kScreenCenterX, 312 + kGameOverContentOffsetY, score.c_str(), micropixel::Color::White(),
-          micropixel::SystemFont::kLarge);
-    label(kScreenCenterX - 55, 356 + kGameOverContentOffsetY, strings_.Get(blocks_strings::Id::kLabelLines),
-          micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
-    label(kScreenCenterX + 55, 356 + kGameOverContentOffsetY, strings_.Get(blocks_strings::Id::kLabelLevel),
-          micropixel::Color::Rgb(115U, 115U, 115U), micropixel::SystemFont::kSmall);
-    Line lines;
-    lines.AppendUint(model_.lines());
-    label(kScreenCenterX - 55, 390 + kGameOverContentOffsetY, lines.c_str(), micropixel::Color::White(),
-          micropixel::SystemFont::kMedium);
-    Line level;
-    level.AppendUint(model_.level());
-    label(kScreenCenterX + 55, 390 + kGameOverContentOffsetY, level.c_str(), micropixel::Color::White(),
-          micropixel::SystemFont::kMedium);
-    label(kScreenCenterX, ActionButtonTextY(kRestartButtonRect), strings_.Get(blocks_strings::Id::kActionRestart),
-          micropixel::Color::Rgb(69U, 10U, 10U), kActionButtonFont);
+    micropixel::Assert(action_button_.SetBounds(update, kStartButtonRect).has_value(),
+                       "blocks: text button bounds invalid");
+    micropixel::Assert(
+        action_button_
+            .SetText(update, strings_.Get(screen_ == Screen::kMenu ? blocks_strings::Id::kActionStart
+                                                                   : blocks_strings::Id::kActionContinue))
+            .has_value(),
+        "blocks: text button text invalid");
 }
 
 void BlocksGame::Render() {
@@ -431,15 +469,17 @@ void BlocksGame::Render() {
     InitializeScene();
     SyncPlayfield();
     const Theme& theme = ThemeForLevel(model_.level());
-    auto update = scene_.BeginUpdate();
-    RenderHeader(update, theme);
-    RenderSidebar(update, theme);
-    const int32_t center = kBoardX + kSidebarX + kSidebarWidth / 2;
-    RenderMiniPiece(update, 0U, model_.held(), center, kBoardY + 54, !model_.hold_available(), model_.has_hold());
-    RenderMiniPiece(update, 12U, model_.next(), center, kBoardY + 196, false, true);
-    RenderStatusEffect(update, theme);
-    RenderOverlay(update);
-    micropixel::Assert(update.Present().has_value(), "blocks: scene update failed");
+    auto presented = scene_.Update([&](micropixel::SceneUpdate& update) {
+        RenderHeader(update, theme);
+        RenderSidebar(update, theme);
+        const int32_t center = kSidebarPanelRects[0].x + kSidebarPanelRects[0].width / 2;
+        RenderMiniPiece(update, 0U, model_.held(), center, kSidebarPanelRects[0].y + 54, !model_.hold_available(),
+                        model_.has_hold());
+        RenderMiniPiece(update, 12U, model_.next(), center, kSidebarPanelRects[1].y + 54, false, true);
+        RenderStatusEffect(update, theme);
+        RenderOverlay(update);
+    });
+    micropixel::Assert(presented.has_value(), "blocks: scene update failed");
 }
 
 }  // namespace blocks

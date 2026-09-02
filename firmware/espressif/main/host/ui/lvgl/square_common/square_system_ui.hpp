@@ -18,6 +18,7 @@ class SquareSystemUi final : public host_ui::SystemUi {
     void UpdateHallStatusBar(const host_ui::HallStatusBarModel& model) override;
     void UpdateHallInstallProgress(uint32_t app_index, uint8_t progress_percent) override;
     void PauseHallCoverLoading() override;
+    void PrepareAppLaunch(uint32_t app_index) override;
     void LeaveHall() override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> RestoreGuestView() override;
     void WatchGuestActions(host_ui::SystemUiActionSink action_sink, void* action_context) override;

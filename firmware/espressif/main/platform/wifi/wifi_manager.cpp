@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <memory>
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -177,10 +178,29 @@ const char* AuthModeName(uint8_t auth_mode) {
 
 void WifiManager::HeapCapsDeleter::operator()(std::byte* value) const { heap_caps_free(value); }
 
+void WifiManager::ColdStateDeleter::operator()(ColdState* value) const {
+    if (value != nullptr) {
+        std::destroy_at(value);
+        heap_caps_free(value);
+    }
+}
+
 WifiManager::~WifiManager() {
     if (radio_startup_task_started_ && radio_startup_done_ != nullptr) {
         (void)xSemaphoreTake(radio_startup_done_, portMAX_DELAY);
     }
+    if (driver_initialized_) {
+        (void)esp_wifi_stop();
+    }
+    if (wifi_event_instance_ != nullptr) {
+        (void)esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_instance_);
+        wifi_event_instance_ = nullptr;
+    }
+    if (ip_event_instance_ != nullptr) {
+        (void)esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_instance_);
+        ip_event_instance_ = nullptr;
+    }
+    (void)ReleaseDriver();
 }
 
 void WifiManager::BindBackgroundExecutor(work::BackgroundExecutor& executor) { background_executor_ = &executor; }
@@ -189,6 +209,12 @@ std::expected<void, device::WifiError> WifiManager::Initialize() {
     if (initialization_started_) {
         return {};
     }
+    void* cold_storage = heap_caps_malloc(sizeof(ColdState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (cold_storage == nullptr) {
+        ESP_LOGW(kTag, "Wi-Fi cold state is unavailable in PSRAM");
+        return std::unexpected(device::WifiError::kOperationFailed);
+    }
+    cold_state_.reset(std::construct_at(static_cast<ColdState*>(cold_storage)));
     mutex_ = xSemaphoreCreateMutex();
     persistence_mutex_ = xSemaphoreCreateMutex();
     if (mutex_ == nullptr || persistence_mutex_ == nullptr) {
@@ -197,10 +223,7 @@ std::expected<void, device::WifiError> WifiManager::Initialize() {
     auto* scan_record_workspace =
         static_cast<std::byte*>(heap_caps_calloc(1U, kScanRecordWorkspaceBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (scan_record_workspace == nullptr) {
-        scan_record_workspace =
-            static_cast<std::byte*>(heap_caps_calloc(1U, kScanRecordWorkspaceBytes, MALLOC_CAP_8BIT));
-    }
-    if (scan_record_workspace == nullptr) {
+        ESP_LOGW(kTag, "Wi-Fi scan workspace is unavailable in PSRAM");
         return std::unexpected(device::WifiError::kOperationFailed);
     }
     scan_record_workspace_.reset(scan_record_workspace);
@@ -271,49 +294,33 @@ std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
         return std::unexpected(WifiErrorFor(radio_status));
     }
 
-    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    // MicroPixel owns Wi-Fi persistence in runtime_nvs and explicitly uses
-    // WIFI_STORAGE_RAM below. Disable the driver's separate default-NVS path
-    // so native and hosted radios share one authoritative settings store.
-    config.nvs_enable = false;
-    esp_err_t status = esp_wifi_init(&config);
-    if (status != ESP_OK) {
-        ESP_LOGW(kTag, "Wi-Fi initialization failed: %s", esp_err_to_name(status));
-        return std::unexpected(WifiErrorFor(status));
-    }
-    status = esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    if (status == ESP_OK) {
-        status = esp_wifi_set_mode(WIFI_MODE_STA);
-    }
-    if (status == ESP_OK) {
-        status = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, WifiEventHandler, this,
-                                                     &wifi_event_instance_);
-    }
-    if (status == ESP_OK) {
-        status = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, WifiEventHandler, this,
-                                                     &ip_event_instance_);
-    }
-    if (status != ESP_OK) {
-        ESP_LOGW(kTag, "Wi-Fi event setup failed: %s", esp_err_to_name(status));
-        return std::unexpected(WifiErrorFor(status));
-    }
-
     {
         ScopedLock lock(mutex_);
         initialized_ = true;
-        snapshot_.available = true;
-        snapshot_.enabled = enabled_;
+        Cold().snapshot.available = true;
+        Cold().snapshot.enabled = enabled_;
         RebuildSnapshotLocked();
     }
     if (enabled_) {
-        status = esp_wifi_start();
+        esp_err_t status = InitializeDriver();
+        if (status == ESP_OK) {
+            status = esp_wifi_start();
+        }
         if (status != ESP_OK) {
             ESP_LOGW(kTag, "Wi-Fi start failed: %s", esp_err_to_name(status));
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+            (void)esp_wifi_stop();
+            (void)ReleaseDriver();
+#endif
             return std::unexpected(WifiErrorFor(status));
         }
         status = radio_.OnStationStarted();
         if (status != ESP_OK) {
             ESP_LOGW(kTag, "%s radio post-start configuration failed: %s", radio_.Name(), esp_err_to_name(status));
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+            (void)esp_wifi_stop();
+            (void)ReleaseDriver();
+#endif
             return std::unexpected(WifiErrorFor(status));
         }
     }
@@ -322,12 +329,55 @@ std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
     return {};
 }
 
+esp_err_t WifiManager::InitializeDriver() {
+    if (driver_initialized_) {
+        return ESP_OK;
+    }
+    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
+    // MicroPixel owns Wi-Fi persistence in runtime_nvs and explicitly uses
+    // WIFI_STORAGE_RAM below. Disable the driver's separate default-NVS path
+    // so native and hosted radios share one authoritative settings store.
+    config.nvs_enable = false;
+    esp_err_t status = esp_wifi_init(&config);
+    if (status != ESP_OK) {
+        return status;
+    }
+    driver_initialized_ = true;
+    status = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (status == ESP_OK) {
+        status = esp_wifi_set_mode(WIFI_MODE_STA);
+    }
+    if (status == ESP_OK && wifi_event_instance_ == nullptr) {
+        status = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, WifiEventHandler, this,
+                                                     &wifi_event_instance_);
+    }
+    if (status == ESP_OK && ip_event_instance_ == nullptr) {
+        status = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, WifiEventHandler, this,
+                                                     &ip_event_instance_);
+    }
+    if (status != ESP_OK) {
+        (void)ReleaseDriver();
+    }
+    return status;
+}
+
+esp_err_t WifiManager::ReleaseDriver() {
+    if (!driver_initialized_) {
+        return ESP_OK;
+    }
+    const esp_err_t status = esp_wifi_deinit();
+    if (status == ESP_OK) {
+        driver_initialized_ = false;
+    }
+    return status;
+}
+
 device::WifiSnapshot WifiManager::Snapshot() const {
     device::WifiSnapshot result{};
     {
         ScopedLock lock(mutex_);
         if (lock.locked()) {
-            result = snapshot_;
+            result = Cold().snapshot;
         }
     }
     if (result.connected) {
@@ -373,7 +423,7 @@ std::expected<void, device::WifiError> WifiManager::SetEnabled(bool enabled) {
         user_requested_disconnect_ = !enabled;
         associated_ = false;
         reconnect_attempts_ = 0U;
-        pending_profile_ = {};
+        Cold().pending_profile = {};
         pending_profile_valid_ = false;
         ignore_next_disconnect_ = false;
         scan_after_disconnect_ = false;
@@ -385,10 +435,10 @@ std::expected<void, device::WifiError> WifiManager::SetEnabled(bool enabled) {
         discovery_channel_index_ = 0U;
         discovery_backoff_index_ = 0U;
         last_user_scan_request_us_ = 0;
-        snapshot_.enabled = enabled;
-        snapshot_.connected = false;
-        snapshot_.scanning = false;
-        snapshot_.connection_state = device::WifiConnectionState::kDisconnected;
+        Cold().snapshot.enabled = enabled;
+        Cold().snapshot.connected = false;
+        Cold().snapshot.scanning = false;
+        Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
         RebuildSnapshotLocked();
     }
 
@@ -396,7 +446,23 @@ std::expected<void, device::WifiError> WifiManager::SetEnabled(bool enabled) {
         (void)esp_timer_stop(discovery_timer_);
     }
 
-    esp_err_t status = enabled ? esp_wifi_start() : esp_wifi_stop();
+    esp_err_t status = ESP_OK;
+    if (enabled) {
+        status = InitializeDriver();
+        if (status == ESP_OK) {
+            status = esp_wifi_start();
+        }
+        if (status == ESP_OK) {
+            status = radio_.OnStationStarted();
+        }
+    } else {
+        status = esp_wifi_stop();
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+        if (status == ESP_OK) {
+            status = ReleaseDriver();
+        }
+#endif
+    }
 #if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5
     if (status == ESP_OK && enabled) {
         status = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
@@ -405,9 +471,15 @@ std::expected<void, device::WifiError> WifiManager::SetEnabled(bool enabled) {
     if (status != ESP_OK) {
         ScopedLock lock(mutex_);
         enabled_ = !enabled;
-        snapshot_.enabled = enabled_;
-        snapshot_.connection_state = device::WifiConnectionState::kFailed;
+        Cold().snapshot.enabled = enabled_;
+        Cold().snapshot.connection_state = device::WifiConnectionState::kFailed;
         RebuildSnapshotLocked();
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+        if (enabled) {
+            (void)esp_wifi_stop();
+            (void)ReleaseDriver();
+        }
+#endif
         return std::unexpected(WifiErrorFor(status));
     }
     QueueSaveSettings();
@@ -422,13 +494,14 @@ std::expected<void, device::WifiError> WifiManager::RequestScan() {
             return std::unexpected(device::WifiError::kUnavailable);
         }
         last_user_scan_request_us_ = esp_timer_get_time();
-        if (snapshot_.scanning) {
-            if (scan_purpose_ == ScanPurpose::kDiscovery) {
+        if (Cold().snapshot.scanning) {
+            if (scan_purpose_ == ScanPurpose::kDiscovery || scan_purpose_ == ScanPurpose::kDiscoveryFull) {
                 user_scan_after_discovery_ = true;
             }
             return {};
         }
-        if (snapshot_.connection_state == device::WifiConnectionState::kConnecting && !snapshot_.connected) {
+        if (Cold().snapshot.connection_state == device::WifiConnectionState::kConnecting &&
+            !Cold().snapshot.connected) {
             scan_after_disconnect_ = true;
             scan_purpose_ = ScanPurpose::kUser;
             disconnect_connecting = true;
@@ -461,32 +534,36 @@ std::expected<void, device::WifiError> WifiManager::StartScan(ScanPurpose purpos
         if (!initialized_ || !enabled_) {
             return std::unexpected(device::WifiError::kUnavailable);
         }
-        if (snapshot_.scanning || snapshot_.connection_state == device::WifiConnectionState::kConnecting) {
+        if (Cold().snapshot.scanning || Cold().snapshot.connection_state == device::WifiConnectionState::kConnecting) {
             return std::unexpected(device::WifiError::kBusy);
         }
         if (purpose == ScanPurpose::kDiscovery) {
             if (!BuildDiscoveryChannelsLocked()) {
-                return std::unexpected(device::WifiError::kUnavailable);
+                purpose = ScanPurpose::kDiscoveryFull;
+            } else {
+                channel = Cold().discovery_channels[0U];
             }
-            channel = discovery_channels_[0U];
-        } else {
+        }
+        if (purpose != ScanPurpose::kDiscovery) {
             discovery_channel_count_ = 0U;
             discovery_channel_index_ = 0U;
         }
-        snapshot_.scanning = true;
+        Cold().snapshot.scanning = true;
         scan_purpose_ = purpose;
         RebuildSnapshotLocked();
     }
     const bool passive = purpose == ScanPurpose::kDiscovery;
     if (passive) {
         ESP_LOGI(kTag, "passive saved-network scan start: channel=%u", channel);
+    } else if (purpose == ScanPurpose::kDiscoveryFull) {
+        ESP_LOGI(kTag, "active saved-network fallback scan start: all channels");
     } else {
         ESP_LOGI(kTag, "active full-channel Wi-Fi scan start");
     }
     const esp_err_t status = StartWifiScan(passive, channel);
     if (status != ESP_OK) {
         ScopedLock lock(mutex_);
-        snapshot_.scanning = false;
+        Cold().snapshot.scanning = false;
         scan_purpose_ = ScanPurpose::kNone;
         discovery_channel_count_ = 0U;
         discovery_channel_index_ = 0U;
@@ -499,7 +576,8 @@ std::expected<void, device::WifiError> WifiManager::StartScan(ScanPurpose purpos
 void WifiManager::StartDiscovery() {
     {
         ScopedLock lock(mutex_);
-        if (!initialized_ || !enabled_ || profile_count_ == 0U || snapshot_.connected || user_requested_disconnect_) {
+        if (!initialized_ || !enabled_ || profile_count_ == 0U || Cold().snapshot.connected ||
+            user_requested_disconnect_) {
             return;
         }
         const int64_t now_us = esp_timer_get_time();
@@ -521,7 +599,7 @@ void WifiManager::ScheduleDiscovery(bool advance_backoff) {
     int64_t delay_us = kDiscoveryBackoffUs.back();
     {
         ScopedLock lock(mutex_);
-        if (!initialized_ || !enabled_ || snapshot_.connected || user_requested_disconnect_ ||
+        if (!initialized_ || !enabled_ || Cold().snapshot.connected || user_requested_disconnect_ ||
             discovery_timer_ == nullptr) {
             return;
         }
@@ -569,7 +647,7 @@ std::expected<void, device::WifiError> WifiManager::ConnectSaved(std::string_vie
         if (index < 0) {
             return std::unexpected(device::WifiError::kInvalidArgument);
         }
-        profile = profiles_[static_cast<uint32_t>(index)];
+        profile = Cold().profiles[static_cast<uint32_t>(index)];
         active_profile_index_ = index;
         pending_profile_valid_ = false;
         user_requested_disconnect_ = false;
@@ -603,17 +681,17 @@ std::expected<void, device::WifiError> WifiManager::Connect(std::string_view ssi
             return std::unexpected(device::WifiError::kUnavailable);
         }
         const int32_t index = FindSavedProfile(ssid);
-        if (index < 0 && profile_count_ >= profiles_.size()) {
+        if (index < 0 && profile_count_ >= Cold().profiles.size()) {
             return std::unexpected(device::WifiError::kStorage);
         }
         if (index >= 0) {
-            const SavedProfile& saved = profiles_[static_cast<uint32_t>(index)];
+            const SavedProfile& saved = Cold().profiles[static_cast<uint32_t>(index)];
             profile.channel = saved.channel;
             profile.bssid = saved.bssid;
             profile.bssid_valid = saved.bssid_valid;
         }
         have_target = ApplyScanTarget(ssid, profile) || (profile.channel != 0U && profile.bssid_valid);
-        pending_profile_ = profile;
+        Cold().pending_profile = profile;
         pending_profile_valid_ = true;
         active_profile_index_ = index;
         user_requested_disconnect_ = false;
@@ -633,7 +711,7 @@ std::expected<void, device::WifiError> WifiManager::Disconnect() {
         user_requested_disconnect_ = true;
         associated_ = false;
         reconnect_attempts_ = 0U;
-        pending_profile_ = {};
+        Cold().pending_profile = {};
         pending_profile_valid_ = false;
         ignore_next_disconnect_ = false;
         scan_after_disconnect_ = false;
@@ -643,8 +721,8 @@ std::expected<void, device::WifiError> WifiManager::Disconnect() {
         scan_purpose_ = ScanPurpose::kNone;
         discovery_channel_count_ = 0U;
         discovery_channel_index_ = 0U;
-        snapshot_.connected = false;
-        snapshot_.connection_state = device::WifiConnectionState::kDisconnected;
+        Cold().snapshot.connected = false;
+        Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
         RebuildSnapshotLocked();
     }
     if (discovery_timer_ != nullptr) {
@@ -667,21 +745,21 @@ std::expected<void, device::WifiError> WifiManager::Forget(std::string_view ssid
         }
         disconnect = active_profile_index_ == index;
         for (uint32_t current = static_cast<uint32_t>(index); current + 1U < profile_count_; ++current) {
-            profiles_[current] = profiles_[current + 1U];
+            Cold().profiles[current] = Cold().profiles[current + 1U];
         }
         if (profile_count_ > 0U) {
-            profiles_[--profile_count_] = {};
+            Cold().profiles[--profile_count_] = {};
         }
         if (disconnect) {
             active_profile_index_ = -1;
             user_requested_disconnect_ = true;
             associated_ = false;
             reconnect_attempts_ = 0U;
-            pending_profile_ = {};
+            Cold().pending_profile = {};
             pending_profile_valid_ = false;
             connection_full_channel_scan_ = false;
-            snapshot_.connected = false;
-            snapshot_.connection_state = device::WifiConnectionState::kDisconnected;
+            Cold().snapshot.connected = false;
+            Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
         } else if (active_profile_index_ > index) {
             --active_profile_index_;
         }
@@ -733,24 +811,24 @@ void WifiManager::HandleWifiEvent(int32_t event_id, void* event_data) {
             ScopedLock lock(mutex_);
             associated_ = true;
             if (pending_profile_valid_) {
-                int32_t pending_index = FindSavedProfile(pending_profile_.ssid.data());
-                if (pending_index < 0 && profile_count_ < profiles_.size()) {
+                int32_t pending_index = FindSavedProfile(Cold().pending_profile.ssid.data());
+                if (pending_index < 0 && profile_count_ < Cold().profiles.size()) {
                     pending_index = static_cast<int32_t>(profile_count_++);
                 }
                 if (pending_index >= 0) {
-                    profiles_[static_cast<uint32_t>(pending_index)] = pending_profile_;
+                    Cold().profiles[static_cast<uint32_t>(pending_index)] = Cold().pending_profile;
                     active_profile_index_ = pending_index;
                 }
-                pending_profile_ = {};
+                Cold().pending_profile = {};
                 pending_profile_valid_ = false;
             }
             if (active_profile_index_ >= 0 && active_profile_index_ < static_cast<int32_t>(profile_count_)) {
-                SavedProfile& profile = profiles_[static_cast<uint32_t>(active_profile_index_)];
+                SavedProfile& profile = Cold().profiles[static_cast<uint32_t>(active_profile_index_)];
                 profile.channel = connected->channel;
                 std::memcpy(profile.bssid.data(), connected->bssid, profile.bssid.size());
                 profile.bssid_valid = true;
             }
-            snapshot_.connection_state = device::WifiConnectionState::kConnecting;
+            Cold().snapshot.connection_state = device::WifiConnectionState::kConnecting;
             RebuildSnapshotLocked();
         }
         QueueSaveSettings();
@@ -784,10 +862,10 @@ void WifiManager::HandleWifiEvent(int32_t event_id, void* event_data) {
     {
         ScopedLock lock(mutex_);
         associated_ = false;
-        snapshot_.connected = false;
+        Cold().snapshot.connected = false;
         if (scan_after_disconnect_) {
             scan_after_disconnect_ = false;
-            snapshot_.connection_state = device::WifiConnectionState::kDisconnected;
+            Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
             RebuildSnapshotLocked();
             start_user_scan = true;
         } else if (ignore_next_disconnect_) {
@@ -795,7 +873,7 @@ void WifiManager::HandleWifiEvent(int32_t event_id, void* event_data) {
             RebuildSnapshotLocked();
             return;
         } else if (user_requested_disconnect_) {
-            snapshot_.connection_state = device::WifiConnectionState::kDisconnected;
+            Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
             RebuildSnapshotLocked();
             return;
         } else {
@@ -806,21 +884,21 @@ void WifiManager::HandleWifiEvent(int32_t event_id, void* event_data) {
                 ++reconnect_attempts_;
                 retry_attempt = reconnect_attempts_;
                 retry_new_connection = new_connection_pending;
-                retry_profile =
-                    new_connection_pending ? pending_profile_ : profiles_[static_cast<uint32_t>(active_profile_index_)];
+                retry_profile = new_connection_pending ? Cold().pending_profile
+                                                       : Cold().profiles[static_cast<uint32_t>(active_profile_index_)];
                 retry_full_channel_scan =
                     connection_full_channel_scan_ || retry_profile.channel == 0U || !retry_profile.bssid_valid;
-                snapshot_.connection_state = device::WifiConnectionState::kConnecting;
+                Cold().snapshot.connection_state = device::WifiConnectionState::kConnecting;
             } else if (new_connection_pending) {
                 user_connection_failed = true;
-                pending_profile_ = {};
+                Cold().pending_profile = {};
                 pending_profile_valid_ = false;
-                snapshot_.connection_state = ConnectionStateForDisconnectReason(disconnect_reason);
+                Cold().snapshot.connection_state = ConnectionStateForDisconnectReason(disconnect_reason);
                 discovery_connection_pending_ = false;
                 connection_full_channel_scan_ = false;
                 schedule_discovery = profile_count_ > 0U;
             } else {
-                snapshot_.connection_state = device::WifiConnectionState::kFailed;
+                Cold().snapshot.connection_state = device::WifiConnectionState::kFailed;
                 connection_full_channel_scan_ = false;
                 if (discovery_connection_pending_) {
                     discovery_connection_pending_ = false;
@@ -864,8 +942,8 @@ void WifiManager::HandleGotIp() {
         if (!associated_) {
             return;
         }
-        snapshot_.connected = true;
-        snapshot_.connection_state = device::WifiConnectionState::kConnected;
+        Cold().snapshot.connected = true;
+        Cold().snapshot.connection_state = device::WifiConnectionState::kConnected;
         reconnect_attempts_ = 0U;
         connection_full_channel_scan_ = false;
         RebuildSnapshotLocked();
@@ -877,20 +955,25 @@ void WifiManager::HandleScanDone() {
     auto* records = reinterpret_cast<wifi_ap_record_t*>(scan_record_workspace_.get());
     uint16_t count = static_cast<uint16_t>(device::kMaxVisibleWifiNetworks);
     const esp_err_t status = records == nullptr ? ESP_ERR_NO_MEM : esp_wifi_scan_get_ap_records(&count, records);
+    if (status != ESP_OK) {
+        count = 0U;
+    }
     SavedProfile discovery_profile{};
     bool connect_discovery_candidate = false;
     bool start_next_discovery_channel = false;
+    bool start_full_discovery = false;
     bool start_user_scan = false;
     bool schedule_discovery = false;
     bool advance_discovery_backoff = true;
     uint8_t next_discovery_channel = 0U;
     {
         ScopedLock lock(mutex_);
-        if (scan_purpose_ == ScanPurpose::kDiscovery) {
+        if (scan_purpose_ == ScanPurpose::kDiscovery || scan_purpose_ == ScanPurpose::kDiscoveryFull) {
+            const bool full_discovery = scan_purpose_ == ScanPurpose::kDiscoveryFull;
             if (status == ESP_OK) {
                 MergeDiscoveryScanResultsLocked(records, count);
             } else {
-                ESP_LOGW(kTag, "could not read passive discovery results: %s", esp_err_to_name(status));
+                ESP_LOGW(kTag, "could not read saved-network discovery results: %s", esp_err_to_name(status));
             }
 
             if (user_scan_after_discovery_) {
@@ -913,14 +996,14 @@ void WifiManager::HandleScanDone() {
             }
 
             if (start_user_scan) {
-                snapshot_.scanning = false;
+                Cold().snapshot.scanning = false;
                 scan_purpose_ = ScanPurpose::kNone;
                 discovery_channel_count_ = 0U;
                 discovery_channel_index_ = 0U;
                 RebuildSnapshotLocked();
             } else if (best_profile_index >= 0) {
                 active_profile_index_ = best_profile_index;
-                SavedProfile& saved_profile = profiles_[static_cast<uint32_t>(best_profile_index)];
+                SavedProfile& saved_profile = Cold().profiles[static_cast<uint32_t>(best_profile_index)];
                 const wifi_ap_record_t& record = records[best_record_index];
                 saved_profile.channel = record.primary;
                 std::memcpy(saved_profile.bssid.data(), record.bssid, saved_profile.bssid.size());
@@ -930,38 +1013,45 @@ void WifiManager::HandleScanDone() {
                 discovery_connection_pending_ = true;
                 reconnect_attempts_ = 0U;
                 connect_discovery_candidate = true;
-                snapshot_.scanning = false;
+                Cold().snapshot.scanning = false;
                 scan_purpose_ = ScanPurpose::kNone;
                 discovery_channel_count_ = 0U;
                 discovery_channel_index_ = 0U;
                 RebuildSnapshotLocked();
-            } else if (discovery_channel_index_ + 1U < discovery_channel_count_) {
+            } else if (!full_discovery && discovery_channel_index_ + 1U < discovery_channel_count_) {
                 ++discovery_channel_index_;
-                next_discovery_channel = discovery_channels_[discovery_channel_index_];
+                next_discovery_channel = Cold().discovery_channels[discovery_channel_index_];
                 start_next_discovery_channel = true;
+            } else if (!full_discovery && profile_count_ > 0U) {
+                Cold().snapshot.scanning = false;
+                scan_purpose_ = ScanPurpose::kNone;
+                discovery_channel_count_ = 0U;
+                discovery_channel_index_ = 0U;
+                start_full_discovery = true;
+                RebuildSnapshotLocked();
             } else {
                 schedule_discovery = profile_count_ > 0U;
-                snapshot_.scanning = false;
+                Cold().snapshot.scanning = false;
                 scan_purpose_ = ScanPurpose::kNone;
                 discovery_channel_count_ = 0U;
                 discovery_channel_index_ = 0U;
                 RebuildSnapshotLocked();
             }
         } else if (scan_purpose_ == ScanPurpose::kUser) {
-            snapshot_.scanning = false;
+            Cold().snapshot.scanning = false;
             if (status == ESP_OK) {
                 UpdateScanResultsLocked(records, count);
             } else {
                 ESP_LOGW(kTag, "could not read active scan results: %s", esp_err_to_name(status));
             }
-            if (!snapshot_.connected && !user_requested_disconnect_) {
+            if (!Cold().snapshot.connected && !user_requested_disconnect_) {
                 schedule_discovery = profile_count_ > 0U;
                 advance_discovery_backoff = false;
             }
             scan_purpose_ = ScanPurpose::kNone;
             RebuildSnapshotLocked();
         } else {
-            snapshot_.scanning = false;
+            Cold().snapshot.scanning = false;
             RebuildSnapshotLocked();
         }
     }
@@ -971,7 +1061,7 @@ void WifiManager::HandleScanDone() {
         if (const esp_err_t next_status = StartWifiScan(true, next_discovery_channel); next_status != ESP_OK) {
             {
                 ScopedLock lock(mutex_);
-                snapshot_.scanning = false;
+                Cold().snapshot.scanning = false;
                 scan_purpose_ = ScanPurpose::kNone;
                 discovery_channel_count_ = 0U;
                 discovery_channel_index_ = 0U;
@@ -984,6 +1074,12 @@ void WifiManager::HandleScanDone() {
         if (const auto result = StartScan(ScanPurpose::kUser); !result) {
             ESP_LOGW(kTag, "deferred active Wi-Fi scan failed: error=%u", static_cast<unsigned>(result.error()));
             ScheduleDiscovery(false);
+        }
+    } else if (start_full_discovery) {
+        if (const auto result = StartScan(ScanPurpose::kDiscoveryFull); !result) {
+            ESP_LOGW(kTag, "full-channel saved-network fallback scan failed: error=%u",
+                     static_cast<unsigned>(result.error()));
+            ScheduleDiscovery(true);
         }
     } else if (connect_discovery_candidate) {
         const auto result = ConfigureAndConnect(discovery_profile, false);
@@ -1006,14 +1102,14 @@ std::expected<void, device::WifiError> WifiManager::ConfigureAndConnect(const Sa
         ScopedLock lock(mutex_);
         scan_purpose_ = ScanPurpose::kNone;
         connection_full_channel_scan_ = full_channel_scan;
-        disconnect_existing = associated_ || snapshot_.connected;
+        disconnect_existing = associated_ || Cold().snapshot.connected;
         if (disconnect_existing) {
             ignore_next_disconnect_ = true;
             associated_ = false;
-            snapshot_.connected = false;
+            Cold().snapshot.connected = false;
         }
-        snapshot_.scanning = false;
-        snapshot_.connection_state = device::WifiConnectionState::kConnecting;
+        Cold().snapshot.scanning = false;
+        Cold().snapshot.connection_state = device::WifiConnectionState::kConnecting;
         RebuildSnapshotLocked();
     }
     (void)esp_wifi_scan_stop();
@@ -1050,8 +1146,8 @@ std::expected<void, device::WifiError> WifiManager::ConfigureAndConnect(const Sa
     }
     if (status != ESP_OK) {
         ScopedLock lock(mutex_);
-        snapshot_.connection_state = device::WifiConnectionState::kFailed;
-        pending_profile_ = {};
+        Cold().snapshot.connection_state = device::WifiConnectionState::kFailed;
+        Cold().pending_profile = {};
         pending_profile_valid_ = false;
         connection_full_channel_scan_ = false;
         RebuildSnapshotLocked();
@@ -1062,7 +1158,7 @@ std::expected<void, device::WifiError> WifiManager::ConfigureAndConnect(const Sa
 
 int32_t WifiManager::FindSavedProfile(std::string_view ssid) const {
     for (uint32_t index = 0U; index < profile_count_; ++index) {
-        if (SameSsid(profiles_[index].ssid, ssid)) {
+        if (SameSsid(Cold().profiles[index].ssid, ssid)) {
             return static_cast<int32_t>(index);
         }
     }
@@ -1071,7 +1167,7 @@ int32_t WifiManager::FindSavedProfile(std::string_view ssid) const {
 
 int32_t WifiManager::FindScanResult(std::string_view ssid) const {
     for (uint32_t index = 0U; index < scan_result_count_; ++index) {
-        if (SameSsid(scan_results_[index].network.ssid, ssid)) {
+        if (SameSsid(Cold().scan_results[index].network.ssid, ssid)) {
             return static_cast<int32_t>(index);
         }
     }
@@ -1083,7 +1179,7 @@ bool WifiManager::ApplyScanTarget(std::string_view ssid, SavedProfile& profile) 
     if (index < 0) {
         return false;
     }
-    const ScanResult& result = scan_results_[static_cast<uint32_t>(index)];
+    const ScanResult& result = Cold().scan_results[static_cast<uint32_t>(index)];
     if (result.network.channel == 0U) {
         return false;
     }
@@ -1095,7 +1191,7 @@ bool WifiManager::ApplyScanTarget(std::string_view ssid, SavedProfile& profile) 
 }
 
 bool WifiManager::BuildDiscoveryChannelsLocked() {
-    discovery_channels_.fill(0U);
+    Cold().discovery_channels.fill(0U);
     discovery_channel_count_ = 0U;
     discovery_channel_index_ = 0U;
 
@@ -1104,20 +1200,20 @@ bool WifiManager::BuildDiscoveryChannelsLocked() {
             return;
         }
         for (uint32_t index = 0U; index < discovery_channel_count_; ++index) {
-            if (discovery_channels_[index] == channel) {
+            if (Cold().discovery_channels[index] == channel) {
                 return;
             }
         }
-        if (discovery_channel_count_ < discovery_channels_.size()) {
-            discovery_channels_[discovery_channel_count_++] = channel;
+        if (discovery_channel_count_ < Cold().discovery_channels.size()) {
+            Cold().discovery_channels[discovery_channel_count_++] = channel;
         }
     };
 
     if (active_profile_index_ >= 0 && active_profile_index_ < static_cast<int32_t>(profile_count_)) {
-        append_channel(profiles_[static_cast<uint32_t>(active_profile_index_)].channel);
+        append_channel(Cold().profiles[static_cast<uint32_t>(active_profile_index_)].channel);
     }
     for (uint32_t index = 0U; index < profile_count_; ++index) {
-        append_channel(profiles_[index].channel);
+        append_channel(Cold().profiles[index].channel);
     }
     return discovery_channel_count_ != 0U;
 }
@@ -1140,7 +1236,7 @@ bool WifiManager::LoadSettings() {
         return true;
     }
     if (status != ESP_OK || size != sizeof(stored) || stored.magic != kStoredStateMagic ||
-        stored.version != kStoredStateVersion || stored.profile_count > profiles_.size()) {
+        stored.version != kStoredStateVersion || stored.profile_count > Cold().profiles.size()) {
         ESP_LOGW(kTag, "saved network state is invalid or incompatible");
         return false;
     }
@@ -1150,7 +1246,7 @@ bool WifiManager::LoadSettings() {
         profile_count_ == 0U ? -1 : static_cast<int32_t>(std::min<uint32_t>(stored.last_profile, profile_count_ - 1U));
     for (uint32_t index = 0U; index < profile_count_; ++index) {
         const StoredProfile& source = stored.profiles[index];
-        SavedProfile& destination = profiles_[index];
+        SavedProfile& destination = Cold().profiles[index];
         std::memcpy(destination.ssid.data(), source.ssid, destination.ssid.size());
         destination.ssid.back() = '\0';
         std::memcpy(destination.password.data(), source.password, destination.password.size());
@@ -1178,7 +1274,7 @@ bool WifiManager::SaveSettings() const {
         stored.last_profile = active_profile_index_ >= 0 ? static_cast<uint8_t>(active_profile_index_) : 0U;
         stored.enabled = enabled_ ? 1U : 0U;
         for (uint32_t index = 0U; index < profile_count_; ++index) {
-            const SavedProfile& source = profiles_[index];
+            const SavedProfile& source = Cold().profiles[index];
             StoredProfile& destination = stored.profiles[index];
             std::memcpy(destination.ssid, source.ssid.data(), source.ssid.size());
             std::memcpy(destination.password, source.password.data(), source.password.size());
@@ -1246,23 +1342,24 @@ void WifiManager::ProcessPendingSettingsSaves() {
 }
 
 void WifiManager::RebuildSnapshotLocked() {
-    snapshot_.available = initialized_;
-    snapshot_.enabled = enabled_;
-    snapshot_.saved_network_count = profile_count_;
-    snapshot_.available_network_count = 0U;
-    for (auto& network : snapshot_.saved_networks) {
+    Cold().snapshot.available = initialized_;
+    Cold().snapshot.enabled = enabled_;
+    Cold().snapshot.saved_network_count = profile_count_;
+    Cold().snapshot.available_network_count = 0U;
+    for (auto& network : Cold().snapshot.saved_networks) {
         network = {};
     }
     for (uint32_t index = 0U; index < profile_count_; ++index) {
-        device::WifiNetwork& network = snapshot_.saved_networks[index];
-        network.ssid = profiles_[index].ssid;
-        network.channel = profiles_[index].channel;
+        device::WifiNetwork& network = Cold().snapshot.saved_networks[index];
+        network.ssid = Cold().profiles[index].ssid;
+        network.channel = Cold().profiles[index].channel;
         network.band = BandForChannel(network.channel);
-        network.security = profiles_[index].secured ? device::WifiSecurity::kSecured : device::WifiSecurity::kOpen;
+        network.security =
+            Cold().profiles[index].secured ? device::WifiSecurity::kSecured : device::WifiSecurity::kOpen;
         network.saved = true;
-        network.connected = snapshot_.connected && static_cast<int32_t>(index) == active_profile_index_;
+        network.connected = Cold().snapshot.connected && static_cast<int32_t>(index) == active_profile_index_;
         for (uint32_t scan_index = 0U; scan_index < scan_result_count_; ++scan_index) {
-            const device::WifiNetwork& scanned = scan_results_[scan_index].network;
+            const device::WifiNetwork& scanned = Cold().scan_results[scan_index].network;
             if (SameSsid(scanned.ssid, network.ssid.data())) {
                 network.rssi = scanned.rssi;
                 if (!network.connected) {
@@ -1273,19 +1370,19 @@ void WifiManager::RebuildSnapshotLocked() {
             }
         }
     }
-    for (auto& network : snapshot_.available_networks) {
+    for (auto& network : Cold().snapshot.available_networks) {
         network = {};
     }
-    for (uint32_t scan_index = 0U;
-         scan_index < scan_result_count_ && snapshot_.available_network_count < snapshot_.available_networks.size();
+    for (uint32_t scan_index = 0U; scan_index < scan_result_count_ &&
+                                   Cold().snapshot.available_network_count < Cold().snapshot.available_networks.size();
          ++scan_index) {
-        device::WifiNetwork candidate = scan_results_[scan_index].network;
+        device::WifiNetwork candidate = Cold().scan_results[scan_index].network;
         const int32_t saved_index = FindSavedProfile(candidate.ssid.data());
         if (saved_index >= 0) {
             candidate.saved = true;
-            candidate.connected = snapshot_.connected && saved_index == active_profile_index_;
+            candidate.connected = Cold().snapshot.connected && saved_index == active_profile_index_;
         }
-        snapshot_.available_networks[snapshot_.available_network_count++] = candidate;
+        Cold().snapshot.available_networks[Cold().snapshot.available_network_count++] = candidate;
     }
     if (state_change_sink_ != nullptr) {
         state_change_sink_(state_change_context_);
@@ -1295,7 +1392,7 @@ void WifiManager::RebuildSnapshotLocked() {
 void WifiManager::UpdateScanResultsLocked(const void* raw_records, uint16_t count) {
     const auto* records = static_cast<const wifi_ap_record_t*>(raw_records);
     scan_result_count_ = 0U;
-    for (uint16_t index = 0U; index < count && scan_result_count_ < scan_results_.size(); ++index) {
+    for (uint16_t index = 0U; index < count && scan_result_count_ < Cold().scan_results.size(); ++index) {
         if (records[index].ssid[0] == '\0') {
             continue;
         }
@@ -1303,7 +1400,7 @@ void WifiManager::UpdateScanResultsLocked(const void* raw_records, uint16_t coun
         CopyCString(ssid, records[index].ssid, sizeof(records[index].ssid));
         bool duplicate = false;
         for (uint32_t previous = 0U; previous < scan_result_count_; ++previous) {
-            if (SameSsid(scan_results_[previous].network.ssid, ssid.data())) {
+            if (SameSsid(Cold().scan_results[previous].network.ssid, ssid.data())) {
                 duplicate = true;
                 break;
             }
@@ -1311,7 +1408,7 @@ void WifiManager::UpdateScanResultsLocked(const void* raw_records, uint16_t coun
         if (duplicate) {
             continue;
         }
-        ScanResult& result = scan_results_[scan_result_count_++];
+        ScanResult& result = Cold().scan_results[scan_result_count_++];
         device::WifiNetwork& network = result.network;
         network.ssid = ssid;
         network.rssi = records[index].rssi;
@@ -1338,12 +1435,12 @@ void WifiManager::MergeDiscoveryScanResultsLocked(const void* raw_records, uint1
 
         int32_t result_index = FindScanResult(ssid.data());
         if (result_index < 0) {
-            if (scan_result_count_ >= scan_results_.size()) {
+            if (scan_result_count_ >= Cold().scan_results.size()) {
                 continue;
             }
             result_index = static_cast<int32_t>(scan_result_count_++);
         }
-        ScanResult& result = scan_results_[static_cast<uint32_t>(result_index)];
+        ScanResult& result = Cold().scan_results[static_cast<uint32_t>(result_index)];
         result.network.ssid = ssid;
         result.network.rssi = records[record_index].rssi;
         result.network.channel = records[record_index].primary;

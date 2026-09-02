@@ -16,10 +16,6 @@ class SnakeGame final {
 
     void Render();
 
-    void SetBoard(micropixel::Texture texture);
-
-    void SetButtonTextures(micropixel::Texture start, micropixel::Texture restart);
-
     void SetBurstSheet(FoodType type, micropixel::Texture texture);
 
     void SetFoodSheet(FoodType type, micropixel::Texture texture);
@@ -130,9 +126,9 @@ class SnakeGame final {
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
     micropixel::Scene scene_;
-    micropixel::Layer game_layer_{};
-    micropixel::Layer hud_layer_{};
-    micropixel::SpriteNode board_node_{};
+    micropixel::ContainerNode game_container_{};
+    micropixel::ContainerNode hud_container_{};
+    micropixel::RoundedRectNode board_node_{};
     micropixel::SpriteBatch scenery_batch_{};
     micropixel::SpriteNode food_node_{};
     micropixel::SpriteBatch snake_batch_{};
@@ -140,15 +136,13 @@ class SnakeGame final {
     micropixel::SpriteBatch particle_batch_{};
     micropixel::ShapeNode overlay_node_{};
     micropixel::SpriteBatch flash_batch_{};
-    micropixel::SpriteNode button_node_{};
+    micropixel::ui::TextButton action_button_{};
+    micropixel::ui::FlexContainer game_over_panel_{};
     micropixel::SpriteBatch combo_batch_{};
     micropixel::LabelNode popup_labels_[kPopupPoolSize]{};
-    micropixel::LabelNode overlay_labels_[9U]{};
-    micropixel::LabelNode header_labels_[7U]{};
+    micropixel::LabelNode overlay_labels_[2U]{};
+    micropixel::ui::FlexContainer hud_{};
     micropixel::Audio audio_;
-    micropixel::Texture board_texture_{};
-    micropixel::Texture start_button_texture_{};
-    micropixel::Texture restart_button_texture_{};
     micropixel::Texture burst_sheets_[4U]{};
     micropixel::Texture food_sheets_[4U]{};
     SnakeModel model_{};
@@ -185,7 +179,6 @@ class SnakeGame final {
     bool audio_error_logged_{};
     bool scene_initialized_{};
     Screen screen_{Screen::kMenu};
-    micropixel::ui::Button screen_button_{};
     micropixel::ui::Button pause_touch_button_{};
     snake::gamekit::SwipeGesture touch_gesture_;
 };

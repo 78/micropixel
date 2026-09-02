@@ -21,6 +21,15 @@ void StyleContainer(lv_obj_t* object, const HallSceneRect& bounds, int32_t radiu
     lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
 }
 
+void StyleTransparentContainer(lv_obj_t* object) {
+    lv_obj_set_style_pad_all(object, 0, 0);
+    lv_obj_set_style_radius(object, 0, 0);
+    lv_obj_set_style_border_width(object, 0, 0);
+    lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+}
+
 lv_obj_t* CreateLabel(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color, HallScenePoint point) {
     lv_obj_t* label = lv_label_create(parent);
     lv_label_set_text(label, text);
@@ -284,46 +293,82 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     }
 
     const HallStatusBarLayout& status = layout.status_bar;
-    objects_.time_label = CreateLabel(root, model.status_bar.time_text.data(),
-                                      platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium),
-                                      theme::kPrimaryText, status.time);
+    objects_.status_bar_container = lv_obj_create(root);
+    StyleTransparentContainer(objects_.status_bar_container);
+    lv_obj_set_size(objects_.status_bar_container, layout.width, status.height);
+    lv_obj_align(objects_.status_bar_container, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_pad_left(objects_.status_bar_container, status.padding_left, 0);
+    lv_obj_set_style_pad_right(objects_.status_bar_container, status.padding_right, 0);
+    lv_obj_set_flex_flow(objects_.status_bar_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(objects_.status_bar_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    objects_.time_label = lv_label_create(objects_.status_bar_container);
+    lv_label_set_text(objects_.time_label, model.status_bar.time_text.data());
+    lv_obj_set_style_text_font(objects_.time_label,
+                               platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium), 0);
+    lv_obj_set_style_text_color(objects_.time_label, lv_color_hex(theme::kPrimaryText), 0);
     lv_obj_set_width(objects_.time_label, status.time_width);
-    objects_.cellular_container = lv_obj_create(root);
-    StyleContainer(objects_.cellular_container, status.cellular, 0, theme::kHallBackground);
-    lv_obj_set_style_bg_opa(objects_.cellular_container, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(objects_.cellular_container, LV_OBJ_FLAG_CLICKABLE);
+
+    objects_.status_bar_items = lv_obj_create(objects_.status_bar_container);
+    StyleTransparentContainer(objects_.status_bar_items);
+    lv_obj_set_size(objects_.status_bar_items, LV_SIZE_CONTENT, LV_PCT(100));
+    lv_obj_set_style_pad_column(objects_.status_bar_items, status.item_gap, 0);
+    lv_obj_set_flex_flow(objects_.status_bar_items, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(objects_.status_bar_items, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    objects_.cellular_container = lv_obj_create(objects_.status_bar_items);
+    StyleTransparentContainer(objects_.cellular_container);
+    lv_obj_set_size(objects_.cellular_container, status.cellular.width, status.cellular.height);
+    lv_obj_set_flex_flow(objects_.cellular_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(objects_.cellular_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_CENTER);
     for (uint32_t index = 0U; index < objects_.cellular_bars.size(); ++index) {
         lv_obj_t* bar = lv_obj_create(objects_.cellular_container);
         const int32_t height = std::max<int32_t>(2, status.cellular.height * static_cast<int32_t>(index + 1U) / 5);
-        StyleContainer(bar,
-                       {.x = static_cast<int32_t>(index) * status.cellular.width / 5,
-                        .y = status.cellular.height - height,
-                        .width = std::max<int32_t>(2, status.cellular.width / 7),
-                        .height = height},
-                       1, theme::kPrimaryText);
+        lv_obj_set_size(bar, std::max<int32_t>(2, status.cellular.width / 7), height);
+        lv_obj_set_style_pad_all(bar, 0, 0);
+        lv_obj_set_style_radius(bar, 1, 0);
+        lv_obj_set_style_border_width(bar, 0, 0);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(theme::kPrimaryText), 0);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
         objects_.cellular_bars[index] = bar;
     }
-    objects_.wifi_image = lv_image_create(root);
-    lv_obj_set_pos(objects_.wifi_image, status.wifi.x, status.wifi.y);
+    objects_.wifi_image = lv_image_create(objects_.status_bar_items);
     lv_image_set_scale(objects_.wifi_image, status.wifi_scale);
     lv_obj_set_style_image_recolor(objects_.wifi_image, lv_color_hex(theme::kPrimaryText), 0);
     lv_obj_set_style_image_recolor_opa(objects_.wifi_image, LV_OPA_COVER, 0);
-    objects_.battery_label =
-        CreateLabel(root, "", platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge),
-                    theme::kPrimaryText, status.battery);
+
+    objects_.battery_container = lv_obj_create(objects_.status_bar_items);
+    StyleTransparentContainer(objects_.battery_container);
+    lv_obj_set_size(objects_.battery_container, LV_SIZE_CONTENT, LV_PCT(100));
+    lv_obj_set_style_pad_column(objects_.battery_container, status.battery_gap, 0);
+    lv_obj_set_flex_flow(objects_.battery_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(objects_.battery_container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    objects_.battery_label = lv_label_create(objects_.battery_container);
+    lv_label_set_text(objects_.battery_label, "");
+    lv_obj_set_style_text_font(objects_.battery_label,
+                               platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge), 0);
+    lv_obj_set_style_text_color(objects_.battery_label, lv_color_hex(theme::kPrimaryText), 0);
     lv_obj_set_width(objects_.battery_label, status.battery_width);
     lv_obj_set_style_text_align(objects_.battery_label, LV_TEXT_ALIGN_CENTER, 0);
-    objects_.battery_percent_label =
-        CreateLabel(root, "", platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium),
-                    theme::kPrimaryText, status.battery_percent);
+    objects_.battery_percent_label = lv_label_create(objects_.battery_container);
+    lv_label_set_text(objects_.battery_percent_label, "");
+    lv_obj_set_style_text_font(objects_.battery_percent_label,
+                               platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium), 0);
+    lv_obj_set_style_text_color(objects_.battery_percent_label, lv_color_hex(theme::kPrimaryText), 0);
     lv_obj_set_width(objects_.battery_percent_label, status.battery_percent_width);
     lv_obj_set_style_text_align(objects_.battery_percent_label, LV_TEXT_ALIGN_RIGHT, 0);
     UpdateStatusBarLocked(model.status_bar);
 }
 
 void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model) {
-    if (objects_.time_label == nullptr || objects_.cellular_container == nullptr || objects_.wifi_image == nullptr ||
-        objects_.battery_label == nullptr || objects_.battery_percent_label == nullptr) {
+    if (objects_.status_bar_container == nullptr || objects_.time_label == nullptr ||
+        objects_.cellular_container == nullptr || objects_.wifi_image == nullptr ||
+        objects_.battery_container == nullptr || objects_.battery_label == nullptr ||
+        objects_.battery_percent_label == nullptr) {
         return;
     }
     lv_label_set_text(objects_.time_label, model.time_text.data());
@@ -344,26 +389,30 @@ void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model
     } else {
         lv_obj_add_flag(objects_.wifi_image, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(objects_.battery_label, model.battery.available || model.battery.charging
-                                                  ? HallBatterySymbol(model.battery)
-                                                  : LV_SYMBOL_BATTERY_EMPTY);
-    lv_obj_set_y(objects_.battery_label, layout_->status_bar.battery.y + (model.battery.charging ? 3 : 0));
-    lv_obj_set_style_text_font(objects_.battery_label,
-                               model.battery.charging
-                                   ? platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium)
-                                   : platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge),
-                               0);
-    lv_obj_set_style_transform_scale_x(objects_.battery_label, 256, 0);
-    char percent[8]{};
-    if (model.battery.available) {
-        (void)std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(model.battery.percent));
+    const bool battery_visible = model.battery.available || model.battery.charging;
+    if (battery_visible) {
+        lv_label_set_text(objects_.battery_label, HallBatterySymbol(model.battery));
+        lv_obj_set_style_text_font(objects_.battery_label,
+                                   model.battery.charging
+                                       ? platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium)
+                                       : platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge),
+                                   0);
+        lv_obj_set_style_transform_scale_x(objects_.battery_label, 256, 0);
+        char percent[8]{};
+        if (model.battery.available) {
+            (void)std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(model.battery.percent));
+        } else {
+            (void)std::snprintf(percent, sizeof(percent), "--");
+        }
+        lv_label_set_text(objects_.battery_percent_label, percent);
+        const uint32_t color = model.battery.charging ? theme::kSuccess : theme::kPrimaryText;
+        lv_obj_set_style_text_color(objects_.battery_label, lv_color_hex(color), 0);
+        lv_obj_set_style_text_color(objects_.battery_percent_label, lv_color_hex(color), 0);
+        lv_obj_remove_flag(objects_.battery_container, LV_OBJ_FLAG_HIDDEN);
     } else {
-        (void)std::snprintf(percent, sizeof(percent), "--");
+        lv_obj_add_flag(objects_.battery_container, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(objects_.battery_percent_label, percent);
-    const uint32_t color = model.battery.charging ? theme::kSuccess : theme::kPrimaryText;
-    lv_obj_set_style_text_color(objects_.battery_label, lv_color_hex(color), 0);
-    lv_obj_set_style_text_color(objects_.battery_percent_label, lv_color_hex(color), 0);
+    lv_obj_update_layout(objects_.status_bar_container);
 }
 
 void HallSceneUi::UpdateScrollLocked(uint32_t app_count, int32_t offset) {

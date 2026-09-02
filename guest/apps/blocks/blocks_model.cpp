@@ -16,11 +16,12 @@ constexpr uint16_t kShapeMasks[kTetrominoCount][4U] = {
 
 constexpr int8_t kKickOffsets[] = {0, -1, 1, -2, 2};
 
-// P(level) = 750 ms / fourth_root(1 + 8.58 * (level - 1)).
-// The curve passes approximately through (12, 240 ms) and (24, 200 ms), then
-// keeps accelerating forever while the change between adjacent levels softens.
-constexpr float kInitialDropPeriodUs = 750000.0F;
-constexpr float kDifficultyGrowthPerLevel = 8.58F;
+constexpr uint32_t kMaximumLevel = 99U;
+
+[[nodiscard]] uint32_t LevelForLines(uint32_t lines) {
+    const uint32_t uncapped_level_index = lines / 10U;
+    return uncapped_level_index >= kMaximumLevel - 1U ? kMaximumLevel : uncapped_level_index + 1U;
+}
 
 }  // namespace
 
@@ -269,7 +270,7 @@ LockOutcome BlocksModel::LockActive() {
         score_ += gained;
         outcome.points_gained += gained;
         lines_ += cleared;
-        level_ = lines_ / 10U + 1U;
+        level_ = LevelForLines(lines_);
         outcome.level_up = level_ != previous_level;
     } else {
         combo_ = 0U;
@@ -296,10 +297,14 @@ int32_t BlocksModel::ghost_y() const {
 }
 
 uint32_t BlocksModel::drop_period_us() const {
-    const uint32_t level_index = level_ > 1U ? level_ - 1U : 0U;
-    const float curve_input = 1.0F + kDifficultyGrowthPerLevel * static_cast<float>(level_index);
-    const float fourth_root = __builtin_sqrtf(__builtin_sqrtf(curve_input));
-    return static_cast<uint32_t>(kInitialDropPeriodUs / fourth_root + 0.5F);
+    const uint32_t capped_level = level_ > kMaximumLevel ? kMaximumLevel : level_;
+    if (capped_level <= 12U) {
+        return 750000U - (capped_level - 1U) * 510000U / 11U;
+    }
+    if (capped_level <= 20U) {
+        return 240000U - (capped_level - 12U) * 40000U / 8U;
+    }
+    return 200000U - (capped_level - 20U) * 100000U / 79U;
 }
 
 }  // namespace blocks

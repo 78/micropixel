@@ -55,7 +55,7 @@ class ControlDispatcher final {
     [[nodiscard]] bool QueueCommand(const HostCommand& command, bool local);
 
     mutable std::mutex snapshot_mutex_;
-    HostSnapshot snapshot_{};
+    HostSnapshot* snapshot_{};
     InstallActivity install_activity_{};
     StaticQueue_t host_command_queue_storage_{};
     uint8_t* host_command_queue_bytes_{};

@@ -2,7 +2,9 @@
 #define MICROPIXEL_PLATFORM_LVGL_GUEST_GRAPHICS_OPERATIONS_HPP
 
 #include "platform/adapters/graphics_adapter.hpp"
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
 #include "platform/lvgl/display/ppa_srm_blitter.hpp"
+#endif
 #include "platform/lvgl/guest_graphics_engine.hpp"
 
 namespace micropixel::platform::lvgl {
@@ -19,7 +21,9 @@ struct GuestGraphicsHooks final {
 struct GuestGraphicsOperationsContext final {
     GuestGraphicsEngine* engine{};
     GuestGraphicsHooks hooks{};
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
     PpaSrmBlitter texture_scaler{};
+#endif
 };
 
 [[nodiscard]] adapters::GraphicsOperations MakeGuestGraphicsOperations(GuestGraphicsOperationsContext& context);

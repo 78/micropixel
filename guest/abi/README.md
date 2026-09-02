@@ -26,10 +26,15 @@ Audio 或 Network 方法通常只新增 Service 内的稳定数字 ID 和 wire s
 
 当前 Service ID：Timer `1`、Storage `2`、Resource `3`、Random `4`、System `5`、Devices `6`、
 Graphics `16`、Input `17`、Audio `18`、Sensors `20`、GPIO `21`、Haptics `22`、PowerInfo `23`；
-Network `19` 只预留 ID，尚未实现。System 1.0 提供最长 31 bytes 的
+Network `19` 只预留 ID，尚未实现。System 1.1 提供最长 31 bytes 的
 BCP 47 locale tag。Host 返回当前 Catalog 和字体确实可用的 effective Locale；基础固件只有 `en`，
 以后安装语言组件并改变设备语言不需要修改 Guest ABI。Locale 在一个 AppSession 内不可变；用户返回
 App Hall 修改语言后，下一次启动 Guest 才会取得新值，v1 不投递 locale-change event。
+
+System 1.1 的 `GET_LAUNCH_ARGUMENTS` 返回本次 AppSession 的只读参数快照：最多 16 项，UTF-8 字符串区
+合计最多 512 bytes，每项以 NUL 结尾并由固定 `offsets[]` 定位。Host 在进入 Guest `main()` 前完成边界
+校验和复制；Hall 启动返回空列表，暂停/恢复同一 Session 时快照保持不变。它是 Service method 扩展，
+没有增加 Core import，也不把 Host `argv` 指针暴露给 Guest。
 
 `service_open` 校验 Service 独立的 major/minor，返回 48-byte `micropixel_service_info_t`：
 
@@ -54,17 +59,36 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
   无法满足背压或吞吐需求时，才讨论新增 Core import。
 - Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
-Graphics wire 是 retained Scene 协议。首个提交发送完整 keyframe，之后仅发送 Layer、Sprite、
+Graphics wire 是 retained Scene 协议。首个提交发送完整 keyframe，之后仅发送 Container、Sprite、
 SpriteBatch instance、Shape、Label 或 SurfaceNode 的属性差量；消息携带 generation、base revision 和
 revision，Host 在固定容量 scratch scene 中完成整包验证后再原子交换。SpriteBatch 可让蛇身、方块、
 爆炸和粒子共享一个 Host 节点，patch 只携带变化的 instance。Texture/SurfaceNode 同时携带 destination 与
 source rectangle，opacity 与资源自身逐像素 alpha 相乘；不透明复制、缩放和填充分别映射到
-DMA2D/PPA 快速路径。容量由 `max_scene_nodes`、`max_batch_instances`、`max_layers`、
+DMA2D/PPA 快速路径。容量由 `max_scene_nodes`、`max_batch_instances`、`max_containers`、
 `max_sprite_batches` 和 `max_scene_bytes` 明确给出。
 
 Graphics 1.1 在 `GET_INFO` 尾部追加物理显示像素单位的 `safe_inset_{top,right,bottom,left}`。Host 从
 Board 的显示几何元数据填充这些值；Guest SDK 用向外取整换算到逻辑坐标，避免缩放后重新暴露一个被圆角、
 盖板或异形边缘遮挡的物理像素。零值表示对应边没有额外安全内缩，而不是让 App 猜测板型。
+
+Graphics 1.2 用 `CONTAINER` 和 `NODE_LINK` record 建立真正的 retained tree。Container ID `0` 是 Scene
+隐式根，`1..container_count` 是连续 wire ID；每个 drawable 在 keyframe 中必须有一个 `NODE_LINK`，声明
+parent container 和同级顺序。Container 可嵌套，translation、clip、opacity 和 visibility 沿父链继承，
+drawable geometry、clip 和 translation 都是相对直接 parent 的局部物理坐标，Host 在遍历父链时合成最终
+Scene 坐标；z-order 与 sibling order 决定树内绘制顺序。Scene touch 坐标不进入 Graphics wire，Guest SDK
+负责高层控件的 Scene/local 转换。Host 继续只读兼容 Graphics 1.1 的 `LAYER` record，并在解析后
+规范化为一级 container；1.2 Guest 不再发送 `LAYER`。此升级没有增加 Core import。
+
+Graphics 1.3 增加 `ROUNDED_RECT` drawable，携带填充色、描边色、圆角半径、描边宽度和整体 opacity。
+它不拥有独立像素缓冲；Host 在 App Surface 的 damage 区域内直接栅格化。半透明颜色在绘制时与既有
+RGB565 像素混合，Surface 本身仍保持不透明 RGB565。半径和描边宽度超过短边一半时按短边一半截断。
+旧版 `RECT` record 的大小和含义不变。
+
+Graphics/Resource 的 `MICROPIXEL_PIXEL_FORMAT_RGB565` 值为 `3`，表示内存中的 canonical little-endian
+RGB565 word：bit 15..11 为 R、10..5 为 G、4..0 为 B；紧凑行宽为 `width * 2`。它与 panel wire byte
+order 无关，末端 transport 若需要高字节先发，必须在 panel 层单独换序。BGR888、BGRA8888 的既有值和
+字节含义保持不变。Streaming texture update 必须使用创建纹理时的原生格式；Host 对 stride、矩形、乘法
+溢出和精确 payload 长度再次校验。透明纹理仍使用 BGRA8888，并可直接 blend 到 RGB565 destination。
 
 文字命令传递稳定的 System Font role handle（Small、Medium、Large、Title），不传具体像素字号。
 Guest 使用逻辑像素定位；Host 可以按设备密度、语言和字体可用性为这些角色选择实际字形与字号。
@@ -130,11 +154,15 @@ Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表�
 - Retained scene 持有独立 Texture 引用。Guest release 只撤销 Guest 引用；显示场景替换或 Session teardown
   后才撤销 scene 引用，两个引用都归零时才释放像素内存。
 - Graphics scene wire 由 `micropixel_graphics_scene_header_t` 开始。Keyframe 必须完整声明 background、连续
-  node slot 和所有 Layer，并以新的非零 generation、`base_revision=0`、`revision=1` 发布；Patch 必须精确
+  node slot、所有 Container 和每个 drawable 的 `NODE_LINK`，并以新的非零 generation、`base_revision=0`、
+  `revision=1` 发布；Patch 必须精确
   引用 Host 当前的 generation 与 base revision，且 revision 只增加 1。Host 对固定容量 scratch scene 完成
-  所有 record、property mask、slot、Layer、坐标、UTF-8、Font 和 Texture 校验后才原子交换。任一字段失败不
+  所有 record、property mask、slot、Container、父链、同级顺序、坐标、UTF-8、Font 和 Texture 校验后才原子交换。任一字段失败不
   改变当前 scene；base revision 不匹配返回 `MICROPIXEL_STATUS_STALE_STATE`，SDK 下一帧发送新 keyframe。
-  Node ID 是稳定 z-order slot，0 是最底层；Layer ID 0 表示 root，1..4 表示 retained group。
+  Node ID 在同一 scene generation 内稳定，0 是最底层；结构变化由 SDK 发送新 keyframe，并按创建顺序把
+  当前存活节点重新压缩为连续 Node ID。Public SDK 的 `slot + generation` handle 不进入 wire，也不等同于
+  Node ID。Container ID 0 表示 Scene root，父链不得成环；SDK 的 slot/generation 与 wire ID 分离，销毁
+  container 时递归失效整个子树。旧 Graphics 1.1 的 Layer ID 仅保留为 Host 读兼容，不得复用其 opcode。
 - Resource 1.2 提供同步 `LOAD_TEXTURE`、带整数缩放比的 `LOAD_ADAPTIVE_TEXTURE`、release、streaming
   texture create/update 和 update batch。自适应请求由 SDK 根据物理屏幕尺寸生成比例；Host 验证比例与
   最终尺寸，在 worker 解码后使用平台缩放能力生成缓存纹理。普通自然尺寸绘制因此不需要逐帧缩放。
@@ -143,6 +171,7 @@ Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表�
   Texture 配额；update request 由 32-byte header 和紧密排列的原生格式脏矩形组成，总长度不超过
   4096 bytes。Host 只允许修改带 `MICROPIXEL_TEXTURE_FLAG_STREAMING` 的句柄，并再次校验 bounds、
   pitch、格式和精确 payload 长度。Batch 内先合并 damage，finish 时统一 invalidate 并只唤醒一次 compositor。
+  Bundle raw format `10` 是同样 little-endian 的 opaque RGB565；它只追加新含义，不复用既有 raw format ID。
 - 固定容量、配额、超时和背压属于 Host 策略；只有 wire-format 硬上限进入公共 ABI。
 - Public Guest 链接必须使用 allowlist，禁止用全局 `--allow-undefined` 掩盖拼写错误或未授权依赖。
 

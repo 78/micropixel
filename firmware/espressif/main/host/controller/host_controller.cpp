@@ -620,8 +620,8 @@ host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCa
     return model;
 }
 
-control::CatalogSnapshot MakeControlCatalog(const runtime::InstalledAppCatalog& catalog) {
-    control::CatalogSnapshot snapshot{};
+void FillControlCatalog(const runtime::InstalledAppCatalog& catalog, control::CatalogSnapshot& snapshot) {
+    snapshot = {};
     snapshot.count = std::min(catalog.count, static_cast<uint32_t>(snapshot.apps.size()));
     snapshot.store_total_bytes = catalog.store_total_bytes;
     snapshot.store_used_bytes = catalog.store_used_bytes;
@@ -633,7 +633,6 @@ control::CatalogSnapshot MakeControlCatalog(const runtime::InstalledAppCatalog& 
                       source.display_name.data());
         destination.bundle_size = source.bundle_size;
     }
-    return snapshot;
 }
 
 // Keep the 50-entry catalog snapshot out of long-lived caller stack frames.
@@ -642,7 +641,13 @@ control::CatalogSnapshot MakeControlCatalog(const runtime::InstalledAppCatalog& 
 // consume roughly 7 KiB of the main task stack.
 [[gnu::noinline]] void UpdateControlCatalog(control::ControlDispatcher& controls,
                                             const runtime::InstalledAppCatalog& catalog) {
-    controls.UpdateInstalledApps(MakeControlCatalog(catalog));
+    auto snapshot = MakePsramObject<control::CatalogSnapshot>();
+    if (!snapshot) {
+        ESP_LOGE(kTag, "failed to allocate control catalog snapshot");
+        return;
+    }
+    FillControlCatalog(catalog, *snapshot);
+    controls.UpdateInstalledApps(*snapshot);
 }
 
 const char* RemoteLifecycleText(AppLifecycleState state) {
@@ -673,6 +678,8 @@ const char* AppStoreErrorText(runtime::AppStoreError error) {
             return "app_catalog_corrupt";
         case runtime::AppStoreError::kInvalidPackage:
             return "package_invalid";
+        case runtime::AppStoreError::kIncompatibleAotTarget:
+            return "package_aot_target_incompatible";
         case runtime::AppStoreError::kHashMismatch:
             return "package_hash_mismatch";
         case runtime::AppStoreError::kAppIdMismatch:
@@ -2022,7 +2029,63 @@ class ActiveHost final {
 
     // Returns true when the command changed the outer Hall/Foreground state
     // and the current loop must yield to the state machine.
+    [[nodiscard]] const char* CommitInstallPackage(const control::HostCommand& command, bool& changed_out) {
+        const runtime::AppInstallRequest request{
+            .data = command.package_data,
+            .size = command.package_size,
+            .expected_app_id = command.app_id.data(),
+            .expected_sha256 = command.package_sha256,
+        };
+        auto install_result = runtime::InstallApp(request, effective_locale_.data());
+        heap_caps_free(command.package_data);
+        if (!install_result) {
+            return AppStoreErrorText(install_result.error());
+        }
+        changed_out = install_result->changed;
+        return nullptr;
+    }
+
+    [[nodiscard]] bool ProcessInstallCommand(const control::HostCommand& command) {
+        auto& result = remote_result_workspace_;
+        result = {};
+        result.command_id = command.command_id;
+        result.source = command.source;
+        if (command.deadline_ticks != 0U && static_cast<int32_t>(xTaskGetTickCount() - command.deadline_ticks) >= 0) {
+            heap_caps_free(command.package_data);
+            controls_.EndInstallActivity(command.source, command.command_id.data());
+            SubmitRemoteResult(result, false, "command_expired");
+            return false;
+        }
+        if (app_controller_.state() != AppLifecycleState::kNotRunning) {
+            heap_caps_free(command.package_data);
+            controls_.EndInstallActivity(command.source, command.command_id.data());
+            SubmitRemoteResult(result, false, "stop_active_app_before_install");
+            return false;
+        }
+        ReleaseHallCovers();
+        bool changed = false;
+        if (const char* install_error = CommitInstallPackage(command, changed); install_error != nullptr) {
+            RestoreHallCovers();
+            controls_.EndInstallActivity(command.source, command.command_id.data());
+            SubmitRemoteResult(result, false, install_error);
+            return false;
+        }
+        if (!ReloadAppCatalog()) {
+            RestoreHallCovers();
+            controls_.EndInstallActivity(command.source, command.command_id.data());
+            SubmitRemoteResult(result, false, "catalog_refresh_failed");
+            return false;
+        }
+        controls_.UpdateInstallProgress(command.source, command.command_id.data(), 100U);
+        controls_.EndInstallActivity(command.source, command.command_id.data());
+        SubmitRemoteResult(result, true, changed ? "app_installed" : "already_installed");
+        return true;
+    }
+
     [[nodiscard]] bool ProcessRemoteCommand(const control::HostCommand& command) {
+        if (command.type == control::HostCommandType::kInstallApp) {
+            return ProcessInstallCommand(command);
+        }
         // Remote commands are consumed exclusively by the Host supervisor
         // task. Reuse bounded workspaces instead of placing the protocol's
         // largest fixed-capacity objects on app_main's Host stack.
@@ -2078,7 +2141,8 @@ class ActiveHost final {
                     return false;
                 }
                 if (app_controller_.state() == AppLifecycleState::kForeground) {
-                    const bool already_running = foreground_index_ == *app_index;
+                    const bool already_running =
+                        foreground_index_ == *app_index && command.launch_arguments.count == 0U;
                     SubmitRemoteResult(result, already_running, already_running ? "already_running" : "app_active");
                     return false;
                 }
@@ -2086,7 +2150,7 @@ class ActiveHost final {
                     SubmitRemoteResult(result, false, "lifecycle_busy");
                     return false;
                 }
-                const char* activation_error = ActivateSelectedApp(*app_index);
+                const char* activation_error = ActivateSelectedApp(*app_index, &command.launch_arguments);
                 if (activation_error != nullptr) {
                     SubmitRemoteResult(result, false, activation_error);
                     return false;
@@ -2140,39 +2204,8 @@ class ActiveHost final {
                 SubmitRemoteResult(result, true, "app_stopped");
                 return true;
             }
-            case control::HostCommandType::kInstallApp: {
-                if (app_controller_.state() != AppLifecycleState::kNotRunning) {
-                    heap_caps_free(command.package_data);
-                    controls_.EndInstallActivity(command.source, command.command_id.data());
-                    SubmitRemoteResult(result, false, "stop_active_app_before_install");
-                    return false;
-                }
-                ReleaseHallCovers();
-                const runtime::AppInstallRequest request{
-                    .data = command.package_data,
-                    .size = command.package_size,
-                    .expected_app_id = command.app_id.data(),
-                    .expected_sha256 = command.package_sha256,
-                };
-                auto install_result = runtime::InstallApp(request, effective_locale_.data());
-                heap_caps_free(command.package_data);
-                if (!install_result) {
-                    RestoreHallCovers();
-                    controls_.EndInstallActivity(command.source, command.command_id.data());
-                    SubmitRemoteResult(result, false, AppStoreErrorText(install_result.error()));
-                    return false;
-                }
-                if (!ReloadAppCatalog()) {
-                    RestoreHallCovers();
-                    controls_.EndInstallActivity(command.source, command.command_id.data());
-                    SubmitRemoteResult(result, false, "catalog_refresh_failed");
-                    return false;
-                }
-                controls_.UpdateInstallProgress(command.source, command.command_id.data(), 100U);
-                controls_.EndInstallActivity(command.source, command.command_id.data());
-                SubmitRemoteResult(result, true, install_result->changed ? "app_installed" : "already_installed");
-                return true;
-            }
+            case control::HostCommandType::kInstallApp:
+                return false;
             case control::HostCommandType::kUninstallApp: {
                 if (app_controller_.state() != AppLifecycleState::kNotRunning) {
                     SubmitRemoteResult(result, false, "stop_active_app_before_uninstall");
@@ -2461,11 +2494,18 @@ class ActiveHost final {
         return true;
     }
 
-    const char* ActivateSelectedApp(uint32_t selected_index) {
+    const char* ActivateSelectedApp(
+        uint32_t selected_index,
+        const micropixel_system_launch_arguments_response_t* requested_launch_arguments = nullptr) {
+        micropixel_system_launch_arguments_response_t launch_arguments{};
+        launch_arguments.size = sizeof(launch_arguments);
+        if (requested_launch_arguments != nullptr) {
+            launch_arguments = *requested_launch_arguments;
+        }
         bool resumed_existing = false;
         if (suspended_index_.has_value()) {
             const uint32_t previous_suspended_index = *suspended_index_;
-            const bool selected_suspended_app = *suspended_index_ == selected_index;
+            const bool selected_suspended_app = *suspended_index_ == selected_index && launch_arguments.count == 0U;
             bool guest_view_restored = true;
             if (selected_suspended_app) {
                 auto restore_result = shell_.RestoreGuestView();
@@ -2476,6 +2516,7 @@ class ActiveHost final {
                     guest_view_restored = false;
                 }
             } else {
+                shell_.PrepareAppLaunch(selected_index);
                 shell_.LeaveHall();
             }
             shell_.ReleaseGuestSnapshot();
@@ -2517,6 +2558,7 @@ class ActiveHost final {
                 micropixel_log_heap_state("host after suspended App stop");
             }
         } else {
+            shell_.PrepareAppLaunch(selected_index);
             shell_.LeaveHall();
         }
 
@@ -2526,7 +2568,7 @@ class ActiveHost final {
             ESP_LOGI(kTag, "launching selected App: index=%" PRIu32 " app=%s bytes=%" PRIu32, selected_index,
                      selected_app.app_id.data(), selected_app.bundle_size);
             micropixel_log_heap_state("host before AppController start");
-            auto start_result = app_controller_.Start(selected_app);
+            auto start_result = app_controller_.Start(selected_app, launch_arguments);
             if (!start_result) {
                 ESP_LOGE(kTag, "Host could not start the selected AppSession: error=%u",
                          static_cast<unsigned>(start_result.error()));

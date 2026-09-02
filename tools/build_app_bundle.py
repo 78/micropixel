@@ -35,6 +35,12 @@ KIND_ASSET = 2
 KIND_APP_METADATA = 3
 KIND_FONT = 4
 FORMAT_UTF8 = 6
+AOT_TARGET_MASKS = {
+    "riscv32-ilp32f": 1,
+    "xtensa": 2,
+}
+AOT_FLAG_THREADING_DECLARED = 1 << 0
+AOT_FLAG_SHARED_MEMORY = 1 << 1
 FORMATS = {
     "aot": 1,
     "raw_rgb888": 2,
@@ -43,9 +49,11 @@ FORMATS = {
     "raw_argb8888": 5,
     "font_cbin": 8,
     "ogg_opus": 9,
+    "raw_rgb565": 10,
 }
 ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"], FORMATS["font_cbin"]}
 PNG_TO_RAW_RGB888 = "png_to_raw_rgb888"
+PNG_TO_RAW_RGB565 = "png_to_raw_rgb565"
 LAUNCH_FORMATS = frozenset({FORMATS["jpeg"], FORMATS["png"]})
 OGG_OPUS_MAX_TAG_BYTES = 64 * 1024
 OGG_OPUS_MAX_PACKET_BYTES = 61_440
@@ -118,6 +126,7 @@ class PackageManifest:
     package_id: str
     titles: LocalizedTitles
     launch_asset: str
+    threading: str = "none"
     package_type: str = "app"
     component_type: str = ""
     version: str = ""
@@ -192,6 +201,7 @@ def decode_rgba8_png(data: bytes) -> tuple[int, int, bytes]:
     offset = 8
     width = 0
     height = 0
+    color_type = 0
     compressed = bytearray()
     saw_header = False
     saw_end = False
@@ -220,12 +230,12 @@ def decode_rgba8_png(data: bytes) -> tuple[int, int, bytes]:
                 width <= 0
                 or height <= 0
                 or bit_depth != 8
-                or color_type != 6
+                or color_type not in (2, 6)
                 or compression != 0
                 or filtering != 0
                 or interlace != 0
             ):
-                raise ValueError("PNG-to-raw requires non-interlaced 8-bit RGBA")
+                raise ValueError("PNG-to-raw requires non-interlaced 8-bit RGB or RGBA")
             saw_header = True
         elif chunk_type == b"IDAT":
             if not saw_header or saw_end:
@@ -240,13 +250,13 @@ def decode_rgba8_png(data: bytes) -> tuple[int, int, bytes]:
     if not saw_header or not saw_end or not compressed:
         raise ValueError("incomplete PNG asset")
 
-    bytes_per_pixel = 4
+    bytes_per_pixel = 3 if color_type == 2 else 4
     row_bytes = width * bytes_per_pixel
     filtered = zlib.decompress(bytes(compressed))
     if len(filtered) != (row_bytes + 1) * height:
         raise ValueError("PNG decompressed size disagrees with dimensions")
 
-    rgba = bytearray(row_bytes * height)
+    pixels = bytearray(row_bytes * height)
     source = 0
     for row in range(height):
         filter_type = filtered[source]
@@ -255,10 +265,10 @@ def decode_rgba8_png(data: bytes) -> tuple[int, int, bytes]:
         previous = destination - row_bytes
         for column in range(row_bytes):
             raw = filtered[source + column]
-            left = rgba[destination + column - bytes_per_pixel] if column >= bytes_per_pixel else 0
-            above = rgba[previous + column] if row != 0 else 0
+            left = pixels[destination + column - bytes_per_pixel] if column >= bytes_per_pixel else 0
+            above = pixels[previous + column] if row != 0 else 0
             upper_left = (
-                rgba[previous + column - bytes_per_pixel]
+                pixels[previous + column - bytes_per_pixel]
                 if row != 0 and column >= bytes_per_pixel
                 else 0
             )
@@ -274,9 +284,18 @@ def decode_rgba8_png(data: bytes) -> tuple[int, int, bytes]:
                 value = raw + paeth_predictor(left, above, upper_left)
             else:
                 raise ValueError("unsupported PNG row filter")
-            rgba[destination + column] = value & 0xFF
+            pixels[destination + column] = value & 0xFF
         source += row_bytes
 
+    if color_type == 6:
+        return width, height, bytes(pixels)
+
+    rgba = bytearray(width * height * 4)
+    destination = 0
+    for source in range(0, len(pixels), 3):
+        rgba[destination : destination + 3] = pixels[source : source + 3]
+        rgba[destination + 3] = 0xFF
+        destination += 4
     return width, height, bytes(rgba)
 
 
@@ -304,6 +323,26 @@ def rgba_to_raw_rgb888(rgba: bytes, background: tuple[int, int, int] | None) -> 
         # LVGL's little-endian RGB888 storage is B, G, R in memory.
         rgb[destination : destination + 3] = bytes((blue, green, red))
         destination += 3
+    return bytes(rgb)
+
+
+def rgba_to_raw_rgb565(rgba: bytes, background: tuple[int, int, int] | None) -> bytes:
+    if len(rgba) % 4 != 0:
+        raise ValueError("RGBA byte length must be divisible by four")
+    rgb = bytearray((len(rgba) // 4) * 2)
+    destination = 0
+    for offset in range(0, len(rgba), 4):
+        red, green, blue, alpha = rgba[offset : offset + 4]
+        if alpha != 0xFF:
+            if background is None:
+                raise ValueError("PNG-to-RGB requires opaque pixels or a background color")
+            inverse_alpha = 0xFF - alpha
+            red = (red * alpha + background[0] * inverse_alpha + 127) // 255
+            green = (green * alpha + background[1] * inverse_alpha + 127) // 255
+            blue = (blue * alpha + background[2] * inverse_alpha + 127) // 255
+        packed = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+        rgb[destination : destination + 2] = struct.pack("<H", packed)
+        destination += 2
     return bytes(rgb)
 
 
@@ -435,7 +474,10 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
     if len(parts) != 5:
         raise ValueError("asset must be ID:FORMAT:WIDTH:HEIGHT:PATH")
     raw_id, format_name, raw_width, raw_height, raw_path = parts
-    if (format_name not in FORMATS or format_name == "aot") and format_name != PNG_TO_RAW_RGB888:
+    if (format_name not in FORMATS or format_name == "aot") and format_name not in {
+        PNG_TO_RAW_RGB888,
+        PNG_TO_RAW_RGB565,
+    }:
         raise ValueError(f"unsupported asset format: {format_name}")
     section_id = int(raw_id, 0)
     if section_id <= 0:
@@ -446,7 +488,7 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
     width = int(raw_width, 0)
     height = int(raw_height, 0)
     output_format_name = format_name
-    if format_name == PNG_TO_RAW_RGB888:
+    if format_name in {PNG_TO_RAW_RGB888, PNG_TO_RAW_RGB565}:
         actual_width, actual_height, rgba = decode_rgba8_png(data)
         width, height = (
             (actual_width, actual_height)
@@ -455,8 +497,12 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
         )
         if (width, height) != (actual_width, actual_height):
             raise ValueError("PNG dimensions disagree with asset spec")
-        data = rgba_to_raw_rgb888(rgba, background)
-        output_format_name = "raw_rgb888"
+        if format_name == PNG_TO_RAW_RGB565:
+            data = rgba_to_raw_rgb565(rgba, background)
+            output_format_name = "raw_rgb565"
+        else:
+            data = rgba_to_raw_rgb888(rgba, background)
+            output_format_name = "raw_rgb888"
     elif format_name == "png":
         actual = png_size(data)
         width, height = actual if width == 0 or height == 0 else (width, height)
@@ -473,6 +519,9 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
     elif format_name == "raw_argb8888":
         if width <= 0 or height <= 0 or len(data) != width * height * 4:
             raise ValueError("raw_argb8888 size must equal WIDTH*HEIGHT*4")
+    elif format_name == "raw_rgb565":
+        if width <= 0 or height <= 0 or len(data) != width * height * 2:
+            raise ValueError("raw_rgb565 size must equal WIDTH*HEIGHT*2")
     elif format_name == "font_cbin":
         if width != 0 or height != 0 or len(data) < 160 or not data.startswith(b"MPXFCBN\0"):
             raise ValueError("font_cbin must be a wrapped MicroPixel font cbin with zero dimensions")
@@ -485,6 +534,8 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
         if output_format_name == "raw_rgb888"
         else width * 4
         if output_format_name == "raw_argb8888"
+        else width * 2
+        if output_format_name == "raw_rgb565"
         else 0
     )
     kind = KIND_FONT if output_format_name == "font_cbin" else KIND_ASSET
@@ -600,8 +651,10 @@ def load_asset_manifest(path: Path) -> list[InputSection]:
             raise ValueError(f"invalid asset manifest entry {index}") from error
         background = None
         if "background" in record:
-            if record.get("format") != PNG_TO_RAW_RGB888:
-                raise ValueError(f"asset manifest entry {index} background requires {PNG_TO_RAW_RGB888}")
+            if record.get("format") not in {PNG_TO_RAW_RGB888, PNG_TO_RAW_RGB565}:
+                raise ValueError(
+                    f"asset manifest entry {index} background requires {PNG_TO_RAW_RGB888} or {PNG_TO_RAW_RGB565}"
+                )
             background = parse_rgb888_color(record["background"], f"asset manifest entry {index} background")
         section = parse_asset(spec, background)
         atlas = parse_atlas(record, section, name, index)
@@ -717,7 +770,10 @@ def load_package_manifest(path: Path) -> PackageManifest:
             launch_asset = str(value.get("launch_asset", ""))
             if launch_asset:
                 validate_asset_name(launch_asset, 0)
-            return PackageManifest(app_id, titles, launch_asset)
+            threading = value.get("threading", "none")
+            if threading not in {"none", "shared-memory"}:
+                raise ValueError("app manifest threading must be none or shared-memory")
+            return PackageManifest(app_id, titles, launch_asset, threading=threading)
         except (KeyError, TypeError) as error:
             raise ValueError(
                 "app manifest requires app_id, title and a valid launch_asset name"
@@ -763,8 +819,9 @@ def load_package_manifest(path: Path) -> PackageManifest:
                 raise ValueError("font component roles must reference distinct assets")
             asset_names.add(asset)
             font_roles[role] = {"asset": asset, "style": style, "size": size, "bpp": bpp}
-        return PackageManifest(package_id, titles, "", "component", "font", version, tuple(languages),
-                               font_bundle, charset, font_roles)
+        return PackageManifest(package_id, titles, "", package_type="component", component_type="font",
+                               version=version, languages=tuple(languages), font_bundle=font_bundle,
+                               charset=charset, font_roles=font_roles)
     except KeyError as error:
         raise ValueError(f"font component manifest is missing {error.args[0]}") from error
 
@@ -1144,6 +1201,11 @@ def main() -> None:
         description=f"Prepare a resource pack or finalize a MicroPixel App Bundle v{VERSION}."
     )
     parser.add_argument("--aot", type=Path, help="AOT input for final Bundle mode")
+    parser.add_argument(
+        "--aot-target",
+        choices=tuple(AOT_TARGET_MASKS),
+        help="required CPU architecture for an App Bundle's AOT payload",
+    )
     parser.add_argument("--app-id", help="App ID when no app manifest is used")
     parser.add_argument("--app-manifest", type=Path, help="App metadata and launch resource name")
     parser.add_argument("--asset-manifest", type=Path, help="named resources for prepare mode")
@@ -1187,7 +1249,12 @@ def main() -> None:
     if args.prepare_resource_pack is not None:
         if args.legacy_metadata_v1:
             raise SystemExit("--legacy-metadata-v1 is only valid for final Bundle builds")
-        if args.aot is not None or args.output is not None or args.resource_pack is not None:
+        if (
+            args.aot is not None
+            or args.aot_target is not None
+            or args.output is not None
+            or args.resource_pack is not None
+        ):
             raise SystemExit("resource preparation cannot also build a final Bundle")
         if (
             args.asset_manifest is None
@@ -1260,12 +1327,14 @@ def main() -> None:
     if package_manifest.package_type == "app":
         if args.aot is None:
             raise SystemExit("App Bundle builds require --aot")
+        if args.aot_target is None:
+            raise SystemExit("App Bundle builds require --aot-target")
         aot = args.aot.read_bytes()
         if not aot:
             raise SystemExit("AOT input is empty")
         sections.insert(0, InputSection(KIND_AOT, 0, FORMATS["aot"], 0, 0, 0, aot))
-    elif args.aot is not None:
-        raise SystemExit("Component Packages cannot contain AOT/Wasm")
+    elif args.aot is not None or args.aot_target is not None:
+        raise SystemExit("Component Packages cannot contain AOT/Wasm or an AOT target")
     launch_asset_id = 0
     resource_digest = bytes(32)
     if args.resource_pack is not None:
@@ -1295,12 +1364,17 @@ def main() -> None:
     cursor = align(toc_offset + len(sections) * SECTION.size, 64)
     entries: list[bytes] = []
     placements: list[tuple[int, bytes]] = []
+    aot_target_mask = AOT_TARGET_MASKS[args.aot_target] if args.aot_target is not None else 0
+    aot_flags = AOT_FLAG_THREADING_DECLARED
+    if package_manifest.threading == "shared-memory":
+        aot_flags |= AOT_FLAG_SHARED_MEMORY
     for section in sections:
         cursor = align(cursor, 64)
         entries.append(SECTION.pack(
             section.kind, section.section_id, cursor, len(section.data),
             fnv1a32(section.data), section.format, section.width, section.height,
-            section.stride, 0, 0, 0,
+            section.stride, aot_flags if section.kind == KIND_AOT else 0,
+            aot_target_mask if section.kind == KIND_AOT else 0, 0,
         ))
         placements.append((cursor, section.data))
         cursor += len(section.data)
@@ -1330,6 +1404,7 @@ def main() -> None:
         f"Bundle v{VERSION}: type={package_manifest.package_type} id={app_id_text} "
         f"title={default_title!r} metadata=v{metadata_version} "
         f"locales={len(titles.values)} sections={len(sections)} "
+        f"aot-target={args.aot_target or 'none'} threading={package_manifest.threading} "
         f"content={cursor} extent={bundle_size} launch={launch_asset}({launch_asset_id}) "
         f"resources={len(sections) - (2 if package_manifest.package_type == 'app' else 1)} "
         f"digest={resource_digest.hex()} "

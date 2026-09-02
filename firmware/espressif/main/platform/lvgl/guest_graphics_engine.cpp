@@ -78,12 +78,17 @@ void StyleFullscreenContainer(lv_obj_t* container, int32_t width, int32_t height
 
 }  // namespace
 
-GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts)
+GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height, FontRegistry& fonts,
+                                         graphics::SurfacePixelFormat app_surface_format)
     : width_(width),
       height_(height),
+      app_surface_format_(app_surface_format),
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
       hardware_pixel_compositor_(software_pixel_compositor_),
+#endif
       fonts_(fonts),
-      bitmap_font_rasterizer_(fonts) {}
+      bitmap_font_rasterizer_(fonts) {
+}
 
 bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_handle_t font) {
     return context != nullptr && static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font) != nullptr;
@@ -119,7 +124,9 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebuff
     esp_lv_adapter_display_telemetry_t discarded{};
     (void)esp_lv_adapter_display_telemetry_take(&discarded);
 #endif
-#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+#if !defined(CONFIG_SOC_PPA_SUPPORTED) || !CONFIG_SOC_PPA_SUPPORTED
+    ESP_LOGI(kTag, "App Surface compositor: CPU-only target");
+#elif CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
     ESP_LOGI(kTag, "App Surface compositor: CPU-only S31 experiment");
 #else
     const esp_err_t compositor_status =
@@ -200,8 +207,9 @@ int32_t GuestGraphicsEngine::GetInfo(micropixel_graphics_info_t& info) const {
     info.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
     info.width = width_;
     info.height = height_;
-    info.pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888;
-    info.max_layers = MICROPIXEL_GRAPHICS_MAX_LAYERS;
+    info.pixel_format = app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? MICROPIXEL_PIXEL_FORMAT_RGB565
+                                                                                     : MICROPIXEL_PIXEL_FORMAT_BGR888;
+    info.max_containers = MICROPIXEL_GRAPHICS_MAX_CONTAINERS;
     info.max_scene_bytes = MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES;
     info.max_scene_nodes = MICROPIXEL_GRAPHICS_MAX_SCENE_NODES;
     info.max_batch_instances = MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES;
@@ -246,17 +254,31 @@ bool GuestGraphicsEngine::EnsureSceneStorage() {
     guest_scene_instance_storage_ = static_cast<graphics::GuestSceneSpriteInstance*>(heap_caps_aligned_calloc(
         alignof(graphics::GuestSceneSpriteInstance), 2U * MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES,
         sizeof(graphics::GuestSceneSpriteInstance), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (guest_scene_node_storage_ == nullptr || guest_scene_instance_storage_ == nullptr) {
+    guest_scene_container_storage_ = static_cast<graphics::GuestSceneContainer*>(
+        heap_caps_aligned_calloc(alignof(graphics::GuestSceneContainer), 2U * (MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U),
+                                 sizeof(graphics::GuestSceneContainer), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    guest_scene_draw_order_storage_ =
+        static_cast<uint16_t*>(heap_caps_aligned_calloc(alignof(uint16_t), 2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
+                                                        sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (guest_scene_node_storage_ == nullptr || guest_scene_instance_storage_ == nullptr ||
+        guest_scene_container_storage_ == nullptr || guest_scene_draw_order_storage_ == nullptr) {
         heap_caps_free(guest_scene_node_storage_);
         heap_caps_free(guest_scene_instance_storage_);
+        heap_caps_free(guest_scene_container_storage_);
+        heap_caps_free(guest_scene_draw_order_storage_);
         guest_scene_node_storage_ = nullptr;
         guest_scene_instance_storage_ = nullptr;
+        guest_scene_container_storage_ = nullptr;
+        guest_scene_draw_order_storage_ = nullptr;
         return false;
     }
     guest_scene_.emplace(guest_scene_node_storage_, guest_scene_node_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
                          MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, guest_scene_instance_storage_,
                          guest_scene_instance_storage_ + MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES,
-                         MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES);
+                         MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES, guest_scene_container_storage_,
+                         guest_scene_container_storage_ + MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U,
+                         guest_scene_draw_order_storage_,
+                         guest_scene_draw_order_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES);
     return true;
 }
 
@@ -270,7 +292,8 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
     }
     const uint32_t storage_width = (static_cast<uint32_t>(width_) + kAppSurfaceStrideAlignmentPixels - 1U) &
                                    ~(kAppSurfaceStrideAlignmentPixels - 1U);
-    const uint64_t stride = static_cast<uint64_t>(storage_width) * 3U;
+    const uint32_t bytes_per_pixel = app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? 2U : 3U;
+    const uint64_t stride = static_cast<uint64_t>(storage_width) * bytes_per_pixel;
     const uint64_t pixel_bytes = stride * static_cast<uint32_t>(height_);
     const uint64_t allocation_bytes = (pixel_bytes + kAppSurfaceAlignment - 1U) & ~(kAppSurfaceAlignment - 1U);
     if (stride > UINT32_MAX || pixel_bytes == 0U || allocation_bytes > UINT32_MAX || allocation_bytes > SIZE_MAX / 2U) {
@@ -301,29 +324,36 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorageLocked() {
     app_surface_allocation_bytes_ = static_cast<uint32_t>(allocation_bytes);
     app_surface_stride_ = static_cast<uint32_t>(stride);
     app_surface_layer_pixels_ = app_surface_pixels_ + app_surface_allocation_bytes_;
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
+    graphics::PixelCompositor& pixel_compositor = hardware_pixel_compositor_;
+#else
+    graphics::PixelCompositor& pixel_compositor = software_pixel_compositor_;
+#endif
     app_surface_compositor_.emplace(
         app_surface_operation_storage_, app_surface_operation_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
-        MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, hardware_pixel_compositor_, kDamageMergePolicy, &bitmap_font_rasterizer_);
+        MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, pixel_compositor, kDamageMergePolicy, &bitmap_font_rasterizer_);
     app_surface_compositor_->SetLayerCache({
         .pixels = app_surface_layer_pixels_,
         .size = app_surface_allocation_bytes_,
         .width = static_cast<uint32_t>(width_),
         .height = static_cast<uint32_t>(height_),
         .stride = app_surface_stride_,
-        .format = graphics::SurfacePixelFormat::kBgr888,
+        .format = app_surface_format_,
     });
     app_surface_image_descriptor_ = {};
     app_surface_image_descriptor_.header.magic = LV_IMAGE_HEADER_MAGIC;
-    app_surface_image_descriptor_.header.cf = LV_COLOR_FORMAT_RGB888;
+    app_surface_image_descriptor_.header.cf =
+        app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? LV_COLOR_FORMAT_RGB565 : LV_COLOR_FORMAT_RGB888;
     app_surface_image_descriptor_.header.w = static_cast<uint32_t>(width_);
     app_surface_image_descriptor_.header.h = static_cast<uint32_t>(height_);
     app_surface_image_descriptor_.header.stride = app_surface_stride_;
     app_surface_image_descriptor_.data_size = app_surface_pixel_bytes_;
     app_surface_image_descriptor_.data = app_surface_pixels_;
     ESP_LOGI(kTag,
-             "App Surface ready: %" PRId32 "x%" PRId32 " RGB888 stride=%" PRIu32 " pixels=%" PRIu32
-             " layer-cache=%" PRIu32 " transform-scratch=%" PRIu32 " scene=%zu bytes",
-             width_, height_, app_surface_stride_, app_surface_pixel_bytes_, app_surface_allocation_bytes_,
+             "App Surface ready: %" PRId32 "x%" PRId32 " %s stride=%" PRIu32 " pixels=%" PRIu32 " layer-cache=%" PRIu32
+             " transform-scratch=%" PRIu32 " scene=%zu bytes",
+             width_, height_, app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? "RGB565" : "RGB888",
+             app_surface_stride_, app_surface_pixel_bytes_, app_surface_allocation_bytes_,
              software_transform_scratch_bytes_,
              2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES * sizeof(graphics::AppDrawOperation));
     return true;
@@ -336,7 +366,7 @@ graphics::PixelSurface GuestGraphicsEngine::AppSurfacePixels() const {
         .width = static_cast<uint32_t>(width_),
         .height = static_cast<uint32_t>(height_),
         .stride = app_surface_stride_,
-        .format = graphics::SurfacePixelFormat::kBgr888,
+        .format = app_surface_format_,
     };
 }
 
@@ -475,32 +505,52 @@ int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textu
     const bool layer_snapshot_transition = result.layer_snapshot_used != layer_snapshot_telemetry_active_;
     layer_snapshot_telemetry_active_ = result.layer_snapshot_used;
     if (sequence <= 8U || (sequence % 120U) == 0U || layer_snapshot_transition) {
-        const graphics::HardwarePixelCompositorStats hardware = hardware_pixel_compositor_.Stats();
+        const SoftwarePixelCompositorStats software = software_pixel_compositor_.Stats();
+        struct HardwareStats final {
+            uint32_t ppa_fills{};
+            uint32_t ppa_blends{};
+            uint32_t ppa_scales{};
+            uint32_t dma2d_copies{};
+            uint32_t software_fallbacks{};
+        } hardware;
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
+        const graphics::HardwarePixelCompositorStats measured = hardware_pixel_compositor_.Stats();
+        hardware = {
+            .ppa_fills = measured.ppa_fills,
+            .ppa_blends = measured.ppa_blends,
+            .ppa_scales = measured.ppa_scales,
+            .dma2d_copies = measured.dma2d_copies,
+            .software_fallbacks = measured.software_fallbacks,
+        };
+#endif
         ESP_LOGI(kTag,
                  "App Surface scene #%" PRIu32 ": revision=%" PRIu32 " damage=%" PRIu32 "/%" PRIu64
                  " pixels replays=%" PRIu32 " normalize=%" PRIu32 "/%s wire=%" PRIu16 "rec/%" PRIu16 "inst/%" PRIu32
                  "B layer-cache=%s capacity-merges=%" PRIu32 " hw=fill:%" PRIu32 "/blend:%" PRIu32 "/scale:%" PRIu32
-                 "/dma2d:%" PRIu32 " cpu:%" PRIu32,
+                 "/dma2d:%" PRIu32 " cpu:%" PRIu32 " sw=blit:%" PRIu64 "px/rgb888-to-rgb565:%" PRIu64
+                 "px/alpha:%" PRIu64 "px",
                  sequence, guest_scene_->Revision(), result.damage_region_count, result.damage_pixels,
                  result.draw_operations_replayed, result.operations_normalized,
                  result.incremental_normalization ? "patch" : "full", scene_wire_records_, scene_wire_instances_,
                  scene_wire_bytes_, result.layer_snapshot_used ? "yes" : "no", result.capacity_merge_count,
                  hardware.ppa_fills, hardware.ppa_blends, hardware.ppa_scales, hardware.dma2d_copies,
-                 hardware.software_fallbacks);
+                 hardware.software_fallbacks, software.blit_pixels, software.rgb888_to_rgb565_pixels,
+                 software.alpha_blend_pixels);
     }
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
     if ((sequence % 120U) == 0U) {
         esp_lv_adapter_display_telemetry_t telemetry{};
         if (esp_lv_adapter_display_telemetry_take(&telemetry)) {
-            ESP_LOGI(kTag,
-                     "display telemetry (120 scene frames): sw-image=%" PRIu64 "/%" PRIu64 "px/%" PRIu64
-                     "us fb-dma2d=%" PRIu64 "/%" PRIu64 "px/%" PRIu64 "us panel-submit=%" PRIu64 "/%" PRIu64
-                     "us vsync-wait=%" PRIu64 "/%" PRIu64 "us",
-                     telemetry.software_image_calls, telemetry.software_image_pixels,
-                     telemetry.software_image_elapsed_us, telemetry.framebuffer_dma2d_calls,
-                     telemetry.framebuffer_dma2d_pixels, telemetry.framebuffer_dma2d_elapsed_us,
-                     telemetry.panel_submit_calls, telemetry.panel_submit_elapsed_us, telemetry.panel_vsync_wait_calls,
-                     telemetry.panel_vsync_wait_elapsed_us);
+            ESP_LOGI(
+                kTag,
+                "display telemetry (120 scene frames): sw-image=%" PRIu64 "/%" PRIu64 "px/%" PRIu64
+                "us fb-dma2d=%" PRIu64 "/%" PRIu64 "px/%" PRIu64 "us panel-submit=%" PRIu64 "/%" PRIu64 "B/%" PRIu64
+                "us rgb565-byte-swap=%" PRIu64 "/%" PRIu64 "px/%" PRIu64 "us vsync-wait=%" PRIu64 "/%" PRIu64 "us",
+                telemetry.software_image_calls, telemetry.software_image_pixels, telemetry.software_image_elapsed_us,
+                telemetry.framebuffer_dma2d_calls, telemetry.framebuffer_dma2d_pixels,
+                telemetry.framebuffer_dma2d_elapsed_us, telemetry.panel_submit_calls, telemetry.panel_submit_bytes,
+                telemetry.panel_submit_elapsed_us, telemetry.rgb565_wire_cpu_count, telemetry.rgb565_wire_cpu_pixels,
+                telemetry.rgb565_wire_cpu_us, telemetry.panel_vsync_wait_calls, telemetry.panel_vsync_wait_elapsed_us);
         }
     }
 #endif
@@ -558,6 +608,10 @@ void GuestGraphicsEngine::Release() {
     guest_scene_node_storage_ = nullptr;
     heap_caps_free(guest_scene_instance_storage_);
     guest_scene_instance_storage_ = nullptr;
+    heap_caps_free(guest_scene_container_storage_);
+    guest_scene_container_storage_ = nullptr;
+    heap_caps_free(guest_scene_draw_order_storage_);
+    guest_scene_draw_order_storage_ = nullptr;
     fonts_.ReleaseGuestFonts();
     esp_lv_adapter_unlock();
 }
@@ -680,7 +734,9 @@ int32_t GuestGraphicsEngine::UpdateBitmap(const device::BitmapView& bitmap, uint
                                           uint32_t height, const uint8_t* pixels, uint32_t stride) {
     const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
                                          ? 3U
-                                         : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4U : 0U);
+                                         : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
+                                                ? 4U
+                                                : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
     if (display_ == nullptr || bitmap.data == nullptr || pixels == nullptr || bytes_per_pixel == 0U ||
         (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || width == 0U || height == 0U ||
         static_cast<uint64_t>(x) + width > bitmap.width || static_cast<uint64_t>(y) + height > bitmap.height ||
@@ -730,17 +786,10 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
     }
 
     bool invalidated = false;
-    uint32_t ppa_eligible_damage = 0U;
     for (size_t index = 0U; index < bitmap_damage_.Size(); ++index) {
         const graphics::DamageRegion& damage = bitmap_damage_[index];
         invalidated =
             RefreshAppSurfaceBitmapLocked(static_cast<const uint8_t*>(damage.source), damage.rect) || invalidated;
-#if CONFIG_MICROPIXEL_LVGL_PPA_ACCEL
-        if (static_cast<uint64_t>(damage.rect.width) * damage.rect.height >
-            CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS) {
-            ++ppa_eligible_damage;
-        }
-#endif
     }
     if (invalidated) {
         guest_refresh_pending_ = true;
@@ -763,9 +812,9 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
     if (updates != 0U && (sequence <= 8U || (sequence % 120U) == 0U)) {
         ESP_LOGI(kTag,
                  "offscreen frame #%" PRIu32 ": updates=%" PRIu32 " bytes=%" PRIu64 " regions=%" PRIu32
-                 " ppa-eligible=%" PRIu32 " capacity-merges=%" PRIu32 " stage=%" PRIu64 " us present=%s",
-                 sequence, updates, bytes, static_cast<uint32_t>(damage_count), ppa_eligible_damage, capacity_merges,
-                 elapsed_us, invalidated ? "yes" : "no");
+                 " capacity-merges=%" PRIu32 " stage=%" PRIu64 " us present=%s",
+                 sequence, updates, bytes, static_cast<uint32_t>(damage_count), capacity_merges, elapsed_us,
+                 invalidated ? "yes" : "no");
     }
     return MICROPIXEL_STATUS_OK;
 }

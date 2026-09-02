@@ -9,7 +9,7 @@ namespace demo {
 
 namespace {
 
-void LayoutAudioButtons(const DemoContext& context, std::span<micropixel::ui::Button> buttons) {
+void LayoutAudioButtons(const DemoContext& context, std::span<micropixel::Rect> bounds) {
     constexpr std::array row_items{micropixel::ui::FlexItem::Grow(), micropixel::ui::FlexItem::Grow(),
                                    micropixel::ui::FlexItem::Grow()};
     std::array<micropixel::Rect, row_items.size()> rows{};
@@ -34,8 +34,7 @@ void LayoutAudioButtons(const DemoContext& context, std::span<micropixel::ui::Bu
             column_items, columns);
         micropixel::Assert(column_result.has_value(), "demo.audio: column layout failed");
         for (uint32_t column = 0U; column < columns.size(); ++column) {
-            buttons[row * 2U + column].SetBounds(columns[column]);
-            buttons[row * 2U + column].Reset();
+            bounds[row * 2U + column] = columns[column];
         }
     }
 }
@@ -65,11 +64,8 @@ class AudioPage final {
                 compressed_available_ = false;
             }
         }
-        LayoutAudioButtons(context, buttons_);
-        for (uint32_t index = 0U; index < 6U; ++index) {
-            buttons_[index].SetEnabled(available_);
-        }
-        buttons_[4].SetEnabled(compressed_available_);
+        page_container_ = context.root_container.CreateContainer();
+        CreateButtons(context);
     }
 
     void Exit(DemoContext& context) {
@@ -79,6 +75,7 @@ class AudioPage final {
         context.audio_playback.Reset();
         context.audio_clip.Reset();
         compressed_available_ = false;
+        micropixel::Assert(page_container_.Destroy().has_value(), "demo.audio: destroy page failed");
     }
 
     [[nodiscard]] bool OnEvent(DemoContext& context, const micropixel::Event& event) {
@@ -140,15 +137,27 @@ class AudioPage final {
         commands.CenteredText(center_x, PageY(context, 52, 82), status_, available_ ? AccentColor() : DangerColor(),
                               micropixel::SystemFont::kLarge);
 
-        DrawButton(commands, buttons_[0], "SINE", BlueColor());
-        DrawButton(commands, buttons_[1], "SQUARE", BlueColor());
-        DrawButton(commands, buttons_[2], "TRIANGLE", BlueColor());
-        DrawButton(commands, buttons_[3], "NOISE", BlueColor());
-        DrawButton(commands, buttons_[4], "PLAY OGG", AccentColor());
-        DrawButton(commands, buttons_[5], "STOP ALL", DangerColor());
+        for (uint32_t index = 0U; index < 6U; ++index) {
+            buttons_[index].SetEnabled(commands.scene_update(), index == 4U ? compressed_available_ : available_);
+            buttons_[index].SetVisible(commands.scene_update(), true);
+        }
     }
 
    private:
+    void CreateButtons(DemoContext& context) {
+        std::array<micropixel::Rect, 6U> bounds{};
+        LayoutAudioButtons(context, bounds);
+        constexpr const char* labels[6]{"SINE", "SQUARE", "TRIANGLE", "NOISE", "PLAY OGG", "STOP ALL"};
+        const micropixel::Color backgrounds[6]{BlueColor(), BlueColor(),   BlueColor(),
+                                               BlueColor(), AccentColor(), DangerColor()};
+        for (uint32_t index = 0U; index < 6U; ++index) {
+            buttons_[index] = page_container_.CreateTextButton(
+                {.bounds = bounds[index],
+                 .text = labels[index],
+                 .style = {.background = backgrounds[index], .font = micropixel::SystemFont::kLarge}});
+        }
+    }
+
     void Play(DemoContext& context, micropixel::Waveform waveform, uint32_t frequency_hz, const char* status) {
         const micropixel::Tone tone{
             .waveform = waveform,
@@ -168,7 +177,8 @@ class AudioPage final {
     const char* status_{"Not initialized"};
     bool available_{};
     bool compressed_available_{};
-    micropixel::ui::Button buttons_[6]{};
+    micropixel::ContainerNode page_container_{};
+    micropixel::ui::TextButton buttons_[6]{};
 };
 
 AudioPage audio_page;

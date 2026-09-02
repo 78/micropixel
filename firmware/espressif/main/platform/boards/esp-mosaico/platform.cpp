@@ -89,7 +89,11 @@ esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
 #else
     display_config.profile.use_psram = false;
 #endif
+#if CONFIG_MICROPIXEL_MOSAICO_LVGL_DOUBLE_BUFFER
     display_config.profile.require_double_buffer = true;
+#else
+    display_config.profile.require_double_buffer = false;
+#endif
     display_config.profile.enable_ppa_accel = board_detail::kEnableLvglAdapterPpaAccel;
     display_config.profile.mono_layout = ESP_LV_ADAPTER_MONO_LAYOUT_NONE;
     state.display = esp_lv_adapter_register_display(&display_config);

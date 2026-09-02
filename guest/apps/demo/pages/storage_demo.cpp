@@ -11,7 +11,10 @@ constexpr const char* kCounterKey = "demo.counter";
 class StoragePage final {
    public:
     void Enter(DemoContext& context) {
-        LayoutButtonRow(context, buttons_);
+        std::array<micropixel::Rect, 2U> bounds{};
+        LayoutButtonRow(context, bounds);
+        page_container_ = context.root_container.CreateContainer();
+        CreateButtons(bounds);
         auto stored = context.app.storage().GetU32(kCounterKey);
         if (stored.has_value()) {
             counter_ = stored.value();
@@ -72,14 +75,29 @@ class StoragePage final {
         commands.CenteredText(center_x, panel.y + (context.layout.compact() ? 152 : 216), "KVStore::GetU32 / SetU32",
                               MutedColor(), micropixel::SystemFont::kSmall);
 
-        DrawButton(commands, buttons_[0], "ADD + SAVE", AccentColor());
-        DrawButton(commands, buttons_[1], "RESET", DangerColor());
+        for (auto& button : buttons_) {
+            button.Sync(commands.scene_update());
+        }
     }
 
+    void Exit() { micropixel::Assert(page_container_.Destroy().has_value(), "demo.storage: destroy page failed"); }
+
    private:
+    void CreateButtons(const std::array<micropixel::Rect, 2U>& bounds) {
+        constexpr const char* labels[2]{"ADD + SAVE", "RESET"};
+        const micropixel::Color backgrounds[2]{AccentColor(), DangerColor()};
+        for (uint32_t index = 0U; index < 2U; ++index) {
+            buttons_[index] = page_container_.CreateTextButton(
+                {.bounds = bounds[index],
+                 .text = labels[index],
+                 .style = {.background = backgrounds[index], .font = micropixel::SystemFont::kLarge}});
+        }
+    }
+
     uint32_t counter_{};
     const char* status_{"Not loaded"};
-    micropixel::ui::Button buttons_[2]{};
+    micropixel::ContainerNode page_container_{};
+    micropixel::ui::TextButton buttons_[2]{};
 };
 
 StoragePage storage_page;
@@ -87,6 +105,8 @@ StoragePage storage_page;
 }  // namespace
 
 void StorageDemoEnter(DemoContext& context) { storage_page.Enter(context); }
+
+void StorageDemoExit(DemoContext&) { storage_page.Exit(); }
 
 bool StorageDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
     return storage_page.OnTouch(context, event);

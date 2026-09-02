@@ -18,6 +18,9 @@ class AudioEngine : public device::Audio {
     [[nodiscard]] esp_err_t Initialize(AudioOutputPeripheral& output, uint32_t sample_rate,
                                        AudioPowerController* power_controller = nullptr);
     virtual void SetMasterVolumePercent(uint8_t percent);
+    // Board-owned switches may mute the Host mix independently of the saved
+    // master-volume setting. This is intentionally outside the Guest contract.
+    void SetHardwareMuted(bool muted);
 
     [[nodiscard]] int32_t GetInfo(micropixel_audio_info_t& info) override;
     [[nodiscard]] int32_t PlayTone(const micropixel_audio_tone_t& tone) override;

@@ -1,32 +1,18 @@
 #include "host/ui/system_gesture_router.hpp"
 
-#include <algorithm>
 #include <cinttypes>
 #include <cstdlib>
 
 #include "esp_log.h"
 #include "freertos/task.h"
+#include "host/ui/gesture_thresholds.hpp"
 
 namespace micropixel::host_ui {
 namespace {
 
 constexpr char kTag[] = "micropixel_gestures";
-constexpr uint16_t kTopReservedEdgeHeight = 64U;
-constexpr uint16_t kBottomReservedEdgeHeight = 32U;
-constexpr int32_t kGestureReferenceExtent = 720;
-constexpr int32_t kTopRecognitionDistance = 56;
-constexpr int32_t kBottomRecognitionDistance = 56;
-constexpr int32_t kDirectionSlop = 40;
-constexpr int32_t kMinimumRecognitionDistance = 24;
-constexpr int32_t kMinimumDirectionSlop = 24;
 constexpr uint64_t kRecognitionTimeoutUs = 600000U;
 constexpr uint64_t kPostGestureReleaseGuardUs = 300000U;
-
-int32_t ScaleGestureDistance(int32_t distance, uint16_t extent, int32_t minimum) {
-    const int32_t scaled =
-        (distance * static_cast<int32_t>(extent) + kGestureReferenceExtent - 1) / kGestureReferenceExtent;
-    return std::max(minimum, scaled);
-}
 
 bool InBottomCenterThird(int32_t x, uint16_t width) {
     const int32_t side_width = static_cast<int32_t>(width) / 3;
@@ -161,9 +147,14 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
             return Forward(sample);
         }
         Edge edge = Edge::kNone;
-        if (sample.y < kTopReservedEdgeHeight) {
+        const int32_t top_reserved_edge_height =
+            gesture_thresholds::ScaleExtent(height_, gesture_thresholds::kTopReservedEdge);
+        const int32_t bottom_reserved_edge_height =
+            gesture_thresholds::ScaleExtent(height_, gesture_thresholds::kBottomReservedEdge);
+        if (sample.y < top_reserved_edge_height) {
             edge = Edge::kTop;
-        } else if (sample.y >= height_ - kBottomReservedEdgeHeight && InBottomCenterThird(sample.x, width_)) {
+        } else if (sample.y >= static_cast<int32_t>(height_) - bottom_reserved_edge_height &&
+                   InBottomCenterThird(sample.x, width_)) {
             edge = Edge::kBottom;
         }
         if (edge == Edge::kNone) {
@@ -219,9 +210,8 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
                                     ? sample.timestamp_us - candidate_.initial.timestamp_us
                                     : 0U;
     const int32_t recognition_distance =
-        ScaleGestureDistance(candidate_.edge == Edge::kTop ? kTopRecognitionDistance : kBottomRecognitionDistance,
-                             height_, kMinimumRecognitionDistance);
-    const int32_t direction_slop = ScaleGestureDistance(kDirectionSlop, width_, kMinimumDirectionSlop);
+        gesture_thresholds::ScaleExtent(height_, gesture_thresholds::kSystemRecognitionDistance);
+    const int32_t direction_slop = gesture_thresholds::ScaleExtent(width_, gesture_thresholds::kSystemDirectionSlop);
     const bool correct_direction =
         candidate_.edge == Edge::kTop ? delta_y >= recognition_distance : delta_y <= -recognition_distance;
     const bool direction_compatible = std::abs(delta_x) <= std::abs(delta_y) + direction_slop;

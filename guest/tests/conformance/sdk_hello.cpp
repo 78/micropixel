@@ -51,8 +51,7 @@ int main() {
     if (failed || failed.error().code() != micropixel::ErrorCode::kInvalidArgument) {
         return 11;
     }
-    if (failed.error().name()[0] != 'i' ||
-        micropixel::ErrorCodeName(micropixel::ErrorCode::kNotFound)[0] != 'n') {
+    if (failed.error().name()[0] != 'i' || micropixel::ErrorCodeName(micropixel::ErrorCode::kNotFound)[0] != 'n') {
         return 12;
     }
 
@@ -115,6 +114,11 @@ int main() {
     const micropixel::Locale locale = app.localization().CurrentLocale();
     if (locale.tag()[0] != 'e' || locale.tag()[1] != 'n' || locale.tag()[2] != '\0') {
         return 17;
+    }
+    const micropixel::LaunchArguments launch_arguments = app.launch_arguments();
+    if (launch_arguments.count() != 0U || launch_arguments.Get(0U) != nullptr ||
+        launch_arguments.FindValue("--missing") != nullptr) {
+        return 23;
     }
     same_log.Debug("sdk_hello: debug log available");
     same_log.Info("sdk_hello: startup ABI check, service views and SDK are ready");

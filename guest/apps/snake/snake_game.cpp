@@ -15,9 +15,7 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer
       strings_(snake_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
-      scene_(renderer.CreateScene({.logical_width = renderer_info.width(),
-                                   .logical_height = renderer_info.height(),
-                                   .background = micropixel::Color::Rgb(5U, 5U, 5U)})),
+      scene_(renderer.CreateScene(micropixel::Color::Rgb(5U, 5U, 5U))),
       audio_(audio),
       best_score_(best_score),
       audio_available_(audio_available),
@@ -25,7 +23,6 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer
                                                      renderer_info.physical_width()),
                      gamekit::ScalePhysicalThreshold(kSwipeThresholdPhysicalPixels, renderer_info.height(),
                                                      renderer_info.physical_height())} {
-    screen_button_.SetBounds(kStartButtonRect);
     pause_touch_button_.SetBounds(kPauseTouchRect);
     ResetGameModel();
     ResetBodySlotMapping();
@@ -134,8 +131,6 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
             TriggerFlash(Rgb{244U, 63U, 94U}, 500000U);
             TriggerShake(true, 400000U);
             screen_ = Screen::kGameOver;
-            screen_button_.SetBounds(kRestartButtonRect);
-            screen_button_.Reset();
             app_.log().Info("snake: game over with M18 statistics and feedback");
         }
     }
@@ -144,7 +139,8 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
 
 void SnakeGame::OnTouch(const micropixel::TouchEvent& touch) {
     if (screen_ != Screen::kPlaying) {
-        const micropixel::ui::ButtonUpdate update = screen_button_.OnTouch(touch);
+        auto& button = screen_ == Screen::kGameOver ? game_over_panel_.text_button(0U) : action_button_;
+        const micropixel::ui::ButtonUpdate update = button.OnTouch(touch);
         if (update.clicked) {
             if (screen_ == Screen::kMenu) {
                 StartGame();
@@ -163,14 +159,16 @@ void SnakeGame::OnTouch(const micropixel::TouchEvent& touch) {
         return;
     }
 
-    const micropixel::ui::ButtonUpdate pause_update = pause_touch_button_.OnTouch(touch);
+    const micropixel::TouchEvent local_touch = touch.WithPosition(
+        {touch.x() - ContentOffsetX(renderer_info_.width()), touch.y() - ContentOffsetY(renderer_info_.height())});
+    const micropixel::ui::ButtonUpdate pause_update = pause_touch_button_.OnTouch(local_touch);
     if (pause_update.handled) {
         if (pause_update.clicked) {
             TogglePause();
         }
         return;
     }
-    const snake::gamekit::Gesture gesture = touch_gesture_.Update(touch);
+    const snake::gamekit::Gesture gesture = touch_gesture_.Update(local_touch);
     if (gesture.kind == snake::gamekit::GestureKind::kSwipe) {
         CommitSwipe(gesture.dx, gesture.dy);
     }
@@ -183,14 +181,11 @@ void SnakeGame::OnTouch(const micropixel::TouchEvent& touch) {
 void SnakeGame::TogglePause() {
     if (screen_ == Screen::kPlaying) {
         screen_ = Screen::kPaused;
-        screen_button_.SetBounds(kStartButtonRect);
-        screen_button_.Reset();
         pause_touch_button_.Reset();
         StopAudio();
         app_.log().Info("snake: paused; logic clock frozen");
     } else if (screen_ == Screen::kPaused) {
         screen_ = Screen::kPlaying;
-        screen_button_.Reset();
         pause_touch_button_.Reset();
         accumulated_us_ = 0U;
         PlayStartSound();
@@ -234,7 +229,6 @@ void SnakeGame::StartGame() {
     record_broken_ = false;
     logic_debt_logged_ = false;
     screen_ = Screen::kPlaying;
-    screen_button_.Reset();
     pause_touch_button_.Reset();
     PlayStartSound();
     StartBgm();

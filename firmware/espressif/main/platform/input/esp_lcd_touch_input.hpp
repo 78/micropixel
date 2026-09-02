@@ -7,6 +7,7 @@
 #include "device/contracts/input.hpp"
 #include "esp_err.h"
 #include "esp_lcd_touch.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "lvgl.h"
 #include "platform/buses/i2c_executor.hpp"
@@ -19,6 +20,7 @@ namespace micropixel::platform::input {
 class EspLcdTouchInput final : public device::Input {
    public:
     EspLcdTouchInput(int32_t width, int32_t height, uint8_t max_touch_points);
+    ~EspLcdTouchInput() override;
 
     [[nodiscard]] esp_err_t Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor);
     [[nodiscard]] esp_err_t Start(lv_display_t* display);
@@ -39,6 +41,7 @@ class EspLcdTouchInput final : public device::Input {
     void ProcessInterrupt();
     static esp_err_t PrimeEntry(void* context);
     static void IRAM_ATTR InterruptEntry(esp_lcd_touch_handle_t touch);
+    static void PollTimerExpired(void* context);
     static esp_err_t ProcessEntry(void* context);
 
     static EspLcdTouchInput* active_instance_;
@@ -49,6 +52,7 @@ class EspLcdTouchInput final : public device::Input {
     esp_lcd_touch_handle_t touch_{};
     lv_display_t* display_{};
     buses::I2cExecutor* executor_{};
+    esp_timer_handle_t poll_timer_{};
     std::atomic<uint32_t> interrupts_{};
     std::atomic<bool> work_pending_{};
     portMUX_TYPE sink_lock_ = portMUX_INITIALIZER_UNLOCKED;

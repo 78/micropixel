@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
 #include "sdk/ui/button.hpp"
@@ -63,12 +64,23 @@ void CapturedTouchCanLeaveAndReturn() {
     Check(up.clicked, "a captured touch returning before release must click");
 }
 
+void DescribesInteractionState() {
+    micropixel::ui::Button button{{100, 100, 32, 32}, 6U};
+    (void)button.OnTouch(micropixel::Application::Touch(micropixel::TouchPhase::kDown, 11U, 95, 110));
+    const auto description = button.ToString();
+    Check(std::strcmp(description.c_str(),
+                      "Button bounds=(x=100,y=100,w=32,h=32) hit_bounds=(x=94,y=94,w=44,h=44) "
+                      "enabled=true tracking=true pressed=true touch_id=11") == 0,
+          "Button::ToString must include geometry and captured touch state");
+}
+
 }  // namespace
 
 int main() {
     ExpandedHitAreaCapturesWithoutChangingVisualBounds();
     BackgroundTouchCannotRetargetOnRelease();
     CapturedTouchCanLeaveAndReturn();
-    std::cout << "guest button tests passed: 3 cases\n";
+    DescribesInteractionState();
+    std::cout << "guest button tests passed: 4 cases\n";
     return 0;
 }

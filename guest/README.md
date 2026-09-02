@@ -27,7 +27,7 @@ guest/
 
 `tests/conformance/` 保留 Event、Timer/Clock、Renderer、退出语义、watchdog 和 Service 边界
 验收。历史 S3 Guest、独立 benchmark 和编译失败样例已经移除；需要这类测试时按当前接口重写。
-完整产品应用 [`apps/snake/`](apps/snake/) 与 Demo 独立构建。
+完整产品应用 [`apps/snake/`](apps/snake/) 和 [`apps/blocks/`](apps/blocks/) 与 Demo 独立构建。
 
 所有游戏音效使用 `apps/<game>/audio/sfx.json` 作为唯一参数源，并在正式 Bundle 构建中执行感知分析门禁。
 事件层级、重复暴露、跨游戏对齐和真机 A/B 流程见
@@ -36,7 +36,10 @@ guest/
 只携带压缩 Ogg，不需要打包 WAV 或 Guest codec。
 
 日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。Manifest 用 `title` 表达 App Hall 中的用户可见名称，
-用唯一的 `sources` 数组列出所有 C++ translation unit，不再声明屏幕 profile 或重复的单数 `source`。
+用唯一的 `sources` 数组列出所有 C++ translation unit，并用 `threading` 声明 `none`（默认）或
+`shared-memory`；不再声明屏幕 profile 或重复的单数 `source`。当前 SDK 与集成 App 均使用 `none`，
+生成非共享 Wasm linear memory，使 WAMR 通过 `memory.grow` 按需扩展。Bundle 会携带该声明，Host 在加载时
+将它与 AOT target-info 的 multi-thread 特征交叉校验。
 SDK 初始化时根据物理屏幕建立短边为 720 的逻辑坐标；App 通过 `RendererInfo` 判断当前宽高和方向，
 并对不支持的布局显式 `Assert`。`localization`、
 `asset_manifest` 和 `audio/sfx.json` 是生成 Catalog、资源绑定、音效 profile、Wasm/AOT 与 Bundle 的
@@ -51,7 +54,9 @@ micropixel --transport usb run
 
 该命令默认读取当前目录的 `app.json`，完成 development 构建、停止当前 Guest、
 安装、启动和日志跟随；`Ctrl-C` 不会停止设备上的 App。只需部署并启动时使用 `micropixel run --no-follow`。
-只做本地产物时再单独使用 `micropixel build` 或 `micropixel package`。
+连接设备的 `run`/`app install` 会读取设备芯片并自动选择 AOT target。只做本地产物时可单独使用
+`micropixel build`；离线 `micropixel package` 必须显式传入 `--aot-target riscv32-ilp32f` 或
+`--aot-target xtensa`。
 
 完整产品基线仍可使用：
 
@@ -64,7 +69,8 @@ bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 分区的独立公开脚本。单 App 开发安装走 USB Local Control 或 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；
-`micropixel package` 和 `micropixel app install` 默认使用 `release`。需要显式选择时使用
+`micropixel package` 和 `micropixel app install` 默认使用 `release`。Release 使用 Clang `-Oz` 和精简的
+AOT 调用栈，但继续保留软件越界检查与内存诊断。需要显式选择时使用
 `--profile development|release|size`。链接器只允许 [`abi/allowed_imports.txt`](abi/allowed_imports.txt)
 列出的 Runtime import，拼写错误或未授权 import 会在构建阶段失败。
 

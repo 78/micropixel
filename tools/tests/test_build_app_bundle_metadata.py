@@ -2,12 +2,44 @@ import json
 import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from tools import build_app_bundle as bundle
 
 
 class PackageMetadataTests(unittest.TestCase):
+    @staticmethod
+    def png_chunk(kind: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+
+    @classmethod
+    def rgb8_png(cls, width: int, height: int, pixels: bytes) -> bytes:
+        rows = b"".join(b"\0" + pixels[row * width * 3 : (row + 1) * width * 3] for row in range(height))
+        return b"".join(
+            (
+                b"\x89PNG\r\n\x1a\n",
+                cls.png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)),
+                cls.png_chunk(b"IDAT", zlib.compress(rows)),
+                cls.png_chunk(b"IEND", b""),
+            )
+        )
+
+    def test_png_to_raw_rgb565_accepts_opaque_rgb_png(self) -> None:
+        width, height, rgba = bundle.decode_rgba8_png(
+            self.rgb8_png(2, 1, bytes((255, 0, 0, 0, 0, 255)))
+        )
+        self.assertEqual((width, height), (2, 1))
+        self.assertEqual(rgba, bytes((255, 0, 0, 255, 0, 0, 255, 255)))
+        self.assertEqual(bundle.rgba_to_raw_rgb565(rgba, None), bytes((0x00, 0xF8, 0x1F, 0x00)))
+
+    def test_rgba_to_raw_rgb565_uses_little_endian_canonical_pixels(self) -> None:
+        rgba = bytes((255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255))
+        self.assertEqual(
+            bundle.rgba_to_raw_rgb565(rgba, None),
+            bytes((0x00, 0xF8, 0xE0, 0x07, 0x1F, 0x00, 0xFF, 0xFF)),
+        )
+
     @staticmethod
     def ogg_page(
         serial: int,
@@ -98,6 +130,22 @@ class PackageMetadataTests(unittest.TestCase):
             self.assertEqual(titles.default_locale, "en")
             self.assertEqual(titles.values, {"en": "Test"})
 
+    def test_app_threading_defaults_to_none_and_validates_shared_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self.write_manifest(root, "Test")
+            self.assertEqual(bundle.load_package_manifest(path).threading, "none")
+
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["threading"] = "shared-memory"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertEqual(bundle.load_package_manifest(path).threading, "shared-memory")
+
+            value["threading"] = "pthread"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "threading must be none or shared-memory"):
+                bundle.load_package_manifest(path)
+
     def test_default_locale_requires_a_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = self.write_manifest(
@@ -151,17 +199,21 @@ class PackageMetadataTests(unittest.TestCase):
             root = Path(directory)
             rgb = root / "rgb.bin"
             argb = root / "argb.bin"
+            rgb565 = root / "rgb565.bin"
             jpeg = root / "cover.jpg"
             rgb.write_bytes(bytes(12))
             argb.write_bytes(bytes(16))
+            rgb565.write_bytes(bytes(8))
             jpeg.write_bytes(
                 b"\xff\xd8\xff\xc0\x00\x11\x08\x00\x02\x00\x02\x03" + bytes(9)
             )
 
             rgb_section = bundle.parse_asset(f"1:raw_rgb888:2:2:{rgb}")
             argb_section = bundle.parse_asset(f"2:raw_argb8888:2:2:{argb}")
+            rgb565_section = bundle.parse_asset(f"4:raw_rgb565:2:2:{rgb565}")
             self.assertEqual((rgb_section.format, rgb_section.stride), (bundle.FORMATS["raw_rgb888"], 6))
             self.assertEqual((argb_section.format, argb_section.stride), (bundle.FORMATS["raw_argb8888"], 8))
+            self.assertEqual((rgb565_section.format, rgb565_section.stride), (bundle.FORMATS["raw_rgb565"], 4))
 
             launch = bundle.InputSection(
                 rgb_section.kind,

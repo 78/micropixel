@@ -37,10 +37,12 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     if (!RemoteControlVisible() || root_ == nullptr) {
         return;
     }
+    remote_control_scroll_ = nullptr;
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
     Header(layout_, root_, "Remote Control", "Service and temporary connection code", RemoteControlBackEvent, this);
     lv_obj_t* scroll = Scroll(layout_, root_, ScrollEvent, this);
+    remote_control_scroll_ = scroll;
 
     lv_obj_t* status = Panel(layout_, scroll, 0);
     lv_obj_t* status_heading = square_common::CreateSystemColumn(status, 0);
@@ -58,8 +60,10 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
     (void)Label(status_heading, RemoteState(remote_control_model_.connection_state),
                 platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    InformationRow(layout_, status, "Service",
-                   remote_control_model_.service[0] != '\0' ? remote_control_model_.service.data() : "Not configured");
+    lv_obj_t* service_row = square_common::CreateSystemInformationRow(
+        status, layout_, "Service",
+        remote_control_model_.service[0] != '\0' ? remote_control_model_.service.data() : "Not configured");
+    lv_obj_set_style_border_width(service_row, 0, 0);
 
     lv_obj_t* pairing = Panel(layout_, scroll);
     (void)Label(pairing, "Connect this device", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
@@ -102,6 +106,10 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     if (remote_control_off_confirmation_visible_) {
         DrawRemoteControlOffConfirmationLocked();
     }
+    lv_obj_update_layout(scroll);
+    lv_obj_scroll_to_y(scroll, remote_control_scroll_offset_, LV_ANIM_OFF);
+    remote_control_scroll_gesture_active_ = false;
+    remote_control_render_pending_ = false;
     lv_obj_move_foreground(root_);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(root_));
 }
@@ -111,6 +119,10 @@ void SystemDetailUi::UpdateRemoteControlLocked(const host_ui::RemoteControlModel
         remote_control_model_ = model;
         if (!model.enabled) {
             remote_control_off_confirmation_visible_ = false;
+        }
+        if (remote_control_scroll_gesture_active_) {
+            remote_control_render_pending_ = true;
+            return;
         }
         RenderRemoteControlLocked();
     }
@@ -181,6 +193,10 @@ void SystemDetailUi::RemoteControlConfirmOffEvent(lv_event_t* event) {
 void SystemDetailUi::RemoteControlRenderAsync(void* context) {
     auto* ui = static_cast<SystemDetailUi*>(context);
     if (ui != nullptr && ui->RemoteControlVisible()) {
+        if (ui->remote_control_scroll_gesture_active_) {
+            ui->remote_control_render_pending_ = true;
+            return;
+        }
         ui->RenderRemoteControlLocked();
     }
 }

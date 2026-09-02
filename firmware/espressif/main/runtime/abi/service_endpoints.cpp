@@ -294,7 +294,9 @@ int32_t PowerInfoServiceEndpoint::Call(uint32_t method_id, const uint8_t* reques
                                                          response_size_out);
 }
 
-SystemServiceEndpoint::SystemServiceEndpoint(std::string_view effective_locale) {
+SystemServiceEndpoint::SystemServiceEndpoint(std::string_view effective_locale,
+                                             const micropixel_system_launch_arguments_response_t& launch_arguments)
+    : launch_arguments_(launch_arguments) {
     if (effective_locale.empty() || effective_locale.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES) {
         effective_locale = "en";
     }
@@ -308,23 +310,26 @@ ServiceDescriptor SystemServiceEndpoint::Describe() const {
         .interface_major = MICROPIXEL_SYSTEM_INTERFACE_MAJOR,
         .interface_minor = MICROPIXEL_SYSTEM_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL,
-        .max_response_bytes = sizeof(micropixel_system_locale_response_t),
+        .max_response_bytes = sizeof(micropixel_system_launch_arguments_response_t),
     };
 }
 
 int32_t SystemServiceEndpoint::Call(uint32_t method_id, const uint8_t*, uint32_t request_size, uint8_t* response,
                                     uint32_t response_capacity, uint32_t& response_size_out) {
-    if (method_id != MICROPIXEL_SYSTEM_METHOD_GET_LOCALE) {
-        return MICROPIXEL_STATUS_UNSUPPORTED;
-    }
     if (!EmptyRequest(request_size)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    micropixel_system_locale_response_t locale{};
-    locale.size = sizeof(locale);
-    locale.tag_length = effective_locale_length_;
-    std::memcpy(locale.tag, effective_locale_.data(), effective_locale_length_);
-    return WriteValue(locale, response, response_capacity, response_size_out);
+    if (method_id == MICROPIXEL_SYSTEM_METHOD_GET_LOCALE) {
+        micropixel_system_locale_response_t locale{};
+        locale.size = sizeof(locale);
+        locale.tag_length = effective_locale_length_;
+        std::memcpy(locale.tag, effective_locale_.data(), effective_locale_length_);
+        return WriteValue(locale, response, response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_SYSTEM_METHOD_GET_LAUNCH_ARGUMENTS) {
+        return WriteValue(launch_arguments_, response, response_capacity, response_size_out);
+    }
+    return MICROPIXEL_STATUS_UNSUPPORTED;
 }
 
 ServiceDescriptor TimerServiceEndpoint::Describe() const {

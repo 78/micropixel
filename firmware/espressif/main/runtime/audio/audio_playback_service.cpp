@@ -40,8 +40,15 @@ AudioPlaybackService::AudioPlaybackService(const micropixel_aot_package_t& packa
         playbacks_[index].owner = this;
         playbacks_[index].ring = ring_storage_ + index * kRingFrames;
     }
-    if (xTaskCreatePinnedToCore(WorkerEntry, "micropixel_opus", kWorkerStackBytes, this,
-                                task_policy::kAudioDecodePriority, &worker_, kWorkerCore) != pdPASS) {
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    const BaseType_t task_created = xTaskCreatePinnedToCoreWithCaps(WorkerEntry, "micropixel_opus", kWorkerStackBytes,
+                                                                    this, task_policy::kAudioDecodePriority, &worker_,
+                                                                    kWorkerCore, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    const BaseType_t task_created = xTaskCreatePinnedToCore(WorkerEntry, "micropixel_opus", kWorkerStackBytes, this,
+                                                            task_policy::kAudioDecodePriority, &worker_, kWorkerCore);
+#endif
+    if (task_created != pdPASS) {
         worker_ = nullptr;
         return;
     }
@@ -508,7 +515,11 @@ void AudioPlaybackService::WorkerLoop() {
         }
     }
     (void)xSemaphoreGive(worker_stopped_);
-    vTaskDelete(nullptr);
+    // Shutdown owns deletion so a task created with explicit PSRAM stack caps
+    // is destroyed through the matching API. Self-deleting with vTaskDelete()
+    // only releases the FreeRTOS task object; it leaks the separately allocated
+    // WithCaps stack and TCB on every AppSession.
+    vTaskSuspend(nullptr);
 }
 
 void AudioPlaybackService::Shutdown() {
@@ -531,6 +542,11 @@ void AudioPlaybackService::Shutdown() {
     if (worker_ != nullptr) {
         xTaskNotifyGive(worker_);
         (void)xSemaphoreTake(worker_stopped_, portMAX_DELAY);
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+        vTaskDeleteWithCaps(worker_);
+#else
+        vTaskDelete(worker_);
+#endif
         worker_ = nullptr;
     }
     for (ClipSlot& clip : clips_) {

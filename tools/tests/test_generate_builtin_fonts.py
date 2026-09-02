@@ -20,6 +20,7 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
                 {"role": "large", "size": 24},
                 {"role": "title", "size": 32},
             ],
+            "supplemental_sizes": [10, 12, 16, 20, 26],
         }
 
     def test_profile_has_exact_builtin_latin_v1_coverage(self):
@@ -53,6 +54,12 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             generate_builtin_fonts.validate_profile(profile)
 
+    def test_rejects_duplicate_supplemental_size(self):
+        profile = self.profile()
+        profile["supplemental_sizes"] = [12, 14]
+        with self.assertRaises(ValueError):
+            generate_builtin_fonts.validate_profile(profile)
+
     def test_finds_implicit_lvgl_widget_symbols(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -68,6 +75,19 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
             self.assertEqual(requirements, {"LV_SYMBOL_DOWN": 0xF078})
             with self.assertRaisesRegex(ValueError, "LV_SYMBOL_DOWN=U\\+F078"):
                 generate_builtin_fonts.validate_lvgl_symbol_coverage(requirements, {0x20})
+
+    def test_finds_guest_sdk_symbols(self):
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "symbols.hpp"
+            source.write_text(
+                'inline constexpr char kLeft[] = "\\xEF\\x81\\x93"; // U+F053\n'
+                'inline constexpr char kUp[] = "\\xEF\\x81\\xB7"; // U+F077\n',
+                encoding="utf-8",
+            )
+            requirements = generate_builtin_fonts.sdk_symbol_requirements(source)
+            self.assertEqual(requirements, {"kLeft": 0xF053, "kUp": 0xF077})
+            with self.assertRaisesRegex(ValueError, "kUp=U\\+F077"):
+                generate_builtin_fonts.validate_sdk_symbol_coverage(requirements, {0xF053})
 
     def test_repository_profile_covers_host_and_default_widget_symbols(self):
         root = Path(__file__).resolve().parents[2]
@@ -86,6 +106,10 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         )
         generate_builtin_fonts.validate_lvgl_symbol_coverage(
             requirements, generate_builtin_fonts.requested_codepoints(profile)
+        )
+        sdk_requirements = generate_builtin_fonts.sdk_symbol_requirements(root / "guest/sdk/symbols.hpp")
+        generate_builtin_fonts.validate_sdk_symbol_coverage(
+            sdk_requirements, generate_builtin_fonts.requested_codepoints(profile)
         )
 
 

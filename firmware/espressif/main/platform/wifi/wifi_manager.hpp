@@ -49,6 +49,7 @@ class WifiManager final : public device::Wifi {
     enum class ScanPurpose : uint8_t {
         kNone,
         kDiscovery,
+        kDiscoveryFull,
         kUser,
     };
 
@@ -68,11 +69,25 @@ class WifiManager final : public device::Wifi {
         uint8_t auth_mode{0xffU};
     };
 
+    struct ColdState final {
+        std::array<SavedProfile, device::kMaxSavedWifiNetworks> profiles{};
+        SavedProfile pending_profile{};
+        std::array<ScanResult, device::kMaxVisibleWifiNetworks> scan_results{};
+        std::array<uint8_t, device::kMaxSavedWifiNetworks> discovery_channels{};
+        device::WifiSnapshot snapshot{};
+    };
+
+    struct ColdStateDeleter final {
+        void operator()(ColdState* value) const;
+    };
+
     static void WifiEventHandler(void* context, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void DiscoveryTimerHandler(void* context);
     static void RadioStartupEntry(void* context);
     static void SaveSettingsEntry(void* context);
     [[nodiscard]] std::expected<void, device::WifiError> FinishInitialize();
+    [[nodiscard]] esp_err_t InitializeDriver();
+    [[nodiscard]] esp_err_t ReleaseDriver();
     void HandleWifiEvent(int32_t event_id, void* event_data);
     void HandleGotIp();
     void HandleScanDone();
@@ -95,6 +110,8 @@ class WifiManager final : public device::Wifi {
     void RebuildSnapshotLocked();
     void UpdateScanResultsLocked(const void* records, uint16_t count);
     void MergeDiscoveryScanResultsLocked(const void* records, uint16_t count);
+    [[nodiscard]] ColdState& Cold() { return *cold_state_; }
+    [[nodiscard]] const ColdState& Cold() const { return *cold_state_; }
 
     mutable SemaphoreHandle_t mutex_{};
     mutable SemaphoreHandle_t persistence_mutex_{};
@@ -107,11 +124,7 @@ class WifiManager final : public device::Wifi {
     esp_event_handler_instance_t wifi_event_instance_{};
     esp_event_handler_instance_t ip_event_instance_{};
     std::unique_ptr<std::byte, HeapCapsDeleter> scan_record_workspace_{};
-    std::array<SavedProfile, device::kMaxSavedWifiNetworks> profiles_{};
-    SavedProfile pending_profile_{};
-    std::array<ScanResult, device::kMaxVisibleWifiNetworks> scan_results_{};
-    std::array<uint8_t, device::kMaxSavedWifiNetworks> discovery_channels_{};
-    device::WifiSnapshot snapshot_{};
+    std::unique_ptr<ColdState, ColdStateDeleter> cold_state_{};
     uint32_t profile_count_{};
     uint32_t scan_result_count_{};
     uint32_t discovery_channel_count_{};
@@ -125,6 +138,7 @@ class WifiManager final : public device::Wifi {
     bool initialization_started_{};
     bool radio_startup_task_started_{};
     bool initialized_{};
+    bool driver_initialized_{};
     bool enabled_{true};
     bool associated_{};
     bool user_requested_disconnect_{};

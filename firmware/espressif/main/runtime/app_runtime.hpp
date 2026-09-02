@@ -60,8 +60,9 @@ class AppRuntime final {
         device::DeviceServices& devices, work::BackgroundExecutor& background_executor,
         std::string_view effective_locale, GuestLogSink* log_sink = nullptr);
     [[nodiscard]] bool SetEffectiveLocale(std::string_view effective_locale);
-    [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app, AppSessionReadySink ready_sink = nullptr,
-                                       void* ready_context = nullptr);
+    [[nodiscard]] AppRunOutcome RunApp(const InstalledApp& app,
+                                       const micropixel_system_launch_arguments_response_t& launch_arguments,
+                                       AppSessionReadySink ready_sink = nullptr, void* ready_context = nullptr);
     [[nodiscard]] bool RequestSuspend(TickType_t timeout);
     [[nodiscard]] bool RequestResume();
     [[nodiscard]] bool RequestStop();

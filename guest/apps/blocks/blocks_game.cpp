@@ -21,28 +21,11 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
       strings_(blocks_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
-      scene_(renderer.CreateScene({.logical_width = renderer_info.width(),
-                                   .logical_height = renderer_info.height(),
-                                   .background = micropixel::Color::Rgb(5U, 5U, 5U)})),
+      scene_(renderer.CreateScene(micropixel::Color::Rgb(5U, 5U, 5U))),
       audio_(audio),
       best_score_(best_score),
       audio_available_(audio_available) {
-    screen_button_.SetBounds(kStartButtonRect);
     model_.Reset(kDefaultRandomSeed);
-}
-
-void BlocksGame::set_textures(micropixel::Texture board, micropixel::Texture start, micropixel::Texture restart) {
-    micropixel::Assert(board.width() == static_cast<uint32_t>(kBoardAssetWidth) &&
-                           board.height() == static_cast<uint32_t>(kBoardAssetHeight),
-                       "blocks: board texture dimensions invalid");
-    micropixel::Assert(start.width() == static_cast<uint32_t>(kActionButtonWidth) &&
-                           start.height() == static_cast<uint32_t>(kActionButtonHeight) &&
-                           restart.width() == static_cast<uint32_t>(kActionButtonWidth) &&
-                           restart.height() == static_cast<uint32_t>(kActionButtonHeight),
-                       "blocks: button texture dimensions invalid");
-    board_texture_ = static_cast<micropixel::Texture&&>(board);
-    start_button_texture_ = static_cast<micropixel::Texture&&>(start);
-    restart_button_texture_ = static_cast<micropixel::Texture&&>(restart);
     InitializePlayfieldSurfaces();
 }
 
@@ -53,7 +36,6 @@ void BlocksGame::StartNewGame() {
     clear_effect_remaining_us_ = 0U;
     clear_rows_mask_ = 0U;
     clear_points_ = 0U;
-    screen_button_.Reset();
     ResetGesture();
     ClearAudioQueue();
     PlayStartSound();
@@ -62,8 +44,6 @@ void BlocksGame::StartNewGame() {
 
 void BlocksGame::EnterPause() {
     screen_ = Screen::kPaused;
-    screen_button_.SetBounds(kStartButtonRect);
-    screen_button_.Reset();
     ResetGesture();
     Render();
 }
@@ -71,7 +51,6 @@ void BlocksGame::EnterPause() {
 void BlocksGame::ResumeGame() {
     screen_ = Screen::kPlaying;
     gravity_accumulated_us_ = 0U;
-    screen_button_.Reset();
     ResetGesture();
     PlayStartSound();
     Render();
@@ -79,8 +58,6 @@ void BlocksGame::ResumeGame() {
 
 void BlocksGame::EnterGameOver() {
     screen_ = Screen::kGameOver;
-    screen_button_.SetBounds(kRestartButtonRect);
-    screen_button_.Reset();
     ResetGesture();
     if (model_.score() > best_score_) {
         best_score_ = model_.score();
@@ -148,6 +125,7 @@ void BlocksGame::OnTimer(const micropixel::TimerEvent& tick) {
 void BlocksGame::ResetGesture() {
     gesture_active_ = false;
     gesture_moved_ = false;
+    gesture_axis_ = GestureAxis::kUndecided;
     gesture_started_in_pause_ = false;
     gesture_started_in_hold_ = false;
     gesture_touch_id_ = 0U;
@@ -160,6 +138,7 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
         }
         gesture_active_ = true;
         gesture_moved_ = false;
+        gesture_axis_ = GestureAxis::kUndecided;
         gesture_touch_id_ = touch.id();
         gesture_start_x_ = touch.x();
         gesture_start_y_ = touch.y();
@@ -178,12 +157,15 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
     const int32_t total_dy = static_cast<int32_t>(touch.y()) - gesture_start_y_;
     const uint64_t elapsed_us = touch.timestamp().microseconds() - gesture_started_us_;
     if (touch.phase() == micropixel::TouchPhase::kMove) {
+        if (gesture_axis_ == GestureAxis::kUndecided) {
+            gesture_axis_ = ClassifyGestureAxis(total_dx, total_dy);
+        }
         int32_t dx = static_cast<int32_t>(touch.x()) - gesture_anchor_x_;
         int32_t dy = static_cast<int32_t>(touch.y()) - gesture_anchor_y_;
         bool played_move_sound = false;
         bool visual_changed = false;
         bool interface_changed = false;
-        while (AbsoluteValue(dx) >= kCellPitch && AbsoluteValue(dx) > AbsoluteValue(dy)) {
+        while (gesture_axis_ == GestureAxis::kHorizontal && AbsoluteValue(dx) >= kCellPitch) {
             const int32_t direction = dx < 0 ? -1 : 1;
             if (model_.MoveHorizontal(direction)) {
                 gesture_moved_ = true;
@@ -196,7 +178,7 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
             gesture_anchor_x_ += direction * kCellPitch;
             dx = static_cast<int32_t>(touch.x()) - gesture_anchor_x_;
         }
-        while (dy >= kCellPitch && AbsoluteValue(dy) > AbsoluteValue(dx)) {
+        while (gesture_axis_ == GestureAxis::kVertical && dy >= kCellPitch) {
             const LockOutcome outcome = model_.SoftDrop();
             gesture_moved_ = true;
             HandleOutcome(outcome);
@@ -228,7 +210,8 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
         return;
     }
 
-    const bool hard_drop = IsHardDropGesture(total_dx, total_dy, elapsed_us);
+    const bool hard_drop = gesture_axis_ != GestureAxis::kHorizontal &&
+                           IsHardDropGesture(total_dx, total_dy, elapsed_us);
     const bool was_moved = gesture_moved_;
     const bool started_in_pause = gesture_started_in_pause_;
     const bool started_in_hold = gesture_started_in_hold_;
@@ -271,7 +254,8 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
 
 void BlocksGame::OnTouch(const micropixel::TouchEvent& touch) {
     if (screen_ != Screen::kPlaying) {
-        const micropixel::ui::ButtonUpdate update = screen_button_.OnTouch(touch);
+        auto& button = screen_ == Screen::kGameOver ? game_over_panel_.text_button(0U) : action_button_;
+        const micropixel::ui::ButtonUpdate update = button.OnTouch(touch);
         if (update.clicked) {
             if (screen_ == Screen::kMenu || screen_ == Screen::kGameOver) {
                 StartNewGame();
@@ -284,7 +268,8 @@ void BlocksGame::OnTouch(const micropixel::TouchEvent& touch) {
         return;
     }
 
-    HandlePlayGesture(touch);
+    HandlePlayGesture(touch.WithPosition(
+        {touch.x() - ContentOffsetX(renderer_info_.width()), touch.y() - ContentOffsetY(renderer_info_.height())}));
 }
 
 }  // namespace blocks

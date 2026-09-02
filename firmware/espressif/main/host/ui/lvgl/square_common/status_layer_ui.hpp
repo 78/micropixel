@@ -52,7 +52,7 @@ class StatusLayerUi final {
         Bounds quick[3]{};
         Bounds sliders[2]{};
         Bounds metrics[3]{};
-        Bounds performance_overlay{};
+        int32_t performance_overlay_y{};
         int32_t panel_radius{};
         int32_t dialog_radius{};
         int32_t dialog_border_width{};
@@ -72,7 +72,6 @@ class StatusLayerUi final {
         int32_t metric_track_x{};
         int32_t metric_track_y{};
         int32_t metric_track_height{};
-        int32_t performance_label_y{};
         platform::lvgl::SystemFontRole quick_name_font{};
         platform::lvgl::SystemFontRole quick_detail_font{};
         platform::lvgl::SystemFontRole control_font{};

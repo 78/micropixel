@@ -65,8 +65,9 @@ class LocalControlAgent final {
     [[nodiscard]] bool PollResponse(char* response, size_t capacity);
     [[nodiscard]] bool HandleHostResult(const control::HostResult& result);
     [[nodiscard]] bool QueueResponse(uint32_t request_id, const char* status, const char* detail);
-    [[nodiscard]] bool QueueHostCommand(uint32_t request_id, control::HostCommandType type,
-                                        std::string_view app_id = {});
+    [[nodiscard]] bool QueueHostCommand(
+        uint32_t request_id, control::HostCommandType type, std::string_view app_id = {},
+        const micropixel_system_launch_arguments_response_t* launch_arguments = nullptr);
     void HandleAppList(uint32_t request_id, std::string_view arguments);
     void HandleAppLastError(uint32_t request_id, std::string_view arguments);
     void HandleLogRead(uint32_t request_id, std::string_view arguments);

@@ -53,11 +53,11 @@ source "$idf_root/export.sh" >/dev/null 2>&1
 if $configure; then
     IDF_TOOLCHAIN=clang idf.py -C "$firmware_dir" -B "$product_build_dir" \
         -D SDKCONFIG="$product_build_dir/sdkconfig.style" \
-        -D SDKCONFIG_DEFAULTS="$firmware_dir/sdkconfig.p4.defaults" \
+        -D SDKCONFIG_DEFAULTS="$firmware_dir/sdkconfig.defaults;$firmware_dir/sdkconfig.p4.defaults" \
         -D IDF_TARGET=esp32p4 reconfigure
     IDF_TOOLCHAIN=clang idf.py -C "$firmware_dir" -B "$conformance_build_dir" \
         -D SDKCONFIG="$conformance_build_dir/sdkconfig.style" \
-        -D SDKCONFIG_DEFAULTS="$firmware_dir/sdkconfig.p4.defaults;$firmware_dir/sdkconfig.p4-conformance.defaults" \
+        -D SDKCONFIG_DEFAULTS="$firmware_dir/sdkconfig.defaults;$firmware_dir/sdkconfig.p4.defaults;$firmware_dir/sdkconfig.p4-conformance.defaults" \
         -D IDF_TARGET=esp32p4 reconfigure
 fi
 

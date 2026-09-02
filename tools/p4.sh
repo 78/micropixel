@@ -40,13 +40,14 @@ if [[ -n "$remote_control_ca_override" ]]; then
 fi
 
 firmware_dir="$workspace_root/firmware/espressif"
+common_max_task_name_len="$(sed -n 's/^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=//p' "$firmware_dir/sdkconfig.defaults")"
 host_build_dir="${P4_HOST_BUILD_DIR:-$workspace_root/build/host-esp32p4}"
 system_shell_output_dir="${P4_SYSTEM_SHELL_OUTPUT_DIR:-$workspace_root/build/system-shell-p4}"
 example_app_store_image="$system_shell_output_dir/app-store.bin"
 release_app_store_image="$system_shell_output_dir/app-store-release.bin"
 idf_environment_cache="$workspace_root/build/p4-idf-environment.sh"
 sdkconfig_path="${P4_SDKCONFIG:-$host_build_dir/sdkconfig.release}"
-sdkconfig_defaults="${P4_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.p4.defaults}"
+sdkconfig_defaults="${P4_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.defaults;$firmware_dir/sdkconfig.p4.defaults}"
 host_config_prepared=false
 
 usage() {
@@ -76,7 +77,7 @@ Normal development commands:
 Explicit full/destructive commands:
   fullclean-host                     Delete the Host build cache with idf.py fullclean.
   flash-all [PORT]                   Build and flash the Host, then clear and flash
-                                     seven example Apps. Run no tests.
+                                     eight example Apps. Run no tests.
   reset-app-store [PORT]             Recovery only: clear app_store to an EMPTY Catalog.
   install-apps-examples              Non-USB alternative: install examples through
                                      Remote Control while preserving other Apps.
@@ -253,8 +254,8 @@ prepare_host_config() {
         updated="$(mktemp "${sdkconfig_path}.XXXXXX")"
         awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
-            -v lv_mem_size_kib="$lv_mem_size_kib" '
-            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_lv_examples = 0; saw_lv_demos = 0; saw_pm = 0; saw_pm_dfs = 0; saw_freertos_hz = 0; saw_freertos_tickless = 0 }
+            -v lv_mem_size_kib="$lv_mem_size_kib" -v max_task_name_len="$common_max_task_name_len" '
+            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0; saw_hw_ecdsa = 0; saw_cert_bundle = 0; saw_ota_rollback = 0; saw_lv_mem_size = 0; saw_lv_mem_expand = 0; saw_lv_examples = 0; saw_lv_demos = 0; saw_pm = 0; saw_pm_dfs = 0; saw_freertos_hz = 0; saw_freertos_tickless = 0; saw_max_task_name_len = 0 }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
@@ -336,6 +337,11 @@ prepare_host_config() {
                 saw_freertos_hz = 1
                 next
             }
+            /^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=/ {
+                print "CONFIG_FREERTOS_MAX_TASK_NAME_LEN=" max_task_name_len
+                saw_max_task_name_len = 1
+                next
+            }
             /^CONFIG_FREERTOS_USE_TICKLESS_IDLE=/ || /^# CONFIG_FREERTOS_USE_TICKLESS_IDLE is not set$/ {
                 print "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
                 saw_freertos_tickless = 1
@@ -362,6 +368,7 @@ prepare_host_config() {
                 if (!saw_pm_dfs) print "CONFIG_PM_DFS_INIT_AUTO=y"
                 if (!saw_freertos_hz) print "CONFIG_FREERTOS_HZ=1000"
                 if (!saw_freertos_tickless) print "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
+                if (!saw_max_task_name_len) print "CONFIG_FREERTOS_MAX_TASK_NAME_LEN=" max_task_name_len
             }
         ' "$sdkconfig_path" >"$updated"
         if ! cmp -s "$updated" "$sdkconfig_path"; then
@@ -405,7 +412,7 @@ build_null() {
     require_idf
     host_build_dir="${P4_NULL_HOST_BUILD_DIR:-$workspace_root/build/host-esp32p4-null}"
     sdkconfig_path="$host_build_dir/sdkconfig.release"
-    sdkconfig_defaults="$firmware_dir/sdkconfig.p4.defaults;$firmware_dir/sdkconfig.p4-null.defaults"
+    sdkconfig_defaults="$firmware_dir/sdkconfig.defaults;$firmware_dir/sdkconfig.p4.defaults;$firmware_dir/sdkconfig.p4-null.defaults"
     echo "==> Null board compile gate (separate build; never flashed)"
     idf_host p4-null build
 }
@@ -417,6 +424,7 @@ build_app_package() {
 
     python3 "$workspace_root/tools/micropixel" package "$app_dir" \
         --profile "${MICROPIXEL_GUEST_PROFILE:-release}" \
+        --aot-target riscv32-ilp32f \
         --output-dir "$app_build_dir" \
         --output "$app_build_dir/$app_name.bundle.bin"
 }
@@ -537,7 +545,7 @@ write_app_store_image() {
 }
 
 build_all() {
-    echo "==> Building Host + seven example Apps + App Store image (no tests, no flash)"
+    echo "==> Building Host + eight example Apps + App Store image (no tests, no flash)"
     build_example_apps
     build_host
     create_example_app_store_image
@@ -548,7 +556,7 @@ build_all() {
         echo "App Store image is larger than app_store ($image_size > $partition_size)." >&2
         return 2
     fi
-    echo "==> App Store image ready: $example_app_store_image (7 Apps)"
+    echo "==> App Store image ready: $example_app_store_image (8 Apps)"
 }
 
 flash_all() {
@@ -559,11 +567,11 @@ flash_all() {
     port="$(resolve_port "$requested_port")"
     echo "==> Flashing Host at $baud baud"
     idf_host metalio-claw4 flash --baud "$baud" --port "$port"
-    echo "==> Clearing app_store and flashing seven example Apps"
+    echo "==> Clearing app_store and flashing eight example Apps"
     write_app_store_image "$port" "$example_app_store_image" true
     python "$workspace_root/tools/capture_serial_until.py" \
         "$port" "System Shell ready: App Hall rendered" --timeout 30 --reset
-    echo "System Shell P4 flashed and verified on $port with seven Apps."
+    echo "System Shell P4 flashed and verified on $port with eight Apps."
 }
 
 install_bundle() {

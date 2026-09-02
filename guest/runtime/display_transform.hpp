@@ -131,13 +131,6 @@ struct LogicalInsets final {
     return ScaleCoordinate(value, transform.physical_height, transform.logical_height);
 }
 
-// System font handles are ordered small..title. The physical Host font is
-// selected here so MeasureText() and retained Label serialization use the same
-// logical metrics on lower-density displays.
-[[nodiscard]] constexpr uint16_t MapSystemFont(uint16_t font, const DisplayTransform& transform) {
-    return transform.scale_numerator < transform.scale_denominator && font > 1U && font <= 4U ? font - 1U : font;
-}
-
 // The process-wide display context is initialized by Application and remains
 // immutable for the lifetime of a Guest instance.
 [[nodiscard]] const DisplayTransform& CurrentDisplayTransform();

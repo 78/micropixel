@@ -38,9 +38,10 @@ if [[ -n "$remote_control_ca_override" ]]; then
 fi
 
 firmware_dir="$workspace_root/firmware/espressif"
+common_max_task_name_len="$(sed -n 's/^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=//p' "$firmware_dir/sdkconfig.defaults")"
 host_build_dir="${S31_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s31-mosaico}"
 sdkconfig_path="${S31_SDKCONFIG:-$host_build_dir/sdkconfig.release}"
-sdkconfig_defaults="${S31_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.s31.defaults}"
+sdkconfig_defaults="${S31_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.defaults;$firmware_dir/sdkconfig.s31.defaults}"
 system_shell_output_dir="${S31_SYSTEM_SHELL_OUTPUT_DIR:-$workspace_root/build/system-shell-s31}"
 release_app_store_image="$system_shell_output_dir/app-store-release.bin"
 host_config_prepared=false
@@ -148,6 +149,10 @@ prepare_host_config() {
         fi
         printf 'CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64="%s"\n' "$trusted_ca"
         printf '# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set\n'
+        printf 'CONFIG_PM_ENABLE=y\n'
+        printf '# CONFIG_PM_DFS_INIT_AUTO is not set\n'
+        printf 'CONFIG_FREERTOS_USE_TICKLESS_IDLE=y\n'
+        printf 'CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y\n'
     } >"$env_defaults_updated"
     if [[ ! -f "$env_defaults" ]] || ! cmp -s "$env_defaults_updated" "$env_defaults"; then
         mv "$env_defaults_updated" "$env_defaults"
@@ -158,14 +163,19 @@ prepare_host_config() {
     export S31_SDKCONFIG_DEFAULTS="$sdkconfig_defaults"
 
     # Kconfig defaults do not replace values already materialized in the
-    # incremental build directory. Refresh only the machine-local Remote
-    # Control fields so changing .env takes effect without a fullclean.
+    # incremental build directory. Refresh machine-local Remote Control fields
+    # and the S31 performance/power baseline without requiring a fullclean.
     if [[ -f "$sdkconfig_path" ]]; then
         local updated
         updated="$(mktemp "${sdkconfig_path}.XXXXXX")"
         awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
-            -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" '
-            BEGIN { saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0 }
+            -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
+            -v max_task_name_len="$common_max_task_name_len" '
+            BEGIN {
+                saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0
+                saw_pm = 0; saw_pm_dfs = 0; saw_tickless = 0; saw_wifi_lwip_psram = 0
+                saw_main_stack = 0; saw_max_task_name_len = 0
+            }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 saw_host = 1
@@ -193,6 +203,36 @@ prepare_host_config() {
                 saw_cert_time = 1
                 next
             }
+            /^CONFIG_PM_ENABLE=/ || /^# CONFIG_PM_ENABLE is not set$/ {
+                print "CONFIG_PM_ENABLE=y"
+                saw_pm = 1
+                next
+            }
+            /^CONFIG_PM_DFS_INIT_AUTO=/ || /^# CONFIG_PM_DFS_INIT_AUTO is not set$/ {
+                print "# CONFIG_PM_DFS_INIT_AUTO is not set"
+                saw_pm_dfs = 1
+                next
+            }
+            /^CONFIG_FREERTOS_USE_TICKLESS_IDLE=/ || /^# CONFIG_FREERTOS_USE_TICKLESS_IDLE is not set$/ {
+                print "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
+                saw_tickless = 1
+                next
+            }
+            /^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=/ {
+                print "CONFIG_FREERTOS_MAX_TASK_NAME_LEN=" max_task_name_len
+                saw_max_task_name_len = 1
+                next
+            }
+            /^CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=/ || /^# CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP is not set$/ {
+                print "CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y"
+                saw_wifi_lwip_psram = 1
+                next
+            }
+            /^CONFIG_ESP_MAIN_TASK_STACK_SIZE=/ {
+                print "CONFIG_ESP_MAIN_TASK_STACK_SIZE=14336"
+                saw_main_stack = 1
+                next
+            }
             { print }
             END {
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
@@ -203,6 +243,12 @@ prepare_host_config() {
                 }
                 if (!saw_ca) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64=\"" trusted_ca "\""
                 if (!saw_cert_time) print "# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set"
+                if (!saw_pm) print "CONFIG_PM_ENABLE=y"
+                if (!saw_pm_dfs) print "# CONFIG_PM_DFS_INIT_AUTO is not set"
+                if (!saw_tickless) print "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
+                if (!saw_wifi_lwip_psram) print "CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y"
+                if (!saw_main_stack) print "CONFIG_ESP_MAIN_TASK_STACK_SIZE=14336"
+                if (!saw_max_task_name_len) print "CONFIG_FREERTOS_MAX_TASK_NAME_LEN=" max_task_name_len
             }
         ' "$sdkconfig_path" >"$updated"
         if ! cmp -s "$updated" "$sdkconfig_path"; then
@@ -235,6 +281,7 @@ build_app_package() {
 
     python3 "$workspace_root/tools/micropixel" package "$app_dir" \
         --profile "${MICROPIXEL_GUEST_PROFILE:-release}" \
+        --aot-target riscv32-ilp32f \
         --output-dir "$app_build_dir" \
         --output "$app_build_dir/$app_name.bundle.bin"
 }

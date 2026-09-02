@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "sdk/event.hpp"
+#include "sdk/fixed_string.hpp"
 #include "sdk/graphics.hpp"
 
 namespace micropixel::ui {
@@ -18,8 +19,28 @@ struct ButtonUpdate final {
     [[nodiscard]] constexpr bool redraw() const { return visual_changed || clicked; }
 };
 
+// Labels use a centered x anchor, while y is the top of the complete line
+// box. Keeping this calculation beside the headless interaction primitive
+// lets every visual Button variant share identical two-axis centering.
+[[nodiscard]] inline Result<Point> CenteredLabelPosition(Rect bounds, const TextMetrics& metrics) {
+    if (bounds.empty() || metrics.width == 0U || metrics.height == 0U ||
+        metrics.width > static_cast<uint32_t>(bounds.width) || metrics.height > static_cast<uint32_t>(bounds.height) ||
+        metrics.height > static_cast<uint32_t>(INT32_MAX)) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    const int64_t center_x = static_cast<int64_t>(bounds.x) + bounds.width / 2;
+    const int64_t top = static_cast<int64_t>(bounds.y) +
+                        (static_cast<int64_t>(bounds.height) - static_cast<int64_t>(metrics.height)) / 2;
+    if (center_x < INT32_MIN || center_x > INT32_MAX || top < INT32_MIN || top > INT32_MAX) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    return Point{static_cast<int32_t>(center_x), static_cast<int32_t>(top)};
+}
+
 class Button final {
    public:
+    static constexpr uint32_t kDiagnosticBytes = 256U;
+
     constexpr Button() = default;
     explicit constexpr Button(Rect bounds, uint16_t hit_padding = 0U) : bounds_(bounds), hit_padding_(hit_padding) {}
 
@@ -92,6 +113,35 @@ class Button final {
     [[nodiscard]] constexpr bool enabled() const { return enabled_; }
     [[nodiscard]] constexpr bool tracking() const { return tracking_; }
     [[nodiscard]] constexpr bool pressed() const { return pressed_; }
+    [[nodiscard]] FixedString<kDiagnosticBytes> ToString() const {
+        FixedString<kDiagnosticBytes> description;
+        const Rect hit = hit_bounds();
+        description.Append("Button bounds=(x=");
+        description.AppendInt(bounds_.x);
+        description.Append(",y=");
+        description.AppendInt(bounds_.y);
+        description.Append(",w=");
+        description.AppendInt(bounds_.width);
+        description.Append(",h=");
+        description.AppendInt(bounds_.height);
+        description.Append(") hit_bounds=(x=");
+        description.AppendInt(hit.x);
+        description.Append(",y=");
+        description.AppendInt(hit.y);
+        description.Append(",w=");
+        description.AppendInt(hit.width);
+        description.Append(",h=");
+        description.AppendInt(hit.height);
+        description.Append(") enabled=");
+        description.Append(enabled_ ? "true" : "false");
+        description.Append(" tracking=");
+        description.Append(tracking_ ? "true" : "false");
+        description.Append(" pressed=");
+        description.Append(pressed_ ? "true" : "false");
+        description.Append(" touch_id=");
+        description.AppendUint(touch_id_);
+        return description;
+    }
 
    private:
     Rect bounds_{};

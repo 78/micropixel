@@ -29,8 +29,72 @@ constexpr size_t kGuestLinearMemoryAllocationOverhead = 64U;
 // block after the Host UI and a previous Guest have fragmented that heap.
 constexpr unsigned kPsramAllocationThreshold = 16U * 1024U;
 constexpr uintptr_t kWamrAllocationAlignment = 8U;
+constexpr uint32_t kAotTargetInfoSection = 0U;
+constexpr uint32_t kAotTargetInfoSize = 48U;
+constexpr uint32_t kAotFeatureMultiThread = 1U << 2U;
 constexpr char kTag[] = "micropixel_wamr";
 bool guest_memory_placement_logged;
+
+uint32_t ReadLittleEndian32(const uint8_t* bytes) {
+    return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8U |
+           static_cast<uint32_t>(bytes[2]) << 16U | static_cast<uint32_t>(bytes[3]) << 24U;
+}
+
+uint64_t ReadLittleEndian64(const uint8_t* bytes) {
+    return static_cast<uint64_t>(ReadLittleEndian32(bytes)) | static_cast<uint64_t>(ReadLittleEndian32(bytes + 4U))
+                                                                  << 32U;
+}
+
+bool ReadAotFeatureFlags(const AotPackage& package, uint64_t& feature_flags_out) {
+    // Locked WAMR AOT v6 starts with magic/version, followed by a 48-byte
+    // target-info section. feature_flags is 16 bytes into that section body.
+    constexpr uint32_t kFileHeaderSize = 8U;
+    constexpr uint32_t kSectionHeaderSize = 8U;
+    constexpr uint32_t kFeatureFlagsOffset = 16U;
+    constexpr uint32_t kRequiredSize = kFileHeaderSize + kSectionHeaderSize + kFeatureFlagsOffset + sizeof(uint64_t);
+    if (package.size() < kRequiredSize) {
+        return false;
+    }
+    const uint8_t* bytes = package.data();
+    if (ReadLittleEndian32(bytes + kFileHeaderSize) != kAotTargetInfoSection ||
+        ReadLittleEndian32(bytes + kFileHeaderSize + sizeof(uint32_t)) != kAotTargetInfoSize) {
+        return false;
+    }
+    feature_flags_out = ReadLittleEndian64(bytes + kFileHeaderSize + kSectionHeaderSize + kFeatureFlagsOffset);
+    return true;
+}
+
+bool ValidateThreadingDeclaration(const AotPackage& package, char* error_buf, size_t error_buf_size) {
+    const uint32_t bundle_flags = package.raw().aot_flags;
+    if ((bundle_flags & MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED) == 0U) {
+        ESP_LOGW(kTag, "legacy Bundle has no Guest threading declaration: app=%s", package.raw().app_id);
+        return true;
+    }
+
+    uint64_t aot_features = 0U;
+    if (!ReadAotFeatureFlags(package, aot_features)) {
+        std::snprintf(error_buf, error_buf_size, "unable to read WAMR AOT target-info threading features");
+        return false;
+    }
+    const bool declared_shared = (bundle_flags & MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY) != 0U;
+    const bool aot_multi_thread = (aot_features & kAotFeatureMultiThread) != 0U;
+    if (declared_shared != aot_multi_thread) {
+        std::snprintf(error_buf, error_buf_size,
+                      "Bundle threading declaration disagrees with AOT features: declared=%s aot=%s",
+                      declared_shared ? "shared-memory" : "none", aot_multi_thread ? "multi-thread" : "none");
+        return false;
+    }
+#if !CONFIG_WAMR_ENABLE_LIB_PTHREAD || !CONFIG_WAMR_ENABLE_SHARED_MEMORY
+    if (declared_shared) {
+        std::snprintf(error_buf, error_buf_size,
+                      "Bundle requires shared-memory threading but this Host does not include WAMR pthread support");
+        return false;
+    }
+#endif
+    ESP_LOGI(kTag, "Guest threading policy: app=%s mode=%s", package.raw().app_id,
+             declared_shared ? "shared-memory" : "none");
+    return true;
+}
 
 constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
     constexpr size_t kReservedBytes =
@@ -42,8 +106,9 @@ constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
     return std::min(kGuestLinearMemoryMaxPages, available_pages);
 }
 
-static_assert(EffectiveGuestLinearMemoryPages(2U * 1024U * 1024U) == 0U);
-static_assert(EffectiveGuestLinearMemoryPages(4U * 1024U * 1024U) == 31U);
+static_assert(EffectiveGuestLinearMemoryPages(CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES) == 0U);
+static_assert(EffectiveGuestLinearMemoryPages(CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES +
+                                              kGuestLinearMemoryAllocationOverhead + kWasmPageBytes) == 1U);
 static_assert(EffectiveGuestLinearMemoryPages(32U * 1024U * 1024U) == kGuestLinearMemoryMaxPages);
 
 struct WamrAllocationHeader {
@@ -265,6 +330,9 @@ LoadedModule::~LoadedModule() { Reset(); }
 
 std::expected<LoadedModule, WamrFailure> LoadedModule::Load(const AotPackage& package) {
     WamrFailure failure{.code = WamrError::kModuleLoad};
+    if (!ValidateThreadingDeclaration(package, failure.message.data(), failure.message.size())) {
+        return std::unexpected(failure);
+    }
     LoadedModule module;
     module.module_ = wasm_runtime_load(package.data(), package.size(), failure.message.data(), failure.message.size());
     if (module.module_ == nullptr) {

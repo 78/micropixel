@@ -2,11 +2,13 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 
 #include "device/contracts/devices.hpp"
 #include "device/contracts/gpio.hpp"
 #include "device/contracts/haptics.hpp"
 #include "device/contracts/sensors.hpp"
+#include "sdkconfig.h"
 
 namespace micropixel::device {
 
@@ -17,6 +19,7 @@ class DeviceRegistry final : public DeviceCatalog, public Sensors, public Gpio, 
    public:
     static constexpr uint32_t kMaximumDeviceCount = MICROPIXEL_MAX_DEVICES;
 
+    [[nodiscard]] bool InitializeStorage();
     void Reset();
     [[nodiscard]] bool RegisterDisplay(const char* name = "Built-in display");
     [[nodiscard]] bool RegisterTouch(const char* name = "Built-in touchscreen");
@@ -70,6 +73,12 @@ class DeviceRegistry final : public DeviceCatalog, public Sensors, public Gpio, 
         void* gpio_edge_context{};
     };
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+    struct EntryDeleter final {
+        void operator()(Entry* entries) const;
+    };
+#endif
+
     [[nodiscard]] bool Add(uint16_t kind, uint64_t capabilities, const char* name,
                            RouteKind route_kind = RouteKind::kNone, void* peripheral = nullptr,
                            PeripheralChannelId channel = 0U);
@@ -82,7 +91,15 @@ class DeviceRegistry final : public DeviceCatalog, public Sensors, public Gpio, 
     static void OnHapticsFinished(void* context, HapticsPeripheral& peripheral, PeripheralChannelId channel,
                                   uint64_t timestamp_us);
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+    [[nodiscard]] Entry* Entries() { return entries_.get(); }
+    [[nodiscard]] const Entry* Entries() const { return entries_.get(); }
+    std::unique_ptr<Entry, EntryDeleter> entries_{};
+#else
+    [[nodiscard]] Entry* Entries() { return entries_.data(); }
+    [[nodiscard]] const Entry* Entries() const { return entries_.data(); }
     std::array<Entry, kMaximumDeviceCount> entries_{};
+#endif
     uint32_t count_{};
     uint32_t generation_{1U};
     HapticCompletionSink haptic_completion_sink_{};

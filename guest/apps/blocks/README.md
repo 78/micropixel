@@ -1,7 +1,7 @@
 # Juicy Blocks
 
 Juicy Blocks 是与 Juicy Snake 同系列的 720×720 触控俄罗斯方块 Guest App。界面沿用近黑终端 HUD、
-关卡强调色、位图按钮和固定容量运行时结构。棋盘由 4 个 Host PSRAM offscreen surface 组成，
+关卡强调色、`TextButton` 和固定容量运行时结构。棋盘由 4 个 Host PSRAM offscreen surface 组成，
 活动块移动只上传发生变化的格子，不再按帧重建整棵绘图对象树。
 
 ```text
@@ -19,27 +19,27 @@ blocks/
 ├── blocks_model_test.cpp       # 可原生运行的规则回归
 └── assets/
     ├── manifest.json
-    ├── source/generate_ui_assets.py
-    └── blocks_*.png
+    └── source/                 # 启动图源文件
 ```
 
 构建 App Bundle：
 
 ```sh
-python3 tools/micropixel package guest/apps/blocks
+python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 ```
 
 触控操作覆盖整个 720×720 逻辑屏幕：任意位置点击旋转、水平拖动、慢速下拖软降、快速下划硬降、上划换块；
-轻点 HOLD 换块，轻点左上角标题区域暂停。从 HOLD 或标题区域起手的滑动仍按游戏手势处理，不会被按钮截断。
+轻点 HOLD 换块，轻点左上角标题所在的顶部 HUD 区域暂停。暂停热区覆盖完整标题，但不侵入棋盘；从 HOLD 或标题区域起手的滑动仍按游戏手势处理，不会被按钮截断。
 按住并向下拖动时，方块只按手指位移逐格软降，不会在 Move 阶段提前硬降。只有松手时，手势同时满足
 150 ms 内完成、向下至少移动 80 个逻辑像素且纵向位移占优，才执行硬降。
 
-游戏每消除 10 行提升一级。自动下落周期使用连续曲线
-`P(level) = 750 ms / ⁴√(1 + 8.58 × (level − 1))`：1 级为 750 ms、12 级约 240 ms、24 级约 200 ms。
-曲线没有人为速度上限，后期仍会持续变快，但相邻等级的变化会自然放缓；内部使用微秒精度，避免高等级因
-整数毫秒取整出现速度平台。软降和硬降仍允许熟练玩家主动加快节奏。
+游戏每消除 10 行提升一级，最高为 99 级。自动下落周期在四个速度点之间线性变化：
+1 级 750 ms、12 级 240 ms、20 级 200 ms 和 99 级 100 ms。到达 99 级后等级和下落周期都不再变化。
+内部使用微秒精度，软降和硬降仍允许熟练玩家主动加快节奏。
 
-渲染器把 10×20 棋盘按每 5 行拆为 4 个 `300×150 RGB888` offscreen surface。Guest 缓存 200 个
+渲染器把 10×20 棋盘按每 5 行拆为 4 个 `300×150 RGB565` offscreen surface，棋盘底色、圆角边框和网格
+也直接光栅化到这些 surface；右侧卡片使用 `RoundedRectNode`，START/RESTART 使用 `TextButton`，因此不再
+加载棋盘和纯色按钮贴图。Guest 缓存 200 个
 visual-cell code，逻辑变化后重新合成活动块、Ghost 和落定棋盘，只对 code 改变的 `30×30` 格子调用
 `StreamingTexture::Update()`。每次 `SyncPlayfield()` 用一个 `TextureUpdateBatch` 包住全部写入；Host
 按 surface 合并脏格，commit 时统一 invalidate 并只唤醒一次 compositor。合并后的活动块区域通常超过

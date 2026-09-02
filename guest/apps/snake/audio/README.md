@@ -30,7 +30,7 @@ Guest 不再定义 App master，设备整体音量交由 Host 系统状态栏控
 `build/apps/snake/sfx-report.json` 并在越界时失败：
 
 ```sh
-python3 tools/micropixel package guest/apps/snake
+python3 tools/micropixel package guest/apps/snake --aot-target riscv32-ilp32f
 ```
 
 独立生成报告和试听 WAV：

@@ -64,6 +64,7 @@ class ResourceService final {
     SemaphoreHandle_t work_done_{};
     micropixel_texture_handle_t completed_texture_{};
     int32_t completed_status_{MICROPIXEL_STATUS_INTERNAL};
+    uint32_t preferred_opaque_format_{MICROPIXEL_PIXEL_FORMAT_BGR888};
     BitmapStore bitmaps_;
     std::atomic<bool> stopping_{};
     bool shutdown_complete_{};

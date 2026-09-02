@@ -19,7 +19,6 @@ class BlocksGame final {
     BlocksGame(micropixel::Application& app, micropixel::Renderer renderer, micropixel::RendererInfo renderer_info,
                micropixel::Audio audio, bool audio_available, uint32_t best_score);
 
-    void set_textures(micropixel::Texture board, micropixel::Texture start, micropixel::Texture restart);
     void OnTimer(const micropixel::TimerEvent& tick);
     void OnTouch(const micropixel::TouchEvent& touch);
     void Render();
@@ -66,24 +65,20 @@ class BlocksGame final {
     micropixel::Renderer renderer_;
     micropixel::RendererInfo renderer_info_;
     micropixel::Scene scene_;
-    micropixel::Layer layer_{};
-    micropixel::SpriteNode board_node_{};
+    micropixel::ContainerNode root_container_{};
     micropixel::SurfaceNode playfield_nodes_[4U]{};
+    micropixel::RoundedRectNode sidebar_panels_[kSidebarPanelCount]{};
     micropixel::SpriteBatch mini_piece_batch_{};
     micropixel::SpriteBatch status_batch_{};
-    micropixel::LabelNode header_labels_[6U]{};
+    micropixel::ui::FlexContainer hud_{};
     micropixel::LabelNode sidebar_labels_[6U]{};
     micropixel::LabelNode status_label_{};
     micropixel::ShapeNode overlay_node_{};
-    micropixel::SpriteNode button_node_{};
-    micropixel::LabelNode overlay_labels_[7U]{};
+    micropixel::ui::TextButton action_button_{};
+    micropixel::ui::FlexContainer game_over_panel_{};
     micropixel::Audio audio_;
     BlocksModel model_{};
-    micropixel::Texture board_texture_{};
-    micropixel::Texture start_button_texture_{};
-    micropixel::Texture restart_button_texture_{};
     micropixel::StreamingTexture playfield_surfaces_[4U]{};
-    micropixel::ui::Button screen_button_{};
     ScheduledTone scheduled_tones_[8U]{};
     Screen screen_{Screen::kMenu};
     uint32_t best_score_{};
@@ -92,13 +87,14 @@ class BlocksGame final {
     uint64_t gravity_accumulated_us_{};
     uint64_t clear_effect_remaining_us_{};
     uint64_t gesture_started_us_{};
+    GestureAxis gesture_axis_{GestureAxis::kUndecided};
     int32_t gesture_start_x_{};
     int32_t gesture_start_y_{};
     int32_t gesture_anchor_x_{};
     int32_t gesture_anchor_y_{};
     uint32_t gesture_touch_id_{};
     uint8_t visual_cells_[kBoardColumns * kBoardRows]{};
-    alignas(4) uint8_t cell_pixels_[kCellPitch * kCellPitch * 3U]{};
+    alignas(4) uint8_t cell_pixels_[kCellPitch * kCellPitch * 2U]{};
     bool gesture_active_{};
     bool gesture_moved_{};
     bool gesture_started_in_pause_{};

@@ -18,12 +18,22 @@ const lv_font_t kInvalidFont{.get_glyph_bitmap = GlyphBitmap, .line_height = 15}
 }  // namespace
 
 extern "C" {
+extern const lv_font_t font_builtin_latin_10{
+    .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 13};
+extern const lv_font_t font_builtin_latin_12{
+    .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 16};
 extern const lv_font_t font_builtin_latin_14{
     .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 18};
+extern const lv_font_t font_builtin_latin_16{
+    .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 21};
 extern const lv_font_t font_builtin_latin_18{
     .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 23};
+extern const lv_font_t font_builtin_latin_20{
+    .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 26};
 extern const lv_font_t font_builtin_latin_24{
     .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 30};
+extern const lv_font_t font_builtin_latin_26{
+    .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 33};
 extern const lv_font_t font_builtin_latin_32{
     .get_glyph_dsc = GlyphDescriptor, .get_glyph_bitmap = GlyphBitmap, .line_height = 39};
 }
@@ -42,10 +52,26 @@ int main() {
     using micropixel::platform::lvgl::SystemFontSet;
 
     FontRegistry registry;
+#if CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_10);
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_MEDIUM) == &font_builtin_latin_12);
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_LARGE) == &font_builtin_latin_14);
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_TITLE) == &font_builtin_latin_18);
+#elif CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_14);
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_MEDIUM) == &font_builtin_latin_16);
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_LARGE) == &font_builtin_latin_20);
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_TITLE) == &font_builtin_latin_26);
+#else
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_14);
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_MEDIUM) == &font_builtin_latin_18);
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_LARGE) == &font_builtin_latin_24);
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_TITLE) == &font_builtin_latin_32);
+#endif
+    for (uint16_t handle = MICROPIXEL_SYSTEM_FONT_SMALL; handle <= MICROPIXEL_SYSTEM_FONT_TITLE; ++handle) {
+        assert(registry.ResolveGuestHandle(handle) == registry.ResolveSystemHandle(handle));
+        assert(registry.ResolveRetainedHandle(handle) == registry.ResolveSystemHandle(handle));
+    }
     assert(registry.ResolveSystemHandle(0U) == nullptr);
     assert(registry.ResolveSystemHandle(5U) == nullptr);
 
@@ -66,6 +92,12 @@ int main() {
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &kCandidateSmall);
 
     registry.ResetToBuiltin();
+#if CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_10);
+#elif CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO
     assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_14);
+#else
+    assert(registry.ResolveSystemHandle(MICROPIXEL_SYSTEM_FONT_SMALL) == &font_builtin_latin_14);
+#endif
     return 0;
 }

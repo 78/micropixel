@@ -46,20 +46,27 @@ constexpr int32_t kBoardY = 76;
 constexpr int32_t kCellPitch = 25;
 constexpr int32_t kScreenWidth = 720;
 constexpr int32_t kScreenHeight = 720;
-constexpr int32_t kActionButtonWidth = 280;
-constexpr int32_t kActionButtonHeight = 96;
+
+[[nodiscard]] constexpr int32_t ContentOffsetX(uint32_t display_width) {
+    return display_width > static_cast<uint32_t>(kScreenWidth)
+               ? static_cast<int32_t>((display_width - static_cast<uint32_t>(kScreenWidth)) / 2U)
+               : 0;
+}
+
+[[nodiscard]] constexpr int32_t ContentOffsetY(uint32_t display_height) {
+    return display_height > static_cast<uint32_t>(kScreenHeight)
+               ? static_cast<int32_t>((display_height - static_cast<uint32_t>(kScreenHeight)) / 2U)
+               : 0;
+}
+constexpr int32_t kActionButtonWidth = 360;
+constexpr int32_t kActionButtonHeight = 120;
+constexpr uint16_t kActionButtonHitPadding = 8U;
+constexpr uint32_t kActionButtonCornerRadius = 30U;
 constexpr int32_t kActionButtonX = (kScreenWidth - kActionButtonWidth) / 2;
 constexpr micropixel::SystemFont kActionButtonFont = micropixel::SystemFont::kLarge;
-constexpr int32_t kActionButtonFontHeight = 24;
-constexpr int32_t kActionButtonTextOpticalOffsetY = -5;
 constexpr uint8_t kOverlayOpacity = 180U;
-constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 304, kActionButtonWidth, kActionButtonHeight};
-constexpr micropixel::Rect kRestartButtonRect{kActionButtonX, 408, kActionButtonWidth, kActionButtonHeight};
-constexpr micropixel::Rect kPauseTouchRect{0, 0, 180, kBoardY};
-
-[[nodiscard]] constexpr int32_t ActionButtonTextY(micropixel::Rect bounds) {
-    return bounds.y + (bounds.height - kActionButtonFontHeight) / 2 + kActionButtonTextOpticalOffsetY;
-}
+constexpr micropixel::Rect kStartButtonRect{kActionButtonX, 286, kActionButtonWidth, kActionButtonHeight};
+constexpr micropixel::Rect kPauseTouchRect{0, 0, 300, kBoardY};
 
 static_assert(kBurstFrameCount == snake_assets::burst_atlas_frame_count);
 static_assert(snake_assets::burst_atlas_count == 4U);

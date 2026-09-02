@@ -25,13 +25,13 @@ class ResourceAtlasPage final {
    public:
     void Enter(DemoContext& context) {
         animation_running_ = AtlasTexturesValid(context);
-        LayoutButtonRow(context, buttons_);
-        for (uint32_t index = 0U; index < 2U; ++index) {
-            buttons_[index].SetEnabled(animation_running_);
-        }
+        page_container_ = context.root_container.CreateContainer();
+        CreateButtons(context);
         context.app.log().Info(animation_running_ ? "demo.resource: atlas textures ready"
                                                   : "demo.resource: atlas textures unavailable");
     }
+
+    void Exit() { micropixel::Assert(page_container_.Destroy().has_value(), "demo.resource: destroy page failed"); }
 
     [[nodiscard]] bool OnTimer(DemoContext&, const micropixel::TimerEvent& event) {
         if (!animation_running_) {
@@ -70,7 +70,12 @@ class ResourceAtlasPage final {
         const int32_t center_x = PageCenterX(context);
         commands.CenteredText(center_x, PageY(context, 8, 16), "30-frame RGBA atlas, native pixels and alpha blend.",
                               MutedColor(), micropixel::SystemFont::kMedium);
-        if (!AtlasTexturesValid(context)) {
+        const bool textures_valid = AtlasTexturesValid(context);
+        for (micropixel::ui::TextButton& button : buttons_) {
+            button.SetEnabled(commands.scene_update(), textures_valid);
+            button.SetVisible(commands.scene_update(), textures_valid);
+        }
+        if (!textures_valid) {
             commands.CenteredText(center_x, PageY(context, 130, 220), "Atlas texture failed to load", DangerColor(),
                                   micropixel::SystemFont::kLarge);
             return;
@@ -106,15 +111,29 @@ class ResourceAtlasPage final {
                               animation_running_ ? "ANIMATING / ALPHA 224" : "PAUSED / ALPHA 224",
                               animation_running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
-        DrawButton(commands, buttons_[0], animation_running_ ? "PAUSE" : "PLAY", AccentColor());
-        DrawButton(commands, buttons_[1], "NEXT FRAME", BlueColor());
+        auto text = buttons_[0].SetText(commands.scene_update(), animation_running_ ? "PAUSE" : "PLAY");
+        micropixel::Assert(text.has_value(), "demo.resource: update text button failed");
     }
 
    private:
+    void CreateButtons(DemoContext& context) {
+        std::array<micropixel::Rect, 2U> bounds{};
+        LayoutButtonRow(context, bounds);
+        constexpr const char* labels[2]{"PLAY", "NEXT FRAME"};
+        const micropixel::Color backgrounds[2]{AccentColor(), BlueColor()};
+        for (uint32_t index = 0U; index < 2U; ++index) {
+            buttons_[index] = page_container_.CreateTextButton(
+                {.bounds = bounds[index],
+                 .text = labels[index],
+                 .style = {.background = backgrounds[index], .font = micropixel::SystemFont::kLarge}});
+        }
+    }
+
     uint64_t accumulated_us_{};
     uint32_t frame_{};
     bool animation_running_{};
-    micropixel::ui::Button buttons_[2]{};
+    micropixel::ContainerNode page_container_{};
+    micropixel::ui::TextButton buttons_[2]{};
 };
 
 ResourceAtlasPage resource_atlas_page;
@@ -141,6 +160,8 @@ DemoAtlasTextures LoadDemoAtlases(micropixel::Application& app) {
 }
 
 void ResourceAtlasDemoEnter(DemoContext& context) { resource_atlas_page.Enter(context); }
+
+void ResourceAtlasDemoExit(DemoContext&) { resource_atlas_page.Exit(); }
 
 bool ResourceAtlasDemoOnTimer(DemoContext& context, const micropixel::TimerEvent& event) {
     return resource_atlas_page.OnTimer(context, event);

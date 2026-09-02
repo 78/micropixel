@@ -29,6 +29,54 @@ sys.modules[LOADER.name] = CLI
 LOADER.exec_module(CLI)
 
 
+def make_app_bundle(
+    app_id: str,
+    aot_target: str | None = "riscv32-ilp32f",
+    threading_mode: str | None = None,
+) -> bytes:
+    app_id_bytes = app_id.encode("ascii")
+    app_id_field = app_id_bytes + bytes(64 - len(app_id_bytes))
+    target_mask = CLI.AOT_TARGET_MASKS[aot_target] if aot_target is not None else 0
+    aot_flags = 0
+    if threading_mode is not None:
+        aot_flags = CLI.AOT_FLAG_THREADING_DECLARED
+        if threading_mode == "shared-memory":
+            aot_flags |= CLI.AOT_FLAG_SHARED_MEMORY
+    header_without_hash = CLI.BUNDLE_HEADER.pack(
+        CLI.BUNDLE_MAGIC,
+        1,
+        CLI.BUNDLE_HEADER_SIZE,
+        CLI.BUNDLE_ALIGNMENT,
+        CLI.BUNDLE_HEADER_SIZE,
+        app_id_field,
+        len(app_id_bytes),
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    header = CLI.BUNDLE_HEADER.pack(
+        *CLI.BUNDLE_HEADER.unpack(header_without_hash)[:10],
+        CLI.fnv1a32(header_without_hash),
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    bundle = bytearray(CLI.BUNDLE_ALIGNMENT)
+    bundle[: CLI.BUNDLE_HEADER_SIZE] = header
+    CLI.BUNDLE_SECTION.pack_into(
+        bundle, CLI.BUNDLE_HEADER_SIZE, 1, 0, 192, 1, 0, 1, 0, 0, 0, aot_flags, target_mask, 0
+    )
+    return bytes(bundle)
+
+
 def api_token(device_id: str) -> str:
     encoded = base64.urlsafe_b64encode(
         json.dumps({"typ": "api", "device_id": device_id}, separators=(",", ":")).encode("utf-8")
@@ -37,6 +85,109 @@ def api_token(device_id: str) -> str:
 
 
 class MicroPixelCliTest(unittest.TestCase):
+    def test_run_and_app_start_accept_bounded_launch_arguments_after_separator(self) -> None:
+        run = CLI.parse_command_line(
+            ["run", "guest/apps/blocks", "--profile", "development", "--", "--level", "100"]
+        )
+        self.assertEqual(run.project, "guest/apps/blocks")
+        self.assertEqual(run.profile, "development")
+        self.assertEqual(run.launch_arguments, ["--level", "100"])
+
+        start = CLI.parse_command_line(["app", "start", "vendor.game", "--", "--level=100"])
+        self.assertEqual(start.launch_arguments, ["--level=100"])
+        with self.assertRaisesRegex(CLI.CliError, "at most 16"):
+            CLI.parse_command_line(["run", ".", "--", *[str(index) for index in range(17)]])
+
+    def test_usb_launch_arguments_use_binary_safe_base64_framing(self) -> None:
+        class Client:
+            def request(self, operation: str, detail: str) -> str:
+                self.operation = operation
+                self.detail = detail
+                return "RESULT app_started"
+
+        client = Client()
+        CLI.UsbControlClient.action(client, "APP_START", "vendor.game", ["--level", "100", "你好"])
+        app_id, encoded = client.detail.split()
+        self.assertEqual(app_id, "vendor.game")
+        self.assertEqual(base64.b64decode(encoded), b"--level\0" + b"100\0" + "你好".encode() + b"\0")
+
+    def test_release_guest_profile_optimizes_size_and_compacts_call_stack(self) -> None:
+        compile_flags, link_flags, aot_flags = CLI.guest_build_profile_flags("release", "xtensa")
+        self.assertEqual(compile_flags, ["-Oz"])
+        self.assertIn("-Wl,--strip-all", link_flags)
+        self.assertIn("--opt-level=3", aot_flags)
+        self.assertIn("--call-stack-features=ip,func-idx", aot_flags)
+
+        development_compile, _, development_aot = CLI.guest_build_profile_flags("development", "xtensa")
+        self.assertEqual(development_compile, ["-O1", "-g"])
+        self.assertNotIn("--call-stack-features=ip,func-idx", development_aot)
+
+    def test_xtensa_aot_uses_literal_islands_for_large_modules(self) -> None:
+        for profile in ("development", "release", "size"):
+            with self.subTest(profile=profile):
+                _, _, xtensa_flags = CLI.guest_build_profile_flags(profile, "xtensa")
+                _, _, riscv_flags = CLI.guest_build_profile_flags(profile, "riscv32")
+                self.assertIn("--size-level=0", xtensa_flags)
+                self.assertNotIn("--size-level=3", xtensa_flags)
+                self.assertIn("--size-level=3", riscv_flags)
+
+    def test_guest_build_commands_accept_explicit_xtensa_aot_target(self) -> None:
+        for arguments in (
+            ["build", "guest/tests/smoke", "--aot-target", "xtensa"],
+            ["package", "guest/tests/smoke", "--aot-target", "xtensa"],
+            ["run", "guest/tests/smoke", "--aot-target", "xtensa"],
+            ["app", "install", "guest/tests/smoke", "--aot-target", "xtensa"],
+        ):
+            with self.subTest(command=arguments):
+                parsed = CLI.parser().parse_args(arguments)
+                self.assertEqual(parsed.aot_target, "xtensa")
+
+    def test_guest_threading_selects_non_shared_build_by_default(self) -> None:
+        target, compile_flags, link_flags, aot_flags = CLI.guest_threading_flags("none")
+        self.assertEqual(target, "wasm32-wasip1")
+        self.assertEqual((compile_flags, link_flags, aot_flags), ([], [], []))
+
+        target, compile_flags, link_flags, aot_flags = CLI.guest_threading_flags("shared-memory")
+        self.assertEqual(target, "wasm32-wasip1-threads")
+        self.assertIn("-matomics", compile_flags)
+        self.assertIn("-Wl,--shared-memory", link_flags)
+        self.assertIn("--enable-multi-thread", aot_flags)
+
+    def test_device_chip_selects_aot_target_and_bundle_preflight_rejects_mismatch(self) -> None:
+        self.assertEqual(CLI.aot_target_for_chip("ESP32-S3"), "xtensa")
+        self.assertEqual(CLI.aot_target_for_chip("ESP32-P4"), "riscv32-ilp32f")
+        self.assertEqual(CLI.aot_target_for_chip("ESP32-S31"), "riscv32-ilp32f")
+        with self.assertRaisesRegex(CLI.CliError, "no supported MicroPixel AOT target"):
+            CLI.aot_target_for_chip("unknown")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            riscv = root / "riscv.bundle.bin"
+            riscv.write_bytes(make_app_bundle("vendor.riscv"))
+            legacy = root / "legacy.bundle.bin"
+            legacy.write_bytes(make_app_bundle("vendor.legacy", None))
+            self.assertEqual(CLI.require_bundle_target(riscv, "riscv32-ilp32f")["aotTarget"], "riscv32-ilp32f")
+            with self.assertRaisesRegex(CLI.CliError, "connected device requires xtensa"):
+                CLI.require_bundle_target(riscv, "xtensa")
+            with self.assertRaisesRegex(CLI.CliError, "has no AOT target metadata"):
+                CLI.require_bundle_target(legacy, "riscv32-ilp32f")
+
+    def test_connected_build_uses_device_target_and_rejects_conflicting_override(self) -> None:
+        args = argparse.Namespace(aot_target=None)
+        prepared: list[str] = []
+        with patch.object(CLI, "require_bundle_target"):
+            CLI.prepare_connected_bundle(
+                args,
+                "xtensa",
+                lambda value: prepared.append(value.aot_target) or Path("fixture.bundle.bin"),
+            )
+        self.assertEqual(prepared, ["xtensa"])
+        self.assertEqual(args.aot_target, "xtensa")
+
+        args = argparse.Namespace(aot_target="riscv32-ilp32f")
+        with self.assertRaisesRegex(CLI.CliError, "incompatible with the connected device"):
+            CLI.prepare_connected_bundle(args, "xtensa", lambda _value: Path("unused"))
+
     def test_terminal_progress_redraws_interactively_and_ends_with_newline(self) -> None:
         class TtyBuffer(io.StringIO):
             def isatty(self) -> bool:
@@ -195,11 +346,7 @@ class MicroPixelCliTest(unittest.TestCase):
                 self.assertEqual(client.task_diagnostics()["tasks"][0]["name"], "main")
                 self.assertEqual(client.action("DEVICE_REBOOT")["result"]["message"], "rebooting")
                 with tempfile.TemporaryDirectory() as directory:
-                    bundle = bytearray(CLI.BUNDLE_ALIGNMENT)
-                    bundle[:8] = CLI.BUNDLE_MAGIC
-                    struct.pack_into("<III", bundle, 8, 1, CLI.BUNDLE_HEADER_SIZE, len(bundle))
-                    bundle[24:35] = b"vendor.demo"
-                    struct.pack_into("<I", bundle, 88, 11)
+                    bundle = make_app_bundle("vendor.demo")
                     path = Path(directory) / "demo.bundle.bin"
                     path.write_bytes(bundle)
                     progress: list[int] = []
@@ -217,6 +364,109 @@ class MicroPixelCliTest(unittest.TestCase):
         )
         self.assertEqual(args.transport, "usb")
         self.assertEqual(args.port, "/dev/cu.usbmodem1101")
+
+    def test_usb_discovery_accepts_micropixel_tinyusb_cdc_product(self) -> None:
+        port = argparse.Namespace(
+            device="/dev/cu.usbmodem-s31",
+            vid=0x303A,
+            pid=0x4001,
+            product="MicroPixel ESP-Mosaico",
+        )
+        with patch.object(CLI, "usb_serial_ports", return_value=[port]):
+            self.assertEqual(CLI.discover_usb_port(None), "/dev/cu.usbmodem-s31")
+
+    def test_port_list_reports_board_chip_and_firmware(self) -> None:
+        ports = [
+            argparse.Namespace(
+                device="/dev/cu.Bluetooth-Incoming-Port",
+                vid=None,
+                pid=None,
+                product=None,
+                description="Bluetooth-Incoming-Port",
+                manufacturer=None,
+            ),
+            argparse.Namespace(
+                device="/dev/cu.usbmodem-s31",
+                vid=0x303A,
+                pid=0x4001,
+                product="MicroPixel ESP-Mosaico",
+                description="MicroPixel ESP-Mosaico",
+                manufacturer="Espressif Systems",
+            ),
+        ]
+
+        class Client:
+            def __init__(self, port: str, timeout: float) -> None:
+                self.port = port
+                self.timeout = timeout
+
+            def __enter__(self) -> "Client":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                pass
+
+            def device_status(self) -> dict[str, object]:
+                return {
+                    "hardware": {"board": "ESP-Mosaico V1.0", "chip": "ESP32-S31"},
+                    "firmware": {"version": "0.4.2"},
+                }
+
+        with patch.object(CLI, "usb_serial_ports", return_value=ports), patch.object(
+            CLI, "UsbControlClient", Client
+        ):
+            result = CLI.list_local_ports(probe_timeout=1.5)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(
+            result["ports"][0],
+            {
+                "port": "/dev/cu.usbmodem-s31",
+                "deviceName": "MicroPixel ESP-Mosaico",
+                "microPixelCandidate": True,
+                "manufacturer": "Espressif Systems",
+                "usbId": "303A:4001",
+                "available": True,
+                "board": "ESP-Mosaico V1.0",
+                "chip": "ESP32-S31",
+                "firmwareVersion": "0.4.2",
+            },
+        )
+
+    def test_port_list_keeps_busy_ports_visible(self) -> None:
+        port = argparse.Namespace(
+            device="/dev/cu.usbmodem-busy",
+            vid=0x303A,
+            pid=0x1001,
+            product="USB JTAG/serial debug unit",
+            description="USB JTAG/serial debug unit",
+            manufacturer="Espressif",
+        )
+
+        class BusyClient:
+            def __init__(self, device: str, timeout: float) -> None:
+                self.device = device
+                self.timeout = timeout
+
+            def __enter__(self) -> "BusyClient":
+                raise CLI.CliError(f"Cannot open USB device {self.device}: Resource busy")
+
+            def __exit__(self, *_args: object) -> None:
+                pass
+
+        with patch.object(CLI, "usb_serial_ports", return_value=[port]), patch.object(
+            CLI, "UsbControlClient", BusyClient
+        ):
+            result = CLI.list_local_ports()
+        self.assertEqual(result["count"], 1)
+        self.assertFalse(result["ports"][0]["available"])
+        self.assertIn("Resource busy", result["ports"][0]["error"])
+
+    def test_port_list_parser_supports_all_ports_without_transport_selection(self) -> None:
+        args = CLI.parser().parse_args(["port", "list", "--all"])
+        self.assertEqual(args.command, "port")
+        self.assertEqual(args.port_command, "list")
+        self.assertTrue(args.all)
+        self.assertEqual(args.timeout, 2.0)
 
     def test_usb_serial_omits_posix_exclusive_option_on_windows(self) -> None:
         class FakeDevice:
@@ -273,6 +523,7 @@ class MicroPixelCliTest(unittest.TestCase):
                 output_dir=str(output_dir),
                 output=None,
                 raw=None,
+                aot_target="riscv32-ilp32f",
             )
             with patch.object(CLI, "_run_build_sources", side_effect=fake_build):
                 with redirect_stdout(io.StringIO()):
@@ -417,14 +668,35 @@ class MicroPixelCliTest(unittest.TestCase):
 
     def test_validates_bundle_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            bundle = bytearray(CLI.BUNDLE_ALIGNMENT)
-            bundle[:8] = CLI.BUNDLE_MAGIC
-            struct.pack_into("<III", bundle, 8, 1, CLI.BUNDLE_HEADER_SIZE, len(bundle))
-            bundle[24:36] = b"example.demo"
-            struct.pack_into("<I", bundle, 88, 12)
+            bundle = make_app_bundle("example.demo")
             path = Path(directory) / "demo.bundle.bin"
             path.write_bytes(bundle)
-            self.assertEqual(CLI.validate_bundle(path), {"appId": "example.demo", "sizeBytes": len(bundle)})
+            self.assertEqual(
+                CLI.validate_bundle(path),
+                {
+                    "appId": "example.demo",
+                    "sizeBytes": len(bundle),
+                    "aotTarget": "riscv32-ilp32f",
+                    "threading": None,
+                    "hasAot": True,
+                },
+            )
+
+    def test_validates_explicit_bundle_threading_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for threading_mode in ("none", "shared-memory"):
+                with self.subTest(threading=threading_mode):
+                    path = root / f"{threading_mode}.bundle.bin"
+                    path.write_bytes(make_app_bundle("example.demo", threading_mode=threading_mode))
+                    self.assertEqual(CLI.validate_bundle(path)["threading"], threading_mode)
+
+            invalid = bytearray(make_app_bundle("example.demo"))
+            struct.pack_into("<I", invalid, CLI.BUNDLE_HEADER_SIZE + 9 * 4, CLI.AOT_FLAG_SHARED_MEMORY)
+            invalid_path = root / "invalid.bundle.bin"
+            invalid_path.write_bytes(invalid)
+            with self.assertRaisesRegex(CLI.CliError, "threading metadata"):
+                CLI.validate_bundle(invalid_path)
 
     def test_control_client_sends_bearer_token_and_reads_json(self) -> None:
         class Handler(BaseHTTPRequestHandler):
@@ -614,7 +886,7 @@ class MicroPixelCliTest(unittest.TestCase):
             ) -> dict[str, object]:
                 self.requests.append((method, path, body))
                 if path == "/device":
-                    return {"online": True, "status": {"firmwareVersion": "0.2.2"}}
+                    return {"online": True, "status": {"firmwareVersion": "0.4.0"}}
                 return {"id": "start-job"}
 
             def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
@@ -631,10 +903,14 @@ class MicroPixelCliTest(unittest.TestCase):
             command_timeout_ms=10_000,
             source="app",
             idempotency_key=None,
+            launch_arguments=["--level", "100"],
         )
         with patch.object(CLI, "stream_network_logs") as stream, redirect_stdout(io.StringIO()):
             CLI.execute_network(args, client)
-        self.assertIn(("POST", "/device/apps/vendor.demo/actions/start", {}), client.requests)
+        self.assertIn(
+            ("POST", "/device/apps/vendor.demo/actions/start", {"launchArguments": ["--level", "100"]}),
+            client.requests,
+        )
         stream.assert_called_once_with(
             client,
             cursor=None,
@@ -657,7 +933,7 @@ class MicroPixelCliTest(unittest.TestCase):
             def json(self, method: str, path: str, body: object = None, timeout: float = 30.0) -> dict[str, object]:
                 self.requests.append((method, path, body))
                 if path == "/device":
-                    return {"online": True, "status": {"firmwareVersion": "0.2.2"}}
+                    return {"online": True, "status": {"firmwareVersion": "0.4.0"}}
                 return {"id": path}
 
             def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
@@ -705,7 +981,7 @@ class MicroPixelCliTest(unittest.TestCase):
                     return {
                         "online": True,
                         "status": {
-                            "firmwareVersion": "0.2.2",
+                            "firmwareVersion": "0.4.0",
                             "runtime": {
                                 "foregroundSessionId": "session-old",
                                 "runtimeSessions": [
@@ -732,6 +1008,7 @@ class MicroPixelCliTest(unittest.TestCase):
             timeout=20.0,
             command_timeout_ms=None,
             idempotency_key=None,
+            launch_arguments=["--level", "100"],
         )
         with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), patch.object(
             CLI, "stream_network_logs"
@@ -744,7 +1021,7 @@ class MicroPixelCliTest(unittest.TestCase):
             [
                 ("POST", "/device/runtime/foreground/stop", {}),
                 ("POST", "/device/apps/install", {"packageId": "package-id"}),
-                ("POST", "/device/apps/vendor.demo/actions/start", {}),
+                ("POST", "/device/apps/vendor.demo/actions/start", {"launchArguments": ["--level", "100"]}),
             ],
         )
         stream.assert_called_once()
@@ -770,7 +1047,7 @@ class MicroPixelCliTest(unittest.TestCase):
                     return {
                         "online": True,
                         "status": {
-                            "firmwareVersion": "0.2.2",
+                            "firmwareVersion": "0.4.0",
                             "runtime": {
                                 "foregroundSessionId": "session-old",
                                 "runtimeSessions": [{"sessionId": "session-old", "appId": "vendor.old"}],
@@ -826,7 +1103,10 @@ class MicroPixelCliTest(unittest.TestCase):
             follow=True,
             interval=0.5,
         )
-        with patch.object(CLI, "stream_usb_logs") as stream, redirect_stderr(io.StringIO()):
+        args.aot_target = "riscv32-ilp32f"
+        with patch.object(CLI, "require_bundle_target"), patch.object(
+            CLI, "stream_usb_logs"
+        ) as stream, redirect_stderr(io.StringIO()):
             CLI.run_usb_app(args, client)
         self.assertEqual(
             client.operations,
@@ -878,9 +1158,9 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(client.request, ("GET", "/device/app-errors/latest", None))
         rendered = json.loads(output.getvalue())
         self.assertEqual(rendered["code"], "guest_trap")
-        self.assertIn("rebuild this App with SDK 0.10.1", rendered["recommendation"])
+        self.assertIn("rebuild this App with SDK 0.11.0", rendered["recommendation"])
 
-    def test_firmware_preflight_requires_0_2_2_before_install_or_start(self) -> None:
+    def test_firmware_preflight_requires_0_4_0_before_install_or_start(self) -> None:
         class Client:
             def __init__(self, version: str, online: bool = True) -> None:
                 self.version = version
@@ -893,14 +1173,14 @@ class MicroPixelCliTest(unittest.TestCase):
                 self.request = (method, path, body)
                 return {"online": self.online, "status": {"firmwareVersion": self.version}}
 
-        current = Client("0.2.2")
+        current = Client("0.4.0")
         CLI.require_compatible_firmware(current)
         self.assertEqual(current.request, ("GET", "/device", None))
 
-        with self.assertRaisesRegex(CLI.CliError, "Upgrade the device to firmware 0.2.2 or later"):
-            CLI.require_compatible_firmware(Client("0.2.1"))
+        with self.assertRaisesRegex(CLI.CliError, "Upgrade the device to firmware 0.4.0 or later"):
+            CLI.require_compatible_firmware(Client("0.3.3"))
         with self.assertRaisesRegex(CLI.CliError, "device is offline"):
-            CLI.require_compatible_firmware(Client("0.2.2", online=False))
+            CLI.require_compatible_firmware(Client("0.4.0", online=False))
 
     def test_reboot_and_firmware_commands_use_explicit_endpoints(self) -> None:
         class Client:

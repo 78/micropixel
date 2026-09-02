@@ -28,11 +28,12 @@ snake/
 构建输出统一写入 `build/apps/snake/`：
 
 ```sh
-python3 tools/micropixel package guest/apps/snake
+python3 tools/micropixel package guest/apps/snake --aot-target riscv32-ilp32f
 ```
 
 `gamekit/` 仍是 Snake 内部实现；只有第二个游戏出现相同需求且语义稳定后，才移动到公共 SDK。
-通用的按钮交互、固定字符串和 retained Scene API 位于 `guest/sdk/`。
+通用的按钮交互、固定字符串和 retained Scene API 位于 `guest/sdk/`；START/RESTART 使用 SDK 的
+`TextButton`，不再携带纯色按钮贴图。
 
 当前 Metalio-Claw4 与 ESP-Mosaico 音频硬件链路均为 16 kHz；Snake 仍根据 `Audio::info()` 使用 Host
 实际报告的格式，不把板级采样率写进游戏逻辑。
@@ -52,9 +53,10 @@ Food sprite 的原始 36×36 帧保存在 `assets/source/*_1x.png`。为了让 7
 python3 guest/apps/snake/assets/source/generate_food_sheets.py
 ```
 
-Snake 的普通移动使用固定容量 SpriteBatch 和 body ring：尾槽复用为新身体位置，SDK 只序列化事务的净
+棋盘背景是一个随 Theme 更新填充色和边框色的 `RoundedRectNode`，不再为纯色背景加载 625×625
+纹理；START/RESTART 由 `TextButton` 绘制。Snake 的普通移动使用固定容量 SpriteBatch 和 body ring：尾槽复用为新身体位置，SDK 只序列化事务的净
 instance 差量。Food/Burst 通过 Sprite atlas source patch 播放；粒子复用固定池 Batch。震动先提交完成的
-Game Layer，再在震动期间冻结其子节点，只更新 Layer translation；HUD 位于独立 Layer，Host 因而可以
-捕获一次 Game Layer snapshot 并用 PPA/DMA2D 移动，而不会被同时变化的 flash/particle 迫使全量重放。
+Game Container，再在震动期间冻结其子节点，只更新 Container translation；HUD 位于独立 Container，Host 因而可以
+捕获一次 Game Container snapshot 并用 PPA/DMA2D 移动，而不会被同时变化的 flash/particle 迫使全量重放。
 顶部 HUD 从 `RendererInfo::safe_area_insets()` 读取圆角屏的逻辑边缘内缩：标题保留额外视觉 padding，
-Level、Score、Best、状态文字和 Combo 条按右侧 inset 整组左移，不按 Mosaico 板名硬编码布局分支。
+Level、Score、Best、状态文字和 Combo 条按右侧 inset 整组左移，不按 Mosaico 板名硬编码布局分支。轻点左上标题所在的顶部 HUD 可暂停；热区覆盖完整标题但不侵入棋盘。

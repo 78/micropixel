@@ -7,21 +7,6 @@
       "path": "source/launch-transparent-360.png"
     },
     {
-      "name": "board",
-      "format": "png",
-      "path": "snake_board_625x625.png"
-    },
-    {
-      "name": "button.start",
-      "format": "png",
-      "path": "snake_button_start_280x96.png"
-    },
-    {
-      "name": "button.restart",
-      "format": "png",
-      "path": "snake_button_restart_280x96.png"
-    },
-    {
       "name": "burst.normal",
       "format": "png",
       "path": "snake_burst_normal_sheet.png",

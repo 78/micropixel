@@ -5,6 +5,7 @@
 
 #include <array>
 #include <span>
+#include <vector>
 
 #include "sdk/micropixel.hpp"
 
@@ -16,8 +17,6 @@ inline constexpr micropixel::Color AccentColor() { return micropixel::Color::Rgb
 inline constexpr micropixel::Color MutedColor() { return micropixel::Color::Rgb(148U, 168U, 190U); }
 inline constexpr micropixel::Color DangerColor() { return micropixel::Color::Rgb(224U, 79U, 96U); }
 inline constexpr micropixel::Color BlueColor() { return micropixel::Color::Rgb(68U, 132U, 235U); }
-inline constexpr int32_t kButtonTextOpticalOffsetY = -5;
-
 enum class DisplayClass : uint8_t {
     kCompact,
     kExpanded,
@@ -45,43 +44,50 @@ using DemoAtlasTextures = std::array<micropixel::Texture, kDemoAtlasSheetCount>;
 
 class DemoView final {
    public:
-    DemoView(micropixel::Scene& scene, micropixel::Layer layer, DemoAtlasTextures& atlases)
-        : scene_(scene), layer_(layer) {
-        shapes_ = scene_.CreateSpriteBatch(kShapeCapacity, layer_);
-        for (micropixel::LabelNode& label : labels_) {
-            label =
-                scene_.CreateLabel({0, 0}, " ", micropixel::Color::White(), micropixel::SystemFont::kMedium, layer_);
-        }
-        for (micropixel::SpriteNode& sprite : sprites_) {
-            sprite = scene_.CreateSprite(atlases[0], {0, 0, 1, 1}, {0, 0, 1, 1}, layer_);
-        }
-    }
+    DemoView(micropixel::Scene& scene, micropixel::ContainerNode root_container)
+        : scene_(scene),
+          shape_container_(root_container.CreateContainer({.z_order = 0})),
+          sprite_container_(root_container.CreateContainer({.z_order = 1})),
+          label_container_(root_container.CreateContainer({.z_order = 2})) {}
 
     template <typename RenderFunction>
     void Update(RenderFunction&& render) {
-        auto update = scene_.BeginUpdate();
-        update_ = &update;
-        shape_count_ = 0U;
-        label_count_ = 0U;
-        sprite_count_ = 0U;
-        for (uint16_t index = 0U; index < kShapeCapacity; ++index) {
-            shapes_.SetInstanceVisible(update, index, false);
-        }
-        for (micropixel::LabelNode& label : labels_) {
-            label.SetVisible(update, false);
-        }
-        for (micropixel::SpriteNode& sprite : sprites_) {
-            sprite.SetVisible(update, false);
-        }
-        render(*this);
-        update_ = nullptr;
-        micropixel::Assert(update.Present().has_value(), "demo: scene update failed");
+        auto presented = scene_.Update([&](micropixel::SceneUpdate& update) {
+            update_ = &update;
+            shape_count_ = 0U;
+            label_count_ = 0U;
+            sprite_count_ = 0U;
+            for (micropixel::ShapeNode& shape : shapes_) {
+                shape.SetVisible(update, false);
+            }
+            for (micropixel::LabelNode& label : labels_) {
+                label.SetVisible(update, false);
+            }
+            for (micropixel::SpriteNode& sprite : sprites_) {
+                sprite.SetVisible(update, false);
+            }
+            render(*this);
+            DestroyUnused(update, shapes_, shape_count_);
+            DestroyUnused(update, labels_, label_count_);
+            DestroyUnused(update, sprites_, sprite_count_);
+            update_ = nullptr;
+        });
+        micropixel::Assert(presented.has_value(), "demo: scene update failed");
+        shapes_.resize(shape_count_);
+        labels_.resize(label_count_);
+        sprites_.resize(sprite_count_);
     }
 
     void Panel(micropixel::Rect rect, micropixel::Color color, uint8_t opacity = 255U) {
-        micropixel::Assert(update_ != nullptr && shape_count_ < kShapeCapacity, "demo: shape slots exhausted");
-        shapes_.SetInstance(*update_, shape_count_++,
-                            {.destination = rect, .color = color, .opacity = opacity, .visible = opacity != 0U});
+        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        if (shape_count_ == shapes_.size()) {
+            shapes_.push_back(shape_container_.CreateShape(rect, color, opacity));
+        }
+        micropixel::ShapeNode& shape = shapes_[shape_count_++];
+        shape.SetRect(*update_, rect);
+        shape.SetColor(*update_, color);
+        shape.SetOpacity(*update_, opacity);
+        shape.SetVisible(*update_, opacity != 0U);
     }
 
     void Text(micropixel::Point position, const char* text, micropixel::Color color,
@@ -96,7 +102,11 @@ class DemoView final {
 
     void Sprite(micropixel::Point position, const micropixel::Texture& texture, micropixel::Rect source,
                 uint8_t opacity = 255U) {
-        micropixel::Assert(update_ != nullptr && sprite_count_ < kSpriteCapacity, "demo: sprite slots exhausted");
+        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        if (sprite_count_ == sprites_.size()) {
+            sprites_.push_back(sprite_container_.CreateSprite(
+                texture, {position.x, position.y, source.width, source.height}, source, opacity));
+        }
         micropixel::SpriteNode& sprite = sprites_[sprite_count_++];
         sprite.SetTexture(*update_, texture);
         sprite.SetSource(*update_, source);
@@ -105,10 +115,25 @@ class DemoView final {
         sprite.SetVisible(*update_, opacity != 0U);
     }
 
+    [[nodiscard]] micropixel::SceneUpdate& scene_update() {
+        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        return *update_;
+    }
+
    private:
+    template <typename Node>
+    static void DestroyUnused(micropixel::SceneUpdate& update, std::vector<Node>& nodes, uint32_t used) {
+        for (uint32_t index = used; index < nodes.size(); ++index) {
+            nodes[index].Destroy(update);
+        }
+    }
+
     void SetText(micropixel::Point position, const char* text, micropixel::Color color, micropixel::SystemFont font,
                  bool centered) {
-        micropixel::Assert(update_ != nullptr && label_count_ < kLabelCapacity, "demo: label slots exhausted");
+        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        if (label_count_ == labels_.size()) {
+            labels_.push_back(label_container_.CreateLabel(position, text, color, font, centered));
+        }
         micropixel::LabelNode& label = labels_[label_count_++];
         label.SetPosition(*update_, position);
         label.SetText(*update_, text);
@@ -118,26 +143,26 @@ class DemoView final {
         label.SetVisible(*update_, true);
     }
 
-    static constexpr uint16_t kShapeCapacity = 64U;
-    static constexpr uint16_t kLabelCapacity = 64U;
-    static constexpr uint16_t kSpriteCapacity = 8U;
     micropixel::Scene& scene_;
-    micropixel::Layer layer_{};
-    micropixel::SpriteBatch shapes_{};
-    micropixel::LabelNode labels_[kLabelCapacity]{};
-    micropixel::SpriteNode sprites_[kSpriteCapacity]{};
+    micropixel::ContainerNode shape_container_{};
+    micropixel::ContainerNode sprite_container_{};
+    micropixel::ContainerNode label_container_{};
+    std::vector<micropixel::ShapeNode> shapes_{};
+    std::vector<micropixel::LabelNode> labels_{};
+    std::vector<micropixel::SpriteNode> sprites_{};
     micropixel::SceneUpdate* update_{};
-    uint16_t shape_count_{};
-    uint16_t label_count_{};
-    uint16_t sprite_count_{};
+    uint32_t shape_count_{};
+    uint32_t label_count_{};
+    uint32_t sprite_count_{};
 };
 
 struct DemoContext final {
     micropixel::Application& app;
-    micropixel::Renderer renderer;
     micropixel::InputInfo input;
     DemoLayout layout;
     DemoAtlasTextures& atlas_textures;
+    micropixel::Scene& scene;
+    micropixel::ContainerNode root_container;
     DemoView& view;
     micropixel::AudioClip audio_clip{};
     micropixel::Playback audio_playback{};
@@ -160,11 +185,10 @@ using Line = micropixel::FixedString<96U>;
     return context.layout.page_content.y + (context.layout.compact() ? compact_offset : expanded_offset);
 }
 
-inline void LayoutButtonRow(const DemoContext& context, std::span<micropixel::ui::Button> buttons) {
-    micropixel::Assert(!buttons.empty() && buttons.size() <= 6U, "demo: invalid action button count");
+inline void LayoutButtonRow(const DemoContext& context, std::span<micropixel::Rect> bounds) {
+    micropixel::Assert(!bounds.empty() && bounds.size() <= 6U, "demo: invalid action button count");
     std::array<micropixel::ui::FlexItem, 6U> items{};
-    std::array<micropixel::Rect, 6U> rects{};
-    for (uint32_t index = 0U; index < buttons.size(); ++index) {
+    for (uint32_t index = 0U; index < bounds.size(); ++index) {
         items[index] = micropixel::ui::FlexItem::Grow();
     }
     const int32_t horizontal_padding = context.layout.compact() ? 20 : 28;
@@ -175,23 +199,8 @@ inline void LayoutButtonRow(const DemoContext& context, std::span<micropixel::ui
             .direction = micropixel::ui::FlexDirection::kHorizontal,
             .padding = {vertical_padding, horizontal_padding, vertical_padding, horizontal_padding},
             .gap_pixels = context.layout.compact() ? 10 : 14},
-        std::span<const micropixel::ui::FlexItem>{items.data(), buttons.size()},
-        std::span<micropixel::Rect>{rects.data(), buttons.size()});
+        std::span<const micropixel::ui::FlexItem>{items.data(), bounds.size()}, bounds);
     micropixel::Assert(result.has_value(), "demo: action button layout failed");
-    for (uint32_t index = 0U; index < buttons.size(); ++index) {
-        buttons[index].SetBounds(rects[index]);
-        buttons[index].Reset();
-    }
-}
-
-inline void DrawButton(DemoView& view, const micropixel::ui::Button& button, const char* label,
-                       micropixel::Color color = BlueColor()) {
-    const micropixel::Rect bounds = button.bounds();
-    view.Panel(bounds, color);
-    view.Panel(bounds, micropixel::Color::Black(), !button.enabled() ? 112U : button.pressed() ? 48U : 0U);
-    view.CenteredText(bounds.center_x(),
-                      bounds.y + (bounds.height - 24) / 2 + kButtonTextOpticalOffsetY + (button.pressed() ? 1 : 0),
-                      label, micropixel::Color::White(), micropixel::SystemFont::kLarge);
 }
 
 enum class PageId : uint8_t {
@@ -210,6 +219,7 @@ enum class PageId : uint8_t {
 [[nodiscard]] DemoAtlasTextures LoadDemoAtlases(micropixel::Application& app);
 
 void TimerDemoEnter(DemoContext& context);
+void TimerDemoExit(DemoContext& context);
 [[nodiscard]] bool TimerDemoOnTimer(DemoContext& context, const micropixel::TimerEvent& event);
 [[nodiscard]] bool TimerDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
 void TimerDemoRender(DemoContext& context, DemoView& view);
@@ -220,10 +230,12 @@ void InputDemoEnter(DemoContext& context);
 void InputDemoRender(DemoContext& context, DemoView& view);
 
 void StorageDemoEnter(DemoContext& context);
+void StorageDemoExit(DemoContext& context);
 [[nodiscard]] bool StorageDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
 void StorageDemoRender(DemoContext& context, DemoView& view);
 
 void ResourceAtlasDemoEnter(DemoContext& context);
+void ResourceAtlasDemoExit(DemoContext& context);
 [[nodiscard]] bool ResourceAtlasDemoOnTimer(DemoContext& context, const micropixel::TimerEvent& event);
 [[nodiscard]] bool ResourceAtlasDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event);
 void ResourceAtlasDemoRender(DemoContext& context, DemoView& view);

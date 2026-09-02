@@ -4,8 +4,12 @@
 #include <cstdint>
 #include <cstring>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+#include "freertos/idf_additions.h"
+#endif
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "platform/audio/audio_mixer.hpp"
@@ -47,6 +51,7 @@ struct AudioEngineState final {
     std::atomic<EngineState> engine_state{EngineState::kStopped};
     std::atomic<bool> suspended{};
     std::atomic<bool> app_foreground{};
+    std::atomic<bool> hardware_muted{};
     std::atomic<uint16_t> master_volume_per_ten_thousand{static_cast<uint16_t>(VolumeOutputPerTenThousand(70U))};
     std::atomic<TaskHandle_t> task{};
     SemaphoreHandle_t voices_mutex{};
@@ -85,6 +90,11 @@ struct AudioChunkState final {
     device::PcmCompletion completions[kMaxPcmStreams]{};
 };
 
+struct AudioTaskBuffers final {
+    int32_t output_frames[kFramesPerChunk * 2U]{};
+    int16_t pcm_samples[kMaxPcmStreams][kFramesPerChunk]{};
+};
+
 bool HasPlayableVoiceLocked() {
     if (State().suspended.load(std::memory_order_acquire)) {
         return false;
@@ -117,14 +127,14 @@ bool AppKeepsOutputActive() {
 
 bool HasOutputDemand() { return ShouldRunAudioOutput(AppKeepsOutputActive(), HasPlayableVoice()); }
 
-AudioChunkState FillAudioChunk(int32_t* frames) {
-    std::memset(frames, 0, kFramesPerChunk * 2U * sizeof(*frames));
+AudioChunkState FillAudioChunk(AudioTaskBuffers& buffers) {
+    std::memset(buffers.output_frames, 0, sizeof(buffers.output_frames));
     if (xSemaphoreTake(State().voices_mutex, portMAX_DELAY) != pdTRUE) {
         return {};
     }
     AudioChunkState chunk{};
     if (!State().suspended.load(std::memory_order_acquire)) {
-        int16_t pcm_samples[kMaxPcmStreams][kFramesPerChunk]{};
+        std::memset(buffers.pcm_samples, 0, sizeof(buffers.pcm_samples));
         uint32_t pcm_frames[kMaxPcmStreams]{};
         uint16_t pcm_volumes[kMaxPcmStreams]{};
         for (uint32_t index = 0U; index < kMaxPcmStreams; ++index) {
@@ -133,7 +143,7 @@ AudioChunkState FillAudioChunk(int32_t* frames) {
                 continue;
             }
             const device::PcmReadResult read =
-                voice.source.read(voice.source.context, pcm_samples[index], kFramesPerChunk);
+                voice.source.read(voice.source.context, buffers.pcm_samples[index], kFramesPerChunk);
             if (read.frames > kFramesPerChunk) {
                 chunk.completions[chunk.completion_count++] = {
                     .token = voice.token,
@@ -163,18 +173,19 @@ AudioChunkState FillAudioChunk(int32_t* frames) {
             for (uint32_t index = 0U; index < kMaxPcmStreams; ++index) {
                 if (frame < pcm_frames[index]) {
                     chunk.rendered_audio = true;
-                    mixed += static_cast<int32_t>(pcm_samples[index][frame]) * pcm_volumes[index] / 1000;
+                    mixed += static_cast<int32_t>(buffers.pcm_samples[index][frame]) * pcm_volumes[index] / 1000;
                 }
             }
-            mixed = ScaleOutputSample(mixed, State().master_volume_per_ten_thousand.load(std::memory_order_relaxed));
+            mixed = ApplyHostOutputGain(mixed, State().master_volume_per_ten_thousand.load(std::memory_order_relaxed),
+                                        State().hardware_muted.load(std::memory_order_relaxed));
             if (mixed > 32767) {
                 mixed = 32767;
             } else if (mixed < -32768) {
                 mixed = -32768;
             }
             const int32_t output = mixed * 65536;
-            frames[frame * 2U] = output;
-            frames[frame * 2U + 1U] = output;
+            buffers.output_frames[frame * 2U] = output;
+            buffers.output_frames[frame * 2U + 1U] = output;
         }
         chunk.active_after = HasPlayableVoiceLocked();
     }
@@ -206,6 +217,14 @@ void NotifyAudioTask() {
 
 void AudioTask(void* argument) {
     auto& sink = *static_cast<AudioOutputPeripheral*>(argument);
+    auto* buffers = static_cast<AudioTaskBuffers*>(
+        heap_caps_calloc(1U, sizeof(AudioTaskBuffers), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buffers == nullptr) {
+        State().engine_state.store(EngineState::kFailed, std::memory_order_release);
+        ESP_LOGE(kTag, "unable to allocate audio task buffers in PSRAM");
+        vTaskDelete(nullptr);
+        return;
+    }
     AudioPowerController* power_controller = State().power_controller;
     bool sink_initialized = false;
     esp_err_t status = power_controller == nullptr ? sink.Initialize() : ESP_OK;
@@ -214,6 +233,7 @@ void AudioTask(void* argument) {
         State().engine_state.store(EngineState::kFailed, std::memory_order_release);
         ESP_LOGE(kTag, "%s initialization failed: %s", sink.Name(), esp_err_to_name(status));
         sink.Shutdown();
+        heap_caps_free(buffers);
         vTaskDelete(nullptr);
         return;
     }
@@ -221,7 +241,6 @@ void AudioTask(void* argument) {
     State().engine_state.store(EngineState::kReady, std::memory_order_release);
     ESP_LOGI(kTag, "audio ready: sink=%s, %lu Hz, %u synth voices, core=%d", sink.Name(),
              static_cast<unsigned long>(State().sample_rate), kMaxVoices, xPortGetCoreID());
-    int32_t frames[kFramesPerChunk * 2U]{};
     bool first_output_transition = true;
     while (status == ESP_OK) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -242,14 +261,14 @@ void AudioTask(void* argument) {
                 break;
             }
         }
-        status = sink.Start(frames, kFramesPerChunk);
+        status = sink.Start(buffers->output_frames, kFramesPerChunk);
         if (status == ESP_OK && first_output_transition) {
             ESP_LOGI(kTag, "audio output started for foreground App");
         }
         uint32_t idle_chunks = 0U;
         while (status == ESP_OK) {
-            const AudioChunkState chunk = FillAudioChunk(frames);
-            status = sink.Write(frames, kFramesPerChunk);
+            const AudioChunkState chunk = FillAudioChunk(*buffers);
+            status = sink.Write(buffers->output_frames, kFramesPerChunk);
             if (status != ESP_OK) {
                 ESP_LOGE(kTag, "%s mixer stopped: %s", sink.Name(), esp_err_to_name(status));
                 break;
@@ -287,6 +306,7 @@ void AudioTask(void* argument) {
     if (power_controller != nullptr) {
         (void)power_controller->PowerOffAudio();
     }
+    heap_caps_free(buffers);
     vTaskDelete(nullptr);
 }
 
@@ -307,8 +327,16 @@ esp_err_t AudioEngine::Initialize(AudioOutputPeripheral& sink, uint32_t sample_r
     AudioMixer::InitializeSineTable(State().sine_table);
     State().engine_state.store(EngineState::kInitializing, std::memory_order_release);
     TaskHandle_t task = nullptr;
-    if (xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, State().sink,
-                                task_policy::kAudioPriority, &task, kAudioTaskCore) != pdPASS) {
+#ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    const BaseType_t task_created = xTaskCreatePinnedToCoreWithCaps(
+        AudioTask, "micropixel_audio", kAudioTaskStackSize, State().sink, task_policy::kAudioPriority, &task,
+        kAudioTaskCore, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    const BaseType_t task_created =
+        xTaskCreatePinnedToCore(AudioTask, "micropixel_audio", kAudioTaskStackSize, State().sink,
+                                task_policy::kAudioPriority, &task, kAudioTaskCore);
+#endif
+    if (task_created != pdPASS) {
         State().engine_state.store(EngineState::kStopped, std::memory_order_release);
         vSemaphoreDelete(State().voices_mutex);
         State().voices_mutex = nullptr;
@@ -322,6 +350,8 @@ void AudioEngine::SetMasterVolumePercent(uint8_t percent) {
     const uint16_t perceptual_output = VolumeOutputPerTenThousand(percent);
     State().master_volume_per_ten_thousand.store(perceptual_output, std::memory_order_relaxed);
 }
+
+void AudioEngine::SetHardwareMuted(bool muted) { State().hardware_muted.store(muted, std::memory_order_relaxed); }
 
 int32_t AudioEngine::GetInfo(micropixel_audio_info_t& info) {
     EngineState state = State().engine_state.load(std::memory_order_acquire);

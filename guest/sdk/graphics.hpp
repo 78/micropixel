@@ -11,7 +11,8 @@ namespace micropixel {
 class Application;
 class Renderer;
 class Scene;
-class Layer;
+class Container;
+class ContainerNode;
 class ShapeNode;
 class SpriteNode;
 class SurfaceNode;
@@ -22,6 +23,12 @@ class Texture;
 class StreamingTexture;
 class TextureUpdateBatch;
 class Font;
+
+namespace ui {
+class ImageButton;
+class Label;
+class TextButton;
+}  // namespace ui
 
 class Color final {
    public:
@@ -55,7 +62,7 @@ class Color final {
     explicit constexpr Color(uint32_t rgb888) : rgb888_(rgb888) {}
     uint32_t rgb888_{};
 
-    friend class Scene;
+    friend class Container;
     friend class ShapeNode;
     friend class LabelNode;
 };
@@ -71,6 +78,8 @@ enum class PixelFormat : uint32_t {
     kBgr888 = 1U,
     // Canonical bytes in Guest memory: B, G, R, A.
     kBgra8888 = 2U,
+    // Canonical Guest-memory layout: little-endian RGB565 uint16_t.
+    kRgb565 = 3U,
 };
 
 enum class SystemFont : uint16_t {
@@ -101,14 +110,14 @@ class RendererInfo final {
     }
     [[nodiscard]] constexpr uint16_t max_scene_nodes() const { return max_scene_nodes_; }
     [[nodiscard]] constexpr uint16_t max_batch_instances() const { return max_batch_instances_; }
-    [[nodiscard]] constexpr uint16_t max_layers() const { return max_layers_; }
+    [[nodiscard]] constexpr uint16_t max_containers() const { return max_containers_; }
     [[nodiscard]] constexpr uint16_t max_sprite_batches() const { return max_sprite_batches_; }
     [[nodiscard]] constexpr uint32_t max_scene_bytes() const { return max_scene_bytes_; }
 
    private:
     constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t physical_width, uint32_t physical_height,
                            DisplayInsets safe_area_insets, uint16_t max_scene_nodes, uint16_t max_batch_instances,
-                           uint16_t max_layers, uint16_t max_sprite_batches, uint32_t max_scene_bytes)
+                           uint16_t max_containers, uint16_t max_sprite_batches, uint32_t max_scene_bytes)
         : width_(width),
           height_(height),
           physical_width_(physical_width),
@@ -117,7 +126,7 @@ class RendererInfo final {
           max_scene_bytes_(max_scene_bytes),
           max_scene_nodes_(max_scene_nodes),
           max_batch_instances_(max_batch_instances),
-          max_layers_(max_layers),
+          max_containers_(max_containers),
           max_sprite_batches_(max_sprite_batches) {}
 
     uint32_t width_{};
@@ -128,7 +137,7 @@ class RendererInfo final {
     uint32_t max_scene_bytes_{};
     uint16_t max_scene_nodes_{};
     uint16_t max_batch_instances_{};
-    uint16_t max_layers_{};
+    uint16_t max_containers_{};
     uint16_t max_sprite_batches_{};
 
     friend class Renderer;
@@ -140,6 +149,7 @@ class Renderer final {
     constexpr Renderer& operator=(const Renderer&) noexcept = default;
 
     [[nodiscard]] RendererInfo info() const;
+    [[nodiscard]] Scene CreateScene(Color background = Color::Black()) const;
     [[nodiscard]] Scene CreateScene(const SceneDescriptor& descriptor) const;
     [[nodiscard]] Result<StreamingTexture> CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
     [[nodiscard]] TextureUpdateBatch BeginTextureUpdateBatch() const;
@@ -150,6 +160,10 @@ class Renderer final {
     struct CapabilityToken {};
     explicit constexpr Renderer(CapabilityToken) noexcept {}
     friend class Application;
+    friend class Container;
+    friend class ui::ImageButton;
+    friend class ui::Label;
+    friend class ui::TextButton;
 };
 
 }  // namespace micropixel

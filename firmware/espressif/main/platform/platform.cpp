@@ -3,6 +3,7 @@
 #include <cstring>
 #include <expected>
 
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "platform/audio/audio_output_peripheral.hpp"
@@ -12,6 +13,8 @@
 
 namespace micropixel::platform {
 namespace {
+
+constexpr char kTag[] = "micropixel_platform";
 
 class UnavailablePower final : public device::Power {
    public:
@@ -134,12 +137,19 @@ bool Platform::Publish(const BoardRegistration& registration) {
 
     device::Audio* audio = registration.audio_;
     if (registration.audio_output_ != nullptr) {
-        if (registration.audio_sample_rate_ == 0U ||
-            audio_engine_.Initialize(*registration.audio_output_, registration.audio_sample_rate_,
-                                     registration.audio_power_controller_) != ESP_OK) {
-            return false;
+        const esp_err_t audio_status =
+            registration.audio_sample_rate_ == 0U
+                ? ESP_ERR_INVALID_ARG
+                : audio_engine_.Initialize(*registration.audio_output_, registration.audio_sample_rate_,
+                                           registration.audio_power_controller_);
+        if (audio_status == ESP_OK) {
+            audio = &audio_engine_;
+        } else {
+            ESP_LOGW(kTag, "%s audio capability unavailable for this boot: %s", registration.audio_output_->Name(),
+                     esp_err_to_name(audio_status));
+            registration.audio_output_->Shutdown();
+            audio = nullptr;
         }
-        audio = &audio_engine_;
     }
     if (audio != nullptr) {
         valid = device_registry_.RegisterAudioOutput() && valid;
@@ -189,6 +199,10 @@ bool BoardContext::Publish(const BoardRegistration& registration) { return platf
 esp_err_t Platform::Initialize() {
     if (initializing_ || Ready()) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if (!device_registry_.InitializeStorage()) {
+        ESP_LOGE(kTag, "device registry storage is unavailable");
+        return ESP_ERR_NO_MEM;
     }
     initializing_ = true;
     const esp_err_t status = board_.Initialize(board_context_);

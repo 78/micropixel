@@ -30,7 +30,7 @@ class GuestContext final {
    public:
     GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
                  work::BackgroundExecutor& background_executor, std::string_view effective_locale,
-                 GuestLogSink* log_sink);
+                 const micropixel_system_launch_arguments_response_t& launch_arguments, GuestLogSink* log_sink);
     GuestContext(const GuestContext&) = delete;
     GuestContext& operator=(const GuestContext&) = delete;
     ~GuestContext();

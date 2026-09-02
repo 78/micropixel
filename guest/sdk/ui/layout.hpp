@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <span>
 
 #include "sdk/geometry.hpp"
@@ -38,13 +39,9 @@ enum class FlexAlignment : uint8_t {
 
 class LayoutLength final {
    public:
-    [[nodiscard]] static constexpr LayoutLength Pixels(uint32_t pixels) {
-        return LayoutLength{Kind::kPixels, pixels};
-    }
+    [[nodiscard]] static constexpr LayoutLength Pixels(uint32_t pixels) { return LayoutLength{Kind::kPixels, pixels}; }
 
-    [[nodiscard]] static constexpr LayoutLength Grow(uint16_t weight = 1U) {
-        return LayoutLength{Kind::kGrow, weight};
-    }
+    [[nodiscard]] static constexpr LayoutLength Grow(uint16_t weight = 1U) { return LayoutLength{Kind::kGrow, weight}; }
 
     [[nodiscard]] static constexpr LayoutLength Fill() { return LayoutLength{Kind::kFill, 0U}; }
 
@@ -85,10 +82,17 @@ struct FlexLayout final {
     FlexAlignment alignment{FlexAlignment::kStretch};
 };
 
+struct GridLayout final {
+    FlexLayout rows{.direction = FlexDirection::kVertical};
+    FlexLayout columns{.direction = FlexDirection::kHorizontal};
+};
+
+inline constexpr size_t kMaxGridTracks = 8U;
+
 // Computes physical rectangles into caller-owned storage. This is a pure Guest-side
 // geometry operation: it performs no allocation and never calls a Host service.
 [[nodiscard]] inline Result<void> ComputeFlexLayout(Rect bounds, const FlexLayout& layout,
-                                                     std::span<const FlexItem> items, std::span<Rect> output) {
+                                                    std::span<const FlexItem> items, std::span<Rect> output) {
     if (output.size() < items.size()) {
         return unexpected(Error{ErrorCode::kBufferTooSmall});
     }
@@ -171,8 +175,7 @@ struct FlexLayout final {
         const FlexItem& item = items[index];
         int64_t main_size = item.main_size.value_;
         if (item.main_size.kind_ == LayoutLength::Kind::kGrow) {
-            const uint64_t numerator =
-                static_cast<uint64_t>(free_pixels) * item.main_size.value_ + grow_remainder;
+            const uint64_t numerator = static_cast<uint64_t>(free_pixels) * item.main_size.value_ + grow_remainder;
             main_size = static_cast<int64_t>(numerator / grow_weight);
             grow_remainder = numerator % grow_weight;
         }
@@ -194,11 +197,10 @@ struct FlexLayout final {
             }
         }
 
-        output[index] = horizontal
-                            ? Rect{static_cast<int32_t>(main_position), static_cast<int32_t>(cross_position),
-                                   static_cast<int32_t>(main_size), static_cast<int32_t>(cross_size)}
-                            : Rect{static_cast<int32_t>(cross_position), static_cast<int32_t>(main_position),
-                                   static_cast<int32_t>(cross_size), static_cast<int32_t>(main_size)};
+        output[index] = horizontal ? Rect{static_cast<int32_t>(main_position), static_cast<int32_t>(cross_position),
+                                          static_cast<int32_t>(main_size), static_cast<int32_t>(cross_size)}
+                                   : Rect{static_cast<int32_t>(cross_position), static_cast<int32_t>(main_position),
+                                          static_cast<int32_t>(cross_size), static_cast<int32_t>(main_size)};
         main_position += main_size;
         if (index + 1U < items.size()) {
             main_position += layout.gap_pixels + distributed_gap_pixels;
@@ -206,6 +208,45 @@ struct FlexLayout final {
                 ++main_position;
             }
         }
+    }
+    return {};
+}
+
+// Computes a row-major grid by composing one vertical and one horizontal Flex
+// layout. Row and column tracks can independently use fixed or grow sizing.
+// The fixed capacity keeps the helper allocation-free and makes failure atomic:
+// output is modified only after every cell has been computed successfully.
+[[nodiscard]] inline Result<void> ComputeGridLayout(Rect bounds, const GridLayout& layout,
+                                                    std::span<const FlexItem> rows, std::span<const FlexItem> columns,
+                                                    std::span<Rect> output) {
+    if (rows.empty() || columns.empty() || layout.rows.direction != FlexDirection::kVertical ||
+        layout.columns.direction != FlexDirection::kHorizontal) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    if (rows.size() > kMaxGridTracks || columns.size() > kMaxGridTracks) {
+        return unexpected(Error{ErrorCode::kResourceExhausted});
+    }
+    const size_t cell_count = rows.size() * columns.size();
+    if (output.size() < cell_count) {
+        return unexpected(Error{ErrorCode::kBufferTooSmall});
+    }
+
+    std::array<Rect, kMaxGridTracks> row_rects{};
+    auto rows_laid_out = ComputeFlexLayout(bounds, layout.rows, rows, std::span{row_rects}.first(rows.size()));
+    if (!rows_laid_out.has_value()) {
+        return unexpected(rows_laid_out.error());
+    }
+
+    std::array<Rect, kMaxGridTracks * kMaxGridTracks> cells{};
+    for (size_t row = 0U; row < rows.size(); ++row) {
+        auto row_output = std::span{cells}.subspan(row * columns.size(), columns.size());
+        auto columns_laid_out = ComputeFlexLayout(row_rects[row], layout.columns, columns, row_output);
+        if (!columns_laid_out.has_value()) {
+            return unexpected(columns_laid_out.error());
+        }
+    }
+    for (size_t index = 0U; index < cell_count; ++index) {
+        output[index] = cells[index];
     }
     return {};
 }

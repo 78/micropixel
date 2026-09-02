@@ -15,12 +15,71 @@
 #include "runtime/bundle/bundle_format.h"
 #include "runtime/bundle/bundle_reader.h"
 #include "runtime/bundlefs/bundlefs.h"
+#include "sdkconfig.h"
 
 namespace micropixel::runtime {
 namespace {
 
 constexpr char kTag[] = "app_store";
 constexpr size_t kWriteChunkSize = 4096U;
+
+constexpr uint32_t HostAotTargetMask() {
+#if CONFIG_IDF_TARGET_ESP32S3
+    return MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3;
+#elif CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+    return MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F;
+#else
+#error "MicroPixel App Store requires an explicit Host AOT target"
+#endif
+}
+
+uint32_t Fnv1a32(const uint8_t* data, size_t size) {
+    uint32_t value = 2166136261U;
+    for (size_t index = 0U; index < size; ++index) {
+        value ^= data[index];
+        value *= 16777619U;
+    }
+    return value;
+}
+
+std::expected<void, AppStoreError> PreflightAotTarget(const AppInstallRequest& request,
+                                                      const micropixel_bundle_header_t& header) {
+    if (header.header_size != sizeof(header) || header.toc_offset != sizeof(header) || header.section_count == 0U ||
+        header.section_count > MICROPIXEL_BUNDLE_MAX_SECTIONS ||
+        header.section_count > (request.size - header.toc_offset) / sizeof(micropixel_bundle_section_t) ||
+        header.framework_abi_version != MICROPIXEL_BUNDLE_FRAMEWORK_ABI_VERSION || header.reserved0 != 0U ||
+        header.reserved1 != 0U || header.reserved2 != 0U || header.reserved3 != 0U || header.reserved4 != 0U) {
+        return std::unexpected(AppStoreError::kInvalidPackage);
+    }
+    micropixel_bundle_header_t hash_header = header;
+    const uint32_t expected_hash = hash_header.header_hash;
+    hash_header.header_hash = 0U;
+    if (Fnv1a32(reinterpret_cast<const uint8_t*>(&hash_header), sizeof(hash_header)) != expected_hash) {
+        return std::unexpected(AppStoreError::kInvalidPackage);
+    }
+
+    uint32_t aot_sections = 0U;
+    uint32_t aot_target_mask = MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE;
+    for (uint32_t index = 0U; index < header.section_count; ++index) {
+        micropixel_bundle_section_t section{};
+        std::memcpy(&section, request.data + header.toc_offset + index * sizeof(section), sizeof(section));
+        if (section.kind == MICROPIXEL_BUNDLE_SECTION_AOT) {
+            ++aot_sections;
+            aot_target_mask = section.reserved0;
+        }
+    }
+    const bool known_target = aot_target_mask == MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE ||
+                              aot_target_mask == MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F ||
+                              aot_target_mask == MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3;
+    if (aot_sections > 1U || !known_target) {
+        return std::unexpected(AppStoreError::kInvalidPackage);
+    }
+    if (aot_sections == 1U &&
+        (aot_target_mask == MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE || aot_target_mask != HostAotTargetMask())) {
+        return std::unexpected(AppStoreError::kIncompatibleAotTarget);
+    }
+    return {};
+}
 
 template <typename T>
 struct HeapCapsObjectDeleter final {
@@ -243,6 +302,10 @@ std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallReques
     std::memcpy(header_app_id.data(), header.app_id, header.app_id_length);
     if (std::strcmp(header_app_id.data(), request.expected_app_id) != 0) {
         return std::unexpected(AppStoreError::kAppIdMismatch);
+    }
+    auto target_preflight = PreflightAotTarget(request, header);
+    if (!target_preflight) {
+        return std::unexpected(target_preflight.error());
     }
 
     std::array<uint8_t, BUNDLEFS_SHA256_SIZE> installed_sha256{};

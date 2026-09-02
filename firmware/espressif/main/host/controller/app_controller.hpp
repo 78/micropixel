@@ -47,6 +47,8 @@ class AppController final {
     ~AppController();
 
     [[nodiscard]] bool valid() const { return completion_queue_ != nullptr; }  // NOLINT(readability-identifier-naming)
+    [[nodiscard]] std::expected<void, AppControllerError> Start(
+        const runtime::InstalledApp& app, const micropixel_system_launch_arguments_response_t& launch_arguments);
     [[nodiscard]] std::expected<void, AppControllerError> Start(const runtime::InstalledApp& app);
     [[nodiscard]] std::expected<void, AppControllerError> Suspend(TickType_t timeout);
     [[nodiscard]] std::expected<void, AppControllerError> Resume();
@@ -66,6 +68,7 @@ class AppController final {
 
     runtime::AppRuntime& runtime_;
     runtime::InstalledApp selected_app_{};
+    micropixel_system_launch_arguments_response_t launch_arguments_{};
     StaticQueue_t completion_queue_storage_{};
     std::array<uint8_t, sizeof(runtime::AppRunOutcome)> completion_queue_bytes_{};
     QueueHandle_t completion_queue_{};

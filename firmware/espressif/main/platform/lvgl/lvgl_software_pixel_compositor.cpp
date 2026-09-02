@@ -269,7 +269,11 @@ bool LvglSoftwarePixelCompositor::Fill(PixelSurface destination, SurfaceRect rec
         return true;
     }
     if (destination.stride > INT32_MAX) {
-        return reference_.Fill(destination, rect, rgb888, opacity);
+        const bool succeeded = reference_.Fill(destination, rect, rgb888, opacity);
+        if (succeeded && opacity != 255U) {
+            stats_.alpha_blend_pixels += static_cast<uint64_t>(clipped.width) * clipped.height;
+        }
+        return succeeded;
     }
 
     lv_draw_sw_blend_fill_dsc_t descriptor{};
@@ -283,7 +287,22 @@ bool LvglSoftwarePixelCompositor::Fill(PixelSurface destination, SurfaceRect rec
     descriptor.opa = opacity;
     descriptor.relative_area = LocalArea(clipped.width, clipped.height);
     BlendFill(descriptor, destination.format);
+    if (opacity != 255U) {
+        stats_.alpha_blend_pixels += static_cast<uint64_t>(clipped.width) * clipped.height;
+    }
     return true;
+}
+
+void LvglSoftwarePixelCompositor::RecordBlit(ConstPixelSurface source, PixelSurface destination, SurfaceRect clipped,
+                                             uint8_t opacity) {
+    const uint64_t pixels = static_cast<uint64_t>(clipped.width) * clipped.height;
+    stats_.blit_pixels += pixels;
+    if (destination.format == SurfacePixelFormat::kRgb565 && source.format != SurfacePixelFormat::kRgb565) {
+        stats_.rgb888_to_rgb565_pixels += pixels;
+    }
+    if (source.format == SurfacePixelFormat::kBgra8888 || opacity != 255U) {
+        stats_.alpha_blend_pixels += pixels;
+    }
 }
 
 bool LvglSoftwarePixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
@@ -300,12 +319,20 @@ bool LvglSoftwarePixelCompositor::Blit(ConstPixelSurface source, SurfaceRect sou
         return true;
     }
     if (source.stride > INT32_MAX || destination.stride > INT32_MAX) {
-        return reference_.Blit(source, source_rect, destination, destination_rect, opacity);
+        const bool succeeded = reference_.Blit(source, source_rect, destination, destination_rect, opacity);
+        if (succeeded) {
+            RecordBlit(source, destination, clipped, opacity);
+        }
+        return succeeded;
     }
 
     const bool same_size = source_rect.width == destination_rect.width && source_rect.height == destination_rect.height;
     if (!same_size) {
-        return TransformBlit(source, source_rect, destination, destination_rect, clipped, opacity);
+        const bool succeeded = TransformBlit(source, source_rect, destination, destination_rect, clipped, opacity);
+        if (succeeded) {
+            RecordBlit(source, destination, clipped, opacity);
+        }
+        return succeeded;
     }
 
     const uint32_t source_x = static_cast<uint32_t>(source_rect.x + clipped.x - destination_rect.x);
@@ -324,6 +351,7 @@ bool LvglSoftwarePixelCompositor::Blit(ConstPixelSurface source, SurfaceRect sou
     descriptor.relative_area = LocalArea(clipped.width, clipped.height);
     descriptor.src_area = descriptor.relative_area;
     BlendImage(descriptor, destination.format);
+    RecordBlit(source, destination, clipped, opacity);
     return true;
 }
 

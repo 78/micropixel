@@ -1,7 +1,7 @@
 # Host 固件构建与烧录指南
 
-本文说明如何构建和烧录 Metalio-Claw4（ESP32-P4）产品固件，以及如何构建和烧录
-ESP-Mosaico（ESP32-S31）预览固件。以下命令均在仓库根目录执行。
+本文说明如何构建和烧录 Metalio-Claw4（ESP32-P4）产品固件，以及 ESP-Mosaico（ESP32-S31）、
+ESP32-S3-BOX-3 和立创开发板 SZPI ESP32-S3 预览固件。以下命令均在仓库根目录执行。
 
 ## 1. 准备环境
 
@@ -115,6 +115,30 @@ down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange statu
 触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 
+## ESP32-S3 / ESP32-S3-BOX-3 与立创 SZPI 预览版
+
+BOX-3 正式预览配置固定使用 40 MHz SPI、40 行 PSRAM partial buffer 和双缓冲：
+
+```sh
+bash tools/s3.sh build-host
+bash tools/s3.sh build-release  # Host + Blocks/Snake/Demo + 完整浏览器镜像
+bash tools/s3.sh flash-all /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor /dev/cu.usbmodemXXXX --reset
+```
+
+`build-release` 生成 `build/host-esp32s3-box-3/micropixel.bin` 和 `micropixel-full.bin`；完整镜像包含
+三个 Xtensa AOT App。`flash-all` 烧录 Host 和对应的 8 MiB `app_store` 内容。烧录入口会先确认端口连接的是
+ESP32-S3，默认使用原生 USB Serial/JTAG。
+
+立创 SZPI ESP32-S3 使用同一套 40 行 PSRAM 双缓冲和 Xtensa Guest 基线，板级显示、触控与传感器接线
+由独立 profile 提供：
+
+```sh
+bash tools/s3.sh build-szpi
+bash tools/s3.sh flash-szpi /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor-szpi /dev/cu.usbmodemXXXX --reset
+```
+
 Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo
 时使用产品固件的 USB 本地控制通道增量安装，不进入 ROM 下载态，也不重写 Host：
 
@@ -201,7 +225,7 @@ USB CDC 端口，不能同时占用。截图统一使用 `micropixel --transport
 需要专用 conformance Host 时，仍通过统一入口显式叠加配置：
 
 ```sh
-P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.p4-conformance.defaults" \
+P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.defaults;$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.p4-conformance.defaults" \
     bash tools/p4.sh build-host
 bash tools/p4.sh flash-host "$P4_PORT"
 ```

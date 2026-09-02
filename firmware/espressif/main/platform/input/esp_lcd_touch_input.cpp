@@ -10,12 +10,23 @@ namespace micropixel::platform::input {
 namespace {
 
 constexpr char kTag[] = "micropixel_touch";
+constexpr uint64_t kPollingIntervalUs = 10000U;
 }  // namespace
 
 EspLcdTouchInput* EspLcdTouchInput::active_instance_ = nullptr;
 
 EspLcdTouchInput::EspLcdTouchInput(int32_t width, int32_t height, uint8_t max_touch_points)
     : width_(width), height_(height), max_touch_points_(max_touch_points) {}
+
+EspLcdTouchInput::~EspLcdTouchInput() {
+    if (poll_timer_ != nullptr) {
+        (void)esp_timer_stop_blocking(poll_timer_, portMAX_DELAY);
+        (void)esp_timer_delete(poll_timer_);
+    }
+    if (active_instance_ == this) {
+        active_instance_ = nullptr;
+    }
+}
 
 esp_err_t EspLcdTouchInput::Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor) {
     if (touch == nullptr || width_ <= 0 || height_ <= 0 || max_touch_points_ == 0U ||
@@ -41,8 +52,27 @@ esp_err_t EspLcdTouchInput::Start(lv_display_t* display) {
         return prime_status;
     }
     active_instance_ = this;
-    const esp_err_t status = esp_lcd_touch_register_interrupt_callback(touch_, InterruptEntry);
+    esp_err_t status = esp_lcd_touch_register_interrupt_callback(touch_, InterruptEntry);
+    if (status == ESP_ERR_INVALID_ARG || status == ESP_ERR_NOT_SUPPORTED) {
+        esp_timer_create_args_t timer_config{};
+        timer_config.callback = PollTimerExpired;
+        timer_config.arg = this;
+        timer_config.dispatch_method = ESP_TIMER_TASK;
+        timer_config.name = "touch_poll";
+        timer_config.skip_unhandled_events = true;
+        status = esp_timer_create(&timer_config, &poll_timer_);
+        if (status == ESP_OK) {
+            status = esp_timer_start_periodic(poll_timer_, kPollingIntervalUs);
+        }
+        if (status == ESP_OK) {
+            ESP_LOGI(kTag, "touch controller has no interrupt line; polling every %llu us", kPollingIntervalUs);
+        }
+    }
     if (status != ESP_OK) {
+        if (poll_timer_ != nullptr) {
+            (void)esp_timer_delete(poll_timer_);
+            poll_timer_ = nullptr;
+        }
         active_instance_ = nullptr;
         display_ = nullptr;
     }
@@ -155,6 +185,20 @@ void IRAM_ATTR EspLcdTouchInput::InterruptEntry(esp_lcd_touch_handle_t) {
     }
     if (higher_priority_task_woken == pdTRUE) {
         portYIELD_FROM_ISR();
+    }
+}
+
+void EspLcdTouchInput::PollTimerExpired(void* context) {
+    auto* instance = static_cast<EspLcdTouchInput*>(context);
+    if (instance == nullptr) {
+        return;
+    }
+    instance->interrupts_.fetch_add(1U, std::memory_order_relaxed);
+    if (instance->executor_ == nullptr || instance->work_pending_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    if (!instance->executor_->Post(buses::I2cExecutor::Priority::kHigh, ProcessEntry, instance)) {
+        instance->work_pending_.store(false, std::memory_order_release);
     }
 }
 

@@ -21,15 +21,21 @@ struct HallScenePoint final {
     int32_t y{};
 };
 
+struct HallSceneSize final {
+    int32_t width{};
+    int32_t height{};
+};
+
 struct HallStatusBarLayout final {
-    HallScenePoint time{};
+    int32_t height{};
+    int32_t padding_left{};
+    int32_t padding_right{};
+    int32_t item_gap{};
+    int32_t battery_gap{};
     int32_t time_width{};
-    HallSceneRect cellular{};
-    HallScenePoint wifi{};
+    HallSceneSize cellular{};
     uint16_t wifi_scale{256U};
-    HallScenePoint battery{};
     int32_t battery_width{};
-    HallScenePoint battery_percent{};
     int32_t battery_percent_width{};
 };
 
@@ -80,10 +86,13 @@ struct HallSceneObjects final {
     lv_obj_t* carousel_content{};
     lv_obj_t* scroll_track{};
     lv_obj_t* scroll_thumb{};
+    lv_obj_t* status_bar_container{};
+    lv_obj_t* status_bar_items{};
     lv_obj_t* time_label{};
     lv_obj_t* cellular_container{};
     std::array<lv_obj_t*, 4U> cellular_bars{};
     lv_obj_t* wifi_image{};
+    lv_obj_t* battery_container{};
     lv_obj_t* battery_label{};
     lv_obj_t* battery_percent_label{};
 };

@@ -12,6 +12,19 @@ namespace micropixel::runtime {
 namespace {
 
 constexpr char kTag[] = "micropixel_resource";
+
+bool IsRawBitmapFormat(uint32_t format) {
+    return format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 || format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 ||
+           format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565;
+}
+
+uint32_t AssetPixelFormat(uint32_t format) {
+    if (format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888) {
+        return MICROPIXEL_PIXEL_FORMAT_BGRA8888;
+    }
+    return format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565 ? MICROPIXEL_PIXEL_FORMAT_RGB565
+                                                         : MICROPIXEL_PIXEL_FORMAT_BGR888;
+}
 }  // namespace
 
 ResourceService::ResourceService(const micropixel_aot_package_t& package, work::BackgroundExecutor& background_executor,
@@ -19,7 +32,12 @@ ResourceService::ResourceService(const micropixel_aot_package_t& package, work::
     : package_(package),
       background_executor_(background_executor),
       graphics_(graphics),
-      work_done_(xSemaphoreCreateBinary()) {}
+      work_done_(xSemaphoreCreateBinary()) {
+    const auto graphics_info = graphics_.GetInfo();
+    if (graphics_info && graphics_info->pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
+        preferred_opaque_format_ = MICROPIXEL_PIXEL_FORMAT_RGB565;
+    }
+}
 
 ResourceService::~ResourceService() {
     Shutdown();
@@ -28,7 +46,7 @@ ResourceService::~ResourceService() {
     }
 }
 
-bool ResourceService::valid() const { return work_done_ != nullptr && background_executor_.valid(); }
+bool ResourceService::valid() const { return work_done_ != nullptr && background_executor_.valid() && bitmaps_.valid(); }
 
 micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle_t texture,
                                                        const device::BitmapView& view) const {
@@ -46,9 +64,7 @@ micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle
 }
 
 ServiceResult<micropixel_texture_info_t> ResourceService::AddAsset(const micropixel_bundle_asset_view_t& asset) {
-    const uint32_t pixel_format = asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888
-                                      ? MICROPIXEL_PIXEL_FORMAT_BGRA8888
-                                      : MICROPIXEL_PIXEL_FORMAT_BGR888;
+    const uint32_t pixel_format = AssetPixelFormat(asset.format);
     device::BitmapView view{asset.data, asset.size, asset.width, asset.height, asset.stride, pixel_format};
     const micropixel_texture_handle_t texture = bitmaps_.Add(view, false);
     if (texture == 0U) {
@@ -66,7 +82,7 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
     }
 
-    if (asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 || asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888) {
+    if (IsRawBitmapFormat(asset.format)) {
         auto result = AddAsset(asset);
         ESP_LOGI(kTag, "loaded raw asset=%" PRIu32 " texture=%" PRIu32 " flash=%p", asset_id,
                  result ? result->texture : 0U, asset.data);
@@ -110,8 +126,7 @@ ServiceResult<micropixel_adaptive_texture_info_t> ResourceService::LoadAdaptiveT
         return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
     }
 
-    const bool raw =
-        asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 || asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
+    const bool raw = IsRawBitmapFormat(asset.format);
     if (scale_numerator == scale_denominator && raw) {
         auto loaded = AddAsset(asset);
         if (!loaded) {
@@ -185,8 +200,8 @@ ServiceResult<device::FontResourceView> ResourceService::FindFont(uint32_t resou
 ServiceResult<micropixel_texture_info_t> ResourceService::CreateStreamingTexture(uint32_t width, uint32_t height,
                                                                                  uint32_t pixel_format) {
     if (stopping_.load(std::memory_order_acquire) || width == 0U || height == 0U ||
-        width > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION || height > CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION ||
-        (pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 && pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888)) {
+        (pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 && pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 &&
+         pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     const micropixel_texture_handle_t texture = bitmaps_.CreateOffscreenSurface(width, height, pixel_format);
@@ -253,11 +268,8 @@ void ResourceService::Process(const Work& work) {
 
 int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_handle_t& texture_out) {
     DecodedBitmap source{};
-    const uint32_t pixel_format = work.asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888
-                                      ? MICROPIXEL_PIXEL_FORMAT_BGRA8888
-                                      : MICROPIXEL_PIXEL_FORMAT_BGR888;
-    const bool raw = work.asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 ||
-                     work.asset.format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
+    const uint32_t pixel_format = AssetPixelFormat(work.asset.format);
+    const bool raw = IsRawBitmapFormat(work.asset.format);
     if (raw) {
         if (!AllocateBitmap(work.asset.width, work.asset.height, pixel_format, source)) {
             return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
@@ -270,7 +282,7 @@ int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_han
         for (uint32_t row = 0U; row < work.asset.height; ++row) {
             std::memcpy(destination + row * row_bytes, work.asset.data + row * work.asset.stride, row_bytes);
         }
-    } else if (!DecodeBitmap(work.asset, source)) {
+    } else if (!DecodeBitmap(work.asset, preferred_opaque_format_, source)) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
 
@@ -309,9 +321,11 @@ void ResourceService::Shutdown() {
         return;
     }
     stopping_.store(true, std::memory_order_release);
+    const uint32_t texture_high_water_mark = bitmaps_.HighWaterMark();
     bitmaps_.ReleaseAll();
     shutdown_complete_ = true;
-    ESP_LOGI(kTag, "resource textures released");
+    ESP_LOGI(kTag, "resource textures released: high-water=%" PRIu32 "/%" PRIu32, texture_high_water_mark,
+             limits::kMaxBitmaps);
 }
 
 }  // namespace micropixel::runtime

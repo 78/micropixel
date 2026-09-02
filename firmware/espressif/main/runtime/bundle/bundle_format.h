@@ -35,12 +35,29 @@ typedef enum micropixel_bundle_section_format {
     MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON = 7,
     MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 = 8,
     MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS = 9,
+    MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565 = 10,
 } micropixel_bundle_section_format_t;
 
 typedef enum micropixel_bundle_package_type {
     MICROPIXEL_BUNDLE_PACKAGE_APP = 1,
     MICROPIXEL_BUNDLE_PACKAGE_COMPONENT = 2,
 } micropixel_bundle_package_type_t;
+
+typedef enum micropixel_bundle_aot_target_mask {
+    /* Stored as a one-bit mask in the reserved0 field of each AOT section. */
+    /* No AOT payload, or a legacy App Bundle created before target metadata. */
+    MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE = 0,
+    MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F = 1U << 0U,
+    MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3 = 1U << 1U,
+} micropixel_bundle_aot_target_mask_t;
+
+typedef enum micropixel_bundle_aot_flag {
+    /* flags=0 identifies a legacy Bundle without an explicit threading declaration. */
+    MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED = 1U << 0U,
+    MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY = 1U << 1U,
+    MICROPIXEL_BUNDLE_AOT_FLAG_MASK =
+        MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED | MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY,
+} micropixel_bundle_aot_flag_t;
 
 typedef enum micropixel_bundle_display_profile {
     MICROPIXEL_BUNDLE_DISPLAY_SQUARE = 1,

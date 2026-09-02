@@ -1,0 +1,37 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.s3.csv"
+
+# ESP32-S3 preview boards use the native USB Serial/JTAG peripheral for the preview console.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Supported S3 modules use octal PSRAM. Guest linear memory and bounded Host
+# workspaces use it through explicit capability allocations.
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# S3 Wi-Fi is used for bounded OTA/App downloads rather than sustained high
+# throughput. Match the measured Pocket Sage profile: keep the hardware RX
+# pool aligned with the upstream BA window, allocate TX/RX payload buffers on
+# demand, and cap the dynamic queues. esp_wifi_deinit() releases the remaining
+# static pool whenever the user disables Wi-Fi for gameplay.
+# CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP is not set
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_MGMT_SBUF_NUM=8
+
+# Offline games do not execute the Wi-Fi hot path. Keep it in flash on native
+# S3 boards so graphics/audio retain the shared DIRAM budget. P4 ESP-Hosted
+# uses its own profile and is intentionally unaffected.
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+
+CONFIG_MICROPIXEL_BOARD_NULL=y
+# LVGL remains linked because SystemShell types and generated fonts are shared,
+# but the Null compile gate creates no display or draw buffers.
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1

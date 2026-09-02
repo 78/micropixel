@@ -6,16 +6,32 @@ dependencies:
   lvgl/lvgl:
     version: "^9.5.0"
     rules:
-      - if: "target in [esp32p4, esp32s31]"
+      - if: "target in [esp32p4, esp32s31, esp32s3]"
   espressif/esp_lvgl_adapter:
     version: "^0.6.2"
     override_path: "../components/esp-iot-solution/components/display/tools/esp_lvgl_adapter"
     rules:
-      - if: "target in [esp32p4, esp32s31]"
+      - if: "target in [esp32p4, esp32s31, esp32s3]"
   espressif/esp_lcd_touch_gt911:
     version: "^1.2.0"
     rules:
-      - if: "target == esp32p4"
+      - if: "target in [esp32p4, esp32s3]"
+  espressif/esp_lcd_touch_tt21100:
+    version: "^1.0.0"
+    rules:
+      - if: "target == esp32s3"
+  espressif/esp_lcd_ili9341:
+    version: "^2.0.1"
+    rules:
+      - if: "target == esp32s3"
+  espressif/icm42670:
+    version: "^2.0.2"
+    rules:
+      - if: "target == esp32s3"
+  espressif/esp_lcd_touch_ft5x06:
+    version: "^1.0.7"
+    rules:
+      - if: "target == esp32s3"
   espressif/button:
     version: "^4.2.0"
   espressif/cjson:
@@ -33,7 +49,7 @@ dependencies:
   espressif/esp_codec_dev:
     version: "^1.6.2"
     rules:
-      - if: "target == esp32s31"
+      - if: "target in [esp32s31, esp32s3]"
   78/esp_lcd_touch_cst92xx:
     version: "^0.1.0"
     rules:

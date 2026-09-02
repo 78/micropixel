@@ -134,6 +134,8 @@ micropixel_graphics_info_t cached_graphics_info{};
 bool graphics_info_loaded{};
 micropixel::detail::DisplayTransform cached_display_context{};
 bool display_context_loaded{};
+micropixel_system_launch_arguments_response_t cached_launch_arguments{};
+bool launch_arguments_loaded{};
 micropixel_input_info_t cached_input_info{};
 bool input_info_loaded{};
 
@@ -144,6 +146,54 @@ struct SensorHandleState final {
 };
 
 SensorHandleState sensor_handles[MICROPIXEL_MAX_SENSOR_HANDLES]{};
+
+int32_t OpenService(ServiceCache& cache, uint32_t service_id, uint16_t interface_major, uint16_t minimum_minor);
+int32_t CallService(ServiceCache& cache, uint32_t method_id, const void* request, uint32_t request_size, void* response,
+                    uint32_t response_capacity, uint32_t& response_size_out);
+
+void LoadLaunchArguments() {
+    if (launch_arguments_loaded) {
+        return;
+    }
+    RequireOk(OpenService(system_service, MICROPIXEL_SERVICE_SYSTEM, MICROPIXEL_SYSTEM_INTERFACE_MAJOR,
+                          MICROPIXEL_SYSTEM_INTERFACE_MINOR),
+              "system.open");
+    uint32_t response_size = 0U;
+    RequireOk(CallService(system_service, MICROPIXEL_SYSTEM_METHOD_GET_LAUNCH_ARGUMENTS, nullptr, 0U,
+                          &cached_launch_arguments, sizeof(cached_launch_arguments), response_size),
+              "system.launch_arguments");
+    if (response_size < sizeof(cached_launch_arguments) ||
+        cached_launch_arguments.size < sizeof(cached_launch_arguments) || cached_launch_arguments.reserved0 != 0U ||
+        cached_launch_arguments.count > MICROPIXEL_LAUNCH_ARGUMENT_MAX_COUNT ||
+        cached_launch_arguments.bytes_length > MICROPIXEL_LAUNCH_ARGUMENT_MAX_BYTES) {
+        micropixel::runtime::Panic("system.launch_arguments.invalid", MICROPIXEL_STATUS_INTERNAL);
+    }
+    for (uint32_t index = 0U; index < cached_launch_arguments.count; ++index) {
+        const uint32_t offset = cached_launch_arguments.offsets[index];
+        if (offset >= cached_launch_arguments.bytes_length) {
+            micropixel::runtime::Panic("system.launch_arguments.offset", MICROPIXEL_STATUS_INTERNAL);
+        }
+        uint32_t end = offset;
+        while (end < cached_launch_arguments.bytes_length && cached_launch_arguments.bytes[end] != '\0') {
+            ++end;
+        }
+        if (end == cached_launch_arguments.bytes_length) {
+            micropixel::runtime::Panic("system.launch_arguments.termination", MICROPIXEL_STATUS_INTERNAL);
+        }
+    }
+    launch_arguments_loaded = true;
+}
+
+bool TextEquals(const char* left, const char* right) {
+    if (left == nullptr || right == nullptr) {
+        return false;
+    }
+    while (*left != '\0' && *left == *right) {
+        ++left;
+        ++right;
+    }
+    return *left == '\0' && *right == '\0';
+}
 
 SensorHandleState* FindSensorHandle(uint32_t handle) {
     const uint32_t encoded_index = handle & 0xffU;
@@ -194,11 +244,12 @@ const micropixel_graphics_info_t& LoadPhysicalGraphicsInfo() {
                   "graphics.info");
         if (response_size < sizeof(cached_graphics_info) || cached_graphics_info.size < sizeof(cached_graphics_info) ||
             cached_graphics_info.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
-            cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 || cached_graphics_info.width == 0U ||
-            cached_graphics_info.height == 0U ||
+            (cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
+             cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) ||
+            cached_graphics_info.width == 0U || cached_graphics_info.height == 0U ||
             cached_graphics_info.max_scene_bytes < MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES ||
             cached_graphics_info.max_scene_nodes == 0U || cached_graphics_info.max_batch_instances == 0U ||
-            cached_graphics_info.max_layers == 0U || cached_graphics_info.max_sprite_batches == 0U ||
+            cached_graphics_info.max_containers == 0U || cached_graphics_info.max_sprite_batches == 0U ||
             static_cast<uint32_t>(cached_graphics_info.safe_inset_left) + cached_graphics_info.safe_inset_right >=
                 cached_graphics_info.width ||
             static_cast<uint32_t>(cached_graphics_info.safe_inset_top) + cached_graphics_info.safe_inset_bottom >=
@@ -524,6 +575,42 @@ Locale Localization::CurrentLocale() const {
     }
     CopyBytes(locale.tag_, wire.tag, wire.tag_length + 1U);
     return locale;
+}
+
+uint32_t LaunchArguments::count() const {
+    LoadLaunchArguments();
+    return cached_launch_arguments.count;
+}
+
+const char* LaunchArguments::Get(uint32_t index) const {
+    LoadLaunchArguments();
+    if (index >= cached_launch_arguments.count) {
+        return nullptr;
+    }
+    return cached_launch_arguments.bytes + cached_launch_arguments.offsets[index];
+}
+
+const char* LaunchArguments::FindValue(const char* name) const {
+    if (name == nullptr || name[0] == '\0') {
+        return nullptr;
+    }
+    const uint32_t argument_count = count();
+    for (uint32_t index = 0U; index < argument_count; ++index) {
+        const char* argument = Get(index);
+        if (TextEquals(argument, name)) {
+            return index + 1U < argument_count ? Get(index + 1U) : nullptr;
+        }
+        const char* option = argument;
+        const char* expected = name;
+        while (*expected != '\0' && *option == *expected) {
+            ++option;
+            ++expected;
+        }
+        if (*expected == '\0' && *option == '=') {
+            return option + 1U;
+        }
+    }
+    return nullptr;
 }
 
 Result<AudioInfo> Audio::info() const {
@@ -853,7 +940,7 @@ RendererInfo Renderer::info() const {
                         {safe.top, safe.right, safe.bottom, safe.left},
                         raw.max_scene_nodes,
                         raw.max_batch_instances,
-                        raw.max_layers,
+                        raw.max_containers,
                         raw.max_sprite_batches,
                         raw.max_scene_bytes};
 }
@@ -907,8 +994,7 @@ Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle
 }  // namespace
 
 Result<TextMetrics> Renderer::MeasureText(const char* text, SystemFont font) const {
-    const auto& display = LoadDisplayContext();
-    const uint16_t font_handle = detail::MapSystemFont(static_cast<uint16_t>(font), display);
+    const uint16_t font_handle = static_cast<uint16_t>(font);
     if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
@@ -1440,7 +1526,9 @@ void Font::Reset() {
 
 Result<void> StreamingTexture::Update(Rect dirty, const uint8_t* pixels, uint32_t byte_length, uint32_t pitch) {
     const uint32_t bytes_per_pixel =
-        pixel_format_ == PixelFormat::kBgr888 ? 3U : (pixel_format_ == PixelFormat::kBgra8888 ? 4U : 0U);
+        pixel_format_ == PixelFormat::kBgr888
+            ? 3U
+            : (pixel_format_ == PixelFormat::kBgra8888 ? 4U : (pixel_format_ == PixelFormat::kRgb565 ? 2U : 0U));
     if (!valid() || dirty.x < 0 || dirty.y < 0 || dirty.width <= 0 || dirty.height <= 0 || pixels == nullptr ||
         bytes_per_pixel == 0U || static_cast<int64_t>(dirty.x) + dirty.width > static_cast<int64_t>(width()) ||
         static_cast<int64_t>(dirty.y) + dirty.height > static_cast<int64_t>(height())) {
@@ -1538,12 +1626,38 @@ Result<Texture> Resources::LoadTexture(AssetId asset) const {
         response.logical_width == 0U || response.logical_height == 0U || response.physical_width == 0U ||
         response.physical_height == 0U ||
         (response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
-         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888) ||
+         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 &&
+         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) ||
         (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) != 0U) {
         runtime::Panic("resources.load_texture.response", MICROPIXEL_STATUS_INTERNAL);
     }
     return Texture{response.texture,        response.logical_width,   response.logical_height,
                    response.physical_width, response.physical_height, true};
+}
+
+Result<Texture> Resources::LoadNativeTexture(AssetId asset) const {
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    micropixel_resource_load_texture_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
+    micropixel_texture_info_t response{};
+    uint32_t response_size = 0U;
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_TEXTURE, &request, sizeof(request),
+                         &response, sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) ||
+        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
+        response.width == 0U || response.height == 0U ||
+        (response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
+         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 &&
+         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) ||
+        (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) != 0U) {
+        runtime::Panic("resources.load_native_texture.response", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return Texture{response.texture, response.width, response.height, response.width, response.height, false};
 }
 
 Result<Font> Resources::LoadFont(AssetId asset) const {
@@ -1574,7 +1688,8 @@ Result<StreamingTexture> Renderer::CreateStreamingTexture(Size size, PixelFormat
         return unexpected(ErrorFromStatus(status));
     }
     if (size.width == 0U || size.height == 0U ||
-        (pixel_format != PixelFormat::kBgr888 && pixel_format != PixelFormat::kBgra8888)) {
+        (pixel_format != PixelFormat::kBgr888 && pixel_format != PixelFormat::kBgra8888 &&
+         pixel_format != PixelFormat::kRgb565)) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
     micropixel_streaming_texture_create_request_t request{};
@@ -1608,7 +1723,10 @@ TextureUpdateBatch Renderer::BeginTextureUpdateBatch() const {
     return TextureUpdateBatch{TextureUpdateBatch::CapabilityToken{}};
 }
 
-Application::Application() noexcept { (void)LoadDisplayContext(); }
+// Service capabilities are resolved lazily by the operation that needs them.
+// This keeps non-graphical Guests usable on headless bring-up profiles while
+// Renderer and touch-coordinate paths still validate the display contract.
+Application::Application() noexcept = default;
 
 void Application::BeginRun() const {
     if (running_) {

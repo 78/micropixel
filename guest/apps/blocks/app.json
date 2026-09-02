@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.blocks",
+  "threading": "none",
   "title": {
     "default": "en",
     "values": {

@@ -24,7 +24,7 @@ Guest 不再定义 App master，历史的 45% 统一衰减已移除；设备整�
 `sfx.json` 中的边界，构建都会失败：
 
 ```sh
-python3 tools/micropixel package guest/apps/blocks
+python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 ```
 
 独立运行、导出可试听 WAV 和执行算法回归：

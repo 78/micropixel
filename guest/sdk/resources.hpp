@@ -56,7 +56,7 @@ class Texture final {
     uint32_t physical_height_{};
     bool adaptive_{};
 
-    friend class Scene;
+    friend class Container;
     friend class SpriteNode;
     friend class SurfaceNode;
     friend class SpriteBatch;
@@ -91,7 +91,7 @@ class Font final {
     int16_t ascent_{};
     int16_t descent_{};
 
-    friend class Scene;
+    friend class Container;
     friend class Renderer;
     friend class Resources;
 };
@@ -119,7 +119,7 @@ class StreamingTexture final {
     PixelFormat pixel_format_{PixelFormat::kBgr888};
 
     friend class Renderer;
-    friend class Scene;
+    friend class Container;
     friend class SurfaceNode;
 };
 
@@ -144,6 +144,11 @@ class TextureUpdateBatch final {
 class Resources final {
    public:
     [[nodiscard]] Result<Texture> LoadTexture(AssetId asset) const;
+    // Loads the encoded bitmap at its authored pixel dimensions. This is for
+    // applications that ship an explicitly selected physical-resolution
+    // variant. Ordinary logical-canvas assets should continue to use
+    // LoadTexture(), which adapts them to the current display scale.
+    [[nodiscard]] Result<Texture> LoadNativeTexture(AssetId asset) const;
     [[nodiscard]] Result<Font> LoadFont(AssetId asset) const;
 
    private:

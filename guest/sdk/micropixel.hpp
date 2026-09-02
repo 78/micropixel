@@ -10,6 +10,7 @@
 #include "sdk/graphics.hpp"
 #include "sdk/haptics.hpp"
 #include "sdk/input.hpp"
+#include "sdk/launch_arguments.hpp"
 #include "sdk/localization.hpp"
 #include "sdk/panic.hpp"
 #include "sdk/power_info.hpp"
@@ -17,7 +18,13 @@
 #include "sdk/resources.hpp"
 #include "sdk/sensors.hpp"
 #include "sdk/storage.hpp"
+#include "sdk/symbols.hpp"
 #include "sdk/ui/button.hpp"
+#include "sdk/ui/flex_container.hpp"
+#include "sdk/ui/grid_container.hpp"
+#include "sdk/ui/image_button.hpp"
+#include "sdk/ui/label.hpp"
 #include "sdk/ui/layout.hpp"
+#include "sdk/ui/text_button.hpp"
 
 #endif

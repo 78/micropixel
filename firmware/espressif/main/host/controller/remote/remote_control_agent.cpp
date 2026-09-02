@@ -15,6 +15,7 @@
 #include "client/http3_async_client.h"
 #include "client/http3_client.h"
 #include "device/contracts/wifi.hpp"
+#include "device/text.hpp"
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
 #include "esp_chip_info.h"
@@ -30,6 +31,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "host/controller/remote/remote_control_defaults.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
 #include "mbedtls/base64.h"
 #include "psa/crypto.h"
@@ -189,6 +191,38 @@ void CopyText(std::array<char, Capacity>& destination, const char* source) {
 const char* JsonString(const cJSON* object, const char* name) {
     const cJSON* item = cJSON_GetObjectItemCaseSensitive(object, name);
     return cJSON_IsString(item) && item->valuestring != nullptr ? item->valuestring : nullptr;
+}
+
+bool ParseLaunchArguments(const cJSON* params, micropixel_system_launch_arguments_response_t& launch_arguments) {
+    launch_arguments = {};
+    launch_arguments.size = sizeof(launch_arguments);
+    const cJSON* arguments = params != nullptr ? cJSON_GetObjectItemCaseSensitive(params, "launchArguments") : nullptr;
+    if (arguments == nullptr) {
+        return true;
+    }
+    if (!cJSON_IsArray(arguments) || cJSON_GetArraySize(arguments) > MICROPIXEL_LAUNCH_ARGUMENT_MAX_COUNT) {
+        return false;
+    }
+    const int count = cJSON_GetArraySize(arguments);
+    for (int index = 0; index < count; ++index) {
+        const cJSON* item = cJSON_GetArrayItem(arguments, index);
+        const char* value = cJSON_IsString(item) ? cJSON_GetStringValue(item) : nullptr;
+        if (value == nullptr) {
+            return false;
+        }
+        const size_t length = std::strlen(value);
+        if (length + 1U > sizeof(launch_arguments.bytes) - launch_arguments.bytes_length) {
+            return false;
+        }
+        if (length != 0U &&
+            !device::IsValidUtf8(reinterpret_cast<const uint8_t*>(value), static_cast<uint32_t>(length))) {
+            return false;
+        }
+        launch_arguments.offsets[launch_arguments.count++] = launch_arguments.bytes_length;
+        std::memcpy(launch_arguments.bytes + launch_arguments.bytes_length, value, length + 1U);
+        launch_arguments.bytes_length += static_cast<uint16_t>(length + 1U);
+    }
+    return true;
 }
 
 uint32_t JsonPositiveUint(const cJSON* object, const char* name, uint32_t fallback) {
@@ -427,7 +461,8 @@ RemoteControlAgent::RemoteControlAgent(device::Wifi& wifi, const device::BoardIn
         ESP_LOGW(kTag, "System log ring is unavailable");
     }
     app_lifecycle_.fill('\0');
-    if (CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST[0] == '\0') {
+    model_.enabled = EnabledByDefault(CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST);
+    if (!model_.enabled) {
         CopyText(model_.service, "Not configured");
         CopyText(model_.status_message, "Set MICROPIXEL_REMOTE_CONTROL_HOST to connect");
     } else {
@@ -1353,6 +1388,9 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         if (app_id == nullptr || app_id[0] == '\0' || std::strlen(app_id) >= command.app_id.size()) {
             return reject("invalid_app_id");
         }
+        if (!ParseLaunchArguments(params, command.launch_arguments)) {
+            return reject("invalid_launch_arguments");
+        }
         command.type = control::HostCommandType::kStartApp;
         CopyText(command.app_id, app_id);
     } else if (std::strcmp(name, "app.stop") == 0) {
@@ -1556,8 +1594,9 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
     Http3Request request{};
     request.method = "GET";
     const bool is_s31 = std::strcmp(board_info_.host_chip, "ESP32-S31") == 0;
-    const char* release_target = is_s31 ? "esp-mosaico" : "metalio-claw4";
-    const char* release_chip = is_s31 ? "ESP32-S31" : "ESP32-P4";
+    const bool is_s3 = std::strcmp(board_info_.host_chip, "ESP32-S3") == 0;
+    const char* release_target = is_s31 ? "esp-mosaico" : is_s3 ? "esp-box-3" : "metalio-claw4";
+    const char* release_chip = is_s31 ? "ESP32-S31" : is_s3 ? "ESP32-S3" : "ESP32-P4";
     request.path =
         std::string("/firmware/releases/latest?currentVersion=") + current->version + "&target=" + release_target;
     std::unique_ptr<Http3Stream> stream = ClientFrom(client).Open(request);

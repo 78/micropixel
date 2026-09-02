@@ -78,7 +78,7 @@ int main() {
     };
     if (renderer_info.max_scene_nodes() != info.max_scene_nodes ||
         renderer_info.max_batch_instances() != info.max_batch_instances ||
-        renderer_info.max_layers() != info.max_layers ||
+        renderer_info.max_containers() != info.max_layers ||
         renderer_info.max_sprite_batches() != info.max_sprite_batches ||
         renderer_info.max_scene_bytes() != info.max_scene_bytes ||
         safe_insets.top != scale_inset(info.safe_inset_top, renderer_info.height(), info.height) ||
@@ -102,12 +102,12 @@ int main() {
     auto scene = renderer.CreateScene({.logical_width = renderer_info.width(),
                                        .logical_height = renderer_info.height(),
                                        .background = micropixel::Color::Black()});
-    auto game = scene.CreateLayer(
+    auto game = scene.CreateContainer(
         {.clip = {0, 0, static_cast<int32_t>(renderer_info.width()), static_cast<int32_t>(renderer_info.height())}});
-    auto snake = scene.CreateSpriteBatch(4U, game);
-    auto image = scene.CreateSurfaceNode(texture, {420, 40, 56, 56}, {0, 0, 2, 2}, game, 192U);
-    auto label = scene.CreateLabel({52, 56}, "graphics_protocol: scene keyframe", micropixel::Color::White(),
-                                   micropixel::SystemFont::kMedium, game);
+    auto snake = game.CreateSpriteBatch(4U);
+    auto image = game.CreateSurfaceNode(texture, {420, 40, 56, 56}, {0, 0, 2, 2}, 192U);
+    auto label = game.CreateLabel({52, 56}, "graphics_protocol: scene keyframe", micropixel::Color::White(),
+                                  micropixel::SystemFont::kMedium);
     {
         auto update = scene.BeginUpdate();
         snake.SetInstance(update, 0U,

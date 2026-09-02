@@ -61,6 +61,10 @@ class PixelCompositor {
     PixelCompositor& operator=(const PixelCompositor&) = delete;
 
     [[nodiscard]] virtual bool Fill(PixelSurface destination, SurfaceRect rect, uint32_t rgb888, uint8_t opacity) = 0;
+    // Rasterizes directly into destination. Implemented as horizontal spans so
+    // platform Fill implementations retain their native RGB565 blend path.
+    [[nodiscard]] bool RoundedRect(PixelSurface destination, SurfaceRect rect, uint32_t radius, uint32_t fill_rgb888,
+                                   uint32_t stroke_rgb888, uint32_t stroke_width, uint8_t opacity);
     [[nodiscard]] virtual bool Blit(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                     SurfaceRect destination_rect, uint8_t opacity) = 0;
 

@@ -1,8 +1,9 @@
 # MicroPixel Espressif firmware
 
 这是 MicroPixel 的 Espressif Host 固件工程，使用 ESP-IDF 6.1 和固定 commit 的 WAMR fork。当前
-product profile 是 ESP32-P4 + Metalio-Claw4，preview bring-up profile 是 ESP32-S31 + ESP-Mosaico；
-两者复用 Runtime、Device contracts、Guest ABI 和方屏 Host UI。先按仓库根目录 README 初始化 submodule，
+product profile 是 ESP32-P4 + Metalio-Claw4；preview profile 是 ESP32-S31 + ESP-Mosaico、
+ESP32-S3-BOX-3 和立创开发板 SZPI ESP32-S3。各 profile 复用 Runtime、Device contracts、Guest ABI 和
+Host UI。先按仓库根目录 README 初始化 submodule，
 并设置 `IDF_PATH`、WASI Clang 和 `WAMRC`。
 
 日常增量构建、Host 烧录、显式 fullclean、空 App Store 重置和示例 App 安装见
@@ -35,18 +36,31 @@ bash tools/s31.sh monitor /dev/cu.usbmodemPORT
 bash tools/s31.sh build-null
 ```
 
+ESP32-S3 preview 使用 Xtensa AOT Guest；BOX-3 和立创 SZPI 分别使用独立板级 profile：
+
+```sh
+bash tools/s3.sh build-host
+bash tools/s3.sh build-szpi
+bash tools/s3.sh flash-host /dev/cu.usbmodemPORT
+bash tools/s3.sh flash-szpi /dev/cu.usbmodemPORT
+```
+
 ## 构建配置
 
-- `sdkconfig.p4.defaults`：产品 defaults，使用固定 task core、dirty-region coalescing，并关闭测试钩子；
+- `sdkconfig.defaults`：P4、S31 和 S3 共用的 release、PSRAM、WAMR、Guest limits、FreeRTOS diagnostics、
+  LVGL 和 Remote Control defaults；
+- `sdkconfig.p4.defaults`：P4 产品 defaults，使用固定 task core 和 dirty-region coalescing；
 - `sdkconfig.p4-conformance.defaults`：仅为 `event_wait`、`touch_pressure` 和 `run_handler_*` 加入合成 Host 事件；
 - `sdkconfig.p4-null.defaults`：覆盖产品 defaults，编译 Null Platform 以检查 Runtime/Device 的硬件无关路径；
 - `sdkconfig.s31.defaults`：ESP-Mosaico preview defaults；`sdkconfig.s31-null.defaults` 只选择 S31 Null Board；
+- `sdkconfig.s3.defaults`：S3 SoC defaults；`sdkconfig.s3-box-3.defaults`、`sdkconfig.s3-szpi.defaults` 和
+  `sdkconfig.s3-null.defaults` 分别叠加 BOX-3、立创 SZPI preview 与 Null Board；
 - `sdkconfig.debug.defaults`：显式追加时启用的调试配置。
 
-需要专用 conformance 固件时，可把两个 defaults 一起传给现有构建脚本：
+需要专用 conformance 固件时，可把公共、芯片和 conformance defaults 一起传给现有构建脚本：
 
 ```sh
-P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.p4-conformance.defaults" \
+P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.defaults;$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.p4-conformance.defaults" \
     bash tools/p4.sh build-host
 ```
 

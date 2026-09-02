@@ -51,6 +51,23 @@ struct HallAppPresentation final {
     bool installing{};
 };
 
+// Process-lifetime Hall catalog metadata. It remains fixed-capacity and is
+// placed in external BSS on targets that support it; gameplay does not touch
+// these arrays while the Hall is hidden.
+struct SquareSystemUiHallStorage final {
+    std::array<lv_image_dsc_t, host_ui::kMaxHallApps> cover_descriptors{};
+    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> cover_sources{};
+    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> idle_cover_sources{};
+    std::array<HallAppPresentation, host_ui::kMaxHallApps> app_presentations{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> cards{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> cover_images{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> cover_placeholders{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> install_progress_arcs{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> install_progress_labels{};
+    std::array<lv_obj_t*, host_ui::kMaxHallApps> card_press_overlays{};
+    std::array<bool, host_ui::kMaxHallApps> app_running{};
+};
+
 // Host-owned LVGL state shared by every square-display product. Board state
 // owns one instance but does not duplicate page objects, input routing, Hall
 // bookkeeping or System UI lifecycle rules.
@@ -84,6 +101,7 @@ class SquareSystemUiState final {
     [[nodiscard]] lv_obj_t* EnsureRootLocked(uint32_t background);
     [[nodiscard]] lv_obj_t* PrepareSystemPageRootLocked();
     void DeleteRootLocked();
+    void DropLaunchBitmapLocked();
     void ResetHallPresentationLocked();
     [[nodiscard]] int32_t ShowLaunchBitmap(const device::BitmapView& bitmap);
     [[nodiscard]] bool DismissLaunchBitmap();
@@ -156,17 +174,17 @@ class SquareSystemUiState final {
     host_ui::SystemGestureRouter input_router;
     HallCoverCache hall_cover_cache;
 
-    std::array<lv_image_dsc_t, host_ui::kMaxHallApps> hall_cover_descriptors{};
-    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> hall_cover_sources{};
-    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps> hall_idle_cover_sources{};
-    std::array<HallAppPresentation, host_ui::kMaxHallApps> hall_app_presentations{};
-    std::array<lv_obj_t*, host_ui::kMaxHallApps> hall_cards{};
-    std::array<lv_obj_t*, host_ui::kMaxHallApps> hall_cover_images{};
-    std::array<lv_obj_t*, host_ui::kMaxHallApps> hall_cover_placeholders{};
-    std::array<lv_obj_t*, host_ui::kMaxHallApps> hall_install_progress_arcs{};
-    std::array<lv_obj_t*, host_ui::kMaxHallApps> hall_install_progress_labels{};
-    std::array<lv_obj_t*, host_ui::kMaxHallApps> hall_card_press_overlays{};
-    std::array<bool, host_ui::kMaxHallApps> hall_app_running{};
+    std::array<lv_image_dsc_t, host_ui::kMaxHallApps>& hall_cover_descriptors;
+    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps>& hall_cover_sources;
+    std::array<host_ui::HallCoverModel, host_ui::kMaxHallApps>& hall_idle_cover_sources;
+    std::array<HallAppPresentation, host_ui::kMaxHallApps>& hall_app_presentations;
+    std::array<lv_obj_t*, host_ui::kMaxHallApps>& hall_cards;
+    std::array<lv_obj_t*, host_ui::kMaxHallApps>& hall_cover_images;
+    std::array<lv_obj_t*, host_ui::kMaxHallApps>& hall_cover_placeholders;
+    std::array<lv_obj_t*, host_ui::kMaxHallApps>& hall_install_progress_arcs;
+    std::array<lv_obj_t*, host_ui::kMaxHallApps>& hall_install_progress_labels;
+    std::array<lv_obj_t*, host_ui::kMaxHallApps>& hall_card_press_overlays;
+    std::array<bool, host_ui::kMaxHallApps>& hall_app_running;
     host_ui::SystemUiActionSink hall_action_sink{};
     void* hall_action_context{};
     uint32_t hall_app_count{};

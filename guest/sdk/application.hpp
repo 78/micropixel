@@ -11,6 +11,7 @@
 #include "sdk/graphics.hpp"
 #include "sdk/haptics.hpp"
 #include "sdk/input.hpp"
+#include "sdk/launch_arguments.hpp"
 #include "sdk/localization.hpp"
 #include "sdk/log.hpp"
 #include "sdk/power_info.hpp"
@@ -51,6 +52,9 @@ class Application final {
     [[nodiscard]] constexpr KVStore storage() const noexcept { return KVStore{KVStore::CapabilityToken{}}; }
     [[nodiscard]] constexpr Localization localization() const noexcept {
         return Localization{Localization::CapabilityToken{}};
+    }
+    [[nodiscard]] constexpr LaunchArguments launch_arguments() const noexcept {
+        return LaunchArguments{LaunchArguments::CapabilityToken{}};
     }
     [[nodiscard]] constexpr Devices devices() const noexcept { return Devices{Devices::CapabilityToken{}}; }
     [[nodiscard]] constexpr Sensors sensors() const noexcept { return Sensors{Sensors::CapabilityToken{}}; }

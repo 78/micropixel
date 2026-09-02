@@ -41,6 +41,9 @@ bool BitmapSurface(const device::BitmapView& bitmap, ConstPixelSurface& surface)
     } else if (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888) {
         format = SurfacePixelFormat::kBgra8888;
         bytes_per_pixel = 4U;
+    } else if (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
+        format = SurfacePixelFormat::kRgb565;
+        bytes_per_pixel = 2U;
     } else {
         return false;
     }
@@ -86,6 +89,10 @@ bool SameVisual(const AppDrawOperation& left, const AppDrawOperation& right) {
     }
     if (left.kind == AppDrawOperationKind::kFill) {
         return left.rgb888 == right.rgb888;
+    }
+    if (left.kind == AppDrawOperationKind::kRoundedRect) {
+        return left.rgb888 == right.rgb888 && left.stroke_rgb888 == right.stroke_rgb888 &&
+               left.radius == right.radius && left.stroke_width == right.stroke_width;
     }
     if (left.kind == AppDrawOperationKind::kTexture) {
         return left.texture == right.texture && SameRect(left.source, right.source) &&
@@ -243,12 +250,13 @@ uint64_t DamagePixels(const DamageRegionSet<AppSurfaceCompositor::kMaxDamageRegi
 }
 
 AppLayerState NormalizeLayer(const GuestScene& scene) {
-    if (scene.LayerCount() < 1U) {
+    if (scene.ContainerCount() < 1U) {
         return {};
     }
-    const GuestSceneLayer& source = scene.Layers()[1];
+    const GuestSceneContainer& source = scene.Containers()[1];
     return {
-        .valid = source.visible && source.opacity == 255U,
+        .valid = source.parent_container_id == 0U && source.visible && source.opacity == 255U && source.width > 0 &&
+                 source.height > 0,
         .translation_active = source.translate_x != 0 || source.translate_y != 0,
         .layer_id = 1U,
         .clip = {.x = source.clip_x, .y = source.clip_y, .width = source.width, .height = source.height},
@@ -298,6 +306,11 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
         operation.destination = {.x = node.x, .y = node.y, .width = node.width, .height = node.height};
         if (node.kind == GuestSceneNodeKind::kRect) {
             operation.kind = AppDrawOperationKind::kFill;
+        } else if (node.kind == GuestSceneNodeKind::kRoundedRect) {
+            operation.kind = AppDrawOperationKind::kRoundedRect;
+            operation.stroke_rgb888 = node.stroke_rgb888;
+            operation.radius = node.radius;
+            operation.stroke_width = node.stroke_width;
         } else if (node.kind == GuestSceneNodeKind::kTexture) {
             if (resolver == nullptr || !resolver(resolver_context, node.texture, operation.bitmap)) {
                 return AppSurfaceStatus::kInvalidArgument;
@@ -330,28 +343,53 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
         }
     }
 
-    operation.bounds = operation.destination;
-    if (node.layer_id != 0U) {
-        const GuestSceneLayer& source_layer = scene.Layers()[node.layer_id];
-        SurfaceRect translated_destination{};
-        SurfaceRect translated_clip{};
-        const SurfaceRect clip{.x = source_layer.clip_x,
-                               .y = source_layer.clip_y,
-                               .width = source_layer.width,
-                               .height = source_layer.height};
-        if (!Offset(operation.destination, source_layer.translate_x, source_layer.translate_y,
-                    translated_destination) ||
-            !Offset(clip, source_layer.translate_x, source_layer.translate_y, translated_clip)) {
+    uint16_t path[MICROPIXEL_GRAPHICS_MAX_CONTAINERS]{};
+    uint16_t depth = 0U;
+    uint16_t container_id = node.parent_container_id;
+    while (container_id != 0U) {
+        if (container_id > scene.ContainerCount() || depth >= MICROPIXEL_GRAPHICS_MAX_CONTAINERS) {
             return AppSurfaceStatus::kInvalidArgument;
         }
-        operation.in_layer = node.layer_id == layer.layer_id;
-        operation.z_order = source_layer.z_order;
-        operation.visible = operation.visible && source_layer.visible;
-        operation.opacity =
-            static_cast<uint8_t>((static_cast<uint32_t>(operation.opacity) * source_layer.opacity + 127U) / 255U);
-        operation.destination = translated_destination;
-        operation.bounds = Intersection(translated_destination, translated_clip);
+        path[depth++] = container_id;
+        container_id = scene.Containers()[container_id].parent_container_id;
     }
+    int32_t translate_x = 0;
+    int32_t translate_y = 0;
+    bool has_clip = false;
+    SurfaceRect effective_clip{};
+    while (depth > 0U) {
+        const uint16_t current_id = path[--depth];
+        const GuestSceneContainer& container = scene.Containers()[current_id];
+        const int64_t next_x = static_cast<int64_t>(translate_x) + container.translate_x;
+        const int64_t next_y = static_cast<int64_t>(translate_y) + container.translate_y;
+        if (next_x < INT32_MIN || next_x > INT32_MAX || next_y < INT32_MIN || next_y > INT32_MAX) {
+            return AppSurfaceStatus::kInvalidArgument;
+        }
+        translate_x = static_cast<int32_t>(next_x);
+        translate_y = static_cast<int32_t>(next_y);
+        operation.in_layer = operation.in_layer || current_id == layer.layer_id;
+        operation.visible = operation.visible && container.visible;
+        operation.opacity =
+            static_cast<uint8_t>((static_cast<uint32_t>(operation.opacity) * container.opacity + 127U) / 255U);
+        if (container.width > 0 && container.height > 0) {
+            SurfaceRect translated_clip{};
+            if (!Offset({.x = container.clip_x,
+                         .y = container.clip_y,
+                         .width = container.width,
+                         .height = container.height},
+                        translate_x, translate_y, translated_clip)) {
+                return AppSurfaceStatus::kInvalidArgument;
+            }
+            effective_clip = has_clip ? Intersection(effective_clip, translated_clip) : translated_clip;
+            has_clip = true;
+        }
+    }
+    SurfaceRect translated_destination{};
+    if (!Offset(operation.destination, translate_x, translate_y, translated_destination)) {
+        return AppSurfaceStatus::kInvalidArgument;
+    }
+    operation.destination = translated_destination;
+    operation.bounds = has_clip ? Intersection(translated_destination, effective_clip) : translated_destination;
     operation.visible =
         operation.visible && operation.opacity != 0U && operation.bounds.width > 0 && operation.bounds.height > 0;
     return AppSurfaceStatus::kOk;
@@ -380,8 +418,8 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeScene(const GuestScene& scene, d
     operation_count = 0U;
     layer = NormalizeLayer(scene);
     uint16_t stable_order = 0U;
-    for (uint32_t index = 0U; index < scene.NodeCount(); ++index) {
-        const GuestSceneNode& node = scene.Nodes()[index];
+    for (uint16_t draw_index = 0U; draw_index < scene.NodeCount(); ++draw_index) {
+        const GuestSceneNode& node = scene.Nodes()[scene.DrawNodeId(draw_index)];
         if (node.kind == GuestSceneNodeKind::kSpriteBatch) {
             for (uint16_t instance_index = 0U; instance_index < node.batch_capacity; ++instance_index) {
                 if (operation_count >= operation_capacity_) {
@@ -441,14 +479,13 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeScenePatch(const GuestScene& sce
         stable_to_sorted_index_[stable_order] = static_cast<uint16_t>(index);
     }
 
-    bool z_order_changed = false;
     uint16_t stable_order = 0U;
-    for (uint16_t node_index = 0U; node_index < scene.NodeCount(); ++node_index) {
+    for (uint16_t draw_index = 0U; draw_index < scene.NodeCount(); ++draw_index) {
+        const uint16_t node_index = scene.DrawNodeId(draw_index);
         const GuestSceneNode& node = scene.Nodes()[node_index];
         const uint32_t node_changes = scene.NodeChanges(node_index);
-        const uint32_t layer_changes = node.layer_id == 0U ? 0U : scene.LayerChanges(node.layer_id);
-        z_order_changed = z_order_changed || (layer_changes & MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER) != 0U;
-        const bool node_or_layer_changed = node_changes != 0U || layer_changes != 0U;
+        const uint32_t container_changes = scene.AncestorChanges(node.parent_container_id);
+        const bool node_or_container_changed = node_changes != 0U || container_changes != 0U;
         const uint16_t operation_span =
             node.kind == GuestSceneNodeKind::kSpriteBatch ? node.batch_capacity : static_cast<uint16_t>(1U);
         for (uint16_t local_index = 0U; local_index < operation_span; ++local_index) {
@@ -456,8 +493,8 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeScenePatch(const GuestScene& sce
                 return AppSurfaceStatus::kInvalidArgument;
             }
             const uint16_t scene_instance = node.batch_instance_offset + local_index;
-            const bool changed = node_or_layer_changed || (node.kind == GuestSceneNodeKind::kSpriteBatch &&
-                                                           scene.InstanceChanges(scene_instance) != 0U);
+            const bool changed = node_or_container_changed || (node.kind == GuestSceneNodeKind::kSpriteBatch &&
+                                                               scene.InstanceChanges(scene_instance) != 0U);
             if (changed) {
                 ++normalized_operations_;
                 AppDrawOperation operation{};
@@ -479,13 +516,6 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeScenePatch(const GuestScene& sce
     }
     if (stable_order != current_count_) {
         return AppSurfaceStatus::kInvalidArgument;
-    }
-    if (z_order_changed) {
-        SortOperations(scratch_, operation_count);
-        stale_operation_count_ = static_cast<uint16_t>(operation_count);
-        for (uint16_t index = 0U; index < stale_operation_count_; ++index) {
-            stale_operation_indices_[index] = index;
-        }
     }
     return AppSurfaceStatus::kOk;
 }
@@ -549,6 +579,9 @@ bool AppSurfaceCompositor::RenderDamage(PixelSurface destination, const AppDrawO
                 rendered = pixels_.Fill(operation_target,
                                         {.x = 0, .y = 0, .width = draw_bounds.width, .height = draw_bounds.height},
                                         operation.rgb888, operation.opacity);
+            } else if (operation.kind == AppDrawOperationKind::kRoundedRect) {
+                rendered = pixels_.RoundedRect(operation_target, local_destination, operation.radius, operation.rgb888,
+                                               operation.stroke_rgb888, operation.stroke_width, operation.opacity);
             } else if (operation.kind == AppDrawOperationKind::kTexture) {
                 ConstPixelSurface source{};
                 SurfaceRect clipped_source{};
@@ -658,7 +691,7 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentScene(const GuestScene& scene
     }
     uint32_t scratch_count = 0U;
     AppLayerState scratch_layer{};
-    bool incremental = synchronized_ && !scene.LastApplyWasKeyframe();
+    bool incremental = synchronized_ && !scene.LastApplyWasKeyframe() && !scene.TreeOrderChanged();
     for (uint16_t node_index = 0U; incremental && node_index < scene.NodeCount(); ++node_index) {
         const uint32_t changes = scene.NodeChanges(node_index);
         incremental = (changes & MICROPIXEL_GRAPHICS_SCENE_NODE_KIND) == 0U &&

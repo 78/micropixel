@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.snake",
+  "threading": "none",
   "title": {
     "default": "en",
     "values": {

@@ -108,7 +108,9 @@ bool AppRuntime::SetEffectiveLocale(std::string_view effective_locale) {
     return true;
 }
 
-AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink ready_sink, void* ready_context) {
+AppRunOutcome AppRuntime::RunApp(const InstalledApp& app,
+                                 const micropixel_system_launch_arguments_response_t& launch_arguments,
+                                 AppSessionReadySink ready_sink, void* ready_context) {
     AppRunOutcome outcome;
     CopyAppId(app.app_id.data(), outcome.app_id);
     if (!TakeSessionLock()) {
@@ -130,8 +132,8 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app, AppSessionReadySink re
     GiveSessionLock();
 
     micropixel_log_heap_state("AppSession create begin");
-    auto session_result =
-        AppSession::Create(devices_, background_executor_, app.file, effective_locale_.data(), log_sink_);
+    auto session_result = AppSession::Create(devices_, background_executor_, app.file, effective_locale_.data(),
+                                             launch_arguments, log_sink_);
     if (!session_result) {
         if (session_result.error().app_id[0] != '\0') {
             outcome.app_id = session_result.error().app_id;

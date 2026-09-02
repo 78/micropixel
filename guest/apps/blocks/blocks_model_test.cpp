@@ -21,6 +21,18 @@ void TestEveryRotationContainsFourCells() {
     }
 }
 
+void TestGestureDirectionLockClassification() {
+    using blocks::GestureAxis;
+
+    assert(blocks::ClassifyGestureAxis(23, 0) == GestureAxis::kUndecided);
+    assert(blocks::ClassifyGestureAxis(0, 23) == GestureAxis::kUndecided);
+    assert(blocks::ClassifyGestureAxis(30, 30) == GestureAxis::kUndecided);
+    assert(blocks::ClassifyGestureAxis(31, 90) == GestureAxis::kVertical);
+    assert(blocks::ClassifyGestureAxis(-35, 120) == GestureAxis::kVertical);
+    assert(blocks::ClassifyGestureAxis(90, 25) == GestureAxis::kHorizontal);
+    assert(blocks::ClassifyGestureAxis(-90, 25) == GestureAxis::kHorizontal);
+}
+
 void TestHorizontalBoundsAndHardDrop() {
     blocks::BlocksModel model;
     model.Reset(1U);
@@ -71,7 +83,7 @@ void TestHoldIsLimitedUntilLock() {
     assert(model.hold_available());
 }
 
-void TestLeisureDifficultyCurve() {
+void TestCappedDifficultyCurve() {
     blocks::BlocksModel model;
     model.Reset(4U);
 
@@ -80,8 +92,12 @@ void TestLeisureDifficultyCurve() {
         uint32_t period_us;
     };
     constexpr ExpectedPeriod kExpected[] = {
-        {1U, 750000U},   {2U, 426304U},   {6U, 291370U},   {11U, 245715U}, {12U, 239992U},
-        {13U, 234879U}, {24U, 199852U},  {74U, 149860U},  {124U, 131556U}, {200U, 116657U},
+        {1U, 750000U},
+        {12U, 240000U},
+        {20U, 200000U},
+        {99U, 100000U},
+        {100U, 100000U},
+        {200U, 100000U},
     };
     for (const ExpectedPeriod expected : kExpected) {
         model.SetLevelForTesting(expected.level);
@@ -89,7 +105,7 @@ void TestLeisureDifficultyCurve() {
     }
 
     uint32_t previous_period_us = 750000U;
-    for (uint32_t level = 1U; level <= 200U; ++level) {
+    for (uint32_t level = 1U; level <= 99U; ++level) {
         model.SetLevelForTesting(level);
         const uint32_t period_us = model.drop_period_us();
         assert(period_us < previous_period_us || level == 1U);
@@ -134,7 +150,9 @@ void TestRandomPlayAndRenderRunBound() {
             }
             assert(model.score() >= previous_score);
             previous_score = model.score();
-            assert(model.level() == model.lines() / 10U + 1U);
+            const uint32_t expected_level =
+                model.lines() / 10U >= 98U ? 99U : model.lines() / 10U + 1U;
+            assert(model.level() == expected_level);
             if (model.alive()) {
                 assert(model.ghost_y() >= model.active().y);
             }
@@ -159,10 +177,11 @@ void TestRandomPlayAndRenderRunBound() {
 
 int main() {
     TestEveryRotationContainsFourCells();
+    TestGestureDirectionLockClassification();
     TestHorizontalBoundsAndHardDrop();
     TestSingleLineClearAndScoring();
     TestHoldIsLimitedUntilLock();
-    TestLeisureDifficultyCurve();
+    TestCappedDifficultyCurve();
     TestRandomPlayAndRenderRunBound();
     return 0;
 }

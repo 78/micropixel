@@ -26,6 +26,8 @@ void SquareSystemUi::UpdateHallInstallProgress(uint32_t app_index, uint8_t progr
 
 void SquareSystemUi::PauseHallCoverLoading() { hall_policy_.PauseCoverLoading(); }
 
+void SquareSystemUi::PrepareAppLaunch(uint32_t app_index) { hall_policy_.PrepareLaunch(app_index); }
+
 void SquareSystemUi::LeaveHall() { hall_policy_.Leave(); }
 
 std::expected<void, host_ui::SystemUiError> SquareSystemUi::RestoreGuestView() {

@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.pixel-sketch",
+  "threading": "none",
   "title": "Pixel Sketch",
   "sources": ["main.cpp"]
 }

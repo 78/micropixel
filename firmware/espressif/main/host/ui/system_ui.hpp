@@ -152,7 +152,7 @@ struct HallCellularModel final {
 };
 
 struct HallStatusBarModel final {
-    std::array<char, 6U> time_text{'-', '-', ':', '-', '-', '\0'};
+    std::array<char, 6U> time_text{};
     HallWifiModel wifi{};
     HallCellularModel cellular{};
     HallBatteryModel battery{};
@@ -451,6 +451,7 @@ class SystemUi {
         (void)progress_percent;
     }
     virtual void PauseHallCoverLoading() {}
+    virtual void PrepareAppLaunch(uint32_t app_index) { (void)app_index; }
     virtual void LeaveHall() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> RestoreGuestView() = 0;
     virtual void WatchGuestActions(SystemUiActionSink action_sink, void* action_context) = 0;

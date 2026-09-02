@@ -19,13 +19,23 @@ test，也不为每项能力生成独立 AOT；协议、错误和边界验证继
 定位真实用法。Renderer 没有独立页面：`demo_app.cpp` 统一持有 Scene 并提交 `SceneUpdate`，各功能页直接
 向它写入自己的绘制命令。
 
-首页、返回按钮和各页面操作按钮共用 `sdk/ui/button.hpp`：按下时修改对应 Shape/Sprite 的 opacity 反馈，
-移出按钮会撤销按下态，只有移回并在按钮内松开才触发动作。这个应用也因此直接覆盖 Renderer
-alpha blend 的实际交互路径，不需要为 Graphics 再单独做一页。BACK 使用加大的绘制区域和比绘制边界额外
-大 6 px 的独立命中区域；Devices 页只为 Haptics、GPIO 和 Power 显示中间操作按钮，其他设备让 PREV/NEXT
-均分整行。所有按钮文字统一使用向上 5 个逻辑像素的光学校正，与 Blocks、Snake 的操作按钮一致。
+首页入口、返回按钮和各功能页的普通文字按钮都通过所属 Container 的 `CreateTextButton()` 创建，不需要传
+Renderer 或手动拆 `Result`；它覆盖 SDK 自带背景、状态遮罩、字体测量和二维文字居中路径。首页用一个可见性
+Container 统一切换六个入口；需要 retained 控件的功能页进入时创建自己的 `page_container_` 和按钮，
+退出时直接调用页面 Container 的 `Destroy()`，级联归还嵌套按钮 Container 与 Scene node；再次进入直接
+重建页面对象，展示标准的按需页面生命周期。
 
-界面直接使用 `RendererInfo` 返回的物理坐标。`sdk/ui/layout.hpp` 的 `ComputeFlexLayout()` 在启动时计算
+页面的静态和动态说明内容复用一套由 `std::vector` 管理的 `DemoView` 绘制节点；它从空集合开始，只随实际
+需求增长，不为六个页面预建固定 Label/Shape 槽。Shape、Sprite 和 Label 分别挂在确定 z-order 的子
+Container，交互控件位于更高的 controls Container，因此节点回收、复用或跨页面改变数量都不会改变视觉
+层级。渲染结束时在同一个事务中销毁多余节点，提交成功后缩短 handle vector，因此 Scene 只保留当前页面
+实际使用的槽。Scene 支持事务内创建节点，增长和回收可以与页面更新原子提交。这个共享 View 是全 Demo 的渲染基础设施，不代表页面对象所有权。专属
+retained 页面应把视觉对象和控件都挂到自己的页面根 Container。
+
+移出按钮会撤销按下态，只有移回并在按钮内松开才触发动作。BACK 使用比绘制边界额外大 6 px 的命中区域；Devices 页只为 Haptics、
+GPIO 和 Power 显示中间操作按钮，其他设备让 PREV/NEXT 均分整行。
+
+界面直接使用 `RendererInfo` 返回的逻辑坐标。`sdk/ui/layout.hpp` 的 `ComputeFlexLayout()` 在启动时计算
 页面分区和首页菜单，在页面进入时计算操作按钮；480×480 使用单列紧凑布局，720×720 使用两列展开布局。
 布局结果同时用于绘制和 Button 命中，触摸不做坐标转换。Flex 只分配矩形，不缩放 Texture。
 
@@ -60,7 +70,7 @@ python3 tools/generate_demo_explosion_atlas.py --frames 30 --update-manifest
 ## 构建与烧录
 
 ```sh
-python3 tools/micropixel package guest/apps/demo
+python3 tools/micropixel package guest/apps/demo --aot-target riscv32-ilp32f
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 

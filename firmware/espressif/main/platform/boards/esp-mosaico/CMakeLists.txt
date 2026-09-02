@@ -16,6 +16,7 @@ list(APPEND micropixel_sources
     "platform/drivers/sensors/bmi270.cpp"
     "platform/drivers/sensors/bmm150.cpp"
     "platform/input/esp_lcd_touch_input.cpp"
+    "platform/input/gpio_key_input.cpp"
     "platform/transports/development_display_control.cpp"
     "platform/transports/tinyusb_cdc_local_control.cpp"
 )

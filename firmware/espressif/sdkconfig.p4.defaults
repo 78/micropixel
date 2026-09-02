@@ -1,7 +1,5 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
-CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4.csv"
-CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Enable the 32 MiB DIO flash configuration used by the supported Metalio-Claw4 board.
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
@@ -9,13 +7,9 @@ CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
 
 # The attached ESP32-P4 has 16-line PSRAM. Keep standard malloc() internal;
 # WAMR linear memory and the Host comparison buffer request PSRAM explicitly.
-CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
-CONFIG_SPIRAM_USE_CAPS_ALLOC=y
-# Skip the destructive full-PSRAM sweep on every product boot. PSRAM remains
-# enabled and is still initialized normally before Host allocations use it.
-CONFIG_SPIRAM_MEMTEST=n
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # The attached device is P4 rev 1.3. ESP-IDF treats pre-v3 and v3+ P4 as
 # mutually incompatible targets; rev 1.x runs at 360 MHz.
@@ -30,8 +24,6 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 CONFIG_PM_ENABLE=y
 CONFIG_PM_DFS_INIT_AUTO=y
 
-# Use 1 ms FreeRTOS tick granularity for bounded waits and service deadlines.
-CONFIG_FREERTOS_HZ=1000
 # Reserve enough shared interrupt stack for nested display, Wi-Fi and timer ISRs.
 CONFIG_FREERTOS_ISR_STACKSIZE=2048
 # Suppress periodic ticks while every runnable task is blocked. Runtime PM does
@@ -58,83 +50,19 @@ CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=31
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=53
 CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
 CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-# BundleFS workspaces and persistent Host state live in PSRAM-backed heap.
-# Keep enough internal stack for synchronous LVGL tree rebuilds and the bounded
-# control flow used by System UI capture; pixel and PNG buffers remain in PSRAM.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
-
-# Product firmware is performance-sensitive. Use ESP-IDF's supported release
-# optimization profile; sdkconfig.debug.defaults can be appended explicitly
-# when source-level debugging is required.
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
-
-# Keep both the mutable relocatable AOT input and executable text in PSRAM.
-# Internal SRAM remains available for Host/WAMR metadata, stacks, DMA and
-# latency-sensitive system work; product builds do not select placement by
-# module size.
-# CONFIG_ESP_SYSTEM_MEMPROT is not set
-
-CONFIG_WAMR_BUILD_RELEASE=y
-CONFIG_WAMR_ENABLE_AOT=y
-# CONFIG_WAMR_ENABLE_INTERP is not set
-CONFIG_WAMR_ENABLE_LIBC_BUILTIN=y
-# Keep the P4 Host aligned with the S3 performance baseline.
-CONFIG_WAMR_ENABLE_LIBC_WASI=n
-CONFIG_WAMR_ENABLE_MEMORY_PROFILING=y
-CONFIG_WAMR_ENABLE_DUMP_CALL_STACK=y
-CONFIG_WAMR_ENABLE_LIB_PTHREAD=y
-CONFIG_WAMR_ENABLE_SHARED_MEMORY=y
-CONFIG_WAMR_LINEAR_MEMORY_IN_PSRAM=y
-CONFIG_WAMR_AOT_CODE_IN_PSRAM=y
-CONFIG_MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM=y
-CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES=128
-CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES=2097152
-
-CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS=2
-CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS=1000
-CONFIG_MICROPIXEL_KV_MAX_BYTES=2048
-CONFIG_MICROPIXEL_KV_MAX_VALUE_BYTES=512
-CONFIG_MICROPIXEL_KV_MAX_KEYS=16
-CONFIG_MICROPIXEL_KV_WRITE_BURST=8
-CONFIG_MICROPIXEL_KV_WRITE_REFILL_MS=1000
-
-# Product images never inject synthetic input. The conformance overlay enables
-# its isolated test hooks explicitly.
-CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
 # ESP32-P4 product path: retained Guest objects, PPA-assisted image copies,
 # and bounded dirty-region coalescing.
 CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4=y
-# All Ogg Opus decoders run serially on MicroPixel's one audio decode worker,
-# so one PSRAM-backed pseudostack is sufficient for every playback instance.
-CONFIG_OPUS_NONTHREADSAFE_PSEUDOSTACK=y
-CONFIG_OPUS_PSEUDOSTACK_SIZE=120000
-CONFIG_OPUS_STATE_PREFER_PSRAM=y
-CONFIG_OPUS_PSEUDOSTACK_PREFER_PSRAM=y
-CONFIG_OPUS_OGG_DECODER_PREFER_PSRAM=y
 # ESP32-P4 uses the portable fixed-point RISC-V decoder path.
 # CONFIG_OPUS_FLOATING_POINT is not set
 # CONFIG_OPUS_ENABLE_XTENSA_OPTIMIZATIONS is not set
-# The TCA9555 power-key wake ISR disables its GPIO interrupt through the
-# esp-iot-solution button driver. PPA/PSRAM activity can temporarily disable
-# the flash cache, so the GPIO control path must remain callable from IRAM.
-CONFIG_GPIO_CTRL_FUNC_IN_IRAM=y
-CONFIG_MICROPIXEL_LVGL_PPA_ACCEL=y
-CONFIG_MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS=4096
 CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT=y
-# The V1 status panel always offers Guest-presented FPS/aggregate-CPU control.
-# Keep run-time accounting available; drawing and sampling remain off until enabled.
-CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
-CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
-CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
 # Keep the RGB888 scratch buffer in internal SRAM for render speed, but limit
 # it to 60 rows (129600 bytes). This returns another 129600 bytes of contiguous
 # internal SRAM compared with the previous 120-row buffer.
 CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=60
 # CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM is not set
-CONFIG_MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES=12582912
-CONFIG_MICROPIXEL_MAX_TEXTURE_DIMENSION=720
 # Merge nearby retained-object invalidations to limit repeated LVGL tree walks.
 # Coalescing is always enabled; this bounds the extra overdraw per merge.
 CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS=8192
@@ -144,32 +72,15 @@ CONFIG_LV_COLOR_DEPTH_24=y
 CONFIG_LV_MEM_SIZE_KILOBYTES=96
 CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0
 # CONFIG_LV_USE_LODEPNG is not set
-CONFIG_LV_DEF_REFR_PERIOD=4
-# LVGL's Kconfig requires a built-in default choice, but main/CMakeLists.txt
-# overrides that compile-time default with generated builtin-latin-v1/14 and
-# compiles Montserrat 14 out. Explicitly disable the other duplicate sizes too.
-# Product firmware never links LVGL's examples or demos.
-# CONFIG_LV_BUILD_EXAMPLES is not set
-# CONFIG_LV_BUILD_DEMOS is not set
+# main/CMakeLists.txt overrides LVGL's built-in default font with generated
+# builtin-latin-v1/14. Explicitly disable the other duplicate sizes too.
 # CONFIG_LV_FONT_MONTSERRAT_18 is not set
 # CONFIG_LV_FONT_MONTSERRAT_24 is not set
 # CONFIG_LV_FONT_MONTSERRAT_32 is not set
-CONFIG_LV_FONT_FMT_TXT_LARGE=y
-CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y
-# The device has no trusted wall clock. Keep ESP-IDF's default behavior and
-# ignore X.509 notBefore/notAfter while retaining chain and hostname checks.
-# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set
 # ESP32-P4 revisions used by Metalio-Claw4 reject the ESP ECDSA peripheral at
 # runtime. Keep TLS 1.3 CertificateVerify on the software path and do not link
 # the unusable PSA hardware driver.
 # CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY is not set
-# Remote Control either skips trust-chain verification in development or uses
-# its configured single DER trust anchor. The Mozilla root bundle is unused.
-# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
 # Keep every LVGL row 16-byte aligned without producing a fractional RGB888
 # physical width: lcm(16-byte SIMD alignment, 3-byte RGB888 pixel) = 48 bytes.
 CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=48
-CONFIG_LV_DRAW_BUF_ALIGN=64
-# Neither Xtensa P4 nor RISC-V S31 has an LVGL assembly backend supported by
-# this build. Keep the generic optimized C kernels selected explicitly.
-CONFIG_LV_DRAW_SW_ASM_NONE=y

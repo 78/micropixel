@@ -58,10 +58,23 @@ bool ForegroundSuspendResumeStop() {
     AppRuntime runtime;
     AppController controller(runtime);
     const InstalledApp app = TestApp("micropixel.lifecycle");
+    micropixel_system_launch_arguments_response_t launch_arguments{};
+    launch_arguments.size = sizeof(launch_arguments);
+    launch_arguments.count = 2U;
+    launch_arguments.bytes_length = 12U;
+    launch_arguments.offsets[0] = 0U;
+    launch_arguments.offsets[1] = 8U;
+    std::memcpy(launch_arguments.bytes,
+                "--level\0"
+                "100\0",
+                launch_arguments.bytes_length);
 
-    auto start = controller.Start(app);
+    auto start = controller.Start(app, launch_arguments);
     if (!Check(start.has_value(), "Start must accept the first App") ||
-        !Check(runtime.WaitUntilStarted(), "Guest worker must enter RunApp")) {
+        !Check(runtime.WaitUntilStarted(), "Guest worker must enter RunApp") ||
+        !Check(runtime.launch_arguments().count == 2U &&
+                   std::strcmp(runtime.launch_arguments().bytes + runtime.launch_arguments().offsets[1], "100") == 0,
+               "Start must copy launch arguments into the Guest worker")) {
         return false;
     }
     runtime.AllowReady();

@@ -9,7 +9,7 @@ bool IsTrustedUtcTime(std::time_t utc_seconds) {
 }
 
 std::array<char, 6U> FormatBeijingClock(std::time_t utc_seconds) {
-    std::array<char, 6U> text{'-', '-', ':', '-', '-', '\0'};
+    std::array<char, 6U> text{};
     if (!IsTrustedUtcTime(utc_seconds)) {
         return text;
     }

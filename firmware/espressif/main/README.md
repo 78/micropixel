@@ -226,7 +226,9 @@ main/
 - `runtime/abi/` 固定为 7 个文件。它包含 C ABI 声明、WAMR native symbol 表、参数适配、固定容量服务注册表和各服务 Endpoint；`ServiceHandler` 与注册表放在一起，避免为一个小抽象再增加文件。
 - `runtime/bundle/` 负责 Bundle v1 解析、语义校验和 AOT payload 所有权。v1 使用显式长度的 64 字节
   AppId、必需的 UTF-8 App 标题元数据，并将 Header 固定为 128 字节；对外格式由 `bundle_format.h`
-  固定，目录调整不改变磁盘 ABI。
+  固定，目录调整不改变磁盘 ABI。每个 AOT section 在 `reserved0` 以 bitmap 声明 CPU target；当前只装载一个 AOT，
+  安装事务在开始 BundleFS staging write 前拒绝缺少 target 元数据或与 Host 架构不匹配的 App Bundle。
+  该 per-section 布局为未来多 target Bundle 保留扩展空间，但当前 reader 尚未启用多 AOT 选择。
 - `runtime/bundlefs/` 是 `app_store` 的底层文件系统（P4 产品为 24 MiB，S31 NOR bring-up profile 为
   8 MiB）。它以离散 64 KiB 数据块保存不可变 Bundle，并按目标将每块展开为一个或多个 Flash MMU page，
   使用四个 16 KiB Catalog Bank 环形提交，最多保存 50 个 App，并兼容读取和迁移旧 v1 的四个 4 KiB
@@ -270,7 +272,8 @@ main/
 - `host/controller/` 集中 Host Controller 以及本地、远程控制入口；`control::ControlDispatcher` 是
   Local/Remote 共用的传输无关有界队列和快照边界，两类 Agent 不互相依赖。远程 Agent 以独立任务维护
   HTTP/3 控制流，设备
-  UUID/credential 与 Remote Control 开关分别保存在 `sys_store/control`；它只向 System Shell 发布快照，
+  UUID/credential 与 Remote Control 开关分别保存在 `sys_store/control`；配置服务地址且没有已保存开关时，
+  Remote Control 默认开启并等待 Wi-Fi，用户保存的开关选择在后续启动时优先；它只向 System Shell 发布快照，
   不从网络回调直接调用 WAMR、LVGL 或板级驱动。发布配置必须提供匹配 Control 主机名的 DER CA
   base64 和可达 NTP 服务；设备先建立可信 wall clock，再校验证书链/用途/有效期/主机名、TLS 1.3
   CertificateVerify 与 Finished。开发 bypass 只跳过证书链、有效期和主机名。
@@ -321,6 +324,12 @@ main/
 - `platform/boards/null/` 提供没有真实板级设备时的构建实现。
 - `platform/audio/` 在 App 启动或 Resume 后立即打开音频输出，并在 App 保持前台时持续输出静音帧以保持
   I²S、codec 和功放就绪；只有 App Suspend、Stop 或 Session 销毁后，原有 10 秒静音空闲计时才允许关闭输出。
+- `platform/boards/esp32-s3-box-3/` 是 ESP32-S3 preview 组合：320×240 RGB565 SPI panel、displayed shadow
+  和所有大图形/截图缓冲固定使用 PSRAM；原生 Wi-Fi 复用共享 `WifiManager`，ES8311/I2S 复用
+  `platform/audio/` 的可配置 sink。GPIO1 侧边 Mute 由 Host 独占并归零 mixer，不作为 Guest Key，也不改变
+  保存的设备主音量。板载 ICM-42607-P 通过共享 I2C executor 发布加速度和角速度；Pmod 排除 USB 的
+  GPIO19/20 与 Dock I2C 的 GPIO40/41 后发布其余 12 路 GPIO。AHT30 位于外接 SENSOR 扩展板，不作为主机
+  内建设备注册。板级音频、Wi-Fi 或传感器初始化失败只降级对应能力，不阻断 Hall、USB local control 或 Runtime。
 - `platform/boards/esp-mosaico/` 是 ESP32-S31 的 P0/P1 产品组合：复用原生 Wi-Fi policy、共享 App Hall/
   Status Layer、480 方屏 layout、逻辑坐标变换、PPA/DMA2D 图形原语和 16 KiB MMU page-safe BundleFS；板级层
   组合 CO5300、`78/esp_lcd_touch_cst92xx`、ES8311 codec、BQ27220、数字振动电机、供电和引脚；音频 tone/PCM mixer 与

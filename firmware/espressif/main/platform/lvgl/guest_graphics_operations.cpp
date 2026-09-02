@@ -9,7 +9,7 @@ GuestGraphicsOperationsContext& Binding(void* context) {
     return *static_cast<GuestGraphicsOperationsContext*>(context);
 }
 
-#if !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED && !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
 constexpr uint32_t kPpaScaleFractionSteps = 16U;
 
 bool ExactPpaScale(uint32_t source, uint32_t destination, float& scale_out) {
@@ -57,6 +57,8 @@ int32_t ScaleBitmap(GuestGraphicsOperationsContext& binding, const device::Bitma
         bytes_per_pixel = 3U;
     } else if (source.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888) {
         bytes_per_pixel = 4U;
+    } else if (source.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
+        bytes_per_pixel = 2U;
     } else {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
@@ -65,14 +67,16 @@ int32_t ScaleBitmap(GuestGraphicsOperationsContext& binding, const device::Bitma
         destination.size < destination.stride * destination.height) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-#if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+#if !defined(CONFIG_SOC_PPA_SUPPORTED) || !CONFIG_SOC_PPA_SUPPORTED || CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
     if (!binding.engine->ScaleBitmapSoftware(source, destination)) {
         ScaleBitmapNearest(source, destination, bytes_per_pixel);
     }
     return MICROPIXEL_STATUS_OK;
 #else
-    const ppa_srm_color_mode_t mode =
-        source.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888 ? PPA_SRM_COLOR_MODE_RGB888 : PPA_SRM_COLOR_MODE_ARGB8888;
+    const ppa_srm_color_mode_t mode = source.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888 ? PPA_SRM_COLOR_MODE_RGB888
+                                      : source.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565
+                                          ? PPA_SRM_COLOR_MODE_RGB565
+                                          : PPA_SRM_COLOR_MODE_ARGB8888;
     float scale_x = 0.0F;
     float scale_y = 0.0F;
     if (!ExactPpaScale(source.width, destination.width, scale_x) ||
@@ -145,15 +149,19 @@ adapters::GraphicsOperations MakeGuestGraphicsOperations(GuestGraphicsOperations
             [](void* opaque, const device::BitmapView& source, const device::BitmapView& destination) {
                 return ScaleBitmap(Binding(opaque), source, destination);
             },
-        .show_launch_bitmap =
-            [](void* opaque, const device::BitmapView& bitmap) {
-                GuestGraphicsOperationsContext& binding = Binding(opaque);
-                return binding.hooks.show_launch_bitmap(binding.hooks.context, bitmap);
-            },
+        .show_launch_bitmap = [](void* opaque, const device::BitmapView& bitmap) -> int32_t {
+            GuestGraphicsOperationsContext& binding = Binding(opaque);
+            if (binding.hooks.show_launch_bitmap == nullptr) {
+                return MICROPIXEL_STATUS_UNSUPPORTED;
+            }
+            return binding.hooks.show_launch_bitmap(binding.hooks.context, bitmap);
+        },
         .dismiss_launch_bitmap =
             [](void* opaque) {
                 GuestGraphicsOperationsContext& binding = Binding(opaque);
-                binding.hooks.dismiss_launch_bitmap(binding.hooks.context);
+                if (binding.hooks.dismiss_launch_bitmap != nullptr) {
+                    binding.hooks.dismiss_launch_bitmap(binding.hooks.context);
+                }
             },
         .release_guest_resources = [](void* opaque) { Binding(opaque).engine->Release(); },
     };

@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "cJSON.h"
+#include "device/text.hpp"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_heap_caps.h"
@@ -69,6 +70,43 @@ bool ValidAppId(std::string_view app_id) {
         return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9') ||
                byte == '_' || byte == '-' || byte == '.';
     });
+}
+
+bool DecodeLaunchArguments(std::string_view encoded, micropixel_system_launch_arguments_response_t& launch_arguments) {
+    launch_arguments = {};
+    launch_arguments.size = sizeof(launch_arguments);
+    if (encoded.empty()) {
+        return true;
+    }
+    size_t decoded_size = 0U;
+    if (mbedtls_base64_decode(reinterpret_cast<uint8_t*>(launch_arguments.bytes), sizeof(launch_arguments.bytes),
+                              &decoded_size, reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()) != 0 ||
+        decoded_size == 0U || decoded_size > UINT16_MAX || launch_arguments.bytes[decoded_size - 1U] != '\0') {
+        return false;
+    }
+    launch_arguments.bytes_length = static_cast<uint16_t>(decoded_size);
+    size_t offset = 0U;
+    while (offset < decoded_size) {
+        if (launch_arguments.count >= MICROPIXEL_LAUNCH_ARGUMENT_MAX_COUNT) {
+            return false;
+        }
+        launch_arguments.offsets[launch_arguments.count++] = static_cast<uint16_t>(offset);
+        while (offset < decoded_size && launch_arguments.bytes[offset] != '\0') {
+            ++offset;
+        }
+        if (offset == decoded_size) {
+            return false;
+        }
+        const uint32_t argument_offset = launch_arguments.offsets[launch_arguments.count - 1U];
+        const uint32_t argument_length = static_cast<uint32_t>(offset - argument_offset);
+        if (argument_length != 0U &&
+            !device::IsValidUtf8(reinterpret_cast<const uint8_t*>(launch_arguments.bytes + argument_offset),
+                                 argument_length)) {
+            return false;
+        }
+        ++offset;
+    }
+    return true;
 }
 
 bool ParseSha256(std::string_view text, std::array<uint8_t, 32U>& digest) {
@@ -328,7 +366,8 @@ bool LocalControlAgent::HandleHostResult(const control::HostResult& result) {
     return QueueResponse(request_id, "OK", detail.data());
 }
 
-bool LocalControlAgent::QueueHostCommand(uint32_t request_id, control::HostCommandType type, std::string_view app_id) {
+bool LocalControlAgent::QueueHostCommand(uint32_t request_id, control::HostCommandType type, std::string_view app_id,
+                                         const micropixel_system_launch_arguments_response_t* launch_arguments) {
     control::HostCommand command{};
     std::snprintf(command.command_id.data(), command.command_id.size(), "usb:%" PRIu32, request_id);
     command.source = control::ControlSource::kLocal;
@@ -337,6 +376,10 @@ bool LocalControlAgent::QueueHostCommand(uint32_t request_id, control::HostComma
     if (!app_id.empty()) {
         std::snprintf(command.app_id.data(), command.app_id.size(), "%.*s", static_cast<int>(app_id.size()),
                       app_id.data());
+    }
+    command.launch_arguments.size = sizeof(command.launch_arguments);
+    if (launch_arguments != nullptr) {
+        command.launch_arguments = *launch_arguments;
     }
     if (!controls_.QueueLocalCommand(command)) {
         (void)QueueResponse(request_id, "ERROR", "device_busy");
@@ -907,10 +950,14 @@ void LocalControlAgent::HandleCommand(const char* command) {
         HandleDeviceReboot(request_id, remaining);
     } else if (operation == "APP_START") {
         const std::string_view app_id = TakeToken(remaining);
-        if (!ValidAppId(app_id) || !TrimLeft(remaining).empty()) {
+        const std::string_view encoded_arguments = TakeToken(remaining);
+        micropixel_system_launch_arguments_response_t launch_arguments{};
+        if (!ValidAppId(app_id)) {
             (void)QueueResponse(request_id, "ERROR", "invalid_app_id");
+        } else if (!TrimLeft(remaining).empty() || !DecodeLaunchArguments(encoded_arguments, launch_arguments)) {
+            (void)QueueResponse(request_id, "ERROR", "invalid_launch_arguments");
         } else {
-            (void)QueueHostCommand(request_id, control::HostCommandType::kStartApp, app_id);
+            (void)QueueHostCommand(request_id, control::HostCommandType::kStartApp, app_id, &launch_arguments);
         }
     } else if (operation == "APP_STOP") {
         const std::string_view app_id = TakeToken(remaining);

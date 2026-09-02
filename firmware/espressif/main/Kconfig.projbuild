@@ -9,8 +9,7 @@ menu "WAMR application quotas"
             page is 64 KiB, so the default allows 8 MiB for Guest static data,
             stack and C++ dynamic allocations. At instantiation the Host may
             lower this ceiling to fit the largest contiguous PSRAM block while
-            retaining a safety reserve for Host work. This remains separate
-            from Host-owned Bitmap quotas.
+            retaining a safety reserve for Host work.
 
     config MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES
         int "PSRAM safety reserve protected from Guest allocations"
@@ -18,22 +17,9 @@ menu "WAMR application quotas"
         default 2097152
         help
             Minimum free PSRAM retained for Host display, audio, system UI and
-            transient work. WAMR growth, decoded textures and mutable surfaces
-            are admitted on demand only while this reserve remains available.
-            This is a Host safety floor, not a preallocated Guest quota.
-
-    config MICROPIXEL_AOT_PACKAGE_BUFFER_IN_PSRAM
-        bool "Copy non-mapped AOT package input into PSRAM"
-        depends on SPIRAM
-        depends on SPIRAM_USE_CAPS_ALLOC || SPIRAM_USE_MALLOC
-        default y if WAMR_AOT_CODE_IN_PSRAM
-        default n
-        help
-            Keep an ordinary relocatable AOT input buffer in writable PSRAM
-            until its WAMR module is unloaded. This removes the temporary and
-            lifetime package-size charge from internal SRAM and is required
-            for large ordinary AOT packages whose relocated text also runs
-            from PSRAM.
+            transient work. WAMR linear-memory allocations and growth are
+            admitted only while this reserve remains available. Bitmap pixels
+            allocate directly from PSRAM and are not subject to this reserve.
 
     config WAMR_RUNTIME_MAX_GUEST_THREADS
         int "Maximum child threads per guest"
@@ -55,25 +41,15 @@ menu "WAMR application quotas"
             budget. A production app manifest can request a smaller value,
             but must not exceed the framework's policy ceiling.
 
-    config MICROPIXEL_BITMAP_PSRAM_QUOTA_BYTES
-        int "Maximum bytes in one decoded Bitmap/offscreen surface"
-        range 65536 25165824
-        default 4194304
+    config MICROPIXEL_MAX_BITMAPS
+        int "Maximum live Texture handles per Guest"
+        range 16 128
+        default 128
         help
-            Rejects one unexpectedly large JPEG/PNG decode output or mutable
-            offscreen surface. This is not a cumulative Guest quota: multiple
-            textures are allocated elastically while the Host PSRAM safety
-            reserve remains intact. Raw package Bitmaps remain backed by
-            read-only Flash mmap and do not consume PSRAM.
-
-    config MICROPIXEL_MAX_TEXTURE_DIMENSION
-        int "Maximum decoded texture dimension"
-        range 64 2048
-        default 1024
-        help
-            Independent width/height ceiling for decoded and streaming
-            textures. This is a resource policy, not the physical panel
-            resolution; Guest rendering still queries RendererInfo.
+            Fixed-capacity Host handle table for Guest textures. Compact slots
+            are stored in PSRAM and resolved in constant time through an
+            index-plus-generation handle. Texture pixels remain separately
+            allocated in Flash or PSRAM.
 
     config MICROPIXEL_KV_MAX_BYTES
         int "Maximum logical private KV bytes per Guest"
@@ -104,17 +80,6 @@ endmenu
 
 menu "MicroPixel board backends"
 
-    config MICROPIXEL_DISPLAY_LVGL
-        bool
-        select LV_FONT_FMT_TXT_LARGE
-        select LV_USE_SNAPSHOT
-
-    config MICROPIXEL_DISPLAY_PPA
-        bool
-
-    config MICROPIXEL_DISPLAY_DIRECT_FRAMEBUFFER
-        bool
-
     choice MICROPIXEL_BOARD
         prompt "Target board"
         default MICROPIXEL_BOARD_METALIO_CLAW4 if IDF_TARGET_ESP32P4
@@ -123,9 +88,6 @@ menu "MicroPixel board backends"
     config MICROPIXEL_BOARD_METALIO_CLAW4
         bool "Metalio-Claw4"
         depends on IDF_TARGET_ESP32P4
-        select MICROPIXEL_DISPLAY_LVGL
-        select MICROPIXEL_DISPLAY_PPA
-        select MICROPIXEL_DISPLAY_DIRECT_FRAMEBUFFER
         help
             Bring up the verified 720x720 RGB888 MIPI-DSI panel and GT911
             touch controller before WAMR starts. LVGL remains a Host-only
@@ -134,21 +96,46 @@ menu "MicroPixel board backends"
     config MICROPIXEL_BOARD_ESP_MOSAICO
         bool "ESP-Mosaico bring-up profile"
         depends on IDF_TARGET_ESP32S31
-        select MICROPIXEL_DISPLAY_LVGL
-        select MICROPIXEL_DISPLAY_PPA
         help
             Bring up the CO5300 display and 78/esp_lcd_touch_cst92xx driver with the
             shared Runtime, Guest graphics engine and native ESP32-S31 Wi-Fi.
             Audio, sensors, battery, NAND and module discovery remain outside
             the initial HMI integration.
 
+    config MICROPIXEL_BOARD_ESP32_S3_BOX_3
+        bool "ESP32-S3-BOX-3 preview profile"
+        depends on IDF_TARGET_ESP32S3
+        help
+            Bring up the native ESP-BOX-3 display, touch, audio, Wi-Fi,
+            built-in ICM-42607-P IMU, Pmod GPIO, Guest Graphics and App Hall.
+
+    config MICROPIXEL_BOARD_SZPI_ESP32S3
+        bool "LCKFB SZPI ESP32-S3 preview profile"
+        depends on IDF_TARGET_ESP32S3
+        help
+            Bring up the LCKFB SZPI ESP32-S3 board's ST7789 display, FT6336
+            touch controller, ES8311 audio output, native Wi-Fi, QMI8658 IMU,
+            BOOT key, expansion GPIO, Guest Graphics and App Hall. Camera,
+            microphone and SD card remain outside the preview profile.
+
     config MICROPIXEL_BOARD_NULL
-        bool "Null compile-only board"
+        bool "Null board"
         help
             Build hardware-independent Runtime and Device paths with unavailable
-            device backends. This profile is not intended for flashing.
+            device backends. Product profiles do not select this board; preview
+            bring-up profiles may flash it before board peripherals are enabled.
 
     endchoice
+
+    config MICROPIXEL_SMOKE_AUTORUN_FIRST_APP
+        bool "Automatically run the first App once during Null-board smoke testing"
+        depends on MICROPIXEL_BOARD_NULL
+        default n
+        help
+            Optional smoke-test hook. When BundleFS contains an App,
+            the Null System UI asks HostController to launch catalog index zero
+            exactly once and logs a stable marker. Normal Null compile gates and
+            every product board keep this disabled.
 
     config MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
         bool "Disable PPA and DMA2D on ESP-Mosaico"
@@ -174,27 +161,36 @@ menu "MicroPixel board backends"
             increasing it when display signal integrity fails at 40 MHz. Keep
             this board-specific; Runtime and Device contracts never depend on it.
 
-    config MICROPIXEL_LVGL_PPA_ACCEL
-        bool "Use PPA for eligible LVGL RGB888 draw operations"
-        depends on MICROPIXEL_DISPLAY_PPA && !MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
-        default y
+    config MICROPIXEL_BOX3_LVGL_DOUBLE_BUFFER
+        bool "Use two LVGL partial buffers on ESP32-S3-BOX-3"
+        depends on MICROPIXEL_BOARD_ESP32_S3_BOX_3
+        default n
         help
-            Register the ESP LVGL adapter's PPA Fill/Blend handler on a target
-            that advertises the accelerator. Guest applications never see PPA.
+            Let CPU rendering overlap the previous SPI transfer. This remains
+            partial rendering; it does not allocate two panel framebuffers.
+            Board sdkconfig defaults must select this explicitly when two
+            buffers are intended.
 
-    config MICROPIXEL_LVGL_PPA_MIN_AREA_PIXELS
-        int "Minimum RGB888 fill area sent to PPA"
-        depends on MICROPIXEL_LVGL_PPA_ACCEL
-        range 100 518400
-        default 4096
+    config MICROPIXEL_SZPI_S3_LVGL_DOUBLE_BUFFER
+        bool "Use two LVGL partial buffers on LCKFB SZPI ESP32-S3"
+        depends on MICROPIXEL_BOARD_SZPI_ESP32S3
+        default n
         help
-            Keep smaller opaque fills on the CPU because blocking PPA setup
-            and cache maintenance can dominate them. Areas larger than this
-            threshold use PPA Fill.
+            Let CPU rendering overlap the previous ST7789 SPI transfer. This
+            remains partial rendering and does not allocate two framebuffers.
+
+    config MICROPIXEL_MOSAICO_LVGL_DOUBLE_BUFFER
+        bool "Use two LVGL partial buffers on ESP-Mosaico"
+        depends on MICROPIXEL_BOARD_ESP_MOSAICO
+        default n
+        help
+            Allocate two LVGL draw buffers so rendering can overlap display
+            transfer. Board sdkconfig defaults must select this explicitly;
+            the board backend does not force it.
 
     config MICROPIXEL_APP_SURFACE_HW_MIN_AREA_PIXELS
         int "Minimum App Surface operation sent to PPA/DMA2D"
-        depends on MICROPIXEL_DISPLAY_PPA
+        depends on SOC_PPA_SUPPORTED || SOC_DMA2D_SUPPORTED
         range 1 65536
         default 100
         help
@@ -205,7 +201,6 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT
         int "LVGL partial draw buffer height"
-        depends on MICROPIXEL_DISPLAY_LVGL
         range 20 720
         default 100
         help
@@ -215,27 +210,14 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM
         bool "Place the LVGL partial draw buffer in PSRAM"
-        depends on MICROPIXEL_DISPLAY_LVGL && SPIRAM
         default n
         help
             Allocate partial scratch buffers from PSRAM instead of internal
             SRAM. This permits taller or multiple buffers at the cost of slower
             CPU access. PPA and DMA2D remain available where supported.
 
-    config MICROPIXEL_LVGL_OBJECT_POOL_PSRAM
-        bool "Place the LVGL object pool in PSRAM"
-        depends on MICROPIXEL_DISPLAY_LVGL && SPIRAM && LV_USE_BUILTIN_MALLOC
-        default n
-        help
-            Place LVGL's fixed builtin TLSF pool, which owns objects, styles
-            and event descriptors, in external RAM. Draw buffers are governed
-            separately by MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM. Keep this off
-            on boards where CPU access to PSRAM makes object traversal too
-            expensive.
-
     config MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS
         int "Maximum extra pixels per dirty-area merge"
-        depends on MICROPIXEL_DISPLAY_LVGL
         range 0 65536
         default 8192
         help
@@ -246,7 +228,6 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS
         int "Maximum union area for a dirty-area merge"
-        depends on MICROPIXEL_DISPLAY_LVGL
         range 4096 518400
         default 65536
         help
@@ -256,8 +237,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
         bool "Enable suspended-App snapshot transitions for the App Hall"
-        depends on MICROPIXEL_BOARD_METALIO_CLAW4 && SPIRAM
-        select LV_USE_SNAPSHOT
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
         default y
         help
             Capture the paused Guest object tree into a transient 720x720
@@ -291,8 +271,9 @@ menu "MicroPixel Remote Control"
         help
             Build the Host-owned HTTP/3 control agent, stateless device
             bootstrap, NVS identity, control stream, and temporary pairing
-            flow. The user-facing Remote Control switch remains off by
-            default and is stored separately in sys_store.
+            flow. The user-facing Remote Control switch defaults to on when a
+            service hostname is configured and to off otherwise. A saved user
+            choice in sys_store takes precedence on later boots.
 
     config MICROPIXEL_REMOTE_CONTROL_HOST
         string "Control service hostname"

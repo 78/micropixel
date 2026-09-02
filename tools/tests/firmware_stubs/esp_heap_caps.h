@@ -18,6 +18,12 @@ static inline void* heap_caps_calloc(size_t count, size_t size, unsigned capabil
     return calloc(count, size);
 }
 
+static inline void* heap_caps_aligned_alloc(size_t alignment, size_t size, unsigned capabilities) {
+    (void)alignment;
+    (void)capabilities;
+    return malloc(size);
+}
+
 static inline void heap_caps_free(void* memory) { free(memory); }
 
 #endif

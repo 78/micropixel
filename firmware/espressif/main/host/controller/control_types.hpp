@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "abi/micropixel_abi.h"
 #include "device/contracts/input.hpp"
 #include "freertos/FreeRTOS.h"
 
@@ -94,6 +95,7 @@ struct HostCommand final {
     HostCommandType type{HostCommandType::kCaptureScreen};
     TickType_t deadline_ticks{};
     std::array<char, kAppIdCapacity> app_id{};
+    micropixel_system_launch_arguments_response_t launch_arguments{};
     std::array<SequenceOperation, kMaxSequenceOperations> operations{};
     uint32_t operation_count{};
     uint8_t* package_data{};

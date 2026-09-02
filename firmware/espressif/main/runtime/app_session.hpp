@@ -7,6 +7,7 @@
 #include <memory>
 #include <string_view>
 
+#include "abi/micropixel_abi.h"
 #include "freertos/FreeRTOS.h"
 #include "runtime/bundle/aot_package.hpp"
 #include "runtime/wamr/wamr_runtime.hpp"
@@ -22,7 +23,6 @@ class BackgroundExecutor;
 namespace micropixel::runtime {
 
 class GuestContext;
-class DecodedBitmap;
 class GuestLogSink;
 
 enum class AppSessionError {
@@ -64,7 +64,8 @@ class AppSession final {
 
     [[nodiscard]] static std::expected<AppSession, AppSessionFailure> Create(
         device::DeviceServices& devices, work::BackgroundExecutor& background_executor, const bundlefs_file_t& file,
-        std::string_view effective_locale, GuestLogSink* log_sink = nullptr);
+        std::string_view effective_locale, const micropixel_system_launch_arguments_response_t& launch_arguments,
+        GuestLogSink* log_sink = nullptr);
     [[nodiscard]] std::expected<void, AppSessionFailure> Run();
     [[nodiscard]] bool Suspend(TickType_t timeout);
     [[nodiscard]] bool Resume();
@@ -75,8 +76,7 @@ class AppSession final {
    private:
     AppSession(device::DeviceServices& devices, AotPackage package, LoadedModule module, GuestInstance guest,
                wasm_function_inst_t entry, std::unique_ptr<GuestContext> context,
-               std::unique_ptr<GuestContextBinding> context_binding, std::unique_ptr<DecodedBitmap> launch_bitmap,
-               bool launch_visible);
+               std::unique_ptr<GuestContextBinding> context_binding);
 
     device::DeviceServices& devices_;
     AotPackage package_;
@@ -85,9 +85,7 @@ class AppSession final {
     wasm_function_inst_t entry_{};
     std::unique_ptr<GuestContext> context_;
     std::unique_ptr<GuestContextBinding> context_binding_;
-    std::unique_ptr<DecodedBitmap> launch_bitmap_;
     std::atomic<bool> stop_requested_{};
-    bool launch_visible_{};
 };
 
 }  // namespace micropixel::runtime

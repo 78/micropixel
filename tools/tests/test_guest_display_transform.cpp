@@ -21,7 +21,6 @@ int main() {
     using micropixel::detail::MapSceneRect;
     using micropixel::detail::MapSceneSizedRect;
     using micropixel::detail::MapSceneVectorX;
-    using micropixel::detail::MapSystemFont;
     using micropixel::detail::ScaleCoordinate;
 
     const auto square_720 = MakeDisplayTransform(720U, 720U);
@@ -45,8 +44,6 @@ int main() {
         textured_board.x == 31 && textured_board.y == 51 && textured_board.width == 417 && textured_board.height == 417,
         "adaptive texture extents must remain phase-independent for physical 1:1 copies");
     Check(MapSceneVectorX(square_480, -6) == -4, "layer translations must lower without viewport offsets");
-    Check(MapSystemFont(4U, square_480) == 3U && MapSystemFont(1U, square_480) == 1U,
-          "system fonts must select the matching physical density");
     const auto rounded_safe_area = MapPhysicalInsets(square_480, 24U, 24U, 24U, 24U);
     Check(rounded_safe_area.top == 36U && rounded_safe_area.right == 36U && rounded_safe_area.bottom == 36U &&
               rounded_safe_area.left == 36U,

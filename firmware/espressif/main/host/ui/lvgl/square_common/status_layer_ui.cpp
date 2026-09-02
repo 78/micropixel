@@ -34,6 +34,45 @@ void StyleFullscreenContainer(lv_obj_t* container, uint32_t background, int32_t 
 }  // namespace
 
 const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
+    static constexpr Layout kLayoutLandscape320{
+        .screen_width = 320,
+        .screen_height = 240,
+        .dialog = {.x = 8, .y = 8, .width = 304, .height = 200},
+        .dialog_hidden_y = -200,
+        .quick = {{.x = 16, .y = 16, .width = 92, .height = 48},
+                  {.x = 114, .y = 16, .width = 92, .height = 48},
+                  {.x = 212, .y = 16, .width = 92, .height = 48}},
+        .sliders = {{.x = 16, .y = 70, .width = 140, .height = 66}, {.x = 164, .y = 70, .width = 140, .height = 66}},
+        .metrics = {{.x = 16, .y = 142, .width = 92, .height = 56},
+                    {.x = 114, .y = 142, .width = 92, .height = 56},
+                    {.x = 212, .y = 142, .width = 92, .height = 56}},
+        .performance_overlay_y = 3,
+        .panel_radius = 10,
+        .dialog_radius = 14,
+        .dialog_border_width = 1,
+        .quick_label_x = 8,
+        .quick_name_y = 4,
+        .quick_detail_y = 25,
+        .slider_label_x = 9,
+        .slider_label_y = 6,
+        .slider_value_width = 32,
+        .slider_track_x = 15,
+        .slider_track_y = 39,
+        .slider_track_height = 12,
+        .slider_knob_size = 24,
+        .metric_label_x = 7,
+        .metric_name_y = 5,
+        .metric_value_y = 26,
+        .metric_track_x = 7,
+        .metric_track_y = 48,
+        .metric_track_height = 4,
+        .quick_name_font = platform::lvgl::SystemFontRole::kSmall,
+        .quick_detail_font = platform::lvgl::SystemFontRole::kSmall,
+        .control_font = platform::lvgl::SystemFontRole::kSmall,
+        .metric_font = platform::lvgl::SystemFontRole::kSmall,
+        .scrim_rgb = theme::kStatusScrim,
+        .scrim_opacity = 190U,
+    };
     static constexpr Layout kLayout480{
         .screen_width = 480,
         .screen_height = 480,
@@ -47,7 +86,7 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
         .metrics = {{.x = 32, .y = 262, .width = 128, .height = 106},
                     {.x = 176, .y = 262, .width = 128, .height = 106},
                     {.x = 320, .y = 262, .width = 128, .height = 106}},
-        .performance_overlay = {.x = 174, .y = 4, .width = 132, .height = 26},
+        .performance_overlay_y = 4,
         .panel_radius = 18,
         .dialog_radius = 28,
         .dialog_border_width = 2,
@@ -67,7 +106,6 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
         .metric_track_x = 10,
         .metric_track_y = 82,
         .metric_track_height = 6,
-        .performance_label_y = 3,
         .quick_name_font = platform::lvgl::SystemFontRole::kMedium,
         .quick_detail_font = platform::lvgl::SystemFontRole::kSmall,
         .control_font = platform::lvgl::SystemFontRole::kSmall,
@@ -118,10 +156,7 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
                      .y = Scale480To720(kLayout480.metrics[2].y),
                      .width = Scale480To720(kLayout480.metrics[2].width),
                      .height = Scale480To720(kLayout480.metrics[2].height)}},
-        .performance_overlay = {.x = Scale480To720(kLayout480.performance_overlay.x),
-                                .y = Scale480To720(kLayout480.performance_overlay.y),
-                                .width = Scale480To720(kLayout480.performance_overlay.width),
-                                .height = Scale480To720(kLayout480.performance_overlay.height)},
+        .performance_overlay_y = Scale480To720(kLayout480.performance_overlay_y),
         .panel_radius = Scale480To720(kLayout480.panel_radius),
         .dialog_radius = Scale480To720(kLayout480.dialog_radius),
         .dialog_border_width = Scale480To720(kLayout480.dialog_border_width),
@@ -141,7 +176,6 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
         .metric_track_x = Scale480To720(kLayout480.metric_track_x),
         .metric_track_y = Scale480To720(kLayout480.metric_track_y),
         .metric_track_height = Scale480To720(kLayout480.metric_track_height),
-        .performance_label_y = Scale480To720(kLayout480.performance_label_y),
         .quick_name_font = platform::lvgl::SystemFontRole::kLarge,
         .quick_detail_font = platform::lvgl::SystemFontRole::kMedium,
         .control_font = platform::lvgl::SystemFontRole::kMedium,
@@ -150,6 +184,10 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
         .scrim_opacity = kLayout480.scrim_opacity,
     };
     lv_display_t* display = lv_screen_active() != nullptr ? lv_obj_get_display(lv_screen_active()) : nullptr;
+    if (display != nullptr && lv_display_get_horizontal_resolution(display) <= 320 &&
+        lv_display_get_vertical_resolution(display) <= 240) {
+        return kLayoutLandscape320;
+    }
     return display != nullptr && lv_display_get_horizontal_resolution(display) <= 480 ? kLayout480 : kLayout720;
 }
 
@@ -541,18 +579,21 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
 }
 
 void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model) {
-    const char* wifi_detail = !model.wifi_available ? "UNAVAILABLE"
+    const bool compact = layout_ != nullptr && layout_->screen_width <= 320;
+    const char* unavailable = compact ? "N/A" : "UNAVAILABLE";
+    const char* wifi_detail = !model.wifi_available ? unavailable
                                                     : (model.wifi_connected    ? "CONNECTED"
                                                        : model.wifi_connecting ? "CONNECTING"
                                                        : model.wifi_enabled    ? "ON"
                                                                                : "OFF");
     const char* cellular_detail =
-        !model.cellular_available ? "UNAVAILABLE"
+        !model.cellular_available ? unavailable
                                   : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
     UpdateQuickCardLocked(TouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
     UpdateQuickCardLocked(TouchTarget::kCellular, cellular_detail, model.cellular_enabled, model.cellular_available);
     UpdateQuickCardLocked(TouchTarget::kPerformance,
-                          model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF",
+                          compact ? (model.performance_overlay_enabled ? "CPU ON" : "CPU OFF")
+                                  : (model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF"),
                           model.performance_overlay_enabled, true);
     UpdateSliderLocked(TouchTarget::kBrightness, model.brightness_percent);
     UpdateSliderLocked(TouchTarget::kVolume, model.volume_percent);
@@ -596,22 +637,26 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     lv_obj_set_style_border_width(status_dialog_, layout_->dialog_border_width, 0);
     lv_obj_set_style_border_color(status_dialog_, lv_color_hex(theme::kStatusDialogBorder), 0);
 
-    const char* wifi_detail = !model.wifi_available ? "UNAVAILABLE"
+    const bool compact = layout_->screen_width <= 320;
+    const char* unavailable = compact ? "N/A" : "UNAVAILABLE";
+    const char* wifi_detail = !model.wifi_available ? unavailable
                                                     : (model.wifi_connected    ? "CONNECTED"
                                                        : model.wifi_connecting ? "CONNECTING"
                                                        : model.wifi_enabled    ? "ON"
                                                                                : "OFF");
     const char* cellular_detail =
-        !model.cellular_available ? "UNAVAILABLE"
+        !model.cellular_available ? unavailable
                                   : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
     DrawQuickCard(status_dialog_, TouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled, model.wifi_available);
     DrawQuickCard(status_dialog_, TouchTarget::kCellular, "4G", cellular_detail, model.cellular_enabled,
                   model.cellular_available);
     DrawQuickCard(status_dialog_, TouchTarget::kPerformance, "FPS",
-                  model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF",
+                  compact ? (model.performance_overlay_enabled ? "CPU ON" : "CPU OFF")
+                          : (model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF"),
                   model.performance_overlay_enabled, true);
 
-    DrawSlider(status_dialog_, TouchTarget::kBrightness, "BRIGHTNESS", model.brightness_percent, theme::kStatusControl);
+    DrawSlider(status_dialog_, TouchTarget::kBrightness, compact ? "BRIGHT" : "BRIGHTNESS", model.brightness_percent,
+               theme::kStatusControl);
     DrawSlider(status_dialog_, TouchTarget::kVolume, "VOLUME", model.volume_percent, theme::kStatusControl);
 
     char memory[24]{};
@@ -726,22 +771,26 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
     if (performance_overlay_ == nullptr) {
         performance_overlay_ = lv_obj_create(lv_screen_active());
         ResolveLayoutLocked();
-        lv_obj_set_pos(performance_overlay_, layout_->performance_overlay.x, layout_->performance_overlay.y);
-        lv_obj_set_size(performance_overlay_, layout_->performance_overlay.width, layout_->performance_overlay.height);
+        const lv_font_t* font = platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall);
+        const int32_t line_height = font->line_height;
+        const int32_t horizontal_padding = std::max<int32_t>(2, line_height / 4);
+        const int32_t vertical_padding = std::max<int32_t>(1, line_height / 10);
+        lv_obj_set_size(performance_overlay_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_set_style_pad_all(performance_overlay_, 0, 0);
-        lv_obj_set_style_radius(performance_overlay_, 6, 0);
+        lv_obj_set_style_pad_hor(performance_overlay_, horizontal_padding, 0);
+        lv_obj_set_style_pad_ver(performance_overlay_, vertical_padding, 0);
+        lv_obj_set_style_radius(performance_overlay_, std::max<int32_t>(2, line_height / 3), 0);
         lv_obj_set_style_border_width(performance_overlay_, 0, 0);
         lv_obj_set_style_bg_color(performance_overlay_, lv_color_hex(theme::kPerformanceOverlayBackground), 0);
-        // This HUD is only 150x30 pixels, so its requested translucent backing
-        // remains a small, PPA-eligible blend instead of a full-screen cost.
+        // Keep the translucent backing tightly fitted to the text so it remains
+        // a small, PPA-eligible blend instead of a full-screen cost.
         lv_obj_set_style_bg_opa(performance_overlay_, 176, 0);
         lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_CLICKABLE);
-        performance_label_ = CreateLabel(performance_overlay_, "",
-                                         platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall),
-                                         theme::kPrimaryText, 0, layout_->performance_label_y);
-        lv_obj_set_width(performance_label_, layout_->performance_overlay.width);
+        performance_label_ = CreateLabel(performance_overlay_, "", font, theme::kPrimaryText, 0, 0);
+        lv_obj_set_size(performance_label_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_set_style_text_align(performance_label_, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(performance_overlay_, LV_ALIGN_TOP_MID, 0, layout_->performance_overlay_y);
     }
     lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
 

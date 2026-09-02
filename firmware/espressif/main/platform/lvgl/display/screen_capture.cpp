@@ -3,11 +3,15 @@
 #include <cstddef>
 #include <cstring>
 
-#include "driver/jpeg_encode.h"
 #include "esp_heap_caps.h"
+#include "esp_jpeg_enc.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "lvgl.h"
+#include "soc/soc_caps.h"
+#if SOC_JPEG_ENCODE_SUPPORTED
+#include "driver/jpeg_encode.h"
+#endif
 
 namespace micropixel::platform::lvgl {
 namespace {
@@ -19,7 +23,7 @@ struct RawCapture final {
     uint8_t* pixels{};
     size_t capacity{};
     uint32_t bytes{};
-    jpeg_enc_input_format_t format{};
+    DisplayCapturePixelFormat format{DisplayCapturePixelFormat::kRgb565};
 };
 
 void Release(RawCapture& capture) {
@@ -30,10 +34,16 @@ void Release(RawCapture& capture) {
 void ReleaseJpeg(uint8_t* data) { heap_caps_free(data); }
 
 bool AllocateInput(uint32_t bytes, RawCapture& capture) {
+#if SOC_JPEG_ENCODE_SUPPORTED
     jpeg_encode_memory_alloc_cfg_t config{
         .buffer_direction = JPEG_ENC_ALLOC_INPUT_BUFFER,
     };
     capture.pixels = static_cast<uint8_t*>(jpeg_alloc_encoder_mem(bytes, &config, &capture.capacity));
+#else
+    capture.capacity = bytes;
+    capture.pixels =
+        static_cast<uint8_t*>(heap_caps_aligned_calloc(16U, bytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+#endif
     capture.bytes = bytes;
     return capture.pixels != nullptr && capture.capacity >= bytes;
 }
@@ -75,7 +85,8 @@ bool CaptureDisplayBuffer(lv_display_t* display, uint32_t width, uint32_t height
                 std::memcpy(capture.pixels + static_cast<size_t>(row) * compact_stride,
                             source + static_cast<size_t>(row) * source_stride, compact_stride);
             }
-            capture.format = bytes_per_pixel == 3U ? JPEG_ENCODE_IN_FORMAT_RGB888 : JPEG_ENCODE_IN_FORMAT_RGB565;
+            capture.format =
+                bytes_per_pixel == 3U ? DisplayCapturePixelFormat::kRgb888 : DisplayCapturePixelFormat::kRgb565;
         }
         esp_lv_adapter_unlock();
     }
@@ -86,6 +97,7 @@ bool CaptureDisplayBuffer(lv_display_t* display, uint32_t width, uint32_t height
 }
 
 bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint8_t*& jpeg_bytes, uint32_t& jpeg_size) {
+#if SOC_JPEG_ENCODE_SUPPORTED
     jpeg_encode_memory_alloc_cfg_t output_config{
         .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER,
     };
@@ -105,7 +117,8 @@ bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint
         jpeg_encode_cfg_t encode_config{};
         encode_config.height = height;
         encode_config.width = width;
-        encode_config.src_type = capture.format;
+        encode_config.src_type = capture.format == DisplayCapturePixelFormat::kRgb888 ? JPEG_ENCODE_IN_FORMAT_RGB888
+                                                                                      : JPEG_ENCODE_IN_FORMAT_RGB565;
         encode_config.sub_sample = JPEG_DOWN_SAMPLING_YUV420;
         encode_config.image_quality = kJpegQuality;
         status = jpeg_encoder_process(encoder, &encode_config, capture.pixels, capture.bytes, jpeg_bytes,
@@ -125,6 +138,46 @@ bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint
         return false;
     }
     return true;
+#else
+    if (width > INT32_MAX || height > INT32_MAX || capture.bytes > INT32_MAX) {
+        return false;
+    }
+    const uint32_t output_capacity = capture.bytes;
+    jpeg_bytes =
+        static_cast<uint8_t*>(heap_caps_aligned_calloc(16U, output_capacity, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (jpeg_bytes == nullptr) {
+        return false;
+    }
+    jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();
+    config.width = static_cast<int>(width);
+    config.height = static_cast<int>(height);
+    config.src_type =
+        capture.format == DisplayCapturePixelFormat::kRgb888 ? JPEG_PIXEL_FORMAT_RGB888 : JPEG_PIXEL_FORMAT_RGB565_LE;
+    config.subsampling = JPEG_SUBSAMPLE_420;
+    config.quality = kJpegQuality;
+    config.task_enable = false;
+    jpeg_enc_handle_t encoder = nullptr;
+    jpeg_error_t status = jpeg_enc_open(&config, &encoder);
+    int encoded_size = 0;
+    if (status == JPEG_ERR_OK) {
+        status = jpeg_enc_process(encoder, capture.pixels, static_cast<int>(capture.bytes), jpeg_bytes,
+                                  static_cast<int>(output_capacity), &encoded_size);
+    }
+    if (encoder != nullptr) {
+        const jpeg_error_t close_status = jpeg_enc_close(encoder);
+        if (status == JPEG_ERR_OK) {
+            status = close_status;
+        }
+    }
+    if (status != JPEG_ERR_OK || encoded_size <= 0) {
+        ESP_LOGE(kTag, "software JPEG encode failed: status=%d", static_cast<int>(status));
+        heap_caps_free(jpeg_bytes);
+        jpeg_bytes = nullptr;
+        return false;
+    }
+    jpeg_size = static_cast<uint32_t>(encoded_size);
+    return true;
+#endif
 }
 
 }  // namespace

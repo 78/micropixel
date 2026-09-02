@@ -5,6 +5,7 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "platform/gpio/gpio_isr_service.hpp"
 #include "work/task_policy.hpp"
 
 namespace micropixel::platform::gpio {
@@ -80,8 +81,8 @@ esp_err_t EspGpioPeripheral::Initialize() {
     if (!valid_configuration_) {
         return ESP_ERR_INVALID_ARG;
     }
-    const esp_err_t isr_status = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    if (isr_status != ESP_OK && isr_status != ESP_ERR_INVALID_STATE) {
+    const esp_err_t isr_status = EnsureIsrServiceInstalled();
+    if (isr_status != ESP_OK) {
         return isr_status;
     }
     ESP_LOGI(kTag, "%u application GPIO lines ready; edge resources are lazy", static_cast<unsigned>(line_count_));

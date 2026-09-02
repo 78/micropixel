@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
+from contextlib import contextmanager
+import fcntl
 import glob
 import json
 import os
@@ -20,6 +23,7 @@ from typing import Any, Mapping, Sequence
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = WORKSPACE_ROOT / "firmware" / "espressif"
 DEFAULT_PROFILES_PATH = Path(__file__).with_name("firmware_profiles.json")
+SHARED_IDF_LOCK_PATH = WORKSPACE_ROOT / "build" / ".esp-idf-managed-components.lock"
 SERIAL_GLOBS = (
     "/dev/cu.usbmodem*",
     "/dev/cu.usbserial*",
@@ -30,6 +34,44 @@ SERIAL_GLOBS = (
 
 class FirmwareToolError(RuntimeError):
     """A user-actionable firmware tooling error."""
+
+
+@contextmanager
+def shared_idf_lock(
+    profile: "Profile",
+    action: str,
+    *,
+    lock_path: Path = SHARED_IDF_LOCK_PATH,
+) -> Iterator[None]:
+    """Serialize ESP-IDF actions that mutate the shared managed_components tree."""
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_file.seek(0)
+            holder = lock_file.read().strip() or "another firmware command"
+            print(f"==> Waiting for shared ESP-IDF lock ({holder})", flush=True)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(
+            f"pid={os.getpid()} profile={profile.name} action={action}"
+        )
+        lock_file.flush()
+        print(
+            f"==> Shared ESP-IDF lock acquired: {profile.name} {action}",
+            flush=True,
+        )
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.flush()
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -426,6 +468,36 @@ def _validate_requested_port(port: str) -> None:
         raise FirmwareToolError(f"serial port not found: {port}")
 
 
+def _settle_probed_port(
+    port: str,
+    location: str,
+    *,
+    timeout_seconds: float = 2.0,
+    minimum_observation_seconds: float = 1.0,
+) -> str:
+    if not location:
+        return port
+
+    started_at = time.monotonic()
+    deadline = started_at + timeout_seconds
+    current = port
+    while time.monotonic() < deadline:
+        matching = [
+            info.device
+            for info in serial_port_infos()
+            if info.location == location
+        ]
+        if matching:
+            current = matching[0]
+        if (
+            time.monotonic() - started_at >= minimum_observation_seconds
+            and Path(current).exists()
+        ):
+            return current
+        time.sleep(0.05)
+    return current
+
+
 def resolve_port(
     profile: Profile,
     requested: str | None,
@@ -441,6 +513,7 @@ def resolve_port(
     )
     if selected:
         _validate_requested_port(selected)
+        info = _serial_port_info(selected)
         if _is_application_port(profile, selected) or _is_rom_port(
             profile, selected
         ):
@@ -451,7 +524,8 @@ def resolve_port(
             raise FirmwareToolError(
                 f"{selected} is not the {profile.name} target:\n{detail}"
             )
-        return selected
+        location = info.location if info else ""
+        return _settle_probed_port(selected, location)
 
     candidates = candidate_ports()
     port_hint = f" or set {profile.port_env}" if profile.port_env else ""
@@ -467,6 +541,7 @@ def resolve_port(
             f"device can be chip-verified:\n  {joined}"
         )
     candidate = candidates[0]
+    info = _serial_port_info(candidate)
     if _is_application_port(profile, candidate) or _is_rom_port(
         profile, candidate
     ):
@@ -477,7 +552,8 @@ def resolve_port(
         raise FirmwareToolError(
             f"{candidate} is not the {profile.name} target:\n{detail}"
         )
-    return candidate
+    location = info.location if info else ""
+    return _settle_probed_port(candidate, location)
 
 
 def _request_usb_auto_download(port: str) -> None:
@@ -777,15 +853,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         idf_py = locate_idf_py()
         if args.action == "build":
             profile.build_dir.mkdir(parents=True, exist_ok=True)
-            run_idf(idf_command(profile, idf_py, ("build",)))
+            with shared_idf_lock(profile, args.action):
+                run_idf(idf_command(profile, idf_py, ("build",)))
             return 0
         if args.action == "fullclean":
-            run_idf(idf_command(profile, idf_py, ("fullclean",)))
+            with shared_idf_lock(profile, args.action):
+                run_idf(idf_command(profile, idf_py, ("fullclean",)))
             return 0
 
         if args.action == "flash":
             profile.build_dir.mkdir(parents=True, exist_ok=True)
-            run_idf(idf_command(profile, idf_py, ("build",)))
+            with shared_idf_lock(profile, "build"):
+                run_idf(idf_command(profile, idf_py, ("build",)))
         if args.action in ("flash", "flash-built"):
             if args.action == "flash-built" and not (profile.build_dir / "micropixel.elf").is_file():
                 raise FirmwareToolError(

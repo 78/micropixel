@@ -12,6 +12,7 @@ namespace micropixel::platform::graphics {
 
 enum class AppDrawOperationKind : uint8_t {
     kFill,
+    kRoundedRect,
     kTexture,
     kText,
 };
@@ -50,6 +51,9 @@ struct AppDrawOperation final {
     SurfaceRect destination{};
     SurfaceRect bounds{};
     uint32_t rgb888{};
+    uint32_t stroke_rgb888{};
+    uint32_t radius{};
+    uint32_t stroke_width{};
     uint8_t opacity{};
     micropixel_texture_handle_t texture{};
     SurfaceRect source{};

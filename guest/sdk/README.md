@@ -1,11 +1,11 @@
 # Guest C++ SDK
 
-状态：**0.10.1，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
+状态：**0.11.0，v1 事件循环已收敛。** 唯一标准入口是 `Run(event_handler)`；Timer 统一从
 `app.timers().After/Every()` 创建。`WaitEvent/WaitEventFor/PollEvent` 只用于短期等待或协议级控制。
 
 ## 工具链兼容性
 
-SDK 0.10.1 生成的 Guest 必须使用公开的
+SDK 0.11.0 生成的 Guest 必须使用公开的
 [MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime) 固定 commit
 `482b17e07fc46e80ffd23e5290871d42c49748e7` 编译为 AOT format v6。该编译器当前仍自报
 `wamrc 2.4.3`，但上游 WAMR 2.4.3、2.4.4 和 2.4.5 Release 都生成不兼容的 AOT v5；因此
@@ -107,17 +107,11 @@ auto texture = app.renderer().CreateStreamingTexture(
     micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
 micropixel::Assert(texture.has_value(), "texture allocation failed");
 
-const auto display = app.renderer().info();
-auto scene = app.renderer().CreateScene({
-    .logical_width = display.width(),
-    .logical_height = display.height(),
-    .background = micropixel::Color::Black(),
-});
-auto game = scene.CreateLayer({.clip = {0, 0, 720, 720}});
-auto board = scene.CreateSurfaceNode(texture.value(), rect, source, game);
-auto update = scene.BeginUpdate();
-board.SetOpacity(update, 192U);
-micropixel::Assert(update.Present().has_value(), "scene present failed");
+auto scene = app.renderer().CreateScene();
+auto game = scene.CreateContainer({.clip = {0, 0, 720, 720}});
+auto board = game.CreateSurfaceNode(texture.value(), rect, source);
+micropixel::Assert(scene.Update([&](auto& update) { board.SetOpacity(update, 192U); }).has_value(),
+                   "scene update failed");
 micropixel::InputInfo input = app.input().info();
 bool pressure_available = input.supports_pressure();
 ```
@@ -301,13 +295,20 @@ Package 资源已经由生成代码表示为 `AssetId`，直接传给 loader；�
 auto texture = app.resources().LoadTexture(my_assets::background);
 ```
 
+`LoadTexture()` 把以 720 短边逻辑画布制作的普通资源自适应到当前物理屏幕。只有 App 明确随 Bundle
+提供并按 `RendererInfo::physical_width()` / `physical_height()` 选择物理分辨率变体时，才使用
+`Resources::LoadNativeTexture()` 保留素材的原生像素尺寸；未精确匹配的显示 profile 必须回退到
+`LoadTexture()`，不能把某个物理 profile 当作通用逻辑资源。
+
 ## Renderer、Scene 与 Texture
 
 公开图形模型固定为以下对象：
 
 - `Renderer`：可复制的设备入口，负责查询信息、创建 Scene 和 streaming texture；
 - `Scene`：Guest 图形内容的唯一根节点，保存背景和对象集合；
-- `Layer`：世界、HUD 等对象的分组节点，支持 clip、translation、opacity、visibility 和 z-order；
+- `Container`：`Scene` 与 `ContainerNode` 共用的子对象创建接口，receiver 就是 parent；
+- `ContainerNode`：可嵌套的非绘制父节点，统一提供子树所有权、clip、translation、opacity、visibility 和
+  z-order；
 - `Sprite` / `SpriteBatch` / `Shape` / `Label` / `SurfaceNode`：保留式视觉对象；
 - `SceneUpdate`：一次原子属性事务，必须显式 `Present()`；析构只放弃未提交事务；
 - `Texture`：同步加载的只读、move-only Host 资源；
@@ -319,65 +320,121 @@ auto texture = app.resources().LoadTexture(my_assets::background);
 `InputInfo` 不重复暴露第二份宽高。App manifest 不声明屏幕 profile。`Application` 初始化时由 SDK 读取物理屏幕
 尺寸并建立短边为 720、长边按实际宽高比推导的逻辑画布。App 必须通过 `RendererInfo` 判断当前宽高和方向，
 对不支持的布局在 Guest 入口给出明确 `Assert`；Host 不负责 Guest 布局判断。Scene geometry 和 Touch event 使用同一个逻辑坐标空间；SDK 在发送 Scene
-keyframe/patch 前统一把节点矩形、Layer translation、atlas source rect 和语义字体 lower 为当前屏幕的
+keyframe/patch 前统一把节点矩形、Container translation、atlas source rect 和语义字体 lower 为当前屏幕的
 物理值，Host Scene 只接收并验证物理坐标，不重复实现 Guest viewport 或布局规则。Scene descriptor 的
-逻辑宽高必须等于当前 `RendererInfo`。自适应 UI 应直接依据 `RendererInfo` 布局。`ui::ComputeFlexLayout()`
-是纯 Guest 侧的固定容量整数计算：应用提供 item 和输出 `Rect` span，不创建控件树、不动态分配，也不调用
-Host。复杂页面通过嵌套横向和纵向 Flex 完成：
+逻辑宽高必须等于当前 `RendererInfo`。自适应 UI 应直接依据 `RendererInfo` 布局。常规页面优先使用
+`CreateFlexContainer()` 和 `CreateGridContainer()`：控件创建顺序就是布局顺序，Label 会缓存文本测量结果，
+容器据此自动计算尺寸和对齐，不要求 App 保存每个控件的手工坐标。高层容器使用动态 STL 存储，只为实际
+创建的控件和 Grid cell 分配内存，不常驻一组未使用的 Label/Shape 槽。例如 failure/summary 页面只需描述结构：
+
+```cpp
+auto panel = root.CreateFlexContainer(
+    {.bounds = content_bounds,
+     .layout = {.direction = micropixel::ui::FlexDirection::kVertical,
+                .gap_pixels = 12,
+                .distribution = micropixel::ui::FlexDistribution::kCenter,
+                .alignment = micropixel::ui::FlexAlignment::kCenter}});
+panel.CreateLabel("CRITICAL FAILURE", title_style);
+panel.CreateLabel(score, score_style);
+
+auto& stats = panel.CreateGridContainer({.columns = 3});
+stats.CreateLabel("FOOD", muted_style);
+stats.CreateLabel("MAX COMBO", muted_style);
+stats.CreateLabel("LEVEL", muted_style);
+stats.CreateLabel(food, value_style);
+stats.CreateLabel(combo, value_style);
+stats.CreateLabel(level, value_style);
+
+panel.CreateTextButton(restart_properties);
+micropixel::Assert(
+    scene.Update([&](auto& update) {
+        micropixel::Assert(panel.Layout(update).has_value(), "panel layout failed");
+    }).has_value(),
+    "scene update failed");
+```
+
+`FlexDirection::kHorizontal` 让子节点沿 X 主轴排列，`kVertical` 则沿 Y 主轴排列；`distribution` 始终控制
+主轴剩余空间，`alignment` 始终控制交叉轴，所以切换方向时 App 不需要重新解释居中规则。Flex 支持
+横向/纵向、固定像素、grow、padding、gap、主轴分布和交叉轴对齐；Label、TextButton、ImageButton 和嵌套
+容器都可以直接作为子项。纯色文字按钮优先使用 TextButton，只有确实需要图片背景时才使用 ImageButton。
+Grid 按 row-major 顺序自动推导行数并
+等分列宽；目前不支持 wrap、span 或百分比。
 
 `RendererInfo::safe_area_insets()` 返回已经换算为逻辑像素的四边安全内缩，`safe_area()` 返回对应的轴对齐
 安全矩形。值由 Board 根据面板 Active Area、盖板和遮挡几何声明；圆角屏上的标题、状态值和触摸控件应以它
 作为边缘基线，再叠加 App 自己的视觉 padding。普通矩形屏返回零 inset，App 不按板名或物理分辨率猜圆角。
 
-```cpp
-const auto info = app.renderer().info();
-const micropixel::Rect screen{0, 0, static_cast<int32_t>(info.width()), static_cast<int32_t>(info.height())};
-constexpr std::array items{micropixel::ui::FlexItem::Fixed(72U), micropixel::ui::FlexItem::Grow(),
-                           micropixel::ui::FlexItem::Fixed(64U)};
-std::array<micropixel::Rect, items.size()> rects{};
-auto laid_out = micropixel::ui::ComputeFlexLayout(
-    screen,
-    {.direction = micropixel::ui::FlexDirection::kVertical, .padding = {16, 20, 16, 20}, .gap_pixels = 12},
-    items, rects);
-micropixel::Assert(laid_out.has_value(), "layout failed");
-```
-
-Flex v1 支持横向/纵向、固定像素、grow、padding、gap、主轴分布和交叉轴对齐，不支持 Grid、wrap、span
-或百分比。布局通常在应用启动或页面进入时计算一次，结果同时交给绘制和 `ui::Button::SetBounds()`；触摸
-事件已经是逻辑坐标，不需要转换。`Resources::LoadTexture()` 会把 SDK 算出的短边缩放比例随请求发送给
+需要直接计算矩形或实现自定义控件时，仍可使用底层 `ui::ComputeFlexLayout()` 和
+`ui::ComputeGridLayout()`。它们是纯 Guest 侧的固定容量整数计算：应用提供 track/item 和输出 `Rect` span，
+不创建控件树、不动态分配，也不调用 Host。Grid 的底层计算由一组纵向 row track 和一组横向 column track
+组成，最多 8×8 cell。布局通常在应用启动、页面进入或内容尺寸变化时执行；触摸
+事件已经是 Scene 逻辑坐标；直接挂在 Scene 下的 headless 控件不需要转换，Container 子树内的控件应先用
+`container.ToLocal()` 转为本地坐标。`Resources::LoadTexture()` 会把 SDK 算出的短边缩放比例随请求发送给
 Host；Host 在后台解码 PNG 后通过 PPA 一次性生成物理尺寸纹理。SDK 使用和资源请求相同的比例 lower
 atlas source rect；纹理 destination 的尺寸独立取整，以保证逻辑 source/destination 同尺寸时在物理空间
 仍严格同尺寸。纹理使用
 `Sprite` 或 `SurfaceNode` 的 source/destination 同尺寸时保持 1:1 物理绘制，只有尺寸不同时
 才走缩放路径。
 
-如果游戏内部还需要棋盘、摄像机或小地图等嵌套坐标空间，应在 App 内用纯几何函数表达。Public SDK
-不再提供第二套屏幕坐标工具，避免与 `Application` 建立的逻辑坐标变换重复。
+Container 是局部坐标空间，不只是生命周期分组。每个新对象的 `x/y` 都相对接收创建调用的直接父
+Container；嵌套 Container 的 `translation` 也相对其父 Container。`ToScene()` / `ToLocal()` 只在输入路由、
+拖放或跨子树放置对象时跨越坐标空间，不参与 Host 的逻辑到物理缩放。`ui::TextButton` 等高层控件会自动把
+Scene touch 转为自己的本地坐标，App 不重复换算。
 
 应用直接创建 Scene 对象，但不接触 App Surface、transport generation 或 revision。首次提交发送完整
-Scene keyframe，之后 `Present()` 只发送变化的对象属性。局部震动只改变 Game Layer translation：
+Scene keyframe，之后 `Present()` 只发送变化的对象属性。局部震动只改变 Game Container translation：
 
 ```cpp
-const auto display = app.renderer().info();
-auto scene = app.renderer().CreateScene({display.width(), display.height(), micropixel::Color::Black()});
-auto game = scene.CreateLayer({.clip = board_bounds});
-auto board = scene.CreateSprite(board_texture, board_bounds, board_source, game);
+auto scene = app.renderer().CreateScene();
+auto game = scene.CreateContainer({.clip = board_bounds});
+auto board = game.CreateSprite(board_texture, board_bounds, board_source);
 
-auto update = scene.BeginUpdate();
-game.SetTranslation(update, {shake_x, shake_y});
-micropixel::Assert(update.Present().has_value(), "scene present failed");
+micropixel::Assert(scene.Update([&](auto& update) { game.SetTranslation(update, {shake_x, shake_y}); }).has_value(),
+                   "scene update failed");
 ```
 
-Scene 同时最多存在一个，Layer 最大深度和对象容量由 `RendererInfo` 给出。应用不能手动提交 wire record、
+Scene 同时最多存在一个，Container 和对象容量由 `RendererInfo` 给出。应用不能手动提交 wire record、
 generation 或 revision。`SceneUpdate` 析构会放弃未提交的属性事务，不产生半更新。
 属性 dirty mask 表示相对于 `BeginUpdate()` 的净差量，而不是 setter 调用历史；例如先隐藏整个 Batch、再把
 仍然存活的 instance 恢复为可见，不会把这些最终未变化的 visibility 写入 patch。
+
+节点、Container、SpriteBatch instance 和事务 undo 使用按实际工作集增长的动态存储，容量仍受 ABI 上限
+约束，并继续使用 slot ID + generation handle。删除对象后的空 slot 会优先复用；动态容器会保留已达到的
+高水位供后续页面重建使用，但不会在 Scene 初始化时为全部上限或整套 undo snapshot 预分配内存。事务只为
+本次真正修改的对象保存 undo。`Scene` 和 `ContainerNode` 共同提供 `Container` 创建接口；
+创建调用的 receiver 就是 parent，不再提供 `scene.CreateX(parent, ...)` 形式。这个点语法让代码结构直接对应
+对象树，也给每种对象的 Create 参数保留独立扩展空间；组合控件遵循同一规则，例如
+`page.CreateTextButton(properties)`。页面可以按需创建一个 `ContainerNode`，再由它创建
+drawable 或内层 container。销毁 container 会递归销毁完整子树并归还
+槽位。销毁属于 `SceneUpdate` 事务：提交失败或
+未调用 `Present()` 时会完整回滚，旧 handle 仍然有效；提交成功后旧 handle 失效，即使槽位随后复用也不能
+误操作新节点。创建也可以发生在 active `SceneUpdate` 中，便于 `std::vector` 等 STL 容器在渲染时按需增长；
+事务回滚后新 handle 失效，generation 保证它不会误命中以后复用的槽位。创建或销毁是结构变化，SDK 自动
+发送新 keyframe；普通属性更新仍使用 patch：
+
+```cpp
+auto page = scene.CreateContainer();
+auto dialog = page.CreateContainer({.translation = {40, 60}, .z_order = 10});
+auto title = dialog.CreateLabel({24, 20}, "SETTINGS", micropixel::Color::White(),
+                                micropixel::SystemFont::kLarge);
+
+micropixel::Assert(
+    scene.Update([&](auto& update) {
+        dialog.SetVisible(update, false);  // 只隐藏对话框子树，页面其他节点不受影响
+    }).has_value(),
+    "page update failed");
+```
+
+Container 的 visible、opacity、translation 和 clip 沿父链继承，因此页面、面板、菜单内对话框都使用同一
+棵树表达。只隐藏最内层 dialog 不影响外层菜单和兄弟节点；销毁外层 page 则递归销毁 dialog 和所有 drawable。
+`ComputeFlexLayout()` 仍只是计算矩形的 Guest 工具，不创建另一棵控件树。输入事件以 Scene 坐标投递；
+modal 路由由 App 决定，高层控件负责对自己的 Container 做本地坐标转换。
 
 Sprite 的 destination 和 source 分别描述显示矩形与 atlas 区域；宽高为 0 是非法空矩形。图片 opacity 与
 逐像素 alpha 相乘，不透明 texture 保留 Host copy 快速路径。蛇身、方块和粒子应使用 SpriteBatch：
 
 ```cpp
-auto snake = scene.CreateSpriteBatch(snake_atlas, 128U, game);
+auto snake = game.CreateSpriteBatch(snake_atlas, 128U);
 auto update = scene.BeginUpdate();
 snake.SetInstance(update, tail_slot, {
     .destination = new_head_rect,
@@ -387,9 +444,25 @@ snake.SetInstance(update, tail_slot, {
 micropixel::Assert(update.Present().has_value(), "snake patch failed");
 ```
 
-`RendererInfo::max_scene_nodes()`、`max_batch_instances()`、`max_layers()`、`max_sprite_batches()` 和
+`RendererInfo::max_scene_nodes()`、`max_batch_instances()`、`max_containers()`、`max_sprite_batches()` 和
 `max_scene_bytes()` 是明确容量。`Present()` 返回 `Result<void>`；参数和状态编程错误仍会 trap，提交失败、
 容量耗尽等运行时错误可由应用处理。
+
+普通矩形使用 `CreateShape()`；需要圆角、描边或二者组合时使用 `CreateRoundedRect()`：
+
+```cpp
+auto panel = scene.CreateRoundedRect(
+    {40, 80, 320, 180},
+    {.fill = micropixel::Color::Rgb(24, 28, 36),
+     .stroke = micropixel::Color::Rgb(90, 220, 255),
+     .radius = 24,
+     .stroke_width = 3,
+     .opacity = 224});
+```
+
+`RoundedRectNode` 与 Shape 一样只保存 retained 属性，不分配自己的像素 Surface。Host 仅在首次显示或
+damage 重绘时把它直接混合进共享 App Surface；非零 radius/stroke 在短边过小时会安全截断。RGB565
+Surface 支持绘制时 opacity 混合，但不保留可供以后拆分的独立 Alpha 通道。
 
 文字使用语义字体角色而不是固定物理字号，坐标仍是 `RendererInfo` 给出的逻辑像素：
 
@@ -400,24 +473,40 @@ auto title = scene.CreateLabel({24, 24}, "Hello", micropixel::Color::White(),
 ```
 
 `SystemFont::{kSmall,kMedium,kLarge,kTitle}` 的实际字体和像素大小由 Host 决定。这样 Host 后续可在不改变
-应用或 wire schema 的情况下选择不同语言字体；SDK 0.10.1 暂不提供翻译目录或语言包 API。
+应用或 wire schema 的情况下选择不同语言字体；SDK 0.11.0 暂不提供翻译目录或语言包 API。
+
+`sdk/symbols.hpp` 提供所有 SystemFont role 都保证存在的稳定 UTF-8 图标，包括上下左右、播放/暂停、
+确认/关闭、音量、文件、连接和电池状态。Guest 只提交普通文本，不包含 LVGL header，也不持有 Host 字体
+对象：
+
+```cpp
+auto previous = panel.CreateTextButton(
+    {.bounds = {20, 20, 80, 64},
+     .text = micropixel::symbols::kLeft,
+     .style = {.font = micropixel::SystemFont::kLarge}});
+```
+
+Public symbol 集合与 Host `builtin-latin-v1` profile 在 Host 构建时交叉校验，避免 SDK 已公开而某个板型
+生成的字体缺字。
 
 需要维护棋盘、画布或其他动态像素时，创建 `StreamingTexture`。格式名直接描述 Guest 内存字节顺序：
-`kBgr888` 为 B/G/R，`kBgra8888` 为 B/G/R/A。
+`kBgr888` 为 B/G/R，`kBgra8888` 为 B/G/R/A，`kRgb565` 为 little-endian 16-bit RGB565 word。RGB565
+适合不透明、高频局部更新，可减少 Guest payload、Host texture 和 App Surface 带宽；透明像素仍使用
+BGRA8888，由 Host 直接混合到目标 Surface。
 
 ```cpp
 auto board_result = app.renderer().CreateStreamingTexture(
-    micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
+    micropixel::Size{300U, 150U}, micropixel::PixelFormat::kRgb565);
 micropixel::Assert(board_result.has_value(), "board texture allocation failed");
 auto board = static_cast<micropixel::StreamingTexture&&>(board_result.value());
 
-alignas(4) uint8_t cell[30U * 30U * 3U]{};
+alignas(4) uint16_t cell[30U * 30U]{};
 auto batch = app.renderer().BeginTextureUpdateBatch();
 micropixel::Assert(
-    board.Update(micropixel::Rect{60, 30, 30, 30}, cell, sizeof(cell), 30U * 3U).has_value(),
+    board.Update(micropixel::Rect{60, 30, 30, 30}, cell, sizeof(cell), 30U * 2U).has_value(),
     "texture update failed");
 micropixel::Assert(
-    board.Update(micropixel::Rect{60, 60, 30, 30}, cell, sizeof(cell), 30U * 3U).has_value(),
+    board.Update(micropixel::Rect{60, 60, 30, 30}, cell, sizeof(cell), 30U * 2U).has_value(),
     "texture update failed");
 micropixel::Assert(batch.Finish().has_value(), "texture batch failed");
 
@@ -448,6 +537,63 @@ feedback.SetOpacity(scene_update, play_button.pressed() ? 48U : 0U);
 micropixel::Assert(scene_update.Present().has_value(), "button update failed");
 ```
 
+普通文字按钮优先使用 `sdk/ui/text_button.hpp` 的 `ui::TextButton`。它保留 `ui::Button` 的触摸语义，
+并组合圆角背景、圆角状态遮罩和 Label；创建或修改文字/字体时缓存真实字体 metrics，之后按完整行框同时
+水平、垂直居中，不在逐帧热路径测量文字。一个 `TextButton` 使用三个 Scene node；这些节点随控件实际创建，
+不为未使用控件预留 Scene 存储。
+`TextButton` 自己拥有一个 Container，背景、反馈层和文字都是它的子节点。把按钮挂到页面 Container 后，
+页面退出只需销毁页面根 container，即可递归归还按钮 container 和三个 drawable 槽位：
+
+```cpp
+auto start_button = game.CreateTextButton(
+    {.bounds = {250, 316, 220, 72},
+     .text = "START",
+     .style = {.background = micropixel::Color::Green(),
+               .font = micropixel::SystemFont::kLarge,
+               .corner_radius = 18},
+     .hit_padding = 12});
+
+const auto changed = start_button.OnTouch(touch);
+if (changed.clicked) {
+    StartGame();
+}
+if (changed.visual_changed) {
+    micropixel::Assert(scene.Update([&](auto& update) { start_button.Sync(update); }).has_value(),
+                       "text button update failed");
+}
+
+micropixel::Assert(game.Destroy().has_value(), "page destroy failed");
+```
+
+`TextButton` 默认使用 `TextOverflow::kClip`：自己的 Container 会裁剪到按钮 bounds，初始文字或后续
+`SetText()`、`SetStyle()` 的实际行框放不下时仍保持双轴居中并安全裁剪，每个按钮生命周期最多输出一次
+warning，不会终止 Guest。warning 会包含操作、当前按钮 `x/y/w/h`、测量得到的文字 `w/h` 和具体文案，
+可直接定位发生溢出的控件；`text_clipped()` 可用于 App 诊断自适应布局。需要把溢出继续视为严格布局错误时，
+在 properties 中显式指定 `.overflow = TextOverflow::kReject`。空文字、非法 bounds 和超过 128 bytes 的
+文字仍然是无效参数；reject 模式的初始溢出会 trap，后续修改则返回 `kInvalidArgument` 且不会提交一半属性。
+
+所有组合 UI 对象提供无堆分配的 `ToString()` 诊断快照。`Button` 包含视觉/命中 bounds 和捕获状态，`Label`
+包含 bounds、metrics、对齐和文案，`TextButton`/`ImageButton` 额外包含 overflow policy 与 clipped 状态，
+`FlexContainer`/`GridContainer` 包含布局 bounds、轨道或分类后的子对象数量。App 在处理 `Result` 失败时可直接
+把对应快照写入日志；SDK 自己触发的控件 panic 也使用同一份状态格式，不再只报告泛化的控件类型。
+
+图片自带边框、纹理或圆角时使用 `sdk/ui/image_button.hpp` 的 `ui::ImageButton`。它组合 Sprite、Label 和
+`ui::Button`，图片 source 与最终 bounds 可以不同，文字仍按最终 bounds 的真实字体 metrics 双轴居中。若要缩放
+带圆角的整张按钮图，应保持 source 的宽高比；需要任意拉伸时应改用九宫格素材，而不是让圆角随目标矩形变形。
+`ImageButton` 与 `TextButton` 使用同一套默认 `TextOverflow::kClip`、单次详细 warning、显式 `kReject` 和
+`text_clipped()` 语义：
+
+```cpp
+auto start = game.CreateImageButton(
+    start_texture,
+    {.bounds = {192, 295, 336, 115},
+     .source = {0, 0, 280, 96},
+     .text = "START GAME",
+     .style = {.font = micropixel::SystemFont::kLarge}});
+```
+
+纯图标或完全定制的按钮继续使用 headless `ui::Button`。
+
 无需动态分配的短文本拼接统一使用 `FixedString<Capacity>`；`Append*()` 返回内容是否完整写入，
 `truncated()` 会在任一拼接被截断后保持 true，直到 `Clear()`。`capacity()` 返回不含 NUL 的最大内容
 长度。Demo、Snake 和 conformance 日志共用这一实现，不在各 App 内复制字符串类。
@@ -466,7 +612,9 @@ finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新�
 
 首版 `launch_asset` 是 Host 专用的 JPEG/PNG 封面，不经过 Guest ABI 或 Resource Service。默认应为不透明
 封面使用 JPEG，以利用 ESP32-P4 硬件解码；需要透明背景或无损像素时使用 PNG。普通游戏资源仍可使用
-`raw_rgb888`、`raw_argb8888` 或 `png_to_raw_rgb888`，但这些 raw 格式不能被指定为 launch 封面。
+`raw_rgb888`、`raw_argb8888`、`raw_rgb565`、`png_to_raw_rgb888` 或 `png_to_raw_rgb565`，但这些 raw
+格式不能被指定为 launch 封面。`png_to_raw_rgb565` 只接受不透明 PNG；带 alpha 的资源必须保留
+PNG/BGRA8888，避免静默丢失透明度。
 
 多帧动画应优先打包为 sprite sheet/texture atlas。Guest 只同步加载一次 `Texture`，再通过
 `SpriteNode::SetSource()` 或 `SpriteBatch::SetInstance()` 选择 atlas frame；切帧只提交 source rect 差量，
@@ -478,24 +626,61 @@ finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新�
 
 ```sh
 python3 tools/micropixel build path/to/app
-python3 tools/micropixel package path/to/app
+python3 tools/micropixel package path/to/app --aot-target riscv32-ilp32f
 python3 tools/micropixel app install path/to/app
 ```
 
 在包含 `app.json` 的目录中，安装后的 CLI 可直接运行 `micropixel build`、`micropixel package` 和
 `micropixel app install`，不需要 App
 专用脚本。默认输出在项目的 `build/`；仓库集成 App 输出在 `build/apps/<name>/`。构建固定 Restricted
-C++23、警告即错误、共享 Wasm memory 和 AOT 回跳中断点。`build` 默认 development（`-O1 -g`），
-`package`/`app install` 默认 release（Clang `-O2`、WAMR AOT opt level 3）；只有明确以体积优先时才使用：
+C++23、警告即错误和 AOT 回跳中断点。`threading` 缺省为 `none`，此时不启用 atomics、Wasm shared
+memory 或 wamrc multi-thread，linear memory 按需增长；只有显式声明 `shared-memory` 的 Bundle 才启用
+这些编译特征。Host 会校验 Bundle 声明与 AOT target-info，避免错误标记绕过内存策略。`build` 默认
+development（`-O1 -g`），
+`package`/`app install` 默认 release（Clang `-Oz`、WAMR AOT opt level 3）。Release 保留软件越界检查和
+内存诊断，只把 AOT 调用栈缩减为 instruction pointer + function index；development 保留完整调试信息和
+完整调用栈。连接设备的 `app install`/`run`
+根据设备芯片自动选择 AOT target；离线 `package` 必须显式传入 `--aot-target riscv32-ilp32f` 或
+`--aot-target xtensa`。只有明确以体积优先时才使用：
 
 ```sh
-python3 tools/micropixel package path/to/app --profile size
+python3 tools/micropixel package path/to/app --profile size --aot-target riscv32-ilp32f
 ```
 
 需要构建、安装、启动并持续观察 Guest 日志时，可运行 `micropixel run`。它默认使用 development profile，
 在完整打包成功后才停止当前 Guest；安装或启动失败时会尽力恢复此前运行的 App。`micropixel run --no-follow`
 在启动后立即返回。对于已经安装的 App，`micropixel app start --follow` 会从当前 `app.json` 推导 App ID；
 `Ctrl-C` 只断开日志跟随，不停止 App。
+
+调试某个特定状态时，在 `--` 后传入本次 AppSession 的启动参数：
+
+```sh
+micropixel run path/to/game -- --level 100
+# 已安装的 App 也可使用同一语法
+micropixel app start com.example.game -- --level=100
+```
+
+Guest 保持标准无参 `int main()`，通过只读 SDK view 获取参数：
+
+```cpp
+#include <charconv>
+#include <string_view>
+#include <micropixel.hpp>
+
+int main() {
+    micropixel::Application app;
+    uint32_t level = 1;
+    if (const char* value = app.launch_arguments().FindValue("--level")) {
+        const std::string_view text(value);
+        (void)std::from_chars(text.data(), text.data() + text.size(), level);
+    }
+    // 使用 level 初始化游戏，然后进入 app.Run(...)
+}
+```
+
+`FindValue()` 同时识别 `--level 100` 和 `--level=100`；`count()`/`Get(index)` 可用于自定义解析。
+Host 最多接受 16 项、合计 512 bytes（含每项结尾 NUL）的 UTF-8 参数。参数只属于本次新建的
+AppSession；从 Hall 暂停/恢复不会重新传参，普通 Hall 启动得到空列表。
 
 `tools/build_guest_p4.sh` 与 `tools/build_app_bundle.py` 仍是 conformance 和打包器测试使用的
 内部构件，不是普通 App 的公开工作流。

@@ -40,8 +40,9 @@ int SnakeAppMain() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
-    micropixel::Assert(display.width() == display.height() && display.width() >= 480U && display.width() <= 720U,
-                       "snake: requires a 480-720 square display");
+    micropixel::Assert(display.width() >= static_cast<uint32_t>(kScreenWidth) &&
+                           display.height() >= static_cast<uint32_t>(kScreenHeight),
+                       "snake: requires a logical 720x720 viewport");
 
     micropixel::KVStore storage = app.storage();
     uint32_t best_score = ReadU32OrDefault(storage, "best", 0U);
@@ -52,9 +53,6 @@ int SnakeAppMain() {
     app.log().Info(restored.c_str());
 
     app.log().Info("snake: launch page retained while ARGB sprite set predecodes");
-    micropixel::Texture board = LoadPackageTexture(app, snake_assets::board);
-    micropixel::Texture start_button = LoadPackageTexture(app, snake_assets::button_start);
-    micropixel::Texture restart_button = LoadPackageTexture(app, snake_assets::button_restart);
     micropixel::Texture burst_sheets[4U]{};
     for (uint32_t type = 0U; type < 4U; ++type) {
         burst_sheets[type] = LoadPackageTexture(app, snake_assets::burst_atlases[type].asset);
@@ -63,7 +61,7 @@ int SnakeAppMain() {
     for (uint32_t type = 0U; type < 4U; ++type) {
         food_sheets[type] = LoadPackageTexture(app, kFoodAssets[type]);
     }
-    app.log().Info("snake: board/buttons and eight sprite sheets decoded to persistent PSRAM");
+    app.log().Info("snake: eight sprite sheets decoded to persistent PSRAM");
 
     micropixel::Audio audio = app.audio();
     auto audio_info = audio.info();
@@ -79,9 +77,6 @@ int SnakeAppMain() {
     }
 
     SnakeGame game{app, renderer, display, audio, audio_available, best_score};
-    game.SetBoard(static_cast<micropixel::Texture&&>(board));
-    game.SetButtonTextures(static_cast<micropixel::Texture&&>(start_button),
-                           static_cast<micropixel::Texture&&>(restart_button));
     for (uint32_t type = 0U; type < 4U; ++type) {
         game.SetBurstSheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(burst_sheets[type]));
     }

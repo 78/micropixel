@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.demo",
+  "threading": "none",
   "title": "SDK Demo",
   "sources": [
     "main.cpp",

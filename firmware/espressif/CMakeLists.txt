@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(MICROPIXEL_SUPPORTED_TARGETS esp32p4 esp32s31)
+set(MICROPIXEL_SUPPORTED_TARGETS esp32p4 esp32s31 esp32s3)
 if(NOT IDF_TARGET IN_LIST MICROPIXEL_SUPPORTED_TARGETS)
-    message(FATAL_ERROR "MicroPixel supports only ESP32-P4 and ESP32-S31")
+    message(FATAL_ERROR "MicroPixel supports only ESP32-P4, ESP32-S31 and ESP32-S3")
 endif()
 idf_build_set_property(DEPENDENCIES_LOCK dependencies.lock.${IDF_TARGET})
-set(PROJECT_VER "0.3.3")
+set(PROJECT_VER "0.4.2")
 project(micropixel)
 
 # esp-hosted 2.x still starts its SDIO transport from a C constructor. With

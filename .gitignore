@@ -9,6 +9,8 @@
 /.codex-tmp/
 /.private/
 /control/etc/Caddyfile.production
+/control/etc/Caddyfile.edge-relay
+/control/etc/certs/
 /guest/apps/snake/assets/snake_launch_360x360.argb8888
 .DS_Store
 .env

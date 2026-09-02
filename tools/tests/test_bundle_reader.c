@@ -163,7 +163,9 @@ static bool validate_bundle(void) {
         !check(active_mappings == 1U, "running package must own one Bundle mapping") ||
         !check(last_mapping_offset == 0U && last_mapping_size == metadata.bundle_size,
                "running package must map its logical Bundle") ||
-        !check(package.payload != NULL && package.payload_size > 0U, "relocatable AOT must be copied for WAMR")) {
+        !check(package.payload != NULL && package.payload_size > 0U, "relocatable AOT must be copied for WAMR") ||
+        !check((package.aot_flags & MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED) != 0U,
+               "current App Bundles must declare their Guest threading policy")) {
         return false;
     }
     micropixel_bundle_asset_view_t launch;

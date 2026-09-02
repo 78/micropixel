@@ -1,4 +1,3 @@
 # Compile-only profile for validating the target-independent Runtime on S31.
 # CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO is not set
 CONFIG_MICROPIXEL_BOARD_NULL=y
-CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n

@@ -2,7 +2,6 @@
 
 #include "apps/blocks/blocks.hpp"
 #include "apps/blocks/blocks_game.hpp"
-#include "blocks_assets.hpp"
 #include "sdk/micropixel.hpp"
 
 namespace blocks {
@@ -18,31 +17,20 @@ uint32_t ReadBest(micropixel::KVStore storage) {
     return 0U;
 }
 
-micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
-    auto result = app.resources().LoadTexture(asset);
-    micropixel::Assert(result.has_value(), "blocks: critical texture resource failed");
-    return static_cast<micropixel::Texture&&>(result.value());
-}
-
 }  // namespace
 
 int BlocksAppMain() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
-    micropixel::Assert(display.width() == display.height() && display.width() >= 480U && display.width() <= kScreenWidth,
-                       "blocks: requires a 480-720 square display");
+    micropixel::Assert(display.width() >= kScreenWidth && display.height() >= kScreenHeight,
+                       "blocks: requires a logical 720x720 viewport");
 
     const uint32_t best_score = ReadBest(app.storage());
     Line restored;
     restored.Append("blocks: restored BEST ");
     restored.AppendUint(best_score);
     app.log().Info(restored.c_str());
-
-    app.log().Info("blocks: launch retained while UI resources decode");
-    micropixel::Texture board = LoadPackageTexture(app, blocks_assets::board);
-    micropixel::Texture start = LoadPackageTexture(app, blocks_assets::button_start);
-    micropixel::Texture restart = LoadPackageTexture(app, blocks_assets::button_restart);
 
     micropixel::Audio audio = app.audio();
     const auto audio_info = audio.info();
@@ -51,8 +39,6 @@ int BlocksAppMain() {
                                    : "blocks: Audio unavailable; visual gameplay continues");
 
     BlocksGame game{app, renderer, display, audio, audio_available, best_score};
-    game.set_textures(static_cast<micropixel::Texture&&>(board), static_cast<micropixel::Texture&&>(start),
-                      static_cast<micropixel::Texture&&>(restart));
     const micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
     game.Render();
     app.log().Info("blocks: ready; 4 offscreen playfield buffers with atomic dirty-cell commits");
