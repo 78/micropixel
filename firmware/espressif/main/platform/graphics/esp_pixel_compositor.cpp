@@ -1,9 +1,46 @@
 #include "platform/graphics/esp_pixel_compositor.hpp"
 
+#include <cinttypes>
 #include <cstdint>
+#include <cstring>
+
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 
 namespace micropixel::platform::graphics {
 namespace {
+
+constexpr char kTag[] = "pixel_compositor";
+
+#if defined(CONFIG_IDF_TARGET_ESP32S31) && CONFIG_IDF_TARGET_ESP32S31
+constexpr uint32_t kMinimumPpaBlendPixels = 512U;
+constexpr uint32_t kSramStagedBlendCapacityPixels = 512U;
+constexpr size_t kSramStagedBackgroundBytes = kSramStagedBlendCapacityPixels * 3U;
+constexpr size_t kSramStagedForegroundBytes = kSramStagedBlendCapacityPixels * 4U;
+constexpr size_t kSramStagedScratchBytes = kSramStagedBackgroundBytes + kSramStagedForegroundBytes;
+constexpr size_t kSramStagedScratchAlignment = 64U;
+static_assert(kSramStagedScratchBytes % kSramStagedScratchAlignment == 0U);
+#else
+constexpr uint32_t kMinimumPpaBlendPixels = 0U;
+#endif
+
+constexpr std::array<uint64_t, kPpaBlendHistogramBinCount - 1U> kPpaBlendHistogramUpperBounds{
+    256U, 512U, 840U, 1024U, 2048U, 4096U, 16384U,
+};
+
+uint32_t MinimumPpaBlendPixels(uint32_t configured_minimum) {
+    return configured_minimum > kMinimumPpaBlendPixels ? configured_minimum : kMinimumPpaBlendPixels;
+}
+
+std::size_t PpaBlendHistogramBin(uint64_t pixels) {
+    for (std::size_t index = 0U; index < kPpaBlendHistogramUpperBounds.size(); ++index) {
+        if (pixels < kPpaBlendHistogramUpperBounds[index]) {
+            return index;
+        }
+    }
+    return kPpaBlendHistogramBinCount - 1U;
+}
 
 uint32_t BytesPerPixel(SurfacePixelFormat format) {
     if (format == SurfacePixelFormat::kBgr888) {
@@ -104,6 +141,19 @@ esp_err_t EspPixelCompositor::Initialize(uint32_t minimum_hardware_pixels) {
     register_client(PPA_OPERATION_FILL, fill_client_);
     register_client(PPA_OPERATION_SRM, scale_client_);
     register_client(PPA_OPERATION_BLEND, blend_client_);
+#if defined(CONFIG_IDF_TARGET_ESP32S31) && CONFIG_IDF_TARGET_ESP32S31
+    if (blend_client_ != nullptr && sram_staged_blend_scratch_ == nullptr) {
+        sram_staged_blend_scratch_ =
+            static_cast<uint8_t*>(heap_caps_aligned_alloc(kSramStagedScratchAlignment, kSramStagedScratchBytes,
+                                                          MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
+        if (sram_staged_blend_scratch_ != nullptr) {
+            ESP_LOGI(kTag, "S31 SRAM-staged PPA blend enabled: %zu bytes, <%" PRIu32 " pixels", kSramStagedScratchBytes,
+                     kMinimumPpaBlendPixels);
+        } else {
+            ESP_LOGW(kTag, "S31 SRAM-staged PPA blend scratch unavailable; CPU fallback remains active");
+        }
+    }
+#endif
     if (dma2d_client_ == nullptr) {
         async_color_convert_config_t config{};
         config.backlog = 1U;
@@ -133,6 +183,8 @@ void EspPixelCompositor::Release() {
         (void)ppa_unregister_client(fill_client_);
         fill_client_ = nullptr;
     }
+    heap_caps_free(sram_staged_blend_scratch_);
+    sram_staged_blend_scratch_ = nullptr;
 }
 
 bool EspPixelCompositor::TryFill(PixelSurface destination, SurfaceRect rect, uint32_t rgb888) {
@@ -231,12 +283,115 @@ bool EspPixelCompositor::TryScale(ConstPixelSurface source, SurfaceRect source_r
     return ppa_do_scale_rotate_mirror(scale_client_, &config) == ESP_OK;
 }
 
+bool EspPixelCompositor::TrySramStagedBlend(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
+                                            SurfaceRect destination_rect, uint8_t opacity) {
+#if defined(CONFIG_IDF_TARGET_ESP32S31) && CONFIG_IDF_TARGET_ESP32S31
+    const uint64_t pixels = Pixels(destination_rect);
+    if (sram_staged_blend_scratch_ == nullptr || blend_client_ == nullptr ||
+        destination.format != SurfacePixelFormat::kBgr888 ||
+        (source.format != SurfacePixelFormat::kBgr888 && source.format != SurfacePixelFormat::kBgra8888) ||
+        source_rect.width != destination_rect.width || source_rect.height != destination_rect.height ||
+        !EntirelyInside(destination, destination_rect) || pixels == 0U || pixels >= kMinimumPpaBlendPixels ||
+        pixels > kSramStagedBlendCapacityPixels ||
+        (source.format == SurfacePixelFormat::kBgra8888 && opacity != UINT8_MAX)) {
+        return false;
+    }
+
+    const uint32_t width = static_cast<uint32_t>(destination_rect.width);
+    const uint32_t height = static_cast<uint32_t>(destination_rect.height);
+    const uint32_t source_bytes_per_pixel = BytesPerPixel(source.format);
+    const size_t background_row_bytes = static_cast<size_t>(width) * 3U;
+    const size_t foreground_row_bytes = static_cast<size_t>(width) * source_bytes_per_pixel;
+    uint8_t* const staged_background = sram_staged_blend_scratch_;
+    uint8_t* const staged_foreground = sram_staged_blend_scratch_ + kSramStagedBackgroundBytes;
+
+    const int64_t started_us = esp_timer_get_time();
+    for (uint32_t row = 0U; row < height; ++row) {
+        const uint8_t* const input =
+            destination.pixels +
+            static_cast<size_t>(destination.origin_y + static_cast<uint32_t>(destination_rect.y) + row) *
+                destination.stride +
+            static_cast<size_t>(destination.origin_x + static_cast<uint32_t>(destination_rect.x)) * 3U;
+        std::memcpy(staged_background + static_cast<size_t>(row) * background_row_bytes, input, background_row_bytes);
+    }
+    const int64_t background_packed_us = esp_timer_get_time();
+    for (uint32_t row = 0U; row < height; ++row) {
+        const uint8_t* const input =
+            source.pixels +
+            static_cast<size_t>(source.origin_y + static_cast<uint32_t>(source_rect.y) + row) * source.stride +
+            static_cast<size_t>(source.origin_x + static_cast<uint32_t>(source_rect.x)) * source_bytes_per_pixel;
+        std::memcpy(staged_foreground + static_cast<size_t>(row) * foreground_row_bytes, input, foreground_row_bytes);
+    }
+    const int64_t foreground_packed_us = esp_timer_get_time();
+
+    ppa_blend_oper_config_t config{};
+    config.in_bg.buffer = staged_background;
+    config.in_bg.pic_w = width;
+    config.in_bg.pic_h = height;
+    config.in_bg.block_w = width;
+    config.in_bg.block_h = height;
+    config.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
+    config.in_fg.buffer = staged_foreground;
+    config.in_fg.pic_w = width;
+    config.in_fg.pic_h = height;
+    config.in_fg.block_w = width;
+    config.in_fg.block_h = height;
+    config.in_fg.blend_cm = BlendMode(source.format);
+    config.out.buffer = staged_background;
+    config.out.buffer_size = static_cast<uint32_t>(kSramStagedBackgroundBytes);
+    config.out.pic_w = width;
+    config.out.pic_h = height;
+    config.out.blend_cm = PPA_BLEND_COLOR_MODE_RGB888;
+    config.bg_alpha_update_mode = PPA_ALPHA_FIX_VALUE;
+    config.bg_alpha_fix_val = UINT8_MAX;
+    if (source.format == SurfacePixelFormat::kBgra8888) {
+        config.fg_alpha_update_mode = PPA_ALPHA_NO_CHANGE;
+    } else {
+        config.fg_alpha_update_mode = PPA_ALPHA_FIX_VALUE;
+        config.fg_alpha_fix_val = opacity;
+    }
+    config.mode = PPA_TRANS_MODE_BLOCKING;
+    const bool blended = ppa_do_blend(blend_client_, &config) == ESP_OK;
+    const int64_t blended_us = esp_timer_get_time();
+    if (!blended) {
+        ++stats_.sram_staged_failures;
+        return false;
+    }
+
+    for (uint32_t row = 0U; row < height; ++row) {
+        uint8_t* const output =
+            destination.pixels +
+            static_cast<size_t>(destination.origin_y + static_cast<uint32_t>(destination_rect.y) + row) *
+                destination.stride +
+            static_cast<size_t>(destination.origin_x + static_cast<uint32_t>(destination_rect.x)) * 3U;
+        std::memcpy(output, staged_background + static_cast<size_t>(row) * background_row_bytes, background_row_bytes);
+    }
+    const int64_t copied_back_us = esp_timer_get_time();
+    ++stats_.sram_staged_blends;
+    stats_.sram_staged_blend_pixels += pixels;
+    stats_.sram_staged_pack_background_us += static_cast<uint64_t>(background_packed_us - started_us);
+    stats_.sram_staged_pack_foreground_us += static_cast<uint64_t>(foreground_packed_us - background_packed_us);
+    stats_.sram_staged_ppa_us += static_cast<uint64_t>(blended_us - foreground_packed_us);
+    stats_.sram_staged_copy_back_us += static_cast<uint64_t>(copied_back_us - blended_us);
+    stats_.sram_staged_total_us += static_cast<uint64_t>(copied_back_us - started_us);
+    return true;
+#else
+    (void)source;
+    (void)source_rect;
+    (void)destination;
+    (void)destination_rect;
+    (void)opacity;
+    return false;
+#endif
+}
+
 bool EspPixelCompositor::TryBlend(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                   SurfaceRect destination_rect, uint8_t opacity) {
     if (blend_client_ == nullptr || destination.format != SurfacePixelFormat::kBgr888 ||
         (source.format != SurfacePixelFormat::kBgr888 && source.format != SurfacePixelFormat::kBgra8888) ||
         source_rect.width != destination_rect.width || source_rect.height != destination_rect.height ||
-        !EntirelyInside(destination, destination_rect) || Pixels(destination_rect) < minimum_hardware_pixels_) {
+        !EntirelyInside(destination, destination_rect) ||
+        Pixels(destination_rect) < MinimumPpaBlendPixels(minimum_hardware_pixels_)) {
         return false;
     }
     ppa_blend_oper_config_t config{};
@@ -298,9 +453,23 @@ bool EspPixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_rect,
         ++stats_.ppa_scales;
         return true;
     }
-    if ((source.format == SurfacePixelFormat::kBgra8888 || opacity != 255U) && same_size &&
-        TryBlend(source, source_rect, destination, destination_rect, opacity)) {
+    const bool blend_candidate = (source.format == SurfacePixelFormat::kBgra8888 || opacity != 255U) && same_size;
+    const uint64_t blend_pixels = blend_candidate ? Pixels(destination_rect) : 0U;
+    if (blend_candidate && blend_pixels < kMinimumPpaBlendPixels) {
+        ++stats_.small_blend_candidates;
+        if (TrySramStagedBlend(source, source_rect, destination, destination_rect, opacity)) {
+            return true;
+        }
+    }
+    const int64_t blend_started_us = blend_candidate ? esp_timer_get_time() : 0;
+    if (blend_candidate && TryBlend(source, source_rect, destination, destination_rect, opacity)) {
+        const uint64_t blend_elapsed_us = static_cast<uint64_t>(esp_timer_get_time() - blend_started_us);
+        const std::size_t histogram_bin = PpaBlendHistogramBin(blend_pixels);
         ++stats_.ppa_blends;
+        stats_.ppa_blend_pixels += blend_pixels;
+        stats_.ppa_blend_elapsed_us += blend_elapsed_us;
+        ++stats_.ppa_blend_histogram_calls[histogram_bin];
+        stats_.ppa_blend_histogram_elapsed_us[histogram_bin] += blend_elapsed_us;
         return true;
     }
     ++stats_.software_fallbacks;

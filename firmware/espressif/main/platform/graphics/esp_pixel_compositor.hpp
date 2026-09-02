@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "driver/ppa.h"
@@ -9,12 +11,27 @@
 
 namespace micropixel::platform::graphics {
 
+inline constexpr std::size_t kPpaBlendHistogramBinCount = 8U;
+
 struct HardwarePixelCompositorStats final {
     uint32_t ppa_fills{};
     uint32_t ppa_blends{};
+    uint32_t small_blend_candidates{};
     uint32_t ppa_scales{};
     uint32_t dma2d_copies{};
     uint32_t software_fallbacks{};
+    uint64_t ppa_blend_pixels{};
+    uint64_t ppa_blend_elapsed_us{};
+    std::array<uint32_t, kPpaBlendHistogramBinCount> ppa_blend_histogram_calls{};
+    std::array<uint64_t, kPpaBlendHistogramBinCount> ppa_blend_histogram_elapsed_us{};
+    uint32_t sram_staged_blends{};
+    uint32_t sram_staged_failures{};
+    uint64_t sram_staged_blend_pixels{};
+    uint64_t sram_staged_total_us{};
+    uint64_t sram_staged_pack_background_us{};
+    uint64_t sram_staged_pack_foreground_us{};
+    uint64_t sram_staged_ppa_us{};
+    uint64_t sram_staged_copy_back_us{};
 };
 
 // Shared ESP32-P4/S31 implementation of the platform PixelCompositor contract.
@@ -42,6 +59,8 @@ class EspPixelCompositor final : public PixelCompositor {
                                     SurfaceRect destination_rect);
     [[nodiscard]] bool TryScale(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                 SurfaceRect destination_rect);
+    [[nodiscard]] bool TrySramStagedBlend(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
+                                          SurfaceRect destination_rect, uint8_t opacity);
     [[nodiscard]] bool TryBlend(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                 SurfaceRect destination_rect, uint8_t opacity);
 
@@ -50,6 +69,7 @@ class EspPixelCompositor final : public PixelCompositor {
     ppa_client_handle_t scale_client_{};
     ppa_client_handle_t blend_client_{};
     async_color_convert_handle_t dma2d_client_{};
+    uint8_t* sram_staged_blend_scratch_{};
     uint32_t minimum_hardware_pixels_{1U};
     HardwarePixelCompositorStats stats_{};
 };

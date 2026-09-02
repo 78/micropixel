@@ -371,6 +371,36 @@ driver API 进行一次性微基准。每组先预热四次，再按面积执行
 | PPA 2× scale | 16×16 | 24×24 | 约 270 px |
 | PPA opaque fill | 16×16 | 24×24 | 约 420 px |
 
-这些交叉区间说明统一门槛会让部分小图元承担额外的固定成本，但当前产品选择保持 Mosaico 与 P4 的共享
-实现和单一 `100 pixels` 面积门槛，不按 SoC 或 operation 分叉。后续只有端到端 telemetry 显示该成本
-成为主要瓶颈时，才重新评估调度策略；硬件选择始终不暴露给 Guest 或 Sprite API。
+这些交叉区间说明统一门槛会让部分小图元承担额外的固定成本。P4 继续使用共享的 `100 pixels` 门槛；
+S31 的 PPA blend 从 2026-09-02 起单独使用 `512 pixels` 门槛，copy、fill 和 scale 保持原门槛。硬件选择
+始终不暴露给 Guest 或 Sprite API。
+
+调整依据来自 ESP-Mosaico 上一个 480×480 横向卷轴 App 的端到端分桶采样。在相同的持续卷屏 240 Scene
+frame 窗口中，`256–511 pixels` 区间平均每帧提交约 44.6 次 PPA blend、阻塞约 8.71 ms，占全部 blend
+调用约 86.1%、阻塞时间约 75.6%；`100–255 pixels` 另占约 2.2 次和 0.39 ms/帧。相比之下，
+`512–839 pixels` 只有约 0.24 次和 0.07 ms/帧。采用 512 而不是微基准插值得到的 840，可覆盖约 90.4%
+的小 blend 调用和约 78.9% 的 PPA 等待，同时避免把低频的 `512–839` 区间不必要地切到 CPU。
+
+最终 QSPI refresh 仍会因 70k–130k pixel damage 出现约 20–48 ms 帧，因此该阈值只消除错误的硬件调度
+开销，不解决 App 的大面积 damage 和 overdraw。
+
+还验证了 PPA driver 的 non-blocking FIFO 是否能替代面积门槛。实验把 blend client 的
+`max_pending_trans_num` 从 1 增至 16，以 `PPA_TRANS_MODE_NON_BLOCKING` 连续提交，并在 CPU
+写目标 surface、切换 PPA engine 和帧交付前等待完成。队列实测最高积压 8 项，并未触及 16 项容量。
+恢复 100 pixels 门槛后的 240 Scene frame 卷屏窗口中，平均每帧提交约 54.9 次 PPA blend；整个批次墙钟
+时间仍为约 11.52 ms/帧，与 blocking 基线的约 11.53 ms/帧基本相同。显式 barrier 等待已降至约
+0.21 ms/帧，但同步执行的 `ppa_do_blend()` 提交本身仍占约 7.88 ms/帧，场景速率只从约 21.14 FPS
+变为约 21.52 FPS，明显低于 512 pixels 路由的约 26.89 FPS。因此最终没有保留异步队列。
+
+原因在 ESP-IDF PPA driver 的提交路径：每项 blend 在入队前仍会验证完整配置，并分别对 background、
+foreground 和 output 的扩展窗口执行 `esp_cache_msync()`；事务被 DMA2D 取出后还要同步三个 descriptor
+并配置三个 DMA channel。non-blocking 只移除了事务末尾的任务等待，不能摊销这些逐项工作。单个 Blend
+engine 仍按 FIFO 串行执行，所以继续增大队列也不会增加像素吞吐。若要进一步降低该区间成本，需要减少
+blend 事务数量（例如合并相邻图元或缓存预合成层），而不是增加 pending queue 深度。
+
+持续诊断日志中的 `blend-work=<pixels>/<us>/small-candidates:<count>` 分别记录成功 PPA blend 的累计像素、
+blocking driver 累计耗时，以及 S31 交叉点以下、已改走 CPU 的候选数。和其他 Scene 计数一样，应使用相邻
+120 帧记录的差量分析，不把启动以来的累计值直接当作单帧数据。`PPA blend histogram` 进一步按
+`100–255`、`256–511`、`512–839`、`840–1023`、`1024–2047`、`2048–4095`、
+`4096–16383` 和 `16384+` pixels 输出每档累计 `calls/us`，用于判断高频小操作而不是大面积像素
+是否主导等待。

@@ -509,33 +509,80 @@ int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textu
         struct HardwareStats final {
             uint32_t ppa_fills{};
             uint32_t ppa_blends{};
+            uint32_t small_blend_candidates{};
             uint32_t ppa_scales{};
             uint32_t dma2d_copies{};
             uint32_t software_fallbacks{};
+            uint64_t ppa_blend_pixels{};
+            uint64_t ppa_blend_elapsed_us{};
+            std::array<uint32_t, graphics::kPpaBlendHistogramBinCount> ppa_blend_histogram_calls{};
+            std::array<uint64_t, graphics::kPpaBlendHistogramBinCount> ppa_blend_histogram_elapsed_us{};
+            uint32_t sram_staged_blends{};
+            uint32_t sram_staged_failures{};
+            uint64_t sram_staged_blend_pixels{};
+            uint64_t sram_staged_total_us{};
+            uint64_t sram_staged_pack_background_us{};
+            uint64_t sram_staged_pack_foreground_us{};
+            uint64_t sram_staged_ppa_us{};
+            uint64_t sram_staged_copy_back_us{};
         } hardware;
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
         const graphics::HardwarePixelCompositorStats measured = hardware_pixel_compositor_.Stats();
         hardware = {
             .ppa_fills = measured.ppa_fills,
             .ppa_blends = measured.ppa_blends,
+            .small_blend_candidates = measured.small_blend_candidates,
             .ppa_scales = measured.ppa_scales,
             .dma2d_copies = measured.dma2d_copies,
             .software_fallbacks = measured.software_fallbacks,
+            .ppa_blend_pixels = measured.ppa_blend_pixels,
+            .ppa_blend_elapsed_us = measured.ppa_blend_elapsed_us,
+            .ppa_blend_histogram_calls = measured.ppa_blend_histogram_calls,
+            .ppa_blend_histogram_elapsed_us = measured.ppa_blend_histogram_elapsed_us,
+            .sram_staged_blends = measured.sram_staged_blends,
+            .sram_staged_failures = measured.sram_staged_failures,
+            .sram_staged_blend_pixels = measured.sram_staged_blend_pixels,
+            .sram_staged_total_us = measured.sram_staged_total_us,
+            .sram_staged_pack_background_us = measured.sram_staged_pack_background_us,
+            .sram_staged_pack_foreground_us = measured.sram_staged_pack_foreground_us,
+            .sram_staged_ppa_us = measured.sram_staged_ppa_us,
+            .sram_staged_copy_back_us = measured.sram_staged_copy_back_us,
         };
 #endif
         ESP_LOGI(kTag,
                  "App Surface scene #%" PRIu32 ": revision=%" PRIu32 " damage=%" PRIu32 "/%" PRIu64
                  " pixels replays=%" PRIu32 " normalize=%" PRIu32 "/%s wire=%" PRIu16 "rec/%" PRIu16 "inst/%" PRIu32
                  "B layer-cache=%s capacity-merges=%" PRIu32 " hw=fill:%" PRIu32 "/blend:%" PRIu32 "/scale:%" PRIu32
-                 "/dma2d:%" PRIu32 " cpu:%" PRIu32 " sw=blit:%" PRIu64 "px/rgb888-to-rgb565:%" PRIu64
-                 "px/alpha:%" PRIu64 "px",
+                 "/dma2d:%" PRIu32 " cpu:%" PRIu32 " blend-work=%" PRIu64 "px/%" PRIu64 "us/small-candidates:%" PRIu32
+                 " sw=blit:%" PRIu64 "px/rgb888-to-rgb565:%" PRIu64 "px/alpha:%" PRIu64 "px",
                  sequence, guest_scene_->Revision(), result.damage_region_count, result.damage_pixels,
                  result.draw_operations_replayed, result.operations_normalized,
                  result.incremental_normalization ? "patch" : "full", scene_wire_records_, scene_wire_instances_,
                  scene_wire_bytes_, result.layer_snapshot_used ? "yes" : "no", result.capacity_merge_count,
                  hardware.ppa_fills, hardware.ppa_blends, hardware.ppa_scales, hardware.dma2d_copies,
-                 hardware.software_fallbacks, software.blit_pixels, software.rgb888_to_rgb565_pixels,
+                 hardware.software_fallbacks, hardware.ppa_blend_pixels, hardware.ppa_blend_elapsed_us,
+                 hardware.small_blend_candidates, software.blit_pixels, software.rgb888_to_rgb565_pixels,
                  software.alpha_blend_pixels);
+        ESP_LOGI(kTag,
+                 "PPA blend histogram #%" PRIu32 " cumulative calls/us: 100-255=%" PRIu32 "/%" PRIu64
+                 " 256-511=%" PRIu32 "/%" PRIu64 " 512-839=%" PRIu32 "/%" PRIu64 " 840-1023=%" PRIu32 "/%" PRIu64
+                 " 1024-2047=%" PRIu32 "/%" PRIu64 " 2048-4095=%" PRIu32 "/%" PRIu64 " 4096-16383=%" PRIu32 "/%" PRIu64
+                 " 16384+=%" PRIu32 "/%" PRIu64,
+                 sequence, hardware.ppa_blend_histogram_calls[0], hardware.ppa_blend_histogram_elapsed_us[0],
+                 hardware.ppa_blend_histogram_calls[1], hardware.ppa_blend_histogram_elapsed_us[1],
+                 hardware.ppa_blend_histogram_calls[2], hardware.ppa_blend_histogram_elapsed_us[2],
+                 hardware.ppa_blend_histogram_calls[3], hardware.ppa_blend_histogram_elapsed_us[3],
+                 hardware.ppa_blend_histogram_calls[4], hardware.ppa_blend_histogram_elapsed_us[4],
+                 hardware.ppa_blend_histogram_calls[5], hardware.ppa_blend_histogram_elapsed_us[5],
+                 hardware.ppa_blend_histogram_calls[6], hardware.ppa_blend_histogram_elapsed_us[6],
+                 hardware.ppa_blend_histogram_calls[7], hardware.ppa_blend_histogram_elapsed_us[7]);
+        ESP_LOGI(kTag,
+                 "SRAM staged blend #%" PRIu32 " cumulative calls/pixels/failures=%" PRIu32 "/%" PRIu64 "/%" PRIu32
+                 " time total/bg/fg/ppa/out=%" PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 "us",
+                 sequence, hardware.sram_staged_blends, hardware.sram_staged_blend_pixels,
+                 hardware.sram_staged_failures, hardware.sram_staged_total_us, hardware.sram_staged_pack_background_us,
+                 hardware.sram_staged_pack_foreground_us, hardware.sram_staged_ppa_us,
+                 hardware.sram_staged_copy_back_us);
     }
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
     if ((sequence % 120U) == 0U) {
