@@ -389,9 +389,10 @@ Guest 进入 `main()` 后的 Trap 代替。
 
 ## 8. 发布基线
 
-当前集成应用为 Blocks、Snake、Demo 和四个 Showcase Bundle（Tap Counter、Color Lab、Pixel Sketch、
+当前集成应用为 Blocks、Snake、Tilt、Demo 和四个 Showcase Bundle（Tap Counter、Color Lab、Pixel Sketch、
 Orbit Pad）。Demo 覆盖公开 Service，Snake 覆盖高频 Graphics、Input、Storage 和 Audio，Blocks 覆盖
-StreamingTexture 与批量 damage，Showcase 覆盖多 App Hall、轻量 Scene 和独立 Bundle 生命周期。
+StreamingTexture 与批量 damage，Tilt 覆盖传感器输入、双分辨率 atlas 和长关卡进度，Showcase 覆盖多 App Hall、
+轻量 Scene 和独立 Bundle 生命周期。
 
 自动基线：
 
@@ -427,7 +428,7 @@ python3 -m unittest tools.tests.test_build_app_store_image
 1. Bundle requirements 与 WAMR instance 创建前的兼容性 preflight；
 2. 权限声明、grant 与 method 级检查；
 3. Resource/Graphics/Input 协议版本冻结、兼容 fixture 和 wire 负向/fuzz 回归；
-4. Texture retained 生命周期、Timer 积压、Run/Stop 和七个集成应用的真机回归；
+4. Texture retained 生命周期、Timer 积压、Run/Stop 和八个集成应用的真机回归；
 5. 生产 package 签名与授权、网络配置，以及在线安装/升级/卸载的完整断电和错误恢复矩阵。
 
 ## 9. 架构禁止项

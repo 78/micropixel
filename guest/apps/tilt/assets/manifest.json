@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {"name": "launch", "format": "png", "path": "launch.png"},
+    {"name": "board-base.p480", "format": "png", "path": "board_base_480.png"},
+    {"name": "board-base.p720", "format": "png", "path": "board_base_720.png"},
+    {"name": "board-frame.p480", "format": "png", "path": "board_frame_480.png"},
+    {"name": "board-frame.p720", "format": "png", "path": "board_frame_720.png"},
+    {"name": "board-tiles.p480", "format": "png", "path": "board_tiles_480.png"},
+    {"name": "board-tiles.p720", "format": "png", "path": "board_tiles_720.png"},
+    {"name": "objects.p480", "format": "png", "path": "objects_480.png"},
+    {"name": "objects.p720", "format": "png", "path": "objects_720.png"},
+    {"name": "fans.p480", "format": "png", "path": "fans_480.png"},
+    {"name": "fans.p720", "format": "png", "path": "fans_720.png"},
+    {"name": "mechanics.p480", "format": "png", "path": "mechanics_480.png"},
+    {"name": "mechanics.p720", "format": "png", "path": "mechanics_720.png"},
+    {"name": "title.p480", "format": "png", "path": "title_480.png"},
+    {"name": "title.p720", "format": "png", "path": "title_720.png"},
+    {"name": "hud-icons.p480", "format": "png", "path": "hud_icons_480.png"},
+    {"name": "hud-icons.p720", "format": "png", "path": "hud_icons_720.png"}
+  ]
+}

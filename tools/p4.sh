@@ -61,16 +61,16 @@ Normal development commands:
   build-host                         Incrementally build only the ESP32-P4 Host.
   build-null                         Compile the hardware-independent Null board
                                      in its own build directory; never flash it.
-  build-release                      Build Host, Blocks, Snake, and SDK Demo; create a browser-flashable
-                                     micropixel-full.bin containing only those three Apps.
+  build-release                      Build Host, Blocks, Snake, Tilt, and SDK Demo; create a browser-flashable
+                                     micropixel-full.bin containing only those four Apps.
   flash-host [PORT]                  Flash the already-built Host only; do not
                                      rebuild or touch the app_store partition.
   monitor [PORT]                     Monitor the running ESP32-P4 Host without
                                      building, flashing, erasing, or testing.
-  build-apps                         Build Blocks, Snake, Demo, and four Showcase Bundles.
-  build-all                          Build Host plus seven example Apps and the
+  build-apps                         Build Blocks, Snake, Tilt, Demo, and four Showcase Bundles.
+  build-all                          Build Host plus eight example Apps and the
                                      App Store image. Run no tests; flash nothing.
-  flash-apps [PORT]                  Clear app_store and flash seven example Apps
+  flash-apps [PORT]                  Clear app_store and flash eight example Apps
                                      over USB. Uses the unique connected ESP32-P4
                                      when PORT is omitted.
 
@@ -430,9 +430,10 @@ build_app_package() {
 }
 
 build_release() {
-    echo "==> Building release Apps: Blocks, Snake, and SDK Demo"
+    echo "==> Building release Apps: Blocks, Snake, Tilt, and SDK Demo"
     build_app_package blocks
     build_app_package snake
+    build_app_package tilt
     build_app_package demo
     build_host
     mkdir -p "$system_shell_output_dir"
@@ -440,8 +441,9 @@ build_release() {
         --output "$release_app_store_image" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
+        "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
         "$workspace_root/build/apps/demo/demo.bundle.bin"
-    echo "==> Creating browser-flashable image with Blocks, Snake, and SDK Demo"
+    echo "==> Creating browser-flashable image with Blocks, Snake, Tilt, and SDK Demo"
     python3 "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \
         --app-store-image "$release_app_store_image" \
@@ -481,9 +483,9 @@ monitor_host() {
 }
 
 build_example_apps() {
-    echo "==> Building seven example Apps"
+    echo "==> Building eight example Apps"
     local app_name
-    for app_name in blocks snake demo tap-counter color-lab pixel-sketch orbit-pad; do
+    for app_name in blocks snake tilt demo tap-counter color-lab pixel-sketch orbit-pad; do
         build_app_package "$app_name"
     done
 }
@@ -509,6 +511,7 @@ create_example_app_store_image() {
         "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin"
         "$workspace_root/build/apps/blocks/blocks.bundle.bin"
         "$workspace_root/build/apps/snake/snake.bundle.bin"
+        "$workspace_root/build/apps/tilt/tilt.bundle.bin"
         "$workspace_root/build/apps/demo/demo.bundle.bin"
     )
     local bundle
@@ -637,6 +640,7 @@ install_example_apps() {
     echo "==> Installing example Apps; this is not a raw app_store flash"
     install_bundle "$workspace_root/build/apps/blocks/blocks.bundle.bin" Blocks
     install_bundle "$workspace_root/build/apps/snake/snake.bundle.bin" Snake
+    install_bundle "$workspace_root/build/apps/tilt/tilt.bundle.bin" Tilt
     install_bundle "$workspace_root/build/apps/demo/demo.bundle.bin" Demo
     install_bundle "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin" "Tap Counter"
     install_bundle "$workspace_root/build/apps/color-lab/color-lab.bundle.bin" "Color Lab"
@@ -655,10 +659,12 @@ run_tests() {
         python3 -m unittest tools.tests.test_build_app_store_image tools.tests.test_analyze_sfx \
             tools.tests.test_build_app_bundle_metadata tools.tests.test_build_font_cbin \
             tools.tests.test_generate_builtin_fonts \
-            tools.tests.test_generate_localization tools.tests.test_firmware -v
+            tools.tests.test_generate_localization tools.tests.test_firmware \
+            tools.tests.test_tilt_level_generator -v
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
+        "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
         "$workspace_root/build/apps/demo/demo.bundle.bin" \
         "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin" \
         "$workspace_root/build/apps/color-lab/color-lab.bundle.bin" \
@@ -674,7 +680,7 @@ flash_example_apps() {
     require_idf
     create_example_app_store_image
     port="$(resolve_port "$requested_port")"
-    echo "==> USB App flash: clearing app_store and writing seven example Apps"
+    echo "==> USB App flash: clearing app_store and writing eight example Apps"
     write_app_store_image "$port" "$example_app_store_image"
 }
 

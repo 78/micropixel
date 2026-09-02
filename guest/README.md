@@ -10,6 +10,7 @@ guest/
 ├── apps/demo/    # 可导航的 SDK 功能演示应用
 ├── apps/snake/   # 完整产品应用及其 metadata、素材
 ├── apps/blocks/  # 触控俄罗斯方块产品应用
+├── apps/tilt/    # 加速度计控制的 100 关滚球迷宫
 ├── apps/showcase/ # 四个轻量 Showcase App 的共享实现
 ├── apps/{tap-counter,color-lab,pixel-sketch,orbit-pad}/
 │                 # 用于多 App 大厅与 Guest SDK 验收的四个独立 Bundle
@@ -27,7 +28,8 @@ guest/
 
 `tests/conformance/` 保留 Event、Timer/Clock、Renderer、退出语义、watchdog 和 Service 边界
 验收。历史 S3 Guest、独立 benchmark 和编译失败样例已经移除；需要这类测试时按当前接口重写。
-完整产品应用 [`apps/snake/`](apps/snake/) 和 [`apps/blocks/`](apps/blocks/) 与 Demo 独立构建。
+完整产品应用 [`apps/snake/`](apps/snake/)、[`apps/blocks/`](apps/blocks/) 和
+[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。
 
 所有游戏音效使用 `apps/<game>/audio/sfx.json` 作为唯一参数源，并在正式 Bundle 构建中执行感知分析门禁。
 事件层级、重复暴露、跨游戏对齐和真机 A/B 流程见
@@ -65,7 +67,7 @@ bash tools/p4.sh build-all
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
-`flash-apps` 明确替换 App Store，并写入七个示例 App；不再提供会把任意 Bundle 直接写入
+`flash-apps` 明确替换 App Store，并写入八个示例 App；不再提供会把任意 Bundle 直接写入
 分区的独立公开脚本。单 App 开发安装走 USB Local Control 或 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；

@@ -94,7 +94,7 @@ python3 tools/micropixel --transport usb run guest/apps/demo
 # 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
 bash tools/p4.sh build-host
 
-# 构建 Host、7 个示例 App 和 App Store 镜像；不跑测试
+# 构建 Host、8 个示例 App 和 App Store 镜像；不跑测试
 bash tools/p4.sh build-all
 
 # 仅在发布前或推送前显式运行完整测试门禁
@@ -138,7 +138,7 @@ bash tools/p4.sh monitor /dev/cu.usbmodemXXXX
 ```
 
 两条命令在只连接一台 ESP32-P4 时都可省略端口；`monitor` 不构建、不烧录、不清空数据，也不运行测试。
-USB 调试的 App 烧录默认清空旧 Catalog 并写入 7 个示例 App：
+USB 调试的 App 烧录默认清空旧 Catalog 并写入 8 个示例 App：
 
 ```sh
 bash tools/p4.sh flash-apps

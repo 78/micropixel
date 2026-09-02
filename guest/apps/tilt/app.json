@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.tilt",
+  "threading": "none",
+  "title": "Juicy Tilt",
+  "sources": [
+    "main.cpp",
+    "tilt_app.cpp",
+    "tilt_input.cpp",
+    "tilt_model.cpp",
+    "tilt_game.cpp",
+    "tilt_renderer.cpp",
+    "tilt_audio.cpp"
+  ],
+  "asset_manifest": "assets/manifest.json",
+  "launch_asset": "launch"
+}

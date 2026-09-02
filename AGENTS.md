@@ -19,7 +19,7 @@ preview profile。Host 基于 ESP-IDF 6.1 和固定 commit 的 WAMR fork AOT v6�
 - 分发：Bundle v1；P4 使用 24 MiB、S31/S3 使用 8 MiB 可写 `app_store`。BundleFS v2 使用
   离散 64 KiB 数据块、写时复制和四个 16 KiB Catalog Bank，并兼容迁移旧 v1，不依赖 NVS Catalog；
 - 系统 UI：Host 原生 App Hall、Status Layer、系统菜单和系统手势；
-- 集成 App：Blocks、Snake、Demo，以及 Tap Counter、Color Lab、Pixel Sketch、Orbit Pad 四个 Showcase Bundle。
+- 集成 App：Blocks、Snake、Tilt、Demo，以及 Tap Counter、Color Lab、Pixel Sketch、Orbit Pad 四个 Showcase Bundle。
 
 ## 先读哪里
 
@@ -89,7 +89,7 @@ guest/
   abi/                            # wire 格式、ID、allowed imports
   runtime/                        # Guest startup 与 SDK lowering
   sdk/                            # 应用可包含的 Public C++ API
-  apps/{blocks,snake,demo}/       # 完整游戏与 SDK Demo
+  apps/{blocks,snake,tilt,demo}/  # 完整游戏与 SDK Demo
   apps/{tap-counter,color-lab,pixel-sketch,orbit-pad}/ # Showcase Bundle
   tests/conformance/              # Guest/Host 边界验收
 tools/                            # 构建、打包、分析、烧录和回归脚本
@@ -123,7 +123,7 @@ build/                            # 本地生成产物，不提交
 | 修改 Host 业务能力 | `device/contracts/` + Runtime service；板级差异放 `platform/` |
 | 修改应用大厅/状态层 | `host/ui/`、`host/controller/`、共享 Square System UI；板级只接入 presentation |
 | 修改图形热路径 | Graphics Service、Guest graphics engine、display/compositor；保持边界验证 |
-| 修改 Blocks/Snake | 对应 `guest/apps/<app>/`；同时运行该 Bundle 的正式构建 |
+| 修改 Blocks/Snake/Tilt | 对应 `guest/apps/<app>/`；同时运行该 Bundle 的正式构建 |
 | 修改音效 | `audio/sfx.json` + 分析器测试 + App Bundle 构建 + 真机 A/B |
 | 修改 Bundle/App Store | `tools/build_app_bundle.py`、`tools/build_app_store_image.py`、Host bundle reader |
 | 烧录或排查真机 | `docs/development/flashing.zh-CN.md`；先用 MAC 确认目标设备 |
@@ -149,7 +149,7 @@ bash tools/s31.sh build-host
 bash tools/s3.sh build-host
 bash tools/s3.sh build-szpi
 
-# System Shell + 七个示例 App + App Store 集成
+# System Shell + 八个示例 App + App Store 集成
 bash tools/p4.sh build-all
 
 # 发布前或推送前完整门禁；普通 build/flash 不隐式运行
@@ -167,6 +167,7 @@ python3 -m unittest tools.tests.test_analyze_sfx -v
 # 正式 App Bundle
 python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 python3 tools/micropixel package guest/apps/snake --aot-target riscv32-ilp32f
+python3 tools/micropixel package guest/apps/tilt --aot-target riscv32-ilp32f
 python3 tools/micropixel package guest/apps/demo --aot-target riscv32-ilp32f
 
 # Shell 语法

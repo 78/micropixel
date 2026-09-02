@@ -127,7 +127,7 @@ Bundle 是不可变文件。安装和升级使用写时复制：分配足够的�
 ## 5. 初始化、格式化与 NVS 边界
 
 全擦除态 `app_store` 首次挂载时生成 generation 1 的空 Catalog，不安装任何生产预置 App。USB 连接代表
-开发调试工作流，`flash-apps` 和 `flash-all` 默认生成全新的 BundleFS 镜像并写入七个示例 App；
+开发调试工作流，`flash-apps` 和 `flash-all` 默认生成全新的 BundleFS 镜像并写入八个示例 App；
 该操作会替换整个 Catalog，不能用于保留设备上的既有 App。空 Catalog 烧录仅作为显式格式恢复操作。
 正常安装和升级仍使用 BundleFS 写时复制事务。
 

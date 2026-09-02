@@ -53,7 +53,7 @@ ESP32-S3-BOX-3 preview commands:
   build-null          Compile the ESP32-S3 hardware-independent Null gate.
   build-host          Build the 40-line PSRAM double-buffer preview Host.
   build-wamrc         Build locked WAMR 2.4.3 wamrc with the Xtensa LLVM backend.
-  build-apps          Build Demo, Blocks and Snake Xtensa AOT Bundles plus app_store.
+  build-apps          Build Demo, Blocks, Snake and Tilt Xtensa AOT Bundles plus app_store.
   build-release       Build the BOX-3 Host and release Apps, then create the
                       browser-flashable micropixel-full.bin preview image.
   flash-host [PORT]   Flash the already-built preview Host, preserving app_store.
@@ -249,7 +249,7 @@ build_apps() {
     local app
     local bundles=()
     mkdir -p "$apps_output_dir"
-    for app in demo blocks snake; do
+    for app in demo blocks snake tilt; do
         mkdir -p "$apps_output_dir/$app"
         WAMRC="$xtensa_wamrc" python "$workspace_root/tools/micropixel" package \
             "$workspace_root/guest/apps/$app" \
@@ -266,11 +266,11 @@ build_apps() {
 }
 
 build_release() {
-    echo "==> Building ESP32-S3-BOX-3 preview Apps: Blocks, Snake, and SDK Demo"
+    echo "==> Building ESP32-S3-BOX-3 preview Apps: Blocks, Snake, Tilt, and SDK Demo"
     build_apps
     build_profile esp-box-3 "$host_build_dir" \
         sdkconfig.s3.defaults sdkconfig.s3-box-3.defaults
-    echo "==> Creating ESP32-S3-BOX-3 browser image with Blocks, Snake, and SDK Demo"
+    echo "==> Creating ESP32-S3-BOX-3 browser image with Blocks, Snake, Tilt, and SDK Demo"
     python "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \
         --app-store-image "$apps_store" \
