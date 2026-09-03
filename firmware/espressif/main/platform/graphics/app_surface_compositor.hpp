@@ -65,7 +65,6 @@ struct AppDrawOperation final {
 
 struct AppLayerState final {
     bool valid{};
-    bool translation_active{};
     uint8_t layer_id{};
     SurfaceRect clip{};
     int32_t translate_x{};
@@ -90,15 +89,45 @@ struct AppSurfaceFrameResult final {
     uint32_t draw_operations_replayed{};
     uint32_t operations_normalized{};
     bool incremental_normalization{};
+    // Stage timings; all zero unless a clock was installed with SetClock().
+    uint64_t normalize_us{};
+    uint64_t damage_us{};
+    uint64_t render_us{};
 };
+
+// Describes the draw operation the pixel compositor rejected in the last
+// Present that returned kRenderFailed; for diagnostics only.
+struct AppSurfaceRenderFailure final {
+    bool valid{};
+    AppDrawOperationKind kind{};
+    bool layer_snapshot{};
+    // Destination rectangle in App Surface coordinates and the damage window
+    // it was being replayed into.
+    SurfaceRect destination{};
+    SurfaceRect draw_bounds{};
+    SurfaceRect source{};
+    uint32_t bitmap_format{};
+    uint32_t bitmap_width{};
+    uint32_t bitmap_height{};
+};
+
+// Monotonic microsecond clock used only for stage telemetry.
+using AppSurfaceClock = uint64_t (*)();
 
 // Retains the authoritative Guest scene in fixed slots and updates a persistent
 // opaque App Surface. A Present only restores and replays changed regions.
 // A retained-translation scope is captured once into an optional Layer cache;
 // subsequent shake frames restore the old location and move that snapshot.
+//
+// Presents may rotate between up to kMaxSurfaces destination surfaces (double
+// or triple buffering). For every known surface the compositor remembers the
+// content damage rendered elsewhere since that surface was last presented and
+// replays that carry-over before the new frame's damage, so all surfaces
+// converge on the same content without a full redraw.
 class AppSurfaceCompositor final {
    public:
     static constexpr size_t kMaxDamageRegions = 16U;
+    static constexpr size_t kMaxSurfaces = 3U;
 
     AppSurfaceCompositor(AppDrawOperation* first_scene, AppDrawOperation* second_scene, uint32_t operation_capacity,
                          PixelCompositor& pixels, DamageMergePolicy damage_policy, TextRasterizer* text = nullptr)
@@ -121,11 +150,22 @@ class AppSurfaceCompositor final {
                                                       PixelSurface destination);
 
     void SetLayerCache(PixelSurface cache);
+    void SetClock(AppSurfaceClock clock) { clock_ = clock; }
     void Reset();
 
+    [[nodiscard]] const AppSurfaceRenderFailure& LastRenderFailure() const { return render_failure_; }
+
+    // Everything rendered by the last Present, including carry-over replayed
+    // into a back surface.
     [[nodiscard]] size_t LastDamageCount() const { return damage_.Size(); }
     [[nodiscard]] DamageRect LastDamage(size_t index) const { return damage_[index].rect; }
+    // Only the pixels that differ from the previously presented frame; this is
+    // what a display needs to refresh after the front surface changes.
+    [[nodiscard]] size_t ContentDamageCount() const { return content_damage_.Size(); }
+    [[nodiscard]] DamageRect ContentDamage(size_t index) const { return content_damage_[index].rect; }
     [[nodiscard]] uint32_t CurrentOperationCount() const { return current_count_; }
+    // True once a scene has been presented and RefreshBitmap may be used.
+    [[nodiscard]] bool Synchronized() const { return synchronized_; }
 
    private:
     [[nodiscard]] AppSurfaceStatus NormalizeScene(const GuestScene& scene, device::BitmapResolver resolver,
@@ -146,11 +186,31 @@ class AppSurfaceCompositor final {
     [[nodiscard]] bool RenderDamage(PixelSurface destination, const AppDrawOperation* operations,
                                     uint32_t operation_count, uint32_t background, const AppLayerState& layer,
                                     bool use_layer_snapshot, uint32_t& draw_operations_replayed);
-    [[nodiscard]] bool CaptureLayer(PixelSurface destination, const AppLayerState& layer);
-    [[nodiscard]] bool SameDestination(PixelSurface destination) const;
-    void RememberDestination(PixelSurface destination);
+    [[nodiscard]] bool ReplayOperations(PixelSurface destination, const AppDrawOperation* operations,
+                                        uint32_t operation_count, const AppLayerState& layer, bool use_layer_snapshot,
+                                        uint32_t& draw_operations_replayed);
+    [[nodiscard]] bool CaptureLayer(PixelSurface source, const AppLayerState& layer);
+    // Per-destination bookkeeping. A slot is "known" once the surface has
+    // received a complete frame; until then any present into it is a full
+    // redraw. kNoSlot means the destination is not tracked at all.
+    static constexpr uint8_t kNoSlot = UINT8_MAX;
+    [[nodiscard]] uint8_t FindSlot(PixelSurface destination) const;
+    [[nodiscard]] uint8_t ClaimSlot(PixelSurface destination);
+    [[nodiscard]] bool AddCarryDamage(PixelSurface destination, uint8_t slot);
+    // Marks `slot` complete and records this frame's content damage as
+    // outstanding for every other known surface.
+    void RecordCarryDamage(uint8_t slot, const DamageRegionSet<kMaxDamageRegions>& content_damage);
     [[nodiscard]] AppSurfaceFrameResult Result(AppSurfaceStatus status, bool visual_changed,
                                                uint32_t draw_operations_replayed = 0U) const;
+    [[nodiscard]] uint64_t Now() const { return clock_ != nullptr ? clock_() : 0U; }
+
+    struct SurfaceSlot final {
+        PixelSurface surface{};
+        bool valid{};
+        // The carry set overflowed; the surface needs a full redraw next time.
+        bool carry_overflow{};
+        DamageRegionSet<kMaxDamageRegions> carry{};
+    };
 
     AppDrawOperation* current_{};
     AppDrawOperation* scratch_{};
@@ -172,14 +232,16 @@ class AppSurfaceCompositor final {
     bool synchronized_{};
     bool scratch_synchronized_{};
     bool incremental_normalization_{};
-    uint8_t* destination_pixels_{};
-    uint32_t destination_size_{};
-    uint32_t destination_width_{};
-    uint32_t destination_height_{};
-    uint32_t destination_stride_{};
-    SurfacePixelFormat destination_format_{};
-    uint32_t destination_origin_x_{};
-    uint32_t destination_origin_y_{};
+    // slots_[last_presented_] received the last Present and therefore holds
+    // the complete previous frame; it is the source for Layer snapshots.
+    SurfaceSlot slots_[kMaxSurfaces]{};
+    uint8_t last_presented_{kNoSlot};
+    DamageRegionSet<kMaxDamageRegions> content_damage_{};
+    AppSurfaceClock clock_{};
+    uint64_t normalize_us_{};
+    uint64_t damage_us_{};
+    uint64_t render_us_{};
+    AppSurfaceRenderFailure render_failure_{};
 };
 
 }  // namespace micropixel::platform::graphics

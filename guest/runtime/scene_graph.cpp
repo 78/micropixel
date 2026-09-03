@@ -18,7 +18,7 @@ constexpr uint32_t kCommonMask = kBaseMask | MICROPIXEL_GRAPHICS_SCENE_NODE_GEOM
 constexpr uint32_t kContainerMask =
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
-    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE;
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
 constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY;
@@ -68,6 +68,7 @@ struct SceneContainerData final {
     int16_t z_order{};
     uint8_t opacity{255U};
     bool visible{true};
+    bool cache_content{};
     uint32_t order{};
     uint32_t generation{1U};
     uint16_t wire_id{UINT16_MAX};
@@ -356,6 +357,7 @@ class SceneState final {
                           .z_order = properties.z_order,
                           .opacity = properties.opacity,
                           .visible = properties.visible,
+                          .cache_content = properties.cache_content,
                           .order = ++next_order,
                           .generation = generation,
                           .wire_id = UINT16_MAX,
@@ -768,7 +770,8 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
                 .opacity = container.opacity,
                 .visible = static_cast<uint8_t>(container.visible ? 1U : 0U),
                 .sibling_order = WireSiblingOrder(state, container.order),
-                .reserved0 = 0U,
+                .flags = static_cast<uint16_t>(
+                    container.cache_content ? MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT : 0U),
             })) {
             return MICROPIXEL_STATUS_BUFFER_TOO_SMALL;
         }
@@ -1177,6 +1180,18 @@ void ContainerNode::SetZOrder(SceneUpdate& update, int16_t z_order) {
     container.z_order = z_order;
     detail::UpdateScenePropertyDirty(container.dirty, original.dirty, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER,
                                      container.z_order != original.z_order);
+}
+
+void ContainerNode::SetCacheContent(SceneUpdate& update, bool cache_content) {
+    ValidateUpdate(state_, update);
+    SceneContainerData& container = state_->Container(id_, generation_);
+    if (container.cache_content == cache_content) {
+        return;
+    }
+    const SceneContainerData& original = state_->RememberContainer(id_);
+    container.cache_content = cache_content;
+    detail::UpdateScenePropertyDirty(container.dirty, original.dirty, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS,
+                                     container.cache_content != original.cache_content);
 }
 
 void ShapeNode::SetRect(SceneUpdate& update, Rect rect) {

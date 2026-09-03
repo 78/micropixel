@@ -47,7 +47,11 @@ void SnakeGame::InitializeScene() {
 
     const micropixel::Point content_offset{ContentOffsetX(renderer_info_.width()),
                                            ContentOffsetY(renderer_info_.height())};
-    game_container_ = scene_.CreateContainer({.clip = kBoardClip, .translation = content_offset, .z_order = 0});
+    // The board is the container the shake effect translates as a whole, so
+    // it is flagged cache_content: the Host keeps its pixels as a Layer
+    // snapshot and moves them instead of replaying every node per frame.
+    game_container_ = scene_.CreateContainer(
+        {.clip = kBoardClip, .translation = content_offset, .z_order = 0, .cache_content = true});
     hud_container_ = scene_.CreateContainer({.clip = kDisplayClip, .translation = content_offset, .z_order = 10});
 
     board_node_ = game_container_.CreateRoundedRect(
@@ -137,6 +141,7 @@ void SnakeGame::InitializeScene() {
 }
 
 void SnakeGame::Render() {
+    const uint64_t render_started_us = benchmark_ ? app_.clock().Now().microseconds() : 0U;
     InitializeScene();
     const Theme& theme = ThemeForLevel(model_.level());
     const bool shake_active = shake_remaining_us_ != 0U && shake_capture_delay_frames_ == 0U;
@@ -171,6 +176,9 @@ void SnakeGame::Render() {
     }
     if (shake_capture_delay_frames_ != 0U && MotionFractionQ8() == 256U) {
         --shake_capture_delay_frames_;
+    }
+    if (benchmark_) {
+        BenchmarkRecordRender(render_started_us, app_.clock().Now().microseconds());
     }
 }
 

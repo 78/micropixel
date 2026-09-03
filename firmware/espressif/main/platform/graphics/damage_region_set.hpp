@@ -43,7 +43,7 @@ class DamageRegionSet final {
             regions_[count_++] = incoming;
             return true;
         }
-        return MergeAtCapacity(incoming);
+        return MergeAtCapacity(incoming, policy);
     }
 
     void Clear() {
@@ -107,12 +107,22 @@ class DamageRegionSet final {
         };
     }
 
-    [[nodiscard]] static bool Eligible(const UnionCost& cost, DamageMergePolicy policy) {
-        // Overlapping or exactly adjacent regions add no rendering work and
-        // should always collapse, even when their union is larger than the
-        // policy used to limit speculative overdraw.
-        return cost.valid && cost.extra_pixels <= policy.max_extra_pixels &&
-               (cost.extra_pixels == 0U || cost.region_pixels <= policy.max_region_pixels);
+    [[nodiscard]] static bool Overlaps(const DamageRect& left, const DamageRect& right) {
+        return static_cast<uint64_t>(left.x) < static_cast<uint64_t>(right.x) + right.width &&
+               static_cast<uint64_t>(right.x) < static_cast<uint64_t>(left.x) + left.width &&
+               static_cast<uint64_t>(left.y) < static_cast<uint64_t>(right.y) + right.height &&
+               static_cast<uint64_t>(right.y) < static_cast<uint64_t>(left.y) + left.height;
+    }
+
+    [[nodiscard]] static bool Eligible(const DamageRect& left, const DamageRect& right, const UnionCost& cost,
+                                       DamageMergePolicy policy) {
+        // Regions of one set never overlap: renderers rely on that to visit
+        // operations once per pixel (translucent operations would otherwise
+        // blend twice). Overlapping pairs therefore always collapse, as do
+        // exactly adjacent ones; only speculative overdraw obeys the policy.
+        return cost.valid &&
+               (Overlaps(left, right) || (cost.extra_pixels <= policy.max_extra_pixels &&
+                                          (cost.extra_pixels == 0U || cost.region_pixels <= policy.max_region_pixels)));
     }
 
     void Remove(size_t index) {
@@ -129,7 +139,7 @@ class DamageRegionSet final {
                     continue;
                 }
                 const UnionCost cost = Union(regions_[index].rect, incoming.rect);
-                if (!Eligible(cost, policy)) {
+                if (!Eligible(regions_[index].rect, incoming.rect, cost, policy)) {
                     continue;
                 }
                 incoming.rect = cost.rect;
@@ -140,7 +150,7 @@ class DamageRegionSet final {
         }
     }
 
-    [[nodiscard]] bool MergeAtCapacity(const DamageRegion& incoming) {
+    [[nodiscard]] bool MergeAtCapacity(const DamageRegion& incoming, DamageMergePolicy policy) {
         size_t best_first = Capacity;
         size_t best_second = Capacity;
         bool best_includes_incoming = false;
@@ -187,6 +197,19 @@ class DamageRegionSet final {
             regions_[best_second] = incoming;
         }
         ++capacity_merge_count_;
+        // The union may now overlap regions it did not touch before; fold
+        // those in so the no-overlap invariant holds after a capacity merge.
+        bool overlaps_other = false;
+        for (size_t index = 0U; index < count_; ++index) {
+            overlaps_other = overlaps_other || (index != best_first && regions_[index].source == incoming.source &&
+                                                Overlaps(regions_[index].rect, regions_[best_first].rect));
+        }
+        if (overlaps_other) {
+            DamageRegion merged = regions_[best_first];
+            Remove(best_first);
+            MergeEligibleRegions(merged, policy);
+            regions_[count_++] = merged;
+        }
         return true;
     }
 

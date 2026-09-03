@@ -222,7 +222,7 @@ micropixel_graphics_scene_container_record_t Container(uint16_t id, uint16_t par
         .opacity = opacity,
         .visible = static_cast<uint8_t>(visible ? 1U : 0U),
         .sibling_order = sibling,
-        .reserved0 = 0U,
+        .flags = 0U,
     };
 }
 
@@ -277,6 +277,140 @@ void SmallerKeyframeClearsRemovedNodes() {
     assert(result.status == graphics::AppSurfaceStatus::kOk);
     assert(result.visual_changed && result.damage_pixels >= 2U);
     assert(storage[removed_pixel] == 0U && storage[removed_pixel + 1U] == 0U && storage[removed_pixel + 2U] == 0U);
+}
+
+// Alternating presents between two surfaces must converge on identical pixels
+// without a full redraw once both surfaces are known.
+void DoubleBufferedPresentsCarryDamageAcrossSurfaces() {
+    Fixture fixture;
+    std::array<uint8_t, 8U * 2U * 3U> storage_a{};
+    std::array<uint8_t, 8U * 2U * 3U> storage_b{};
+    auto surface_a = BgrSurface(storage_a, 8U, 2U);
+    auto surface_b = BgrSurface(storage_b, 8U, 2U);
+    auto present_rect_at = [&](int32_t x, uint32_t revision, graphics::PixelSurface& surface) {
+        const bool keyframe = revision == 1U;
+        SceneMessage message(keyframe ? MICROPIXEL_GRAPHICS_SCENE_KEYFRAME : MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U,
+                             keyframe ? 0U : revision - 1U, revision, 1U, 0U);
+        if (keyframe) {
+            message.Add(Background(0x0000ffU));
+        }
+        auto rect = Rect(0U, x, 0, 1, 1, 0xff0000U);
+        if (!keyframe) {
+            rect.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
+        }
+        message.Add(rect);
+        assert(fixture.Apply(message.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+        return fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    };
+    auto expect_rect_only_at = [](const std::array<uint8_t, 8U * 2U * 3U>& storage, int32_t x) {
+        for (int32_t column = 0; column < 8; ++column) {
+            const size_t offset = static_cast<size_t>(column) * 3U;
+            const bool red = column == x;
+            assert(storage[offset] == (red ? 0U : 255U));
+            assert(storage[offset + 1U] == 0U);
+            assert(storage[offset + 2U] == (red ? 255U : 0U));
+        }
+    };
+
+    assert(present_rect_at(0, 1U, surface_a).damage_pixels == 16U);  // A: full
+    assert(present_rect_at(1, 2U, surface_b).damage_pixels == 16U);  // B unknown: full
+    // A still shows the rect at column 0. Carrying frame 2's content change
+    // (columns 0 and 1) plus this diff (1 and 2) is enough; re-rendering B in
+    // full was not a content change and must not force A to redraw fully.
+    const auto third = present_rect_at(2, 3U, surface_a);
+    assert(third.status == graphics::AppSurfaceStatus::kOk && third.damage_pixels < 16U);
+    expect_rect_only_at(storage_a, 2);
+    const auto fourth = present_rect_at(3, 4U, surface_b);
+    assert(fourth.status == graphics::AppSurfaceStatus::kOk && fourth.incremental_normalization);
+    assert(fourth.damage_pixels < 16U);
+    expect_rect_only_at(storage_b, 3);
+    const auto fifth = present_rect_at(4, 5U, surface_a);
+    assert(fifth.status == graphics::AppSurfaceStatus::kOk && fifth.damage_pixels < 16U);
+    expect_rect_only_at(storage_a, 4);
+    // Presenting the same surface twice keeps accumulating the carry for B.
+    const auto sixth = present_rect_at(5, 6U, surface_a);
+    assert(sixth.status == graphics::AppSurfaceStatus::kOk && sixth.damage_pixels < 16U);
+    expect_rect_only_at(storage_a, 5);
+    const auto seventh = present_rect_at(6, 7U, surface_b);
+    assert(seventh.status == graphics::AppSurfaceStatus::kOk && seventh.damage_pixels < 16U);
+    expect_rect_only_at(storage_b, 6);
+}
+
+// Three surfaces rotate in arbitrary order; every one converges on the latest
+// content with incremental damage once it has received a complete frame.
+void TripleBufferedPresentsConvergeInAnyOrder() {
+    Fixture fixture;
+    constexpr uint32_t kWidth = 16U;
+    std::array<std::array<uint8_t, kWidth * 3U>, 3U> storage{};
+    std::array<graphics::PixelSurface, 3U> surfaces{
+        BgrSurface(storage[0], kWidth, 1U), BgrSurface(storage[1], kWidth, 1U), BgrSurface(storage[2], kWidth, 1U)};
+    uint32_t revision = 0U;
+    auto present_rect_at = [&](int32_t x, size_t surface_index) {
+        ++revision;
+        const bool keyframe = revision == 1U;
+        SceneMessage message(keyframe ? MICROPIXEL_GRAPHICS_SCENE_KEYFRAME : MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U,
+                             keyframe ? 0U : revision - 1U, revision, 1U, 0U);
+        if (keyframe) {
+            message.Add(Background(0x0000ffU));
+        }
+        auto rect = Rect(0U, x, 0, 1, 1, 0xff0000U);
+        if (!keyframe) {
+            rect.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
+        }
+        message.Add(rect);
+        assert(fixture.Apply(message.Finish(), static_cast<int32_t>(kWidth), 1) == MICROPIXEL_STATUS_OK);
+        return fixture.compositor.PresentScene(fixture.scene, surfaces[surface_index], nullptr, nullptr);
+    };
+    auto expect_rect_only_at = [&](size_t surface_index, int32_t x) {
+        for (int32_t column = 0; column < static_cast<int32_t>(kWidth); ++column) {
+            const size_t offset = static_cast<size_t>(column) * 3U;
+            const bool red = column == x;
+            assert(storage[surface_index][offset] == (red ? 0U : 255U));
+            assert(storage[surface_index][offset + 1U] == 0U);
+            assert(storage[surface_index][offset + 2U] == (red ? 255U : 0U));
+        }
+    };
+
+    assert(present_rect_at(0, 0U).damage_pixels == kWidth);  // first frame: full
+    assert(present_rect_at(1, 1U).damage_pixels == kWidth);  // new surface: full
+    assert(present_rect_at(2, 2U).damage_pixels == kWidth);  // new surface: full
+    // Round robin: each surface missed two frames worth of content.
+    const std::array<std::pair<int32_t, size_t>, 8U> schedule{{{3, 0U},
+                                                               {4, 1U},
+                                                               {5, 2U},
+                                                               {6, 0U},
+                                                               // Skipping a surface and presenting the same one twice
+                                                               // keep the outstanding carry per surface.
+                                                               {7, 2U},
+                                                               {8, 2U},
+                                                               {9, 1U},
+                                                               {10, 0U}}};
+    for (const auto& [x, surface_index] : schedule) {
+        const auto result = present_rect_at(x, surface_index);
+        assert(result.status == graphics::AppSurfaceStatus::kOk);
+        assert(result.damage_pixels < kWidth);
+        expect_rect_only_at(surface_index, x);
+    }
+
+    // A fourth, untracked surface still renders correctly with a full redraw
+    // and does not disturb the tracked rotation.
+    std::array<uint8_t, kWidth * 3U> extra_storage{};
+    auto extra_surface = BgrSurface(extra_storage, kWidth, 1U);
+    ++revision;
+    SceneMessage patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, revision - 1U, revision, 1U, 0U);
+    auto rect = Rect(0U, 11, 0, 1, 1, 0xff0000U);
+    rect.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
+    patch.Add(rect);
+    assert(fixture.Apply(patch.Finish(), static_cast<int32_t>(kWidth), 1) == MICROPIXEL_STATUS_OK);
+    const auto extra = fixture.compositor.PresentScene(fixture.scene, extra_surface, nullptr, nullptr);
+    assert(extra.status == graphics::AppSurfaceStatus::kOk && extra.damage_pixels == kWidth);
+    for (int32_t column = 0; column < static_cast<int32_t>(kWidth); ++column) {
+        const size_t offset = static_cast<size_t>(column) * 3U;
+        assert(extra_storage[offset + 2U] == (column == 11 ? 255U : 0U));
+    }
+    const auto back_on_track = present_rect_at(12, 1U);
+    assert(back_on_track.status == graphics::AppSurfaceStatus::kOk && back_on_track.damage_pixels < kWidth);
+    expect_rect_only_at(1U, 12);
 }
 
 void NestedContainersPropagateVisualStateWithOnePatch() {
@@ -522,6 +656,152 @@ void LayerShakeUsesSnapshotButContentChangesRemainVisible() {
     assert(storage[(1U * 8U + 4U) * 3U + 2U] == 255U);
 }
 
+// A layer with a constant non-zero translation (a viewport offset) must not be
+// captured while nothing inside it moves; otherwise a static frame followed by
+// a small in-layer change would alternate between a whole-layer capture and a
+// whole-layer redraw.
+void ConstantLayerTranslationDoesNotToggleSnapshot() {
+    Fixture fixture;
+    std::array<uint8_t, 8U * 4U * 3U> storage{};
+    std::array<uint8_t, 8U * 4U * 3U> cache_storage{};
+    auto surface = BgrSurface(storage, 8U, 4U);
+    auto cache = BgrSurface(cache_storage, 8U, 4U);
+    fixture.compositor.SetLayerCache(cache);
+
+    constexpr uint32_t kFullLayerMask =
+        MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP | MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION |
+        MICROPIXEL_GRAPHICS_SCENE_LAYER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER;
+    SceneMessage keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 1U, 0U, 1U, 2U, 0U, 1U);
+    keyframe.Add(Background(0U));
+    keyframe.Add(Layer(2, kFullLayerMask));
+    keyframe.Add(Rect(0U, 1, 1, 1, 1, 0x00ff00U, 1U));
+    keyframe.Add(Rect(1U, 6, 0, 1, 1, 0x0000ffU));
+    assert(fixture.Apply(keyframe.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    assert(fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr).status ==
+           graphics::AppSurfaceStatus::kOk);
+    // The in-layer rect lands at its translated position.
+    assert(storage[(1U * 8U + 3U) * 3U + 1U] == 255U);
+
+    // An out-of-layer change leaves the layer untouched: no capture.
+    SceneMessage outside(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 1U, 2U, 2U, 0U, 1U);
+    auto outside_rect = Rect(1U, 6, 0, 1, 1, 0xff0000U);
+    outside_rect.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE;
+    outside.Add(outside_rect);
+    assert(fixture.Apply(outside.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto static_layer = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(static_layer.status == graphics::AppSurfaceStatus::kOk);
+    assert(static_layer.damage_pixels == 1U && !static_layer.layer_snapshot_used);
+
+    // A small in-layer change damages only that rect, not the whole layer.
+    SceneMessage inside(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 2U, 3U, 2U, 0U, 1U);
+    auto inside_rect = Rect(0U, 1, 1, 1, 1, 0xff0000U, 1U);
+    inside_rect.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE;
+    inside.Add(inside_rect);
+    assert(fixture.Apply(inside.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto changed = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(changed.status == graphics::AppSurfaceStatus::kOk);
+    assert(changed.damage_pixels == 1U && !changed.layer_snapshot_used);
+    assert(storage[(1U * 8U + 3U) * 3U + 1U] == 0U);
+    assert(storage[(1U * 8U + 3U) * 3U + 2U] == 255U);
+
+    // Moving the layer itself with unchanged content still uses the snapshot.
+    SceneMessage shake(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 3U, 4U, 2U, 0U, 1U);
+    shake.Add(Layer(3, MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION));
+    assert(fixture.Apply(shake.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto translated = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(translated.status == graphics::AppSurfaceStatus::kOk);
+    assert(translated.layer_snapshot_used && translated.draw_operations_replayed == 1U);
+    assert(storage[(1U * 8U + 3U) * 3U + 2U] == 0U);
+    assert(storage[(1U * 8U + 4U) * 3U + 2U] == 255U);
+}
+
+// Graphics 1.4: a root container flagged CACHED_CONTENT is the Layer even when
+// it is not the first container, and the first container then behaves like an
+// ordinary container (its translation replays instead of snapshotting).
+void CachedContentContainerBecomesLayer() {
+    Fixture fixture;
+    std::array<uint8_t, 8U * 4U * 3U> storage{};
+    std::array<uint8_t, 8U * 4U * 3U> cache_storage{};
+    auto surface = BgrSurface(storage, 8U, 4U);
+    auto cache = BgrSurface(cache_storage, 8U, 4U);
+    fixture.compositor.SetLayerCache(cache);
+
+    const auto container = [](uint16_t id, int32_t clip_y, int32_t translate_x, bool cached, uint32_t mask) {
+        return micropixel_graphics_scene_container_record_t{
+            .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_CONTAINER,
+                       .size = sizeof(micropixel_graphics_scene_container_record_t)},
+            .container_id = id,
+            .parent_container_id = 0U,
+            .property_mask = mask,
+            .clip_x = 0,
+            .clip_y = clip_y,
+            .width = 4,
+            .height = 2,
+            .translate_x = translate_x,
+            .translate_y = 0,
+            .z_order = 0,
+            .opacity = 255U,
+            .visible = 1U,
+            .sibling_order = id,
+            .flags = static_cast<uint16_t>(cached ? MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT : 0U),
+        };
+    };
+    constexpr uint32_t kMaskWithFlags = kContainerMask | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
+    constexpr uint16_t kMinor = 4U;
+    const auto green_at = [&](uint32_t x, uint32_t y) { return storage[(y * 8U + x) * 3U + 1U]; };
+    const auto blue_at = [&](uint32_t x, uint32_t y) { return storage[(y * 8U + x) * 3U + 0U]; };
+
+    SceneMessage keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 1U, 0U, 1U, 2U, 0U, 2U, kMinor);
+    keyframe.Add(Background(0U));
+    keyframe.Add(container(1U, 0, 0, false, kMaskWithFlags));
+    keyframe.Add(container(2U, 2, 0, true, kMaskWithFlags));
+    keyframe.Add(Rect(0U, 1, 0, 1, 1, 0x00ff00U));
+    keyframe.Add(Rect(1U, 1, 2, 1, 1, 0x0000ffU));
+    keyframe.Add(Link(0U, 1U, 1U));
+    keyframe.Add(Link(1U, 2U, 1U));
+    assert(fixture.Apply(keyframe.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    assert(fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr).status ==
+           graphics::AppSurfaceStatus::kOk);
+    assert(green_at(1U, 0U) == 255U && blue_at(1U, 2U) == 255U);
+
+    // Moving the cached container with unchanged content snapshots it.
+    SceneMessage move_cached(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 1U, 2U, 2U, 0U, 2U, kMinor);
+    move_cached.Add(container(2U, 2, 2, true, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
+    assert(fixture.Apply(move_cached.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto cached_moved = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(cached_moved.status == graphics::AppSurfaceStatus::kOk);
+    assert(cached_moved.layer_snapshot_used);
+    assert(blue_at(1U, 2U) == 0U && blue_at(3U, 2U) == 255U);
+    assert(green_at(1U, 0U) == 255U);
+
+    // Moving the first (unflagged) container is an ordinary replay of its
+    // rect; the untouched Layer stays on its snapshot.
+    SceneMessage move_plain(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 2U, 3U, 2U, 0U, 2U, kMinor);
+    move_plain.Add(container(1U, 0, 2, false, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
+    assert(fixture.Apply(move_plain.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto plain_moved = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(plain_moved.status == graphics::AppSurfaceStatus::kOk);
+    assert(plain_moved.draw_operations_replayed >= 1U && plain_moved.damage_pixels == 2U);
+    assert(green_at(1U, 0U) == 0U && green_at(3U, 0U) == 255U);
+    assert(blue_at(3U, 2U) == 255U);
+
+    // Dropping the flag hands the Layer role back to container #1; the
+    // switch must not leave stale in-layer marks on the patch path.
+    SceneMessage unflag(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 3U, 4U, 2U, 0U, 2U, kMinor);
+    unflag.Add(container(2U, 2, 2, false, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS));
+    assert(fixture.Apply(unflag.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto unflagged = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(unflagged.status == graphics::AppSurfaceStatus::kOk);
+    assert(!unflagged.incremental_normalization && !unflagged.layer_snapshot_used);
+    SceneMessage move_first(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 4U, 5U, 2U, 0U, 2U, kMinor);
+    move_first.Add(container(1U, 0, 4, false, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
+    assert(fixture.Apply(move_first.Finish(), 8, 4) == MICROPIXEL_STATUS_OK);
+    const auto first_moved = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(first_moved.status == graphics::AppSurfaceStatus::kOk);
+    assert(first_moved.layer_snapshot_used);
+    assert(green_at(3U, 0U) == 0U && green_at(5U, 0U) == 255U);
+}
+
 void DamageRegionsMergeWithoutLosingSourceIdentity() {
     graphics::DamageRegionSet<4U> regions;
     const uint8_t source{};
@@ -576,6 +856,81 @@ void DamageRegionCapacityUsesTheCheapestSafeUnion() {
     assert(regions[1U].source == &other_source);
 }
 
+// Renderers visit each operation once per region, so two regions must never
+// cover the same pixel: overlapping rectangles collapse even when the policy
+// would reject their union as overdraw, and a capacity merge re-establishes the
+// invariant when the union grows into a third region.
+void DamageRegionsNeverOverlap() {
+    graphics::DamageRegionSet<4U> regions;
+    const uint8_t source{};
+    // Diagonal overlap: union adds 2*9*9-... corner pixels beyond the policy.
+    assert(regions.Add(&source, {.x = 0U, .y = 0U, .width = 10U, .height = 10U}, kNoOverdraw));
+    assert(regions.Add(&source, {.x = 9U, .y = 9U, .width = 10U, .height = 10U}, kNoOverdraw));
+    assert(regions.Size() == 1U && regions[0U].rect.width == 19U && regions[0U].rect.height == 19U);
+
+    // Capacity merges pick the cheapest union, which can grow into a region it
+    // did not touch before. Stress a tiny set with a deterministic sequence and
+    // check the invariant after every insertion.
+    graphics::DamageRegionSet<3U> capacity;
+    uint32_t state = 0x2545F491U;
+    auto next = [&state](uint32_t modulus) {
+        state = state * 1664525U + 1013904223U;
+        return (state >> 8U) % modulus;
+    };
+    for (uint32_t round = 0U; round < 400U; ++round) {
+        const graphics::DamageRect rect{
+            .x = next(40U), .y = next(40U), .width = 1U + next(12U), .height = 1U + next(12U)};
+        assert(capacity.Add(&source, rect, kNoOverdraw));
+        for (size_t first = 0U; first < capacity.Size(); ++first) {
+            for (size_t second = first + 1U; second < capacity.Size(); ++second) {
+                const graphics::DamageRect& a = capacity[first].rect;
+                const graphics::DamageRect& b = capacity[second].rect;
+                const bool overlap =
+                    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+                assert(!overlap);
+            }
+        }
+        if ((round % 50U) == 49U) {
+            capacity.Clear();
+        }
+    }
+}
+
+// A translucent operation spanning two damage regions must be blended exactly
+// once per pixel regardless of the region visiting order.
+void TranslucentOperationAcrossRegionsBlendsOnce() {
+    Fixture fixture;
+    std::array<uint8_t, 8U * 2U * 3U> storage{};
+    auto surface = BgrSurface(storage, 8U, 2U);
+    SceneMessage keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 1U, 0U, 1U, 3U, 0U);
+    keyframe.Add(Background(0U));
+    keyframe.Add(Rect(0U, 0, 0, 1, 1, 0xff0000U));
+    keyframe.Add(Rect(1U, 7, 0, 1, 1, 0xff0000U));
+    auto translucent = Rect(2U, 0, 0, 8, 2, 0xffffffU);
+    translucent.opacity = 128U;
+    keyframe.Add(translucent);
+    assert(fixture.Apply(keyframe.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+    assert(fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr).status ==
+           graphics::AppSurfaceStatus::kOk);
+    const uint8_t expected_grey = storage[(1U * 8U + 3U) * 3U];
+
+    // Move both small rects: two disjoint damage regions, each crossed by the
+    // translucent rect. Background pixels inside them must come out identical
+    // to untouched ones.
+    SceneMessage patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 1U, 1U, 2U, 3U, 0U);
+    auto left = Rect(0U, 1, 0, 1, 1, 0xff0000U);
+    left.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
+    auto right = Rect(1U, 6, 0, 1, 1, 0xff0000U);
+    right.node.property_mask = MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
+    patch.Add(left);
+    patch.Add(right);
+    assert(fixture.Apply(patch.Finish(), 8, 2) == MICROPIXEL_STATUS_OK);
+    const auto result = fixture.compositor.PresentScene(fixture.scene, surface, nullptr, nullptr);
+    assert(result.status == graphics::AppSurfaceStatus::kOk && result.damage_region_count == 2U);
+    assert(storage[(0U * 8U + 0U) * 3U] == expected_grey);  // vacated by the left rect
+    assert(storage[(0U * 8U + 7U) * 3U] == expected_grey);  // vacated by the right rect
+}
+
 void DamageRegionsRejectInvalidRectanglesAndResetMetrics() {
     graphics::DamageRegionSet<1U> regions;
     const uint8_t source{};
@@ -596,14 +951,20 @@ void DamageRegionsRejectInvalidRectanglesAndResetMetrics() {
 int main() {
     InitialSceneRendersTheWholePersistentSurface();
     SmallerKeyframeClearsRemovedNodes();
+    DoubleBufferedPresentsCarryDamageAcrossSurfaces();
+    TripleBufferedPresentsConvergeInAnyOrder();
     NestedContainersPropagateVisualStateWithOnePatch();
     SpriteBatchPatchDamagesOnlyOldTailAndNewHead();
     StreamingSurfaceDamageMapsToItsDestination();
     AtlasFramePatchDamagesOnlyTheSpriteBounds();
     LayerShakeUsesSnapshotButContentChangesRemainVisible();
+    ConstantLayerTranslationDoesNotToggleSnapshot();
+    CachedContentContainerBecomesLayer();
     DamageRegionsMergeWithoutLosingSourceIdentity();
     DamageRegionsMergeLargeOverlapButNotUnrelatedSourcesAtCapacity();
     DamageRegionCapacityUsesTheCheapestSafeUnion();
+    DamageRegionsNeverOverlap();
+    TranslucentOperationAcrossRegionsBlendsOnce();
     DamageRegionsRejectInvalidRectanglesAndResetMetrics();
     return 0;
 }

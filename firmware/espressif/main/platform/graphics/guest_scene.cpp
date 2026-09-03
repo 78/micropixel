@@ -24,6 +24,10 @@ constexpr uint32_t kContainerMask =
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE;
+// Graphics 1.4 adds the FLAGS property; older Guests must not set it and must
+// leave the (then reserved) flags field zero.
+constexpr uint32_t kContainerMask14 = kContainerMask | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
+constexpr uint16_t kKnownContainerFlags = MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT;
 constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY;
@@ -159,6 +163,8 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     const bool container_protocol = header.interface_minor >= 2U;
+    const bool container_flags_protocol = header.interface_minor >= 4U;
+    const uint32_t container_mask = container_flags_protocol ? kContainerMask14 : kContainerMask;
     const uint16_t max_containers =
         container_protocol ? MICROPIXEL_GRAPHICS_MAX_CONTAINERS : MICROPIXEL_GRAPHICS_MAX_LAYERS;
     if (header.container_count > max_containers) {
@@ -279,12 +285,22 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             if (!container_protocol || record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
                 value.container_id == 0U || value.container_id > scratch_container_count ||
                 value.parent_container_id > scratch_container_count ||
-                value.parent_container_id == value.container_id || value.reserved0 != 0U ||
-                container_seen[value.container_id] || value.property_mask == 0U ||
-                (value.property_mask & ~kContainerMask) != 0U || (keyframe && value.property_mask != kContainerMask)) {
+                value.parent_container_id == value.container_id || (value.flags & ~kKnownContainerFlags) != 0U ||
+                (!container_flags_protocol && value.flags != 0U) || container_seen[value.container_id] ||
+                value.property_mask == 0U || (value.property_mask & ~container_mask) != 0U ||
+                (keyframe && value.property_mask != container_mask)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
             GuestSceneContainer& container = scratch_containers_[value.container_id];
+            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS) != 0U) {
+                container.cached_content =
+                    (value.flags & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT) != 0U;
+            } else if (((value.flags & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT) != 0U) !=
+                       container.cached_content) {
+                // Like sibling_order, a patch that does not claim the property
+                // must echo the retained value.
+                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+            }
             if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE) != 0U) {
                 container.parent_container_id = value.parent_container_id;
                 container.sibling_order = value.sibling_order;

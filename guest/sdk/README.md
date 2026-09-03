@@ -394,6 +394,29 @@ micropixel::Assert(scene.Update([&](auto& update) { game.SetTranslation(update, 
                    "scene update failed");
 ```
 
+滚动地图、tile 层这类“内容很少变、位置每帧变”的子树应放进带 `cache_content = true` 的 Container：
+
+```cpp
+auto viewport = scene.CreateContainer({.clip = view_bounds});
+auto terrain = viewport.CreateContainer({.clip = view_bounds, .cache_content = true});
+auto actors = viewport.CreateContainer({.clip = view_bounds});
+// 每帧只平移两个 Container；terrain 子树本身不变时 Host 只从缓存复制。
+scene.Update([&](auto& update) {
+    terrain.SetTranslation(update, {-camera_x, 0});
+    actors.SetTranslation(update, {-camera_x, 0});
+});
+```
+
+`cache_content` 是渲染提示：Host 可以把该子树按局部坐标栅格化到保留缓存，平移只复制缓存，子树内容
+改变时才重绘对应局部区域。缓存按不透明层合成，子树没有覆盖的像素显示 Scene 背景色，所以绘制顺序在
+它之下的对象不会透出；会移动的角色、粒子应放在同级的普通 Container 里而不是缓存子树中。给它一个显式
+clip，clip 就是缓存范围。`ContainerNode::SetCacheContent()` 可以随时切换该提示，Host 忽略该提示时绘制结果
+不变。当前 Host 接受并校验该提示但尚未启用局部坐标缓存层：实测 tile 卷屏每帧真正变化的像素远少于整个视口，
+现有 damage 路径已经更快，见 `docs/development/graphics-performance.zh-CN.md` 第 8 节。Host 目前用它选择
+Layer 快照容器：第一个直接挂在 Scene 根上、带 `cache_content` 的 Container 成为 Layer；当它整体平移而子树
+内容不变时（Snake 的震动），Host 捕获一次快照并复制，而不是重放子树。没有这样的 Container 时，第一个
+Container 保持这一角色。
+
 Scene 同时最多存在一个，Container 和对象容量由 `RendererInfo` 给出。应用不能手动提交 wire record、
 generation 或 revision。`SceneUpdate` 析构会放弃未提交的属性事务，不产生半更新。
 属性 dirty mask 表示相对于 `BeginUpdate()` 的净差量，而不是 setter 调用历史；例如先隐藏整个 Batch、再把

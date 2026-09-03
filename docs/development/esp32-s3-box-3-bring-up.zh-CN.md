@@ -135,7 +135,9 @@ RGB888→RGB565 颜色转换，但仍要在 telemetry 中单独计数，不能�
 
 透明资源不能无损表示为普通 RGB565。第一阶段保持以下规则：
 
-- opaque raw asset 在打包期直接生成 RGB565，运行时可从 Bundle mapping 零拷贝读取；
+- opaque raw asset 在打包期直接生成 RGB565；运行时 Host 在加载时把它从 Bundle 的 flash 映射
+  暂存到 PSRAM（PSRAM 不足才退回 flash 映射），避免绘制热路径反复经过 flash cache，见
+  [`graphics-performance.zh-CN.md`](graphics-performance.zh-CN.md) 第 7 节；
 - JPEG 直接请求 decoder 输出 RGB565，不先生成 RGB888；
 - opaque PNG 优先在打包期转成 raw RGB565；保留压缩 PNG 时只在加载时做一次 RGB→RGB565 展开；
 - 含 alpha PNG 保持 BGRA8888，绘制时直接 blend 到 RGB565 destination，不产生 RGB888 中间整帧；

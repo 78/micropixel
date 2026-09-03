@@ -158,6 +158,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
 
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
         state_.ui.BindBackgroundExecutor(executor);
+        state_.guest_graphics.BindBackgroundExecutor(executor);
         wifi_.BindBackgroundExecutor(executor);
     }
 

@@ -32,6 +32,16 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer
 
 void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
     uint64_t delta_us = tick.delta().count_microseconds();
+    if (benchmark_) {
+        // Timer delivery jitter: a 60 Hz ticker should never be later than
+        // one and a half periods unless the Guest task was held somewhere.
+        if (delta_us > bench_.tick_max_us) {
+            bench_.tick_max_us = delta_us;
+        }
+        if (delta_us > kRenderTargetPeriodUs + kRenderTargetPeriodUs / 2U) {
+            ++bench_.late_ticks;
+        }
+    }
     AdvanceAudio(delta_us);
     if (screen_ != Screen::kPlaying) {
         // A collision can enter GameOver while a Surface shake is active.
@@ -91,6 +101,9 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
                 app_.log().Info("snake: dropped coalesced movement debt After a slow frame");
             }
         }
+        if (benchmark_) {
+            BenchmarkSteer();
+        }
         Cell previous_head = model_.body()[0];
         uint32_t previous_length = model_.length();
         MoveOutcome outcome = model_.Move();
@@ -124,7 +137,12 @@ void SnakeGame::OnTimer(const micropixel::TimerEvent& tick) {
             PlayLevelUpSound();
             app_.log().Info("snake: M18 level theme and upgrade feedback advanced");
         }
-        if (outcome.collision) {
+        if (outcome.collision && benchmark_) {
+            // Keep the board animating: restart in place instead of showing
+            // the GameOver screen.
+            ++bench_.deaths;
+            StartGame();
+        } else if (outcome.collision) {
             PersistBestScore();
             StopAudio();
             PlayDieSound();
@@ -242,6 +260,111 @@ void SnakeGame::ResetGameModel() {
     const uint32_t seed = app_.random().U32();
     model_.Reset(seed);
     effect_random_ = seed ^ 0xa5a5a5a5U;
+}
+
+void SnakeGame::EnableBenchmark(bool bgm_enabled) {
+    benchmark_ = true;
+    bgm_enabled_ = bgm_enabled;
+    bench_ = {};
+    StartGame();
+    app_.log().Info(bgm_enabled ? "snake-bench: enabled (autopilot, restart on collision)"
+                                : "snake-bench: enabled (autopilot, restart on collision, no BGM)");
+}
+
+bool SnakeGame::CellBlocked(Cell cell) const {
+    if (cell.x < 0 || cell.y < 0 || cell.x >= static_cast<int16_t>(kColumns) || cell.y >= static_cast<int16_t>(kRows)) {
+        return true;
+    }
+    const Cell* body = model_.body();
+    // The tail cell is vacated by the same Move, so it is a legal target.
+    const uint32_t occupied = model_.length() > 1U ? model_.length() - 1U : model_.length();
+    for (uint32_t index = 0U; index < occupied; ++index) {
+        if (SameCell(cell, body[index])) {
+            return true;
+        }
+    }
+    const Cell* obstacles = model_.obstacles();
+    for (uint32_t index = 0U; index < model_.obstacle_count(); ++index) {
+        if (SameCell(cell, obstacles[index])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SnakeGame::BenchmarkSteer() {
+    // Greedy autopilot: head for the food along the longer axis first and
+    // fall back to any non-lethal turn. Dead ends still happen; they end in a
+    // collision that the benchmark turns into an immediate restart.
+    const Cell head = model_.body()[0];
+    const Cell food = model_.food().cell;
+    const int32_t dx = static_cast<int32_t>(food.x) - head.x;
+    const int32_t dy = static_cast<int32_t>(food.y) - head.y;
+    const Direction horizontal = dx > 0 ? Direction::kRight : Direction::kLeft;
+    const Direction vertical = dy > 0 ? Direction::kDown : Direction::kUp;
+    Direction candidates[4];
+    if (AbsoluteValue(dx) >= AbsoluteValue(dy)) {
+        candidates[0] = horizontal;
+        candidates[1] = vertical;
+    } else {
+        candidates[0] = vertical;
+        candidates[1] = horizontal;
+    }
+    candidates[2] = dx > 0 ? Direction::kLeft : Direction::kRight;
+    candidates[3] = dy > 0 ? Direction::kUp : Direction::kDown;
+    const Direction current = model_.direction();
+    for (Direction candidate : candidates) {
+        if (Opposite(current, candidate) || CellBlocked(StepCell(head, candidate))) {
+            continue;
+        }
+        if (candidate != current) {
+            (void)model_.RequestDirection(candidate);
+        }
+        return;
+    }
+}
+
+void SnakeGame::BenchmarkRecordRender(uint64_t before_us, uint64_t after_us) {
+    if (bench_.window_start_us == 0U) {
+        bench_.window_start_us = before_us;
+    }
+    const uint64_t render_us = after_us - before_us;
+    bench_.render_us_accum += render_us;
+    if (render_us > bench_.render_max_us) {
+        bench_.render_max_us = render_us;
+    }
+    if (++bench_.frames < 120U) {
+        return;
+    }
+    const uint64_t elapsed_us = after_us - bench_.window_start_us;
+    micropixel::FixedString<192U> msg;
+    msg.Append("snake-bench: frames=");
+    msg.AppendUint(bench_.frames);
+    msg.Append(" elapsed_ms=");
+    msg.AppendUint(static_cast<uint32_t>(elapsed_us / 1000U));
+    msg.Append(" fps_x100=");
+    msg.AppendUint(elapsed_us == 0U ? 0U : static_cast<uint32_t>(bench_.frames * 100000000ULL / elapsed_us));
+    msg.Append(" render_avg_us=");
+    msg.AppendUint(static_cast<uint32_t>(bench_.render_us_accum / bench_.frames));
+    msg.Append(" render_max_us=");
+    msg.AppendUint(static_cast<uint32_t>(bench_.render_max_us));
+    msg.Append(" tick_max_us=");
+    msg.AppendUint(static_cast<uint32_t>(bench_.tick_max_us));
+    msg.Append(" late_ticks=");
+    msg.AppendUint(bench_.late_ticks);
+    msg.Append(" deaths=");
+    msg.AppendUint(bench_.deaths);
+    msg.Append(" len=");
+    msg.AppendUint(model_.length());
+    msg.Append(" level=");
+    msg.AppendUint(model_.level());
+    app_.log().Info(msg.c_str());
+    bench_.frames = 0U;
+    bench_.window_start_us = after_us;
+    bench_.render_us_accum = 0U;
+    bench_.render_max_us = 0U;
+    bench_.tick_max_us = 0U;
+    bench_.late_ticks = 0U;
 }
 
 }  // namespace snake

@@ -10,7 +10,7 @@
 #define MICROPIXEL_ABI_MAX_LOG_BYTES 1024U
 #define MICROPIXEL_MAX_TOUCH_POINTS 5U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
-#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 3U
+#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 4U
 #define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
 #define MICROPIXEL_GRAPHICS_SCENE_MAGIC 0x5347504dU
@@ -528,7 +528,21 @@ typedef enum micropixel_graphics_scene_container_property {
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE = 1U << 2U,
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER = 1U << 3U,
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE = 1U << 4U,
+    /* Graphics 1.4+. Covers micropixel_graphics_scene_container_record_t::flags. */
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS = 1U << 5U,
 } micropixel_graphics_scene_container_property_t;
+
+/* Graphics 1.4+. Rendering hints for a container subtree; they never change
+ * what is drawn, only how the Host may retain it. */
+typedef enum micropixel_graphics_scene_container_flag {
+    /* The subtree changes rarely relative to how often its translation
+     * changes (a scrolling map). The Host may rasterize it once into a retained
+     * cache in the container's local coordinates and re-composite that cache on
+     * every translation. The cache is composited as an opaque layer: pixels not
+     * covered by a descendant show the Scene background color, so descendants
+     * below this container in draw order never show through it. */
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT = 1U << 0U,
+} micropixel_graphics_scene_container_flag_t;
 
 typedef enum micropixel_graphics_scene_background_property {
     MICROPIXEL_GRAPHICS_SCENE_BACKGROUND_COLOR = 1U << 0U,
@@ -894,7 +908,10 @@ typedef struct micropixel_graphics_scene_container_record {
     uint8_t opacity;
     uint8_t visible;
     uint16_t sibling_order;
-    uint16_t reserved0;
+    /* Graphics 1.4+: micropixel_graphics_scene_container_flag_t bits, written
+     * under MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS. Was reserved0 (must be 0)
+     * before 1.4, so the record size and older messages are unchanged. */
+    uint16_t flags;
 } micropixel_graphics_scene_container_record_t;
 
 /* Graphics 1.2+. One keyframe record is required for every drawable node. */

@@ -85,6 +85,16 @@ Graphics 1.3 增加 `ROUNDED_RECT` drawable，携带填充色、描边色、圆�
 RGB565 像素混合，Surface 本身仍保持不透明 RGB565。半径和描边宽度超过短边一半时按短边一半截断。
 旧版 `RECT` record 的大小和含义不变。
 
+Graphics 1.4 把 `CONTAINER` record 末尾原本必须为零的 `reserved0` 改为 `flags`，并新增
+`CONTAINER_FLAGS` property 位来携带它；record 大小不变。目前唯一的 flag 是 `CACHED_CONTENT`：Guest
+声明该子树的内容变化远少于平移变化（滚动地图、tile 层），Host 可以把子树按 container 局部坐标栅格化到
+保留缓存，之后每次平移只从缓存复制，不再重放子树；内容变化仍按局部矩形重绘缓存。缓存按不透明层
+合成，未被后代覆盖的像素显示 Scene 背景色，因此绘制顺序在它之下的节点不会透出。flag 只是提示，不改变
+绘制结果；Host 也可以忽略它。当前 Host 用它选择 Layer 快照容器：第一个 `parent_container_id == 0` 且带
+该 flag 的 container 成为 Layer，否则回退到 container 1。校验规则：minor < 4 的消息仍要求该字段为 0 且不得声明 `CONTAINER_FLAGS`；
+1.4 keyframe 的 container mask 必须包含 `CONTAINER_FLAGS`；未声明该 property 的 patch 必须回显当前值，
+与 `sibling_order` 相同；未知 flag 位被拒绝。
+
 Graphics/Resource 的 `MICROPIXEL_PIXEL_FORMAT_RGB565` 值为 `3`，表示内存中的 canonical little-endian
 RGB565 word：bit 15..11 为 R、10..5 为 G、4..0 为 B；紧凑行宽为 `width * 2`。它与 panel wire byte
 order 无关，末端 transport 若需要高字节先发，必须在 panel 层单独换序。BGR888、BGRA8888 的既有值和

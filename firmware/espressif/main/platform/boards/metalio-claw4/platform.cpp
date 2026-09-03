@@ -9,7 +9,6 @@
 
 #include "device/contracts/graphics.hpp"
 #include "draw/lv_draw_buf_private.h"
-#include "esp_async_color_convert.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -44,6 +43,7 @@
 #include "platform/boards/metalio-claw4/tca9555_power_key.hpp"
 #include "platform/buses/i2c_executor.hpp"
 #include "platform/controllers/brightness_curve.hpp"
+#include "platform/graphics/dma2d_copy_engine.hpp"
 #include "platform/input/gt911_input.hpp"
 #include "platform/lvgl/display/jpeg_cover_decoder.hpp"
 #include "platform/lvgl/display/png_cover_decoder.hpp"
@@ -75,11 +75,14 @@ void* AllocateImageBuffer(size_t size, lv_color_format_t) {
 
 void FreeImageBuffer(void* buffer) { heap_caps_free(buffer); }
 
-async_color_convert_handle_t& LvglBufferCopyDma2dClient() {
-    // LVGL's draw-buffer copy callback has no context parameter. This client is
-    // therefore process-lifetime state, just like LVGL's global handlers.
-    static async_color_convert_handle_t client{};
-    return client;
+graphics::Dma2dCopyEngine& LvglBufferCopyEngine() {
+    // LVGL's draw-buffer copy callback has no context parameter. This engine is
+    // therefore process-lifetime state, just like LVGL's global handlers. It is
+    // only driven from the LVGL task, which satisfies the engine's single-owner
+    // contract. Unlike esp_async_color_convert it synchronizes only the rows a
+    // copy touches instead of both whole frame buffers (~3 MB per call).
+    static graphics::Dma2dCopyEngine engine{};
+    return engine;
 }
 
 void CopyImageBuffer(lv_draw_buf_t* destination, const lv_area_t* destination_area, const lv_draw_buf_t* source,
@@ -111,29 +114,47 @@ void CopyImageBuffer(lv_draw_buf_t* destination, const lv_area_t* destination_ar
         return;
     }
 
-    async_color_convert_handle_t dma2d = LvglBufferCopyDma2dClient();
+    graphics::Dma2dCopyEngine& dma2d = LvglBufferCopyEngine();
     const uint32_t bits_per_pixel = lv_color_format_get_bpp(static_cast<lv_color_format_t>(destination->header.cf));
-    if (dma2d != nullptr && bits_per_pixel == 24U && destination->data != source->data &&
+    if (dma2d.Ready() && bits_per_pixel == 24U && destination->data != source->data &&
         destination->header.stride % 3U == 0U && source->header.stride % 3U == 0U) {
-        async_color_convert_request_t copy{};
-        copy.src_buffer = source->data;
-        copy.src_stride = source->header.stride / 3U;
-        copy.src_height = source->header.h;
-        copy.src_x = source_area == nullptr ? 0U : static_cast<uint32_t>(source_area->x1);
-        copy.src_y = source_area == nullptr ? 0U : static_cast<uint32_t>(source_area->y1);
-        copy.dst_buffer = destination->data;
-        copy.dst_stride = destination->header.stride / 3U;
-        copy.dst_height = destination->header.h;
-        copy.dst_x = destination_area == nullptr ? 0U : static_cast<uint32_t>(destination_area->x1);
-        copy.dst_y = destination_area == nullptr ? 0U : static_cast<uint32_t>(destination_area->y1);
-        copy.copy_width = static_cast<uint32_t>(line_width);
-        copy.copy_height = static_cast<uint32_t>(line_count);
-        copy.src_color_format = ESP_COLOR_FOURCC_BGR24;
-        copy.dst_color_format = ESP_COLOR_FOURCC_BGR24;
+        // Frame buffers handed to LVGL by the panel driver may not carry a
+        // data_size; the tight stride * height bound is exact for them.
+        const auto buffer_bytes = [](const lv_draw_buf_t* buffer) {
+            return buffer->data_size != 0U ? buffer->data_size : buffer->header.stride * buffer->header.h;
+        };
+        const graphics::ConstPixelSurface source_surface{
+            .pixels = source->data,
+            .size = buffer_bytes(source),
+            .width = source->header.w,
+            .height = source->header.h,
+            .stride = source->header.stride,
+            .format = graphics::SurfacePixelFormat::kBgr888,
+        };
+        const graphics::PixelSurface destination_surface{
+            .pixels = destination->data,
+            .size = buffer_bytes(destination),
+            .width = destination->header.w,
+            .height = destination->header.h,
+            .stride = destination->header.stride,
+            .format = graphics::SurfacePixelFormat::kBgr888,
+        };
+        const graphics::Dma2dCopyBlock copy{
+            .source = source_surface,
+            .source_rect = {.x = source_area == nullptr ? 0 : source_area->x1,
+                            .y = source_area == nullptr ? 0 : source_area->y1,
+                            .width = line_width,
+                            .height = line_count},
+            .destination = destination_surface,
+            .destination_rect = {.x = destination_area == nullptr ? 0 : destination_area->x1,
+                                 .y = destination_area == nullptr ? 0 : destination_area->y1,
+                                 .width = line_width,
+                                 .height = line_count},
+        };
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
         const int64_t copy_started_us = esp_timer_get_time();
 #endif
-        if (esp_color_convert_blocking(dma2d, &copy, -1) == ESP_OK) {
+        if (dma2d.Copy(copy)) {
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
             esp_lv_adapter_display_telemetry_record_framebuffer_dma2d(
                 static_cast<uint64_t>(line_width) * line_count,
@@ -178,12 +199,8 @@ esp_err_t InitializeLvgl(board_detail::MetalioClaw4BoardState& state) {
     if (status != ESP_OK) {
         return status;
     }
-    async_color_convert_config_t copy_config{};
-    copy_config.backlog = 1U;
-    copy_config.dma_burst_size = 128U;
-    status = esp_async_color_convert_install_dma2d(&copy_config, &LvglBufferCopyDma2dClient());
+    status = LvglBufferCopyEngine().Initialize();
     if (status != ESP_OK) {
-        LvglBufferCopyDma2dClient() = nullptr;
         ESP_LOGW(board_detail::kTag, "LVGL draw-buffer DMA2D copy unavailable; using CPU fallback: %s",
                  esp_err_to_name(status));
     }
@@ -480,6 +497,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
     }
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
         state_.ui.BindBackgroundExecutor(executor);
+        state_.guest_graphics.BindBackgroundExecutor(executor);
         wifi_.BindBackgroundExecutor(executor);
     }
 

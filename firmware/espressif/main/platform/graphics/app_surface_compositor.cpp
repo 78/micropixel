@@ -249,16 +249,34 @@ uint64_t DamagePixels(const DamageRegionSet<AppSurfaceCompositor::kMaxDamageRegi
     return pixels;
 }
 
-AppLayerState NormalizeLayer(const GuestScene& scene) {
+// Selects the container whose subtree the compositor may snapshot and move
+// as one Layer. A root-level container flagged CACHED_CONTENT (Graphics 1.4)
+// is the Guest's explicit choice; without one, the first container keeps the
+// historical role so pre-1.4 Guests behave as before.
+// Returns 0 when the scene has no containers.
+uint8_t SelectLayerContainer(const GuestScene& scene) {
     if (scene.ContainerCount() < 1U) {
+        return 0U;
+    }
+    for (uint16_t id = 1U; id <= scene.ContainerCount() && id <= UINT8_MAX; ++id) {
+        const GuestSceneContainer& container = scene.Containers()[id];
+        if (container.cached_content && container.parent_container_id == 0U) {
+            return static_cast<uint8_t>(id);
+        }
+    }
+    return 1U;
+}
+
+AppLayerState NormalizeLayer(const GuestScene& scene) {
+    const uint8_t layer_id = SelectLayerContainer(scene);
+    if (layer_id == 0U) {
         return {};
     }
-    const GuestSceneContainer& source = scene.Containers()[1];
+    const GuestSceneContainer& source = scene.Containers()[layer_id];
     return {
         .valid = source.parent_container_id == 0U && source.visible && source.opacity == 255U && source.width > 0 &&
                  source.height > 0,
-        .translation_active = source.translate_x != 0 || source.translate_y != 0,
-        .layer_id = 1U,
+        .layer_id = layer_id,
         .clip = {.x = source.clip_x, .y = source.clip_y, .width = source.width, .height = source.height},
         .translate_x = source.translate_x,
         .translate_y = source.translate_y,
@@ -550,6 +568,10 @@ bool AppSurfaceCompositor::RenderDamage(PixelSurface destination, const AppDrawO
                                         uint32_t operation_count, uint32_t background, const AppLayerState& layer,
                                         bool use_layer_snapshot, uint32_t& draw_operations_replayed) {
     draw_operations_replayed = 0U;
+    // Damage regions never overlap each other after merging, so visiting
+    // operations in z-order and touching every region per operation yields the
+    // same pixels as rendering region by region, while letting the pixel
+    // compositor batch consecutive copies across regions into one transaction.
     for (size_t damage_index = 0U; damage_index < damage_.Size(); ++damage_index) {
         const DamageRect damage = damage_[damage_index].rect;
         PixelSurface target = SubSurface(destination, damage);
@@ -562,14 +584,29 @@ bool AppSurfaceCompositor::RenderDamage(PixelSurface destination, const AppDrawO
         if (!pixels_.Fill(target, local_bounds, background, 255U)) {
             return false;
         }
-        const SurfaceRect global_bounds{.x = static_cast<int32_t>(damage.x),
-                                        .y = static_cast<int32_t>(damage.y),
-                                        .width = static_cast<int32_t>(damage.width),
-                                        .height = static_cast<int32_t>(damage.height)};
-        for (uint32_t index = 0U; index < operation_count; ++index) {
-            const AppDrawOperation& operation = operations[index];
-            if (!operation.visible || (use_layer_snapshot && operation.in_layer) ||
-                !Intersects(operation.bounds, global_bounds)) {
+    }
+    pixels_.BeginBatch();
+    const bool replayed =
+        ReplayOperations(destination, operations, operation_count, layer, use_layer_snapshot, draw_operations_replayed);
+    const bool flushed = pixels_.EndBatch();
+    return replayed && flushed;
+}
+
+bool AppSurfaceCompositor::ReplayOperations(PixelSurface destination, const AppDrawOperation* operations,
+                                            uint32_t operation_count, const AppLayerState& layer,
+                                            bool use_layer_snapshot, uint32_t& draw_operations_replayed) {
+    for (uint32_t index = 0U; index < operation_count; ++index) {
+        const AppDrawOperation& operation = operations[index];
+        if (!operation.visible || (use_layer_snapshot && operation.in_layer)) {
+            continue;
+        }
+        for (size_t damage_index = 0U; damage_index < damage_.Size(); ++damage_index) {
+            const DamageRect damage = damage_[damage_index].rect;
+            const SurfaceRect global_bounds{.x = static_cast<int32_t>(damage.x),
+                                            .y = static_cast<int32_t>(damage.y),
+                                            .width = static_cast<int32_t>(damage.width),
+                                            .height = static_cast<int32_t>(damage.height)};
+            if (!Intersects(operation.bounds, global_bounds)) {
                 continue;
             }
             const SurfaceRect draw_bounds = Intersection(operation.bounds, global_bounds);
@@ -603,49 +640,77 @@ bool AppSurfaceCompositor::RenderDamage(PixelSurface destination, const AppDrawO
                                        operation.font, operation.text, operation.text_length);
             }
             if (!rendered) {
+                render_failure_ = {
+                    .valid = true,
+                    .kind = operation.kind,
+                    .layer_snapshot = false,
+                    .destination = operation.destination,
+                    .draw_bounds = draw_bounds,
+                    .source = operation.source,
+                    .bitmap_format = operation.bitmap.pixel_format,
+                    .bitmap_width = operation.bitmap.width,
+                    .bitmap_height = operation.bitmap.height,
+                };
                 return false;
             }
             ++draw_operations_replayed;
         }
-        if (use_layer_snapshot) {
-            SurfaceRect translated_layer{};
-            if (!LayerRect(layer, translated_layer)) {
-                return false;
-            }
-            const SurfaceRect draw_bounds = Intersection(translated_layer, global_bounds);
-            if (draw_bounds.width > 0 && draw_bounds.height > 0) {
-                PixelSurface operation_target =
-                    SubSurface(destination, {.x = static_cast<uint32_t>(draw_bounds.x),
-                                             .y = static_cast<uint32_t>(draw_bounds.y),
-                                             .width = static_cast<uint32_t>(draw_bounds.width),
-                                             .height = static_cast<uint32_t>(draw_bounds.height)});
-                const SurfaceRect source{
-                    .x = layer.clip.x + draw_bounds.x - translated_layer.x,
-                    .y = layer.clip.y + draw_bounds.y - translated_layer.y,
-                    .width = draw_bounds.width,
-                    .height = draw_bounds.height,
-                };
-                const SurfaceRect local_destination{
-                    .x = 0,
-                    .y = 0,
-                    .width = draw_bounds.width,
-                    .height = draw_bounds.height,
-                };
-                if (!pixels_.Blit(layer_cache_.ReadOnly(), source, operation_target, local_destination, 255U)) {
-                    return false;
-                }
-                ++draw_operations_replayed;
-            }
+    }
+    if (!use_layer_snapshot) {
+        return true;
+    }
+    // The Layer snapshot is composed last, on top of every non-layer operation.
+    SurfaceRect translated_layer{};
+    if (!LayerRect(layer, translated_layer)) {
+        return false;
+    }
+    for (size_t damage_index = 0U; damage_index < damage_.Size(); ++damage_index) {
+        const DamageRect damage = damage_[damage_index].rect;
+        const SurfaceRect global_bounds{.x = static_cast<int32_t>(damage.x),
+                                        .y = static_cast<int32_t>(damage.y),
+                                        .width = static_cast<int32_t>(damage.width),
+                                        .height = static_cast<int32_t>(damage.height)};
+        const SurfaceRect draw_bounds = Intersection(translated_layer, global_bounds);
+        if (draw_bounds.width <= 0 || draw_bounds.height <= 0) {
+            continue;
         }
+        PixelSurface operation_target = SubSurface(destination, {.x = static_cast<uint32_t>(draw_bounds.x),
+                                                                 .y = static_cast<uint32_t>(draw_bounds.y),
+                                                                 .width = static_cast<uint32_t>(draw_bounds.width),
+                                                                 .height = static_cast<uint32_t>(draw_bounds.height)});
+        const SurfaceRect source{
+            .x = layer.clip.x + draw_bounds.x - translated_layer.x,
+            .y = layer.clip.y + draw_bounds.y - translated_layer.y,
+            .width = draw_bounds.width,
+            .height = draw_bounds.height,
+        };
+        const SurfaceRect local_destination{
+            .x = 0,
+            .y = 0,
+            .width = draw_bounds.width,
+            .height = draw_bounds.height,
+        };
+        if (!pixels_.Blit(layer_cache_.ReadOnly(), source, operation_target, local_destination, 255U)) {
+            render_failure_ = {
+                .valid = true,
+                .kind = AppDrawOperationKind::kTexture,
+                .layer_snapshot = true,
+                .destination = translated_layer,
+                .draw_bounds = draw_bounds,
+                .source = source,
+            };
+            return false;
+        }
+        ++draw_operations_replayed;
     }
     return true;
 }
 
-bool AppSurfaceCompositor::CaptureLayer(PixelSurface destination, const AppLayerState& layer) {
-    SurfaceRect source{};
-    return ValidDestination(layer_cache_) && layer_cache_.width == destination.width &&
-           layer_cache_.height == destination.height && layer_cache_.format == destination.format &&
-           LayerRect(layer, source) && pixels_.Blit(destination.ReadOnly(), source, layer_cache_, layer.clip, 255U);
+bool AppSurfaceCompositor::CaptureLayer(PixelSurface source, const AppLayerState& layer) {
+    SurfaceRect rect{};
+    return ValidDestination(layer_cache_) && layer_cache_.width == source.width &&
+           layer_cache_.height == source.height && layer_cache_.format == source.format && LayerRect(layer, rect) &&
+           pixels_.Blit(source.ReadOnly(), rect, layer_cache_, layer.clip, 255U);
 }
 
 void AppSurfaceCompositor::SetLayerCache(PixelSurface cache) {
@@ -653,22 +718,92 @@ void AppSurfaceCompositor::SetLayerCache(PixelSurface cache) {
     layer_snapshot_active_ = false;
 }
 
-bool AppSurfaceCompositor::SameDestination(PixelSurface destination) const {
-    return destination_pixels_ == destination.pixels && destination_size_ == destination.size &&
-           destination_width_ == destination.width && destination_height_ == destination.height &&
-           destination_stride_ == destination.stride && destination_format_ == destination.format &&
-           destination_origin_x_ == destination.origin_x && destination_origin_y_ == destination.origin_y;
+namespace {
+
+bool SameSurface(const PixelSurface& left, const PixelSurface& right) {
+    return left.pixels == right.pixels && left.size == right.size && left.width == right.width &&
+           left.height == right.height && left.stride == right.stride && left.format == right.format &&
+           left.origin_x == right.origin_x && left.origin_y == right.origin_y;
 }
 
-void AppSurfaceCompositor::RememberDestination(PixelSurface destination) {
-    destination_pixels_ = destination.pixels;
-    destination_size_ = destination.size;
-    destination_width_ = destination.width;
-    destination_height_ = destination.height;
-    destination_stride_ = destination.stride;
-    destination_format_ = destination.format;
-    destination_origin_x_ = destination.origin_x;
-    destination_origin_y_ = destination.origin_y;
+// Surfaces rotating through the compositor must be interchangeable targets.
+bool CompatibleSurfaces(const PixelSurface& left, const PixelSurface& right) {
+    return left.width == right.width && left.height == right.height && left.stride == right.stride &&
+           left.format == right.format && left.origin_x == right.origin_x && left.origin_y == right.origin_y;
+}
+
+}  // namespace
+
+uint8_t AppSurfaceCompositor::FindSlot(PixelSurface destination) const {
+    for (uint8_t index = 0U; index < kMaxSurfaces; ++index) {
+        if (slots_[index].valid && SameSurface(slots_[index].surface, destination)) {
+            return index;
+        }
+    }
+    return kNoSlot;
+}
+
+// Returns the slot tracking `destination`, taking a free slot for a new
+// surface. A surface that does not match the geometry of the tracked ones, or
+// arrives once every slot is taken, is left untracked (kNoSlot) and simply
+// gets a full redraw on every present.
+uint8_t AppSurfaceCompositor::ClaimSlot(PixelSurface destination) {
+    const uint8_t existing = FindSlot(destination);
+    if (existing != kNoSlot) {
+        return existing;
+    }
+    for (uint8_t index = 0U; index < kMaxSurfaces; ++index) {
+        if (slots_[index].valid && !CompatibleSurfaces(slots_[index].surface, destination)) {
+            return kNoSlot;
+        }
+    }
+    for (uint8_t index = 0U; index < kMaxSurfaces; ++index) {
+        if (!slots_[index].valid) {
+            slots_[index] = {.surface = destination, .valid = true, .carry_overflow = true, .carry = {}};
+            return index;
+        }
+    }
+    return kNoSlot;
+}
+
+// Replays into `destination` every region other surfaces received while this
+// one was not being presented.
+bool AppSurfaceCompositor::AddCarryDamage(PixelSurface destination, uint8_t slot) {
+    const DamageRegionSet<kMaxDamageRegions>& carry = slots_[slot].carry;
+    for (size_t index = 0U; index < carry.Size(); ++index) {
+        const DamageRect rect = carry[index].rect;
+        if (!AddDamage(destination, {.x = static_cast<int32_t>(rect.x),
+                                     .y = static_cast<int32_t>(rect.y),
+                                     .width = static_cast<int32_t>(rect.width),
+                                     .height = static_cast<int32_t>(rect.height)})) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void AppSurfaceCompositor::RecordCarryDamage(uint8_t slot, const DamageRegionSet<kMaxDamageRegions>& content_damage) {
+    for (uint8_t index = 0U; index < kMaxSurfaces; ++index) {
+        SurfaceSlot& other = slots_[index];
+        if (!other.valid) {
+            continue;
+        }
+        if (index == slot) {
+            other.carry.Clear();
+            other.carry_overflow = false;
+            continue;
+        }
+        for (size_t region = 0U; region < content_damage.Size(); ++region) {
+            // Carry regions use the compositor as their source so that they
+            // merge among themselves independently of which pixel store they
+            // came from.
+            other.carry_overflow =
+                !other.carry.Add(this, content_damage[region].rect, damage_policy_) || other.carry_overflow;
+        }
+    }
+    // An untracked destination now holds the newest frame, so no tracked
+    // surface can serve as the complete previous frame until the next present.
+    last_presented_ = slot;
 }
 
 AppSurfaceFrameResult AppSurfaceCompositor::Result(AppSurfaceStatus status, bool visual_changed,
@@ -683,20 +818,31 @@ AppSurfaceFrameResult AppSurfaceCompositor::Result(AppSurfaceStatus status, bool
         .draw_operations_replayed = draw_operations_replayed,
         .operations_normalized = normalized_operations_,
         .incremental_normalization = incremental_normalization_,
+        .normalize_us = normalize_us_,
+        .damage_us = damage_us_,
+        .render_us = render_us_,
     };
 }
 
 AppSurfaceFrameResult AppSurfaceCompositor::PresentScene(const GuestScene& scene, PixelSurface destination,
                                                          device::BitmapResolver resolver, void* resolver_context) {
     damage_.Clear();
+    content_damage_.Clear();
     normalized_operations_ = 0U;
     incremental_normalization_ = false;
+    normalize_us_ = 0U;
+    damage_us_ = 0U;
+    render_us_ = 0U;
     if (!ValidDestination(destination)) {
         return Result(AppSurfaceStatus::kInvalidArgument, false);
     }
+    const uint64_t normalize_started_us = Now();
     uint32_t scratch_count = 0U;
     AppLayerState scratch_layer{};
-    bool incremental = synchronized_ && !scene.LastApplyWasKeyframe() && !scene.TreeOrderChanged();
+    // Operation in_layer bits are only refreshed for changed nodes on the
+    // patch path, so a change of the Layer container itself needs a full pass.
+    bool incremental = synchronized_ && !scene.LastApplyWasKeyframe() && !scene.TreeOrderChanged() &&
+                       SelectLayerContainer(scene) == current_layer_.layer_id;
     for (uint16_t node_index = 0U; incremental && node_index < scene.NodeCount(); ++node_index) {
         const uint32_t changes = scene.NodeChanges(node_index);
         incremental = (changes & MICROPIXEL_GRAPHICS_SCENE_NODE_KIND) == 0U &&
@@ -714,6 +860,7 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentScene(const GuestScene& scene
     if (!incremental && normalize_status == AppSurfaceStatus::kOk) {
         normalized_operations_ = scratch_count;
     }
+    normalize_us_ = Now() - normalize_started_us;
     if (normalize_status != AppSurfaceStatus::kOk) {
         stale_operation_count_ = 0U;
         scratch_synchronized_ = false;
@@ -732,23 +879,50 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentNormalized(uint32_t scratch_c
                                                               bool scratch_background_valid,
                                                               const AppLayerState& scratch_layer,
                                                               PixelSurface destination) {
+    const uint64_t damage_started_us = Now();
     const bool background_changed = background_valid_ != scratch_background_valid ||
                                     (background_valid_ && background_rgb888_ != scratch_background);
-    bool full_redraw = !synchronized_ || !SameDestination(destination) || background_changed;
+    const uint8_t slot = ClaimSlot(destination);
+    // A known surface holds some earlier complete frame; it needs the damage
+    // carried since then on top of this frame's changes. Anything else has to
+    // be rebuilt completely.
+    const bool known_destination = slot != kNoSlot && !slots_[slot].carry_overflow;
+    const bool content_full = !synchronized_ || background_changed;
+    const bool full_redraw = content_full || !known_destination;
+    const bool previous_frame_available = synchronized_ && last_presented_ != kNoSlot;
     const bool same_layer = SameLayerDefinition(current_layer_, scratch_layer);
     const bool layer_content_changed = same_layer && LayerContentChanged(current_, current_count_, current_layer_,
                                                                          scratch_, scratch_count, scratch_layer);
-    bool use_layer_snapshot =
-        layer_snapshot_active_ && scratch_layer.translation_active && same_layer && !layer_content_changed;
-    if (!use_layer_snapshot && scratch_layer.translation_active && synchronized_ && SameDestination(destination) &&
-        current_layer_.valid && same_layer && !layer_content_changed && CaptureLayer(destination, current_layer_)) {
+    // A snapshot only pays off when the whole layer moves with unchanged
+    // content. A constant (possibly non-zero) translation with unchanged
+    // content produces no damage at all, so it must not trigger a capture;
+    // otherwise a static frame followed by any in-layer change would
+    // alternate between a full-layer capture and a full-layer redraw.
+    const bool layer_translation_changed = same_layer && scratch_layer.valid &&
+                                           (scratch_layer.translate_x != current_layer_.translate_x ||
+                                            scratch_layer.translate_y != current_layer_.translate_y);
+    // Stay on an active snapshot as long as the layer content is unchanged;
+    // the snapshot remains an exact copy of the layer whether it moves or not.
+    bool use_layer_snapshot = layer_snapshot_active_ && same_layer && !layer_content_changed;
+    // The layer snapshot is captured from the last presented surface, which
+    // holds the complete previous frame regardless of which surface is drawn
+    // next.
+    if (!use_layer_snapshot && layer_translation_changed && previous_frame_available && known_destination &&
+        current_layer_.valid && !layer_content_changed &&
+        CaptureLayer(slots_[last_presented_].surface, current_layer_)) {
         use_layer_snapshot = true;
     }
     const bool leaving_layer_snapshot = layer_snapshot_active_ && !use_layer_snapshot;
     const bool skip_layer_differences = use_layer_snapshot || leaving_layer_snapshot;
-    if (full_redraw) {
-        SurfaceRect full{};
-        if (!FullSurfaceRect(destination, full) || !AddDamage(destination, full)) {
+    // damage_ first receives only *content* changes; that subset is what the
+    // other surface of a double-buffered pair will be missing. Re-rendering an
+    // unknown surface or replaying the carry does not change content.
+    SurfaceRect full{};
+    if (!FullSurfaceRect(destination, full)) {
+        return Result(AppSurfaceStatus::kResourceExhausted, false);
+    }
+    if (content_full) {
+        if (!AddDamage(destination, full)) {
             return Result(AppSurfaceStatus::kResourceExhausted, false);
         }
     } else {
@@ -784,10 +958,21 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentNormalized(uint32_t scratch_c
             }
         }
     }
+    content_damage_ = damage_;
+    if (full_redraw && !content_full && !AddDamage(destination, full)) {
+        return Result(AppSurfaceStatus::kResourceExhausted, false);
+    }
+    if (!full_redraw && !AddCarryDamage(destination, slot)) {
+        return Result(AppSurfaceStatus::kResourceExhausted, false);
+    }
 
     uint32_t draw_operations_replayed = 0U;
-    if (!damage_.Empty() && !RenderDamage(destination, scratch_, scratch_count, scratch_background, scratch_layer,
-                                          use_layer_snapshot, draw_operations_replayed)) {
+    const uint64_t render_started_us = Now();
+    damage_us_ = render_started_us - damage_started_us;
+    const bool rendered = damage_.Empty() || RenderDamage(destination, scratch_, scratch_count, scratch_background,
+                                                          scratch_layer, use_layer_snapshot, draw_operations_replayed);
+    render_us_ = Now() - render_started_us;
+    if (!rendered) {
         synchronized_ = false;
         layer_snapshot_active_ = false;
         return Result(AppSurfaceStatus::kRenderFailed, false, draw_operations_replayed);
@@ -799,19 +984,31 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentNormalized(uint32_t scratch_c
     current_layer_ = scratch_layer;
     layer_snapshot_active_ = use_layer_snapshot;
     synchronized_ = true;
-    RememberDestination(destination);
+    RecordCarryDamage(slot, content_damage_);
     return Result(AppSurfaceStatus::kOk, !damage_.Empty(), draw_operations_replayed);
 }
 
 AppSurfaceFrameResult AppSurfaceCompositor::RefreshBitmap(const uint8_t* bitmap_data, DamageRect source_damage,
                                                           PixelSurface destination) {
     damage_.Clear();
+    content_damage_.Clear();
     normalized_operations_ = 0U;
     incremental_normalization_ = false;
-    if (!ValidDestination(destination) || !synchronized_ || !SameDestination(destination) || bitmap_data == nullptr ||
-        source_damage.width == 0U || source_damage.height == 0U) {
+    normalize_us_ = 0U;
+    damage_us_ = 0U;
+    render_us_ = 0U;
+    if (!ValidDestination(destination) || !synchronized_ || bitmap_data == nullptr || source_damage.width == 0U ||
+        source_damage.height == 0U) {
         return Result(AppSurfaceStatus::kInvalidArgument, false);
     }
+    // The bitmap refresh can land on any surface of the rotation: the mapped
+    // regions describe the content change, and the destination additionally
+    // receives whatever it missed while other surfaces were presented.
+    const uint8_t slot = ClaimSlot(destination);
+    if (slot == kNoSlot) {
+        return Result(AppSurfaceStatus::kInvalidArgument, false);
+    }
+    const bool full_redraw = slots_[slot].carry_overflow;
     const uint64_t dirty_right = static_cast<uint64_t>(source_damage.x) + source_damage.width;
     const uint64_t dirty_bottom = static_cast<uint64_t>(source_damage.y) + source_damage.height;
     for (uint32_t index = 0U; index < current_count_; ++index) {
@@ -857,17 +1054,32 @@ AppSurfaceFrameResult AppSurfaceCompositor::RefreshBitmap(const uint8_t* bitmap_
             return Result(AppSurfaceStatus::kResourceExhausted, false);
         }
     }
+    content_damage_ = damage_;
+    if (full_redraw) {
+        SurfaceRect full{};
+        if (!FullSurfaceRect(destination, full) || !AddDamage(destination, full)) {
+            return Result(AppSurfaceStatus::kResourceExhausted, false);
+        }
+    } else if (!AddCarryDamage(destination, slot)) {
+        return Result(AppSurfaceStatus::kResourceExhausted, false);
+    }
     uint32_t draw_operations_replayed = 0U;
     if (!damage_.Empty() && !RenderDamage(destination, current_, current_count_, background_rgb888_, current_layer_,
                                           layer_snapshot_active_, draw_operations_replayed)) {
         synchronized_ = false;
         return Result(AppSurfaceStatus::kRenderFailed, false, draw_operations_replayed);
     }
+    RecordCarryDamage(slot, content_damage_);
     return Result(AppSurfaceStatus::kOk, !damage_.Empty(), draw_operations_replayed);
 }
 
 void AppSurfaceCompositor::Reset() {
     damage_.Clear();
+    content_damage_.Clear();
+    for (SurfaceSlot& slot : slots_) {
+        slot = {};
+    }
+    last_presented_ = kNoSlot;
     current_count_ = 0U;
     background_rgb888_ = 0U;
     background_valid_ = false;
@@ -878,14 +1090,6 @@ void AppSurfaceCompositor::Reset() {
     scratch_synchronized_ = false;
     normalized_operations_ = 0U;
     incremental_normalization_ = false;
-    destination_pixels_ = nullptr;
-    destination_size_ = 0U;
-    destination_width_ = 0U;
-    destination_height_ = 0U;
-    destination_stride_ = 0U;
-    destination_format_ = {};
-    destination_origin_x_ = 0U;
-    destination_origin_y_ = 0U;
 }
 
 }  // namespace micropixel::platform::graphics

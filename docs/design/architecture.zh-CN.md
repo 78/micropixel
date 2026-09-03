@@ -327,6 +327,14 @@ Renderer -> StreamingTexture / TextureUpdateBatch -> SurfaceNode
 - Host 正常链路固定为 `GuestScene -> AppSurfaceCompositor -> App Surface damage -> LVGL Host root ->
   DisplayPipeline`。LVGL 中的 Guest 只有一个 App Surface image，系统 UI 保持原生对象；板级
   `DisplayPipeline` 是 panel、transport、flush 和显示 shadow 的唯一 owner，其他 compositor 不直接提交面板；
+- App Surface 可配置 1–3 个（`CONFIG_MICROPIXEL_APP_SURFACE_COUNT`）。多 surface 时 Guest task 的
+  `Submit` 全程不取 LVGL 锁：合成到一个既未显示也未 pending 的 surface，再把 surface 序号和 content
+  damage 放进 spinlock 保护的单槽 mailbox 并唤醒 LVGL task；LVGL task 在 `LV_EVENT_REFR_START`（或常驻
+  publish timer）里在 LVGL 锁内 adopt 该帧：切换 image data 指针并按 damage invalidate。Guest 领先时新帧
+  直接替换未被采用的 pending 帧，damage 取并集。`AppSurfaceCompositor` 为每个 surface 记录 carry damage，
+  present 到任意 surface 时先重放 carry，使所有 surface 增量收敛到同一内容。单 surface 配置退回锁内合成
+  并就地 adopt。锁序固定：LVGL 锁 → publish spinlock；Guest task 永不在持 spinlock 时取 LVGL 锁。
+  Raw 纹理在加载时从 flash 映射暂存到 PSRAM，保证 DMA2D/PPA 源始终在 PSRAM；
 - 调试日志分别记录 Scene damage/重放数/Layer cache、PPA/DMA2D/CPU fallback、LVGL 合并前后区域，以及
   QSPI panel submit 与 DMA2D shadow copy，用于真机核对每个局部区域只有一次最终 RAM copy 和一次面板提交；
   分段计时边界、当前真机基线和优化判断见

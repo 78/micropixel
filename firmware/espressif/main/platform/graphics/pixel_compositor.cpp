@@ -179,6 +179,81 @@ uint32_t RoundedInset(uint32_t radius, uint32_t height, uint32_t y) {
     return (radius * 2U - horizontal) / 2U;
 }
 
+// Unscaled blit: rows map one to one, so the source position is plain pointer
+// arithmetic instead of the per-pixel 64-bit scaling division of the general
+// path. The BGRA8888 -> BGR888 sprite case (the common ARGB atlas draw) and
+// the opaque BGR888 copy have dedicated loops; everything else shares the
+// format-dispatching per-pixel blend with the same rounding as the general
+// path.
+void BlitSameSize(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
+                  SurfaceRect destination_rect, SurfaceRect clipped, uint8_t opacity) {
+    const uint32_t source_x = static_cast<uint32_t>(source_rect.x + (clipped.x - destination_rect.x));
+    const uint32_t source_y = static_cast<uint32_t>(source_rect.y + (clipped.y - destination_rect.y));
+    const uint32_t width = static_cast<uint32_t>(clipped.width);
+    const uint32_t height = static_cast<uint32_t>(clipped.height);
+    const uint8_t* source_row = PixelAt(source, source_x, source_y);
+    uint8_t* destination_row =
+        MutablePixelAt(destination, static_cast<uint32_t>(clipped.x), static_cast<uint32_t>(clipped.y));
+
+    if (source.format == SurfacePixelFormat::kBgr888 && destination.format == SurfacePixelFormat::kBgr888 &&
+        opacity == 255U) {
+        const size_t row_bytes = static_cast<size_t>(width) * 3U;
+        for (uint32_t y = 0U; y < height; ++y) {
+            std::memcpy(destination_row, source_row, row_bytes);
+            source_row += source.stride;
+            destination_row += destination.stride;
+        }
+        return;
+    }
+    if (source.format == SurfacePixelFormat::kBgra8888 && destination.format == SurfacePixelFormat::kBgr888) {
+        for (uint32_t y = 0U; y < height; ++y) {
+            const uint8_t* src = source_row;
+            uint8_t* dst = destination_row;
+            for (uint32_t x = 0U; x < width; ++x, src += 4U, dst += 3U) {
+                const uint32_t alpha =
+                    opacity == 255U ? src[3] : (static_cast<uint32_t>(src[3]) * opacity + 127U) / 255U;
+                if (alpha == 0U) {
+                    continue;
+                }
+                if (alpha == 255U) {
+                    dst[0] = src[0];
+                    dst[1] = src[1];
+                    dst[2] = src[2];
+                    continue;
+                }
+                const uint32_t inverse = 255U - alpha;
+                dst[0] = static_cast<uint8_t>((src[0] * alpha + dst[0] * inverse + 127U) / 255U);
+                dst[1] = static_cast<uint8_t>((src[1] * alpha + dst[1] * inverse + 127U) / 255U);
+                dst[2] = static_cast<uint8_t>((src[2] * alpha + dst[2] * inverse + 127U) / 255U);
+            }
+            source_row += source.stride;
+            destination_row += destination.stride;
+        }
+        return;
+    }
+    const uint32_t source_bytes = BytesPerPixel(source.format);
+    const uint32_t destination_bytes = BytesPerPixel(destination.format);
+    for (uint32_t y = 0U; y < height; ++y) {
+        const uint8_t* src = source_row;
+        uint8_t* dst = destination_row;
+        for (uint32_t x = 0U; x < width; ++x, src += source_bytes, dst += destination_bytes) {
+            const uint8_t source_alpha = ReadAlpha(src, source.format);
+            const uint8_t effective_alpha =
+                static_cast<uint8_t>((static_cast<uint32_t>(source_alpha) * opacity + 127U) / 255U);
+            if (effective_alpha == 0U) {
+                continue;
+            }
+            const Rgb foreground = ReadRgb(src, source.format);
+            const Rgb result = effective_alpha == 255U
+                                   ? foreground
+                                   : Blend(foreground, ReadRgb(dst, destination.format), effective_alpha);
+            WriteRgb(dst, destination.format, result);
+        }
+        source_row += source.stride;
+        destination_row += destination.stride;
+    }
+}
+
 }  // namespace
 
 bool PixelCompositor::RoundedRect(PixelSurface destination, SurfaceRect rect, uint32_t radius, uint32_t fill_rgb888,
@@ -199,26 +274,43 @@ bool PixelCompositor::RoundedRect(PixelSurface destination, SurfaceRect rect, ui
     const uint32_t inner_width = has_inner ? width - stroke_width * 2U : 0U;
     const uint32_t inner_height = has_inner ? height - stroke_width * 2U : 0U;
     const uint32_t inner_radius = radius > stroke_width ? radius - stroke_width : 0U;
-    for (uint32_t y = 0U; y < height; ++y) {
+
+    // Only the rows that land inside the destination are rasterized. The
+    // compositor replays a node clipped to each damage region, so a large
+    // board is usually visible through a small window and the rest of its
+    // rows would be clipped away by every Fill anyway.
+    const int64_t first_visible = rect.y < 0 ? -static_cast<int64_t>(rect.y) : 0;
+    const int64_t last_visible_exclusive =
+        static_cast<int64_t>(destination.height) - rect.y < static_cast<int64_t>(height)
+            ? static_cast<int64_t>(destination.height) - rect.y
+            : static_cast<int64_t>(height);
+    if (first_visible >= last_visible_exclusive) {
+        return true;
+    }
+    const uint32_t visible_top = static_cast<uint32_t>(first_visible);
+    const uint32_t visible_bottom = static_cast<uint32_t>(last_visible_exclusive);
+
+    // Rows between the corner arcs have no inset on either the outer edge or
+    // the inner fill; they are emitted as up to three block fills instead of
+    // one span per row so hardware fill engines see one large rectangle.
+    const uint32_t band_margin = radius > stroke_width ? radius : stroke_width;
+    const uint32_t band_top = band_margin < height ? band_margin : height;
+    const uint32_t band_bottom = height > band_margin ? height - band_margin : 0U;
+    const bool has_band = band_top < band_bottom;
+
+    const auto draw_row = [&](uint32_t y) -> bool {
         const uint32_t outer_inset = RoundedInset(radius, height, y);
         const int32_t outer_x = rect.x + static_cast<int32_t>(outer_inset);
         const int32_t outer_width = static_cast<int32_t>(width - outer_inset * 2U);
+        const int32_t row_y = rect.y + static_cast<int32_t>(y);
         if (stroke_width == 0U) {
-            if (!Fill(destination,
-                      {.x = outer_x, .y = rect.y + static_cast<int32_t>(y), .width = outer_width, .height = 1},
-                      fill_rgb888, opacity)) {
-                return false;
-            }
-            continue;
+            return Fill(destination, {.x = outer_x, .y = row_y, .width = outer_width, .height = 1}, fill_rgb888,
+                        opacity);
         }
         const bool inner_row = has_inner && y >= stroke_width && y < height - stroke_width;
         if (!inner_row) {
-            if (!Fill(destination,
-                      {.x = outer_x, .y = rect.y + static_cast<int32_t>(y), .width = outer_width, .height = 1},
-                      stroke_rgb888, opacity)) {
-                return false;
-            }
-            continue;
+            return Fill(destination, {.x = outer_x, .y = row_y, .width = outer_width, .height = 1}, stroke_rgb888,
+                        opacity);
         }
         const uint32_t inner_y = y - stroke_width;
         const uint32_t inner_inset = RoundedInset(inner_radius, inner_height, inner_y);
@@ -227,12 +319,58 @@ bool PixelCompositor::RoundedRect(PixelSurface destination, SurfaceRect rect, ui
         const int32_t left_span = inner_x - outer_x;
         const int32_t right_x = inner_x + inner_span;
         const int32_t right_span = outer_x + outer_width - right_x;
-        const int32_t row_y = rect.y + static_cast<int32_t>(y);
-        if ((left_span > 0 &&
-             !Fill(destination, {.x = outer_x, .y = row_y, .width = left_span, .height = 1}, stroke_rgb888, opacity)) ||
-            !Fill(destination, {.x = inner_x, .y = row_y, .width = inner_span, .height = 1}, fill_rgb888, opacity) ||
-            (right_span > 0 && !Fill(destination, {.x = right_x, .y = row_y, .width = right_span, .height = 1},
-                                     stroke_rgb888, opacity))) {
+        return (left_span <= 0 || Fill(destination, {.x = outer_x, .y = row_y, .width = left_span, .height = 1},
+                                       stroke_rgb888, opacity)) &&
+               Fill(destination, {.x = inner_x, .y = row_y, .width = inner_span, .height = 1}, fill_rgb888, opacity) &&
+               (right_span <= 0 || Fill(destination, {.x = right_x, .y = row_y, .width = right_span, .height = 1},
+                                        stroke_rgb888, opacity));
+    };
+
+    const auto draw_band = [&](uint32_t top, uint32_t bottom) -> bool {
+        const int32_t band_y = rect.y + static_cast<int32_t>(top);
+        const int32_t band_height = static_cast<int32_t>(bottom - top);
+        if (stroke_width == 0U) {
+            return Fill(destination, {.x = rect.x, .y = band_y, .width = rect.width, .height = band_height},
+                        fill_rgb888, opacity);
+        }
+        if (!has_inner) {
+            return Fill(destination, {.x = rect.x, .y = band_y, .width = rect.width, .height = band_height},
+                        stroke_rgb888, opacity);
+        }
+        const int32_t stroke_span = static_cast<int32_t>(stroke_width);
+        const int32_t inner_x = rect.x + stroke_span;
+        const int32_t right_x = inner_x + static_cast<int32_t>(inner_width);
+        return Fill(destination, {.x = rect.x, .y = band_y, .width = stroke_span, .height = band_height}, stroke_rgb888,
+                    opacity) &&
+               Fill(destination,
+                    {.x = inner_x, .y = band_y, .width = static_cast<int32_t>(inner_width), .height = band_height},
+                    fill_rgb888, opacity) &&
+               Fill(destination, {.x = right_x, .y = band_y, .width = stroke_span, .height = band_height},
+                    stroke_rgb888, opacity);
+    };
+
+    if (!has_band) {
+        for (uint32_t y = visible_top; y < visible_bottom; ++y) {
+            if (!draw_row(y)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    const uint32_t top_rows_end = band_top < visible_bottom ? band_top : visible_bottom;
+    for (uint32_t y = visible_top; y < top_rows_end; ++y) {
+        if (!draw_row(y)) {
+            return false;
+        }
+    }
+    const uint32_t visible_band_top = band_top > visible_top ? band_top : visible_top;
+    const uint32_t visible_band_bottom = band_bottom < visible_bottom ? band_bottom : visible_bottom;
+    if (visible_band_top < visible_band_bottom && !draw_band(visible_band_top, visible_band_bottom)) {
+        return false;
+    }
+    const uint32_t bottom_rows_start = band_bottom > visible_top ? band_bottom : visible_top;
+    for (uint32_t y = bottom_rows_start; y < visible_bottom; ++y) {
+        if (!draw_row(y)) {
             return false;
         }
     }
@@ -251,12 +389,28 @@ bool SoftwarePixelCompositor::Fill(PixelSurface destination, SurfaceRect rect, u
         return true;
     }
     const Rgb foreground = RgbFromValue(rgb888);
+    if (opacity == 255U) {
+        // Opaque fill: rasterize the first row once, then replicate it. The
+        // row copy runs at memcpy speed, which is what makes a CPU fill the
+        // right choice for the many small rectangles a scene produces.
+        uint8_t* first_row =
+            MutablePixelAt(destination, static_cast<uint32_t>(clipped.x), static_cast<uint32_t>(clipped.y));
+        const size_t bytes_per_pixel = BytesPerPixel(destination.format);
+        const size_t row_bytes = static_cast<size_t>(clipped.width) * bytes_per_pixel;
+        uint8_t* pixel = first_row;
+        for (int32_t x = 0; x < clipped.width; ++x) {
+            WriteRgb(pixel, destination.format, foreground);
+            pixel += bytes_per_pixel;
+        }
+        for (int32_t y = 1; y < clipped.height; ++y) {
+            std::memcpy(first_row + static_cast<size_t>(y) * destination.stride, first_row, row_bytes);
+        }
+        return true;
+    }
     for (int32_t y = clipped.y; y < clipped.y + clipped.height; ++y) {
         for (int32_t x = clipped.x; x < clipped.x + clipped.width; ++x) {
             uint8_t* pixel = MutablePixelAt(destination, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-            const Rgb result =
-                opacity == 255U ? foreground : Blend(foreground, ReadRgb(pixel, destination.format), opacity);
-            WriteRgb(pixel, destination.format, result);
+            WriteRgb(pixel, destination.format, Blend(foreground, ReadRgb(pixel, destination.format), opacity));
         }
     }
     return true;
@@ -273,6 +427,10 @@ bool SoftwarePixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_
     }
     const SurfaceRect clipped = ClipToSurface(destination_rect, destination);
     if (clipped.width == 0 || clipped.height == 0) {
+        return true;
+    }
+    if (source_rect.width == destination_rect.width && source_rect.height == destination_rect.height) {
+        BlitSameSize(source, source_rect, destination, destination_rect, clipped, opacity);
         return true;
     }
     for (int32_t y = clipped.y; y < clipped.y + clipped.height; ++y) {

@@ -150,6 +150,11 @@ bash tools/s3.sh monitor cores3 /dev/cu.usbmodemXXXX --reset
 `build-release`、`flash-apps` 和 `flash-all` 同样接受 `szpi` 或 `cores3`；不写 `BOARD` 时保持原行为，默认
 操作 BOX-3。原有带 `-szpi`、`-cores3` 后缀的命令仍是兼容别名。
 
+新板第一次接入必须先烧一次 `app_store`（`flash-all` 或 `flash-apps BOARD PORT`）。只 `flash-host` 的
+新板 `app_store` 分区是空白 flash，Host 启动会打印 `App Store catalog scan failed`，
+`micropixel app list` 返回 `count=0, storeUsedBytes=0`，此时 `app install`/`run` 的 Bundle 上传会长时间
+挂起而没有明确错误。三款 S3 共享 `build/esp32s3-apps/app-store.bin`，`flash-apps` 不区分板型。
+
 五板固件发布使用同一 `PROJECT_VER`，逐个生成 OTA `micropixel.bin` 与浏览器完整镜像
 `micropixel-full.bin`：
 
@@ -194,12 +199,8 @@ bash tools/p4.sh flash-all "$P4_PORT"
 bash tools/p4.sh test
 ```
 
-成功时命令末尾会输出：
-
-```text
-System Shell P4 flashed and verified ... with eight Apps.
-```
-
+成功时命令末尾会输出 `System Shell P4 flashed on ... with eight Apps.`。脚本不再自动抓取启动日志，
+用 `bash tools/p4.sh monitor "$P4_PORT"` 确认 `System Shell ready: App Hall rendered with apps=8`；
 设备复位后应在 App Hall 中看到八个 App，并可在第一行左右滑动浏览。
 
 ## 5. USB 烧录八个示例 App
@@ -275,7 +276,7 @@ bash tools/p4.sh monitor "$P4_PORT"
 完整烧录后至少检查：
 
 - 终端中 Host 固件和 BundleFS 元数据均报告写入校验成功；
-- 烧录脚本捕获到 `System Shell ready: App Hall rendered with apps=8`；
+- monitor 中出现 `System Shell ready: App Hall rendered with apps=8`；
 - App Hall 中可左右滑动浏览并启动八个示例 App；
 - 状态栏中的亮度和音量控制生效。
 
@@ -285,6 +286,15 @@ bash tools/p4.sh monitor "$P4_PORT"
 - `Serial port not found`：设备重新枚举后端口名已变，重新执行 `ls /dev/cu.usbmodem*`；
 - `No serial data received`：选错 CDC 端口、USB 线不支持数据，或设备未进入可下载状态；
 - 多台设备串口名重用：再次运行 `esptool chip-id`，以 MAC 而不是端口名确认目标。
+- `micropixel app install`/`run` 卡在上传、`app list` 为 `count=0, storeUsedBytes=0`、启动日志有
+  `App Store catalog scan failed`：该设备的 `app_store` 从未烧录。先执行对应板型的 `flash-apps`
+  （P4 `bash tools/p4.sh flash-apps PORT`，S3 `bash tools/s3.sh flash-apps BOARD PORT`），再增量安装。
+- 新增的 `CONFIG_MICROPIXEL_*` Kconfig 符号在已有构建目录里不生效（对应代码被整体编译掉、日志消失）：
+  `build/host-<target>/sdkconfig.release` 是已物化的生成物，改 `Kconfig.projbuild` 后 ESP-IDF 6.1 不一定
+  重新生成它。用 `rg CONFIG_MICROPIXEL_XXX build/host-<target>/sdkconfig.release` 确认；缺失时删除该
+  `sdkconfig.release` 让下次 `build-host` 重新生成，或对该 build dir 执行一次 `idf.py reconfigure`。
+- macOS 没有 `timeout` 命令；给 `micropixel run` 限时请用 `--no-follow` 加随后的 `logs -n N`，不要依赖
+  `timeout`。
 - ESP-MOSAICO `0.2.4` 或更早版本的 OTA 在 99% 报 `ESP_ERR_OTA_VALIDATE_FAILED`：这些预览固件早于多板型
   release target，更新检查会落到兼容旧 P4 的默认目录并下载 P4 镜像。先用 `bash tools/s31.sh flash-host`
   进行一次保留 NVS 与 `app_store` 的 USB Host 更新；`0.3.0` 及以后版本会显式请求 `esp-mosaico`，后续可

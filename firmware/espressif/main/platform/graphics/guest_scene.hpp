@@ -67,6 +67,8 @@ struct GuestSceneContainer final {
     int16_t z_order{};
     uint8_t opacity{255U};
     bool visible{true};
+    // Graphics 1.4 CACHED_CONTENT hint; see micropixel_graphics_scene_container_flag_t.
+    bool cached_content{};
 };
 
 // Fixed-capacity authoritative scene. Every message is applied to scratch and

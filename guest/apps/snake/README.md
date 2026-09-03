@@ -56,7 +56,21 @@ python3 guest/apps/snake/assets/source/generate_food_sheets.py
 棋盘背景是一个随 Theme 更新填充色和边框色的 `RoundedRectNode`，不再为纯色背景加载 625×625
 纹理；START/RESTART 由 `TextButton` 绘制。Snake 的普通移动使用固定容量 SpriteBatch 和 body ring：尾槽复用为新身体位置，SDK 只序列化事务的净
 instance 差量。Food/Burst 通过 Sprite atlas source patch 播放；粒子复用固定池 Batch。震动先提交完成的
-Game Container，再在震动期间冻结其子节点，只更新 Container translation；HUD 位于独立 Container，Host 因而可以
-捕获一次 Game Container snapshot 并用 PPA/DMA2D 移动，而不会被同时变化的 flash/particle 迫使全量重放。
+Game Container，再在震动期间冻结其子节点，只更新 Container translation；HUD 位于独立 Container。Game Container
+带 `cache_content = true`，Host 据此把它选为 Layer，捕获一次 snapshot 并用 PPA/DMA2D 移动，而不会被同时变化的
+flash/particle 迫使全量重放。
 顶部 HUD 从 `RendererInfo::safe_area_insets()` 读取圆角屏的逻辑边缘内缩：标题保留额外视觉 padding，
 Level、Score、Best、状态文字和 Combo 条按右侧 inset 整组左移，不按 Mosaico 板名硬编码布局分支。轻点左上标题所在的顶部 HUD 可暂停；热区覆盖完整标题但不侵入棋盘。
+
+## 性能基准模式
+
+```sh
+python3 tools/micropixel --transport usb run guest/apps/snake --aot-target riscv32-ilp32f --no-follow -- --benchmark
+python3 tools/micropixel --transport usb run guest/apps/snake --aot-target riscv32-ilp32f --no-follow -- --benchmark --no-bgm
+```
+
+`--benchmark` 跳过菜单直接开局、按贪心策略自动转向、撞墙或撞身后立即重开并计 `deaths`，每 120 次 Render 打一行
+`snake-bench: frames= elapsed_ms= fps_x100= render_avg_us= render_max_us= tick_max_us= late_ticks= deaths= len= level=`。
+`render_*` 是 Guest `Render()` 含 Present 的耗时，`tick_max_us`/`late_ticks` 记录 60 Hz 定时器的最大间隔和超过
+1.5 个周期的次数。`--no-bgm` 关闭背景音乐，把音序器的 Host 成本从渲染数据里剔除。不带参数启动时行为不变。
+基线数据见 `docs/development/graphics-performance.zh-CN.md` 第 9 节。

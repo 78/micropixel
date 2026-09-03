@@ -34,6 +34,24 @@ constexpr micropixel::AssetId kFoodAssets[] = {
 static_assert(snake_assets::burst_atlas_count == 4U && sizeof(kFoodAssets) / sizeof(kFoodAssets[0]) == 4U,
               "snake: generated sprite sheet bindings disagree with the app model");
 
+// Returns true when the launch arguments contain `--name` or `--name=...`.
+bool HasLaunchFlag(const micropixel::LaunchArguments& args, const char* name) {
+    for (uint32_t index = 0U; index < args.count(); ++index) {
+        const char* arg = args.Get(index);
+        if (arg == nullptr) {
+            continue;
+        }
+        uint32_t k = 0U;
+        while (name[k] != '\0' && arg[k] == name[k]) {
+            ++k;
+        }
+        if (name[k] == '\0' && (arg[k] == '\0' || arg[k] == '=')) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 int SnakeAppMain() {
@@ -82,6 +100,11 @@ int SnakeAppMain() {
     }
     for (uint32_t type = 0U; type < 4U; ++type) {
         game.SetFoodSheet(static_cast<FoodType>(type), static_cast<micropixel::Texture&&>(food_sheets[type]));
+    }
+    const micropixel::LaunchArguments launch_arguments = app.launch_arguments();
+    if (HasLaunchFlag(launch_arguments, "--benchmark")) {
+        // `--no-bgm` isolates rendering from the tone sequencer's Host cost.
+        game.EnableBenchmark(!HasLaunchFlag(launch_arguments, "--no-bgm"));
     }
     micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
     game.Render();

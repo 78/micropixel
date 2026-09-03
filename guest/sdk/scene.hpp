@@ -41,6 +41,15 @@ struct ContainerProperties final {
     int16_t z_order{};
     uint8_t opacity{255U};
     bool visible{true};
+    // Hint that this subtree changes rarely compared with how often it is
+    // translated (a scrolling map or tile layer). The Host may rasterize the
+    // subtree once, in the container's local coordinates, into a retained cache
+    // and re-composite that cache on every translation: content changes stay
+    // expensive, translation becomes cheap. The cache is composited as an
+    // opaque layer whose uncovered pixels show the Scene background color, so
+    // nothing drawn below this container in draw order shows through it. Give
+    // the container an explicit clip; it bounds the cache.
+    bool cache_content{};
 };
 
 struct RoundedRectStyle final {
@@ -132,6 +141,8 @@ class ContainerNode final : public Container {
     void SetOpacity(SceneUpdate& update, uint8_t opacity);
     void SetVisible(SceneUpdate& update, bool visible);
     void SetZOrder(SceneUpdate& update, int16_t z_order);
+    // See ContainerProperties::cache_content.
+    void SetCacheContent(SceneUpdate& update, bool cache_content);
 
    private:
     constexpr ContainerNode(SceneState* state, uint16_t id, uint32_t generation) : Container(state, id, generation) {}

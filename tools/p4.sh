@@ -572,9 +572,8 @@ flash_all() {
     idf_host metalio-claw4 flash --baud "$baud" --port "$port"
     echo "==> Clearing app_store and flashing eight example Apps"
     write_app_store_image "$port" "$example_app_store_image" true
-    python "$workspace_root/tools/capture_serial_until.py" \
-        "$port" "System Shell ready: App Hall rendered" --timeout 30 --reset
-    echo "System Shell P4 flashed and verified on $port with eight Apps."
+    echo "System Shell P4 flashed on $port with eight Apps."
+    echo "Verify with: bash tools/p4.sh monitor $port (expect 'System Shell ready: App Hall rendered')"
 }
 
 install_bundle() {

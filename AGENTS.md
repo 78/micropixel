@@ -124,6 +124,7 @@ build/                            # 本地生成产物，不提交
 | 修改 Host 业务能力 | `device/contracts/` + Runtime service；板级差异放 `platform/` |
 | 修改应用大厅/状态层 | `host/ui/`、`host/controller/`、共享 Square System UI；板级只接入 presentation |
 | 修改图形热路径 | Graphics Service、Guest graphics engine、display/compositor；保持边界验证 |
+| 图形性能诊断/基准 | `docs/development/graphics-performance.zh-CN.md`；Snake 与本地 Mario 的 `--benchmark --no-bgm` |
 | 修改 Blocks/Snake/Tilt | 对应 `guest/apps/<app>/`；同时运行该 Bundle 的正式构建 |
 | 修改音效 | `audio/sfx.json` + 分析器测试 + App Bundle 构建 + 真机 A/B |
 | 修改 Bundle/App Store | `tools/build_app_bundle.py`、`tools/build_app_store_image.py`、Host bundle reader |
@@ -146,10 +147,10 @@ bash tools/p4.sh build-host
 # ESP32-S31 / ESP-Mosaico preview Host
 bash tools/s31.sh build-host
 
-# ESP32-S3 preview Host
-bash tools/s3.sh build-host
-bash tools/s3.sh build-szpi
-bash tools/s3.sh build-cores3
+# ESP32-S3 preview Host（无 PPA/DMA2D；platform/graphics 改动必须至少构建一款 S3）
+bash tools/s3.sh build-host box3
+bash tools/s3.sh build-host szpi
+bash tools/s3.sh build-host cores3
 
 # System Shell + 八个示例 App + App Store 集成
 bash tools/p4.sh build-all
@@ -181,9 +182,34 @@ bash -n tools/*.sh
 - 文档变更：检查相对链接和 `git diff --check`；
 - Guest SDK/ABI：至少运行 Guest 构建和相关 conformance；
 - Firmware 代码：至少运行相关 Host test、格式和 P4 Host 构建；
+- `platform/graphics/`、`platform/lvgl/` 或任何 `CONFIG_SOC_PPA_SUPPORTED` 分支：P4、S31 和至少一款 S3 都要构建；
 - System Shell、Bundle 或集成 App：运行 `bash tools/p4.sh build-all`；
 - 音频：运行分析器 unit tests、对应 Bundle 构建和真机试听；
+- 图形性能：用 Guest 侧 `*-bench` 行和 Host `App Surface scene`/`display refresh` 采样一起看，不只看 CPU%；
 - 硬件行为：记录目标板型和验收结果，但不提交 MAC、串口日志或设备标识。
+
+Host 单元测试只通过 `bash tools/tests/test_firmware_host.sh` 编译运行；直接用 `clang++` 会链到 ESP 工具链的
+运行库而报 `__eh_frame_start` 类链接错误。
+
+## 真机与构建的已知坑
+
+- 新板第一次接入必须先烧 `app_store`（`flash-all` 或 `flash-apps`）。只 `flash-host` 的板子启动日志有
+  `App Store catalog scan failed`，`micropixel app list` 为 `count=0`，`app install`/`run` 会长时间挂起。
+- 新增 `CONFIG_MICROPIXEL_*` Kconfig 符号后，用 `rg` 确认它出现在 `build/host-<target>/sdkconfig.release`；
+  没有就删掉该文件让下次 build 重新生成，否则对应代码会被无声编译掉。
+- P4 的 PPA/DMA2D 只在 `CONFIG_SOC_PPA_SUPPORTED` 下编译；跨目标共享的常量（telemetry 直方图分档等）不能
+  引用 `EspPixelCompositor`/`Dma2dCopyEngine` 的成员，否则 S3 构建失败。
+- S31 内部 SRAM 不经 cache：对 DMA 描述符或像素行 `esp_cache_msync` 前先查 `esp_cache_get_line_size_by_addr`，
+  为 0 时跳过，否则 S31 上返回错误、渲染报 `status=4`。
+- Guest task 上不要同步写大段 UART 日志；周期性诊断文本格式化后交给 `work::BackgroundExecutor` 输出，
+  并受 `CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG` 控制。一段 1.5 KiB 日志在 115200 下就是一个 100 ms 尖峰。
+- PPA/DMA2D 门槛（`esp_pixel_compositor.cpp`）是按 `PPA blend histogram` 实测调出来的启发式；调整前先看
+  直方图，并在 P4 与 S31 同时 A/B。
+- `guest/apps/mario/` 是被 `.gitignore` 排除的本地滚屏基准 App，可能不存在于其他检出；文档和脚本不要
+  把它当作仓库内 App 依赖。
+- 长跑 `micropixel run` 用 `--no-follow`，随后用 `micropixel logs -n N` 读取；macOS 没有 `timeout`。
+  一台板同一时刻只能被 monitor、esptool 或 `micropixel` 之一占用。
+- 用 `esptool chip-id` 的 MAC 而不是 `/dev/cu.usbmodem*` 名称确认目标设备；端口名会随重枚举改变。
 
 ## 生成物、第三方与安全
 

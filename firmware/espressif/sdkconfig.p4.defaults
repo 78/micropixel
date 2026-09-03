@@ -26,6 +26,12 @@ CONFIG_PM_DFS_INIT_AUTO=y
 
 # Reserve enough shared interrupt stack for nested display, Wi-Fi and timer ISRs.
 CONFIG_FREERTOS_ISR_STACKSIZE=2048
+# The Host controller keeps running on the main task after startup. With the
+# shared 14 KiB allowance its high-water mark drops to ~1 KiB once the boot-time
+# QUIC firmware check has run, and an APP_START taken by an interrupt at that
+# depth trips the hardware stack guard (observed: reboot back to the App Hall).
+# The P4 has ample internal SRAM, so give the main task more headroom here.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
 # Suppress periodic ticks while every runnable task is blocked. Runtime PM does
 # not enable automatic light sleep; explicit Host sleep remains authoritative.
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y

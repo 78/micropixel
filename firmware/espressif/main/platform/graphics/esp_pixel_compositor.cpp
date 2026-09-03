@@ -7,11 +7,24 @@
 namespace micropixel::platform::graphics {
 namespace {
 
-#if defined(CONFIG_IDF_TARGET_ESP32S31) && CONFIG_IDF_TARGET_ESP32S31
-constexpr uint32_t kMinimumPpaBlendPixels = 512U;
-#else
-constexpr uint32_t kMinimumPpaBlendPixels = 0U;
-#endif
+// A blocking PPA blend measures 400-900 us for sprite-sized blocks on both
+// ESP32-P4 and ESP32-S31 (row-window cache sync on background, foreground and
+// output plus the transaction round trip), almost independent of the area in
+// the 512-4095 pixel range, while the CPU blends an unscaled BGRA sprite at
+// well under 100 ns per pixel. Sprites below this area stay on the CPU. Moving
+// the boundary to 16384 (all sprites on the CPU) measured slower on ESP32-P4;
+// see docs/development/graphics-performance.zh-CN.md section 9.
+constexpr uint32_t kMinimumPpaBlendPixels = 4096U;
+
+// Spans shorter than this many rows stay on the CPU even when their area
+// clears the configured hardware minimum; see TryFill.
+constexpr int32_t kMinimumHardwareFillRows = 4;
+// A blocking PPA fill costs roughly 150 us on ESP32-P4 before the first pixel
+// is written (transaction setup, row-window cache sync, interrupt, wake-up),
+// while the CPU replicates an opaque row at memcpy speed. Fills below this
+// area are faster on the CPU regardless of the configured hardware minimum,
+// which is tuned for DMA2D copies.
+constexpr uint64_t kMinimumHardwareFillPixels = 16384U;
 
 constexpr std::array<uint64_t, kPpaBlendHistogramBinCount - 1U> kPpaBlendHistogramUpperBounds{
     256U, 512U, 840U, 1024U, 2048U, 4096U, 16384U,
@@ -129,6 +142,14 @@ esp_err_t EspPixelCompositor::Initialize(uint32_t minimum_hardware_pixels) {
     register_client(PPA_OPERATION_FILL, fill_client_);
     register_client(PPA_OPERATION_SRM, scale_client_);
     register_client(PPA_OPERATION_BLEND, blend_client_);
+#if defined(CONFIG_MICROPIXEL_APP_SURFACE_DMA2D_DIRECT_COPY) && CONFIG_MICROPIXEL_APP_SURFACE_DMA2D_DIRECT_COPY
+    if (!direct_copy_.Ready()) {
+        const esp_err_t status = direct_copy_.Initialize();
+        if (status != ESP_OK && first_error == ESP_OK) {
+            first_error = status;
+        }
+    }
+#endif
     if (dma2d_client_ == nullptr) {
         async_color_convert_config_t config{};
         config.backlog = 1U;
@@ -142,6 +163,7 @@ esp_err_t EspPixelCompositor::Initialize(uint32_t minimum_hardware_pixels) {
 }
 
 void EspPixelCompositor::Release() {
+    direct_copy_.Release();
     if (dma2d_client_ != nullptr) {
         (void)esp_async_color_convert_uninstall(dma2d_client_);
         dma2d_client_ = nullptr;
@@ -150,6 +172,8 @@ void EspPixelCompositor::Release() {
         (void)ppa_unregister_client(blend_client_);
         blend_client_ = nullptr;
     }
+    pending_copy_count_ = 0U;
+    batching_ = false;
     if (scale_client_ != nullptr) {
         (void)ppa_unregister_client(scale_client_);
         scale_client_ = nullptr;
@@ -161,7 +185,13 @@ void EspPixelCompositor::Release() {
 }
 
 bool EspPixelCompositor::TryFill(PixelSurface destination, SurfaceRect rect, uint32_t rgb888) {
-    if (fill_client_ == nullptr || !EntirelyInside(destination, rect) || Pixels(rect) < minimum_hardware_pixels_) {
+    // A PPA fill carries a fixed transaction cost (descriptor setup, cache
+    // sync of the touched rows, interrupt and wake-up) that a CPU loop beats
+    // for any span only a few rows tall, regardless of its width.
+    const uint64_t minimum_pixels =
+        minimum_hardware_pixels_ > kMinimumHardwareFillPixels ? minimum_hardware_pixels_ : kMinimumHardwareFillPixels;
+    if (fill_client_ == nullptr || !EntirelyInside(destination, rect) || Pixels(rect) < minimum_pixels ||
+        rect.height < kMinimumHardwareFillRows) {
         return false;
     }
     ppa_fill_oper_config_t config{};
@@ -184,20 +214,90 @@ bool EspPixelCompositor::Fill(PixelSurface destination, SurfaceRect rect, uint32
     if (!ValidDestination(destination) || !ValidDestinationRect(rect) || (rgb888 & 0xff000000U) != 0U) {
         return false;
     }
+    if (!FlushPendingCopies()) {
+        return false;
+    }
+    const int64_t started_us = esp_timer_get_time();
     if (opacity == 255U && TryFill(destination, rect, rgb888)) {
         ++stats_.ppa_fills;
+        stats_.ppa_fill_elapsed_us += static_cast<uint64_t>(esp_timer_get_time() - started_us);
         return true;
     }
     ++stats_.software_fallbacks;
-    return software_.Fill(destination, rect, rgb888, opacity);
+    const bool filled = software_.Fill(destination, rect, rgb888, opacity);
+    stats_.software_elapsed_us += static_cast<uint64_t>(esp_timer_get_time() - started_us);
+    return filled;
+}
+
+bool EspPixelCompositor::Dma2dCopyEligible(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
+                                           SurfaceRect destination_rect) const {
+    return source.format == SurfacePixelFormat::kBgr888 && destination.format == SurfacePixelFormat::kBgr888 &&
+           source_rect.width == destination_rect.width && source_rect.height == destination_rect.height &&
+           EntirelyInside(destination, destination_rect) && Pixels(destination_rect) >= minimum_hardware_pixels_;
+}
+
+void EspPixelCompositor::BeginBatch() {
+    (void)FlushPendingCopies();
+    batching_ = direct_copy_.Ready();
+    batch_failed_ = false;
+}
+
+bool EspPixelCompositor::EndBatch() {
+    const bool flushed = FlushPendingCopies();
+    batching_ = false;
+    const bool ok = flushed && !batch_failed_;
+    batch_failed_ = false;
+    return ok;
+}
+
+bool EspPixelCompositor::FlushPendingCopies() {
+    if (pending_copy_count_ == 0U) {
+        return true;
+    }
+    const std::size_t count = pending_copy_count_;
+    pending_copy_count_ = 0U;
+    const int64_t started_us = esp_timer_get_time();
+    const bool copied = direct_copy_.CopyBlocks(pending_copies_.data(), count);
+    stats_.dma2d_elapsed_us += static_cast<uint64_t>(esp_timer_get_time() - started_us);
+    if (!copied) {
+        batch_failed_ = true;
+        return false;
+    }
+    ++stats_.dma2d_batches;
+    stats_.dma2d_copies += static_cast<uint32_t>(count);
+    return true;
 }
 
 bool EspPixelCompositor::TryDma2dCopy(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                       SurfaceRect destination_rect) {
-    if (dma2d_client_ == nullptr || source.format != SurfacePixelFormat::kBgr888 ||
-        destination.format != SurfacePixelFormat::kBgr888 || source_rect.width != destination_rect.width ||
-        source_rect.height != destination_rect.height || !EntirelyInside(destination, destination_rect) ||
-        Pixels(destination_rect) < minimum_hardware_pixels_) {
+    if (!Dma2dCopyEligible(source, source_rect, destination, destination_rect)) {
+        return false;
+    }
+    if (batching_) {
+        // Deferred: the chain executes blocks in order, so later copies that
+        // overlap earlier ones still land on top exactly as immediate calls.
+        pending_copies_[pending_copy_count_++] = {
+            .source = source,
+            .source_rect = source_rect,
+            .destination = destination,
+            .destination_rect = destination_rect,
+        };
+        if (pending_copy_count_ == pending_copies_.size()) {
+            // A failed flush is reported once by EndBatch; the caller's frame
+            // is discarded as a whole, so no per-block fallback is attempted.
+            (void)FlushPendingCopies();
+        }
+        return true;
+    }
+    if (direct_copy_.Ready()) {
+        return direct_copy_.Copy({
+            .source = source,
+            .source_rect = source_rect,
+            .destination = destination,
+            .destination_rect = destination_rect,
+        });
+    }
+    if (dma2d_client_ == nullptr) {
         return false;
     }
     async_color_convert_request_t copy{};
@@ -314,10 +414,19 @@ bool EspPixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_rect,
         return true;
     }
     const bool same_size = source_rect.width == destination_rect.width && source_rect.height == destination_rect.height;
+    const int64_t copy_started_us = batching_ ? 0 : esp_timer_get_time();
     if (opacity == 255U && source.format == SurfacePixelFormat::kBgr888 && same_size &&
         TryDma2dCopy(source, source_rect, destination, destination_rect)) {
-        ++stats_.dma2d_copies;
+        if (!batching_) {
+            ++stats_.dma2d_copies;
+            stats_.dma2d_elapsed_us += static_cast<uint64_t>(esp_timer_get_time() - copy_started_us);
+        }
         return true;
+    }
+    // Everything below writes through a different engine or the CPU; queued
+    // copies must land first to keep the caller's draw order.
+    if (!FlushPendingCopies()) {
+        return false;
     }
     if (source.format == SurfacePixelFormat::kBgr888 && !same_size && opacity == 255U &&
         TryScale(source, source_rect, destination, destination_rect)) {
@@ -341,7 +450,10 @@ bool EspPixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_rect,
         return true;
     }
     ++stats_.software_fallbacks;
-    return software_.Blit(source, source_rect, destination, destination_rect, opacity);
+    const int64_t software_started_us = esp_timer_get_time();
+    const bool blitted = software_.Blit(source, source_rect, destination, destination_rect, opacity);
+    stats_.software_elapsed_us += static_cast<uint64_t>(esp_timer_get_time() - software_started_us);
+    return blitted;
 }
 
 }  // namespace micropixel::platform::graphics

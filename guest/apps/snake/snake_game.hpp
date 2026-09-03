@@ -24,7 +24,29 @@ class SnakeGame final {
 
     void OnTouch(const micropixel::TouchEvent& touch);
 
+    // Benchmark mode (`--benchmark` launch argument): starts the game at once,
+    // steers the snake automatically, restarts immediately after a collision
+    // and logs frame pacing every 120 renders. Shipping behaviour is untouched
+    // when it is not enabled.
+    void EnableBenchmark(bool bgm_enabled);
+
    private:
+    struct BenchmarkStats final {
+        uint32_t frames{};
+        uint64_t window_start_us{};
+        uint64_t render_us_accum{};
+        uint64_t render_max_us{};
+        uint64_t tick_max_us{};
+        uint32_t late_ticks{};
+        uint32_t deaths{};
+    };
+
+    void BenchmarkSteer();
+
+    void BenchmarkRecordRender(uint64_t before_us, uint64_t after_us);
+
+    [[nodiscard]] bool CellBlocked(Cell cell) const;
+
     static micropixel::Rect CellRect(Cell cell, int32_t inset, int32_t board_x, int32_t board_y);
 
     [[nodiscard]] uint64_t MovementPeriodUs() const;
@@ -178,6 +200,9 @@ class SnakeGame final {
     bool bgm_playing_{};
     bool audio_error_logged_{};
     bool scene_initialized_{};
+    bool benchmark_{};
+    bool bgm_enabled_{true};
+    BenchmarkStats bench_{};
     Screen screen_{Screen::kMenu};
     micropixel::ui::Button pause_touch_button_{};
     snake::gamekit::SwipeGesture touch_gesture_;

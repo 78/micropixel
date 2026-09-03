@@ -18,6 +18,7 @@ list(APPEND micropixel_sources
 # SoC capabilities instead of the selected board.
 if(CONFIG_SOC_PPA_SUPPORTED OR CONFIG_SOC_DMA2D_SUPPORTED)
     list(APPEND micropixel_sources
+        "platform/graphics/dma2d_copy_engine.cpp"
         "platform/graphics/esp_pixel_compositor.cpp"
         "platform/lvgl/display/ppa_srm_blitter.cpp"
         "platform/lvgl/display/system_transition_compositor.cpp"

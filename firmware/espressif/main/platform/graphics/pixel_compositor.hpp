@@ -68,6 +68,14 @@ class PixelCompositor {
     [[nodiscard]] virtual bool Blit(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                     SurfaceRect destination_rect, uint8_t opacity) = 0;
 
+    // Optional batching window. Between BeginBatch and EndBatch an
+    // implementation may defer order-preserving operations (for example
+    // opaque copies) and issue them as one hardware transaction. Every
+    // operation still takes effect in call order; a deferred failure surfaces
+    // from EndBatch. Implementations without batching keep the defaults.
+    virtual void BeginBatch() {}
+    [[nodiscard]] virtual bool EndBatch() { return true; }
+
    protected:
     PixelCompositor() = default;
 };

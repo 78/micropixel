@@ -107,8 +107,7 @@ SpriteBatch instance 容量；稳定移动的 wire 通常只有 2–6 条 record
 
 下一轮按收益和风险排序：
 
-1. 缩短持有 LVGL 锁的范围，让 App Surface CPU/PPA 合成尽量在锁外执行，只在提交 image damage 和 Host
-   root 状态时持锁；
+1. ~~缩短持有 LVGL 锁的范围~~ 已完成：App Surface 合成和 publish 都不再取 LVGL 锁，见第 8 节；
 2. `GuestScene::Apply()` 从整 Scene current-to-scratch copy 迁移为 touched-slot undo 或等价的固定容量
    原子事务，但必须继续保证失败零副作用；
 3. 缓存 Label metrics，使仅位置、颜色、可见性或祖先 Layer 变化时不重新测量相同文本；
@@ -236,8 +235,8 @@ App Surface 和 LVGL PPA 硬件选择继续沿用 Mosaico 已有方案：P4/S31 
 不满足时仍回退 CPU。copy、fill、blend、scale 不拆分，也不增加板级调度配置。下面的微基准用于解释
 固定成本和观察回归，不再作为拆分阈值的实施建议。
 
-持续统计由 `CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY` 控制，默认关闭。打开后 Host 每 120 个
-Scene frame 输出一条独立聚合记录；关闭时 RGB888 software-image、framebuffer DMA2D、panel submit 和
+持续统计由 `CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY` 控制，默认关闭。打开后 Host 每 600 个
+Scene frame 输出一条独立聚合记录（与其余 App Surface 周期日志同步，见第 8 节关于 UART 日志代价的说明）；关闭时 RGB888 software-image、framebuffer DMA2D、panel submit 和
 VSYNC wait 路径均不调用计时函数，也不更新计数器。
 
 实现后的 Metalio 真机复测确认四组字段都能被采集。一个稳定的 120 Scene frame 窗口记录到 175 次
@@ -373,7 +372,8 @@ driver API 进行一次性微基准。每组先预热四次，再按面积执行
 
 这些交叉区间说明统一门槛会让部分小图元承担额外的固定成本。P4 继续使用共享的 `100 pixels` 门槛；
 S31 的 PPA blend 从 2026-09-02 起单独使用 `512 pixels` 门槛，copy、fill 和 scale 保持原门槛。硬件选择
-始终不暴露给 Guest 或 Sprite API。
+始终不暴露给 Guest 或 Sprite API。（2026-09-04 起 blend 门槛在两块板上统一为 `4096 pixels`，fill 门槛为
+`16384 pixels`，依据见第 9 节；本节保留当时的微基准数据。）
 
 调整依据来自 ESP-Mosaico 上一个 480×480 横向卷轴 App 的端到端分桶采样。在相同的持续卷屏 240 Scene
 frame 窗口中，`256–511 pixels` 区间平均每帧提交约 44.6 次 PPA blend、阻塞约 8.71 ms，占全部 blend
@@ -410,3 +410,204 @@ blocking driver 累计耗时，以及 S31 交叉点以下、已改走 CPU 的候
 `100–255`、`256–511`、`512–839`、`840–1023`、`1024–2047`、`2048–4095`、
 `4096–16383` 和 `16384+` pixels 输出每档累计 `calls/us`，用于判断高频小操作而不是大面积像素
 是否主导等待。
+
+## 7. 硬件源必须位于 PSRAM：flash 映射 raw 资源的代价
+
+2026-09-03 在 Metalio-Claw4 上用 Mario `--benchmark --no-bgm` 卷屏定位 DMA2D 吞吐异常。
+`App Surface engines` 日志把 DMA2D 直驱 copy 的等待拆成 `chan`（等待 pool 分配 channel）、
+`hw`（从 `on_job_picked` 到 RX EOF 中断）和 `wake`（中断到任务恢复）三段；卷屏时 98% 的等待落在
+`hw`，实测约 180 ns/px，而同一帧环境里从 App Surface 复制一条 720×32 PSRAM 条带只需约 23 ns/px。
+逐块 dump 显示慢批次的源地址全部在 `0x4039xxxx`，即 Bundle 在 flash 的 DROM 映射：Mario 的
+tilesheet 是 `png_to_raw_rgb888`，`ResourceService` 以前直接把 flash 映射地址交给 `BitmapStore`。
+DMA2D/PPA 读取 flash 映射源要经过 flash cache 和 MSPI，带宽只有 PSRAM 的几分之一，而且持续占用
+外部存储路径，MIPI-DSI 同时报出 `can't fetch data from external memory fast enough, underrun`
+（60 s 窗口 408 次）。
+
+现行策略：raw 资源在 `LoadTexture()` 时若位于 DROM，就复制到 64-byte 对齐的 PSRAM（`psram-staged`），
+PSRAM 不足时才退回 flash 映射并打 WARN。Mario 1.7 MB tilesheet 的复制约 90 ms，只发生一次。效果
+（120 帧窗口差量，同一构建前后）：
+
+| 指标 | flash 映射源 | PSRAM 暂存源 |
+|---|---:|---:|
+| DMA2D `hw` 耗时 | 约 180 ns/px | 约 27 ns/px |
+| `render` 每帧 | 13–19 ms | 6–9 ms |
+| `compose` 每帧 | 15–24 ms | 9–13 ms |
+| DSI underrun / 60 s | 408 | 0 |
+| Mario 卷屏 FPS | 33–38 | 38–48 |
+
+结论：任何会成为 DMA2D、PPA 或 CPU 热路径源的像素都不能停留在 flash 映射上；“零拷贝”只适用于一次性
+读取的数据。`sw=blit/alpha` 的 CPU 回退同样受益，因为 flash cache miss 也远慢于 PSRAM。
+
+## 8. App Surface 三缓冲与无锁 publish：Guest 不再等 LVGL 锁
+
+2026-09-03 同一台 Metalio-Claw4 上的 Mario 卷屏在 PSRAM 暂存之后仍有一段稳定的 `lock-wait`：120 帧
+窗口平均 3.0–5.8 ms，占每帧 `total` 的 20–25%。原因是 `DOUBLE_DIRECT` 模式下 LVGL task 在 flush 里
+等待 framebuffer switch 完成（约 78 Hz VSYNC，见 5.3），而这段等待始终持有 LVGL 递归锁；Guest 双缓冲
+虽然已经把合成移到锁外，publish（image data 指针切换 + `lv_obj_invalidate_area`）仍要排队等这把锁。
+
+现行结构（`GuestGraphicsEngine` + `AppSurfaceCompositor`）：
+
+1. `AppSurfaceCompositor` 从 front/back 泛化为最多 `kMaxSurfaces = 3` 个 slot。每个 slot 记录“别的
+   surface 已经渲染、本 surface 还没收到”的 carry damage；present 到任意 slot 时先重放 carry 再叠加
+   本帧 content damage，所有 surface 都增量收敛到同一内容。Layer 快照始终取自最近一次 present 的
+   surface。`RefreshBitmap` 同样可以落到任意 slot。`CONFIG_MICROPIXEL_APP_SURFACE_COUNT` 取值 1–3，
+   默认 3。
+2. Guest task 的 `Submit` 全程不取 LVGL 锁：`AcquireComposeSurface()` 在 spinlock 下挑一个既不是
+   displayed 也不是 pending 的 surface；合成后 `PublishSurface()` 把 surface 序号和 content damage 并入
+   单槽 mailbox（`pending_`），再 `lv_timer_ready(publish_timer_)` + `esp_lv_adapter_request_wake()`。
+   LVGL refresh timer 在没有 invalidation 时是暂停的，所以需要一个常驻的长周期 timer 把 LVGL task 拉起
+   来消费 mailbox。
+3. LVGL task 在 `LV_EVENT_REFR_START`（以及 publish timer 回调）里 `AdoptPendingFrameLocked()`：切换
+   image descriptor 的 data 指针、按 damage 集合 `lv_obj_invalidate_area`、首帧时创建 `guest_frame_`
+   并调用 Host presentation hook。REFR_START 位于 `lv_refr_join_area()` 之前，所以本次 refresh 就会把
+   新帧刷到 panel。
+4. Guest 领先 LVGL 时，新 publish 直接替换 mailbox 中未被采用的帧（`replaced` 计数），damage 取并集，
+   被替换的 surface 立刻可以再次成为合成目标。两 surface 配置需要从 mailbox 里“拿回” pending surface；
+   三 surface 配置总有空闲目标。单 surface 配置仍在锁内合成并就地 adopt。
+5. 采样日志的代价也进入了预算：console 是 115200 UART，`App Surface scene/engines/PPA histogram` 三条
+   合计约 1.5 KiB，每 120 帧输出一次意味着 Guest task 每 2 s 阻塞约 110 ms（`present_max_us` 中稳定
+   出现的 100–120 ms 尖峰就是它）。现在这组周期日志改为每 600 帧一次，`display refresh` 每 300 次一次。
+
+Mario `--benchmark --no-bgm`，Guest 每 120 帧窗口（同一构建前后，PSRAM 暂存已生效）：
+
+| 指标 | 双缓冲 + 锁内 publish | 三缓冲 + mailbox |
+|---:|---:|---:|
+| `lock-wait` 每帧 | 3.0–5.8 ms | 0 |
+| `total` 每帧 | 15–22 ms | 11–17 ms |
+| Guest present FPS | 38–48 | 51–60 |
+| `present_max_us`（无日志窗口） | 110–122 ms | 18–39 ms |
+| mailbox `replaced` / 600 帧 | — | 70–135 |
+
+面板侧现在的上限来自 LVGL 自己的 refresh：damage 超过约 10 万像素时一次 refresh 需要 ~24.7 ms
+（约 2 个 12.7 ms VSYNC 周期），小 damage 帧为 4–12 ms，因此 `display refresh` 稳定在每秒约 40–46
+次，Host 浮层 FPS 读数约 39–46；`replaced` 就是 Guest 比 LVGL 多出来的帧。要继续抬高 panel 帧率，
+下一步在 LVGL/adapter 侧：LVGL framebuffer 改用 `TRIPLE_*` tear-avoid 模式以消除 flush 内的 switch
+等待，或者把 App Surface 直接送入 DPI framebuffer 绕过 LVGL image draw；两者都是板级显示 pipeline
+的改动，需要连同 System Shell 过渡动画一起验收。
+
+关于 Phase 2 计划中的 `CachedContainerLayer`：Graphics 1.4 的 `CONTAINER_FLAGS/CACHED_CONTENT` 提示已
+进入 ABI/SDK 并通过 conformance，但 Host 暂不为它实现环形缓存。原因是在本节数据下，Mario 卷屏每帧
+真正变化的只有 5–7 个区域、约 10–16 万像素，其中大部分已由 DMA2D 以 27 ns/px 复制；一个把整个
+720×448 视口从缓存再复制一遍的 Layer（约 32 万像素/帧）会比现在的 damage 路径更慢，PSRAM 带宽才是
+上限。该提示保留为无副作用的渲染建议，等出现“每帧几乎整屏变化但内容不变”的负载再评估；目前它唯一的
+Host 侧作用是选择 Layer 快照容器（见 9.3）。
+
+Mario 已按这个 API 的目标形态拆分场景：`viewport_`（固定裁剪）下并列 `terrain_`（装饰 + 瓦片，
+`cache_content = true`）和 `actors_`（实体 + 飘字），`SetCamera` 同步平移两者。普通滚动帧 wire 从 2 条
+记录变为 3 条（`wire=3rec/1inst/180B`），Guest present FPS 与拆分前一致（45–58，`total` 14.4 ms，
+`lock-wait=0`），说明 Host 忽略该提示时拆分本身没有代价；Host 日后实现缓存层时不需要再改 Guest。
+
+## 9. CPU 光栅热路径、硬件门槛重估与 S31 同步验收
+
+2026-09-03/04，起因是 Juicy Snake 在 Metalio-Claw4 上开局 CPU 63%、只有 50 FPS。Snake 新增了
+`--benchmark`（自动开局、贪心自动驾驭、撞墙立即重开、每 120 次 Render 打一行
+`snake-bench: frames= elapsed_ms= fps_x100= render_avg_us= render_max_us= tick_max_us= late_ticks= deaths=`）
+和 `--no-bgm`，与 Mario 的 benchmark 输出对齐。
+
+### 9.1 三处 CPU 光栅路径
+
+分段日志显示 Snake 一帧里 `cpu:` fallback 有几十次、`fill` 却是 PPA 提交，问题不在硬件而在 CPU 路径的
+形状：
+
+1. `RoundedRect` 逐行调用 `Fill`，即使这一行完全落在 damage 窗口之外，也即使它在直边区间不需要任何内缩。
+   现在先把行迭代裁到目标 surface，再把两段圆角之间的直边带合成最多三个块状 `Fill`；对一个 625×625
+   棋盘，一帧的 fill 调用从数百次降到个位数（`RoundedRectCoalescesStraightBandAndClipsToDestination`）。
+2. 软件不透明 `Fill` 每个像素都走 `WriteRgb` 格式分派。现在只光栅第一行，其余行 `memcpy`。
+3. 软件 `Blit` 对每个像素做 64 位除法映射源坐标。等尺寸 blit（Sprite 的常态）走 `BlitSameSize`，
+   直接指针步进；BGRA8888→BGR888 有专用循环（`SameSizeBgraBlitMatchesReferenceBlend`）。
+
+### 9.2 硬件门槛：小操作固定成本
+
+在 P4 上用 `PPA blend histogram` 和 `fill` 计数拆分后，PPA 的固定成本比第 6 节 S31 微基准更高：一次
+blocking fill 约 150 us 起，一次 blocking blend 对 sprite 大小的块为 400–900 us，且在 512–4095 px
+区间几乎不随面积变化。CPU 复制一行后 `memcpy` 的 fill 和 <100 ns/px 的 BGRA blend 在这些面积上都更快。
+
+现在的路由（两块板一致，`esp_pixel_compositor.cpp`）：
+
+| 操作 | 走硬件的条件 |
+|---|---|
+| DMA2D BGR888 copy | ≥ `CONFIG_MICROPIXEL_APP_SURFACE_HW_MIN_AREA_PIXELS`（100） |
+| PPA fill | ≥ 16384 px 且 ≥ 4 行 |
+| PPA blend | ≥ 4096 px |
+| PPA scale | 原门槛 |
+
+A/B（Mario `--benchmark --no-bgm`，120 帧窗口 Guest present FPS / 600 帧 `compose`）：
+
+| 板 | blend 门槛 | FPS | `compose` |
+|---|---:|---:|---:|
+| Metalio-Claw4 | 4096 | 44–53 | 14.4 ms |
+| Metalio-Claw4 | 16384（全 CPU） | 39–52 | 14.9 ms |
+| ESP-Mosaico | 512（旧） | 45–56 | 11.3 ms |
+| ESP-Mosaico | 4096 | 46–58 | 10.1 ms |
+
+S31 上旧门槛的实测代价：Snake + Mario 累计 `840–1023 px` 档 48k 次 blend 平均 845 us/次，
+`512–839` 档 428 us/次，`1024–4095` 档约 410 us/次——都远慢于 CPU；改到 4096 后 Snake 开局
+`render_avg` 从 11.5 ms 降到 6.0 ms，Host `compose` 从 4.6 ms 降到 2.3 ms。P4 上把 ≥4096 的 blend
+也切到 CPU 反而变慢（上表），所以 4096 保留为两板共用值。这些门槛是启发式，任何新的 sprite 尺寸分布
+都应先看 histogram 再调整。
+
+### 9.3 Layer 由 `cache_content` 选择
+
+`AppSurfaceCompositor` 的 Layer 快照（整块平移、内容不变时捕获并复制）以前固定绑定 Container #1。现在
+`SelectLayerContainer` 优先选第一个 `parent == 0` 且带 `CACHED_CONTENT` 的 container，没有则回退到
+#1；Layer 容器变化时强制走一次完整 normalize，避免 patch 路径上残留 `in_layer` 标记
+（`CachedContentContainerBecomesLayer`）。Snake 的 `game_container_` 现在显式打 `cache_content`，
+两块板上震动帧都出现 `layer-cache=yes ... replays=3`。Mario 的 `terrain_` 是嵌套 container，不满足
+根级条件，行为不变。
+
+### 9.4 ESP-Mosaico 同步验收与一个 S31 专有修复
+
+S31 第一次跑 Mario 在第 3 帧 `render failed status=4`。新增的两条诊断（`rejected op kind= dst= window=
+src= bitmap=` 和 `dma2d_copy: copy failed at <stage>`）定位到 `Dma2dCopyEngine` 对描述符做
+`esp_cache_msync`：描述符在内部 SRAM，P4 上位于 L2 cache 之后需要回写，S31 上内部 SRAM 不经 cache，
+`esp_cache_msync` 对没有 cache line 的地址返回错误。现在与像素行同样先查
+`esp_cache_get_line_size_by_addr`，为 0 时跳过。
+
+同一构建两块板的结果（`--benchmark --no-bgm`，120 帧窗口）：
+
+| 指标 | Metalio-Claw4（720×720） | ESP-Mosaico（480×480） |
+|---|---:|---:|
+| Mario Guest present FPS | 44–53 | 46–58 |
+| Mario `total` / `compose` | 16.3 / 14.4 ms | 11.8 / 10.1 ms |
+| Mario DMA2D `hw` | ≈27 ns/px | ≈28 ns/px |
+| Snake FPS（开局 / level 3） | 60 / 53–60 | 60 / 56–60 |
+| Snake `render_avg`（开局 / level 3） | 6–9 / 12–14 ms | 6–7 / 10–13 ms |
+| Snake `late_ticks` | 0，震动帧 5–16，日志窗口 1 | 0，震动帧 5–10 |
+
+S31 的面板侧仍受 QSPI 限制：`display refresh` 在 14 万像素 damage 时约 46 ms，小 damage 帧 6–13 ms，
+Guest 帧率高于面板刷新率时由 mailbox `replaced` 吸收。
+
+### 9.5 采样日志交给后台执行器
+
+每 600 帧一次的 `scene/engines/histogram/submit stages` 采样日志原先在 Guest task 上同步写 115200 UART，
+约 1.5 KiB 文本对应 P4 `present_max_us≈100–120 ms` 和 1 个 late tick，S3 上更明显。现在
+`GuestGraphicsEngine` 在 Guest task 上只把文本格式化进一个固定 2 KiB 的 `TelemetryReport`
+（最多 6 行，`atomic<bool> in_flight` 防止重入，重入时计数 `dropped` 并在下次报告里补一行），
+然后 `Submit` 给 `work::BackgroundExecutor` 输出；前 8 帧仍内联输出，保证启动诊断不丢。各板
+`platform.cpp` 的 `BindBackgroundExecutor` 同时把执行器绑给 `guest_graphics`。
+
+新增 `CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG`（默认 `y`）：关闭后周期采样和 `display refresh`
+日志整体编译掉，启动与错误日志不受影响。产品发布构建如需安静串口，在对应 `sdkconfig.*.defaults`
+里置 `n`。切换后 P4 `present_max_us` 回到 50–70 ms（真实渲染尖峰），S3 SZPI 的 `max-total` 从
+≈100 ms 降到 ≈40 ms。
+
+### 9.6 ESP32-S3 纯 CPU 路径验收
+
+三款 S3 板没有 PPA/DMA2D，全部走 9.1 的 CPU 路径，只验证“能正常跑、无 `rejected op`/`render failed`”，
+不追 P4/S31 帧率。同一构建（`--benchmark --no-bgm`，120 帧窗口）：
+
+| 指标 | 立创 SZPI ESP32-S3（320×240） | M5Stack CoreS3（320×240，Quad PSRAM） |
+|---|---:|---:|
+| Mario Guest present FPS | 34–47 | 17–26 |
+| Mario `present_avg` / `present_max` | ≈22 / 40 ms | 27–43 / 54–89 ms |
+| Snake FPS（开局 / level 3–6） | 60 / 41–60 | 46–51 / 14–28 |
+| Snake `render_avg`（开局 / 高等级） | ≈8 / 15–21 ms | 17–19 / 33–67 ms |
+| Host `compose` | 3.7–4.6 ms | 同量级 |
+
+两板 Host `compose` 都很低，瓶颈在 Guest 侧 Xtensa AOT 的场景构建和软件 blend。CoreS3 比 SZPI 慢一倍
+以上的主因是 Quad PSRAM 带宽（SZPI 为 Octal），App Surface、LVGL draw buffer 和 sprite 全在 PSRAM，
+属于板级上限而不是回归；Snake 高等级 `late_ticks` 接近每 tick 都晚，是 CoreS3 上的已知现状。
+
+CoreS3 首次接入时 `micropixel run` 卡在上传：新板 `app_store` 从未烧录，Host 启动日志有
+`App Store catalog scan failed`，`app list` 返回 `count=0, storeUsedBytes=0`。先执行
+`bash tools/s3.sh flash-apps cores3 PORT` 烧录共享 Xtensa App Store，再做 USB 增量安装。

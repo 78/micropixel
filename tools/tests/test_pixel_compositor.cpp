@@ -164,6 +164,145 @@ void BgraSourceBlendsDirectlyIntoRgb565() {
     assert(packed == 0x8000U);
 }
 
+// Counts Fill calls so the test can assert the straight band is coalesced
+// into block fills instead of one span per row.
+class CountingCompositor final : public graphics::PixelCompositor {
+   public:
+    [[nodiscard]] bool Fill(graphics::PixelSurface destination, graphics::SurfaceRect rect, uint32_t rgb888,
+                            uint8_t opacity) override {
+        ++fills;
+        return software_.Fill(destination, rect, rgb888, opacity);
+    }
+    [[nodiscard]] bool Blit(graphics::ConstPixelSurface source, graphics::SurfaceRect source_rect,
+                            graphics::PixelSurface destination, graphics::SurfaceRect destination_rect,
+                            uint8_t opacity) override {
+        return software_.Blit(source, source_rect, destination, destination_rect, opacity);
+    }
+    uint32_t fills{};
+
+   private:
+    graphics::SoftwarePixelCompositor software_;
+};
+
+void RoundedRectCoalescesStraightBandAndClipsToDestination() {
+    constexpr uint32_t kSize = 64U;
+    constexpr uint32_t kRadius = 8U;
+    constexpr uint32_t kStroke = 2U;
+    CountingCompositor full;
+    std::array<uint8_t, kSize * kSize * 3U> full_pixels{};
+    graphics::PixelSurface full_surface = BgrSurface(full_pixels, kSize, kSize);
+    assert(full.RoundedRect(full_surface, {.x = 0, .y = 0, .width = kSize, .height = kSize}, kRadius, 0x0000ffU,
+                            0x00ff00U, kStroke, 255U));
+    // Corner rows stay per-span (<= 3 fills each); the band is 3 block fills.
+    assert(full.fills <= 2U * kRadius * 3U + 3U);
+    const auto pixel = [&](uint32_t x, uint32_t y) { return &full_pixels[(y * kSize + x) * 3U]; };
+    // Band rows: stroke | fill | stroke, identical to the per-row geometry.
+    for (uint32_t y = kRadius; y < kSize - kRadius; ++y) {
+        assert(pixel(0U, y)[1] == 255U && pixel(kStroke - 1U, y)[1] == 255U);
+        assert(pixel(kStroke, y)[0] == 255U && pixel(kSize - kStroke - 1U, y)[0] == 255U);
+        assert(pixel(kSize - kStroke, y)[1] == 255U && pixel(kSize - 1U, y)[1] == 255U);
+    }
+    // Corners remain transparent, the stroke runs along the top edge.
+    assert(pixel(0U, 0U)[1] == 0U && pixel(0U, 0U)[0] == 0U);
+    assert(pixel(kSize / 2U, 0U)[1] == 255U);
+
+    // Rendering through a small window at an offset must reproduce exactly
+    // the corresponding region of the full render, including a window that
+    // starts above the rect and one that only covers the straight band.
+    const struct {
+        int32_t x;
+        int32_t y;
+        uint32_t width;
+        uint32_t height;
+    } windows[] = {
+        {3, 5, 20U, 17U},
+        {40, 30, 30U, 9U},
+        {-4, -6, 24U, 20U},
+        {50, 50, 20U, 20U},
+    };
+    for (const auto& window : windows) {
+        CountingCompositor windowed;
+        std::array<uint8_t, 30U * 20U * 3U> window_pixels{};
+        graphics::PixelSurface window_surface = BgrSurface(window_pixels, window.width, window.height);
+        assert(windowed.RoundedRect(window_surface, {.x = -window.x, .y = -window.y, .width = kSize, .height = kSize},
+                                    kRadius, 0x0000ffU, 0x00ff00U, kStroke, 255U));
+        // Rows outside the window are never rasterized.
+        assert(windowed.fills <= (window.height + 1U) * 3U);
+        for (uint32_t wy = 0U; wy < window.height; ++wy) {
+            for (uint32_t wx = 0U; wx < window.width; ++wx) {
+                const int32_t fx = window.x + static_cast<int32_t>(wx);
+                const int32_t fy = window.y + static_cast<int32_t>(wy);
+                const uint8_t* actual = &window_pixels[(wy * window.width + wx) * 3U];
+                if (fx < 0 || fy < 0 || fx >= static_cast<int32_t>(kSize) || fy >= static_cast<int32_t>(kSize)) {
+                    assert(actual[0] == 0U && actual[1] == 0U && actual[2] == 0U);
+                    continue;
+                }
+                const uint8_t* expected = pixel(static_cast<uint32_t>(fx), static_cast<uint32_t>(fy));
+                assert(std::memcmp(actual, expected, 3U) == 0);
+            }
+        }
+    }
+}
+
+void SameSizeBgraBlitMatchesReferenceBlend() {
+    graphics::SoftwarePixelCompositor compositor;
+    constexpr uint32_t kWidth = 5U;
+    constexpr uint32_t kHeight = 4U;
+    std::array<uint8_t, kWidth * kHeight * 4U> source_pixels{};
+    std::array<uint8_t, kWidth * kHeight * 3U> destination_pixels{};
+    uint32_t seed = 12345U;
+    const auto next = [&seed]() {
+        seed = seed * 1103515245U + 12345U;
+        return static_cast<uint8_t>(seed >> 16U);
+    };
+    for (uint8_t& value : source_pixels) {
+        value = next();
+    }
+    // Force the three alpha classes the fast path distinguishes.
+    source_pixels[3U] = 0U;
+    source_pixels[7U] = 255U;
+    source_pixels[11U] = 128U;
+    for (uint8_t& value : destination_pixels) {
+        value = next();
+    }
+    std::array<uint8_t, kWidth * kHeight * 3U> expected = destination_pixels;
+    for (uint32_t index = 0U; index < kWidth * kHeight; ++index) {
+        const uint8_t* src = &source_pixels[index * 4U];
+        uint8_t* dst = &expected[index * 3U];
+        const uint32_t alpha = src[3];
+        if (alpha == 0U) {
+            continue;
+        }
+        for (uint32_t channel = 0U; channel < 3U; ++channel) {
+            dst[channel] = static_cast<uint8_t>((src[channel] * alpha + dst[channel] * (255U - alpha) + 127U) / 255U);
+        }
+    }
+    const graphics::ConstPixelSurface source{
+        .pixels = source_pixels.data(),
+        .size = static_cast<uint32_t>(source_pixels.size()),
+        .width = kWidth,
+        .height = kHeight,
+        .stride = kWidth * 4U,
+        .format = graphics::SurfacePixelFormat::kBgra8888,
+    };
+    graphics::PixelSurface destination = BgrSurface(destination_pixels, kWidth, kHeight);
+    assert(compositor.Blit(source, {.x = 0, .y = 0, .width = kWidth, .height = kHeight}, destination,
+                           {.x = 0, .y = 0, .width = kWidth, .height = kHeight}, 255U));
+    assert(destination_pixels == expected);
+
+    // Partially clipped placement reads the matching source sub-rectangle.
+    std::array<uint8_t, 3U * 2U * 3U> small_pixels{};
+    graphics::PixelSurface small = BgrSurface(small_pixels, 3U, 2U);
+    assert(compositor.Blit(source, {.x = 1, .y = 1, .width = 3, .height = 2}, small,
+                           {.x = -1, .y = -1, .width = 3, .height = 2}, 255U));
+    // small(0,0) <- source(2,2), fully opaque pixels copy their colour.
+    const uint8_t* src = &source_pixels[(2U * kWidth + 2U) * 4U];
+    const uint8_t alpha = src[3];
+    const uint8_t expected_blue = static_cast<uint8_t>((src[0] * alpha + 0U * (255U - alpha) + 127U) / 255U);
+    assert(small_pixels[0] == expected_blue);
+    assert(small_pixels[(1U * 3U + 2U) * 3U] == 0U);  // outside the rect, untouched
+}
+
 void RejectsMalformedSurfaceStorage() {
     graphics::SoftwarePixelCompositor compositor;
     std::array<uint8_t, 3U> pixels{};
@@ -204,6 +343,8 @@ int main() {
     Rgb565RoundTripsPrimaryColors();
     RoundedRectDrawsFillStrokeAndKeepsCornersTransparent();
     RoundedRectAlphaBlendsIntoRgb565();
+    RoundedRectCoalescesStraightBandAndClipsToDestination();
+    SameSizeBgraBlitMatchesReferenceBlend();
     BgraSourceBlendsDirectlyIntoRgb565();
     RejectsMalformedSurfaceStorage();
     return 0;

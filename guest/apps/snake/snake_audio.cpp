@@ -70,7 +70,7 @@ void SnakeGame::StopAudio() {
 }
 
 void SnakeGame::StartBgm() {
-    if (!audio_available_) {
+    if (!audio_available_ || !bgm_enabled_) {
         return;
     }
     bgm_playing_ = true;

@@ -160,6 +160,7 @@ class Esp32S3Box3Board final : public Board {
 
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
         state_.ui.BindBackgroundExecutor(executor);
+        state_.guest_graphics.BindBackgroundExecutor(executor);
         wifi_.BindBackgroundExecutor(executor);
     }
 

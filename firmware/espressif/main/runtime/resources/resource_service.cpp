@@ -3,7 +3,9 @@
 #include <cinttypes>
 #include <cstring>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "runtime/resources/bitmap_decoder.hpp"
 #include "work/background_executor.hpp"
@@ -12,6 +14,9 @@ namespace micropixel::runtime {
 namespace {
 
 constexpr char kTag[] = "micropixel_resource";
+// Cache-line alignment keeps DMA2D/PPA source windows and their cache
+// maintenance on whole lines.
+constexpr size_t kStagedAssetAlignment = 64U;
 
 bool IsRawBitmapFormat(uint32_t format) {
     return format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 || format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 ||
@@ -68,8 +73,30 @@ micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle
 ServiceResult<micropixel_texture_info_t> ResourceService::AddAsset(const micropixel_bundle_asset_view_t& asset) {
     const uint32_t pixel_format = AssetPixelFormat(asset.format);
     device::BitmapView view{asset.data, asset.size, asset.width, asset.height, asset.stride, pixel_format};
-    const micropixel_texture_handle_t texture = bitmaps_.Add(view, false);
+    // Raw assets are mapped straight out of the Bundle in flash. That mapping is
+    // fine for the CPU, but every compositor read of it goes through the flash
+    // cache: DMA2D/PPA sources measured ~180 ns/px from flash against ~23 ns/px
+    // from PSRAM, and the sustained flash traffic starves the DSI frame buffer
+    // fetch ("underrun"). Stage the pixels in PSRAM once at load time; fall
+    // back to the flash view only when PSRAM is exhausted.
+    bool staged = false;
+    if (esp_ptr_in_drom(asset.data)) {
+        auto* pixels = static_cast<uint8_t*>(
+            heap_caps_aligned_alloc(kStagedAssetAlignment, asset.size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (pixels != nullptr) {
+            std::memcpy(pixels, asset.data, asset.size);
+            view.data = pixels;
+            staged = true;
+        } else {
+            ESP_LOGW(kTag, "raw asset %" PRIu32 " bytes stays flash-mapped: PSRAM staging allocation failed",
+                     asset.size);
+        }
+    }
+    const micropixel_texture_handle_t texture = bitmaps_.Add(view, staged);
     if (texture == 0U) {
+        if (staged) {
+            heap_caps_free(const_cast<uint8_t*>(view.data));
+        }
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     return TextureInfo(texture, view);
@@ -85,9 +112,14 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
     }
 
     if (IsRawBitmapFormat(asset.format)) {
+        const int64_t started_us = esp_timer_get_time();
         auto result = AddAsset(asset);
-        ESP_LOGI(kTag, "loaded raw asset=%" PRIu32 " texture=%" PRIu32 " flash=%p", asset_id,
-                 result ? result->texture : 0U, asset.data);
+        device::BitmapView view{};
+        const bool resolved = result && bitmaps_.Resolve(result->texture, view);
+        ESP_LOGI(kTag, "loaded raw asset=%" PRIu32 " texture=%" PRIu32 " bytes=%" PRIu32 " %s elapsed=%" PRId64 " us",
+                 asset_id, result ? result->texture : 0U, asset.size,
+                 resolved ? (esp_ptr_in_drom(view.data) ? "flash-mapped" : "psram-staged") : "failed",
+                 esp_timer_get_time() - started_us);
         return result;
     }
 

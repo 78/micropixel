@@ -104,6 +104,10 @@ int main() {
                                        .background = micropixel::Color::Black()});
     auto game = scene.CreateContainer(
         {.clip = {0, 0, static_cast<int32_t>(renderer_info.width()), static_cast<int32_t>(renderer_info.height())}});
+    // Graphics 1.4: a cached-content container travels its flag in the
+    // keyframe and keeps echoing it in later patches that only move it.
+    auto terrain = game.CreateContainer({.clip = {0, 100, 200, 60}, .cache_content = true});
+    auto ground = terrain.CreateShape({0, 40, 400, 20}, micropixel::Color::Green());
     auto snake = game.CreateSpriteBatch(4U);
     auto image = game.CreateSurfaceNode(texture, {420, 40, 56, 56}, {0, 0, 2, 2}, 192U);
     auto label = game.CreateLabel({52, 56}, "graphics_protocol: scene keyframe", micropixel::Color::White(),
@@ -124,9 +128,29 @@ int main() {
         snake.SetInstance(update, 0U,
                           {.destination = {88, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
         game.SetTranslation(update, {2, 0});
+        // Translation-only patch of the cached container: FLAGS is not in the
+        // property mask, the flag value is echoed unchanged.
+        terrain.SetTranslation(update, {-8, 0});
         label.SetText(update, "graphics_protocol: retained patch");
         if (!update.Present()) {
             return 79;
+        }
+    }
+
+    {
+        // Toggling the hint is a FLAGS-only patch; content and geometry stay.
+        auto update = scene.BeginUpdate();
+        terrain.SetCacheContent(update, false);
+        ground.SetColor(update, micropixel::Color::Rgb(200U, 40U, 40U));
+        if (!update.Present()) {
+            return 82;
+        }
+    }
+    {
+        auto update = scene.BeginUpdate();
+        terrain.SetCacheContent(update, true);
+        if (!update.Present()) {
+            return 83;
         }
     }
 

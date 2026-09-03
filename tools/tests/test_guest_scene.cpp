@@ -195,7 +195,7 @@ micropixel_graphics_scene_container_record_t Container(uint16_t id, uint16_t par
         .opacity = 255U,
         .visible = 1U,
         .sibling_order = sibling_order,
-        .reserved0 = 0U,
+        .flags = 0U,
     };
 }
 
@@ -528,6 +528,81 @@ void ContainerTreeIsValidatedAndPatchedAtomically() {
     assert(scene.Generation() == 7U && scene.Revision() == 2U);
 }
 
+void ContainerFlagsFollowInterfaceMinor() {
+    constexpr uint32_t kContainerMask14 = kContainerMask | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
+    constexpr uint16_t kCached = MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT;
+    SceneStorage<2U, 1U> storage;
+    graphics::GuestScene& scene = storage.scene;
+    auto child = Rect(0, kCommonMask | kKind, 0U);
+    const auto apply = [&](Message& message) {
+        const auto& bytes = message.Finish();
+        return scene.Apply(bytes.data(), static_cast<uint32_t>(bytes.size()), 8, 4, ResolveBitmap, nullptr,
+                           ValidateFont, nullptr);
+    };
+
+    // A 1.3 Guest may neither claim the FLAGS property nor set any flag bit.
+    Message old_property(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 3U);
+    old_property.Add(Background(0U));
+    old_property.Add(Container(1U, 0U, 0U, 0, kContainerMask14));
+    old_property.Add(child);
+    old_property.Add(Link(0U, 1U, 1U));
+    assert(apply(old_property) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+
+    Message old_flag(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 3U);
+    old_flag.Add(Background(0U));
+    auto stale = Container(1U, 0U, 0U);
+    stale.flags = kCached;
+    old_flag.Add(stale);
+    old_flag.Add(child);
+    old_flag.Add(Link(0U, 1U, 1U));
+    assert(apply(old_flag) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+
+    // A 1.4 keyframe must carry the full 1.4 mask and may set the known flag.
+    Message short_mask(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 4U);
+    short_mask.Add(Background(0U));
+    short_mask.Add(Container(1U, 0U, 0U, 0, kContainerMask));
+    short_mask.Add(child);
+    short_mask.Add(Link(0U, 1U, 1U));
+    assert(apply(short_mask) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 4U);
+    keyframe.Add(Background(0U));
+    auto cached = Container(1U, 0U, 0U, 0, kContainerMask14);
+    cached.flags = kCached;
+    keyframe.Add(cached);
+    keyframe.Add(child);
+    keyframe.Add(Link(0U, 1U, 1U));
+    assert(apply(keyframe) == MICROPIXEL_STATUS_OK);
+    assert(scene.Containers()[1].cached_content);
+
+    // Unknown flag bits are rejected even on 1.4.
+    Message unknown(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U, 4U);
+    auto bogus = Container(1U, 0U, 0U, 0, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS);
+    bogus.flags = static_cast<uint16_t>(kCached | (1U << 7U));
+    unknown.Add(bogus);
+    assert(apply(unknown) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+
+    // A translation-only patch must echo the retained flag value...
+    Message mismatch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U, 4U);
+    mismatch.Add(Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
+    assert(apply(mismatch) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    Message translate(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U, 4U);
+    auto moved = Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION);
+    moved.flags = kCached;
+    translate.Add(moved);
+    assert(apply(translate) == MICROPIXEL_STATUS_OK);
+    assert(scene.Containers()[1].cached_content && scene.Containers()[1].translate_x == 3);
+    assert((scene.ContainerChanges(1U) & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS) == 0U);
+
+    // ...and a FLAGS patch clears it.
+    Message clear(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 2U, 3U, 1U, 1U, 0U, 4U);
+    auto plain = Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS);
+    clear.Add(plain);
+    assert(apply(clear) == MICROPIXEL_STATUS_OK);
+    assert(!scene.Containers()[1].cached_content);
+    assert((scene.ContainerChanges(1U) & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS) != 0U);
+}
+
 void RootViewportAcceptsOffscreenLocalGeometry() {
     SceneStorage<2U, 1U> storage;
     graphics::GuestScene& scene = storage.scene;
@@ -598,6 +673,7 @@ int main() {
     SpriteBatchInstancesPatchIndependently();
     AdaptiveAtlasFarEdgeRoundingIsNormalized();
     ContainerTreeIsValidatedAndPatchedAtomically();
+    ContainerFlagsFollowInterfaceMinor();
     RootViewportAcceptsOffscreenLocalGeometry();
     SceneTransactionsSerializeNetPropertyChanges();
     return 0;

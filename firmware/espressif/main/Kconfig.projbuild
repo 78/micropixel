@@ -217,6 +217,46 @@ menu "MicroPixel board backends"
             Small glyph spans still remain on CPU while ordinary game cells,
             sprites and background restores use PPA or DMA2D.
 
+    config MICROPIXEL_APP_SURFACE_COUNT
+        int "Number of App Surfaces the Guest compositor rotates through"
+        range 1 3
+        default 3
+        help
+            With a single App Surface the Guest scene must be composed while
+            holding the LVGL lock, so each Guest frame serializes behind the
+            LVGL refresh that copies the previous frame into the panel
+            framebuffer. With two or more surfaces the Guest composes into a
+            surface LVGL is not reading and publishes it through a lock-free
+            mailbox that the LVGL task adopts at the start of its next
+            refresh, so the Guest never waits for the LVGL lock or the panel
+            vsync. Two surfaces have to reuse the not-yet-adopted surface
+            when the Guest runs ahead of LVGL; three surfaces always leave a
+            free compose target. Each surface costs one full-screen buffer in
+            PSRAM.
+
+    config MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+        bool "Log periodic App Surface scene, engine and refresh telemetry"
+        default y
+        help
+            Every 600 Guest frames the compositor summarizes damage, replay,
+            PPA/DMA2D/CPU engine time and submit stage averages, and every 300
+            display refreshes it logs the refresh duration. The text is
+            formatted on the Guest task but written to the console by the
+            background executor, so the ~1.5 KiB burst does not stall the Guest
+            frame. Disable to compile the periodic telemetry out of the Host
+            entirely; startup and error logs are unaffected.
+
+    config MICROPIXEL_APP_SURFACE_DMA2D_DIRECT_COPY
+        bool "Drive DMA2D copies directly with row-window cache maintenance"
+        depends on SOC_DMA2D_SUPPORTED
+        default y
+        help
+            esp_async_color_convert writes back and invalidates the complete
+            source and destination pictures on every request, which costs about
+            0.2 ms per tile copy and evicts the whole App Surface from cache.
+            The direct path owns its DMA2D descriptors and only synchronizes the
+            rows a block touches. Disable to fall back to the IDF helper.
+
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT
         int "LVGL partial draw buffer height"
         range 20 720
