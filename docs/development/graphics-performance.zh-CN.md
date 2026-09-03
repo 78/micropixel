@@ -398,6 +398,12 @@ foreground 和 output 的扩展窗口执行 `esp_cache_msync()`；事务被 DMA2
 engine 仍按 FIFO 串行执行，所以继续增大队列也不会增加像素吞吐。若要进一步降低该区间成本，需要减少
 blend 事务数量（例如合并相邻图元或缓存预合成层），而不是增加 pending queue 深度。
 
+还测试了把小块的 background、BGRA foreground 和 output 全部逐行打包到 64-byte 对齐的内部 SRAM，
+再执行 blocking PPA blend，最后把结果拷回 PSRAM。相同自动滚屏 App 的小块 CPU 基线为 20.45 FPS；
+SRAM staging 为 17.72–17.76 FPS，反而下降约 13.2%。600 帧累计 29,400 次 staging 的平均成本为：
+background pack 22.5 us、foreground pack 9.1 us、PPA 139.5 us、copy-back 11.7 us，总计 182.9 us/次。
+因此产品路径不保留 SRAM staging，`< 512 pixels` 继续直接走 CPU。
+
 持续诊断日志中的 `blend-work=<pixels>/<us>/small-candidates:<count>` 分别记录成功 PPA blend 的累计像素、
 blocking driver 累计耗时，以及 S31 交叉点以下、已改走 CPU 的候选数。和其他 Scene 计数一样，应使用相邻
 120 帧记录的差量分析，不把启动以来的累计值直接当作单帧数据。`PPA blend histogram` 进一步按

@@ -289,7 +289,9 @@ void KeyframeAndPatchesAreAtomicAndRevisioned() {
     assert(scene.Revision() == 2U && scene.Nodes()[0].x == 5);
 
     Message invalid(MICROPIXEL_GRAPHICS_SCENE_PATCH, 11U, 2U, 3U, 2U, 1U);
-    invalid.Add(Rect(20, MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY));
+    auto invalid_rect = Rect(2, MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY);
+    invalid_rect.width = 0;
+    invalid.Add(invalid_rect);
     const auto& invalid_bytes = invalid.Finish();
     assert(scene.Apply(invalid_bytes.data(), static_cast<uint32_t>(invalid_bytes.size()), 8, 4, ResolveBitmap, nullptr,
                        ValidateFont, nullptr) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -526,6 +528,44 @@ void ContainerTreeIsValidatedAndPatchedAtomically() {
     assert(scene.Generation() == 7U && scene.Revision() == 2U);
 }
 
+void RootViewportAcceptsOffscreenLocalGeometry() {
+    SceneStorage<2U, 1U> storage;
+    graphics::GuestScene& scene = storage.scene;
+
+    auto prefetched = Rect(7, kCommonMask | kKind, 0U);
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 9U, 0U, 1U, 1U, 2U, 0U, 2U);
+    keyframe.Add(Background(0U));
+    keyframe.Add(Container(1U, 0U, 0U));
+    keyframe.Add(Container(2U, 1U, 1U, -1));
+    keyframe.Add(prefetched);
+    keyframe.Add(Link(0U, 2U, 2U));
+    const auto& bytes = keyframe.Finish();
+    assert(scene.Apply(bytes.data(), static_cast<uint32_t>(bytes.size()), 8, 4, ResolveBitmap, nullptr, ValidateFont,
+                       nullptr) == MICROPIXEL_STATUS_OK);
+    assert(scene.Nodes()[0].x == 7 && scene.Nodes()[0].width == 2);
+
+    SceneStorage<2U, 1U> root_storage;
+    graphics::GuestScene& root_scene = root_storage.scene;
+    Message root_keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 10U, 0U, 1U, 1U, 0U);
+    root_keyframe.Add(Background(0U));
+    root_keyframe.Add(Rect(7, kCommonMask | kKind, 0U));
+    const auto& root_bytes = root_keyframe.Finish();
+    assert(root_scene.Apply(root_bytes.data(), static_cast<uint32_t>(root_bytes.size()), 8, 4, ResolveBitmap, nullptr,
+                            ValidateFont, nullptr) == MICROPIXEL_STATUS_OK);
+
+    SceneStorage<2U, 1U> invalid_storage;
+    graphics::GuestScene& invalid_scene = invalid_storage.scene;
+    auto empty = Rect(7, kCommonMask | kKind, 0U);
+    empty.width = 0;
+    Message invalid(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 11U, 0U, 1U, 1U, 0U);
+    invalid.Add(Background(0U));
+    invalid.Add(empty);
+    const auto& invalid_bytes = invalid.Finish();
+    assert(invalid_scene.Apply(invalid_bytes.data(), static_cast<uint32_t>(invalid_bytes.size()), 8, 4,
+                               ResolveBitmap, nullptr, ValidateFont, nullptr) ==
+           MICROPIXEL_STATUS_INVALID_ARGUMENT);
+}
+
 void SceneTransactionsSerializeNetPropertyChanges() {
     constexpr uint32_t kDirtyGeometry = 1U << 0U;
     constexpr uint32_t kDirtyVisibility = 1U << 1U;
@@ -558,6 +598,7 @@ int main() {
     SpriteBatchInstancesPatchIndependently();
     AdaptiveAtlasFarEdgeRoundingIsNormalized();
     ContainerTreeIsValidatedAndPatchedAtomically();
+    RootViewportAcceptsOffscreenLocalGeometry();
     SceneTransactionsSerializeNetPropertyChanges();
     return 0;
 }

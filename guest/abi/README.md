@@ -75,7 +75,8 @@ Graphics 1.2 用 `CONTAINER` 和 `NODE_LINK` record 建立真正的 retained tre
 隐式根，`1..container_count` 是连续 wire ID；每个 drawable 在 keyframe 中必须有一个 `NODE_LINK`，声明
 parent container 和同级顺序。Container 可嵌套，translation、clip、opacity 和 visibility 沿父链继承，
 drawable geometry、clip 和 translation 都是相对直接 parent 的局部物理坐标，Host 在遍历父链时合成最终
-Scene 坐标；z-order 与 sibling order 决定树内绘制顺序。Scene touch 坐标不进入 Graphics wire，Guest SDK
+Scene 坐标；Scene root 隐含最终 viewport clip，drawable 和显式 clip 的局部矩形可以越过 parent 或 root，
+Host 只栅格化祖先 clip 与 viewport 的最终交集；z-order 与 sibling order 决定树内绘制顺序。Scene touch 坐标不进入 Graphics wire，Guest SDK
 负责高层控件的 Scene/local 转换。Host 继续只读兼容 Graphics 1.1 的 `LAYER` record，并在解析后
 规范化为一级 container；1.2 Guest 不再发送 `LAYER`。此升级没有增加 Core import。
 

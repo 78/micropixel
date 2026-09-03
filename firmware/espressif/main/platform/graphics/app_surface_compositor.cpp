@@ -337,7 +337,12 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
                 metrics.width > INT32_MAX || metrics.height > INT32_MAX) {
                 return AppSurfaceStatus::kInvalidArgument;
             }
-            operation.destination.x = node.text_centered ? node.x - static_cast<int32_t>(metrics.width) / 2 : node.x;
+            const int64_t text_x =
+                node.text_centered ? static_cast<int64_t>(node.x) - static_cast<int32_t>(metrics.width) / 2 : node.x;
+            if (text_x < INT32_MIN || text_x > INT32_MAX) {
+                return AppSurfaceStatus::kInvalidArgument;
+            }
+            operation.destination.x = static_cast<int32_t>(text_x);
             operation.destination.width = static_cast<int32_t>(metrics.width);
             operation.destination.height = static_cast<int32_t>(metrics.height);
         }

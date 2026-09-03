@@ -37,3 +37,6 @@ htmlcov/
 .ruff_cache/
 compile_commands.json
 CMakeUserPresets.json
+/experiments/
+/guest/apps/mario/
+/guest/apps/graphics-scroll-benchmark/

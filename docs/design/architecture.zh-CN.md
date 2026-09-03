@@ -286,6 +286,8 @@ Renderer -> StreamingTexture / TextureUpdateBatch -> SurfaceNode
   Create API。组合控件也使用 `page.CreateTextButton()`。点语法必须让代码嵌套关系与 retained tree 一致；
 - Drawable geometry 和子 Container translation 都相对直接父 Container。Touch event 仍以 Scene 逻辑坐标
   投递；`Container::ToLocal()` / `ToScene()` 用于跨坐标空间，高层控件在命中测试前自动转成本地坐标；
+- Scene root 隐含最终 viewport clip。Drawable 和显式 clip 的局部矩形可以越过 parent 或 root；Host 合成
+  祖先 translation/clip 后只栅格化与 viewport 的最终交集，离屏预取不放宽 texture source 或 buffer 校验；
 - `Sprite` 适合有独立身份的纹理对象，`SpriteBatch` 适合蛇身、方块、爆炸、粒子和 tile；`Shape` v1
   提供矩形，`Label` 使用 Host 字形缓存，`SurfaceNode` 显示可局部更新的 `StreamingTexture`；
 - `Point`、`Rect` 和 `Size` 是 Renderer 与 Input 共用的逻辑坐标 value；显示尺寸只由 `RendererInfo`

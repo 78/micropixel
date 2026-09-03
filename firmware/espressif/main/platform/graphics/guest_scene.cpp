@@ -44,6 +44,13 @@ bool ValidRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t logi
            static_cast<int64_t>(y) + height <= logical_height;
 }
 
+bool ValidClippedLocalRect(int32_t x, int32_t y, int32_t width, int32_t height) {
+    const int64_t right = static_cast<int64_t>(x) + width;
+    const int64_t bottom = static_cast<int64_t>(y) + height;
+    return width > 0 && height > 0 && right >= INT32_MIN && right <= INT32_MAX && bottom >= INT32_MIN &&
+           bottom <= INT32_MAX;
+}
+
 bool ValidTranslatedRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t translate_x, int32_t translate_y,
                          int32_t logical_width, int32_t logical_height) {
     const int64_t translated_x = static_cast<int64_t>(x) + translate_x;
@@ -550,8 +557,8 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             }
         }
     }
-    if (!ValidateResult(logical_width, logical_height, bitmap_resolver, bitmap_context, font_validator, font_context,
-                        scratch_node_count, scratch_container_count, scratch_batch_instance_count)) {
+    if (!ValidateResult(bitmap_resolver, bitmap_context, font_validator, font_context, scratch_node_count,
+                        scratch_container_count, scratch_batch_instance_count)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
 
@@ -570,16 +577,16 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
     return MICROPIXEL_STATUS_OK;
 }
 
-bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, device::BitmapResolver bitmap_resolver,
-                                void* bitmap_context, device::FontValidator font_validator, void* font_context,
-                                uint16_t node_count, uint16_t container_count, uint16_t batch_instance_count) {
+bool GuestScene::ValidateResult(device::BitmapResolver bitmap_resolver, void* bitmap_context,
+                                device::FontValidator font_validator, void* font_context, uint16_t node_count,
+                                uint16_t container_count, uint16_t batch_instance_count) {
     for (uint16_t index = 1U; index <= container_count; ++index) {
         const GuestSceneContainer& container = scratch_containers_[index];
         const bool inherited_clip =
             container.clip_x == 0 && container.clip_y == 0 && container.width == 0 && container.height == 0;
         if (container.parent_container_id > container_count || container.parent_container_id == index ||
-            (!inherited_clip && !ValidRect(container.clip_x, container.clip_y, container.width, container.height,
-                                           logical_width, logical_height))) {
+            (!inherited_clip &&
+             !ValidClippedLocalRect(container.clip_x, container.clip_y, container.width, container.height))) {
             return false;
         }
         uint16_t ancestor = container.parent_container_id;
@@ -595,21 +602,23 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
         if (node.parent_container_id > container_count) {
             return false;
         }
+        const auto valid_geometry = [&](int32_t x, int32_t y, int32_t width, int32_t height) {
+            return ValidClippedLocalRect(x, y, width, height);
+        };
         if (node.kind == GuestSceneNodeKind::kRect) {
-            if (!ValidRect(node.x, node.y, node.width, node.height, logical_width, logical_height) ||
-                !ValidRgb888(node.rgb888)) {
+            if (!valid_geometry(node.x, node.y, node.width, node.height) || !ValidRgb888(node.rgb888)) {
                 return false;
             }
         } else if (node.kind == GuestSceneNodeKind::kRoundedRect) {
-            if (!ValidRect(node.x, node.y, node.width, node.height, logical_width, logical_height) ||
-                !ValidRgb888(node.rgb888) || !ValidRgb888(node.stroke_rgb888)) {
+            if (!valid_geometry(node.x, node.y, node.width, node.height) || !ValidRgb888(node.rgb888) ||
+                !ValidRgb888(node.stroke_rgb888)) {
                 return false;
             }
         } else if (node.kind == GuestSceneNodeKind::kTexture) {
             device::BitmapView bitmap{};
-            if (!ValidRect(node.x, node.y, node.width, node.height, logical_width, logical_height) ||
-                node.texture == 0U || bitmap_resolver == nullptr ||
-                !bitmap_resolver(bitmap_context, node.texture, bitmap) || !ValidBitmap(bitmap)) {
+            if (!valid_geometry(node.x, node.y, node.width, node.height) || node.texture == 0U ||
+                bitmap_resolver == nullptr || !bitmap_resolver(bitmap_context, node.texture, bitmap) ||
+                !ValidBitmap(bitmap)) {
                 return false;
             }
             const int32_t original_source_width = node.source_width;
@@ -635,8 +644,7 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
                 if ((instance.flags & MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBLE) == 0U) {
                     continue;
                 }
-                if (!ValidRect(instance.x, instance.y, instance.width, instance.height, logical_width,
-                               logical_height) ||
+                if (!valid_geometry(instance.x, instance.y, instance.width, instance.height) ||
                     !ValidRgb888(instance.rgb888)) {
                     return false;
                 }
@@ -654,8 +662,7 @@ bool GuestScene::ValidateResult(int32_t logical_width, int32_t logical_height, d
                     }
                 }
             }
-        } else if (node.x < 0 || node.x > logical_width || node.y < 0 || node.y >= logical_height ||
-                   !ValidRgb888(node.rgb888) || node.font == 0U || node.text_length == 0U ||
+        } else if (!ValidRgb888(node.rgb888) || node.font == 0U || node.text_length == 0U ||
                    node.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES || font_validator == nullptr ||
                    !font_validator(font_context, node.font) ||
                    !device::IsValidUtf8(reinterpret_cast<const uint8_t*>(node.text), node.text_length)) {

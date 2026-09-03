@@ -120,8 +120,7 @@ class GuestScene final {
     }
 
    private:
-    [[nodiscard]] bool ValidateResult(int32_t logical_width, int32_t logical_height,
-                                      device::BitmapResolver bitmap_resolver, void* bitmap_context,
+    [[nodiscard]] bool ValidateResult(device::BitmapResolver bitmap_resolver, void* bitmap_context,
                                       device::FontValidator font_validator, void* font_context, uint16_t node_count,
                                       uint16_t container_count, uint16_t batch_instance_count);
     [[nodiscard]] bool BuildDrawOrder(uint16_t node_count, uint16_t container_count);

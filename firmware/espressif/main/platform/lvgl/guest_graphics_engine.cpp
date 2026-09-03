@@ -517,14 +517,6 @@ int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textu
             uint64_t ppa_blend_elapsed_us{};
             std::array<uint32_t, graphics::kPpaBlendHistogramBinCount> ppa_blend_histogram_calls{};
             std::array<uint64_t, graphics::kPpaBlendHistogramBinCount> ppa_blend_histogram_elapsed_us{};
-            uint32_t sram_staged_blends{};
-            uint32_t sram_staged_failures{};
-            uint64_t sram_staged_blend_pixels{};
-            uint64_t sram_staged_total_us{};
-            uint64_t sram_staged_pack_background_us{};
-            uint64_t sram_staged_pack_foreground_us{};
-            uint64_t sram_staged_ppa_us{};
-            uint64_t sram_staged_copy_back_us{};
         } hardware;
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
         const graphics::HardwarePixelCompositorStats measured = hardware_pixel_compositor_.Stats();
@@ -539,14 +531,6 @@ int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textu
             .ppa_blend_elapsed_us = measured.ppa_blend_elapsed_us,
             .ppa_blend_histogram_calls = measured.ppa_blend_histogram_calls,
             .ppa_blend_histogram_elapsed_us = measured.ppa_blend_histogram_elapsed_us,
-            .sram_staged_blends = measured.sram_staged_blends,
-            .sram_staged_failures = measured.sram_staged_failures,
-            .sram_staged_blend_pixels = measured.sram_staged_blend_pixels,
-            .sram_staged_total_us = measured.sram_staged_total_us,
-            .sram_staged_pack_background_us = measured.sram_staged_pack_background_us,
-            .sram_staged_pack_foreground_us = measured.sram_staged_pack_foreground_us,
-            .sram_staged_ppa_us = measured.sram_staged_ppa_us,
-            .sram_staged_copy_back_us = measured.sram_staged_copy_back_us,
         };
 #endif
         ESP_LOGI(kTag,
@@ -576,13 +560,6 @@ int32_t GuestGraphicsEngine::ApplySceneLocked(const device::TextureAccess& textu
                  hardware.ppa_blend_histogram_calls[5], hardware.ppa_blend_histogram_elapsed_us[5],
                  hardware.ppa_blend_histogram_calls[6], hardware.ppa_blend_histogram_elapsed_us[6],
                  hardware.ppa_blend_histogram_calls[7], hardware.ppa_blend_histogram_elapsed_us[7]);
-        ESP_LOGI(kTag,
-                 "SRAM staged blend #%" PRIu32 " cumulative calls/pixels/failures=%" PRIu32 "/%" PRIu64 "/%" PRIu32
-                 " time total/bg/fg/ppa/out=%" PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 "/%" PRIu64 "us",
-                 sequence, hardware.sram_staged_blends, hardware.sram_staged_blend_pixels,
-                 hardware.sram_staged_failures, hardware.sram_staged_total_us, hardware.sram_staged_pack_background_us,
-                 hardware.sram_staged_pack_foreground_us, hardware.sram_staged_ppa_us,
-                 hardware.sram_staged_copy_back_us);
     }
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
     if ((sequence % 120U) == 0U) {
