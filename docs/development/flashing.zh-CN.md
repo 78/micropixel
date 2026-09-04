@@ -166,9 +166,10 @@ bash tools/s3.sh build-release szpi
 bash tools/s3.sh build-release cores3
 ```
 
-发布目录由 `control/firmware-release.jsonc` 统一声明。三款 S3 虽共享芯片和 Xtensa App Store，但 Host
-镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户选择具体板型并只用芯片识别做
-系列校验。固件镜像属于生成物，不提交到 Git；部署网站/API 时必须让配置中的五组相对路径都可读。
+发布目录由 Control 服务仓库的 `firmware-release.jsonc` 统一声明（Control API 与官网不在本仓库）。三款 S3
+虽共享芯片和 Xtensa App Store，但 Host 镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户
+选择具体板型并只用芯片识别做系列校验。固件镜像属于生成物，不提交到 Git；部署网站/API 时必须让配置中的五组
+相对路径都可读。
 
 Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面的 `build-host` + `flash-host`；只修改 SDK Demo
 时使用产品固件的 USB 本地控制通道增量安装，不进入 ROM 下载态，也不重写 Host：
