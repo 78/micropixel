@@ -10,12 +10,24 @@ Unless otherwise noted, project-authored source code, documentation, and assets 
 
 - fork: <https://github.com/78/wasm-micro-runtime>;
 - branch: `wamr-host/esp-idf-psram`;
-- pinned commit: `482b17e07fc46e80ffd23e5290871d42c49748e7`;
+- pinned commit: `4dbe3b6efe776fde06468e47f342c1d351879cf0`;
 - upstream: <https://github.com/bytecodealliance/wasm-micro-runtime>;
 - license: Apache-2.0 WITH LLVM-exception.
 
 After submodule initialization, the applicable license, third-party attributions, and component-specific license
 files are present in that directory.
+
+## ESP-IoT-Solution
+
+`firmware/espressif/components/esp-iot-solution/` is a Git submodule of the MicroPixel fork of Espressif's
+esp-iot-solution; the build only uses its `esp_lvgl_adapter` component through `override_path`:
+
+- fork: <https://github.com/78/esp-iot-solution>;
+- branch: `codex/lvgl-monotonic-tick`;
+- pinned commit: `bdff5cab67300f7fe705ed47af2c4c0ace840a2c`;
+- upstream: <https://github.com/espressif/esp-iot-solution>;
+- copyright: Espressif Systems (Shanghai) CO LTD;
+- license: Apache-2.0.
 
 ## LLVM libc++ in Guest applications
 
