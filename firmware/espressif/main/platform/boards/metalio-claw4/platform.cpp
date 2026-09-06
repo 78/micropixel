@@ -516,6 +516,10 @@ class MetalioClaw4Board final : public Board, public device::Power {
         state_.power_key.SetPowerOffSink(sink, context);
     }
 
+    [[nodiscard]] device::IdlePowerAction GetIdlePowerAction() const override {
+        return device::IdlePowerAction::kPowerOff;
+    }
+
     [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override { return EnterLowPowerImpl(state_); }
 
     [[noreturn]] void PowerOff() override { state_.power_key.PowerOff(); }

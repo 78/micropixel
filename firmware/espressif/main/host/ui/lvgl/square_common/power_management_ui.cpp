@@ -36,7 +36,9 @@ void SystemDetailUi::RenderPowerManagementLocked() {
     }
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
-    Header(layout_, root_, "Power Management", "Idle and automatic sleep", PowerManagementBackEvent, this);
+    const bool power_off = power_management_model_.idle_power_action == device::IdlePowerAction::kPowerOff;
+    Header(layout_, root_, "Power Management", power_off ? "Idle and automatic power off" : "Idle and automatic sleep",
+           PowerManagementBackEvent, this);
     lv_obj_t* content = Scroll(layout_, root_, ScrollEvent, this);
 
     lv_obj_t* automatic = Panel(layout_, content);
@@ -46,9 +48,10 @@ void SystemDetailUi::RenderPowerManagementLocked() {
     lv_obj_t* automatic_text = square_common::CreateSystemColumn(automatic, 2);
     lv_obj_set_width(automatic_text, 0);
     lv_obj_set_flex_grow(automatic_text, 1);
-    (void)Label(automatic_text, "Auto sleep", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    (void)Label(automatic_text, "Sleep when the device is idle", platform::lvgl::SystemFontRole::kSmall,
-                theme::kSecondaryText);
+    (void)Label(automatic_text, power_off ? "Auto power off" : "Auto sleep", platform::lvgl::SystemFontRole::kLarge,
+                theme::kPrimaryText);
+    (void)Label(automatic_text, power_off ? "Power off when the device is idle" : "Sleep when the device is idle",
+                platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
     power_switch_ = lv_switch_create(automatic);
     lv_obj_set_size(power_switch_, 64, 36);
     lv_obj_add_event_cb(power_switch_, PowerManagementSwitchEvent, LV_EVENT_VALUE_CHANGED, this);
@@ -64,8 +67,11 @@ void SystemDetailUi::RenderPowerManagementLocked() {
     lv_obj_set_style_text_font(
         power_timeout_, platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium), LV_PART_INDICATOR);
     lv_obj_add_event_cb(power_timeout_, PowerManagementTimeoutEvent, LV_EVENT_VALUE_CHANGED, this);
-    lv_obj_t* note = Label(content, "External power pauses the idle timer. Unplugging starts a fresh countdown.",
-                           layout_.detail_font, theme::kMutedText);
+    lv_obj_t* note = Label(
+        content,
+        power_off ? "Press POWER to turn on again. Apps restart after power off. External power pauses the idle timer."
+                  : "External power pauses the idle timer. Unplugging starts a fresh countdown.",
+        layout_.detail_font, theme::kMutedText);
     lv_obj_set_width(note, LV_PCT(100));
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
     UpdatePowerManagementLocked(power_management_model_);
@@ -79,7 +85,13 @@ void SystemDetailUi::UpdatePowerManagementLocked(const host_ui::PowerManagementM
     }
     power_management_model_ = model;
     updating_ = true;
-    const bool enabled = model.auto_sleep_timeout_minutes != 0U;
+    if (model.idle_power_action != device::IdlePowerAction::kDisabled) {
+        lv_obj_remove_state(power_switch_, LV_STATE_DISABLED);
+    } else {
+        lv_obj_add_state(power_switch_, LV_STATE_DISABLED);
+    }
+    const bool enabled =
+        model.idle_power_action != device::IdlePowerAction::kDisabled && model.auto_sleep_timeout_minutes != 0U;
     if (enabled) {
         lv_obj_add_state(power_switch_, LV_STATE_CHECKED);
         lv_obj_remove_state(power_timeout_, LV_STATE_DISABLED);

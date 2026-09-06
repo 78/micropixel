@@ -103,13 +103,16 @@ ROM，随后按同一 USB 物理位置等待 ROM 产品名并在同一个 esptoo
 在 macOS 真机验证；首次烧录、应用固件损坏或应用 CDC 未启动时，仍需按板卡说明手动进入 ROM 下载模式。
 
 当前 `esp-mosaico` 第一阶段 profile 已接入 CO5300 显示、`78/esp_lcd_touch_cst92xx` 中断触摸组件、ES8311 音频、
-BMI270、双 BMM150、BQ27220 主动刷新、POWER/Function Button、状态 LED、白名单扩展 GPIO、板级 3V3
-电源、light sleep、共用 Runtime、BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D
+BMI270、双 BMM150、BQ27220 主动刷新、GPIO57 关机输出/Function Button、状态 LED、白名单扩展 GPIO、板级 3V3
+电源、共用 Runtime、BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D
 转场；RGB565/QSPI 只作为板级 presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。
 NAND、麦克风采集与模块发现仍未纳入当前范围；传感器轴向/磁校准和电源时序必须按下方真机清单验收。
 
 第一阶段真机验收至少包括：静置/六面翻转检查加速度方向，绕三轴转动检查陀螺仪符号，两颗磁力计分别
-读取且无串址；短按 POWER 完成睡眠与唤醒，长按触发关机；Demo Input 页中 Function Button 产生 Confirm
+读取且无串址；电池供电空闲达到设定时间后，Host 停止 App 并请求整机关机，短按 POWER 应重新开机。
+Power Management 显示 Auto power off，默认 5 分钟，可选 1/5/10/30 分钟或关闭；原有超时设置继续使用，
+外接供电或供电状态未知时不自动关机，OTA 期间拒绝关机并重置计时。GPIO57 是开漏关机输出，
+正常运行保持高阻，不注册按键中断或作为休眠唤醒源；Demo Input 页中 Function Button 产生 Confirm
 down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange status LED` 后，TOGGLE 可点亮/熄灭且
 退出页面恢复熄灭；插拔 Type-C/VIN 时电池与外部供电状态在 2 秒级更新；逐根检查公开 GPIO 不与显示、
 触摸、音频、电源和调试脚冲突。

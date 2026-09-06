@@ -1,6 +1,5 @@
 #include "platform/platform.hpp"
 
-#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -12,7 +11,6 @@
 #include "esp_lcd_touch_cst92xx.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
-#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -165,83 +163,6 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
     ESP_LOGI(board_detail::kTag, "CST92xx ready: interrupt GPIO%d shared I2C0",
              static_cast<int>(esp_mosaico::board::kTouchInterrupt));
     return ESP_OK;
-}
-
-std::expected<void, device::PowerError> RestoreDisplayAfterSleep(board_detail::MosaicoBoardState& state) {
-    const esp_err_t resume_status = state.display_pipeline.Resume();
-    if (resume_status != ESP_OK) {
-        ESP_LOGE(board_detail::kTag, "display resume failed after sleep: %s", esp_err_to_name(resume_status));
-        return std::unexpected(device::PowerError::kDisplayRestore);
-    }
-    const esp_err_t adapter_status =
-        esp_lv_adapter_sleep_recover(state.display, state.display_pipeline.Panel(), state.display_pipeline.PanelIo());
-    if (adapter_status != ESP_OK) {
-        ESP_LOGE(board_detail::kTag, "LVGL recovery failed after sleep: %s", esp_err_to_name(adapter_status));
-        return std::unexpected(device::PowerError::kDisplayRestore);
-    }
-    return {};
-}
-
-std::expected<void, device::PowerError> EnterLowPowerImpl(board_detail::MosaicoBoardState& state,
-                                                          esp_mosaico::PowerController& power) {
-    esp_err_t status = esp_lv_adapter_sleep_prepare();
-    if (status != ESP_OK) {
-        ESP_LOGE(board_detail::kTag, "LVGL sleep preparation failed: %s", esp_err_to_name(status));
-        return std::unexpected(device::PowerError::kDisplayPrepare);
-    }
-    status = state.display_pipeline.Suspend();
-    if (status != ESP_OK) {
-        (void)RestoreDisplayAfterSleep(state);
-        return std::unexpected(device::PowerError::kDisplayShutdown);
-    }
-
-    const auto power_press_pending = [&power] { return power.PowerPressOccurredAfterRequest() || power.IsPressed(); };
-    if (power_press_pending()) {
-        ESP_LOGI(board_detail::kTag, "light sleep canceled by a concurrent POWER press");
-        power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
-        return RestoreDisplayAfterSleep(state);
-    }
-
-    for (uint32_t attempt = 1U; attempt <= esp_mosaico::board::kLightSleepEntryAttempts; ++attempt) {
-        status = power.PrepareForLightSleep();
-        if (status != ESP_OK) {
-            if (power_press_pending()) {
-                power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
-                return RestoreDisplayAfterSleep(state);
-            }
-            const auto restore = RestoreDisplayAfterSleep(state);
-            if (!restore.has_value()) {
-                return restore;
-            }
-            return std::unexpected(device::PowerError::kWakeSource);
-        }
-        if (power_press_pending()) {
-            power.FinishLightSleep();
-            power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
-            return RestoreDisplayAfterSleep(state);
-        }
-
-        const int64_t started_us = esp_timer_get_time();
-        status = esp_light_sleep_start();
-        const uint64_t duration_us = static_cast<uint64_t>(esp_timer_get_time() - started_us);
-        power.FinishLightSleep();
-        if (status == ESP_OK) {
-            ESP_LOGI(board_detail::kTag, "light sleep returned after %" PRIu64 " ms", duration_us / 1000U);
-            power.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
-            break;
-        }
-        ESP_LOGW(board_detail::kTag, "light sleep attempt %" PRIu32 " rejected: %s", attempt, esp_err_to_name(status));
-        if (status != ESP_ERR_SLEEP_REJECT || attempt == esp_mosaico::board::kLightSleepEntryAttempts) {
-            break;
-        }
-    }
-
-    const auto restore = RestoreDisplayAfterSleep(state);
-    if (!restore.has_value()) {
-        return restore;
-    }
-    return status == ESP_OK ? std::expected<void, device::PowerError>{}
-                            : std::unexpected(device::PowerError::kSleepRejected);
 }
 
 class EspMosaicoBoard final : public Board, public device::Power {
@@ -417,15 +338,22 @@ class EspMosaicoBoard final : public Board, public device::Power {
     }
 
     void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {
-        power_.SetPowerButtonSink(sink, context);
+        // POWER currently toggles hardware power; GPIO57 is not a verified input.
+        (void)sink;
+        (void)context;
     }
 
     void SetPowerOffButtonSink(device::PowerOffButtonSink sink, void* context) override {
-        power_.SetPowerOffButtonSink(sink, context);
+        (void)sink;
+        (void)context;
+    }
+
+    [[nodiscard]] device::IdlePowerAction GetIdlePowerAction() const override {
+        return device::IdlePowerAction::kPowerOff;
     }
 
     [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override {
-        return EnterLowPowerImpl(state_, power_);
+        return std::unexpected(device::PowerError::kUnavailable);
     }
 
     [[noreturn]] void PowerOff() override { power_.PowerOff(); }

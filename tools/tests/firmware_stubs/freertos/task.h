@@ -10,7 +10,13 @@
 
 inline void vTaskDelay(TickType_t ticks) { std::this_thread::sleep_for(std::chrono::milliseconds(ticks)); }
 
+// Optional deterministic clock for tests running on the calling thread.
+inline thread_local const TickType_t* micropixel_test_tick_count{};
+
 inline TickType_t xTaskGetTickCount() {
+    if (micropixel_test_tick_count != nullptr) {
+        return *micropixel_test_tick_count;
+    }
     const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
     return static_cast<TickType_t>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 }

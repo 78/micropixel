@@ -80,7 +80,8 @@ class SystemShell final {
     void NotifyTimeStateChanged();
     void NotifyRemoteCommandReady();
     void NotifyUserActivity();
-    void ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query, void* power_context);
+    void ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query, void* power_context,
+                            device::IdlePowerAction action = device::IdlePowerAction::kSleep);
     void SetAutoSleepTimeout(uint8_t timeout_minutes);
     void NotifyPowerCycleCompleted();
 
@@ -123,6 +124,7 @@ class SystemShell final {
     std::atomic_bool user_activity_pending_{};
     std::atomic_bool user_activity_queued_{};
     std::atomic<TickType_t> last_user_activity_ticks_{};
+    device::IdlePowerAction idle_power_action_{device::IdlePowerAction::kSleep};
     std::atomic<uint8_t> auto_sleep_timeout_minutes_{};
     ExternalPowerStateQuery external_power_query_{};
     void* external_power_context_{};

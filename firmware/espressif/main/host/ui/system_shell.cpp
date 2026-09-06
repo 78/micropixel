@@ -339,8 +339,9 @@ void SystemShell::NotifyUserActivity() {
     QueuePendingUserActivity();
 }
 
-void SystemShell::ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query,
-                                     void* power_context) {
+void SystemShell::ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query, void* power_context,
+                                     device::IdlePowerAction action) {
+    idle_power_action_ = action;
     external_power_query_ = power_query;
     external_power_context_ = power_context;
     SetAutoSleepTimeout(timeout_minutes);
@@ -348,7 +349,8 @@ void SystemShell::ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerState
 }
 
 void SystemShell::SetAutoSleepTimeout(uint8_t timeout_minutes) {
-    auto_sleep_timeout_minutes_.store(timeout_minutes, std::memory_order_release);
+    auto_sleep_timeout_minutes_.store(idle_power_action_ == device::IdlePowerAction::kDisabled ? 0U : timeout_minutes,
+                                      std::memory_order_release);
     RecordUserActivity();
 }
 
@@ -475,8 +477,11 @@ bool SystemShell::RequestAutoSleepIfDue() {
     if (elapsed_ticks < timeout_ticks) {
         return false;
     }
-    if (NotifyPowerButtonPressed(static_cast<uint64_t>(now_ticks) * portTICK_PERIOD_MS * 1000U)) {
-        ESP_LOGI(kTag, "auto sleep requested after %u minutes without interaction",
+    const uint64_t timestamp_us = static_cast<uint64_t>(now_ticks) * portTICK_PERIOD_MS * 1000U;
+    const bool power_off = idle_power_action_ == device::IdlePowerAction::kPowerOff;
+    const bool accepted = power_off ? NotifyPowerOffRequested(timestamp_us) : NotifyPowerButtonPressed(timestamp_us);
+    if (accepted) {
+        ESP_LOGI(kTag, "auto %s requested after %u minutes without interaction", power_off ? "power off" : "sleep",
                  static_cast<unsigned>(timeout_minutes));
     }
     return PowerTransitionRequested();

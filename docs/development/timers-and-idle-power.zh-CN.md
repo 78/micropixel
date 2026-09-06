@@ -18,14 +18,23 @@
 造成 adapter 的 idle pause 反复退出。产品启用 ESP-IDF PM 和启动时 DFS：任务活跃时仍可运行在 360 MHz，空闲时降到 XTAL 频率。
 FreeRTOS tickless idle 已启用，所有可运行任务阻塞时可停止周期 tick；运行时 PM 未启用 automatic light sleep。
 
-## 用户可配置的自动休眠
+## 用户可配置的空闲休眠与关机
 
-System Settings 的 Power Management 页面使用 LVGL `switch` 和 `dropdown` 配置空闲休眠。默认超时为
+Metalio-Claw4 和 ESP-Mosaico 使用自动关机，设置页与菜单显示 Auto power off；
+默认 5 分钟，可选 1/5/10/30 分钟或关闭，保留已有超时值及关闭设置。
+Claw4 到期走 Host 完整关机流程及板级电源切断接口；手动短按电源键仍可休眠与唤醒。
+以下 GPIO57/SAM8108 说明仅适用于 ESP-Mosaico：
+到期请求 Host 完整关机流程，停止 App、静音并停止远控后，以 GPIO57 开漏低电平请求 SAM8108 断电。
+短按 POWER 重新开机，原 App Session 不恢复。GPIO57 正常运行保持高阻，不监测实体 POWER 按键；
+该板不进入 light sleep。此行为对应官方 BSP 的
+[`bsp_power_set_shutdown(true)`](https://github.com/esp-mosaico/esp-mosaico-bsp/blob/bef99672e411101489ed19c40527cca1c1dd5bb1/components/esp-mosaico-bsp/include/bsp/power.h)。
+
+支持休眠的其他板型中，System Settings 的 Power Management 页面使用 LVGL `switch` 和 `dropdown` 配置空闲休眠。默认超时为
 5 分钟，可选 1、5、10、30 分钟，也可关闭。该策略不是 FreeRTOS tickless automatic light sleep：它在
 Host supervisor 的现有事件等待上追加一个 deadline，到期后产生与短按电源键相同的 Host 入睡请求，继续复用
 App 安全暂停、背光渐暗、显示释放、显式 `esp_light_sleep_start()` 和电源键唤醒流程。
 
-计时只在外接电源状态明确为未连接时进行；供电状态未知或 USB/无线供电已连接时不会自动休眠。拔掉外接电源、
+两种空闲策略的计时都只在外接电源状态明确为未连接时进行；供电状态未知或 USB/无线供电已连接时不会自动休眠或关机。拔掉外接电源、
 修改设置或从 light sleep 唤醒都会开始一轮新的倒计时。物理触摸、系统手势和 Remote Control 注入的触摸/按键
 都会刷新最后交互时间。固件更新期间到期的请求按现有电源保护规则拒绝，不中断 OTA 事务。设置以向后兼容的
 v2 Host settings record 保存在 `sys_store/system`；旧 v1 record 首次读取时采用 5 分钟默认值。
@@ -86,7 +95,8 @@ CST9217、PSRAM、POWER switch 与 USB CDC 重枚举。两个 profile 的验收�
 - 验证 30 s电量兜底刷新、USB/无线供电插拔即时刷新，以及 Wi-Fi 状态事件即时刷新；
 - Remote Control 启用和禁用状态下分别静置 60 s，确认 `micropixel_remote` 无固定 250 ms/1 s唤醒；随后验证
   Wi-Fi 断开/恢复、远程命令、Host result、配对异步完成和 shutdown 都能立即唤醒；
-- Power Management 关闭时不应自动进入 light sleep；开启后，仅在未接外部电源且达到所选空闲时间时进入；
-- 插入 USB/无线供电应暂停自动休眠，拔出后重新完整计时；唤醒后也应重新完整计时；
-- 自动休眠与短按电源键应走同一显式 light sleep 流程，前台 App 唤醒后恢复原 Session；
-- 固件更新期间即使达到空闲 deadline，也不得进入休眠。
+- Power Management 关闭时不应自动休眠或关机；开启后，仅在未接外部电源且达到所选空闲时间时执行板级策略；
+- 插入 USB/无线供电应暂停空闲计时，拔出后重新完整计时；唤醒后也应重新完整计时；
+- Claw4 手动短按电源键仍走显式 light sleep 流程，前台 App 唤醒后恢复原 Session；
+- Claw4 与 Mosaico 空闲到期应关机；电源键重新开机后进入启动流程，不恢复旧 Session；
+- 固件更新期间即使达到空闲 deadline，也不得进入休眠或关机；拒绝请求后重新完整计时。

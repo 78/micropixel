@@ -48,6 +48,22 @@ const char* RemoteControlDetail(const host_ui::SystemMenuModel& model, const hos
 }
 
 const char* PowerManagementDetail(const host_ui::SystemMenuModel& model) {
+    if (model.idle_power_action == device::IdlePowerAction::kPowerOff) {
+        switch (model.auto_sleep_timeout_minutes) {
+            case 0U:
+                return "Auto power off disabled";
+            case 1U:
+                return "Power off after 1 minute";
+            case 5U:
+                return "Power off after 5 minutes";
+            case 10U:
+                return "Power off after 10 minutes";
+            case 30U:
+                return "Power off after 30 minutes";
+            default:
+                return "Auto power off configured";
+        }
+    }
     switch (model.auto_sleep_timeout_minutes) {
         case 0U:
             return "Auto sleep off";

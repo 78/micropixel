@@ -4,6 +4,7 @@
 #include <iostream>
 #include <thread>
 
+#include "freertos/task.h"
 #include "host/ui/system_shell.hpp"
 
 namespace {
@@ -17,10 +18,10 @@ using micropixel::host_ui::StatusLayerModel;
 using micropixel::host_ui::SystemInformationModel;
 using micropixel::host_ui::SystemMenuModel;
 using micropixel::host_ui::SystemShell;
+using micropixel::host_ui::SystemUi;
 using micropixel::host_ui::SystemUiAction;
 using micropixel::host_ui::SystemUiActionSink;
 using micropixel::host_ui::SystemUiActionType;
-using micropixel::host_ui::SystemUi;
 using micropixel::host_ui::SystemUiError;
 using micropixel::host_ui::WifiSettingsModel;
 
@@ -483,9 +484,75 @@ void DetailScreenActionsReachTheShell() {
           "installed App uninstall should be retained");
 }
 
+void IdleTimeoutSelectsBoardActionAndRespectsActivityAndPower() {
+    using micropixel::device::IdlePowerAction;
+    struct PowerState {
+        bool available{true};
+        bool connected{};
+    };
+    const auto query = [](void* context, bool& connected) {
+        const auto& state = *static_cast<PowerState*>(context);
+        connected = state.connected;
+        return state.available;
+    };
+    for (const auto mode : {IdlePowerAction::kSleep, IdlePowerAction::kPowerOff, IdlePowerAction::kDisabled}) {
+        TickType_t ticks = 1000U;
+        micropixel_test_tick_count = &ticks;
+        FakeSystemUi ui;
+        SystemShell shell(ui);
+        Check(shell.ShowHall(HallModel{}).has_value(), "hall should initialize idle tests");
+        PowerState power;
+        shell.ConfigureAutoSleep(1U, query, &power, mode);
+        ticks += 59000U;
+        Check(!shell.PollAction(0U).has_value(), "idle action must not fire early");
+        shell.NotifyUserActivity();
+        (void)shell.PollAction(0U);
+        ticks += 59000U;
+        Check(!shell.PollAction(0U).has_value(), "user activity must restart the countdown");
+        ticks += 1000U;
+        const auto action = shell.PollAction(0U);
+        if (mode == IdlePowerAction::kDisabled) {
+            Check(!action.has_value() && !shell.PowerTransitionRequested(), "disabled mode must never request power");
+            shell.SetAutoSleepTimeout(1U);
+            ticks += 60000U;
+            Check(!shell.PollAction(0U).has_value(), "settings must not enable unsupported idle actions");
+        } else {
+            const auto expected = mode == IdlePowerAction::kPowerOff ? SystemUiActionType::kPowerOffRequested
+                                                                     : SystemUiActionType::kPowerButtonPressed;
+            Check(action.has_value() && action->type == expected, "deadline must select the board's idle action");
+            Check(mode == IdlePowerAction::kPowerOff ? shell.ConsumePowerOffRequested()
+                                                     : shell.ConsumePowerButtonPressed(),
+                  "the selected power request must be consumable");
+            shell.NotifyPowerCycleCompleted();
+            Check(!shell.PollAction(0U).has_value(), "a rejected transition must start a fresh countdown");
+        }
+        power.connected = true;
+        shell.NotifyBatteryStateChanged();
+        (void)shell.PollAction(0U);
+        ticks += 120000U;
+        Check(!shell.PollAction(0U).has_value(), "external power must pause idle transitions");
+        power.connected = false;
+        power.available = false;
+        shell.NotifyBatteryStateChanged();
+        (void)shell.PollAction(0U);
+        ticks += 120000U;
+        Check(!shell.PollAction(0U).has_value(), "unknown power state must block idle transitions");
+        power.available = true;
+        shell.NotifyBatteryStateChanged();
+        (void)shell.PollAction(0U);
+        ticks += 59000U;
+        Check(!shell.PollAction(0U).has_value(), "returning to battery must restart the countdown");
+        shell.SetAutoSleepTimeout(0U);
+        ticks += 120000U;
+        Check(!shell.PollAction(0U).has_value(), "turning off the timeout must stop all idle actions");
+        micropixel_test_tick_count = nullptr;
+    }
+}
+
 }  // namespace
 
 int main() {
+    IdleTimeoutSelectsBoardActionAndRespectsActivityAndPower();
     DiscreteActionsRemainOrdered();
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
@@ -500,6 +567,6 @@ int main() {
     ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 14 cases\n";
+    std::cout << "system_shell tests passed: 15 cases\n";
     return 0;
 }

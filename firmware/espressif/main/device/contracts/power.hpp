@@ -6,6 +6,12 @@
 
 namespace micropixel::device {
 
+enum class IdlePowerAction : uint8_t {
+    kSleep,
+    kPowerOff,
+    kDisabled,
+};
+
 enum class PowerError {
     kUnavailable,
     kWakeSource,
@@ -32,6 +38,10 @@ class Power {
 
     virtual void SetPowerButtonSink(PowerButtonSink sink, void* context) = 0;
     virtual void SetPowerOffButtonSink(PowerOffButtonSink sink, void* context) = 0;
+
+    // Selects the action after the Host idle timeout; boards without a wake source
+    // must use power off or disable the timeout.
+    [[nodiscard]] virtual IdlePowerAction GetIdlePowerAction() const { return IdlePowerAction::kSleep; }
 
     // Enters light sleep and returns after a configured wake source fires. The
     // implementation restores the display hardware before returning, but keeps

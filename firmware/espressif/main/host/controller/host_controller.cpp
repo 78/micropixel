@@ -427,6 +427,7 @@ host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& st
                                              const host_ui::RemoteControlModel& remote_control,
                                              const char* effective_locale = "en") {
     return host_ui::SystemMenuModel{
+        .idle_power_action = status.idle_power_action,
         .locale = effective_locale,
         .language = "English",
         .installed_app_count = catalog.count,
@@ -1104,6 +1105,7 @@ bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteContro
         if (shell.PowerOffRequested()) {
             if (request_pending || FirmwareUpdateInProgress(remote_model.firmware_update_state)) {
                 (void)shell.ConsumePowerOffRequested();
+                shell.NotifyPowerCycleCompleted();
                 ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
                 continue;
             }
@@ -1265,6 +1267,7 @@ bool RunPowerManagement(host_ui::SystemShell& shell, host_ui::StatusLayerModel& 
                         host_ui::SystemSettingsStore& settings_store, RemoteCommandPump* command_pump) {
     auto model = host_ui::PowerManagementModel{
         .auto_sleep_timeout_minutes = status_model.auto_sleep_timeout_minutes,
+        .idle_power_action = status_model.idle_power_action,
     };
     const auto show_result = shell.ShowPowerManagement(model);
     if (!show_result) {
@@ -1286,6 +1289,9 @@ bool RunPowerManagement(host_ui::SystemShell& shell, host_ui::StatusLayerModel& 
             return true;
         }
 
+        if (status_model.idle_power_action == device::IdlePowerAction::kDisabled) {
+            continue;
+        }
         uint8_t next_timeout = status_model.auto_sleep_timeout_minutes;
         if (action->type == host_ui::SystemUiActionType::kSetAutoSleepEnabled) {
             next_timeout = action->value != 0U ? host_ui::kDefaultAutoSleepTimeoutMinutes : 0U;
@@ -1611,6 +1617,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
         if (shell.PowerOffRequested()) {
             if (FirmwareUpdateInProgress(remote_control.Snapshot().firmware_update_state)) {
                 (void)shell.ConsumePowerOffRequested();
+                shell.NotifyPowerCycleCompleted();
                 ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
             } else {
                 host_power::RunBasicShutdown(shell, power, power_state, remote_control);
@@ -1777,6 +1784,7 @@ class ActiveHost final {
             if (shell_.PowerOffRequested()) {
                 if (ReadFirmwareUpdate(remote_control_).in_progress) {
                     (void)shell_.ConsumePowerOffRequested();
+                    shell_.NotifyPowerCycleCompleted();
                     ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
                 } else {
                     RunShutdown();
@@ -3139,6 +3147,10 @@ void HostController::Run() {
     if (settings_store.ready() && !settings_store.Load(status_model)) {
         ESP_LOGW(kTag, "Host settings could not be restored; using safe defaults");
     }
+    status_model.idle_power_action = power_.GetIdlePowerAction();
+    if (status_model.idle_power_action == device::IdlePowerAction::kDisabled) {
+        status_model.auto_sleep_timeout_minutes = 0U;
+    }
     host_ui::SystemLocaleState locale;
     if (settings_store.ready() && !settings_store.LoadLocale(locale)) {
         ESP_LOGW(kTag, "requested Locale could not be restored; using %s", host_ui::kDefaultLocale.data());
@@ -3158,7 +3170,7 @@ void HostController::Run() {
             connected = snapshot.external_power_connected;
             return snapshot.external_power_available;
         },
-        this);
+        this, status_model.idle_power_action);
     InitializeHostSettings(settings_store, status_model, wifi_, remote_control_);
     shell_.ApplyTheme(status_model.theme_mode);
     shell_.ApplyBrightness(status_model.brightness_percent);

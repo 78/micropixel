@@ -7,6 +7,8 @@
 #include <expected>
 #include <utility>
 
+#include "device/contracts/power.hpp"
+
 namespace micropixel::host_ui {
 
 enum class HallStatus {
@@ -194,6 +196,7 @@ struct CpuUsageSample final {
 };
 
 struct StatusLayerModel final {
+    device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     uint32_t memory_used_kib{};
     uint32_t memory_total_kib{};
     uint32_t sram_used_kib{};
@@ -232,6 +235,7 @@ enum class SystemMenuItem : uint32_t {
 };
 
 struct SystemMenuModel final {
+    device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     const char* locale{"en"};
     const char* language{"English"};
     uint32_t installed_app_count{};
@@ -251,6 +255,7 @@ struct SystemMenuModel final {
 
 struct PowerManagementModel final {
     uint8_t auto_sleep_timeout_minutes{kDefaultAutoSleepTimeoutMinutes};
+    device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
 };
 
 struct AppearanceModel final {
