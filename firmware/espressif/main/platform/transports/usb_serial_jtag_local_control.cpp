@@ -21,7 +21,7 @@ constexpr char kProtocolPrefix[] = "MPX1 ";
 // copied into the fixed response queue. The task never owns a flash operation,
 // so both its large stack and command workspace can stay in PSRAM.
 constexpr uint32_t kTaskStackSize = 10U * 1024U;
-constexpr BaseType_t kTaskCore = 0;
+constexpr BaseType_t kTaskCore = task_policy::kSystemCore;
 
 }  // namespace
 

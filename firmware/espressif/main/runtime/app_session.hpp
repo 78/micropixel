@@ -5,6 +5,7 @@
 #include <atomic>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "abi/micropixel_abi.h"

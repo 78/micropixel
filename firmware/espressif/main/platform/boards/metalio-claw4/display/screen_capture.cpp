@@ -22,11 +22,29 @@ constexpr char kTag[] = "micropixel_capture";
 struct DevelopmentCapture final {
     transports::UsbSerialJtagLocalControl transport{};
     transports::DevelopmentDisplayControl display_control{};
+    lv_display_t* display{};
+    esp_lcd_panel_handle_t panel{};
+    uint32_t width{};
+    uint32_t height{};
 };
 
 DevelopmentCapture& DevelopmentInstance() {
     static DevelopmentCapture instance;
     return instance;
+}
+
+// USB development capture. While dummy draw is active (Direct Surface or a
+// system transition scans out to a panel framebuffer) the LVGL draw buffer is
+// not what the panel shows, so encode the displayed framebuffer instead. When
+// LVGL owns the panel, fall through to the generic draw-buffer capture rather
+// than toggling dummy draw from the transport task.
+std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureDisplayedFramebuffer(void* context) {
+    auto* capture = static_cast<DevelopmentCapture*>(context);
+    if (capture->display == nullptr || capture->panel == nullptr ||
+        esp_lv_adapter_dummy_draw_get_free_buf_preserve(capture->display) == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    return CaptureScreenJpeg(capture->display, capture->panel, capture->width, capture->height);
 }
 
 void ReleaseCaptureBuffer(uint8_t* data) { heap_caps_free(data); }
@@ -50,10 +68,16 @@ uint8_t* DisplayedFrameBuffer(lv_display_t* display, esp_lcd_panel_handle_t pane
 
 }  // namespace
 
-esp_err_t InitializeScreenCapture(lv_display_t* display, input::Gt911Input& touch_input, uint32_t width,
-                                  uint32_t height) {
+esp_err_t InitializeScreenCapture(lv_display_t* display, esp_lcd_panel_handle_t panel, input::Gt911Input& touch_input,
+                                  uint32_t width, uint32_t height) {
     auto& development = DevelopmentInstance();
-    return development.display_control.Start(display, touch_input, development.transport, width, height);
+    development.display = display;
+    development.panel = panel;
+    development.width = width;
+    development.height = height;
+    return development.display_control.Start(
+        display, touch_input, development.transport, width, height, {},
+        transports::DevelopmentCaptureHook{.capture = CaptureDisplayedFramebuffer, .context = &development});
 }
 
 device::LocalControl& UsbLocalControl() { return DevelopmentInstance().transport; }

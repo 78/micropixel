@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
+#include "platform/lvgl/display/scanout_stage_pool.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
 #include "src/core/lv_obj_draw_private.h"
 #include "src/draw/snapshot/lv_snapshot.h"
@@ -79,14 +80,9 @@ esp_err_t PanelTransitionCompositor::Initialize(lv_display_t* display, uint32_t 
     displayed_source_ = displayed_source;
     displayed_source_ready_ = displayed_source_ready;
     frame_allocation_bytes_ = AlignBufferBytes(width * height * kRgb565BytesPerPixel);
-    native_stage_ = static_cast<uint8_t*>(
-        heap_caps_aligned_alloc(kBufferAlignment, frame_allocation_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    wire_stage_ = static_cast<uint8_t*>(
-        heap_caps_aligned_alloc(kBufferAlignment, frame_allocation_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (native_stage_ == nullptr || wire_stage_ == nullptr) {
-        Release();
-        return ESP_ERR_NO_MEM;
-    }
+    // Compose/wire stages and the retained status-layer frames are borrowed
+    // from the shared scanout pool for the duration of a transition; see
+    // AcquireFrame(). Nothing full-frame is held while the Guest owns the panel.
     ESP_LOGI(kTag,
              "CO5300 direct compositor ready: frame=%" PRIu32 "x%" PRIu32 " intermediate=%" PRIu32
              " transport=PSRAM-direct-QSPI status-layer=%s",
@@ -279,7 +275,11 @@ bool PanelTransitionCompositor::CaptureDisplayedToIntermediate(const uint8_t* fu
         return false;
     }
     const int64_t started_us = esp_timer_get_time();
+    if (!EnsureStages()) {
+        return false;
+    }
     if (esp_lv_adapter_set_dummy_draw(display_, true) != ESP_OK) {
+        ReleaseStages();
         return false;
     }
     const PanelTransitionRect fullscreen_region{
@@ -295,6 +295,7 @@ bool PanelTransitionCompositor::CaptureDisplayedToIntermediate(const uint8_t* fu
     elapsed_us = static_cast<uint32_t>(esp_timer_get_time() - started_us);
     if (!presented) {
         (void)esp_lv_adapter_set_dummy_draw(display_, false);
+        ReleaseStages();
         return false;
     }
     prepared_to_hall_ = true;
@@ -328,8 +329,15 @@ bool PanelTransitionCompositor::Animate(const uint8_t* intermediate, const Panel
         return false;
     }
     const bool continuing_to_hall = direction == PanelTransitionDirection::kToHall && prepared_to_hall_;
-    if (!continuing_to_hall && esp_lv_adapter_set_dummy_draw(display_, true) != ESP_OK) {
-        return false;
+    if (!continuing_to_hall) {
+        // A prepared to-hall transition already holds its stages.
+        if (!EnsureStages()) {
+            return false;
+        }
+        if (esp_lv_adapter_set_dummy_draw(display_, true) != ESP_OK) {
+            ReleaseStages();
+            return false;
+        }
     }
 
     const int64_t started_us = esp_timer_get_time();
@@ -572,21 +580,26 @@ bool PanelTransitionCompositor::BeginStatusLayerTransition(bool entering, uint32
         (!entering && !status_layer_buffers_ready_)) {
         return false;
     }
+    if (!EnsureStages()) {
+        return false;
+    }
     if (entering) {
         if (displayed_source_ == nullptr || displayed_source_ready_ == nullptr || !*displayed_source_ready_) {
+            ReleaseStages();
             return false;
         }
         ClearStatusLayerBuffers();
-        status_background_ = static_cast<uint8_t*>(
-            heap_caps_aligned_alloc(kBufferAlignment, frame_allocation_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        status_scrim_ = static_cast<uint8_t*>(
-            heap_caps_aligned_alloc(kBufferAlignment, frame_allocation_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        // Background and scrim stay borrowed while the status layer is open
+        // (keep_buffers) so the close animation can restore the exact frame.
+        status_background_ = AcquireFrame();
+        status_scrim_ = AcquireFrame();
         const uint32_t alpha_bytes = width_ * height_;
         status_scrim_alpha_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(
             kBufferAlignment, AlignBufferBytes(alpha_bytes), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (status_background_ == nullptr || status_scrim_ == nullptr || status_scrim_alpha_ == nullptr) {
             ESP_LOGE(kTag, "could not allocate RGB565 status-layer buffers");
             ClearStatusLayerBuffers();
+            ReleaseStages();
             return false;
         }
         async_color_convert_request_t copy{};
@@ -604,6 +617,7 @@ bool PanelTransitionCompositor::BeginStatusLayerTransition(bool entering, uint32
         std::memset(status_scrim_alpha_, scrim_opacity, alpha_bytes);
         if (esp_color_convert_blocking(dma2d_client_, &copy, -1) != ESP_OK || !ComposeStatusScrim()) {
             ClearStatusLayerBuffers();
+            ReleaseStages();
             return false;
         }
     }
@@ -611,6 +625,7 @@ bool PanelTransitionCompositor::BeginStatusLayerTransition(bool entering, uint32
         if (entering) {
             ClearStatusLayerBuffers();
         }
+        ReleaseStages();
         return false;
     }
     status_transition_dummy_active_ = true;
@@ -706,6 +721,7 @@ bool PanelTransitionCompositor::FinishStatusLayerTransition(bool keep_buffers) {
     if (!keep_buffers) {
         ClearStatusLayerBuffers();
     }
+    ReleaseStages();
     return status == ESP_OK;
 }
 
@@ -718,17 +734,16 @@ void PanelTransitionCompositor::CancelStatusLayerTransition() {
     }
     status_transition_dummy_active_ = false;
     ClearStatusLayerBuffers();
+    ReleaseStages();
 }
 
 void PanelTransitionCompositor::ClearStatusLayerBuffers() {
     heap_caps_free(status_dialog_pixels_);
     heap_caps_free(status_scrim_alpha_);
-    heap_caps_free(status_scrim_);
-    heap_caps_free(status_background_);
+    ReleaseFrame(status_scrim_);
+    ReleaseFrame(status_background_);
     status_dialog_pixels_ = nullptr;
     status_scrim_alpha_ = nullptr;
-    status_scrim_ = nullptr;
-    status_background_ = nullptr;
     status_dialog_width_ = 0U;
     status_dialog_height_ = 0U;
     status_dialog_allocation_bytes_ = 0U;
@@ -741,6 +756,7 @@ bool PanelTransitionCompositor::Finish(bool success) {
     const esp_err_t status =
         success ? DisableDummyDrawAfterSuccessfulTransition(display_) : esp_lv_adapter_set_dummy_draw(display_, false);
     prepared_to_hall_ = false;
+    ReleaseStages();
     return success && status == ESP_OK;
 }
 
@@ -750,6 +766,51 @@ void PanelTransitionCompositor::CancelPreparedToHall() {
     }
     (void)esp_lv_adapter_set_dummy_draw(display_, false);
     prepared_to_hall_ = false;
+    ReleaseStages();
+}
+
+uint8_t* PanelTransitionCompositor::AcquireFrame() {
+    lvgl::ScanoutStagePool& pool = lvgl::ScanoutStagePool::Instance();
+    if (pool.Ready()) {
+        return pool.Acquire(frame_allocation_bytes_);
+    }
+    // Boards without a pool fall back to the heap; the same PSRAM cost as
+    // before, just bounded to the transition.
+    return static_cast<uint8_t*>(
+        heap_caps_aligned_alloc(kBufferAlignment, frame_allocation_bytes_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+}
+
+void PanelTransitionCompositor::ReleaseFrame(uint8_t*& frame) {
+    if (frame == nullptr) {
+        return;
+    }
+    lvgl::ScanoutStagePool& pool = lvgl::ScanoutStagePool::Instance();
+    if (pool.Owns(frame)) {
+        pool.Release(frame);
+    } else {
+        heap_caps_free(frame);
+    }
+    frame = nullptr;
+}
+
+bool PanelTransitionCompositor::EnsureStages() {
+    if (native_stage_ == nullptr) {
+        native_stage_ = AcquireFrame();
+    }
+    if (wire_stage_ == nullptr) {
+        wire_stage_ = AcquireFrame();
+    }
+    if (native_stage_ == nullptr || wire_stage_ == nullptr) {
+        ESP_LOGE(kTag, "could not borrow RGB565 compose/wire stages for the transition");
+        ReleaseStages();
+        return false;
+    }
+    return true;
+}
+
+void PanelTransitionCompositor::ReleaseStages() {
+    ReleaseFrame(wire_stage_);
+    ReleaseFrame(native_stage_);
 }
 
 void PanelTransitionCompositor::ReleaseBackground() {
@@ -761,10 +822,7 @@ void PanelTransitionCompositor::Release() {
     CancelStatusLayerTransition();
     CancelPreparedToHall();
     ReleaseBackground();
-    heap_caps_free(wire_stage_);
-    wire_stage_ = nullptr;
-    heap_caps_free(native_stage_);
-    native_stage_ = nullptr;
+    ReleaseStages();
     srm_blitter_.Release();
     if (blend_client_ != nullptr) {
         const esp_err_t status = ppa_unregister_client(blend_client_);

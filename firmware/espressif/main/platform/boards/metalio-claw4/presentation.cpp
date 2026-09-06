@@ -24,6 +24,7 @@
 #if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
 #include "src/draw/snapshot/lv_snapshot.h"
 #endif
+#include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
 #include "platform/adapters/graphics_adapter.hpp"
 #include "platform/boards/metalio-claw4/battery_peripheral.hpp"
@@ -201,8 +202,9 @@ bool AnimateToGuestImpl(MetalioClaw4BoardState& state, lv_obj_t* hall_root, lv_o
     const uint32_t intermediate_bytes = presentation.intermediate_size * presentation.intermediate_size * 3U;
     const uint32_t intermediate_allocation_bytes =
         (intermediate_bytes + kPpaBufferAlignment - 1U) / kPpaBufferAlignment * kPpaBufferAlignment;
-    auto* transition_fullscreen =
-        static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, kGuestTransitionBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    static_assert(kGuestTransitionBytes % kPpaBufferAlignment == 0U);
+    auto* transition_fullscreen = static_cast<uint8_t*>(
+        heap_caps_aligned_alloc(kPpaBufferAlignment, kGuestTransitionBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     auto* transition_half = static_cast<uint8_t*>(heap_caps_aligned_alloc(
         kPpaBufferAlignment, intermediate_allocation_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     lv_draw_buf_t transition_snapshot{};
@@ -261,10 +263,8 @@ void MetalioClaw4Presentation::BeforeHallRebuildLocked() { state_.touch_input.Cl
 
 bool MetalioClaw4Presentation::RetainNativeCover(const host_ui::HallCoverModel& source,
                                                  host_ui::HallCoverModel& prepared) {
-    if (source.format != host_ui::HallCoverFormat::kRgb888 || source.data != state_.guest_snapshot_pixels ||
-        source.width == 0U || source.height != source.width ||
-        source.stride != host_ui::lvgl::square_common::HallCoverStride(source.width) ||
-        source.size != source.stride * source.height) {
+    if (source.data != state_.guest_snapshot_pixels ||
+        !host_ui::lvgl::square_common::HallCoverCachePolicy::CanUseSourceDirectly(source, source.width)) {
         return false;
     }
     prepared = source;

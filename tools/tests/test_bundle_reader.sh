@@ -28,7 +28,7 @@ for app_bundle in "$@"; do
 done
 
 mkdir -p "$test_output_dir"
-"$cc" \
+python3 "$workspace_root/tools/tests/build_host_test.py" "$cc" \
     -std=c17 \
     -Wall -Wextra -Werror \
     -I "$cjson_dir" \

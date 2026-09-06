@@ -87,6 +87,18 @@ class UnavailableGraphics final : public device::Graphics {
     void DismissLaunchBitmap() override {}
     void ReleaseGuestResources() override { bitmap_update_frame_active_ = false; }
 
+    [[nodiscard]] int32_t CreateDirectSurface(const device::DirectSurfaceConfig&,
+                                              const device::DirectSurfaceReleaseSink&,
+                                              device::DirectSurfaceInfo&) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t PresentDirectSurface(const device::DirectSurfacePresentation&) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    void SuspendDirectSurface() override {}
+    void ResumeDirectSurface() override {}
+    [[nodiscard]] int32_t DestroyDirectSurface() override { return MICROPIXEL_STATUS_NOT_FOUND; }
+
    private:
     bool bitmap_update_frame_active_{};
 };
@@ -258,9 +270,9 @@ class UnavailableSystemUi : public host_ui::SystemUi {
     }
     void UpdateStatusLayer(const host_ui::StatusLayerModel& model) override { (void)model; }
     void LeaveStatusLayer(uint64_t trigger_timestamp_us) override { (void)trigger_timestamp_us; }
-    void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) override {
+    void UpdatePerformanceOverlay(bool enabled, const host_ui::CpuUsageSample& cpu) override {
         (void)enabled;
-        (void)cpu_percent;
+        (void)cpu;
     }
     void ApplyBrightness(uint8_t percent) override { (void)percent; }
     void ApplyVolume(uint8_t percent) override { (void)percent; }

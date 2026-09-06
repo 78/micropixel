@@ -1,0 +1,161 @@
+// Input and hardware Random usage for the navigable Demo app. See ../README.md.
+
+#include "apps/sdk-demo/demo_page.hpp"
+
+namespace demo {
+
+namespace {
+
+struct TouchPoint final {
+    bool active{};
+    uint32_t id{};
+    uint16_t x{};
+    uint16_t y{};
+    micropixel::Color color{AccentColor()};
+};
+
+class InputPage final {
+   public:
+    void Enter(DemoContext& context) {
+        for (TouchPoint& point : points_) {
+            point.active = false;
+        }
+        event_count_ = 0U;
+        key_event_count_ = 0U;
+        function_pressed_ = false;
+        last_random_ = context.app.random().U32();
+        context.app.log().Info("demo.input: touch canvas and Function/Confirm key monitor ready");
+    }
+
+    [[nodiscard]] bool OnKey(const micropixel::KeyEvent& event) {
+        if (event.code() != micropixel::KeyCode::kConfirm) {
+            return false;
+        }
+        function_pressed_ =
+            event.phase() == micropixel::KeyPhase::kDown || event.phase() == micropixel::KeyPhase::kRepeat;
+        ++key_event_count_;
+        return true;
+    }
+
+    [[nodiscard]] bool OnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
+        TouchPoint* point = FindActive(event.id());
+        if (event.phase() == micropixel::TouchPhase::kDown) {
+            if (point == nullptr) {
+                point = FindFree();
+            }
+            if (point == nullptr) {
+                return false;
+            }
+            last_random_ = context.app.random().U32();
+            point->color = RandomColor(last_random_);
+            point->active = true;
+            point->id = event.id();
+        } else if (point == nullptr) {
+            return false;
+        }
+
+        point->x = event.x();
+        point->y = event.y();
+        if (event.phase() == micropixel::TouchPhase::kUp || event.phase() == micropixel::TouchPhase::kCancel) {
+            point->active = false;
+        }
+        ++event_count_;
+        return true;
+    }
+
+    void Render(DemoContext& context, DemoView& commands) {
+        const int32_t center_x = PageCenterX(context);
+        commands.CenteredText(center_x, PageY(context, 12, 20), "Touch and drag with one or more fingers.",
+                              MutedColor(), micropixel::SystemFont::kMedium);
+        Line function;
+        function.Append("Function / Confirm: ");
+        function.Append(function_pressed_ ? "PRESSED" : "RELEASED");
+        function.Append("   events: ");
+        function.AppendUint(key_event_count_);
+        commands.CenteredText(center_x, PageY(context, 54, 62), function.c_str(),
+                              function_pressed_ ? AccentColor() : micropixel::Color::White(),
+                              micropixel::SystemFont::kMedium);
+        const micropixel::Rect canvas{context.layout.page_content.x + (context.layout.compact() ? 20 : 28),
+                                      PageY(context, 104, 112),
+                                      context.layout.page_content.width - (context.layout.compact() ? 40 : 56),
+                                      context.layout.page_content.height - (context.layout.compact() ? 176 : 184)};
+        commands.Panel(canvas, PanelColor());
+
+        for (const TouchPoint& point : points_) {
+            if (!point.active) {
+                continue;
+            }
+            int32_t x = static_cast<int32_t>(point.x) - 22;
+            int32_t y = static_cast<int32_t>(point.y) - 22;
+            const int32_t maximum_x = canvas.x + canvas.width - 44;
+            const int32_t maximum_y = canvas.y + canvas.height - 44;
+            if (x < canvas.x) {
+                x = canvas.x;
+            } else if (x > maximum_x) {
+                x = maximum_x;
+            }
+            if (y < canvas.y) {
+                y = canvas.y;
+            } else if (y > maximum_y) {
+                y = maximum_y;
+            }
+            commands.Panel(micropixel::Rect{x, y, 44, 44}, point.color);
+        }
+
+        Line status;
+        status.Append("Touch events: ");
+        status.AppendUint(event_count_);
+        status.Append("   Random::U32(): ");
+        status.AppendUint(last_random_);
+        commands.CenteredText(center_x, context.layout.page_content.y + context.layout.page_content.height - 28,
+                              status.c_str(), micropixel::Color::White(), micropixel::SystemFont::kSmall);
+    }
+
+   private:
+    [[nodiscard]] TouchPoint* FindActive(uint32_t id) {
+        for (TouchPoint& point : points_) {
+            if (point.active && point.id == id) {
+                return &point;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] TouchPoint* FindFree() {
+        for (TouchPoint& point : points_) {
+            if (!point.active) {
+                return &point;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] static micropixel::Color RandomColor(uint32_t value) {
+        const uint8_t red = static_cast<uint8_t>(64U + (value & 0x7fU));
+        const uint8_t green = static_cast<uint8_t>(64U + ((value >> 8U) & 0x7fU));
+        const uint8_t blue = static_cast<uint8_t>(64U + ((value >> 16U) & 0x7fU));
+        return micropixel::Color::Rgb(red, green, blue);
+    }
+
+    TouchPoint points_[5]{};
+    uint32_t event_count_{};
+    uint32_t key_event_count_{};
+    uint32_t last_random_{};
+    bool function_pressed_{};
+};
+
+InputPage input_page;
+
+}  // namespace
+
+void InputDemoEnter(DemoContext& context) { input_page.Enter(context); }
+
+bool InputDemoOnKey(DemoContext&, const micropixel::KeyEvent& event) { return input_page.OnKey(event); }
+
+bool InputDemoOnTouch(DemoContext& context, const micropixel::TouchEvent& event) {
+    return input_page.OnTouch(context, event);
+}
+
+void InputDemoRender(DemoContext& context, DemoView& commands) { input_page.Render(context, commands); }
+
+}  // namespace demo

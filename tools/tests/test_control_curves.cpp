@@ -14,8 +14,6 @@ using micropixel::platform::controllers::BrightnessOutputPerTenThousand;
 using micropixel::platform::controllers::kBrightnessControlScale;
 using micropixel::platform::controllers::kBrightnessOutputFloor;
 
-constexpr uint32_t kVolumeOutputFloor = 300U;
-
 bool Check(bool condition, const char* message) {
     if (!condition) {
         std::fprintf(stderr, "FAILED: %s\n", message);
@@ -25,13 +23,12 @@ bool Check(bool condition, const char* message) {
 
 bool VolumeCurveHasExpectedAnchors() {
     return Check(VolumeOutputPerTenThousand(0U) == 0U, "zero percent volume must remain muted") &&
-           Check(VolumeOutputPerTenThousand(1U) > kVolumeOutputFloor,
-                 "the first active setting must clear the hardware dead zone") &&
-           Check(VolumeOutputPerTenThousand(10U) == 447U, "ten percent must follow the dB curve") &&
-           Check(VolumeOutputPerTenThousand(15U) == 531U, "fifteen percent must follow the dB curve") &&
-           Check(VolumeOutputPerTenThousand(50U) == 1778U,
-                 "fifty percent volume must be fifteen dB below full scale") &&
-           Check(VolumeOutputPerTenThousand(90U) == 7079U, "ninety percent volume must be three dB below full scale") &&
+           Check(VolumeOutputPerTenThousand(1U) == 20U,
+                 "one percent must match ten percent of the former minus sixty dB curve") &&
+           Check(VolumeOutputPerTenThousand(10U) == 35U, "ten percent must follow the dB curve") &&
+           Check(VolumeOutputPerTenThousand(15U) == 48U, "fifteen percent must follow the dB curve") &&
+           Check(VolumeOutputPerTenThousand(50U) == 433U, "fifty percent must follow the remapped dB curve") &&
+           Check(VolumeOutputPerTenThousand(90U) == 5337U, "ninety percent must follow the remapped dB curve") &&
            Check(VolumeOutputPerTenThousand(100U) == kVolumeControlScale,
                  "one hundred percent must remain full output") &&
            Check(VolumeOutputPerTenThousand(255U) == kVolumeControlScale,

@@ -41,6 +41,12 @@ AOT_TARGET_MASKS = {
 }
 AOT_FLAG_THREADING_DECLARED = 1 << 0
 AOT_FLAG_SHARED_MEMORY = 1 << 1
+# AOT compiled with --bounds-checks=0; only development Hosts accept it.
+AOT_FLAG_UNCHECKED_MEMORY = 1 << 2
+# The Host pins the Guest's whole linear-memory ceiling at start (no base
+# relocation on memory.grow); needed for GUEST_BUFFERS Direct Surfaces.
+# Declared by app.json "pinned_memory": true.
+AOT_FLAG_PINNED_MEMORY = 1 << 3
 FORMATS = {
     "aot": 1,
     "raw_rgb888": 2,
@@ -127,6 +133,7 @@ class PackageManifest:
     titles: LocalizedTitles
     launch_asset: str
     threading: str = "none"
+    pinned_memory: bool = False
     package_type: str = "app"
     component_type: str = ""
     version: str = ""
@@ -773,7 +780,16 @@ def load_package_manifest(path: Path) -> PackageManifest:
             threading = value.get("threading", "none")
             if threading not in {"none", "shared-memory"}:
                 raise ValueError("app manifest threading must be none or shared-memory")
-            return PackageManifest(app_id, titles, launch_asset, threading=threading)
+            pinned_memory = value.get("pinned_memory", False)
+            if not isinstance(pinned_memory, bool):
+                raise ValueError("app manifest pinned_memory must be true or false")
+            return PackageManifest(
+                app_id,
+                titles,
+                launch_asset,
+                threading=threading,
+                pinned_memory=pinned_memory,
+            )
         except (KeyError, TypeError) as error:
             raise ValueError(
                 "app manifest requires app_id, title and a valid launch_asset name"
@@ -1216,6 +1232,11 @@ def main() -> None:
     parser.add_argument("--cpp-namespace", help="namespace for generated AssetId bindings")
     parser.add_argument("--output", type=Path, help="final Bundle output")
     parser.add_argument(
+        "--unchecked-memory",
+        action="store_true",
+        help="mark the AOT payload as compiled without linear-memory bounds checks",
+    )
+    parser.add_argument(
         "--legacy-metadata-v1",
         action="store_true",
         help="emit the legacy single UTF-8 display name for compatibility tests",
@@ -1333,8 +1354,8 @@ def main() -> None:
         if not aot:
             raise SystemExit("AOT input is empty")
         sections.insert(0, InputSection(KIND_AOT, 0, FORMATS["aot"], 0, 0, 0, aot))
-    elif args.aot is not None or args.aot_target is not None:
-        raise SystemExit("Component Packages cannot contain AOT/Wasm or an AOT target")
+    elif args.aot is not None or args.aot_target is not None or args.unchecked_memory:
+        raise SystemExit("Component Packages cannot contain AOT/Wasm, an AOT target, or memory-check flags")
     launch_asset_id = 0
     resource_digest = bytes(32)
     if args.resource_pack is not None:
@@ -1368,6 +1389,10 @@ def main() -> None:
     aot_flags = AOT_FLAG_THREADING_DECLARED
     if package_manifest.threading == "shared-memory":
         aot_flags |= AOT_FLAG_SHARED_MEMORY
+    if args.unchecked_memory:
+        aot_flags |= AOT_FLAG_UNCHECKED_MEMORY
+    if package_manifest.pinned_memory:
+        aot_flags |= AOT_FLAG_PINNED_MEMORY
     for section in sections:
         cursor = align(cursor, 64)
         entries.append(SECTION.pack(
@@ -1405,6 +1430,7 @@ def main() -> None:
         f"title={default_title!r} metadata=v{metadata_version} "
         f"locales={len(titles.values)} sections={len(sections)} "
         f"aot-target={args.aot_target or 'none'} threading={package_manifest.threading} "
+        f"pinned-memory={'yes' if package_manifest.pinned_memory else 'no'} "
         f"content={cursor} extent={bundle_size} launch={launch_asset}({launch_asset_id}) "
         f"resources={len(sections) - (2 if package_manifest.package_type == 'app' else 1)} "
         f"digest={resource_digest.hex()} "

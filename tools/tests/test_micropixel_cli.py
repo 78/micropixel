@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import base64
 import argparse
+import base64
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -145,11 +146,13 @@ class MicroPixelCliTest(unittest.TestCase):
     def test_guest_threading_selects_non_shared_build_by_default(self) -> None:
         target, compile_flags, link_flags, aot_flags = CLI.guest_threading_flags("none")
         self.assertEqual(target, "wasm32-wasip1")
-        self.assertEqual((compile_flags, link_flags, aot_flags), ([], [], []))
+        # Every Guest gets bulk memory and non-trapping float->int; threading adds nothing.
+        self.assertEqual((compile_flags, link_flags, aot_flags), (["-mbulk-memory", "-mnontrapping-fptoint"], [], []))
 
         target, compile_flags, link_flags, aot_flags = CLI.guest_threading_flags("shared-memory")
         self.assertEqual(target, "wasm32-wasip1-threads")
         self.assertIn("-matomics", compile_flags)
+        self.assertIn("-mbulk-memory", compile_flags)
         self.assertIn("-Wl,--shared-memory", link_flags)
         self.assertIn("--enable-multi-thread", aot_flags)
 
@@ -536,6 +539,91 @@ class MicroPixelCliTest(unittest.TestCase):
                 1,
             )
 
+    def test_build_commands_accept_force(self) -> None:
+        for arguments in (
+            ["build", "guest/tests/smoke", "--force"],
+            ["package", "guest/tests/smoke", "--force"],
+            ["run", "guest/tests/smoke", "--force"],
+            ["app", "install", "guest/tests/smoke", "--force"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.assertTrue(CLI.parse_command_line(arguments).force)
+        self.assertFalse(CLI.parse_command_line(["run", "guest/tests/smoke"]).force)
+
+    def test_package_reuses_bundle_until_an_input_or_command_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.cpp").write_text('#include "shared.hpp"\nint fixture = 1;\n', encoding="utf-8")
+            (root / "shared.hpp").write_text("inline int shared = 1;\n", encoding="utf-8")
+            (root / "app.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "app_id": "vendor.fixture",
+                        "title": "Fixture",
+                        "sources": ["main.cpp"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_dir = root / "out"
+            project = CLI.load_project_manifest(root / "app.json")
+            calls: list[str] = []
+
+            def fake_build(args: argparse.Namespace) -> None:
+                calls.append("build")
+                Path(args.output_dir_override).mkdir(parents=True, exist_ok=True)
+                (Path(args.output_dir_override) / "fixture.aot").write_bytes(b"fixture-aot")
+
+            def fake_bundle(arguments: list[str]) -> None:
+                calls.append("bundle")
+                Path(arguments[arguments.index("--output") + 1]).write_bytes(b"fixture-bundle")
+
+            def package(profile: str = "release", force: bool = False) -> Path:
+                with redirect_stdout(io.StringIO()):
+                    return CLI.package_project(
+                        project, profile, output_dir, None, "riscv32-ilp32f", False, force
+                    )
+
+            def age_inputs() -> None:
+                # Put every input clearly before the Bundle mtime so the check
+                # does not depend on filesystem timestamp resolution.
+                bundle_mtime = (output_dir / "fixture.bundle.bin").stat().st_mtime
+                for path in CLI.collect_project_build_inputs(project, output_dir):
+                    if path.is_relative_to(root):
+                        os.utime(path, (bundle_mtime - 10, bundle_mtime - 10))
+
+            with patch.object(CLI, "_run_build_sources", side_effect=fake_build), patch.object(
+                CLI, "_run_bundle_builder", side_effect=fake_bundle
+            ):
+                bundle = package()
+                self.assertEqual(calls, ["build", "bundle"])
+                self.assertTrue(CLI.build_stamp_path(bundle).is_file())
+                age_inputs()
+
+                package()
+                self.assertEqual(calls, ["build", "bundle"], "unchanged inputs must reuse the Bundle")
+
+                package(force=True)
+                self.assertEqual(calls, ["build", "bundle"] * 2, "--force must rebuild")
+                age_inputs()
+
+                package(profile="size")
+                self.assertEqual(calls, ["build", "bundle"] * 3, "a different profile must rebuild")
+                age_inputs()
+
+                newer = bundle.stat().st_mtime + 10
+                os.utime(root / "shared.hpp", (newer, newer))
+                package()
+                self.assertEqual(calls, ["build", "bundle"] * 4, "a newer included header must rebuild")
+                age_inputs()
+
+                (root / "shared.hpp").unlink()
+                (root / "main.cpp").write_text("int fixture = 2;\n", encoding="utf-8")
+                age_inputs()
+                package()
+                self.assertEqual(calls, ["build", "bundle"] * 5, "a changed input set must rebuild")
+
     def test_project_manifest_rejects_paths_outside_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -676,11 +764,26 @@ class MicroPixelCliTest(unittest.TestCase):
                 {
                     "appId": "example.demo",
                     "sizeBytes": len(bundle),
+                    "sha256": hashlib.sha256(bundle).hexdigest(),
                     "aotTarget": "riscv32-ilp32f",
                     "threading": None,
                     "hasAot": True,
+                    "uncheckedMemory": False,
+                    "pinnedMemory": False,
                 },
             )
+
+    def test_validates_pinned_memory_bundle_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pinned = bytearray(make_app_bundle("example.demo", threading_mode="none"))
+            struct.pack_into(
+                "<I", pinned, CLI.BUNDLE_HEADER_SIZE + 9 * 4, CLI.AOT_FLAG_THREADING_DECLARED | CLI.AOT_FLAG_PINNED_MEMORY
+            )
+            path = Path(directory) / "pinned.bundle.bin"
+            path.write_bytes(pinned)
+            described = CLI.validate_bundle(path)
+            self.assertTrue(described["pinnedMemory"])
+            self.assertEqual(described["threading"], "none")
 
     def test_validates_explicit_bundle_threading_flags(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -953,8 +1056,8 @@ class MicroPixelCliTest(unittest.TestCase):
             idempotency_key=None,
         )
         with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), patch.object(
-            CLI, "stream_network_logs"
-        ) as stream, redirect_stdout(io.StringIO()):
+            CLI, "validate_bundle", return_value={"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "00" * 32}
+        ), patch.object(CLI, "stream_network_logs") as stream, redirect_stdout(io.StringIO()):
             CLI.execute_network(args, client)
         self.assertIn(("POST", "/device/apps/install", {"packageId": "package-id"}), client.requests)
         self.assertIn(("POST", "/device/apps/vendor.demo/actions/start", {}), client.requests)
@@ -1011,8 +1114,10 @@ class MicroPixelCliTest(unittest.TestCase):
             launch_arguments=["--level", "100"],
         )
         with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), patch.object(
-            CLI, "stream_network_logs"
-        ) as stream, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            CLI, "validate_bundle", return_value={"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "00" * 32}
+        ), patch.object(CLI, "stream_network_logs") as stream, redirect_stdout(io.StringIO()), redirect_stderr(
+            io.StringIO()
+        ):
             CLI.run_network_app(args, client)
 
         mutating_requests = [request for request in client.requests if request[0] == "POST"]
@@ -1071,7 +1176,9 @@ class MicroPixelCliTest(unittest.TestCase):
             command_timeout_ms=None,
             idempotency_key=None,
         )
-        with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), redirect_stderr(io.StringIO()):
+        with patch.object(CLI, "upload", return_value={"packageId": "package-id"}), patch.object(
+            CLI, "validate_bundle", return_value={"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "00" * 32}
+        ), redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(CLI.CliError, "install failed"):
                 CLI.run_network_app(args, client)
         self.assertIn(("POST", "/device/apps/vendor.old/actions/start", {}), client.requests)
@@ -1084,11 +1191,14 @@ class MicroPixelCliTest(unittest.TestCase):
             def device_status(self) -> dict[str, object]:
                 return {"runtime": {"activeAppId": "vendor.old"}}
 
+            def list_apps(self) -> dict[str, object]:
+                return {"apps": []}
+
             def action(self, operation: str, app_id: str | None = None) -> dict[str, object]:
                 self.operations.append((operation, app_id))
                 return {"status": "succeeded"}
 
-            def install(self, bundle: Path, progress_callback: object = None) -> dict[str, object]:
+            def install(self, bundle: Path, progress_callback: object = None, **_options: object) -> dict[str, object]:
                 self.operations.append(("INSTALL", bundle))
                 if callable(progress_callback):
                     progress_callback(0)
@@ -1105,8 +1215,8 @@ class MicroPixelCliTest(unittest.TestCase):
         )
         args.aot_target = "riscv32-ilp32f"
         with patch.object(CLI, "require_bundle_target"), patch.object(
-            CLI, "stream_usb_logs"
-        ) as stream, redirect_stderr(io.StringIO()):
+            CLI, "validate_bundle", return_value={"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "00" * 32}
+        ), patch.object(CLI, "stream_usb_logs") as stream, redirect_stderr(io.StringIO()):
             CLI.run_usb_app(args, client)
         self.assertEqual(
             client.operations,
@@ -1117,6 +1227,209 @@ class MicroPixelCliTest(unittest.TestCase):
             ],
         )
         stream.assert_called_once()
+
+    def test_usb_install_skips_transfer_when_catalog_sha256_matches(self) -> None:
+        bundle = make_app_bundle("vendor.demo")
+        digest = hashlib.sha256(bundle).hexdigest()
+        operations: list[str] = []
+
+        class FakeSerial:
+            def __init__(self) -> None:
+                self.responses = bytearray()
+
+            def write(self, data: bytes) -> int:
+                fields = data.decode("ascii").strip().split()
+                request_id = fields[1]
+                operation = fields[2]
+                operations.append(operation)
+                if operation == "APP_INSTALL_BEGIN":
+                    raise AssertionError("matching Catalog SHA-256 must skip USB transfer")
+                if operation == "HELLO":
+                    detail = "HELLO 1 3072 8388608"
+                elif operation == "APP_LIST":
+                    detail = (
+                        f"APP_LIST 1 1 {len(bundle)} 25165824 1 "
+                        f"vendor.demo,{len(bundle)},RGVtbw==,0,not_running,{digest}"
+                    )
+                else:
+                    raise AssertionError(f"unexpected operation {operation}")
+                self.responses.extend(f"\nMPX1 {request_id} OK {detail}\n".encode("ascii"))
+                return len(data)
+
+            def read(self, size: int) -> bytes:
+                data = bytes(self.responses[:size])
+                del self.responses[:size]
+                return data
+
+            def close(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "demo.bundle.bin"
+            path.write_bytes(bundle)
+            with patch.object(CLI, "discover_usb_port", return_value="/dev/fake"), patch.object(
+                CLI, "open_usb_serial", return_value=FakeSerial()
+            ):
+                with CLI.UsbControlClient(None, 1.0) as client:
+                    catalog = client.list_apps()
+                    self.assertEqual(catalog["apps"][0]["sha256"], digest)
+                    result = client.install(path)
+        self.assertEqual(result["result"]["message"], "already_installed")
+        self.assertNotIn("APP_INSTALL_BEGIN", operations)
+
+    def test_usb_install_transfers_when_catalog_lacks_sha256_or_differs(self) -> None:
+        bundle = make_app_bundle("vendor.demo")
+        digest = hashlib.sha256(bundle).hexdigest()
+
+        def run_install(entry: str, force: bool = False) -> list[str]:
+            operations: list[str] = []
+
+            class FakeSerial:
+                def __init__(self) -> None:
+                    self.responses = bytearray()
+                    self.installed = bytearray()
+
+                def write(self, data: bytes) -> int:
+                    fields = data.decode("ascii").strip().split()
+                    request_id = fields[1]
+                    operation = fields[2]
+                    operations.append(operation)
+                    if operation == "HELLO":
+                        detail = "HELLO 1 3072 8388608"
+                    elif operation == "APP_LIST":
+                        detail = f"APP_LIST 1 1 {len(bundle)} 25165824 1 {entry}"
+                    elif operation == "APP_INSTALL_BEGIN":
+                        detail = "INSTALL_READY 3072"
+                    elif operation == "APP_INSTALL_CHUNK":
+                        self.installed.extend(base64.b64decode(fields[4], validate=True))
+                        detail = f"INSTALL_CHUNK {len(self.installed)}"
+                    elif operation == "APP_INSTALL_COMMIT":
+                        detail = "RESULT app_installed"
+                    else:
+                        raise AssertionError(f"unexpected operation {operation}")
+                    self.responses.extend(f"\nMPX1 {request_id} OK {detail}\n".encode("ascii"))
+                    return len(data)
+
+                def read(self, size: int) -> bytes:
+                    data = bytes(self.responses[:size])
+                    del self.responses[:size]
+                    return data
+
+                def close(self) -> None:
+                    pass
+
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "demo.bundle.bin"
+                path.write_bytes(bundle)
+                with patch.object(CLI, "discover_usb_port", return_value="/dev/fake"), patch.object(
+                    CLI, "open_usb_serial", return_value=FakeSerial()
+                ):
+                    with CLI.UsbControlClient(None, 1.0) as client:
+                        client.install(path, force=force)
+            return operations
+
+        legacy = run_install(f"vendor.demo,{len(bundle)},RGVtbw==,0,not_running")
+        mismatched = run_install(f"vendor.demo,{len(bundle)},RGVtbw==,0,not_running,{'11' * 32}")
+        forced = run_install(f"vendor.demo,{len(bundle)},RGVtbw==,0,not_running,{digest}", force=True)
+        for operations in (legacy, mismatched, forced):
+            self.assertIn("APP_INSTALL_BEGIN", operations)
+            self.assertIn("APP_INSTALL_COMMIT", operations)
+
+    def test_run_skips_usb_install_but_still_restarts_when_sha256_matches(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.operations: list[tuple[str, object]] = []
+
+            def device_status(self) -> dict[str, object]:
+                return {"runtime": {"activeAppId": "vendor.demo"}}
+
+            def list_apps(self) -> dict[str, object]:
+                return {
+                    "apps": [
+                        {"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "ab" * 32},
+                    ]
+                }
+
+            def action(self, operation: str, app_id: str | None = None) -> dict[str, object]:
+                self.operations.append((operation, app_id))
+                return {"status": "succeeded"}
+
+            def install(self, bundle: Path, progress_callback: object = None, **_options: object) -> dict[str, object]:
+                self.operations.append(("INSTALL", bundle))
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            bundle="demo.bundle.bin",
+            app_id="vendor.demo",
+            follow=False,
+            interval=0.5,
+            force=False,
+            aot_target="riscv32-ilp32f",
+        )
+        with patch.object(CLI, "require_bundle_target"), patch.object(
+            CLI,
+            "validate_bundle",
+            return_value={"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "ab" * 32},
+        ), redirect_stderr(io.StringIO()):
+            CLI.run_usb_app(args, client)
+        self.assertEqual(client.operations, [("APP_STOP", None), ("APP_START", "vendor.demo")])
+
+    def test_run_skips_remote_upload_when_catalog_sha256_matches(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.requests: list[tuple[str, str, object]] = []
+
+            def device_path(self, suffix: str = "") -> str:
+                return f"/device{suffix}"
+
+            def json(
+                self,
+                method: str,
+                path: str,
+                body: object = None,
+                timeout: float = 30.0,
+                **_options: object,
+            ) -> dict[str, object]:
+                self.requests.append((method, path, body))
+                if method == "GET" and path.endswith("/apps"):
+                    return {
+                        "apps": [
+                            {"appId": "vendor.demo", "bundleSizeBytes": 65536, "sha256": "ab" * 32, "sizeBytes": 65536}
+                        ]
+                    }
+                if method == "GET":
+                    return {
+                        "online": True,
+                        "status": {
+                            "firmwareVersion": "0.4.0",
+                            "runtime": {"foregroundSessionId": None, "runtimeSessions": []},
+                        },
+                    }
+                return {"id": path}
+
+            def wait_job(self, job: dict[str, object], timeout: float) -> dict[str, object]:
+                return {"status": "succeeded"}
+
+        client = Client()
+        args = argparse.Namespace(
+            bundle="demo.bundle.bin",
+            app_id="vendor.demo",
+            follow=False,
+            interval=2.0,
+            timeout=20.0,
+            command_timeout_ms=None,
+            idempotency_key=None,
+            force=False,
+        )
+        with patch.object(CLI, "upload") as upload, patch.object(
+            CLI, "validate_bundle", return_value={"appId": "vendor.demo", "sizeBytes": 65536, "sha256": "ab" * 32}
+        ), redirect_stderr(io.StringIO()):
+            CLI.run_network_app(args, client)
+        upload.assert_not_called()
+        self.assertNotIn(("POST", "/device/apps/install", {"packageId": "package-id"}), client.requests)
+        self.assertIn(("POST", "/device/runtime/foreground/stop", {}), client.requests)
+        self.assertIn(("POST", "/device/apps/vendor.demo/actions/start", {}), client.requests)
 
     def test_job_failure_formats_app_diagnostic_for_humans_and_agents(self) -> None:
         message = CLI.job_failure_message(

@@ -21,6 +21,7 @@
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform {
 namespace {
@@ -116,7 +117,7 @@ class SzpiEsp32S3Board final : public Board {
         registration.SetInput(state_.ui.Input());
         registration.SetGraphics(graphics_);
         if (audio_status == ESP_OK) {
-            registration.SetAudioOutput(audio_output_, 16000U);
+            registration.SetAudioOutput(audio_output_, audio_output_.SampleRate());
         }
         registration.SetWifi(wifi_);
         registration.SetLocalControl(state_.local_control);
@@ -161,7 +162,7 @@ class SzpiEsp32S3Board final : public Board {
                                       .code = device::KeyCode::kConfirm,
                                       .log_tag = "szpi_button",
                                       .task_name = "szpi_button",
-                                      .task_core = 0}};
+                                      .task_core = task_policy::kSystemCore}};
     wifi::NativeWifiRadio wifi_radio_{};
     wifi::WifiManager wifi_{wifi_radio_};
 };

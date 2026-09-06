@@ -202,7 +202,8 @@ esp_err_t BoardIo::InitializeLcd() {
 
     esp_lcd_dpi_panel_config_t dpi_config{};
     dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-    dpi_config.dpi_clock_freq_mhz = 48;
+    // Exact 240/6 MHz division keeps the panel above 60 Hz with these timings.
+    dpi_config.dpi_clock_freq_mhz = 40;
     dpi_config.virtual_channel = 0;
     dpi_config.num_fbs = kDisplayFramebufferCount;
     dpi_config.video_timing.h_size = display_width_;

@@ -21,6 +21,7 @@
 #include "platform/transports/development_display_control.hpp"
 #include "platform/transports/tinyusb_cdc_local_control.hpp"
 #include "soc/soc_caps.h"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::esp_mosaico::detail {
 
@@ -31,7 +32,12 @@ inline constexpr int32_t kWidth = board::kDisplayWidth;
 inline constexpr int32_t kHeight = board::kDisplayHeight;
 static_assert(kWidth == ui_profile::Layout::kWidth);
 static_assert(kHeight == ui_profile::Layout::kHeight);
-inline constexpr int kLvglTaskCore = 1;
+// Full-frame RGB565 stages shared by the Direct Surface presenter and the
+// transition compositor. Peak use is the open status layer: retained
+// background + scrim held across the layer's lifetime, plus compose + wire
+// during its open/close animation.
+inline constexpr uint32_t kScanoutStageSlots = 4U;
+inline constexpr int kLvglTaskCore = task_policy::kSystemCore;
 inline constexpr uint32_t kTransitionAlignment = 128U;
 inline constexpr uint32_t kDisplayFrameStride = static_cast<uint32_t>(kWidth) * 2U;
 inline constexpr uint32_t kDisplayFrameBytes = kDisplayFrameStride * static_cast<uint32_t>(kHeight);
@@ -52,7 +58,13 @@ struct MosaicoBoardState final {
     lv_display_t* display{};
     esp_lcd_touch_handle_t touch{};
     lvgl::FontRegistry fonts{};
-    lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts};
+    // RGB565 App Surface: the CO5300 panel and LVGL are RGB565, so BGR888 would
+    // only cost PSRAM (0.9 MiB more for the App Surface set) and a colour
+    // conversion on every LVGL flush. Guest textures stay BGR888/BGRA8888; the
+    // DMA2D copy engine converts 888->565 on its transmit channel and PPA
+    // SRM/blend output RGB565 directly, so Scene sprites never fall back to
+    // the CPU because of the format.
+    lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts, graphics::SurfacePixelFormat::kRgb565};
     PanelTransitionCompositor panel_transition{};
     input::EspLcdTouchInput touch_input{kWidth, kHeight, ESP_LCD_TOUCH_CST92XX_MAX_POINTS};
     host_ui::lvgl::square_common::SquareSystemUiState ui{touch_input, guest_graphics, panel_transition,

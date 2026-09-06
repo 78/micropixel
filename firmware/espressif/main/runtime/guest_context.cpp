@@ -1,12 +1,16 @@
 #include "runtime/guest_context.hpp"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "runtime/wamr/diagnostics.h"
+#include "sdkconfig.h"
 
 namespace micropixel::runtime {
 
@@ -28,6 +32,13 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       haptics_(devices_.haptics(), events_, timers_),
       resources_(package, background_executor, devices_.graphics()),
       audio_playback_(package, devices_.audio(), events_, clock_origin_us_),
+      pcm_stream_(devices_.audio(), events_, clock_origin_us_),
+      direct_surface_(devices_.graphics(), events_, clock_origin_us_),
+#if CONFIG_MICROPIXEL_RASTER_KERNELS
+      raster_(RasterService::kAbiPoolBytes),
+#else
+      raster_(0U),
+#endif
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),
       key_events_(events_, devices_.input(), clock_origin_us_),
@@ -62,6 +73,12 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
 }
 
 GuestContext::~GuestContext() {
+    micropixel_check_heap("GuestContext teardown begin");
+    // Returns the panel to LVGL and drains in-flight Guest buffers while the
+    // event queue and the release sink (this object) are still alive.
+    direct_surface_.Shutdown();
+    raster_.Shutdown();
+    micropixel_check_heap("direct surface and raster shutdown");
     events_.Close();
     key_events_.Shutdown();
     touch_events_.Shutdown();
@@ -69,13 +86,24 @@ GuestContext::~GuestContext() {
     gpio_.Shutdown();
     haptics_.Shutdown();
     audio_playback_.Shutdown();
+    pcm_stream_.Shutdown();
     (void)devices_.audio().StopAll();
     (void)devices_.audio().SuspendAll();
+    micropixel_check_heap("before Guest graphics release");
     devices_.graphics().ReleaseGuestResources();
+    micropixel_check_heap("after Guest graphics release");
     resources_.Shutdown();
+    micropixel_check_heap("after Guest textures release");
 }
 
-void GuestContext::WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length) const {
+void GuestContext::WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length) {
+    constexpr std::string_view kPanicPrefix = "panic: ";
+    if (level == MICROPIXEL_LOG_ERROR && length > kPanicPrefix.size() &&
+        std::memcmp(bytes, kPanicPrefix.data(), kPanicPrefix.size()) == 0) {
+        const uint32_t copied = std::min<uint32_t>(length, last_panic_.size() - 1U);
+        std::memcpy(last_panic_.data(), bytes, copied);
+        last_panic_[copied] = '\0';
+    }
     if (log_sink_ != nullptr) {
         log_sink_->WriteGuestLog(app_id_.data(), level, bytes, length, static_cast<uint64_t>(esp_timer_get_time()));
     }
@@ -85,6 +113,9 @@ bool GuestContext::Suspend(TickType_t timeout) {
     if (suspended_) {
         return true;
     }
+    // First: the Guest may still be presenting until it reaches WaitEvent, and
+    // the Hall snapshot below needs LVGL to own the panel again.
+    direct_surface_.Suspend();
     touch_events_.Suspend();
     key_events_.Suspend();
     sensors_.Suspend();
@@ -100,6 +131,7 @@ bool GuestContext::Suspend(TickType_t timeout) {
         (void)gpio_.Resume();
         touch_events_.Resume();
         key_events_.Resume();
+        direct_surface_.Resume();
         events_.Resume();
         return false;
     }
@@ -140,6 +172,8 @@ bool GuestContext::Resume() {
     }
     touch_events_.Resume();
     key_events_.Resume();
+    // Before the Guest wakes: its first frame after RESUME must be shown.
+    direct_surface_.Resume();
     events_.Resume();
     suspended_ = false;
     ESP_LOGI(kTag, "Guest services resumed from the same AppSession: event=%" PRIu32, core_sequence_);
@@ -168,6 +202,7 @@ bool GuestContext::RequestStop() {
 }
 
 void GuestContext::ForceStop() {
+    direct_surface_.Shutdown();
     touch_events_.Suspend();
     key_events_.Suspend();
     sensors_.Suspend();
@@ -200,6 +235,16 @@ device::TextureAccess GuestContext::GraphicsTextureAccess() {
         .retain = RetainTextureForGraphics,
         .release = ReleaseTextureForGraphics,
     };
+}
+
+device::DeviceResult<micropixel_graphics_info_t> GuestContext::GraphicsInfo() const {
+    auto info = devices_.graphics().GetInfo();
+    if (info) {
+        info->raster_pool_bytes = raster_.pool_bytes();
+        info->raster_max_textures = raster_.available() ? MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES : 0U;
+        info->raster_max_light_levels = raster_.available() ? MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS : 0U;
+    }
+    return info;
 }
 
 device::DeviceResult<void> GuestContext::GraphicsSubmit(const uint8_t* bytes, uint32_t length) {

@@ -12,7 +12,9 @@
 
 namespace micropixel::platform::graphics {
 
-// One rectangular block copy between two equally formatted surfaces.
+// One rectangular block copy between two opaque surfaces of the same size:
+// BGR888->BGR888, RGB565->RGB565 or BGR888->RGB565 (hardware colour-space
+// conversion on the transmit channel).
 struct Dma2dCopyBlock final {
     ConstPixelSurface source{};
     SurfaceRect source_rect{};
@@ -20,7 +22,7 @@ struct Dma2dCopyBlock final {
     SurfaceRect destination_rect{};
 };
 
-// Direct DMA2D memory-to-memory copy path for opaque BGR888 surfaces.
+// Direct DMA2D memory-to-memory copy path for opaque BGR888/RGB565 surfaces.
 //
 // `esp_async_color_convert` synchronizes the *entire* source and destination
 // pictures on every request, which costs roughly 0.2 ms and evicts a full
@@ -47,8 +49,16 @@ class Dma2dCopyEngine final {
 
     // Copies every block in one linked DMA2D transaction and blocks until the
     // receive channel reports end-of-frame. Returns false without touching any
-    // pixel when a block is not an in-bounds, equally sized, opaque BGR888 copy.
+    // pixel when a block is not an in-bounds, equally sized opaque copy, or when
+    // the blocks do not all share the first block's source/destination formats
+    // (the colour-space conversion is programmed once per transaction).
     [[nodiscard]] bool CopyBlocks(const Dma2dCopyBlock* blocks, std::size_t count);
+    // True when the engine can move `source` pixels into `destination` pixels.
+    [[nodiscard]] static bool SupportsFormats(SurfacePixelFormat source, SurfacePixelFormat destination) {
+        return source == destination
+                   ? (source == SurfacePixelFormat::kBgr888 || source == SurfacePixelFormat::kRgb565)
+                   : (source == SurfacePixelFormat::kBgr888 && destination == SurfacePixelFormat::kRgb565);
+    }
     [[nodiscard]] bool Copy(const Dma2dCopyBlock& block) { return CopyBlocks(&block, 1U); }
 
     [[nodiscard]] uint32_t Transactions() const { return transactions_; }
@@ -82,6 +92,9 @@ class Dma2dCopyEngine final {
     std::size_t descriptor_stride_bytes_{};
     dma2d_trans_t* transaction_placeholder_{};
     dma2d_trans_config_t transaction_config_{};
+    // Colour-space conversion of the transaction being enqueued; read by
+    // OnJobPicked on the pool's task.
+    dma2d_csc_tx_option_t tx_csc_option_{DMA2D_CSC_TX_NONE};
     StaticSemaphore_t done_storage_{};
     SemaphoreHandle_t done_{};
     uint32_t transactions_{};

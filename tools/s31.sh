@@ -291,7 +291,7 @@ build_release() {
     build_app_package blocks
     build_app_package snake
     build_app_package tilt
-    build_app_package demo
+    build_app_package sdk-demo
     build_profile esp-mosaico
     mkdir -p "$system_shell_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
@@ -300,7 +300,7 @@ build_release() {
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
         "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
-        "$workspace_root/build/apps/demo/demo.bundle.bin"
+        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
     echo "==> Creating ESP-Mosaico browser image with Blocks, Snake, Tilt, and SDK Demo"
     python3 "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \

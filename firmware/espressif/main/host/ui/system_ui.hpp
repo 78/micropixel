@@ -54,7 +54,8 @@ struct HallCoverModel final {
     uint32_t stride{};
     HallCoverFormat format{HallCoverFormat::kRgb888};
     // Stable across mmap lifetimes. A changed key invalidates the platform's
-    // PSRAM thumbnail cache for this Hall slot.
+    // PSRAM thumbnail cache for this Hall slot. Zero denotes a transient image
+    // whose decoded pixels must not be reused across Hall model updates.
     uint64_t cache_key{};
 };
 
@@ -180,6 +181,16 @@ enum class SystemThemeMode : uint8_t {
     kPureBlack,
     kDeepBlue,
     kSoftIvory,
+};
+
+// CPU load for the performance overlay. per_core_percent holds one entry per
+// core when the scheduler exposes per-core idle counters; core_count is 0 when
+// only the aggregate is available.
+struct CpuUsageSample final {
+    static constexpr uint8_t kMaxCores = 2;
+    uint8_t total_percent{};
+    uint8_t core_count{};
+    std::array<uint8_t, kMaxCores> per_core_percent{};
 };
 
 struct StatusLayerModel final {
@@ -332,6 +343,8 @@ struct AppManagementModel final {
     uint32_t storage_total_kib{};
     bool launch_available{};
     bool uninstall_available{};
+    // A valid index opens the shared action sheet directly over the Hall.
+    uint32_t action_app_index{kMaxHallApps};
 };
 
 enum class WifiBand : uint8_t {
@@ -418,6 +431,7 @@ enum class SystemUiActionType {
     kTimeStateChanged,
     kRemoteCommandReady,
     kUserActivity,
+    kOpenAppActions,
 };
 
 struct SystemUiAction final {
@@ -509,7 +523,7 @@ class SystemUi {
                                                                              void* action_context) = 0;
     virtual void UpdateStatusLayer(const StatusLayerModel& model) = 0;
     virtual void LeaveStatusLayer(uint64_t trigger_timestamp_us) = 0;
-    virtual void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) = 0;
+    virtual void UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu) = 0;
     virtual void ApplyBrightness(uint8_t percent) = 0;
     virtual void ApplyVolume(uint8_t percent) = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> ShowShutdown() = 0;

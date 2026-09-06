@@ -22,6 +22,7 @@ struct InstalledApp final {
     uint32_t display_profile{MICROPIXEL_BUNDLE_DISPLAY_SQUARE};
     uint32_t bundle_size{};
     uint32_t content_id{};
+    std::array<uint8_t, BUNDLEFS_SHA256_SIZE> sha256{};
     bundlefs_file_t file{};
 };
 

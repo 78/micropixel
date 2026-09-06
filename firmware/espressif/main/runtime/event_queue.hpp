@@ -54,6 +54,10 @@ class EventQueue final {
     /* Required events apply backpressure and are never silently dropped. */
     [[nodiscard]] bool PushRequired(const micropixel_event_t& event);
 
+    /* Advisory events from real-time tasks: never blocks, returns false when
+     * the queue is full or closed so the producer can re-arm and retry later. */
+    [[nodiscard]] bool PushAdvisory(const micropixel_event_t& event);
+
     /* At most one event for each periodic Timer may wait in the queue. */
     [[nodiscard]] PeriodicPushResult PushPeriodicCoalesced(const micropixel_event_t& event);
 

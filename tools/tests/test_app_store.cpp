@@ -132,8 +132,9 @@ void TestEmptyInstallUpdateAndRemove() {
 
     catalog_result = micropixel::runtime::LoadAppStoreCatalog(catalog);
     Check(catalog_result.has_value() && catalog.count == 1U &&
-              catalog.store_used_bytes == MICROPIXEL_BUNDLEFS_METADATA_SIZE + first_bundle.size(),
-          "installed Bundle must be listed with metadata-inclusive Store usage");
+              catalog.store_used_bytes == MICROPIXEL_BUNDLEFS_METADATA_SIZE + first_bundle.size() &&
+              catalog.apps[0].sha256 == Hash(first_bundle),
+          "installed Bundle must be listed with metadata-inclusive Store usage and Catalog SHA-256");
     installed = micropixel::runtime::InstallApp(Request(first_bundle, "demo"));
     Check(installed.has_value() && !installed->changed && file_count == 1U,
           "installing the same Bundle digest must converge without rewriting it");
@@ -269,6 +270,8 @@ bundlefs_error_t bundlefs_list(bundlefs_file_info_t* files_out, uint32_t capacit
         std::snprintf(files_out[index].name, sizeof(files_out[index].name), "%s", files[index].name.c_str());
         files_out[index].size = files[index].data.size();
         files_out[index].content_id = files[index].content_id;
+        const auto digest = Hash(files[index].data);
+        std::copy(digest.begin(), digest.end(), files_out[index].sha256);
     }
     return BUNDLEFS_OK;
 }

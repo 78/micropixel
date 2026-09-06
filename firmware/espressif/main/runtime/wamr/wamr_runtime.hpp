@@ -66,10 +66,18 @@ class GuestInstance final {
     GuestInstance& operator=(GuestInstance&& other) noexcept;
     ~GuestInstance();
 
-    [[nodiscard]] static std::expected<GuestInstance, WamrFailure> Instantiate(wasm_module_t module);
+    // `pinned_memory`: reserve the whole linear-memory ceiling at start so
+    // memory.grow never relocates the base (MICROPIXEL_BUNDLE_AOT_FLAG_PINNED_MEMORY).
+    // Otherwise the memory starts at the module's initial size and grows on
+    // demand, leaving the PSRAM to Host-side work such as bitmap decoding.
+    [[nodiscard]] static std::expected<GuestInstance, WamrFailure> Instantiate(wasm_module_t module,
+                                                                               bool pinned_memory);
     [[nodiscard]] std::expected<void, WamrFailure> CreateExecEnv();
     [[nodiscard]] wasm_module_inst_t get() const;    // NOLINT(readability-identifier-naming)
     [[nodiscard]] wasm_exec_env_t exec_env() const;  // NOLINT(readability-identifier-naming)
+    // True when Host pointers into this Guest's linear memory stay valid for
+    // the instance lifetime (Direct Surface, raster kernels rely on it).
+    [[nodiscard]] bool pinned_memory() const { return pinned_memory_; }  // NOLINT(readability-identifier-naming)
 
    private:
     GuestInstance() = default;
@@ -77,6 +85,7 @@ class GuestInstance final {
 
     wasm_module_inst_t instance_{};
     wasm_exec_env_t exec_env_{};
+    bool pinned_memory_{};
 };
 
 class GuestContextBinding final {

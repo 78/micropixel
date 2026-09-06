@@ -186,6 +186,7 @@ std::expected<InstalledApp, AppStoreError> InstalledFromFile(const bundlefs_file
     app.display_profile = metadata.display_profile;
     app.bundle_size = metadata.bundle_size;
     app.content_id = file_info.content_id;
+    std::copy_n(file_info.sha256, app.sha256.size(), app.sha256.begin());
     app.file = file;
     return app;
 }

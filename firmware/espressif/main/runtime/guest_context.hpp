@@ -9,12 +9,15 @@
 #include "runtime/abi/service_endpoints.hpp"
 #include "runtime/abi/service_registry.hpp"
 #include "runtime/audio/audio_playback_service.hpp"
+#include "runtime/audio/pcm_stream_service.hpp"
 #include "runtime/event_queue.hpp"
 #include "runtime/guest_log_sink.hpp"
 #include "runtime/key_event_bridge.hpp"
 #include "runtime/resources/resource_service.hpp"
+#include "runtime/services/direct_surface_service.hpp"
 #include "runtime/services/gpio_service.hpp"
 #include "runtime/services/haptics_service.hpp"
+#include "runtime/services/raster_service.hpp"
 #include "runtime/services/sensor_service.hpp"
 #include "runtime/services/storage_service.hpp"
 #include "runtime/services/timer_service.hpp"
@@ -51,7 +54,11 @@ class GuestContext final {
     [[nodiscard]] bool PushRequired(const micropixel_event_t& event) { return events_.PushRequired(event); }
     [[nodiscard]] bool PushTouch(const device::TouchSample& sample) { return touch_events_.Push(sample); }
     [[nodiscard]] bool PushKey(const device::KeySample& sample) { return key_events_.Push(sample); }
-    void WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length) const;
+    void WriteLog(uint32_t level, const uint8_t* bytes, uint32_t length);
+    // Last Guest log line that began with "panic: " (the SDK's single-line panic
+    // report), or an empty string. Attached to the trap failure detail so the
+    // developer sees the cause instead of only "Exception: unreachable".
+    [[nodiscard]] const char* LastPanic() const { return last_panic_.data(); }
     void NoteEventDelivered(const micropixel_event_t& event) { touch_events_.NoteDelivered(event); }
     [[nodiscard]] int32_t ServiceOpen(uint32_t service_id, uint32_t required_interface_version,
                                       micropixel_service_info_t& info_out, uint32_t info_capacity) const {
@@ -102,8 +109,34 @@ class GuestContext final {
         return resources_.ResolveTexture(texture, view_out);
     }
     [[nodiscard]] device::DeviceResult<void> GraphicsSubmit(const uint8_t* bytes, uint32_t length);
-    [[nodiscard]] device::DeviceResult<micropixel_graphics_info_t> GraphicsInfo() const {
-        return devices_.graphics().GetInfo();
+    // Direct Surface (Graphics 1.5) and raster kernels (Graphics 1.6). Guest
+    // offsets are resolved through the memory access bound by the session
+    // after instantiation.
+    void BindGuestMemory(const GuestMemoryAccess& access) {
+        direct_surface_.BindGuestMemory(access);
+        raster_.BindGuestMemory(access);
+    }
+    [[nodiscard]] ServiceResult<micropixel_surface_create_response_t> SurfaceCreate(
+        const micropixel_surface_create_request_t& request) {
+        return direct_surface_.Create(request);
+    }
+    [[nodiscard]] ServiceResult<void> SurfacePresent(const micropixel_surface_present_request_t& request) {
+        return direct_surface_.Present(request);
+    }
+    [[nodiscard]] ServiceResult<void> SurfaceDestroy(micropixel_surface_handle_t surface) {
+        return direct_surface_.Destroy(surface);
+    }
+    // Device info plus the runtime-owned raster pool fields.
+    [[nodiscard]] device::DeviceResult<micropixel_graphics_info_t> GraphicsInfo() const;
+    [[nodiscard]] bool RasterAvailable() const { return raster_.available(); }
+    [[nodiscard]] ServiceResult<void> RasterTextureUpload(const micropixel_raster_texture_upload_request_t& request) {
+        return raster_.UploadTexture(request);
+    }
+    [[nodiscard]] ServiceResult<void> RasterPaletteUpload(const micropixel_raster_palette_upload_request_t& request) {
+        return raster_.UploadPalette(request);
+    }
+    [[nodiscard]] ServiceResult<void> RasterSubmit(const uint8_t* bytes, uint32_t length) {
+        return raster_.Submit(bytes, length, direct_surface_);
     }
     [[nodiscard]] device::DeviceResult<micropixel_input_info_t> InputInfo() const { return devices_.input().GetInfo(); }
     [[nodiscard]] device::DeviceResult<micropixel_audio_info_t> AudioInfo() const { return devices_.audio().GetInfo(); }
@@ -193,7 +226,21 @@ class GuestContext final {
         micropixel_audio_playback_handle_t playback) {
         return audio_playback_.State(playback);
     }
-    [[nodiscard]] ServiceResult<void> AudioStopAll() { return audio_playback_.StopAll(); }
+    [[nodiscard]] ServiceResult<void> AudioStopAll() {
+        pcm_stream_.CloseAll();
+        return audio_playback_.StopAll();
+    }
+    [[nodiscard]] ServiceResult<micropixel_audio_pcm_stream_open_response_t> AudioOpenPcmStream(
+        const micropixel_audio_pcm_stream_open_request_t& request) {
+        return pcm_stream_.Open(request);
+    }
+    [[nodiscard]] ServiceResult<micropixel_audio_pcm_stream_write_response_t> AudioWritePcmStream(
+        const micropixel_audio_pcm_stream_write_request_t& request, const int16_t* samples, uint32_t payload_bytes) {
+        return pcm_stream_.Write(request, samples, payload_bytes);
+    }
+    [[nodiscard]] ServiceResult<void> AudioClosePcmStream(micropixel_audio_pcm_stream_handle_t stream) {
+        return pcm_stream_.Close(stream);
+    }
     [[nodiscard]] ServiceResult<uint32_t> KvGetU32(const char* key, uint32_t key_length) {
         return storage_.GetU32(key, key_length);
     }
@@ -227,6 +274,7 @@ class GuestContext final {
 
     device::DeviceServices& devices_;
     GuestLogSink* log_sink_{};
+    std::array<char, 160U> last_panic_{};
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> app_id_{};
     int64_t clock_origin_us_{};
     EventQueue events_;
@@ -236,6 +284,9 @@ class GuestContext final {
     HapticsService haptics_;
     ResourceService resources_;
     AudioPlaybackService audio_playback_;
+    PcmStreamService pcm_stream_;
+    DirectSurfaceService direct_surface_;
+    RasterService raster_;
     StorageService storage_;
     TouchEventBridge touch_events_;
     KeyEventBridge key_events_;

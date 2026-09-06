@@ -11,6 +11,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::buses {
 
@@ -51,7 +52,7 @@ class I2cExecutor final {
 
     static constexpr uint32_t kQueueCapacity = 8U;
     static constexpr uint32_t kWorkerStackBytes = 4096U;
-    static constexpr BaseType_t kWorkerCore = 1;
+    static constexpr BaseType_t kWorkerCore = task_policy::kSystemCore;
 
     static void WorkerEntry(void* context);
     void WorkerLoop();

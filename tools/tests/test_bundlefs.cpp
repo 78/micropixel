@@ -202,6 +202,11 @@ void TestReadMapReplaceAndRemove() {
     std::array<uint8_t, BUNDLEFS_SHA256_SIZE> listed_digest{};
     Check(bundlefs_get_file_sha256("demo", listed_digest.data()) == BUNDLEFS_OK && listed_digest == first_digest,
           "digest lookup must expose the committed SHA-256 without expanding every file record");
+    std::array<bundlefs_file_info_t, BUNDLEFS_MAX_FILES> listed{};
+    uint32_t listed_count = 0U;
+    Check(bundlefs_list(listed.data(), listed.size(), &listed_count) == BUNDLEFS_OK && listed_count == 1U &&
+              std::equal(first_digest.begin(), first_digest.end(), listed[0].sha256),
+          "file list must expose the committed SHA-256");
 
     bundlefs_store_info_t populated_info{};
     Check(bundlefs_get_store_info(&populated_info) == BUNDLEFS_OK && populated_info.used_blocks == 2U,

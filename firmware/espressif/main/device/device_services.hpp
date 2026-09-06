@@ -113,6 +113,12 @@ class GraphicsService final {
     [[nodiscard]] DeviceResult<void> ShowLaunchBitmap(const BitmapView& bitmap) const;
     void DismissLaunchBitmap() const;
     void ReleaseGuestResources() const;
+    [[nodiscard]] DeviceResult<DirectSurfaceInfo> CreateDirectSurface(const DirectSurfaceConfig& config,
+                                                                      const DirectSurfaceReleaseSink& sink) const;
+    [[nodiscard]] DeviceResult<void> PresentDirectSurface(const DirectSurfacePresentation& presentation) const;
+    void SuspendDirectSurface() const;
+    void ResumeDirectSurface() const;
+    [[nodiscard]] DeviceResult<void> DestroyDirectSurface() const;
 
    private:
     Graphics& implementation_;

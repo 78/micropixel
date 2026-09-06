@@ -139,6 +139,20 @@ void BoundedCoverWindow() {
           "decoded Hall cover memory must remain bounded independently of App count");
 }
 
+void SnapshotCacheIdentity() {
+    using host_ui::lvgl::square_common::HallCoverCacheIdentity;
+    const uint8_t first[1]{};
+    const uint8_t second[1]{};
+    const HallCoverCacheIdentity snapshot{0U, first, 1U};
+    Check(snapshot.Matches({0U, first, 1U}), "scrolling within one Hall may reuse its current snapshot");
+    Check(!snapshot.Matches({0U, second, 1U}), "two unkeyed snapshots must not share decoded pixels");
+    Check(!snapshot.Matches({0U, first, 2U}),
+          "a later App capture must miss even when its RAM address and zero key are reused");
+    const HallCoverCacheIdentity asset{123U, first, 1U};
+    Check(asset.Matches({123U, second, 2U}), "immutable bundle covers remain cached across Hall updates");
+    Check(!asset.Matches({124U, first, 1U}), "updated bundle covers must invalidate cached pixels");
+}
+
 void CoverCacheReplacementAfterAppUpdate() {
     constexpr std::array<HallCoverCacheSlot, HallCarousel::kMaximumCachedCovers> kFullCache{{
         {.occupied = true, .key = 10U, .app_index = 9U},
@@ -160,6 +174,34 @@ void CoverCacheReplacementAfterAppUpdate() {
           "a cover outside the current window must remain the fallback eviction candidate");
 }
 
+void NativeScreenshotCover() {
+    std::array<uint8_t, 624U * 202U> pixels{};
+    host_ui::HallCoverModel cover{
+        .data = pixels.data(), .size = 122412U, .width = 202U, .height = 202U, .stride = 606U};
+    Check(HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U),
+          "the P4 packed screenshot must not fall back to a placeholder and asynchronous conversion");
+    cover.stride = 624U;
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U),
+          "padded rows must have enough backing storage");
+    cover.size = pixels.size();
+    Check(HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U),
+          "LVGL-aligned decoded covers must remain directly usable");
+    cover.stride = 605U;
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U), "a row cannot be shorter than its RGB888 pixels");
+    cover.stride = 624U;
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 135U), "different card sizes still need scaling");
+    cover.format = host_ui::HallCoverFormat::kJpeg;
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U), "encoded covers still need decoding");
+    cover.format = host_ui::HallCoverFormat::kRgb888;
+    cover.data = nullptr;
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U), "missing pixels cannot hide a placeholder");
+    cover.data = pixels.data();
+    cover.width = cover.height = cover.stride = cover.size = UINT32_MAX;
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, UINT32_MAX), "stride and size checks must not overflow");
+    cover = {.data = pixels.data()};
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 0U), "an empty cover cannot be used directly");
+}
+
 void RepeatedThrowMomentum() {
     Check(HallCarousel::InertiaVelocity(2000, 0U) == 2000,
           "interrupted inertia must expose its initial instantaneous velocity");
@@ -176,13 +218,10 @@ void RepeatedThrowMomentum() {
 }
 
 void HallLaunchBackgroundPolicy() {
-    Check(PlanHallLaunchBackground(false, false) == HallLaunchBackgroundPlan::kCaptureVisibleHall &&
-              PlanHallLaunchBackground(false, true) == HallLaunchBackgroundPlan::kCaptureVisibleHall,
-          "a Hall without a running App may refresh its visible launch baseline");
-    Check(PlanHallLaunchBackground(true, true) == HallLaunchBackgroundPlan::kReuseCleanBaseline,
-          "an App switch must reuse the clean baseline instead of capturing the RUNNING card");
-    Check(PlanHallLaunchBackground(true, false) == HallLaunchBackgroundPlan::kPrepareCleanBaseline,
-          "an App switch without a cached baseline must render a clean fallback");
+    Check(PlanHallLaunchBackground(false) == HallLaunchBackgroundPlan::kCaptureVisibleHall,
+          "a Hall without a running App must capture the current carousel and covers");
+    Check(PlanHallLaunchBackground(true) == HallLaunchBackgroundPlan::kPrepareCleanBaseline,
+          "switching Apps must rebuild a clean baseline at the current scroll position, not reuse an old Hall");
 }
 
 void HallResumePolicy() {
@@ -220,10 +259,12 @@ int main() {
     ContinuousIndicator();
     CardRevealOffset();
     BoundedCoverWindow();
+    SnapshotCacheIdentity();
     CoverCacheReplacementAfterAppUpdate();
+    NativeScreenshotCover();
     RepeatedThrowMomentum();
     HallLaunchBackgroundPolicy();
     HallResumePolicy();
-    std::cout << "hall_carousel tests passed: 12 cases\n";
+    std::cout << "hall_carousel tests passed: 14 cases\n";
     return 0;
 }

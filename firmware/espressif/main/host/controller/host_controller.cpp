@@ -88,48 +88,65 @@ class CpuUsageSampler final {
     void Reset() {
         last_sample_us_ = 0U;
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-        last_idle_time_ = 0U;
+        last_idle_time_ = {};
 #endif
     }
 
-    [[nodiscard]] uint8_t Sample() {
+    // Returns the load since the previous call: aggregate over all cores plus a
+    // per-core split when the kernel exposes per-core idle counters. The split
+    // is what tells whether the Guest core or the system core is saturated.
+    [[nodiscard]] host_ui::CpuUsageSample Sample() {
+        host_ui::CpuUsageSample sample{};
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
         using Counter = configRUN_TIME_COUNTER_TYPE;
-        Counter idle_time = 0U;
+        constexpr size_t kCores = static_cast<size_t>(configNUMBER_OF_CORES);
+        static_assert(kCores <= host_ui::CpuUsageSample::kMaxCores);
+        std::array<Counter, host_ui::CpuUsageSample::kMaxCores> idle_time{};
+        bool per_core = false;
 #if defined(CONFIG_FREERTOS_SMP) && CONFIG_FREERTOS_SMP
-        idle_time = ulTaskGetIdleRunTimeCounter();
+        idle_time[0] = ulTaskGetIdleRunTimeCounter();
 #else
-        for (BaseType_t core = 0; core < configNUMBER_OF_CORES; ++core) {
-            idle_time += ulTaskGetIdleRunTimeCounterForCore(core);
+        per_core = true;
+        for (size_t core = 0; core < kCores; ++core) {
+            idle_time[core] = ulTaskGetIdleRunTimeCounterForCore(static_cast<BaseType_t>(core));
         }
 #endif
         const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
         if (last_sample_us_ == 0U) {
             last_sample_us_ = now_us;
             last_idle_time_ = idle_time;
-            return 0U;
+            return sample;
         }
         const uint64_t elapsed_us = now_us - last_sample_us_;
-        const Counter idle_delta = idle_time >= last_idle_time_
-                                       ? idle_time - last_idle_time_
-                                       : std::numeric_limits<Counter>::max() - last_idle_time_ + idle_time + 1U;
         last_sample_us_ = now_us;
-        last_idle_time_ = idle_time;
-        const uint64_t available_cpu_us = elapsed_us * configNUMBER_OF_CORES;
-        if (available_cpu_us == 0U) {
-            return 0U;
+        if (elapsed_us == 0U) {
+            last_idle_time_ = idle_time;
+            return sample;
         }
-        const uint64_t idle_percent = static_cast<uint64_t>(idle_delta) * 100U / available_cpu_us;
-        return static_cast<uint8_t>(idle_percent < 100U ? 100U - idle_percent : 0U);
-#else
-        return 0U;
+        uint64_t idle_total = 0U;
+        for (size_t core = 0; core < kCores; ++core) {
+            const Counter previous = last_idle_time_[core];
+            const Counter current = idle_time[core];
+            const Counter delta = current >= previous ? current - previous
+                                                      : std::numeric_limits<Counter>::max() - previous + current + 1U;
+            idle_total += delta;
+            if (per_core) {
+                const uint64_t idle_percent = static_cast<uint64_t>(delta) * 100U / elapsed_us;
+                sample.per_core_percent[core] = static_cast<uint8_t>(idle_percent < 100U ? 100U - idle_percent : 0U);
+            }
+        }
+        last_idle_time_ = idle_time;
+        const uint64_t idle_percent = idle_total * 100U / (elapsed_us * kCores);
+        sample.total_percent = static_cast<uint8_t>(idle_percent < 100U ? 100U - idle_percent : 0U);
+        sample.core_count = per_core ? static_cast<uint8_t>(kCores) : 0U;
 #endif
+        return sample;
     }
 
    private:
     uint64_t last_sample_us_{};
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    configRUN_TIME_COUNTER_TYPE last_idle_time_{};
+    std::array<configRUN_TIME_COUNTER_TYPE, host_ui::CpuUsageSample::kMaxCores> last_idle_time_{};
 #endif
 };
 
@@ -632,6 +649,7 @@ void FillControlCatalog(const runtime::InstalledAppCatalog& catalog, control::Ca
         std::snprintf(destination.display_name.data(), destination.display_name.size(), "%s",
                       source.display_name.data());
         destination.bundle_size = source.bundle_size;
+        destination.sha256 = source.sha256;
     }
 }
 
@@ -863,9 +881,9 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
                     paused_cpu_sampler.Reset();
                     (void)paused_cpu_sampler.Sample();
                     next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
-                    shell.UpdatePerformanceOverlay(true, 0U);
+                    shell.UpdatePerformanceOverlay(true, host_ui::CpuUsageSample{});
                 } else {
-                    shell.UpdatePerformanceOverlay(false, 0U);
+                    shell.UpdatePerformanceOverlay(false, host_ui::CpuUsageSample{});
                 }
                 controls_changed = true;
                 break;
@@ -1302,9 +1320,11 @@ bool RunAppearance(host_ui::SystemShell& shell, host_ui::StatusLayerModel& statu
 
 bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCatalog& catalog, bool launch_available,
                       const AppManagementUninstallHandler* uninstall_handler, std::optional<uint32_t>& launch_request,
-                      RemoteCommandPump* command_pump) {
+                      RemoteCommandPump* command_pump, uint32_t action_app_index = host_ui::kMaxHallApps) {
     const bool uninstall_available = uninstall_handler != nullptr && uninstall_handler->available;
-    auto show_result = shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available, uninstall_available));
+    auto model = MakeAppManagementModel(catalog, launch_available, uninstall_available);
+    model.action_app_index = action_app_index;
+    auto show_result = shell.ShowAppManagement(model);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show App Management: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1337,6 +1357,9 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             shell.LeaveAppManagement();
             if (!uninstall_handler->Uninstall(action->app_index)) {
                 ESP_LOGE(kTag, "local App uninstall failed: index=%" PRIu32, action->app_index);
+            }
+            if (action_app_index < host_ui::kMaxHallApps) {
+                return true;
             }
             show_result =
                 shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available, uninstall_available));
@@ -1578,7 +1601,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
                                            &covers, std::nullopt, nullptr, 0U, firmware_update_available))) {
             return;
         }
-        shell.UpdatePerformanceOverlay(status_model.performance_overlay_enabled, 0U);
+        shell.UpdatePerformanceOverlay(status_model.performance_overlay_enabled, host_ui::CpuUsageSample{});
         int64_t next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
         for (;;) {
             const TickType_t timeout = DeadlineWaitTimeout(
@@ -1753,14 +1776,16 @@ class ActiveHost final {
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control_.Snapshot();
         hall_firmware_update_available_ = remote_control_snapshot.firmware_update_available;
         controls_.CopyInstallActivity(hall_install_activity_);
+        micropixel_check_heap("before Hall render");
         if (!ShowHall(shell_, MakeHallModel(catalog_, wifi_snapshot, battery_.Snapshot(), hall_status_, outcome_,
                                             hall_detail_, CanLaunch(), &covers_, suspended_index_, &suspended_snapshot_,
                                             hall_transition_trigger_us_, hall_firmware_update_available_,
                                             &hall_install_activity_))) {
             return false;
         }
+        micropixel_check_heap("after Hall render");
         hall_transition_trigger_us_ = 0U;
-        shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, 0U);
+        shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, host_ui::CpuUsageSample{});
         if (!ready_logged_) {
             ESP_LOGI(kTag, "System Shell ready: App Hall rendered with apps=%" PRIu32, catalog_.count);
             ready_logged_ = true;
@@ -2190,7 +2215,9 @@ class ActiveHost final {
                 }
                 FinishPendingStart(false, "app_start_cancelled");
                 if (suspended_index_.has_value()) {
+                    micropixel_check_heap("before Guest snapshot release");
                     shell_.ReleaseGuestSnapshot();
+                    micropixel_check_heap("after Guest snapshot release");
                     suspended_snapshot_ = {};
                     suspended_index_.reset();
                 } else {
@@ -2416,7 +2443,8 @@ class ActiveHost final {
                 next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
                 continue;
             }
-            if (action.type == host_ui::SystemUiActionType::kOpenSystemMenu) {
+            if (action.type == host_ui::SystemUiActionType::kOpenSystemMenu ||
+                (action.type == host_ui::SystemUiActionType::kOpenAppActions && action.app_index < catalog_.count)) {
                 std::optional<uint32_t> launch_request;
                 const AppManagementUninstallHandler uninstall_handler{
                     .uninstall =
@@ -2426,9 +2454,14 @@ class ActiveHost final {
                     .context = this,
                     .available = app_controller_.state() == AppLifecycleState::kNotRunning,
                 };
-                if (!RunSystemMenu(shell_, battery_, wifi_, status_model_, catalog_, settings_store_, remote_control_,
-                                   CanLaunch(), &uninstall_handler, launch_request, &command_pump,
-                                   effective_locale_.data())) {
+                const bool opened =
+                    action.type == host_ui::SystemUiActionType::kOpenAppActions
+                        ? RunAppManagement(shell_, catalog_, CanLaunch(), &uninstall_handler, launch_request,
+                                           &command_pump, action.app_index)
+                        : RunSystemMenu(shell_, battery_, wifi_, status_model_, catalog_, settings_store_,
+                                        remote_control_, CanLaunch(), &uninstall_handler, launch_request, &command_pump,
+                                        effective_locale_.data());
+                if (!opened) {
                     RecordHostFailure(static_cast<uint32_t>(host_ui::SystemUiError::kRenderFailed));
                 }
                 if (command_pump.unwind_requested) {
@@ -2488,7 +2521,9 @@ class ActiveHost final {
         if (!ShowCurrentHall()) {
             return false;
         }
+        micropixel_check_heap("before Guest snapshot release");
         shell_.ReleaseGuestSnapshot();
+        micropixel_check_heap("after Guest snapshot release");
         suspended_snapshot_ = {};
         micropixel_log_heap_state("host after Hall App stop");
         return true;
@@ -2512,14 +2547,22 @@ class ActiveHost final {
                 if (!restore_result) {
                     ESP_LOGE(kTag, "failed to restore retained Guest view: error=%u",
                              static_cast<unsigned>(restore_result.error()));
+                    micropixel_check_heap("before leave Hall");
                     shell_.LeaveHall();
+                    micropixel_check_heap("after leave Hall");
                     guest_view_restored = false;
                 }
             } else {
+                micropixel_check_heap("before Hall launch cover retention");
                 shell_.PrepareAppLaunch(selected_index);
+                micropixel_check_heap("after Hall launch cover retention");
+                micropixel_check_heap("before leave Hall");
                 shell_.LeaveHall();
+                micropixel_check_heap("after leave Hall");
             }
+            micropixel_check_heap("before Guest snapshot release");
             shell_.ReleaseGuestSnapshot();
+            micropixel_check_heap("after Guest snapshot release");
             suspended_snapshot_ = {};
             suspended_index_.reset();
 
@@ -2558,8 +2601,12 @@ class ActiveHost final {
                 micropixel_log_heap_state("host after suspended App stop");
             }
         } else {
+            micropixel_check_heap("before Hall launch cover retention");
             shell_.PrepareAppLaunch(selected_index);
+            micropixel_check_heap("after Hall launch cover retention");
+            micropixel_check_heap("before leave Hall");
             shell_.LeaveHall();
+            micropixel_check_heap("after leave Hall");
         }
 
         const runtime::InstalledApp& selected_app = catalog_.apps[selected_index];
@@ -2588,7 +2635,7 @@ class ActiveHost final {
         cpu_sampler.Reset();
         (void)cpu_sampler.Sample();
         int64_t next_performance_sample_us = esp_timer_get_time() + kPerformanceSamplePeriodUs;
-        shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, 0U);
+        shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, host_ui::CpuUsageSample{});
         shell_.WatchGuestActions();
 
         for (;;) {
@@ -2642,8 +2689,9 @@ class ActiveHost final {
                                    ? static_cast<uint32_t>(last_outcome_.error)
                                    : 0U;
                 if (last_outcome_.completion == runtime::AppCompletion::kFailed) {
-                    ESP_LOGE(kTag, "AppSession failed: app=%s error=%u", last_outcome_.app_id.data(),
-                             static_cast<unsigned>(last_outcome_.error));
+                    ESP_LOGE(kTag, "AppSession failed: app=%s phase=%s code=%s detail=%s", last_outcome_.app_id.data(),
+                             runtime::AppSessionErrorPhase(last_outcome_.error),
+                             runtime::AppSessionErrorCode(last_outcome_.error), last_outcome_.detail.data());
                     ReportAppFailure(last_outcome_);
                 }
                 micropixel_log_heap_state("host after AppController completion");
@@ -2726,7 +2774,7 @@ class ActiveHost final {
         }
         FinishPendingStart(false, "device_shutting_down");
         shell_.StopWatchingGuestActions();
-        shell_.UpdatePerformanceOverlay(false, 0U);
+        shell_.UpdatePerformanceOverlay(false, host_ui::CpuUsageSample{});
         shell_.ApplyVolume(0U);
 
         const AppLifecycleState lifecycle = app_controller_.state();
@@ -2753,7 +2801,9 @@ class ActiveHost final {
         controls_.UpdateAppLifecycle(nullptr, "not_running");
         suspended_index_.reset();
         suspended_snapshot_ = {};
+        micropixel_check_heap("before Guest snapshot release");
         shell_.ReleaseGuestSnapshot();
+        micropixel_check_heap("after Guest snapshot release");
 
         const auto show_result = shell_.ShowShutdown();
         if (!show_result) {
@@ -2825,7 +2875,9 @@ class ActiveHost final {
                 }
                 suspended_index_.reset();
                 suspended_snapshot_ = {};
+                micropixel_check_heap("before Guest snapshot release");
                 shell_.ReleaseGuestSnapshot();
+                micropixel_check_heap("after Guest snapshot release");
                 LeaveForegroundUi();
                 state_ = State::kHall;
                 moved_to_hall = true;
@@ -2884,7 +2936,9 @@ class ActiveHost final {
         if (trigger_timestamp_us == 0U) {
             trigger_timestamp_us = static_cast<uint64_t>(suspend_started_us);
         }
+        micropixel_check_heap("before suspend to Hall");
         auto suspend_result = app_controller_.Suspend(pdMS_TO_TICKS(500));
+        micropixel_check_heap("after suspend to Hall");
         if (!suspend_result) {
             ESP_LOGE(kTag, "failed to suspend App for Hall: error=%u", static_cast<unsigned>(suspend_result.error()));
             RecordHostFailure(static_cast<uint32_t>(suspend_result.error()));
@@ -2898,7 +2952,9 @@ class ActiveHost final {
         // Remove the Host performance HUD before capture so it cannot be
         // scaled into the suspended App card as part of the Guest image.
         LeaveForegroundUi();
+        micropixel_check_heap("before Hall capture and transition");
         auto snapshot_result = shell_.CaptureGuestFrame(foreground_index_, trigger_timestamp_us);
+        micropixel_check_heap("after Hall capture and transition");
         const int64_t snapshot_completed_us = esp_timer_get_time();
         if (snapshot_result) {
             suspended_snapshot_ = *snapshot_result;
@@ -2925,7 +2981,7 @@ class ActiveHost final {
 
     void LeaveForegroundUi() {
         shell_.StopWatchingGuestActions();
-        shell_.UpdatePerformanceOverlay(false, 0U);
+        shell_.UpdatePerformanceOverlay(false, host_ui::CpuUsageSample{});
     }
 
     runtime::InstalledAppCatalog catalog_;

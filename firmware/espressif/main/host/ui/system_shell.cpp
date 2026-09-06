@@ -231,8 +231,8 @@ void SystemShell::UpdateStatusLayer(const StatusLayerModel& model) { ui_.UpdateS
 
 void SystemShell::LeaveStatusLayer(uint64_t trigger_timestamp_us) { ui_.LeaveStatusLayer(trigger_timestamp_us); }
 
-void SystemShell::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) {
-    ui_.UpdatePerformanceOverlay(enabled, cpu_percent);
+void SystemShell::UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu) {
+    ui_.UpdatePerformanceOverlay(enabled, cpu);
 }
 
 void SystemShell::ApplyBrightness(uint8_t percent) { ui_.ApplyBrightness(percent); }

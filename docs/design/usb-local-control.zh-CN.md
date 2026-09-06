@@ -35,7 +35,9 @@ MPX1 <request-id> ERROR <stable-error-code>
 - `HELLO`：协商协议版本、最大 chunk 和最大 Bundle；
 - `DEVICE_STATUS`、`DEVICE_TASKS <offset>`、`DEVICE_REBOOT`；
 - `FIRMWARE_STATUS`、`FIRMWARE_UPDATE`；
-- `APP_LIST <offset>`：按固定上限分页返回 Catalog；
+- `APP_LIST <offset>`：按固定上限分页返回 Catalog。每条为
+  `appId,size,base64Name,active,lifecycle,sha256`，`sha256` 是 Catalog 里已提交 Bundle 的 64 位小写十六进制
+  digest（与 `APP_INSTALL_BEGIN` 相同）。旧 CLI 用 `split(",", 4)` 会把 lifecycle 和 sha256 粘在一起，需与本固件配对升级。
 - `APP_LAST_ERROR`；
 - `APP_START <app-id>`；
 - `APP_STOP [app-id]`；

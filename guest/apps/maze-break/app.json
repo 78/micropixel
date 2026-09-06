@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.maze-break",
+  "threading": "none",
+  "title": {
+    "default": "en",
+    "values": {
+      "en": "Maze Break",
+      "zh-CN": "迷城突围"
+    }
+  },
+  "sources": [
+    "main.cpp",
+    "maze_break_app.cpp",
+    "maze_break_audio.cpp",
+    "gfx/palette.cpp",
+    "gfx/textures.cpp",
+    "gfx/sprites.cpp",
+    "gfx/font.cpp",
+    "game/level.cpp",
+    "game/world.cpp",
+    "game/renderer.cpp",
+    "input/touch_controls.cpp",
+    "input/motion_controls.cpp"
+  ],
+  "asset_manifest": "assets/manifest.json",
+  "launch_asset": "launch"
+}

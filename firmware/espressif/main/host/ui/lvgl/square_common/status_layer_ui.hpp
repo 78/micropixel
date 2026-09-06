@@ -17,6 +17,7 @@ class StatusLayerUi final {
     StatusLayerUi() = default;
     StatusLayerUi(const StatusLayerUi&) = delete;
     StatusLayerUi& operator=(const StatusLayerUi&) = delete;
+    ~StatusLayerUi();
 
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowLocked(const host_ui::StatusLayerModel& model,
                                                                          host_ui::SystemUiActionSink action_sink,
@@ -32,9 +33,25 @@ class StatusLayerUi final {
     [[nodiscard]] uint32_t TransitionScrimRgb() const;
     [[nodiscard]] uint8_t TransitionScrimOpacity() const;
 
-    void UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_percent, uint32_t guest_presented_frame_sequence);
+    void UpdatePerformanceOverlayLocked(bool enabled, const CpuUsageSample& cpu,
+                                        uint32_t guest_presented_frame_sequence);
     void RaisePerformanceOverlayLocked();
     [[nodiscard]] bool PerformanceOverlayVisibleLocked() const;
+
+    // Off-screen rendering of the performance HUD for Direct Surface scanout:
+    // the LVGL object stays hidden (so the Guest keeps the panel) and its
+    // ARGB8888 snapshot is handed to the presenter instead. The pixels stay
+    // valid until the next call. `fps` is measured by the caller.
+    struct PerformanceOverlaySnapshot final {
+        const uint8_t* pixels{};
+        uint32_t width{};
+        uint32_t height{};
+        uint32_t stride{};
+        int32_t x{};
+        int32_t y{};
+    };
+    [[nodiscard]] bool RenderPerformanceOverlaySnapshotLocked(const CpuUsageSample& cpu, uint32_t fps,
+                                                              PerformanceOverlaySnapshot& snapshot_out);
 
    private:
     struct Bounds final {
@@ -149,8 +166,14 @@ class StatusLayerUi final {
     uint32_t performance_last_frame_sequence_{};
     uint32_t performance_fps_{};
     int64_t performance_last_sample_us_{};
+    // ARGB8888 snapshot of the hidden HUD for Direct Surface scanout.
+    uint8_t* performance_snapshot_pixels_{};
+    uint32_t performance_snapshot_capacity_{};
     bool updating_controls_{};
     const Layout* layout_{};
+
+    void EnsurePerformanceOverlayLocked();
+    void SetPerformanceOverlayTextLocked(const CpuUsageSample& cpu, uint32_t fps);
 };
 
 }  // namespace micropixel::host_ui::lvgl::square_common

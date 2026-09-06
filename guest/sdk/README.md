@@ -1,26 +1,20 @@
 # Guest C++ SDK
 
-状态：**0.13.0，v1 事件循环已收敛。** 0.13.0 让 Host 用根级 `cache_content` Container 选择
-Layer 快照容器，滚动/震动类场景可少重绘；保留 0.12.1 的自适应纹理缩放边界修复。唯一标准入口是
-`Run(event_handler)`；Timer 统一从 `app.timers().After/Every()` 创建。
-`WaitEvent/WaitEventFor/PollEvent` 只用于短期等待或协议级控制。
+SDK 让应用通过强类型对象使用图形、输入、音频和设备能力。应用保存自己的状态，以单线程事件循环
+驱动更新；Host 管理硬件、资源和系统 UI。本文介绍编程模型与易错边界，完整可运行用法见
+[Demo](../apps/sdk-demo/)，底层协议见 [ABI](../abi/README.md)。
 
 ## 工具链兼容性
 
-SDK 0.13.0 生成的 Guest 必须使用公开的
-[MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime) 固定 commit
-`4dbe3b6efe776fde06468e47f342c1d351879cf0` 编译为 AOT format v6。该编译器当前仍自报
-`wamrc 2.4.3`，但上游 WAMR 2.4.3、2.4.4 和 2.4.5 Release 都生成不兼容的 AOT v5；因此
-`wamrc --version` 不是兼容性判断依据。安装步骤和产物头检查见 MicroPixel Developer 的
-[开发环境](https://micropixel.ai/docs/environment/)页面。
+当前 SDK 版本为 0.13.0，使用受限 C++23 和固定 commit 的
+[MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime)
+`af07c787ac6f7d1d20555f97ddc184f5fc13731a`，生成 AOT format v6。
+wamrc 自报版本不足以判断兼容性。构建、打包和目标架构选择统一使用
+[Guest 构建流程](../README.md)，不自行拼接编译命令。
 
-MicroPixel 是项目正式名称。Public C++ API 使用 `micropixel` namespace 和 `sdk/micropixel.hpp`，
-C ABI 统一使用 `micropixel_` 前缀。ABI 与 Renderer、Input 等后续能力仍须按各自里程碑用真实任务
-验证后再冻结。
+## 最小应用
 
-## AI-first 默认写法
-
-普通 Guest 只包含 `sdk/micropixel.hpp`，实现标准 `int main()`：
+普通应用包含 `sdk/micropixel.hpp`，实现标准无参 `int main()`：
 
 ```cpp
 #include "sdk/micropixel.hpp"
@@ -31,7 +25,7 @@ int main() {
     micropixel::Application app;
     micropixel::Timer timer = app.timers().Every(1_s);
     app.Run([&](const micropixel::Event& event) {
-        if (const micropixel::TimerEvent* tick = event.TimerFrom(timer)) {
+        if (const auto* tick = event.TimerFrom(timer)) {
             (void)tick->delta();
             app.log().Info("tick");
         }
@@ -40,798 +34,196 @@ int main() {
 }
 ```
 
-这条默认路径使用统一事件语言表达意图：
+`Run()` 是 Guest 自己的串行事件循环。Timer、输入和完成事件进入同一个 handler，不创建 Guest 线程，
+也不会在 handler 中间插入另一个事件。返回 `EventResult::kExit` 可主动结束应用，返回 void 则继续。
+高级 `WaitEvent/WaitEventFor/PollEvent` 用于短期等待或协议控制，不作为另一套常规应用模板。
 
-- `app.timers().Every(period)` 创建周期 Timer；一次性 Timer 使用 `app.timers().After(delay)`；
-- `app.Run(handler)` 是 Guest 自己的串行事件循环，不是 Host 回调，也不创建 Guest 线程；
-- handler 可以返回 `EventResult::kContinue/kExit` 主动结束应用；返回 `void` 等价于始终 continue；
-- Timer、Touch、Key、Resume、Stop 和未来 Event 全部进入同一个 handler；
-- Timer 通过 `event.TimerFrom(timer)` 匹配，资源身份和 capture 生命周期在代码中可见；
-- `Stop` 会先交给 handler，handler 返回后 `Run()` 返回，应用随后从 `main()` 返回；
-- SDK/Runtime 失败在发生点 panic，普通应用不写 `try`、`if (!result)` 或 ABI status 样板。
+## 对象与所有权
 
-应用自身的前置条件或 invariant 使用带条件和原因的 `micropixel::Assert()`，不要返回无法从
-日志理解的数字：
+| 对象 | 语义 | 使用原则 |
+|---|---|---|
+| Application | 能力入口与事件循环 | 通过 accessor 取得 Service，不堆积叶子操作 |
+| Service View | 可复制的能力入口，如 Audio、Renderer | 本身没有独立资源身份 |
+| Resource | Timer、Texture、Sensor、Playback 等 | move-only RAII；释放后不得继续使用旧身份 |
+| Value / Event | 时间、坐标、事件数据 | 值语义，typed payload view 不超过 Event 寿命 |
 
-```cpp
-micropixel::Assert(display.width() >= 320U && display.height() >= 320U,
-                     "app: requires at least a 320x320 logical display");
-```
+保存 Service View 不会自动延长其创建资源的寿命。资源的 Guest 所有权与 Host 的在用引用可能独立：
+Scene 引用 Texture，播放实例引用 AudioClip；释放 Guest 句柄不会让仍在使用的底层内容立即失效。
+跨 ABI 的身份、所属应用和容量仍由 Host 校验，C++ 类型不能代替隔离检查。
 
-不能自然写成条件的直接失败仍可使用 `micropixel::Panic(reason)`。不使用 `micropixel::assert` 作为函数名，
-是为了避免它被标准 C/C++ `assert` 宏展开。
+## 时间与事件
 
-需要由 Guest 主动结束并返回 App Hall 时，handler 返回明确结果；原有 `void` handler 保持适合长期 App：
+使用 `Duration` 表达间隔、`TimePoint` 表达应用时钟上的时间点，单位写成 `16_ms`、`1_s` 或显式工厂。
+时间运算的溢出、下溢和除零会 trap。应用时钟在暂停时冻结，不能与 Host wall clock 混用。
 
-```cpp
-app.Run([&](const micropixel::Event& event) {
-    return ShouldExit(event) ? micropixel::EventResult::kExit
-                             : micropixel::EventResult::kContinue;
-});
-```
+Timer 由 `app.timers().After/Every()` 创建，通过 `event.TimerFrom(timer)` 匹配来源。
+周期通知合并时，`delta()` 累加实际经过时间，`missed_count()` 表示未单独投递的 tick 数。
+Cancel 是幂等终态操作，释放 handle；需要再次调度时创建新 Timer。Reset 和析构只做 best-effort 释放。
 
-需要在短函数中读取事件时，可以使用高级接口：`WaitEvent()` 无限等待，
-`WaitEventFor(event, timeout)` 有限等待，`PollEvent(event)` 不阻塞。后两者只在没有事件时返回 false；
-Runtime/ABI 错误仍在调用点 panic。它们不应成为长期 App 的第二套主循环模板。可运行的 SDK 用法按能力
-拆在 `guest/apps/demo/pages/`，由同一个 Demo Bundle 导航和测试；详细协议验收位于
-`guest/tests/conformance/`。
+Touch position 与 Renderer 共用逻辑坐标；pressure 只有在 capability 声明支持时才有效。
+Key 使用方向、Confirm/Back/Menu 与按位置命名的 South/East/West/North，不依赖手柄上的 A/B/X/Y 标签。
+系统手势由 Host 处理，应用不要重新实现系统菜单或返回大厅的手势。
 
-## Application façade 与 Public 对象分类
+## Resume、Stop 与 watchdog
 
-`Application` 是可通过自动补全逐层发现能力的 façade/capability root，不是实现所有能力的
-“上帝对象”。`app.clock()`、`app.random()`、`app.log()`、`app.timers()`、`app.renderer()`、`app.input()`、
-`app.resources()`、`app.storage()`、`app.audio()`、`app.localization()`、`app.devices()`、
-`app.sensors()`、`app.gpio()`、`app.haptics()` 和 `app.power_info()` 都按值返回轻量 **Service View**；它们不包含对应 Host Service 的
-实现和资源状态。同类 Service View 的多个副本访问同一个 Guest Service：
+暂停冻结应用时钟、Timer、输入和音频。恢复同一 Session 首先收到 Resume，不重新调用 main；
+Host 先显示保留画面，需要重建动态内容的应用可再重绘。Guest 没有 Pause 事件。
 
-```cpp
-micropixel::Clock clock = app.clock();
-micropixel::Clock same_clock = clock;
+关闭或切换应用时投递 Stop，handler 返回后 Run 返回；500ms 内未结束才强制终止。
+保存状态应在这一有界时间内完成，不能依赖析构执行长操作。
 
-micropixel::TimePoint started = clock.Now();
-micropixel::TimePoint current = same_clock.Now();
-```
+1 秒 watchdog 限制连续 Guest 计算：阻塞等待事件时暂停，进入 Host ABI 时重新计时，AOT 回跳点
+检查终止标志。应用可以长期运行，但 handler 或纯计算循环不能无限占用 CPU。
 
-这里没有创建两条独立时间线。真正的当前时间快照是 `TimePoint`。Public 类型固定按以下语义分类：
+## 图形：先选择更新模型
 
-| 分类 | C++ 语义 | 示例 |
-| --- | --- | --- |
-| Service View | 轻量、可复制、没有独立资源身份 | `Log`、`Clock`、`Devices`、`Sensors`、`Gpio`、`Haptics`、`PowerInfo` 等 |
-| Resource | 有 Host 身份和所有权，默认 move-only、析构释放 | `Timer`、`Texture`、`Playback`、`Sensor<T>`、`GpioInput/Output/Pwm`、`Haptic` 等 |
-| Value | 普通可复制数据快照，不拥有 Host 资源 | `TimePoint`、`DeviceInfo`、`SensorInfo`、`PowerState` 和 typed event 等 |
-| Module | 编译、链接或部署单元，不作为 `app.xxx()` 的返回对象 | Renderer SDK、Host Audio backend |
+| 场景 | 模型 | 原因 |
+|---|---|---|
+| 页面、精灵、对象移动 | Scene | 保留对象，仅传递变化属性 |
+| 棋盘、画布的局部像素变化 | StreamingTexture + Scene | 按 dirty rect 更新 |
+| raycaster 等整帧光栅 | DirectSurface + SurfaceRaster | 批量绘制到 Host buffer，减少像素传输 |
 
-`Application` 只公开生命周期、事件编排和稳定的顶层能力入口。具体动作必须留在对应 Service 或
-Resource 上：
+### Scene 与布局
 
-```cpp
-auto texture = app.renderer().CreateStreamingTexture(
-    micropixel::Size{300U, 150U}, micropixel::PixelFormat::kBgr888);
-micropixel::Assert(texture.has_value(), "texture allocation failed");
+一个应用同时最多有一个 Scene。Container 既是子树所有权边界，也是局部坐标空间：创建调用的
+receiver 就是 parent，子对象的位置相对直接父 Container，visibility、opacity、translation 和 clip
+沿父链生效。销毁页面根即可销毁完整子树；隐藏页面则保留资源供恢复使用。
 
-auto scene = app.renderer().CreateScene();
-auto game = scene.CreateContainer({.clip = {0, 0, 720, 720}});
-auto board = game.CreateSurfaceNode(texture.value(), rect, source);
-micropixel::Assert(scene.Update([&](auto& update) { board.SetOpacity(update, 192U); }).has_value(),
-                   "scene update failed");
-micropixel::InputInfo input = app.input().info();
-bool pressure_available = input.supports_pressure();
-```
+一次 SceneUpdate 是属性事务，必须 Present，或使用 `Scene::Update(lambda)`。
+未提交或提交失败会回滚：旧 handle 继续有效，新创建的 handle 失效；成功销毁后槽位即使复用，旧
+handle 也不能操作新对象。普通更新只发送相对事务开始时的净变化，创建/销毁由 SDK 自动转为 keyframe。
+应用不手动填写 wire record、generation 或 revision。
 
-`app.audio()` 提供 Audio 1.1。短 UI 音和程序化音效继续提交 `Tone` 值，由 Host 的固定 8-voice
-pool 混音；BGM、对白和较长音效使用 Bundle 中的 `ogg_opus` asset。`AudioClip` 表示可重复播放的
-压缩来源，`Playback` 表示一次可暂停、恢复、调音量和停止的播放，两者都是 move-only RAII 资源。
-Host 负责 Ogg demux、Opus 解码、PCM ring buffer 和设备主音量，Guest 不接触 PCM 指针、codec 或 I2S。
+布局依据 RendererInfo 的逻辑 width/height 与 safe area。SDK 使用短边 720 的逻辑画布，序列化时统一
+转换为物理值；physical width/height 用于物理素材选择等明确需要原生像素的场景。Touch 属于 Scene
+坐标，跨 Container 使用 ToLocal/ToScene，高层控件自动转换。
 
-```cpp
-micropixel::Audio audio = app.audio();
-audio.Play(micropixel::Tone{
-    .waveform = micropixel::Waveform::kTriangle,
-    .frequency_hz = 660U,
-    .duration = 120_ms,
-});
+Sprite 适合独立图像，SpriteBatch 适合蛇身、方块和粒子；Shape/RoundedRect 保存形状属性，不各自
+分配像素 surface。Label 使用 Small/Medium/Large/Title 语义字体，具体字号由 Host profile 决定。
+[symbols.hpp](symbols.hpp)提供保证存在于系统字体的图标。
 
-auto clip = audio.Load(game_assets::music_level_one);
-micropixel::Assert(clip.has_value(), "load BGM failed");
-auto playing = audio.Play(*clip, {.volume_per_mille = 260U, .loop = true});
-micropixel::Assert(playing.has_value(), "play BGM failed");
+Scene 容量从 RendererInfo 查询。Guest 存储按实际工作集增长，但仍受 Host/ABI 上限约束；页面和
+Batch 的槽位可以复用，不能把动态容器理解为无限资源。
 
-app.Run([&](const micropixel::Event& event) {
-    if (const auto* finished = event.PlaybackFrom(*playing)) {
-        micropixel::Assert(finished->succeeded(), "BGM decode failed");
-    }
-});
-```
+`cache_content` 是 Host 渲染提示，当前用于选择根级 Layer 快照容器，适合内容不变的整体平移。
+它不保证任意子树缓存，也不应被当作影响画面语义的 API；缓存行为与诊断见
+[Graphics 性能文档](../../docs/development/graphics-performance.zh-CN.md)。
 
-当前 Host 上限为 16 个 clip handle、2 条同时 compressed playback；实际值应从 `AudioInfo` 查询。
-播放开始后 Host 会 pin clip，所以关卡切换时可以先 `clip.Reset()` 释放 Guest 所有权，仍在播放的实例
-不会失效；`Playback::Stop()`/析构或自然结束会撤销最后的 pin。跨多个关卡持续使用的 BGM 保留在上层
-`AudioClip`/`Playback` 中，关卡专属素材则随关卡对象析构。`Audio::Play(AssetId, options)` 是只播放一次
-时的便利写法。网络 URL、下载进度和缓存生命周期不属于 Audio 1.1，后续由 Resource/Network 加载层
-提供相同的 source/playback 模型。
+### Texture 与局部像素更新
 
-`Run(handler)` 是 Application 唯一的事件编排入口；Timer 操作归 `timers()`。新增 Camera、Storage
-等能力时可以增加同级 Service View accessor 或 Event，但不得把 `DrawRect()`、`PlayPcm()`、
-`TouchPosition()` 等叶子操作堆到 `Application`。
+使用生成的 AssetId 加载资源，不手写 TOC 数字或运行时名称查找。LoadTexture 同步返回 Texture，
+并适配到物理屏幕；只有应用提供且正确选择物理分辨率素材时才用 LoadNativeTexture，其他尺寸回退
+LoadTexture。Scene 独立持有纹理引用，Guest Reset 后仍可正确重绘，最终引用释放才回收像素。
+
+动画优先使用 atlas：加载一次、逐帧改变 source rect。时间由应用事件循环驱动，当前没有
+AnimationClip/Track。资源清单、生成绑定与 Bundle 工作流见 [Guest 构建](../README.md)。
+
+StreamingTexture 按矩形更新，输入同时提供 byte length 和 pitch，SDK 分块传输，Host 再验证范围。
+TextureUpdateBatch 在 Finish 时合并刷新。格式名描述 Guest 内存：Bgr888 为 B/G/R，Bgra8888 为
+B/G/R/A，Rgb565 为 little-endian 16-bit RGB565。不透明像素可用 RGB565，透明内容保留 BGRA8888。
+Host-owned 纹理不占 Guest C++ heap，但仍受 PSRAM 动态准入限制。
+
+### DirectSurface 与 SurfaceRaster
+
+默认 DirectSurface buffer 由 Host 持有，Guest 不映射像素，使用 SurfaceRaster 上传 INDEX8 纹理和
+canonical RGB565 调色板，再提交绘制记录。Guest 决定几何、遮挡和顺序，Host 执行逐像素操作。
+完整调用签名见 [graphics.hpp](graphics.hpp)，可运行示例见 [迷城突围 / Maze Break](../apps/maze-break/)。
+
+帧的生命周期是“取得空闲 buffer → 绘制并 Finish → Present → Host 归还”：
+
+- Present 成功后 buffer 归 Host；Busy 时不能改写、绘制或重复 Present。
+- 所有 buffer 忙时等待 ReleasedFrom 事件，不能忙循环抢占 CPU。Host 可保留当前显示帧直到下一帧替换，
+  连续提交 N 帧不保证立即得到 N 次释放事件；销毁归还最后一帧，不再投递其事件。
+- 暂停时 Host 停止扫描输出并归还在飞 buffer，恢复后继续 Present。
+- DirectSurface 存活期间拒绝 Scene submit。系统 UI 仍归 Host，必要时退回合成；direct_scanout 为假
+  时接口语义不变。max_full_frame_fps 是传输上限，不是应用可达到的保证值。
+- buffer 可按整数 upscale 缩小，代价是放大处理与画质变化，必须测量最终呈现时间。
+
+Guest buffer 模式供需要直接写像素的应用使用：Bundle 必须声明 `pinned_memory: true`，保持线性内存
+基址不移动，否则创建返回 Unsupported。像素按面板字节序写入，依据 rgb565_byte_swapped 查询。
+这种模式会提前保留连续内存；默认 Host buffer 无需此声明，Guest 内存按需增长。
+
+SurfaceRaster 的 Column 使用列主序纹理，SpanPair 使用行主序；Sprite/SolidSprite 用于图像和字形，
+FillRect 用于填充或混合。Column/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect 的目标由 Host 裁剪。
+纹理宽高为 8–128 内的 2 的幂；资源上限从 Service 查询，上传被拒绝时保留旧纹理。
+
+每个提交批次先验证再写像素。SDK 缓冲满时会自动分批，Finish 返回首个错误；此前已经成功的批次
+不会整体回滚。应用只应在绘制成功后 Present。关闭 Host raster 能力时返回 Unsupported，应用需
+明确选择 Scene 或 Guest buffer 回退，不能假定 Host buffer 总能绘制。
+
+### 组合控件
+
+普通页面优先用 Flex/Grid 容器描述布局，使用 TextButton 或 ImageButton 组合显示与点击行为。
+完全定制的按钮可用无堆分配的 `ui::Button`，它捕获 touch id，移出取消按下视觉，移回恢复，内部松开才
+触发 click；hit padding 扩大触控区但不改变画面，相邻目标不应重叠。
+
+文字按钮默认居中裁剪溢出文字，并提供 text_clipped 与一次诊断 warning；需要严格拒绝时显式使用
+TextOverflow::kReject。后续修改失败不能提交一半属性。控件 ToString 可用于错误诊断，具体属性与
+限制见 [ui](ui/)。
+
+## 音频
+
+Tone 用于短音效；AudioClip 表示资源，Playback 表示一次播放，可暂停、恢复和停止。
+Host 在播放期间独立 pin clip，释放 Guest clip 不打断已开始的播放。音效只设置单次 volume_per_mille，
+设备主音量始终由 Host 管理；游戏参数源与验收见
+[音频规范](../../docs/development/game-audio.zh-CN.md)。
+
+Ogg Opus 由 Host 解码和缓冲，Guest 不访问 codec/I2S。采样率与可用播放容量从 AudioInfo 查询，
+不按板名硬编码。PcmStream 适合应用自己合成音频：Write 返回实际接收的交织 int16 帧数，短写表示
+环满，等待 LowWaterFrom 后继续；欠载播放静音而不结束流。
+
+每个应用最多一条 PCM stream，支持 1/2 声道，采样率为设备混音率或其整数分频。Close、析构或
+StopAll 关闭流；暂停期间保留流，恢复后继续播放已缓冲数据。接口见 [audio.hpp](audio.hpp)。
 
 ## 设备发现、传感器与 GPIO
 
-应用不知道最终运行在哪块板上时，先枚举设备，再把不透明 `DeviceId` 交给对应能力 Service。枚举位置
-不是身份，也不需要厂家预先给 GPIO 绑定用途：
+设备目录回答“有什么”，具体 Service 负责操作。不透明 DeviceId 不等于枚举位置，parent 表达组合
+设备关系，应用依 kind/capability 选择设备，不根据物理名称推导路由。
 
-```cpp
-auto listed = app.devices().List();
-micropixel::Assert(listed.has_value(), "device discovery failed");
+Sensor 按 Acceleration、AngularVelocity、MagneticField 等 reading 类型打开，单位由类型表达。
+Open 才启动采样，SetSampleInterval 在设备范围内配置频率，Read 读取缓存而不等待 I²C 转换；刚打开、
+改频或恢复后的首个周期可返回 WouldBlock。最后一个 handle 释放或应用暂停后停止采样。
 
-for (micropixel::DeviceId id : *listed) {
-    auto info = app.devices().GetInfo(id);
-    if (!info) {
-        continue;  // 热插拔设备可能已离开
-    }
-    if (info->kind == micropixel::DeviceKind::kGpioLine) {
-        auto output = app.gpio().OpenOutput(id);
-        if (output) {
-            micropixel::Assert(output->Write(true).has_value(), "GPIO write failed");
-        }
-    }
-}
-```
+GPIO 打开即租用板级白名单中的引脚，释放后恢复安全输入状态。edge input 使用 EdgeFrom 接收变化；
+未订阅边沿时主动 Read。PWM duty 和 Haptics strength 使用 0..1000，持续时间使用 Duration。
+应用不能打开系统已占用的引脚。具体接口见 [SDK 头文件](./)和 [Demo 设备页](../apps/sdk-demo/pages/)。
 
-`DeviceInfo::parent` 表达组合设备关系。例如未来两个无线手柄各有自己的 gamepad `DeviceId`，手柄里的
-陀螺仪和加速度计可以作为独立 Sensor device，并把 parent 指向所属手柄；应用因此不会混淆两个手柄的
-按键和传感器。设备目录只回答“有什么”，具体读取、配置与生命周期由 Sensors、GPIO、Haptics
-等 Service 负责。
+## 存储、启动参数与语言
 
-Sensor 按 reading 类型打开。当前提供 `Acceleration`、`AngularVelocity` 和 `MagneticField`，对应别名为
-`Accelerometer`、`Gyroscope` 和 `Magnetometer`；后续温度、光照和压力会增加各自的 value type 与
-`SensorTraits`，不会向现有 reading 塞入无关字段：
+Package 资源与应用私有 KV 存储是独立入口，不暴露文件系统路径。GetBytesSize 先查询精确大小，
+再分配 buffer 并 GetBytes；key/value 上限由 KVStore 常量给出，UTF-8 key 按 bytes 计数。
+Random::Below 使用无偏范围采样，需要范围随机数时不要自行对 U32 取模。
 
-```cpp
-using micropixel::literals::operator""_ms;
-
-auto opened = app.sensors().Open<micropixel::Acceleration>(sensor_id);
-micropixel::Assert(opened.has_value(), "accelerometer open failed");
-micropixel::Accelerometer accelerometer = static_cast<micropixel::Accelerometer&&>(*opened);
-auto configured = accelerometer.SetSampleInterval(10_ms);  // 100 Hz game sampling
-micropixel::Assert(configured.has_value(), "sensor sampling rate unavailable");
-auto sample = accelerometer.Read();
-if (sample) {
-    (void)sample->value.meters_per_second_squared.x;
-}
-```
-
-第一个 Sensor `Open` 才让 Host 以游戏可用的 100 Hz 默认值向板级共享 I²C executor 注册周期采样；应用可通过
-`SetSampleInterval()` 提升或降低采样率，允许范围由 `SensorInfo::minimum_interval` 和 `maximum_interval` 给出。
-Host 将硬件 ODR 选择为不慢于请求值的档位，并按请求间隔刷新最新快照；返回的 `Duration` 是实际缓存
-刷新间隔。低功耗边界是最后一个 handle 释放或 App Suspend，而不是已经打开的传感器。`Read()` 只复制
-缓存，不等待 I2C 转换。刚打开、改频率或从 Suspend 恢复后的第一个采样周期内，
-`Read()` 可以返回 `WouldBlock`。最后一个 Sensor handle `Reset()` 或析构后，周期采样被注销，芯片回到
-suspend；Sensor 不创建独立任务。
-
-`Sensor<T>`、`GpioInput/Output/Pwm` 和 `Haptic` 都是 move-only RAII resource。GPIO 打开即租用该引脚，
-同一 Session 内其他 open 返回 `ResourceExhausted`；`Reset()`、析构或 Session teardown 释放并恢复安全
-输入状态。PWM duty 与 Haptics strength 使用 0..1000，持续时间必须用 `Duration` 表达。
-
-`GpioInputOptions::edge` 为 rising、falling 或 both 时，Guest 可用 `event.EdgeFrom(input)` 接收变化事件；
-`edge = none` 时只支持主动 `Read()`。Host 只在至少存在一个 edge input 时运行 GPIO bridge task，不对引脚
-轮询；output 和 PWM 不会启动该任务。
-
-## 时间与 Event 来源类型安全
-
-`Clock` 是随应用生命周期前进、未来在 Suspend 期间冻结的单调时钟；`TimePoint` 是该时间轴上的
-值，`Duration` 是两个时间点之间的间隔：
-
-```cpp
-micropixel::TimePoint started = app.clock().Now();
-micropixel::Duration elapsed = app.clock().Now() - started;
-```
-
-Public API 不允许 `Duration{1000}` 这种隐藏单位的构造。必须写成 `1000_us`、`1_ms` 或
-`Duration::Milliseconds(1)`。非零 `TimePoint` 只能由 Runtime 通过 `Clock::Now()` 或 typed event
-产生，应用不能用整数伪造另一个时间域的时间点。`Duration` 支持比较、加减、整数倍乘除；`TimePoint`
-可以加减 `Duration`，溢出、下溢和除零会 trap：
-
-```cpp
-micropixel::Duration animation = 250_ms * 4U;
-micropixel::TimePoint deadline = app.clock().Now() + animation;
-```
-
-Timer 是显式资源，handler 通过来源匹配获得 typed event：
-
-```cpp
-micropixel::Timer timer = app.timers().Every(50_ms);
-app.Run([&](const micropixel::Event& event) {
-    if (const micropixel::TimerEvent* tick = event.TimerFrom(timer)) {
-        update(tick->delta());
-    }
-});
-```
-
-高级事件接口还提供 `TimerEvent::missed_count()`。周期 tick 合并时，`delta()` 累加真实经过时间，
-`missed_count()` 返回未单独投递的 tick 数。`Timer::Cancel()` 是幂等终态操作：停止后续触发、释放
-Host handle 并令对象失效。`Timer::Reset()` 是析构和 move assignment 使用的 best-effort release，
-不会 Panic。需要再次调度时创建新的 Timer。
-
-`TouchEvent::x()/y()` 为 `int32_t`。只有 `InputInfo::supports_pressure()` 为 true 时，
-`TouchEvent::has_pressure()` 才为 true，且 `pressure_per_mille()` 的范围为 0..1000；GT911 返回不支持和 0。
-`TouchEvent::position()` 直接返回与 Renderer 共用逻辑坐标空间的 `Point`；`Point`、`Rect` 和 `Size`
-属于跨输入/图形共用的 geometry value，而不是某个 graphics backend 的类型。
-`InputInfo::supports_key_events()` 表示 Host 可以投递固定语义按键；它不承诺存在物理键盘。handler 可用
-`event.key()` 取得 `KeyEvent`，读取方向、逻辑动作 Confirm/Back/Menu，以及按物理位置命名的
-South/East/West/North face button。Public API 不定义 A/B/X/Y，应用不得依赖不同手柄的标签布局。
-阶段为 Down、Up、Repeat、Cancel，只有 Repeat 的 `repeat_count()` 非零。
-日志完整支持 `Debug()`、`Info()`、`Warning()`、`Error()` 四个等级；消息 payload 最长为
-`Log::kMaximumMessageBytes`，不包含结尾 NUL。
-
-`Random::U32()` 返回完整 32-bit hardware random；需要 `[0, upper_bound)` 范围时使用
-`Random::Below(upper_bound)`，它使用 rejection sampling 避免 `% upper_bound` 的 modulo bias。
-
-`KVStore::GetBytesSize(key)` 先查询 byte value 的精确大小，再由应用选择固定数组或动态容器并调用
-`GetBytes()`；这样 buffer-too-small 不需要退化成猜测固定上限。Package asset 与 app-private KV storage
-保持为两个不同入口，不向 Guest 暴露文件系统路径。key 与 value 的硬上限分别由
-`KVStore::kMaximumKeyBytes` 和 `KVStore::kMaximumValueBytes` 公开，UTF-8 key 按 bytes 计数且不包含 NUL。
-
-## Service 演进与 ABI 隔离
-
-Public C++ 方法不与 Wasm import 一一对应。新增 Scene 节点属性、`Audio::Pause()` 或
-`Input` capability 时，优先增加版本化 service method、payload field、event 或 Scene record，
-不能机械增加同名 ABI 函数。
-
-```text
-Typed C++ Service View
-    → 小数据：通用 Service Control Plane
-    → 高频/大块数据：service_submit 的独立 channel
-```
-
-每个 Service 独立维护 major/minor 和 capability set，Host 在进入 `main()` 前校验 required
-capability。旧 Guest 必须能在兼容的新 Host 上继续运行；新 Guest 对旧 Host 的可选能力应 fallback，
-required 能力缺失则在启动前给出明确诊断。service/method ID、wire schema、resource handle 和
-Scene protocol 全部由 SDK/Runtime 隐藏，AI 不直接填写。首版资源加载只有同步
-`Resources::LoadTexture()`；未来如需异步加载，会增加独立的任务/请求对象，不改变现有同步方法的语义，
-也不会把完成事件塞回通用 `Event`。
-
-Package 资源已经由生成代码表示为 `AssetId`，直接传给 loader；不再额外包一层只含同一个 ID 的
-`ResourceRef::Package(...)`：
-
-```cpp
-auto texture = app.resources().LoadTexture(my_assets::background);
-```
-
-`LoadTexture()` 把以 720 短边逻辑画布制作的普通资源自适应到当前物理屏幕。只有 App 明确随 Bundle
-提供并按 `RendererInfo::physical_width()` / `physical_height()` 选择物理分辨率变体时，才使用
-`Resources::LoadNativeTexture()` 保留素材的原生像素尺寸；未精确匹配的显示 profile 必须回退到
-`LoadTexture()`，不能把某个物理 profile 当作通用逻辑资源。
-
-## Renderer、Scene 与 Texture
-
-公开图形模型固定为以下对象：
-
-- `Renderer`：可复制的设备入口，负责查询信息、创建 Scene 和 streaming texture；
-- `Scene`：Guest 图形内容的唯一根节点，保存背景和对象集合；
-- `Container`：`Scene` 与 `ContainerNode` 共用的子对象创建接口，receiver 就是 parent；
-- `ContainerNode`：可嵌套的非绘制父节点，统一提供子树所有权、clip、translation、opacity、visibility 和
-  z-order；
-- `Sprite` / `SpriteBatch` / `Shape` / `Label` / `SurfaceNode`：保留式视觉对象；
-- `SceneUpdate`：一次原子属性事务，必须显式 `Present()`；析构只放弃未提交事务；
-- `Texture`：同步加载的只读、move-only Host 资源；
-- `StreamingTexture`：可写脏矩形的 move-only Host 资源；
-- `TextureUpdateBatch`：把多次 streaming texture 更新合并成一次 compositor 唤醒。
-
-`RendererInfo::width()` / `height()` 是 Guest 布局所用逻辑坐标空间的唯一尺寸来源；
-`physical_width()` / `physical_height()` 仅用于把触摸距离等物理像素阈值换算到逻辑坐标，不应用于布局；
-`InputInfo` 不重复暴露第二份宽高。App manifest 不声明屏幕 profile。`Application` 初始化时由 SDK 读取物理屏幕
-尺寸并建立短边为 720、长边按实际宽高比推导的逻辑画布。App 必须通过 `RendererInfo` 判断当前宽高和方向，
-对不支持的布局在 Guest 入口给出明确 `Assert`；Host 不负责 Guest 布局判断。Scene geometry 和 Touch event 使用同一个逻辑坐标空间；SDK 在发送 Scene
-keyframe/patch 前统一把节点矩形、Container translation、atlas source rect 和语义字体 lower 为当前屏幕的
-物理值，Host Scene 只接收并验证物理坐标，不重复实现 Guest viewport 或布局规则。Scene descriptor 的
-逻辑宽高必须等于当前 `RendererInfo`。自适应 UI 应直接依据 `RendererInfo` 布局。常规页面优先使用
-`CreateFlexContainer()` 和 `CreateGridContainer()`：控件创建顺序就是布局顺序，Label 会缓存文本测量结果，
-容器据此自动计算尺寸和对齐，不要求 App 保存每个控件的手工坐标。高层容器使用动态 STL 存储，只为实际
-创建的控件和 Grid cell 分配内存，不常驻一组未使用的 Label/Shape 槽。例如 failure/summary 页面只需描述结构：
-
-```cpp
-auto panel = root.CreateFlexContainer(
-    {.bounds = content_bounds,
-     .layout = {.direction = micropixel::ui::FlexDirection::kVertical,
-                .gap_pixels = 12,
-                .distribution = micropixel::ui::FlexDistribution::kCenter,
-                .alignment = micropixel::ui::FlexAlignment::kCenter}});
-panel.CreateLabel("CRITICAL FAILURE", title_style);
-panel.CreateLabel(score, score_style);
-
-auto& stats = panel.CreateGridContainer({.columns = 3});
-stats.CreateLabel("FOOD", muted_style);
-stats.CreateLabel("MAX COMBO", muted_style);
-stats.CreateLabel("LEVEL", muted_style);
-stats.CreateLabel(food, value_style);
-stats.CreateLabel(combo, value_style);
-stats.CreateLabel(level, value_style);
-
-panel.CreateTextButton(restart_properties);
-micropixel::Assert(
-    scene.Update([&](auto& update) {
-        micropixel::Assert(panel.Layout(update).has_value(), "panel layout failed");
-    }).has_value(),
-    "scene update failed");
-```
-
-`FlexDirection::kHorizontal` 让子节点沿 X 主轴排列，`kVertical` 则沿 Y 主轴排列；`distribution` 始终控制
-主轴剩余空间，`alignment` 始终控制交叉轴，所以切换方向时 App 不需要重新解释居中规则。Flex 支持
-横向/纵向、固定像素、grow、padding、gap、主轴分布和交叉轴对齐；Label、TextButton、ImageButton 和嵌套
-容器都可以直接作为子项。纯色文字按钮优先使用 TextButton，只有确实需要图片背景时才使用 ImageButton。
-Grid 按 row-major 顺序自动推导行数并
-等分列宽；目前不支持 wrap、span 或百分比。
-
-`RendererInfo::safe_area_insets()` 返回已经换算为逻辑像素的四边安全内缩，`safe_area()` 返回对应的轴对齐
-安全矩形。值由 Board 根据面板 Active Area、盖板和遮挡几何声明；圆角屏上的标题、状态值和触摸控件应以它
-作为边缘基线，再叠加 App 自己的视觉 padding。普通矩形屏返回零 inset，App 不按板名或物理分辨率猜圆角。
-
-需要直接计算矩形或实现自定义控件时，仍可使用底层 `ui::ComputeFlexLayout()` 和
-`ui::ComputeGridLayout()`。它们是纯 Guest 侧的固定容量整数计算：应用提供 track/item 和输出 `Rect` span，
-不创建控件树、不动态分配，也不调用 Host。Grid 的底层计算由一组纵向 row track 和一组横向 column track
-组成，最多 8×8 cell。布局通常在应用启动、页面进入或内容尺寸变化时执行；触摸
-事件已经是 Scene 逻辑坐标；直接挂在 Scene 下的 headless 控件不需要转换，Container 子树内的控件应先用
-`container.ToLocal()` 转为本地坐标。`Resources::LoadTexture()` 会把 SDK 算出的短边缩放比例随请求发送给
-Host；Host 在后台解码 PNG 后通过 PPA 一次性生成物理尺寸纹理。SDK 使用和资源请求相同的比例 lower
-atlas source rect；纹理 destination 的尺寸独立取整，以保证逻辑 source/destination 同尺寸时在物理空间
-仍严格同尺寸。纹理使用
-`Sprite` 或 `SurfaceNode` 的 source/destination 同尺寸时保持 1:1 物理绘制，只有尺寸不同时
-才走缩放路径。
-
-Container 是局部坐标空间，不只是生命周期分组。每个新对象的 `x/y` 都相对接收创建调用的直接父
-Container；嵌套 Container 的 `translation` 也相对其父 Container。`ToScene()` / `ToLocal()` 只在输入路由、
-拖放或跨子树放置对象时跨越坐标空间，不参与 Host 的逻辑到物理缩放。`ui::TextButton` 等高层控件会自动把
-Scene touch 转为自己的本地坐标，App 不重复换算。
-
-应用直接创建 Scene 对象，但不接触 App Surface、transport generation 或 revision。首次提交发送完整
-Scene keyframe，之后 `Present()` 只发送变化的对象属性。局部震动只改变 Game Container translation：
-
-```cpp
-auto scene = app.renderer().CreateScene();
-auto game = scene.CreateContainer({.clip = board_bounds});
-auto board = game.CreateSprite(board_texture, board_bounds, board_source);
-
-micropixel::Assert(scene.Update([&](auto& update) { game.SetTranslation(update, {shake_x, shake_y}); }).has_value(),
-                   "scene update failed");
-```
-
-滚动地图、tile 层这类“内容很少变、位置每帧变”的子树应放进带 `cache_content = true` 的 Container：
-
-```cpp
-auto viewport = scene.CreateContainer({.clip = view_bounds});
-auto terrain = viewport.CreateContainer({.clip = view_bounds, .cache_content = true});
-auto actors = viewport.CreateContainer({.clip = view_bounds});
-// 每帧只平移两个 Container；terrain 子树本身不变时 Host 只从缓存复制。
-scene.Update([&](auto& update) {
-    terrain.SetTranslation(update, {-camera_x, 0});
-    actors.SetTranslation(update, {-camera_x, 0});
-});
-```
-
-`cache_content` 是渲染提示：Host 可以把该子树按局部坐标栅格化到保留缓存，平移只复制缓存，子树内容
-改变时才重绘对应局部区域。缓存按不透明层合成，子树没有覆盖的像素显示 Scene 背景色，所以绘制顺序在
-它之下的对象不会透出；会移动的角色、粒子应放在同级的普通 Container 里而不是缓存子树中。给它一个显式
-clip，clip 就是缓存范围。`ContainerNode::SetCacheContent()` 可以随时切换该提示，Host 忽略该提示时绘制结果
-不变。当前 Host 接受并校验该提示但尚未启用局部坐标缓存层：实测 tile 卷屏每帧真正变化的像素远少于整个视口，
-现有 damage 路径已经更快，见 `docs/development/graphics-performance.zh-CN.md` 第 8 节。Host 目前用它选择
-Layer 快照容器：第一个直接挂在 Scene 根上、带 `cache_content` 的 Container 成为 Layer；当它整体平移而子树
-内容不变时（Snake 的震动），Host 捕获一次快照并复制，而不是重放子树。没有这样的 Container 时，第一个
-Container 保持这一角色。
-
-Scene 同时最多存在一个，Container 和对象容量由 `RendererInfo` 给出。应用不能手动提交 wire record、
-generation 或 revision。`SceneUpdate` 析构会放弃未提交的属性事务，不产生半更新。
-属性 dirty mask 表示相对于 `BeginUpdate()` 的净差量，而不是 setter 调用历史；例如先隐藏整个 Batch、再把
-仍然存活的 instance 恢复为可见，不会把这些最终未变化的 visibility 写入 patch。
-
-节点、Container、SpriteBatch instance 和事务 undo 使用按实际工作集增长的动态存储，容量仍受 ABI 上限
-约束，并继续使用 slot ID + generation handle。删除对象后的空 slot 会优先复用；动态容器会保留已达到的
-高水位供后续页面重建使用，但不会在 Scene 初始化时为全部上限或整套 undo snapshot 预分配内存。事务只为
-本次真正修改的对象保存 undo。`Scene` 和 `ContainerNode` 共同提供 `Container` 创建接口；
-创建调用的 receiver 就是 parent，不再提供 `scene.CreateX(parent, ...)` 形式。这个点语法让代码结构直接对应
-对象树，也给每种对象的 Create 参数保留独立扩展空间；组合控件遵循同一规则，例如
-`page.CreateTextButton(properties)`。页面可以按需创建一个 `ContainerNode`，再由它创建
-drawable 或内层 container。销毁 container 会递归销毁完整子树并归还
-槽位。销毁属于 `SceneUpdate` 事务：提交失败或
-未调用 `Present()` 时会完整回滚，旧 handle 仍然有效；提交成功后旧 handle 失效，即使槽位随后复用也不能
-误操作新节点。创建也可以发生在 active `SceneUpdate` 中，便于 `std::vector` 等 STL 容器在渲染时按需增长；
-事务回滚后新 handle 失效，generation 保证它不会误命中以后复用的槽位。创建或销毁是结构变化，SDK 自动
-发送新 keyframe；普通属性更新仍使用 patch：
-
-```cpp
-auto page = scene.CreateContainer();
-auto dialog = page.CreateContainer({.translation = {40, 60}, .z_order = 10});
-auto title = dialog.CreateLabel({24, 20}, "SETTINGS", micropixel::Color::White(),
-                                micropixel::SystemFont::kLarge);
-
-micropixel::Assert(
-    scene.Update([&](auto& update) {
-        dialog.SetVisible(update, false);  // 只隐藏对话框子树，页面其他节点不受影响
-    }).has_value(),
-    "page update failed");
-```
-
-Container 的 visible、opacity、translation 和 clip 沿父链继承，因此页面、面板、菜单内对话框都使用同一
-棵树表达。只隐藏最内层 dialog 不影响外层菜单和兄弟节点；销毁外层 page 则递归销毁 dialog 和所有 drawable。
-`ComputeFlexLayout()` 仍只是计算矩形的 Guest 工具，不创建另一棵控件树。输入事件以 Scene 坐标投递；
-modal 路由由 App 决定，高层控件负责对自己的 Container 做本地坐标转换。
-
-Sprite 的 destination 和 source 分别描述显示矩形与 atlas 区域；宽高为 0 是非法空矩形。图片 opacity 与
-逐像素 alpha 相乘，不透明 texture 保留 Host copy 快速路径。蛇身、方块和粒子应使用 SpriteBatch：
-
-```cpp
-auto snake = game.CreateSpriteBatch(snake_atlas, 128U);
-auto update = scene.BeginUpdate();
-snake.SetInstance(update, tail_slot, {
-    .destination = new_head_rect,
-    .source = head_frame,
-    .visible = true,
-});
-micropixel::Assert(update.Present().has_value(), "snake patch failed");
-```
-
-`RendererInfo::max_scene_nodes()`、`max_batch_instances()`、`max_containers()`、`max_sprite_batches()` 和
-`max_scene_bytes()` 是明确容量。`Present()` 返回 `Result<void>`；参数和状态编程错误仍会 trap，提交失败、
-容量耗尽等运行时错误可由应用处理。
-
-普通矩形使用 `CreateShape()`；需要圆角、描边或二者组合时使用 `CreateRoundedRect()`：
-
-```cpp
-auto panel = scene.CreateRoundedRect(
-    {40, 80, 320, 180},
-    {.fill = micropixel::Color::Rgb(24, 28, 36),
-     .stroke = micropixel::Color::Rgb(90, 220, 255),
-     .radius = 24,
-     .stroke_width = 3,
-     .opacity = 224});
-```
-
-`RoundedRectNode` 与 Shape 一样只保存 retained 属性，不分配自己的像素 Surface。Host 仅在首次显示或
-damage 重绘时把它直接混合进共享 App Surface；非零 radius/stroke 在短边过小时会安全截断。RGB565
-Surface 支持绘制时 opacity 混合，但不保留可供以后拆分的独立 Alpha 通道。
-
-文字使用语义字体角色而不是固定物理字号，坐标仍是 `RendererInfo` 给出的逻辑像素：
-
-```cpp
-const micropixel::Locale locale = app.localization().CurrentLocale(); // BCP 47，例如 en
-auto title = scene.CreateLabel({24, 24}, "Hello", micropixel::Color::White(),
-                               micropixel::SystemFont::kLarge);
-```
-
-`SystemFont::{kSmall,kMedium,kLarge,kTitle}` 的实际字体和像素大小由 Host 决定。这样 Host 后续可在不改变
-应用或 wire schema 的情况下选择不同语言字体；SDK 0.13.0 暂不提供翻译目录或语言包 API。
-
-`sdk/symbols.hpp` 提供所有 SystemFont role 都保证存在的稳定 UTF-8 图标，包括上下左右、播放/暂停、
-确认/关闭、音量、文件、连接和电池状态。Guest 只提交普通文本，不包含 LVGL header，也不持有 Host 字体
-对象：
-
-```cpp
-auto previous = panel.CreateTextButton(
-    {.bounds = {20, 20, 80, 64},
-     .text = micropixel::symbols::kLeft,
-     .style = {.font = micropixel::SystemFont::kLarge}});
-```
-
-Public symbol 集合与 Host `builtin-latin-v1` profile 在 Host 构建时交叉校验，避免 SDK 已公开而某个板型
-生成的字体缺字。
-
-需要维护棋盘、画布或其他动态像素时，创建 `StreamingTexture`。格式名直接描述 Guest 内存字节顺序：
-`kBgr888` 为 B/G/R，`kBgra8888` 为 B/G/R/A，`kRgb565` 为 little-endian 16-bit RGB565 word。RGB565
-适合不透明、高频局部更新，可减少 Guest payload、Host texture 和 App Surface 带宽；透明像素仍使用
-BGRA8888，由 Host 直接混合到目标 Surface。
-
-```cpp
-auto board_result = app.renderer().CreateStreamingTexture(
-    micropixel::Size{300U, 150U}, micropixel::PixelFormat::kRgb565);
-micropixel::Assert(board_result.has_value(), "board texture allocation failed");
-auto board = static_cast<micropixel::StreamingTexture&&>(board_result.value());
-
-alignas(4) uint16_t cell[30U * 30U]{};
-auto batch = app.renderer().BeginTextureUpdateBatch();
-micropixel::Assert(
-    board.Update(micropixel::Rect{60, 30, 30, 30}, cell, sizeof(cell), 30U * 2U).has_value(),
-    "texture update failed");
-micropixel::Assert(
-    board.Update(micropixel::Rect{60, 60, 30, 30}, cell, sizeof(cell), 30U * 2U).has_value(),
-    "texture update failed");
-micropixel::Assert(batch.Finish().has_value(), "texture batch failed");
-
-auto board_node = scene.CreateSurfaceNode(board, {47, 76, 300, 150}, {0, 0, 300, 150});
-auto update = scene.BeginUpdate();
-micropixel::Assert(update.Present().has_value(), "surface present failed");
-```
-
-`Update()` 同时接收可读 `byte_length` 和每行 `pitch`；SDK 校验输入范围，并把大矩形自动切成不超过
-4096 bytes 的有界 Resource call。Host 再校验 texture 类型、格式、bounds、pitch 和精确 payload 长度。
-每个 streaming texture 计入 Guest 的 PSRAM 配额。
-
-`sdk/ui/button.hpp` 提供无堆分配的 `ui::Button`。它捕获按下时的 touch id，手指移出时取消视觉
-按下态，回到按钮内会恢复，只有在按钮内松开才返回 `clicked`。构造函数的可选 `hit_padding` 会在四边
-扩大不可见触控区域而不改变绘制边界，适合小屏上的图标按钮。相邻按钮的扩大区域不应重叠；需要紧凑
-排列时由 App 的页面级 hit tester 先选出唯一目标。动作和视觉绑定均由 App 处理；按下状态通常修改
-按钮 Shape 的 opacity 或 Sprite 的 tint/opacity：
-
-```cpp
-micropixel::ui::Button play_button{{250, 316, 220, 72}, 12};
-
-if (const auto update = play_button.OnTouch(touch); update.clicked) {
-    StartGame();
-}
-
-auto scene_update = scene.BeginUpdate();
-feedback.SetOpacity(scene_update, play_button.pressed() ? 48U : 0U);
-micropixel::Assert(scene_update.Present().has_value(), "button update failed");
-```
-
-普通文字按钮优先使用 `sdk/ui/text_button.hpp` 的 `ui::TextButton`。它保留 `ui::Button` 的触摸语义，
-并组合圆角背景、圆角状态遮罩和 Label；创建或修改文字/字体时缓存真实字体 metrics，之后按完整行框同时
-水平、垂直居中，不在逐帧热路径测量文字。一个 `TextButton` 使用三个 Scene node；这些节点随控件实际创建，
-不为未使用控件预留 Scene 存储。
-`TextButton` 自己拥有一个 Container，背景、反馈层和文字都是它的子节点。把按钮挂到页面 Container 后，
-页面退出只需销毁页面根 container，即可递归归还按钮 container 和三个 drawable 槽位：
-
-```cpp
-auto start_button = game.CreateTextButton(
-    {.bounds = {250, 316, 220, 72},
-     .text = "START",
-     .style = {.background = micropixel::Color::Green(),
-               .font = micropixel::SystemFont::kLarge,
-               .corner_radius = 18},
-     .hit_padding = 12});
-
-const auto changed = start_button.OnTouch(touch);
-if (changed.clicked) {
-    StartGame();
-}
-if (changed.visual_changed) {
-    micropixel::Assert(scene.Update([&](auto& update) { start_button.Sync(update); }).has_value(),
-                       "text button update failed");
-}
-
-micropixel::Assert(game.Destroy().has_value(), "page destroy failed");
-```
-
-`TextButton` 默认使用 `TextOverflow::kClip`：自己的 Container 会裁剪到按钮 bounds，初始文字或后续
-`SetText()`、`SetStyle()` 的实际行框放不下时仍保持双轴居中并安全裁剪，每个按钮生命周期最多输出一次
-warning，不会终止 Guest。warning 会包含操作、当前按钮 `x/y/w/h`、测量得到的文字 `w/h` 和具体文案，
-可直接定位发生溢出的控件；`text_clipped()` 可用于 App 诊断自适应布局。需要把溢出继续视为严格布局错误时，
-在 properties 中显式指定 `.overflow = TextOverflow::kReject`。空文字、非法 bounds 和超过 128 bytes 的
-文字仍然是无效参数；reject 模式的初始溢出会 trap，后续修改则返回 `kInvalidArgument` 且不会提交一半属性。
-
-所有组合 UI 对象提供无堆分配的 `ToString()` 诊断快照。`Button` 包含视觉/命中 bounds 和捕获状态，`Label`
-包含 bounds、metrics、对齐和文案，`TextButton`/`ImageButton` 额外包含 overflow policy 与 clipped 状态，
-`FlexContainer`/`GridContainer` 包含布局 bounds、轨道或分类后的子对象数量。App 在处理 `Result` 失败时可直接
-把对应快照写入日志；SDK 自己触发的控件 panic 也使用同一份状态格式，不再只报告泛化的控件类型。
-
-图片自带边框、纹理或圆角时使用 `sdk/ui/image_button.hpp` 的 `ui::ImageButton`。它组合 Sprite、Label 和
-`ui::Button`，图片 source 与最终 bounds 可以不同，文字仍按最终 bounds 的真实字体 metrics 双轴居中。若要缩放
-带圆角的整张按钮图，应保持 source 的宽高比；需要任意拉伸时应改用九宫格素材，而不是让圆角随目标矩形变形。
-`ImageButton` 与 `TextButton` 使用同一套默认 `TextOverflow::kClip`、单次详细 warning、显式 `kReject` 和
-`text_clipped()` 语义：
-
-```cpp
-auto start = game.CreateImageButton(
-    start_texture,
-    {.bounds = {192, 295, 336, 115},
-     .source = {0, 0, 280, 96},
-     .text = "START GAME",
-     .style = {.font = micropixel::SystemFont::kLarge}});
-```
-
-纯图标或完全定制的按钮继续使用 headless `ui::Button`。
-
-无需动态分配的短文本拼接统一使用 `FixedString<Capacity>`；`Append*()` 返回内容是否完整写入，
-`truncated()` 会在任一拼接被截断后保持 true，直到 `Clear()`。`capacity()` 返回不含 NUL 的最大内容
-长度。Demo、Snake 和 conformance 日志共用这一实现，不在各 App 内复制字符串类。
-
-完整规则见 [Guest–Host ABI](../abi/README.md)。
-
-Bundle 资源清单使用语义名称，不允许 App 手写 TOC 数字 ID。Bundle builder 对名称做唯一性、
-格式、动画序列连续性和 32 位 ID 冲突校验。prepare 阶段通过同一次清单解析原子生成包含
-`AssetId` 及可选 atlas 布局的 C++ 绑定和不可变 `resources.pack`；字符串和名称查找不会进入 Guest 运行时或
-Resource Service ABI。例如清单中的 `button.start` 和
-`food.normal.00..15` 会生成 `snake_assets::button_start` 与定长的
-`snake_assets::food_normal[]`。资源重排不会改变由名称产生的内部 ID，名称拼写或帧数不一致则在
-生成或编译阶段失败。资源清单及其引用的最终资源属于 App 源码并纳入版本控制；资源制作工具不参与
-App 的 production 构建。资源 pack 携带版本、launch ID、逐项内容 hash 和整个目录的 SHA-256；
-finalize 阶段只读取 AOT 和 pack，不会再次读取资源清单或重新分配 ID：
-
-首版 `launch_asset` 是 Host 专用的 JPEG/PNG 封面，不经过 Guest ABI 或 Resource Service。默认应为不透明
-封面使用 JPEG，以利用 ESP32-P4 硬件解码；需要透明背景或无损像素时使用 PNG。普通游戏资源仍可使用
-`raw_rgb888`、`raw_argb8888`、`raw_rgb565`、`png_to_raw_rgb888` 或 `png_to_raw_rgb565`，但这些 raw
-格式不能被指定为 launch 封面。`png_to_raw_rgb565` 只接受不透明 PNG；带 alpha 的资源必须保留
-PNG/BGRA8888，避免静默丢失透明度。
-
-多帧动画应优先打包为 sprite sheet/texture atlas。Guest 只同步加载一次 `Texture`，再通过
-`SpriteNode::SetSource()` 或 `SpriteBatch::SetInstance()` 选择 atlas frame；切帧只提交 source rect 差量，
-不触发资源查找、图片解码或 Texture 分配。v1 不提供 `AnimationClip/Track`，动画时间由 Guest 游戏循环
-驱动；未来若加入 Host timeline，必须同时定义时钟、暂停/恢复、打断、资源 pin 和完成事件。
-
-日常构建只把项目目录交给统一 CLI。它从 `app.json` 读取 sources、localization 和 asset manifest，生成
-绑定头、编译 Guest，并把稳定 AppId、AOT 和资源 TOC 写入补齐到 64 KiB extent 的 Bundle v1：
-
-```sh
-python3 tools/micropixel build path/to/app
-python3 tools/micropixel package path/to/app --aot-target riscv32-ilp32f
-python3 tools/micropixel app install path/to/app
-```
-
-在包含 `app.json` 的目录中，安装后的 CLI 可直接运行 `micropixel build`、`micropixel package` 和
-`micropixel app install`，不需要 App
-专用脚本。默认输出在项目的 `build/`；仓库集成 App 输出在 `build/apps/<name>/`。构建固定 Restricted
-C++23、警告即错误和 AOT 回跳中断点。`threading` 缺省为 `none`，此时不启用 atomics、Wasm shared
-memory 或 wamrc multi-thread，linear memory 按需增长；只有显式声明 `shared-memory` 的 Bundle 才启用
-这些编译特征。Host 会校验 Bundle 声明与 AOT target-info，避免错误标记绕过内存策略。`build` 默认
-development（`-O1 -g`），
-`package`/`app install` 默认 release（Clang `-Oz`、WAMR AOT opt level 3）。Release 保留软件越界检查和
-内存诊断，只把 AOT 调用栈缩减为 instruction pointer + function index；development 保留完整调试信息和
-完整调用栈。连接设备的 `app install`/`run`
-根据设备芯片自动选择 AOT target；离线 `package` 必须显式传入 `--aot-target riscv32-ilp32f` 或
-`--aot-target xtensa`。只有明确以体积优先时才使用：
-
-```sh
-python3 tools/micropixel package path/to/app --profile size --aot-target riscv32-ilp32f
-```
-
-需要构建、安装、启动并持续观察 Guest 日志时，可运行 `micropixel run`。它默认使用 development profile，
-在完整打包成功后才停止当前 Guest；安装或启动失败时会尽力恢复此前运行的 App。`micropixel run --no-follow`
-在启动后立即返回。对于已经安装的 App，`micropixel app start --follow` 会从当前 `app.json` 推导 App ID；
-`Ctrl-C` 只断开日志跟随，不停止 App。
-
-调试某个特定状态时，在 `--` 后传入本次 AppSession 的启动参数：
-
-```sh
-micropixel run path/to/game -- --level 100
-# 已安装的 App 也可使用同一语法
-micropixel app start com.example.game -- --level=100
-```
-
-Guest 保持标准无参 `int main()`，通过只读 SDK view 获取参数：
-
-```cpp
-#include <charconv>
-#include <string_view>
-#include <micropixel.hpp>
-
-int main() {
-    micropixel::Application app;
-    uint32_t level = 1;
-    if (const char* value = app.launch_arguments().FindValue("--level")) {
-        const std::string_view text(value);
-        (void)std::from_chars(text.data(), text.data() + text.size(), level);
-    }
-    // 使用 level 初始化游戏，然后进入 app.Run(...)
-}
-```
-
-`FindValue()` 同时识别 `--level 100` 和 `--level=100`；`count()`/`Get(index)` 可用于自定义解析。
-Host 最多接受 16 项、合计 512 bytes（含每项结尾 NUL）的 UTF-8 参数。参数只属于本次新建的
-AppSession；从 Hall 暂停/恢复不会重新传参，普通 Hall 启动得到空列表。
-
-`tools/build_guest_p4.sh` 与 `tools/build_app_bundle.py` 仍是 conformance 和打包器测试使用的
-内部构件，不是普通 App 的公开工作流。
-
-USB 调试统一使用 `bash tools/p4.sh flash-apps` 写入七个示例 App。自定义 Bundle 不再绕过
-安装事务直接覆写分区，应通过 USB Local Control 或 Remote Control 安装。
-
-所有 import 必须在 `guest/abi/allowed_imports.txt` 中声明；未授权 import 和拼写错误在链接时
-失败。AI 不应自行拼接工具链命令。
+CLI 的 `--` 后参数属于本次新建 Session，应用从 launch_arguments 读取，FindValue 同时识别
+`--level 100` 和 `--level=100`。Host 最多接受 16 项、合计 512 bytes（含 NUL）；暂停恢复不重新传参，
+普通大厅启动参数为空。CurrentLocale 同样在 Session 启动时确定，系统语言变更在下次启动生效。
 
 ## Guest STL profile
 
-Guest 使用 wasi-sdk 33 的 no-exception libc++ headers 和静态库。`micropixel build` 始终开启
-function/data sections 和 linker GC，因此没有实例化或引用的模板、函数和运行库对象不会进入最终
-Wasm/AOT。SDK Demo 使用 `std::array`/`std::span` 管理原有页面表；Blocks 和 Snake 的生成 Catalog
-使用 `std::array<std::string_view>` 与 `std::span`，但 SDK Demo 本身不接入 localization。
+Guest 使用 wasi-sdk 33 的 no-exception libc++。已验证子集包括 array/span/string_view、optional/variant、
+常用 algorithm，以及 string/vector/map/queue/deque、unique_ptr 和动态分配。不使用的代码由链接器 GC
+移除。应用内部可以使用这些容器，Public ABI 不暴露 STL 布局。
 
-首版持续验证的 no-WASI 子集包括：
+线性内存同时容纳静态数据、辅助栈和动态 heap，按需增长，当前 Host 策略上限最多 8 MiB；实际值由
+连续 PSRAM 与 Host 安全水位决定。Host-owned Texture/surface 另行分配，同样动态检查安全水位。
+普通 new 的 OOM panic，nothrow new 返回 nullptr；长期所有权仍用容器或 RAII。
 
-- `array`、`span`、`string_view`、`optional`、`variant` 和常用 `algorithm`；
-- `new/delete`、`nothrow new`、aligned new/delete、`unique_ptr`；
-- `string`、`vector`、`map`、`queue` 和默认底层 `deque`。
+这不是 WASI/POSIX 环境。thread、mutex、filesystem、socket、locale/iostream 和系统调用不受支持；
+exception、RTTI 与 reference-types 关闭，不能自行增加 WASI import。
 
-首次实际使用动态分配时，linker 才保留单线程 allocator。allocator 管理 linker `__heap_base` 之后的
-Wasm linear memory，不再预留固定 32 KiB 数组。ESP32-P4 与 ESP32-S31 当前都把每个 Guest 的策略上限
-设为 8 MiB，实例化时再根据最大连续 PSRAM 块下调实际上限；后续 `memory.grow` 只有在增长后仍高于 Host
-安全水位时才会成功。该预算同时容纳静态数据、16 KiB auxiliary stack 和 C++ 动态分配，因此动态可用量会
-低于实际 linear-memory 上限。Texture/offscreen surface 等 Host-owned PSRAM 资源不占 C++ heap，也不再
-使用固定累计 Guest 配额；每次资源分配都按实时空闲量和最大连续块动态准入。
+## 错误策略与 Service 演进
 
-普通 `new` 的 OOM 按 SDK 不可恢复错误策略记录并 panic；`new (std::nothrow)` 返回 `nullptr`。业务所有权
-仍使用容器或 RAII，不能用裸 `new/delete` 表达长期所有权。Guest AOT 保留 16 MiB 格式扩展上限，Host
-通过 WAMR instantiation policy 施加当前最多 8 MiB、低内存时更小的实际上限；应用不能自行扩大 Host
-policy。
+能采取其他动作的业务失败返回 Result，例如资源缺失、解码失败或容量不足；调用方检查结果并选择
+回退或带原因终止。Core Timer、事件等待等基础操作的编程或 Runtime 错误在发生点 panic，避免把
+机械状态码检查扩散到应用。自定义不可恢复错误使用 Assert/Panic 并提供原因。
 
-当前 Host 为 Guest 触发的 PSRAM 分配保留 2 MiB 安全水位。若实例化前最大连续块已经不足以同时容纳
-Guest 初始 linear memory 和该安全水位，应用会收到内存不足；已经启动的轻量 App 不会因为另一个大型 App
-的理论上限而预占内存。
+Result 提供 expected 风格的值/错误访问；读取错误状态的 value 或成功状态的 error 会 trap。
+析构不 panic，只做 best-effort 释放。Host 捕获 Trap、记录诊断并清理 Session。
 
-这不是 WASI/POSIX 环境：thread、mutex、filesystem、socket、locale/iostream 和依赖系统调用的标准库
-能力不受支持，也不能新增 WASI import。exception、RTTI 和 reference-types 继续关闭；Public SDK 和
-Guest–Host ABI 不暴露 STL 类型。`Result<T>` 继续作为 SDK 的稳定错误类型，应用内部可以自由使用上述
-STL 子集。
+Public 方法不与 Wasm import 一一对应，SDK/Runtime 隐藏 service ID、wire 与 handle。
+新能力通过 Service 版本和 capability 演进，应用对可选能力明确回退。当前 Bundle requirements 与
+完整的启动前能力预检尚未实现，不能假定构造 Application 已检查应用全部需求。
+Network、Camera 和网络资源加载尚未定义公开接口。
 
-## 错误策略：在错误发生点终止
-
-Core API 不提供机械镜像的 `try_*` 方法。事件等待、Timer 创建/启动、`Cancel()` 和 `info()`
-失败，表示程序错误、Runtime/ABI 故障或无法继续满足应用的基本资源要求。SDK 在原始调用点
-输出 panic operation 与 ABI status，随后触发 Wasm trap：
-
-```text
-guest panic
-timers.every.start
-invalid_argument
-```
-
-Host 捕获 trap、Wasm 调用栈和这些结构化字段，清理 Guest 资源并把完整诊断交给调试器或 AI。
-应用主动调用 `micropixel::Panic(reason)` 时，同样先输出 `guest panic` 和具体原因，再触发 trap。
-`main()` 返回非零值仍可用于 conformance 测试区分失败分支；用户应用的不可恢复错误应优先使用
-带原因的 panic。成功的短任务返回 `0`，长期 App 通常停留在 `app.Run()`。
-
-`Result<T>` 与 `Error` 只由确实需要它们的 Service 头引入。只有“失败是正常业务结果且调用方
-能采取不同动作”的接口才返回它们。当前 `KVStore` 的 key 不存在，以及 Texture 不存在、解码失败或
-配额不足属于这类业务分支；未来还包括网络失败、权限被拒绝或异步操作取消。Core Timer/Renderer 等不可恢复
-Runtime 错误仍在发生点 panic。
-
-## Resume 与 Stop 事件
-
-Host 从 App Hall 或状态层恢复同一个 AppSession 时，`Run()` handler 首先收到
-`EventType::kResume`。暂停期间 App Clock、Timer、输入和音频都被冻结；恢复不会重新进入 `main()`。
-Host 会先直接显示暂停前保留的 Guest 画面，所以画面恢复不依赖 Guest 及时提交新帧；需要重建动态内容的
-App 可以在收到 `kResume` 后主动完整重画。
-
-切换或关闭 AppSession 时，handler 收到一次 `EventType::kStop`；handler 返回后 `Run()` 自动返回。
-Host 在 500ms 后仍未完成时才会强制终止，以保证单 App 约束和系统大厅始终可响应。
-应用也可返回 `EventResult::kExit` 主动结束；Host 将成功返回的 `main()` 视为正常退出并返回 App Hall。
-
-`CurrentLocale()` 在 AppSession 启动时确定并在本次运行期间保持不变。用户只能返回 App Hall 后修改
-系统语言；下一次启动 Guest 时获得新的 effective locale，因此 v1 不提供 locale-change 事件。
-
-`Result<T>` 是 freestanding Guest 对 `std::expected<T, Error>` 的兼容子集。应用使用
-`has_value()`/`operator bool()`、`operator*`、`operator->`、`value()`、`error()` 和 `value_or()`；
-失败值可由 `unexpected(Error{...})` 构造。Guest 关闭异常，因此错误状态读取 value 或成功状态
-读取 error 会 trap，而不是抛出 `std::bad_expected_access`。完整标准库兼容不是目标，组合接口
-只在实际 API 需要时增加。
-
-## Watchdog 语义
-
-1 秒 watchdog 是“连续 Guest 计算预算”，不是 `main()` 的总寿命：
-
-- 阻塞在 `Run()` 内部的事件等待或显式 `WaitEvent()` 时暂停；
-- 每次进入 Host ABI 时重新计时；
-- AOT 在循环回跳处检查异步终止标志，因此没有 Host 调用的死循环也能可靠停止；
-- timeout、trap 和非零退出都会由 Host 清理资源并报告 failure。
-
-因此正常事件应用可以永久运行，单次 handler 或两次 Host 调用之间的纯计算不能无限占用 CPU。
-
-## 设计边界
-
-- `Application` 是可发现的 capability façade；高层只提供 `Run(handler)`，accessor 按值返回
-  copyable Service View，高级层保留阻塞事件读取；
-- Service View 没有独立资源身份；Service 创建的 Resource 才以 move-only RAII 表达 Host
-  handle 所有权；
-- Public API 不把 C ABI 的失败模型逐行泄漏给普通应用；
-- `Timer` 是 move-only RAII proxy，析构自动释放 Host 资源；
-- `Event` 和 `TimerEvent` 是 value type，不暴露 raw source、sequence、handle 或 wire buffer；
-- `guest/runtime/sdk.cpp` 集中执行 C ABI lowering 和错误码映射；
-- `guest/runtime/startup.cpp` 在 C++ 构造器和应用 `main()` 前检查核心 ABI；
-- capability 不能只靠 C++ 构造权限保证安全，Host 仍须验证 handle、类型、generation 和所属
-  Guest。
-
-高级接口的 `TimerFrom()` 和 `touch()` 返回当前 `Event` 内 typed payload 的
-受限 view；指针不得保存到该 `Event` 生命周期之外。48-byte wire event 只在 Runtime 中按
-`service_id + event_id` 解码，不把 raw tag/payload 暴露给应用。
-
-## Core 定稿边界
-
-v1 已确定 `Application` façade、typed Service View、move-only Resource、Value/Event 和
-`Run(handler)` 控制流。底层收敛为七个 Core imports、按 Service 版本协商、48-byte Event、
-`service_call` 控制面和 `service_submit` 数据面。后续能力应沿用这些对象语义和错误策略，不能重新
-把叶子操作或 ABI 状态码堆回 `Application`。
-
-尚未定义的是 Network、Camera、网络资源加载/进度/缓存的具体 method/channel/resource 组合，以及是否在
-Public 类型稳定后引入 Typed IDL/binding generator。Bundle Ogg Opus 已由 Audio 1.1 的
-`AudioClip`/`Playback` 定义；未来网络加载只增加 source 的取得方式，不改变播放实例语义或 v1 transport。
-
-格式、命名、所有权和 Guest 限制见
-[C/C++ 代码风格](../../docs/development/code-style.zh-CN.md)。底层协议见
-[Runtime Host ABI](../abi/README.md)。
+实现规则见 [代码风格](../../docs/development/code-style.zh-CN.md)，边界验收见
+[conformance](../tests/conformance/)。

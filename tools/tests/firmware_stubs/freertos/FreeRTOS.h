@@ -8,6 +8,7 @@ using BaseType_t = int;
 using UBaseType_t = unsigned int;
 
 constexpr UBaseType_t configMAX_PRIORITIES = 25U;
+constexpr BaseType_t configNUMBER_OF_CORES = 2;
 constexpr uint32_t configTICK_RATE_HZ = 1000U;
 
 constexpr BaseType_t pdFALSE = 0;

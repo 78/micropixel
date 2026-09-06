@@ -13,6 +13,7 @@
 #include "platform/lvgl/guest_graphics_engine.hpp"
 #include "platform/transports/development_display_control.hpp"
 #include "platform/transports/usb_serial_jtag_local_control.hpp"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::esp32_s3_common {
 
@@ -23,7 +24,7 @@ inline constexpr int32_t kHeight = 240;
 static_assert(kWidth == ui_profile::Layout::kWidth);
 static_assert(kHeight == ui_profile::Layout::kHeight);
 inline constexpr uint8_t kMaxTouchPoints = MICROPIXEL_MAX_TOUCH_POINTS;
-inline constexpr int kLvglTaskCore = 1;
+inline constexpr int kLvglTaskCore = task_policy::kSystemCore;
 inline constexpr graphics::SurfacePixelFormat kGuestSurfaceFormat = graphics::SurfacePixelFormat::kRgb565;
 
 struct Landscape320State final {

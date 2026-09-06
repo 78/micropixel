@@ -54,8 +54,9 @@ HallTransitionPresentation HallTransitionPresentationFor(const SquareSystemUiPro
 }
 
 void MaskHallTransitionCoverRgb888(const HallTransitionPresentation& presentation, uint8_t* destination) {
-    MaskHallCoverRgb888(destination, presentation.cover_size, presentation.cover_corner_radius,
-                        presentation.cover_top_background_rgb, presentation.cover_bottom_background_rgb);
+    MaskHallCoverRgb888(destination, presentation.cover_size, presentation.cover_stride,
+                        presentation.cover_corner_radius, presentation.cover_top_background_rgb,
+                        presentation.cover_bottom_background_rgb);
 }
 
 VirtualizedHallPolicy::VirtualizedHallPolicy(SquareSystemUiState& state, SquarePresentation& presentation)
@@ -396,6 +397,14 @@ void VirtualizedHallPolicy::CardEvent(lv_event_t* event) {
         SetHallCardPressed({.press_overlay = policy->state_.hall_card_press_overlays[index]}, true);
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         SetHallCardPressed({.press_overlay = policy->state_.hall_card_press_overlays[index]}, false);
+    } else if (code == LV_EVENT_LONG_PRESSED && policy->state_.hall_action_sink != nullptr) {
+        if (lv_indev_t* indev = lv_indev_active(); indev != nullptr) {
+            lv_indev_wait_release(indev);
+        }
+        SetHallCardPressed({.press_overlay = policy->state_.hall_card_press_overlays[index]}, false);
+        policy->state_.hall_action_sink(
+            policy->state_.hall_action_context,
+            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kOpenAppActions, .app_index = index});
     } else if (code == LV_EVENT_SHORT_CLICKED && policy->state_.hall_launch_enabled &&
                policy->state_.hall_action_sink != nullptr) {
         const int32_t reveal =
@@ -516,20 +525,20 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
     const bool candidate =
         running < visible_count && guest != nullptr && transition != nullptr && transition->EnterTransitionPending();
     bool background_ready = false;
-    if (running < visible_count && transition != nullptr && transition->BackgroundAvailable() &&
-        state_.hall_cards[running] != nullptr) {
+    // Some boards complete the return animation during CaptureGuestFrame.
+    // Only prepare a background when an animation still needs to run: rebuilding
+    // an idle-cover baseline here delays the handoff to the screenshot card.
+    if (candidate && transition->BackgroundAvailable() && state_.hall_cards[running] != nullptr) {
         background_ready = transition->UpdateBackgroundRegionLocked(
             state_.hall_cards[running], HallCardPresentationRect(state_.profile, running, state_.hall_scroll_offset));
     }
-    if (!background_ready && running < visible_count) {
+    if (candidate && !background_ready) {
         background_ready = PrepareCleanBackgroundLocked(running);
         if (background_ready && transition != nullptr && state_.hall_cards[running] != nullptr) {
             background_ready = transition->UpdateBackgroundRegionLocked(
                 state_.hall_cards[running],
                 HallCardPresentationRect(state_.profile, running, state_.hall_scroll_offset));
         }
-    } else if (!background_ready && transition != nullptr) {
-        background_ready = transition->PrepareBackgroundLocked(state_.root);
     }
     const bool transition_ready = candidate && background_ready;
     lv_obj_move_foreground(transition_ready ? guest : state_.root);
@@ -642,14 +651,11 @@ void VirtualizedHallPolicy::Leave() {
     state_.SetHostPointerEnabledLocked(false);
     state_.DrainGuestRefreshReady();
     DisplayTransition* transition = presentation_.Transition();
-    const HallLaunchBackgroundPlan plan =
-        PlanHallLaunchBackground(running < app_count, transition != nullptr && transition->BackgroundAvailable());
-    if (plan != HallLaunchBackgroundPlan::kReuseCleanBaseline) {
-        if (plan == HallLaunchBackgroundPlan::kPrepareCleanBaseline) {
-            (void)PrepareCleanBackgroundLocked(running);
-        } else if (transition != nullptr) {
-            (void)transition->PrepareBackgroundLocked(state_.root);
-        }
+    const HallLaunchBackgroundPlan plan = PlanHallLaunchBackground(running < app_count);
+    if (plan == HallLaunchBackgroundPlan::kPrepareCleanBaseline) {
+        (void)PrepareCleanBackgroundLocked(running);
+    } else if (transition != nullptr) {
+        (void)transition->PrepareBackgroundLocked(state_.root);
     }
     state_.hall_app_count = 0U;
     lv_obj_clean(state_.root);

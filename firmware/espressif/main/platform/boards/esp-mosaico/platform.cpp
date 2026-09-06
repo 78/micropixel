@@ -36,6 +36,7 @@
 #include "platform/buses/i2c_executor.hpp"
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/input/esp_lcd_touch_input.hpp"
+#include "platform/lvgl/display/scanout_stage_pool.hpp"
 #include "platform/lvgl/display/screen_capture.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -54,6 +55,24 @@ namespace micropixel::platform {
 namespace {
 
 namespace board_detail = esp_mosaico::detail;
+
+// USB screenshot while the presenter scans the App Surface out directly: the
+// displayed-shadow copy only follows LVGL flushes, so the surface on the panel
+// is read instead. Falls through to the shadow capture otherwise.
+std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScannedAppSurface(void* context) {
+    auto* state = static_cast<board_detail::MosaicoBoardState*>(context);
+    graphics::ConstPixelSurface surface{};
+    if (state == nullptr || !state->guest_graphics.DirectlyScannedAppSurface(surface) ||
+        surface.format != graphics::SurfacePixelFormat::kRgb565) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    static constexpr bool kReady = true;
+    return lvgl::CaptureScreenJpeg(state->display, board_detail::kWidth, board_detail::kHeight,
+                                   {.pixels = surface.pixels,
+                                    .stride = surface.stride,
+                                    .format = lvgl::DisplayCapturePixelFormat::kRgb565,
+                                    .ready = &kReady});
+}
 
 esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
     ESP_RETURN_ON_ERROR(state.display_pipeline.InitializePanel(), board_detail::kTag,
@@ -261,6 +280,13 @@ class EspMosaicoBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(sensors_.BeginInitialize(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
                             "start Mosaico sensor discovery failed");
         ESP_RETURN_ON_ERROR(InitializeDisplay(state_), board_detail::kTag, "initialize Mosaico display failed");
+        // Shared full-frame RGB565 staging for the Direct Surface presenter and
+        // the transition compositor. Four frames cover the worst case (status
+        // layer open: retained background + scrim + compose + wire) and are
+        // taken before any Guest can claim the PSRAM for its linear memory.
+        ESP_RETURN_ON_ERROR(lvgl::ScanoutStagePool::Instance().Initialize(board_detail::kDisplayFrameBytes,
+                                                                          board_detail::kScanoutStageSlots),
+                            board_detail::kTag, "initialize Mosaico scanout stage pool failed");
 #if CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
         ESP_LOGI(board_detail::kTag, "S31 graphics experiment: PPA/DMA2D disabled; hardware transitions unavailable");
 #else
@@ -272,8 +298,9 @@ class EspMosaicoBoard final : public Board, public device::Power {
                 state_.display_pipeline.DisplayedShadowReady()),
             board_detail::kTag, "initialize CO5300 direct transition compositor failed");
 #endif
-        ESP_RETURN_ON_ERROR(state_.guest_graphics.Initialize(state_.display, nullptr), board_detail::kTag,
-                            "initialize shared Guest graphics failed");
+        ESP_RETURN_ON_ERROR(
+            state_.guest_graphics.Initialize(state_.display, nullptr, state_.display_pipeline.DirectScanout()),
+            board_detail::kTag, "initialize shared Guest graphics failed");
 
         if (esp_lv_adapter_lock(-1) != ESP_OK) {
             return ESP_FAIL;
@@ -301,7 +328,8 @@ class EspMosaicoBoard final : public Board, public device::Power {
                                                              {.pixels = state_.display_pipeline.DisplayedShadow(),
                                                               .stride = board_detail::kWidth * 2U,
                                                               .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                                              .ready = state_.display_pipeline.DisplayedShadowReady()}),
+                                                              .ready = state_.display_pipeline.DisplayedShadowReady()},
+                                                             {.capture = CaptureScannedAppSurface, .context = &state_}),
                             board_detail::kTag, "start USB screen capture/local control failed");
         ESP_LOGI(board_detail::kTag,
                  "Mosaico HMI ready: 480x480 QSPI display, interrupt-driven touch, shared Guest renderer");
@@ -339,7 +367,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
         }};
         registration.SetGraphics(graphics_);
         registration.SetInput(state_.ui.Input());
-        registration.SetAudioOutput(audio_output_, 16000U, &power_);
+        registration.SetAudioOutput(audio_output_, audio_output_.SampleRate(), &power_);
         registration.SetBattery(battery_);
         registration.SetWifi(wifi_);
         registration.SetPower(*this);

@@ -60,6 +60,7 @@ class I2sCodecAudioSink : public AudioOutputPeripheral {
     [[nodiscard]] esp_err_t Stop() override;
     void Shutdown() override;
     [[nodiscard]] const char* Name() const override { return config_.name; }
+    [[nodiscard]] uint32_t SampleRate() const override { return config_.sample_rate; }
 
    protected:
     [[nodiscard]] virtual const audio_codec_if_t* CreateCodec(const audio_codec_ctrl_if_t* control,

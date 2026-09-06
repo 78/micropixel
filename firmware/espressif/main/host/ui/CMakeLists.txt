@@ -7,6 +7,7 @@ list(APPEND micropixel_sources
     "host/ui/lvgl/square_common/hall_card_ui.cpp"
     "host/ui/lvgl/square_common/hall_cover_cache.cpp"
     "host/ui/lvgl/square_common/hall_cover_codec.cpp"
+    "host/ui/lvgl/square_common/hall_cover_mask.cpp"
     "host/ui/lvgl/square_common/hall_scene_ui.cpp"
     "host/ui/lvgl/square_common/hall_transition_ui.cpp"
     "host/ui/lvgl/square_common/host_ui_theme.cpp"

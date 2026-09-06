@@ -41,7 +41,13 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
         lv_display_add_event_cb(display, AppManagementDisplayEvent, LV_EVENT_RENDER_READY, this);
         lv_display_add_event_cb(display, AppManagementDisplayEvent, LV_EVENT_REFR_READY, this);
     }
-    RenderAppManagementLocked();
+    if (model.action_app_index < model.app_count) {
+        app_management_selected_index_ = model.action_app_index;
+        app_management_overlay_ = AppOverlay::kActions;
+        RenderAppManagementOverlayLocked();
+    } else {
+        RenderAppManagementLocked();
+    }
     return {};
 }
 
@@ -216,6 +222,10 @@ void SystemDetailUi::AppManagementRowEvent(lv_event_t* event) {
 void SystemDetailUi::AppManagementCancelEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr) {
+        if (ui->app_management_model_.action_app_index < ui->app_management_model_.app_count) {
+            AppManagementBackEvent(event);
+            return;
+        }
         ui->app_management_overlay_ = AppOverlay::kNone;
         ui->BeginAppManagementLatencyProbe("sheet.close");
         ui->QueueAppManagementRender();

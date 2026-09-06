@@ -19,7 +19,10 @@
 namespace micropixel::firmware::logging {
 namespace {
 
-constexpr size_t kCapacity = 1024U;
+// 256 fixed slots (~280 KiB in PSRAM). The ring is a bounded diagnostic tail
+// for `micropixel logs`, not an archive; a larger ring costs a ~1.1 KiB slot
+// per entry regardless of message length.
+constexpr size_t kCapacity = 256U;
 constexpr size_t kResponseJsonBudget = 60U * 1024U;
 constexpr size_t kStackFormatCapacity = 512U;
 
@@ -157,8 +160,7 @@ bool ParseLogSourceFilter(std::string_view text, LogSourceFilter& filter_out) {
 }
 
 SystemLogBuffer::SystemLogBuffer() {
-    static_assert(sizeof(Entry) * kCapacity < 2U * 1024U * 1024U,
-                  "System log ring must remain a bounded PSRAM allocation");
+    static_assert(sizeof(Entry) * kCapacity <= 512U * 1024U, "System log ring must remain a bounded PSRAM allocation");
     void* storage = heap_caps_calloc(1U, sizeof(Buffer), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (storage != nullptr) {
         buffer_ = std::construct_at(static_cast<Buffer*>(storage));

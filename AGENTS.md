@@ -1,243 +1,80 @@
-# MicroPixel AI 项目导航
+# MicroPixel AI 项目入口
 
-本文件对整个仓库生效，用于帮助 AI 快速建立正确的项目模型。它是导航和操作约束，不复制所有
-设计细节。代码、ABI header、可执行测试和下方链接的专项文档是更具体的事实来源。
+本文件对整个仓库生效。新任务先建立下方项目模型，再按任务读取相关文档；代码、ABI header 和
+可执行测试是具体行为的事实来源。这里不维护完整接口、文件树或历史实验。
 
-## 一句话理解项目
+## 项目模型
 
-MicroPixel 是运行在 Espressif MCU 上的 WebAssembly 应用运行时：产品固件面向 ESP32-P4 +
-Metalio-Claw4；ESP32-S31 + ESP-Mosaico、ESP32-S3 + ESP32-S3-BOX-3、立创 SZPI ESP32-S3 和 M5Stack CoreS3 作为
-preview profile。Host 基于 ESP-IDF 6.1 和固定 commit 的 WAMR fork AOT v6，Guest 使用受限 C++23 SDK，通过稳定的 Service ABI 访问图形、
-输入、音频、存储和资源，不直接依赖芯片或板级 SDK。
+MicroPixel 是 Espressif MCU 上的 WebAssembly 应用运行时。Host 使用 ESP-IDF 6.1 和固定 commit 的
+WAMR fork（AOT v6）；Guest 使用受限 C++23 SDK，单线程事件循环，同时最多一个 AppSession。
+ESP32-P4 + Metalio-Claw4 是产品 profile，S31/Mosaico 与三款 S3 板型为 preview。
+应用以 Bundle v1 分发，BundleFS v2 负责 App Store 的写时复制与掉电恢复。
 
-当前产品基线：
+依赖方向固定为 `Runtime → Device contracts ← Platform`，`FirmwareApp` 是唯一组合根。
+Host 管理硬件、应用生命周期和系统 UI；Guest 通过 Service ABI 使用能力，不感知具体板型。
 
-- 硬件：ESP32-P4 + Metalio-Claw4 产品 profile；ESP32-S31 + ESP-Mosaico、ESP32-S3-BOX-3、立创
-  SZPI ESP32-S3 和 M5Stack CoreS3 preview profile；
-- Host：ESP-IDF 6.1，一个长驻 `AppRuntime`，同时最多一个 Guest `AppSession`；
-- Guest：Wasm32 + RISC-V 32-bit 或 ESP32-S3 Xtensa AOT，单线程事件模型；
-- 分发：Bundle v1；P4 使用 24 MiB、S31/S3 使用 8 MiB 可写 `app_store`。BundleFS v2 使用
-  离散 64 KiB 数据块、写时复制和四个 16 KiB Catalog Bank，并兼容迁移旧 v1，不依赖 NVS Catalog；
-- 系统 UI：Host 原生 App Hall、Status Layer、系统菜单和系统手势；
-- 集成 App：Blocks、Snake、Tilt、Demo，以及 Tap Counter、Color Lab、Pixel Sketch、Orbit Pad 四个 Showcase Bundle。
+## 按任务找入口
 
-## 先读哪里
+Host 路径均相对 `firmware/espressif/main/`。
 
-根据任务只读相关文档：
+| 任务 | 代码入口 | 优先阅读 |
+|---|---|---|
+| 环境、构建和项目概览 | `tools/` | [README](README.md) |
+| 架构与职责划分 | `device/`、`runtime/`、`platform/` | [架构](docs/design/architecture.zh-CN.md)、[Firmware 导航](firmware/espressif/main/README.md) |
+| Guest 应用与 SDK | `guest/apps/`、`guest/sdk/`、`guest/runtime/sdk.cpp` | [Guest 构建](guest/README.md)、[SDK](guest/sdk/README.md) |
+| wire / Service | `guest/abi/`、`runtime/abi/`、`runtime/services/` | [ABI](guest/abi/README.md)、[ABI header](guest/abi/micropixel_abi.h) |
+| 大厅、状态层、系统手势 | `host/ui/`、`host/controller/` | [Firmware 导航](firmware/espressif/main/README.md) |
+| 图形与性能 | `platform/graphics/`、`platform/lvgl/`、`runtime/graphics/` | [图形诊断](docs/development/graphics-performance.zh-CN.md) |
+| Bundle / App Store | `runtime/bundle/`、`runtime/bundlefs/`、`tools/` | [BundleFS](docs/design/bundlefs.zh-CN.md) |
+| 游戏音效 | `guest/apps/<app>/audio/sfx.json` | [音频规范](docs/development/game-audio.zh-CN.md) |
+| 板级适配、烧录、真机排错 | `platform/boards/` | [烧录指南](docs/development/flashing.zh-CN.md)、[S3 适配](docs/development/esp32-s3-box-3-bring-up.zh-CN.md) |
 
-- 项目入口、环境和常用命令：[`README.md`](README.md)；
-- 产品边界、分层和发布基线：[`docs/design/architecture.zh-CN.md`](docs/design/architecture.zh-CN.md)；
-- BundleFS 持久化格式和事务：[`docs/design/bundlefs.zh-CN.md`](docs/design/bundlefs.zh-CN.md)；
-- Firmware 文件职责：[`firmware/espressif/main/README.md`](firmware/espressif/main/README.md)；
-- Guest 目录与构建：[`guest/README.md`](guest/README.md)；
-- Public C++ API：[`guest/sdk/README.md`](guest/sdk/README.md)；
-- Guest–Host wire 协议：[`guest/abi/README.md`](guest/abi/README.md) 和
-  [`guest/abi/micropixel_abi.h`](guest/abi/micropixel_abi.h)；
-- C/C++ 格式、命名、所有权和错误策略：[`docs/development/code-style.zh-CN.md`](docs/development/code-style.zh-CN.md)；
-- Graphics 性能诊断：[`docs/development/graphics-performance.zh-CN.md`](docs/development/graphics-performance.zh-CN.md)；
-- 游戏音频：[`docs/development/game-audio.zh-CN.md`](docs/development/game-audio.zh-CN.md)；
-- 真机烧录：[`docs/development/flashing.zh-CN.md`](docs/development/flashing.zh-CN.md)；
-- 贡献和提交前检查：[`CONTRIBUTING.md`](CONTRIBUTING.md)。
+C/C++ 修改遵循[代码风格](docs/development/code-style.zh-CN.md)；其他专题从[文档索引](docs/README.md)查找。
 
-## 架构速览
+## 必须保持的边界
 
-```text
-app_main
-  └─ FirmwareApp                         # 唯一组合根
-      ├─ Platform
-      │   ├─ Metalio-Claw4                # ESP32-P4 product
-      │   ├─ ESP-Mosaico                  # ESP32-S31 preview bring-up
-      │   ├─ ESP32-S3-BOX-3               # ESP32-S3 preview
-      │   ├─ SZPI ESP32-S3                # 立创开发板 preview
-      │   ├─ M5Stack CoreS3               # ESP32-S3 preview
-      │   └─ Null                          # 硬件无关编译基线
-      ├─ DeviceServices                    # 硬件无关契约
-      ├─ AppRuntime
-      │   └─ AppSession (0..1)
-      │       ├─ Bundle / WAMR module / instance / exec env
-      │       ├─ GuestContext / Service endpoints
-      │       └─ Event / Timer / Storage / Resource
-      └─ HostController / SystemShell       # App Hall、暂停/恢复、系统 UI
-```
+- Guest SDK/App/ABI 不依赖 ESP-IDF、LVGL 或板型类型，不引入线程、mutex、系统调用或直接硬件访问。
+- Public SDK 到 wire 的转换集中在 Guest Runtime；新能力优先扩展 Service method/channel/event，
+  不轻易增加七个 Core imports。已发布 ID 不得改义或复用，C ABI 不暴露 C++ 布局、STL 或 Host 指针。
+- Host 验证跨 ABI 的 pointer/length、handle、generation、所属 Guest 和容量，不能只信任 SDK 校验。
+- Host 实时和跨任务路径用固定容量队列、数组或对象池；不隐式扩容、不使用 detached task。
+  资源用 move-only RAII 或显式 shutdown protocol，析构只做 best-effort cleanup；不用裸 new/delete
+  承担实时资源所有权。exception 和 RTTI 关闭。
+- ISR 只记录最小 POD 并唤醒任务，不调用 WAMR、Guest 或 LVGL。Guest 热路径不同步输出大段日志。
+- App Hall、状态层、系统手势、亮度和设备主音量归 Host；Guest 不增加 App master 或统一音量衰减。
+  游戏音色参数只写在 `audio/sfx.json`，不在 C++ 维护第二份。
 
-固定依赖方向：
+## 工作与验证
 
-```text
-Runtime -> Device contracts <- Platform
-```
+1. 先运行 `git status --short`，保留用户未提交改动，不覆盖、重置或夹带无关文件。
+2. 查找现有契约、相似实现和测试，选择最小正确变更面。突破架构边界前先更新设计与回归基线。
+3. 按下表验证；编译通过不能代替协议、生命周期或硬件行为验收。
+4. 交付说明行为变化、关键文件、执行命令与结果，以及仍需的真机/人工验收。文档同步当前行为。
 
-- `device/` 定义硬件无关契约；
-- `platform/` 实现契约，不依赖 Runtime；
-- Runtime 只通过注入的 `DeviceServices` 访问设备；
-- `FirmwareApp` 是唯一同时知道 Platform、Device 和 Runtime 的组合根；
-- Public SDK 不直接暴露 C ABI，`guest/runtime/sdk.cpp` 负责 typed SDK 到 wire 的 lowering。
-
-Guest 只使用七个 Core imports：`abi_version`、`log_write`、`clock_now`、`event_wait`、
-`service_open`、`service_call` 和 `service_submit`。新能力优先扩展 Service method/channel/event，不要
-轻易新增 Core import。
-
-## 目录定位
-
-```text
-firmware/espressif/main/
-  device/contracts/               # Host 硬件无关能力契约
-  device/                         # Runtime 使用的设备 façade 与共享校验/格式
-  platform/                       # 板级能力注册；boards/buses/drivers/input/lvgl 与共享能力
-  runtime/                        # WAMR、Session、Bundle、ABI adapter、Host Services
-  host/{controller,ui,time}/       # Host 编排、System Shell 与系统时间
-  work/                           # 后台执行器和全局任务优先级策略
-guest/
-  abi/                            # wire 格式、ID、allowed imports
-  runtime/                        # Guest startup 与 SDK lowering
-  sdk/                            # 应用可包含的 Public C++ API
-  apps/{blocks,snake,tilt,demo}/  # 完整游戏与 SDK Demo
-  apps/{tap-counter,color-lab,pixel-sketch,orbit-pad}/ # Showcase Bundle
-  tests/conformance/              # Guest/Host 边界验收
-tools/                            # 构建、打包、分析、烧录和回归脚本
-docs/                             # 跨模块长期文档
-build/                            # 本地生成产物，不提交
-```
-
-## 修改时必须保持的边界
-
-- Guest SDK、Guest App 和 ABI 不得依赖 ESP-IDF、LVGL 或任何具体开发板类型。
-- 不在 C ABI 中暴露 C++ class、STL 类型、vtable、`std::expected` 或 Host 指针。
-- 已发布的 Service/method/channel/event/capability/opcode ID 不得改义或复用。
-- 所有跨 ABI pointer/length、handle、generation、所属 Guest 和容量都由 Host 验证。
-- Guest 是单线程事件模型；不在 App 中引入线程、mutex、系统调用或直接硬件访问。
-- Host 实时和跨任务路径使用固定容量队列、数组或对象池，不隐式扩容，不使用 detached task。
-- 有身份的资源使用 move-only RAII 或显式 shutdown protocol；析构只做 best-effort cleanup。
-- ISR 只记录最小 POD 状态并唤醒任务，不调用 WAMR、Guest 或 LVGL。
-- exception 和 RTTI 保持关闭。不使用裸 `new/delete` 承担实时资源所有权。
-- Host 拥有设备主音量。Guest 只提供每个音效的 `volume_per_mille`，不得定义 App master
-  或对所有音效再做统一衰减。
-- 游戏音效的波形、频率、时长、包络和响度只写在 `guest/apps/<game>/audio/sfx.json`，
-  不在 C++ 中维护第二份参数。
-- 系统手势、App Hall、状态栏、亮度和设备主音量属于 Host，不做成 Guest App。
-
-## 常用任务路由
-
-| 任务 | 优先定位 |
+| 变更范围 | 最低验证 |
 |---|---|
-| 修改 Public Guest API | `guest/sdk/` → `guest/runtime/sdk.cpp` → 必要时再改 `guest/abi/` 和 Host endpoint |
-| 修改 wire/Service | `guest/abi/` + `firmware/espressif/main/runtime/abi/` + conformance/negative tests |
-| 修改 Host 业务能力 | `device/contracts/` + Runtime service；板级差异放 `platform/` |
-| 修改应用大厅/状态层 | `host/ui/`、`host/controller/`、共享 Square System UI；板级只接入 presentation |
-| 修改图形热路径 | Graphics Service、Guest graphics engine、display/compositor；保持边界验证 |
-| 图形性能诊断/基准 | `docs/development/graphics-performance.zh-CN.md`；Snake 与本地 Mario 的 `--benchmark --no-bgm` |
-| 修改 Blocks/Snake/Tilt | 对应 `guest/apps/<app>/`；同时运行该 Bundle 的正式构建 |
-| 修改音效 | `audio/sfx.json` + 分析器测试 + App Bundle 构建 + 真机 A/B |
-| 修改 Bundle/App Store | `tools/build_app_bundle.py`、`tools/build_app_store_image.py`、Host bundle reader |
-| 烧录或排查真机 | `docs/development/flashing.zh-CN.md`；先用 MAC 确认目标设备 |
+| 文档 | 相对链接、`git diff --check` |
+| Guest SDK / ABI | `bash tools/build_guest_p4.sh` 和相关 conformance |
+| Firmware | 相关 Host test、格式检查、`bash tools/p4.sh build-host` |
+| 共享 graphics / lvgl / PPA 条件分支 | 另构建 S31 和至少一款 S3 |
+| System Shell / Firmware | 相关 Host test、格式检查、`bash tools/p4.sh build-host`；不构建 Guest 或 App Store |
+| Bundle / 集成 App | 相关测试和对应正式 Bundle 构建；只有修改 Host 时才追加 `bash tools/p4.sh build-host` |
+| 音效 | 分析器 unit tests、对应 Bundle 构建、真机 A/B 试听 |
+| 图形性能 | 同时对照 Guest 与 Host 分段采样及可见画面，不只看 CPU% |
 
-## 构建与验证
+Host test 只通过 `bash tools/tests/test_firmware_host.sh` 编译运行，不直接调用 clang++。
+格式入口为 `bash tools/check_firmware_style.sh --format-only`；发布或推送前运行
+`bash tools/p4.sh test`，更多检查见 [CONTRIBUTING](CONTRIBUTING.md)。
 
-环境基线：ESP-IDF 6.1，已通过 `export.sh` 设置 `IDF_PATH`；配置 `WASI_SDK_PATH`/`WASI_CLANG`
-和与 Host 匹配的 `WAMRC`。不要在未激活 ESP-IDF 的 shell 中判断 Host 构建失败。
+构建前激活 ESP-IDF 6.1 的 export.sh，并配置 WASI SDK 和匹配的 WAMRC；未激活环境不能据此判断
+Host 构建失败。新增 Kconfig 符号后检查实际生成配置，避免旧 sdkconfig 无声关闭新代码。
+真机操作前读烧录指南，用芯片 MAC 确认目标，不依赖会重枚举的串口名；同一设备只允许一个串口工具占用。
 
-最小验证要与变更风险匹配：
+## 仓库卫生
 
-```sh
-# Guest ABI/SDK 基线
-bash tools/build_guest_p4.sh
-
-# ESP32-P4 Host 产品基线
-bash tools/p4.sh build-host
-
-# ESP32-S31 / ESP-Mosaico preview Host
-bash tools/s31.sh build-host
-
-# ESP32-S3 preview Host（无 PPA/DMA2D；platform/graphics 改动必须至少构建一款 S3）
-bash tools/s3.sh build-host box3
-bash tools/s3.sh build-host szpi
-bash tools/s3.sh build-host cores3
-
-# System Shell + 八个示例 App + App Store 集成
-bash tools/p4.sh build-all
-
-# 发布前或推送前完整门禁；普通 build/flash 不隐式运行
-bash tools/p4.sh test
-
-# Firmware 格式；首次完整 clang-tidy 需要 --configure
-bash tools/check_firmware_style.sh --format-only
-
-# Host 回归
-bash tools/tests/test_firmware_host.sh
-
-# 音频分析器和所有游戏 manifest
-python3 -m unittest tools.tests.test_analyze_sfx -v
-
-# 正式 App Bundle
-python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
-python3 tools/micropixel package guest/apps/snake --aot-target riscv32-ilp32f
-python3 tools/micropixel package guest/apps/tilt --aot-target riscv32-ilp32f
-python3 tools/micropixel package guest/apps/demo --aot-target riscv32-ilp32f
-
-# Shell 语法
-bash -n tools/*.sh
-```
-
-修改什么就验证什么：
-
-- 文档变更：检查相对链接和 `git diff --check`；
-- Guest SDK/ABI：至少运行 Guest 构建和相关 conformance；
-- Firmware 代码：至少运行相关 Host test、格式和 P4 Host 构建；
-- `platform/graphics/`、`platform/lvgl/` 或任何 `CONFIG_SOC_PPA_SUPPORTED` 分支：P4、S31 和至少一款 S3 都要构建；
-- System Shell、Bundle 或集成 App：运行 `bash tools/p4.sh build-all`；
-- 音频：运行分析器 unit tests、对应 Bundle 构建和真机试听；
-- 图形性能：用 Guest 侧 `*-bench` 行和 Host `App Surface scene`/`display refresh` 采样一起看，不只看 CPU%；
-- 硬件行为：记录目标板型和验收结果，但不提交 MAC、串口日志或设备标识。
-
-Host 单元测试只通过 `bash tools/tests/test_firmware_host.sh` 编译运行；直接用 `clang++` 会链到 ESP 工具链的
-运行库而报 `__eh_frame_start` 类链接错误。
-
-## 真机与构建的已知坑
-
-- 新板第一次接入必须先烧 `app_store`（`flash-all` 或 `flash-apps`）。只 `flash-host` 的板子启动日志有
-  `App Store catalog scan failed`，`micropixel app list` 为 `count=0`，`app install`/`run` 会长时间挂起。
-- 新增 `CONFIG_MICROPIXEL_*` Kconfig 符号后，用 `rg` 确认它出现在 `build/host-<target>/sdkconfig.release`；
-  没有就删掉该文件让下次 build 重新生成，否则对应代码会被无声编译掉。
-- P4 的 PPA/DMA2D 只在 `CONFIG_SOC_PPA_SUPPORTED` 下编译；跨目标共享的常量（telemetry 直方图分档等）不能
-  引用 `EspPixelCompositor`/`Dma2dCopyEngine` 的成员，否则 S3 构建失败。
-- S31 内部 SRAM 不经 cache：对 DMA 描述符或像素行 `esp_cache_msync` 前先查 `esp_cache_get_line_size_by_addr`，
-  为 0 时跳过，否则 S31 上返回错误、渲染报 `status=4`。
-- Guest task 上不要同步写大段 UART 日志；周期性诊断文本格式化后交给 `work::BackgroundExecutor` 输出，
-  并受 `CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG` 控制。一段 1.5 KiB 日志在 115200 下就是一个 100 ms 尖峰。
-- PPA/DMA2D 门槛（`esp_pixel_compositor.cpp`）是按 `PPA blend histogram` 实测调出来的启发式；调整前先看
-  直方图，并在 P4 与 S31 同时 A/B。
-- `guest/apps/mario/` 是被 `.gitignore` 排除的本地滚屏基准 App，可能不存在于其他检出；文档和脚本不要
-  把它当作仓库内 App 依赖。
-- 长跑 `micropixel run` 用 `--no-follow`，随后用 `micropixel logs -n N` 读取；macOS 没有 `timeout`。
-  一台板同一时刻只能被 monitor、esptool 或 `micropixel` 之一占用。
-- 用 `esptool chip-id` 的 MAC 而不是 `/dev/cu.usbmodem*` 名称确认目标设备；端口名会随重枚举改变。
-
-## 生成物、第三方与安全
-
-- `build/`、`artifacts/`、`managed_components/`、生成的 `sdkconfig`、`dependencies.lock.*`、
-  AOT/Wasm/Bundle/Flash 镜像和报告
-  是本地产物，不直接编辑，不提交。
-- 音频生成头文件和资源 pack 由构建脚本生成；修改其源 JSON、素材或生成器。
-- `firmware/espressif/components/wasm-micro-runtime/` 是固定 commit 的 WAMR fork/submodule。除非任务明确
-  要求更新 fork，不要把其源码复制回主仓库。
-- 不为了统一格式而改动第三方源码。新依赖必须核对许可证并更新
-  `THIRD_PARTY_NOTICES.md`。
-- 不提交密钥、令牌、私钥、个人绝对路径、设备序列号、MAC、原始串口日志或一次性性能数据。
-
-## AI 工作流程
-
-1. 先运行 `git status --short`，区分用户未提交变更与当前任务，不覆盖、重置或顺手提交无关文件。
-2. 先查找现有契约、相似实现和测试，再选择最小正确变更面。
-3. 保持上述 Host/Guest/ABI/Platform 边界；如果需要突破，必须先更新架构决策和回归基线。
-4. 使用与风险成比例的测试验证，不以“能编译”代替协议、生命周期或真机行为验收。
-5. 交付时说明行为变化、关键文件、已运行命令、结果和仍需的真机/人工验收。
-
-## 完成定义
-
-一项变更完成时应同时满足：
-
-- 职责放在正确的 Host、Guest、ABI、Device 或 Platform 层；
-- 无意外 wire/Bundle/持久化格式变化，或已配套版本和兼容测试；
-- 所有权、并发、容量、错误路径和 shutdown 顺序有明确语义；
-- 相关自动测试和构建通过；
-- 文档与当前行为一致；
-- 没有夹带用户的无关变更、生成物、设备标识或敏感信息。
+- 修改源 JSON、素材或生成器，不直接编辑/提交 build、artifacts、managed_components、生成的 sdkconfig、
+  dependencies.lock.*、资源 pack、AOT/Wasm/Bundle/Flash 镜像或报告。
+- WAMR 是固定 commit 的 fork/submodule，只有任务明确要求时才更新；不复制其源码回主仓库，
+  不为统一格式改第三方代码。新依赖核对许可证并更新 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。
+- 不提交密钥、令牌、个人绝对路径、设备标识、MAC、原始串口日志或一次性性能数据。
+- `guest/apps/mario/` 是 gitignore 排除的本地基准，可能不存在，不能成为仓库必需依赖。

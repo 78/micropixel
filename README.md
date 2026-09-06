@@ -43,7 +43,7 @@ git submodule update --init --recursive
   `6a9c44fe7e725af45cb99293ae38afd7d481f1e3`；
 - 带 wasm32 backend 的 Clang（设置 `WASI_CLANG`，或设置 `WASI_SDK_PATH`）；
 - MicroPixel WAMR fork 的 `wamr-host/esp-idf-psram` 分支，固定 commit
-  `4dbe3b6efe776fde06468e47f342c1d351879cf0` 构建的 `wamrc`，目标为
+  `af07c787ac6f7d1d20555f97ddc184f5fc13731a` 构建的 `wamrc`，目标为
   `RISCV32_ILP32F`、AOT format v6（设置 `WAMRC`）；上游 WAMR 2.4.3 至 2.4.5 的 AOT v5 不兼容；
 - Python 3；烧录和串口工具的 Python 依赖见 `requirements-dev.txt`。
 
@@ -79,7 +79,7 @@ profile 只有编译能力，通用工具会拒绝烧录；物理板 profile 在
 单个 Guest App 由统一 CLI 直接读取 `app.json`，不需要 App 专用构建脚本。日常设备开发使用一条 `run`：
 
 ```sh
-python3 tools/micropixel --transport usb run guest/apps/demo
+python3 tools/micropixel --transport usb run guest/apps/sdk-demo
 ```
 
 安装后的 CLI 可在项目目录直接运行 `micropixel --transport usb run`，默认读取当前目录的 `app.json`。
@@ -94,8 +94,8 @@ python3 tools/micropixel --transport usb run guest/apps/demo
 # 日常增量构建 Host；不构建 Guest、不跑 unittest、不执行 fullclean
 bash tools/p4.sh build-host
 
-# 构建 Host、8 个示例 App 和 App Store 镜像；不跑测试
-bash tools/p4.sh build-all
+# 按需构建 4 个示例 App；固件修改不需要执行
+bash tools/p4.sh build-apps
 
 # 仅在发布前或推送前显式运行完整测试门禁
 bash tools/p4.sh test
@@ -131,7 +131,7 @@ SDK Demo 单独通过 USB 增量安装，不烧录 Host：
 
 ```sh
 python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
-    app install guest/apps/demo
+    app install guest/apps/sdk-demo
 ```
 
 设备连接后，日常 Host 修改使用保留 App Store 的增量烧录入口：
@@ -142,7 +142,7 @@ bash tools/p4.sh monitor /dev/cu.usbmodemXXXX
 ```
 
 两条命令在只连接一台 ESP32-P4 时都可省略端口；`monitor` 不构建、不烧录、不清空数据，也不运行测试。
-USB 调试的 App 烧录默认清空旧 Catalog 并写入 8 个示例 App：
+USB 调试的 App 烧录默认清空旧 Catalog 并写入 4 个示例 App：
 
 ```sh
 bash tools/p4.sh flash-apps
@@ -154,7 +154,7 @@ Token：
 ```sh
 python3 tools/micropixel port list
 python3 tools/micropixel --transport usb app list
-python3 tools/micropixel --transport usb app install guest/apps/demo
+python3 tools/micropixel --transport usb app install guest/apps/sdk-demo
 python3 tools/micropixel --transport usb app start micropixel.demo
 python3 tools/micropixel --transport usb app start micropixel.demo --follow
 python3 tools/micropixel --transport usb app stop

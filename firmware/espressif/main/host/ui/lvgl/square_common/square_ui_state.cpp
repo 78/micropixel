@@ -1,10 +1,13 @@
 #include "host/ui/lvgl/square_common/square_ui_state.hpp"
 
 #include <algorithm>
+#include <cinttypes>
 
 #include "esp_attr.h"
+#include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_memory_utils.h"
+#include "esp_timer.h"
 #include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -15,6 +18,11 @@
 
 namespace micropixel::host_ui::lvgl::square_common {
 namespace {
+
+#if CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+// Shared with the Guest task's telemetry lines so log readers can grep one tag.
+constexpr const char* kPerfTag = "perf";
+#endif
 
 #if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
 EXT_RAM_BSS_ATTR SquareSystemUiHallStorage g_hall_storage;
@@ -92,7 +100,9 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
       hall_card_press_overlays(g_hall_storage.card_press_overlays),
       hall_app_running(g_hall_storage.app_running),
       guest_graphics_(guest_graphics),
-      transition_(transition) {}
+      transition_(transition) {
+    guest_gesture_hint_ui.Bind(&guest_graphics_);
+}
 
 void SquareSystemUiState::BindHallReset(ResetHallCallback reset, void* context) {
     reset_hall_locked_ = reset;
@@ -639,7 +649,8 @@ std::expected<void, host_ui::SystemUiError> SquareSystemUiState::ShowAppManageme
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
     SetHostPointerEnabledLocked(false);
-    lv_obj_t* page_root = PrepareSystemPageRootLocked();
+    hall_retained_for_status = false;
+    lv_obj_t* page_root = model.action_app_index < model.app_count ? root : PrepareSystemPageRootLocked();
     auto result =
         page_root == nullptr
             ? std::expected<void, host_ui::SystemUiError>(std::unexpected(host_ui::SystemUiError::kRenderFailed))
@@ -763,12 +774,12 @@ void SquareSystemUiState::LeaveStatusLayer(uint64_t trigger_timestamp_us) {
                              profile.allow_software_status_animation);
 }
 
-void SquareSystemUiState::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) {
+void SquareSystemUiState::UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu) {
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
     performance_overlay_requested_ = enabled;
-    performance_cpu_percent_ = cpu_percent;
+    performance_cpu_ = cpu;
     RefreshPerformanceOverlayLocked(true);
     esp_lv_adapter_unlock();
 }
@@ -776,11 +787,78 @@ void SquareSystemUiState::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_per
 void SquareSystemUiState::RefreshPerformanceOverlayLocked(bool refresh_sample) {
     const bool guest_app_visible = guest_actions_watched_ && guest_graphics_.FrameLocked() != nullptr &&
                                    root == nullptr && status_layer_ui.ActionContext() == nullptr;
-    const bool should_show = performance_overlay_requested_ && guest_app_visible;
+    // An LVGL overlay above a Direct Surface would force every Guest frame
+    // through the full-frame composited path (~2x slower on 720x720), and on
+    // panels whose App Surface can be scanned out directly it would keep every
+    // Scene App on the LVGL path. While the Guest owns the panel the HUD is
+    // rendered off-screen and blended by the presenter into each scanned-out
+    // frame instead.
+    const bool direct_surface = guest_app_visible && guest_graphics_.PresenterOverlayWanted();
+    const bool should_show = performance_overlay_requested_ && guest_app_visible && !direct_surface;
+    if (performance_overlay_requested_ && direct_surface) {
+        if (refresh_sample) {
+            PublishDirectSurfacePerformanceSample();
+        }
+    } else {
+        if (performance_direct_overlay_published_) {
+            guest_graphics_.ClearDirectSurfaceOverlay(platform::lvgl::ScanoutOverlayLayer::kPerformanceHud);
+            performance_direct_overlay_published_ = false;
+        }
+        if (!direct_surface) {
+            performance_direct_sample_us_ = 0;
+        }
+    }
     const bool visible = status_layer_ui.PerformanceOverlayVisibleLocked();
     if ((should_show && (refresh_sample || !visible)) || (!should_show && visible)) {
-        status_layer_ui.UpdatePerformanceOverlayLocked(should_show, performance_cpu_percent_,
+        status_layer_ui.UpdatePerformanceOverlayLocked(should_show, performance_cpu_,
                                                        guest_graphics_.GuestPresentedFrameSequence());
+    }
+}
+
+void SquareSystemUiState::PublishDirectSurfacePerformanceSample() {
+    const int64_t now_us = esp_timer_get_time();
+    // Frames shown by the presenter plus frames LVGL flushed while it held the
+    // panel; the two paths never present the same frame.
+    const uint32_t frames =
+        guest_graphics_.DirectSurfaceFramesPresented() + guest_graphics_.GuestPresentedFrameSequence();
+    uint32_t fps = 0U;
+    // Counters restart with every Guest; a smaller value is a new App, not a wrap.
+    if (performance_direct_sample_us_ != 0 && now_us > performance_direct_sample_us_ &&
+        frames >= performance_direct_frames_) {
+        const uint64_t elapsed_us = static_cast<uint64_t>(now_us - performance_direct_sample_us_);
+        fps = static_cast<uint32_t>(
+            (static_cast<uint64_t>(frames - performance_direct_frames_) * 1000000U + elapsed_us / 2U) / elapsed_us);
+#if CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+        // Mirrors the on-panel HUD for USB log readers (`micropixel logs`);
+        // one short line per second, off with the rest of the telemetry.
+        if (performance_cpu_.core_count >= 2U) {
+            ESP_LOGI(kPerfTag, "CPU %u%% [0:%u 1:%u] direct-surface FPS %" PRIu32,
+                     static_cast<unsigned>(performance_cpu_.total_percent),
+                     static_cast<unsigned>(performance_cpu_.per_core_percent[0]),
+                     static_cast<unsigned>(performance_cpu_.per_core_percent[1]), fps);
+        } else {
+            ESP_LOGI(kPerfTag, "CPU %u%% direct-surface FPS %" PRIu32,
+                     static_cast<unsigned>(performance_cpu_.total_percent), fps);
+        }
+#endif
+    }
+    performance_direct_frames_ = frames;
+    performance_direct_sample_us_ = now_us;
+
+    StatusLayerUi::PerformanceOverlaySnapshot snapshot{};
+    if (!status_layer_ui.RenderPerformanceOverlaySnapshotLocked(performance_cpu_, fps, snapshot)) {
+        return;
+    }
+    const platform::lvgl::ScanoutOverlayImage image{
+        .pixels = snapshot.pixels,
+        .width = snapshot.width,
+        .height = snapshot.height,
+        .stride = snapshot.stride,
+        .x = snapshot.x,
+        .y = snapshot.y,
+    };
+    if (guest_graphics_.SetDirectSurfaceOverlay(platform::lvgl::ScanoutOverlayLayer::kPerformanceHud, image)) {
+        performance_direct_overlay_published_ = true;
     }
 }
 

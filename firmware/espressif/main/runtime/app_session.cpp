@@ -1,5 +1,6 @@
 #include "runtime/app_session.hpp"
 
+#include <array>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -71,7 +72,7 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(
     std::string_view effective_locale, const micropixel_system_launch_arguments_response_t& launch_arguments,
     GuestLogSink* log_sink) {
     int64_t stage_started_us = esp_timer_get_time();
-    ESP_LOGI(kTag, "AppSession stage begin: package");
+    ESP_LOGD(kTag, "AppSession stage begin: package");
     auto package_result = AotPackage::Load(file);
     if (!package_result) {
         ESP_LOGE(kTag, "unable to read the configured AOT package");
@@ -83,7 +84,7 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(
     micropixel_log_heap_state("AOT package loaded");
 
     stage_started_us = esp_timer_get_time();
-    ESP_LOGI(kTag, "AppSession stage begin: AOT module load");
+    ESP_LOGD(kTag, "AppSession stage begin: AOT module load");
     auto module_result = LoadedModule::Load(package);
     if (!module_result) {
         ESP_LOGE(kTag, "AOT load failed: %s", module_result.error().message.data());
@@ -95,7 +96,12 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(
              esp_timer_get_time() - stage_started_us);
     micropixel_log_heap_state("AOT module loaded");
 
-    auto guest_result = GuestInstance::Instantiate(module.get());
+    // GUEST_BUFFERS Direct Surfaces hand the Host raw pointers into the Guest's
+    // linear memory, so those Bundles declare PINNED_MEMORY and get their whole
+    // ceiling reserved up front. Everyone else starts small and grows, leaving
+    // PSRAM for Host-side bitmap decoding.
+    const bool pinned_memory = (package.raw().aot_flags & MICROPIXEL_BUNDLE_AOT_FLAG_PINNED_MEMORY) != 0U;
+    auto guest_result = GuestInstance::Instantiate(module.get(), pinned_memory);
     if (!guest_result) {
         ESP_LOGE(kTag, "AOT instantiate failed: %s", guest_result.error().message.data());
         return std::unexpected(
@@ -132,6 +138,37 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(
         return std::unexpected(
             MakeFailure(AppSessionError::kGuestServices, package.raw(), "unable to bind Guest services to WAMR"));
     }
+    // GUEST_BUFFERS Direct Surfaces present Guest buffers by linear-memory
+    // offset; the Host resolves them against this instance. Only a
+    // PINNED_MEMORY Bundle gets a base that never moves, so only then may a
+    // resolved pointer outlive the call (stable_base below); other Bundles are
+    // refused GUEST_BUFFERS (the default Host buffers need no pinning) instead
+    // of being handed a pointer memory.grow can free.
+    // The check must not go through wasm_runtime_validate_app_addr: that call
+    // raises a Guest exception on failure, turning a refused request into a
+    // trap instead of the documented INVALID_MEMORY status.
+    context->BindGuestMemory({
+        .context = guest.get(),
+        .resolve =
+            [](void* instance, uint32_t offset, uint32_t length, uint8_t** host_out) {
+                auto module_instance = static_cast<wasm_module_inst_t>(instance);
+                if (length == 0U) {
+                    return false;
+                }
+                const wasm_memory_inst_t memory = wasm_runtime_get_memory(module_instance, 0U);
+                if (memory == nullptr) {
+                    return false;
+                }
+                const uint64_t linear_bytes = static_cast<uint64_t>(wasm_memory_get_cur_page_count(memory)) *
+                                              wasm_memory_get_bytes_per_page(memory);
+                if (offset >= linear_bytes || length > linear_bytes - offset) {
+                    return false;
+                }
+                *host_out = static_cast<uint8_t*>(wasm_memory_get_base_address(memory)) + offset;
+                return true;
+            },
+        .stable_base = guest.pinned_memory(),
+    });
 
     AppSession session(devices, std::move(package), std::move(module), std::move(guest), entry, std::move(context),
                        std::move(context_binding));
@@ -175,11 +212,22 @@ std::expected<void, AppSessionFailure> AppSession::Run() {
     }
     if (!call_succeeded) {
         const char* exception = wasm_runtime_get_exception(guest_.get());
-        ESP_LOGE(kTag, "guest trapped: %s", exception != nullptr ? exception : "unknown trap");
+        if (exception == nullptr) {
+            exception = "unknown WAMR trap";
+        }
+        // The SDK reports its own panics as a single "panic: ..." log line right
+        // before __builtin_trap(); surface it next to the bare WAMR exception.
+        const char* panic = context_ != nullptr ? context_->LastPanic() : "";
+        std::array<char, 256U> detail{};
+        if (panic[0] != '\0') {
+            (void)std::snprintf(detail.data(), detail.size(), "%s; %s", panic, exception);
+        } else {
+            (void)std::snprintf(detail.data(), detail.size(), "%s", exception);
+        }
+        ESP_LOGE(kTag, "guest trapped: %s", detail.data());
         ESP_LOGE(kTag, "Guest call stack follows");
         wasm_runtime_dump_call_stack(guest_.exec_env());
-        return std::unexpected(MakeFailure(AppSessionError::kGuestTrap, package_.raw(),
-                                           exception != nullptr ? exception : "unknown WAMR trap"));
+        return std::unexpected(MakeFailure(AppSessionError::kGuestTrap, package_.raw(), detail.data()));
     }
 
     const int32_t exit_code = static_cast<int32_t>(argv[0]);

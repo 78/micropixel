@@ -20,6 +20,7 @@
 #include "tinyusb_cdc_acm.h"
 #include "tinyusb_console.h"
 #include "tinyusb_default_config.h"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform {
 namespace {
@@ -321,6 +322,8 @@ esp_err_t InitializeUsbCdcConsole() {
     tinyusb_config_t usb_config = TINYUSB_DEFAULT_CONFIG();
     usb_config.descriptor.string = gUsbStringDescriptors;
     usb_config.descriptor.string_count = sizeof(gUsbStringDescriptors) / sizeof(gUsbStringDescriptors[0]);
+    // The TinyUSB device task defaults to core 1, which is reserved for the Guest.
+    usb_config.task.xCoreID = task_policy::kSystemCore;
     error = tinyusb_driver_install(&usb_config);
     if (error != ESP_OK) {
         StopEarlyLogCapture();

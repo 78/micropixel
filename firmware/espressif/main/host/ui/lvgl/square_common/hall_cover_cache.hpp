@@ -6,6 +6,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
 #include "host/ui/system_ui.hpp"
 
 namespace micropixel::work {
@@ -53,7 +54,7 @@ class HallCoverCache final {
    private:
     struct Entry final {
         uint8_t* pixels{};
-        uint64_t key{};
+        HallCoverCacheIdentity identity{};
         uint32_t app_index{host_ui::kMaxHallApps};
     };
 
@@ -87,6 +88,7 @@ class HallCoverCache final {
     std::atomic_bool worker_active_{};
     std::atomic_uint32_t request_generation_{1U};
     uint64_t catalog_signature_{};
+    uint64_t catalog_generation_{};
     uint32_t app_count_{};
     uint32_t window_first_{host_ui::kMaxHallApps};
     uint32_t window_last_{host_ui::kMaxHallApps};

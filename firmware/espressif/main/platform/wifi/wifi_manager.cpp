@@ -266,8 +266,9 @@ std::expected<void, device::WifiError> WifiManager::Initialize() {
 
     radio_startup_done_ = xSemaphoreCreateBinaryStatic(&radio_startup_done_storage_);
     if (radio_startup_done_ == nullptr ||
-        xTaskCreate(RadioStartupEntry, kRadioStartupTaskName, kRadioStartupTaskStackBytes, this,
-                    task_policy::kAssetWorkerPriority, &radio_startup_task_) != pdPASS) {
+        xTaskCreatePinnedToCore(RadioStartupEntry, kRadioStartupTaskName, kRadioStartupTaskStackBytes, this,
+                                task_policy::kAssetWorkerPriority, &radio_startup_task_,
+                                task_policy::kSystemCore) != pdPASS) {
         radio_startup_task_ = nullptr;
         ESP_LOGW(kTag, "could not start %s radio initialization task", radio_.Name());
         return std::unexpected(device::WifiError::kOperationFailed);

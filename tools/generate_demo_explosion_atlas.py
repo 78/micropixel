@@ -33,13 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--source",
         type=Path,
-        default=repository / "guest/apps/demo/assets/source/demo_explosion_12.png",
+        default=repository / "guest/apps/sdk-demo/assets/source/demo_explosion_12.png",
         help="original 12-frame RGBA explosion atlas",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=repository / "guest/apps/demo/assets/demo_sprite_sheet.png",
+        default=repository / "guest/apps/sdk-demo/assets/demo_sprite_sheet.png",
         help="first generated PNG atlas; additional sheets receive _1, _2, ... suffixes",
     )
     parser.add_argument(
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=repository / "guest/apps/demo/assets/manifest.json",
+        default=repository / "guest/apps/sdk-demo/assets/manifest.json",
         help="Demo asset manifest updated by --update-manifest",
     )
     parser.add_argument(

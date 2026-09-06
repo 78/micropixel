@@ -91,6 +91,15 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> SquareSystemUi::C
     }
     const HallTransitionPresentation presentation =
         HallTransitionPresentationFor(state_.profile, hall_app_index, state_.hall_scroll_offset);
+    // Suspending a Direct Surface App composites its displayed frame into the
+    // App Surface through the publish mailbox. Adopt it now so the board's
+    // pre-capture refresh puts that frame on the panel (and into the capture
+    // source) instead of the publish timer doing so after the transition,
+    // which would flash the suspended App over the Hall.
+    if (state_.display != nullptr && esp_lv_adapter_lock(-1) == ESP_OK) {
+        state_.FlushPendingGuestFrameLocked();
+        esp_lv_adapter_unlock();
+    }
     return transition->CaptureGuestFrame(presentation, trigger_timestamp_us,
                                          state_.profile.square.guest_transition_duration_ms);
 }
@@ -196,8 +205,8 @@ void SquareSystemUi::UpdateStatusLayer(const host_ui::StatusLayerModel& model) {
 
 void SquareSystemUi::LeaveStatusLayer(uint64_t trigger_timestamp_us) { state_.LeaveStatusLayer(trigger_timestamp_us); }
 
-void SquareSystemUi::UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) {
-    state_.UpdatePerformanceOverlay(enabled, cpu_percent);
+void SquareSystemUi::UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu) {
+    state_.UpdatePerformanceOverlay(enabled, cpu);
 }
 
 void SquareSystemUi::ApplyBrightness(uint8_t percent) {

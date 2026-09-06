@@ -3,9 +3,11 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -24,14 +26,30 @@ static void log_native_stack_profile(const char* label, size_t configured, size_
              configured, maximum_used, minimum_free, configured > 0 ? maximum_used * 100U / configured : 0);
 }
 
+#if defined(CONFIG_MICROPIXEL_HEAP_CHECKPOINTS) && CONFIG_MICROPIXEL_HEAP_CHECKPOINTS
+void micropixel_check_heap(const char* stage) {
+    // The allocator's integrity walker can itself fault on damaged metadata.
+    // Emit the stage before entering it; bypass the heap-backed log capture ring.
+    esp_rom_printf("HEAP CHECK begin: %s\n", stage);
+    if (!heap_caps_check_integrity_all(false)) {
+        esp_rom_printf("\nMICROPIXEL HEAP CORRUPTION: stage=%s\n", stage);
+        (void)heap_caps_check_integrity_all(true);
+        abort();
+    }
+    esp_rom_printf("HEAP CHECK ok: %s\n", stage);
+}
+#endif
+
 void micropixel_log_heap_state(const char* label) {
+    micropixel_check_heap(label);
     const uint32_t internal_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
     const uint32_t psram_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
-    ESP_LOGI(TAG, "%s internal SRAM heap: total=%zu free=%zu boot-minimum=%zu largest=%zu", label,
-             heap_caps_get_total_size(internal_caps), heap_caps_get_free_size(internal_caps),
-             heap_caps_get_minimum_free_size(internal_caps), heap_caps_get_largest_free_block(internal_caps));
-    ESP_LOGI(TAG, "%s PSRAM heap: total=%zu free=%zu boot-minimum=%zu largest=%zu", label,
+    ESP_LOGI(TAG,
+             "%s heap bytes: SRAM(total/free/min/largest)=%zu/%zu/%zu/%zu "
+             "PSRAM(total/free/min/largest)=%zu/%zu/%zu/%zu",
+             label, heap_caps_get_total_size(internal_caps), heap_caps_get_free_size(internal_caps),
+             heap_caps_get_minimum_free_size(internal_caps), heap_caps_get_largest_free_block(internal_caps),
              heap_caps_get_total_size(psram_caps), heap_caps_get_free_size(psram_caps),
              heap_caps_get_minimum_free_size(psram_caps), heap_caps_get_largest_free_block(psram_caps));
 }

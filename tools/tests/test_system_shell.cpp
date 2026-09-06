@@ -135,7 +135,7 @@ class FakeSystemUi final : public SystemUi {
         status_close_trigger_us = trigger_timestamp_us;
         ++leave_status_calls;
     }
-    void UpdatePerformanceOverlay(bool, uint8_t) override {}
+    void UpdatePerformanceOverlay(bool, const micropixel::host_ui::CpuUsageSample&) override {}
     void ApplyBrightness(uint8_t) override {}
     void ApplyVolume(uint8_t) override {}
     std::expected<void, SystemUiError> ShowShutdown() override {

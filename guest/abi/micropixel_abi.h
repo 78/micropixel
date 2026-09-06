@@ -1,6 +1,7 @@
 #ifndef MICROPIXEL_GUEST_ABI_H
 #define MICROPIXEL_GUEST_ABI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define MICROPIXEL_ABI_VERSION_MAJOR 1U
@@ -10,25 +11,46 @@
 #define MICROPIXEL_ABI_MAX_LOG_BYTES 1024U
 #define MICROPIXEL_MAX_TOUCH_POINTS 5U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
-#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 4U
+#define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 6U
+/* Smallest GET_INFO response a Host must accept: the Graphics 1.0 prefix. Later
+ * minors only append fields, so a Guest compiled against any older header still
+ * receives the prefix it knows and reads the rest as zero. */
+#define MICROPIXEL_GRAPHICS_INFO_MIN_SIZE 32U
 #define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
 #define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
 #define MICROPIXEL_GRAPHICS_SCENE_MAGIC 0x5347504dU
 #define MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES 24576U
+/* Graphics 1.6 raster draw lists: 'MPRS'. */
+#define MICROPIXEL_GRAPHICS_RASTER_MAGIC 0x5352504dU
+#define MICROPIXEL_GRAPHICS_MAX_RASTER_BYTES 32768U
+#define MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES 32U
+#define MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS 32U
+#define MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES 256U
+#define MICROPIXEL_GRAPHICS_RASTER_MIN_TEXTURE_SIZE 8U
+#define MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURE_SIZE 128U
 #define MICROPIXEL_GRAPHICS_MAX_SCENE_NODES 256U
 #define MICROPIXEL_GRAPHICS_MAX_LAYERS 4U
 #define MICROPIXEL_GRAPHICS_MAX_CONTAINERS 64U
 #define MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES 8U
 #define MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES 256U
 #define MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES 128U
+/* Graphics 1.5 Direct Surface: Guest-owned full-frame buffers presented in place. */
+#define MICROPIXEL_SURFACE_MAX_BUFFERS 3U
+#define MICROPIXEL_SURFACE_BUFFER_ALIGNMENT 64U
 #define MICROPIXEL_RESOURCE_INTERFACE_MAJOR 1U
 #define MICROPIXEL_RESOURCE_INTERFACE_MINOR 2U
 #define MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES 4096U
 #define MICROPIXEL_AUDIO_INTERFACE_MAJOR 1U
-#define MICROPIXEL_AUDIO_INTERFACE_MINOR 1U
+#define MICROPIXEL_AUDIO_INTERFACE_MINOR 2U
+/* Audio 1.0/1.1 GET_INFO prefix; see MICROPIXEL_GRAPHICS_INFO_MIN_SIZE. */
+#define MICROPIXEL_AUDIO_INFO_MIN_SIZE 32U
 #define MICROPIXEL_RANDOM_INTERFACE_MAJOR 1U
 #define MICROPIXEL_RANDOM_INTERFACE_MINOR 0U
 #define MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS 5000U
+/* Upper bound of one PCM_STREAM_WRITE request, header plus interleaved int16 samples. */
+#define MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES 4096U
+#define MICROPIXEL_AUDIO_PCM_MAX_CAPACITY_FRAMES 65536U
+#define MICROPIXEL_AUDIO_PCM_MAX_CHANNELS 2U
 #define MICROPIXEL_STORAGE_MAX_KEY_BYTES 15U
 #define MICROPIXEL_STORAGE_MAX_VALUE_BYTES 4096U
 #define MICROPIXEL_SYSTEM_INTERFACE_MAJOR 1U
@@ -78,10 +100,12 @@ typedef uint32_t micropixel_texture_handle_t;
 typedef uint16_t micropixel_font_handle_t;
 typedef uint32_t micropixel_audio_clip_handle_t;
 typedef uint32_t micropixel_audio_playback_handle_t;
+typedef uint32_t micropixel_audio_pcm_stream_handle_t;
 typedef uint32_t micropixel_device_id_t;
 typedef uint32_t micropixel_sensor_handle_t;
 typedef uint32_t micropixel_gpio_handle_t;
 typedef uint32_t micropixel_haptic_handle_t;
+typedef uint32_t micropixel_surface_handle_t;
 
 typedef enum micropixel_service_id {
     MICROPIXEL_SERVICE_TIMER = 1,
@@ -482,11 +506,271 @@ typedef struct micropixel_power_info_response {
 typedef enum micropixel_graphics_method {
     MICROPIXEL_GRAPHICS_METHOD_GET_INFO = 1,
     MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT = 2,
+    /* Graphics 1.5 Direct Surface. */
+    MICROPIXEL_GRAPHICS_METHOD_SURFACE_CREATE = 3,
+    MICROPIXEL_GRAPHICS_METHOD_SURFACE_PRESENT = 4,
+    MICROPIXEL_GRAPHICS_METHOD_SURFACE_DESTROY = 5,
+    /* Graphics 1.6 raster kernels: Host-owned INDEX8 textures and lit palette
+     * used by MICROPIXEL_GRAPHICS_CHANNEL_RASTER draw lists. */
+    MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD = 6,
+    MICROPIXEL_GRAPHICS_METHOD_RASTER_PALETTE_UPLOAD = 7,
 } micropixel_graphics_method_t;
+
+/* micropixel_service_descriptor_t.capabilities for MICROPIXEL_SERVICE_GRAPHICS. */
+typedef enum micropixel_graphics_capability {
+    /* RASTER_TEXTURE_UPLOAD / RASTER_PALETTE_UPLOAD and the RASTER channel are available. */
+    MICROPIXEL_GRAPHICS_CAP_RASTER = 1U << 0U,
+} micropixel_graphics_capability_t;
+
+typedef enum micropixel_graphics_event_id {
+    /* A presented Direct Surface buffer is no longer read by the Host. */
+    MICROPIXEL_GRAPHICS_EVENT_SURFACE_RELEASED = 1,
+} micropixel_graphics_event_id_t;
+
+/* micropixel_surface_create_response_t.native_flags / micropixel_graphics_info_t.native_flags */
+typedef enum micropixel_surface_native_flag {
+    /* The panel consumes RGB565 with the two bytes of every pixel swapped.
+     * Presented buffers must hold that order; Host buffers always do. */
+    MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED = 1U << 0U,
+    /* The Host scans the presented buffer out without an App Surface copy. When
+     * clear, presents are correct but go through the composited path. */
+    MICROPIXEL_SURFACE_NATIVE_DIRECT_SCANOUT = 1U << 1U,
+} micropixel_surface_native_flag_t;
+
+/* micropixel_surface_create_request_t.flags */
+typedef enum micropixel_surface_create_flag {
+    /* The Guest allocates the buffers in its linear memory, writes pixels
+     * itself and names them by address in every present. The Host keeps
+     * pointers into Guest memory while a buffer is in flight, so the Bundle
+     * must declare PINNED_MEMORY. Without this flag (the default) the Host
+     * allocates and owns the buffers in the panel's native byte order; the
+     * Guest never maps them and draws only through
+     * MICROPIXEL_GRAPHICS_CHANNEL_RASTER lists that name a buffer index. */
+    MICROPIXEL_SURFACE_CREATE_GUEST_BUFFERS = 1U << 0U,
+} micropixel_surface_create_flag_t;
+
+/* micropixel_surface_present_request_t.flags. Presented pixels are always in
+ * the panel byte order advertised by native_flags: Host buffers are kept that
+ * way, and a GUEST_BUFFERS Guest writes that way (RGB565_BYTE_SWAPPED tells it
+ * to swap the two bytes of every pixel). */
+typedef enum micropixel_surface_present_flag {
+    /* The buffer (src_width/src_height) may be an integer fraction of the
+     * panel on both axes; the Host enlarges with nearest-neighbour sampling.
+     * Applies to Host and Guest buffers alike. */
+    MICROPIXEL_SURFACE_PRESENT_SCALE_NEAREST = 1U << 0U,
+} micropixel_surface_present_flag_t;
+
+typedef struct micropixel_surface_create_request {
+    uint16_t size;
+    uint16_t reserved0;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixel_format;
+    /* 1..MICROPIXEL_SURFACE_MAX_BUFFERS buffers that may be in flight. */
+    uint32_t buffer_count;
+    uint32_t flags;
+} micropixel_surface_create_request_t;
+
+typedef struct micropixel_surface_create_response {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_surface_handle_t surface;
+    uint32_t native_pixel_format;
+    uint32_t native_flags;
+    uint16_t max_full_frame_fps;
+    uint16_t reserved1;
+    uint32_t reserved2[3];
+} micropixel_surface_create_response_t;
+
+/* Host buffers: pixels and length are 0, pitch is src_width * 2 and
+ * src_width/src_height equal the buffer size; buffer_index alone names the
+ * buffer. GUEST_BUFFERS: `pixels` is a Guest linear-memory offset and the Host
+ * validates pixels..pixels+length, MICROPIXEL_SURFACE_BUFFER_ALIGNMENT and
+ * pitch * src_height <= length. Either way the buffer belongs to the Host until
+ * MICROPIXEL_GRAPHICS_EVENT_SURFACE_RELEASED names it. */
+typedef struct micropixel_surface_present_request {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_surface_handle_t surface;
+    uint32_t buffer_index;
+    uint32_t pixels;
+    uint32_t length;
+    uint32_t pitch;
+    uint32_t src_width;
+    uint32_t src_height;
+    uint32_t flags;
+} micropixel_surface_present_request_t;
+
+typedef struct micropixel_surface_event_payload {
+    micropixel_surface_handle_t surface;
+    uint32_t buffer_index;
+    uint64_t timestamp_us;
+} micropixel_surface_event_payload_t;
 
 typedef enum micropixel_graphics_channel {
     MICROPIXEL_GRAPHICS_CHANNEL_SCENE = 1,
+    /* Graphics 1.6: one micropixel_raster_header_t followed by raster records.
+     * The Host rasterizes synchronously into the Host-owned Direct Surface
+     * buffer named by the header before service_submit returns. */
+    MICROPIXEL_GRAPHICS_CHANNEL_RASTER = 2,
 } micropixel_graphics_channel_t;
+
+/* ---- Graphics 1.6 raster kernels ----------------------------------------
+ * The Guest keeps its geometry; the Host owns the Direct Surface buffers,
+ * INDEX8 textures and a lit palette (light_levels x 256 canonical RGB565,
+ * converted by the Host to the panel byte order once at upload) and runs the
+ * per-pixel loops natively on the Guest task. Every color a record carries is
+ * canonical RGB565 as well. Texture sizes are powers of two in
+ * [RASTER_MIN_TEXTURE_SIZE, RASTER_MAX_TEXTURE_SIZE]. */
+
+typedef enum micropixel_raster_texture_layout {
+    /* texel(u, v) = pixels[u * height + v]; used by COLUMN records. */
+    MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR = 1,
+    /* texel(u, v) = pixels[v * width + u]; used by SPAN_PAIR records. */
+    MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR = 2,
+} micropixel_raster_texture_layout_t;
+
+/* `pixels` is a Guest linear-memory offset of width * height INDEX8 texels in
+ * `layout`. Uploading to an occupied slot replaces the texture. */
+typedef struct micropixel_raster_texture_upload_request {
+    uint16_t size;
+    uint16_t slot;
+    uint16_t width;
+    uint16_t height;
+    uint16_t layout;
+    uint16_t reserved0;
+    uint32_t pixels;
+    uint32_t length;
+} micropixel_raster_texture_upload_request_t;
+
+/* `pixels` holds light_levels * RASTER_PALETTE_ENTRIES uint16 values; entry
+ * [light][index] is the final pixel written for texel `index` at `light`. */
+typedef struct micropixel_raster_palette_upload_request {
+    uint16_t size;
+    uint16_t light_levels;
+    uint32_t pixels;
+    uint32_t length;
+} micropixel_raster_palette_upload_request_t;
+
+typedef enum micropixel_raster_record_type {
+    /* micropixel_raster_column_t: vertical run of texels from one texture column. */
+    MICROPIXEL_RASTER_RECORD_COLUMN = 1,
+    /* micropixel_raster_span_pair_t: one floor row and one mirrored ceiling row. */
+    MICROPIXEL_RASTER_RECORD_SPAN_PAIR = 2,
+    /* micropixel_raster_sprite_t: scaled, clipped copy of a texture rectangle. */
+    MICROPIXEL_RASTER_RECORD_SPRITE = 3,
+    /* micropixel_raster_rect_t: solid or blended rectangle fill. */
+    MICROPIXEL_RASTER_RECORD_RECT = 4,
+} micropixel_raster_record_type_t;
+
+typedef enum micropixel_raster_column_flag {
+    /* Texel index 0 is transparent (sprites). */
+    MICROPIXEL_RASTER_COLUMN_TRANSPARENT_INDEX0 = 1U << 0U,
+} micropixel_raster_column_flag_t;
+
+typedef enum micropixel_raster_sprite_flag {
+    /* Texel index 0 is transparent. */
+    MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 = 1U << 0U,
+    /* Every texel that is drawn writes `color` instead of the lit palette entry
+     * (glyph atlases, monochrome overlays); `light` is ignored. */
+    MICROPIXEL_RASTER_SPRITE_SOLID_COLOR = 1U << 1U,
+} micropixel_raster_sprite_flag_t;
+
+/* Target is Host-owned buffer `target_buffer` of the App's Direct Surface,
+ * which must not be in flight; target_width/height/pitch must match it (the
+ * records are validated against them). Records follow the header back to
+ * back; any invalid record rejects the whole submission before a pixel is
+ * written. */
+typedef struct micropixel_raster_header {
+    uint32_t magic;
+    uint16_t interface_major;
+    uint16_t interface_minor;
+    uint32_t total_size;
+    uint32_t target_buffer;
+    uint32_t reserved0;
+    uint16_t target_width;
+    uint16_t target_height;
+    uint16_t target_pitch;
+    uint16_t record_count;
+    uint32_t flags;
+} micropixel_raster_header_t;
+
+/* Pixels x, y0..y1 inclusive take texel (u, (v >> 16) & (height - 1)) of a
+ * COLUMN_MAJOR texture at `light`; v advances by v_step per pixel (16.16). */
+typedef struct micropixel_raster_column {
+    uint8_t type;
+    uint8_t flags;
+    uint8_t texture;
+    uint8_t light;
+    uint16_t x;
+    int16_t y0;
+    int16_t y1;
+    uint16_t u;
+    int32_t v_start;
+    int32_t v_step;
+    uint32_t reserved0;
+} micropixel_raster_column_t;
+
+/* Row y_floor takes floor_texture and row y_ceiling takes ceiling_texture over
+ * x0..x1 inclusive, both ROW_MAJOR and sampled at the same (s, t) walk:
+ * texel_x = (s >> (16 - log2(width))) & (width - 1), texel_y likewise with t,
+ * so the integer part of s/t is the tile index and the fraction selects the
+ * texel. s/t advance by ds/dt per pixel (16.16). */
+typedef struct micropixel_raster_span_pair {
+    uint8_t type;
+    uint8_t flags;
+    uint8_t floor_texture;
+    uint8_t ceiling_texture;
+    uint16_t y_floor;
+    uint16_t y_ceiling;
+    uint16_t x0;
+    uint16_t x1;
+    uint8_t light;
+    uint8_t reserved0[3];
+    int32_t s;
+    int32_t t;
+    int32_t ds;
+    int32_t dt;
+} micropixel_raster_span_pair_t;
+
+/* Texels (u0..u0+src_width-1, v0..v0+src_height-1) of a COLUMN_MAJOR texture
+ * are scaled with nearest-neighbour sampling onto the target rectangle
+ * (x, y, width, height), which may lie partly or wholly outside the target:
+ * the Host clips. Drawn texels take the lit palette entry at `light`, or
+ * `color` with SPRITE_SOLID_COLOR. Meant for weapons, HUD icons and glyphs;
+ * depth-sorted world sprites use COLUMN records. */
+typedef struct micropixel_raster_sprite {
+    uint8_t type;
+    uint8_t flags;
+    uint8_t texture;
+    uint8_t light;
+    int16_t x;
+    int16_t y;
+    uint16_t width;
+    uint16_t height;
+    uint16_t u0;
+    uint16_t v0;
+    uint16_t src_width;
+    uint16_t src_height;
+    uint16_t color;
+    uint16_t reserved0;
+} micropixel_raster_sprite_t;
+
+/* Fills the target rectangle (x, y, width, height), clipped, with `color`.
+ * alpha 255 writes the color; a smaller alpha blends color over the existing
+ * pixel per channel (alpha / 255). alpha 0 is rejected. */
+typedef struct micropixel_raster_rect {
+    uint8_t type;
+    uint8_t flags;
+    uint8_t alpha;
+    uint8_t reserved0;
+    int16_t x;
+    int16_t y;
+    uint16_t width;
+    uint16_t height;
+    uint16_t color;
+    uint16_t reserved1;
+} micropixel_raster_rect_t;
 
 typedef enum micropixel_graphics_scene_message_kind {
     MICROPIXEL_GRAPHICS_SCENE_KEYFRAME = 1,
@@ -580,10 +864,16 @@ typedef enum micropixel_audio_method {
     MICROPIXEL_AUDIO_METHOD_PLAYBACK_SET_VOLUME = 9,
     MICROPIXEL_AUDIO_METHOD_PLAYBACK_STOP = 10,
     MICROPIXEL_AUDIO_METHOD_PLAYBACK_GET_STATE = 11,
+    /* Audio 1.2: Guest-generated PCM. */
+    MICROPIXEL_AUDIO_METHOD_PCM_STREAM_OPEN = 12,
+    MICROPIXEL_AUDIO_METHOD_PCM_STREAM_WRITE = 13,
+    MICROPIXEL_AUDIO_METHOD_PCM_STREAM_CLOSE = 14,
 } micropixel_audio_method_t;
 
 typedef enum micropixel_audio_capability {
     MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS = 1U << 0U,
+    /* PCM_STREAM_* methods and the PCM_STREAM_LOW_WATER event are available. */
+    MICROPIXEL_AUDIO_CAPABILITY_PCM_STREAM = 1U << 1U,
 } micropixel_audio_capability_t;
 
 typedef enum micropixel_audio_format {
@@ -603,7 +893,15 @@ typedef enum micropixel_audio_playback_state {
 
 typedef enum micropixel_audio_event_id {
     MICROPIXEL_AUDIO_EVENT_PLAYBACK_FINISHED = 1,
+    /* Buffered frames dropped to or below the stream's low-water mark. Delivered
+     * once per crossing; the next successful WRITE re-arms it. */
+    MICROPIXEL_AUDIO_EVENT_PCM_STREAM_LOW_WATER = 2,
 } micropixel_audio_event_id_t;
+
+typedef enum micropixel_audio_pcm_stream_flag {
+    /* No flags are defined yet; `flags` must be 0. Playback begins at the first WRITE. */
+    MICROPIXEL_AUDIO_PCM_STREAM_NONE = 0U,
+} micropixel_audio_pcm_stream_flag_t;
 
 typedef struct micropixel_service_info {
     uint16_t size;
@@ -704,6 +1002,10 @@ typedef struct micropixel_audio_info {
     uint16_t max_clips;
     uint16_t max_playbacks;
     uint32_t reserved;
+    /* Audio 1.2 appends; Guests check `size` before reading past `reserved`. */
+    uint16_t max_pcm_streams;
+    uint16_t reserved1;
+    uint32_t reserved2;
 } micropixel_audio_info_t;
 
 typedef struct micropixel_audio_tone {
@@ -760,6 +1062,61 @@ typedef struct micropixel_audio_event_payload {
     micropixel_audio_playback_handle_t playback;
     uint32_t reserved[3];
 } micropixel_audio_event_payload_t;
+
+/* Audio 1.2: Guest PCM stream.
+ * `sample_rate` must be the mix rate reported by GET_INFO or an integer divisor
+ * of it; the Host upsamples by linear interpolation. `channels` is 1 or 2;
+ * stereo is averaged down to the mono mixer. `capacity_frames` sizes the Host
+ * ring buffer (PSRAM, rounded up to a power of two) and bounds how far ahead
+ * the Guest can write;
+ * `low_water_frames` < capacity_frames selects when PCM_STREAM_LOW_WATER fires
+ * (0 leaves the event disabled). Underrun plays silence; the stream lives
+ * until PCM_STREAM_CLOSE, STOP_ALL or session end and survives App suspend
+ * with its buffered frames intact. */
+typedef struct micropixel_audio_pcm_stream_open_request {
+    uint16_t size;
+    uint16_t volume_per_mille;
+    uint32_t sample_rate;
+    uint16_t channels;
+    uint16_t flags;
+    uint32_t capacity_frames;
+    uint32_t low_water_frames;
+} micropixel_audio_pcm_stream_open_request_t;
+
+typedef struct micropixel_audio_pcm_stream_open_response {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_audio_pcm_stream_handle_t stream;
+    /* Actual ring capacity after Host clamping. */
+    uint32_t capacity_frames;
+    uint32_t reserved1;
+} micropixel_audio_pcm_stream_open_response_t;
+
+/* Followed by exactly frame_count * channels little-endian int16 samples; as
+ * with streaming texture updates `size` covers the header and the samples and
+ * the whole request is <= MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES. The Host copies
+ * as many leading frames as fit and reports the count; the Guest re-sends the
+ * remainder. */
+typedef struct micropixel_audio_pcm_stream_write_request {
+    uint16_t size;
+    uint16_t reserved0;
+    micropixel_audio_pcm_stream_handle_t stream;
+    uint32_t frame_count;
+} micropixel_audio_pcm_stream_write_request_t;
+
+typedef struct micropixel_audio_pcm_stream_write_response {
+    uint16_t size;
+    uint16_t reserved0;
+    uint32_t accepted_frames;
+    /* Free ring frames after this write, in the stream's own sample rate. */
+    uint32_t free_frames;
+} micropixel_audio_pcm_stream_write_response_t;
+
+typedef struct micropixel_audio_pcm_event_payload {
+    micropixel_audio_pcm_stream_handle_t stream;
+    uint32_t free_frames;
+    uint32_t reserved[2];
+} micropixel_audio_pcm_event_payload_t;
 
 typedef enum micropixel_pixel_format {
     /* Canonical byte order in Guest memory: B, G, R. */
@@ -825,6 +1182,17 @@ typedef struct micropixel_graphics_info {
     uint16_t safe_inset_right;
     uint16_t safe_inset_bottom;
     uint16_t safe_inset_left;
+    /* Graphics 1.5+: panel-native Direct Surface format and flags. Absent (size
+     * == 40) on older Hosts. */
+    uint32_t native_pixel_format;
+    uint32_t native_flags;
+    uint16_t max_full_frame_fps;
+    uint16_t reserved1;
+    /* Graphics 1.6+: raster kernel resource pool. Absent (size == 52) on older
+     * Hosts; raster_pool_bytes == 0 means the kernels are unavailable. */
+    uint32_t raster_pool_bytes;
+    uint16_t raster_max_textures;
+    uint16_t raster_max_light_levels;
 } micropixel_graphics_info_t;
 
 /* Followed by text_length UTF-8 bytes without a trailing NUL. */
@@ -1171,7 +1539,25 @@ static_assert(sizeof(micropixel_power_info_response_t) == 24U, "micropixel_power
 static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
-static_assert(sizeof(micropixel_graphics_info_t) == 40U, "micropixel_graphics_info_t ABI size changed");
+static_assert(sizeof(micropixel_graphics_info_t) == 60U, "micropixel_graphics_info_t ABI size changed");
+static_assert(offsetof(micropixel_graphics_info_t, safe_inset_top) == MICROPIXEL_GRAPHICS_INFO_MIN_SIZE,
+              "micropixel_graphics_info_t 1.0 prefix moved");
+static_assert(sizeof(micropixel_raster_texture_upload_request_t) == 20U,
+              "micropixel_raster_texture_upload_request_t ABI size changed");
+static_assert(sizeof(micropixel_raster_palette_upload_request_t) == 12U,
+              "micropixel_raster_palette_upload_request_t ABI size changed");
+static_assert(sizeof(micropixel_raster_header_t) == 32U, "micropixel_raster_header_t ABI size changed");
+static_assert(sizeof(micropixel_raster_column_t) == 24U, "micropixel_raster_column_t ABI size changed");
+static_assert(sizeof(micropixel_raster_span_pair_t) == 32U, "micropixel_raster_span_pair_t ABI size changed");
+static_assert(sizeof(micropixel_raster_sprite_t) == 24U, "micropixel_raster_sprite_t ABI size changed");
+static_assert(sizeof(micropixel_raster_rect_t) == 16U, "micropixel_raster_rect_t ABI size changed");
+static_assert(sizeof(micropixel_surface_create_request_t) == 24U,
+              "micropixel_surface_create_request_t ABI size changed");
+static_assert(sizeof(micropixel_surface_create_response_t) == 32U,
+              "micropixel_surface_create_response_t ABI size changed");
+static_assert(sizeof(micropixel_surface_present_request_t) == 36U,
+              "micropixel_surface_present_request_t ABI size changed");
+static_assert(sizeof(micropixel_surface_event_payload_t) == 16U, "micropixel_surface_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_graphics_scene_header_t) == 36U, "micropixel_graphics_scene_header_t ABI size changed");
 static_assert(sizeof(micropixel_graphics_scene_record_header_t) == 4U,
               "micropixel_graphics_scene_record_header_t ABI size changed");
@@ -1206,7 +1592,9 @@ static_assert(sizeof(micropixel_streaming_texture_create_request_t) == 16U,
 static_assert(sizeof(micropixel_streaming_texture_update_request_t) == 32U,
               "micropixel_streaming_texture_update_request_t ABI size changed");
 static_assert(sizeof(micropixel_input_info_t) == 32U, "micropixel_input_info_t ABI size changed");
-static_assert(sizeof(micropixel_audio_info_t) == 32U, "micropixel_audio_info_t ABI size changed");
+static_assert(sizeof(micropixel_audio_info_t) == 40U, "micropixel_audio_info_t ABI size changed");
+static_assert(offsetof(micropixel_audio_info_t, max_pcm_streams) == MICROPIXEL_AUDIO_INFO_MIN_SIZE,
+              "micropixel_audio_info_t 1.1 prefix moved");
 static_assert(sizeof(micropixel_audio_tone_t) == 32U, "micropixel_audio_tone_t ABI size changed");
 static_assert(sizeof(micropixel_audio_clip_load_request_t) == 8U,
               "micropixel_audio_clip_load_request_t ABI size changed");
@@ -1218,6 +1606,16 @@ static_assert(sizeof(micropixel_audio_playback_volume_request_t) == 12U,
 static_assert(sizeof(micropixel_audio_playback_state_response_t) == 8U,
               "micropixel_audio_playback_state_response_t ABI size changed");
 static_assert(sizeof(micropixel_audio_event_payload_t) == 16U, "micropixel_audio_event_payload_t ABI size changed");
+static_assert(sizeof(micropixel_audio_pcm_stream_open_request_t) == 20U,
+              "micropixel_audio_pcm_stream_open_request_t ABI size changed");
+static_assert(sizeof(micropixel_audio_pcm_stream_open_response_t) == 16U,
+              "micropixel_audio_pcm_stream_open_response_t ABI size changed");
+static_assert(sizeof(micropixel_audio_pcm_stream_write_request_t) == 12U,
+              "micropixel_audio_pcm_stream_write_request_t ABI size changed");
+static_assert(sizeof(micropixel_audio_pcm_stream_write_response_t) == 12U,
+              "micropixel_audio_pcm_stream_write_response_t ABI size changed");
+static_assert(sizeof(micropixel_audio_pcm_event_payload_t) == 16U,
+              "micropixel_audio_pcm_event_payload_t ABI size changed");
 static_assert(sizeof(micropixel_service_info_t) == 48U, "micropixel_service_info_t ABI size changed");
 static_assert(sizeof(micropixel_handle_request_t) == 8U, "micropixel_handle_request_t ABI size changed");
 static_assert(sizeof(micropixel_handle_response_t) == 8U, "micropixel_handle_response_t ABI size changed");
@@ -1258,7 +1656,24 @@ _Static_assert(sizeof(micropixel_power_info_response_t) == 24U, "micropixel_powe
 _Static_assert(sizeof(micropixel_timer_event_payload_t) == 16U, "micropixel_timer_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_touch_event_payload_t) == 16U, "micropixel_touch_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_key_event_payload_t) == 16U, "micropixel_key_event_payload_t ABI size changed");
-_Static_assert(sizeof(micropixel_graphics_info_t) == 40U, "micropixel_graphics_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_graphics_info_t) == 60U, "micropixel_graphics_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_texture_upload_request_t) == 20U,
+               "micropixel_raster_texture_upload_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_palette_upload_request_t) == 12U,
+               "micropixel_raster_palette_upload_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_header_t) == 32U, "micropixel_raster_header_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_column_t) == 24U, "micropixel_raster_column_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_span_pair_t) == 32U, "micropixel_raster_span_pair_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_sprite_t) == 24U, "micropixel_raster_sprite_t ABI size changed");
+_Static_assert(sizeof(micropixel_raster_rect_t) == 16U, "micropixel_raster_rect_t ABI size changed");
+_Static_assert(sizeof(micropixel_surface_create_request_t) == 24U,
+               "micropixel_surface_create_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_surface_create_response_t) == 32U,
+               "micropixel_surface_create_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_surface_present_request_t) == 36U,
+               "micropixel_surface_present_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_surface_event_payload_t) == 16U,
+               "micropixel_surface_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_graphics_scene_header_t) == 36U,
                "micropixel_graphics_scene_header_t ABI size changed");
 _Static_assert(sizeof(micropixel_graphics_scene_record_header_t) == 4U,
@@ -1295,7 +1710,7 @@ _Static_assert(sizeof(micropixel_streaming_texture_create_request_t) == 16U,
 _Static_assert(sizeof(micropixel_streaming_texture_update_request_t) == 32U,
                "micropixel_streaming_texture_update_request_t ABI size changed");
 _Static_assert(sizeof(micropixel_input_info_t) == 32U, "micropixel_input_info_t ABI size changed");
-_Static_assert(sizeof(micropixel_audio_info_t) == 32U, "micropixel_audio_info_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_info_t) == 40U, "micropixel_audio_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_audio_tone_t) == 32U, "micropixel_audio_tone_t ABI size changed");
 _Static_assert(sizeof(micropixel_audio_clip_load_request_t) == 8U,
                "micropixel_audio_clip_load_request_t ABI size changed");
@@ -1307,6 +1722,16 @@ _Static_assert(sizeof(micropixel_audio_playback_volume_request_t) == 12U,
 _Static_assert(sizeof(micropixel_audio_playback_state_response_t) == 8U,
                "micropixel_audio_playback_state_response_t ABI size changed");
 _Static_assert(sizeof(micropixel_audio_event_payload_t) == 16U, "micropixel_audio_event_payload_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_pcm_stream_open_request_t) == 20U,
+               "micropixel_audio_pcm_stream_open_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_pcm_stream_open_response_t) == 16U,
+               "micropixel_audio_pcm_stream_open_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_pcm_stream_write_request_t) == 12U,
+               "micropixel_audio_pcm_stream_write_request_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_pcm_stream_write_response_t) == 12U,
+               "micropixel_audio_pcm_stream_write_response_t ABI size changed");
+_Static_assert(sizeof(micropixel_audio_pcm_event_payload_t) == 16U,
+               "micropixel_audio_pcm_event_payload_t ABI size changed");
 _Static_assert(sizeof(micropixel_service_info_t) == 48U, "micropixel_service_info_t ABI size changed");
 _Static_assert(sizeof(micropixel_handle_request_t) == 8U, "micropixel_handle_request_t ABI size changed");
 _Static_assert(sizeof(micropixel_handle_response_t) == 8U, "micropixel_handle_response_t ABI size changed");

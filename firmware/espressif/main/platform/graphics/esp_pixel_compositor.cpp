@@ -231,7 +231,10 @@ bool EspPixelCompositor::Fill(PixelSurface destination, SurfaceRect rect, uint32
 
 bool EspPixelCompositor::Dma2dCopyEligible(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                            SurfaceRect destination_rect) const {
-    return source.format == SurfacePixelFormat::kBgr888 && destination.format == SurfacePixelFormat::kBgr888 &&
+    // Only the batching engine converts between formats; the immediate
+    // esp_color_convert path below is same-format only.
+    return Dma2dCopyEngine::SupportsFormats(source.format, destination.format) &&
+           (source.format == destination.format || direct_copy_.Ready()) &&
            source_rect.width == destination_rect.width && source_rect.height == destination_rect.height &&
            EntirelyInside(destination, destination_rect) && Pixels(destination_rect) >= minimum_hardware_pixels_;
 }
@@ -276,6 +279,14 @@ bool EspPixelCompositor::TryDma2dCopy(ConstPixelSurface source, SurfaceRect sour
     if (batching_) {
         // Deferred: the chain executes blocks in order, so later copies that
         // overlap earlier ones still land on top exactly as immediate calls.
+        // One chain shares one colour-space conversion, so a copy of a
+        // different format pair first flushes what is queued.
+        if (pending_copy_count_ != 0U &&
+            (pending_copies_[0].source.format != source.format ||
+             pending_copies_[0].destination.format != destination.format) &&
+            !FlushPendingCopies()) {
+            return false;
+        }
         pending_copies_[pending_copy_count_++] = {
             .source = source,
             .source_rect = source_rect,
@@ -297,7 +308,7 @@ bool EspPixelCompositor::TryDma2dCopy(ConstPixelSurface source, SurfaceRect sour
             .destination_rect = destination_rect,
         });
     }
-    if (dma2d_client_ == nullptr) {
+    if (dma2d_client_ == nullptr || source.format != destination.format) {
         return false;
     }
     async_color_convert_request_t copy{};
@@ -313,16 +324,19 @@ bool EspPixelCompositor::TryDma2dCopy(ConstPixelSurface source, SurfaceRect sour
     copy.dst_y = destination.origin_y + static_cast<uint32_t>(destination_rect.y);
     copy.copy_width = static_cast<uint32_t>(destination_rect.width);
     copy.copy_height = static_cast<uint32_t>(destination_rect.height);
-    copy.src_color_format = ESP_COLOR_FOURCC_BGR24;
-    copy.dst_color_format = ESP_COLOR_FOURCC_BGR24;
+    copy.src_color_format =
+        source.format == SurfacePixelFormat::kRgb565 ? ESP_COLOR_FOURCC_RGB16 : ESP_COLOR_FOURCC_BGR24;
+    copy.dst_color_format = copy.src_color_format;
     return esp_color_convert_blocking(dma2d_client_, &copy, -1) == ESP_OK;
 }
 
 bool EspPixelCompositor::TryScale(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                   SurfaceRect destination_rect) {
+    // SRM converts between its input and output colour modes for free, so a
+    // BGR888 texture scales straight into an RGB565 App Surface.
     if (scale_client_ == nullptr || source.format != SurfacePixelFormat::kBgr888 ||
-        destination.format != SurfacePixelFormat::kBgr888 || !EntirelyInside(destination, destination_rect) ||
-        Pixels(destination_rect) < minimum_hardware_pixels_) {
+        (destination.format != SurfacePixelFormat::kBgr888 && destination.format != SurfacePixelFormat::kRgb565) ||
+        !EntirelyInside(destination, destination_rect) || Pixels(destination_rect) < minimum_hardware_pixels_) {
         return false;
     }
     float scale_x = 0.0F;
@@ -358,7 +372,8 @@ bool EspPixelCompositor::TryScale(ConstPixelSurface source, SurfaceRect source_r
 
 bool EspPixelCompositor::TryBlend(ConstPixelSurface source, SurfaceRect source_rect, PixelSurface destination,
                                   SurfaceRect destination_rect, uint8_t opacity) {
-    if (blend_client_ == nullptr || destination.format != SurfacePixelFormat::kBgr888 ||
+    if (blend_client_ == nullptr ||
+        (destination.format != SurfacePixelFormat::kBgr888 && destination.format != SurfacePixelFormat::kRgb565) ||
         (source.format != SurfacePixelFormat::kBgr888 && source.format != SurfacePixelFormat::kBgra8888) ||
         source_rect.width != destination_rect.width || source_rect.height != destination_rect.height ||
         !EntirelyInside(destination, destination_rect) ||
@@ -415,8 +430,7 @@ bool EspPixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_rect,
     }
     const bool same_size = source_rect.width == destination_rect.width && source_rect.height == destination_rect.height;
     const int64_t copy_started_us = batching_ ? 0 : esp_timer_get_time();
-    if (opacity == 255U && source.format == SurfacePixelFormat::kBgr888 && same_size &&
-        TryDma2dCopy(source, source_rect, destination, destination_rect)) {
+    if (opacity == 255U && same_size && TryDma2dCopy(source, source_rect, destination, destination_rect)) {
         if (!batching_) {
             ++stats_.dma2d_copies;
             stats_.dma2d_elapsed_us += static_cast<uint64_t>(esp_timer_get_time() - copy_started_us);

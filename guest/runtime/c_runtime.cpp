@@ -3,38 +3,25 @@
 
 extern "C" {
 
-__attribute__((no_builtin("memcpy"))) void* memcpy(void* destination, const void* source, size_t length) {
-    auto* output = static_cast<uint8_t*>(destination);
-    const auto* input = static_cast<const uint8_t*>(source);
-    for (size_t index = 0U; index < length; ++index) {
-        output[index] = input[index];
-    }
-    return destination;
+// Guests are always compiled with -mbulk-memory (tools/micropixel), so the
+// builtins below lower to single memory.copy / memory.fill instructions that
+// the Host AOT turns into its native block copy. With -ffreestanding the
+// compiler never rewrites a call to memcpy() into the builtin on its own,
+// which is why these definitions have to spell it out; they cannot recurse
+// because the builtin is an instruction here, not a call.
+#if !defined(__wasm_bulk_memory__)
+#error "MicroPixel Guests require -mbulk-memory"
+#endif
+
+void* memcpy(void* destination, const void* source, size_t length) {
+    return __builtin_memcpy(destination, source, length);
 }
 
-__attribute__((no_builtin("memmove"))) void* memmove(void* destination, const void* source, size_t length) {
-    auto* output = static_cast<uint8_t*>(destination);
-    const auto* input = static_cast<const uint8_t*>(source);
-    if (reinterpret_cast<uintptr_t>(output) < reinterpret_cast<uintptr_t>(input)) {
-        for (size_t index = 0U; index < length; ++index) {
-            output[index] = input[index];
-        }
-    } else if (reinterpret_cast<uintptr_t>(output) > reinterpret_cast<uintptr_t>(input)) {
-        for (size_t index = length; index != 0U; --index) {
-            output[index - 1U] = input[index - 1U];
-        }
-    }
-    return destination;
+void* memmove(void* destination, const void* source, size_t length) {
+    return __builtin_memmove(destination, source, length);
 }
 
-__attribute__((no_builtin("memset"))) void* memset(void* destination, int value, size_t length) {
-    auto* output = static_cast<uint8_t*>(destination);
-    const uint8_t byte = static_cast<uint8_t>(value);
-    for (size_t index = 0U; index < length; ++index) {
-        output[index] = byte;
-    }
-    return destination;
-}
+void* memset(void* destination, int value, size_t length) { return __builtin_memset(destination, value, length); }
 
 __attribute__((no_builtin("memcmp"))) int memcmp(const void* left, const void* right, size_t length) {
     const auto* left_bytes = static_cast<const uint8_t*>(left);

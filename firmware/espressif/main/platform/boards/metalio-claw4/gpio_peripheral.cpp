@@ -17,7 +17,7 @@ constexpr ledc_timer_bit_t kPwmResolution = LEDC_TIMER_10_BIT;
 constexpr uint32_t kPwmMaximumDuty = (1U << 10U) - 1U;
 constexpr uint32_t kEdgeQueueCapacity = 32U;
 constexpr uint32_t kWorkerStackBytes = 4096U;
-constexpr BaseType_t kWorkerCore = 0;
+constexpr BaseType_t kWorkerCore = task_policy::kSystemCore;
 
 gpio_pullup_t PullUp(uint16_t pull) {
     return pull == MICROPIXEL_GPIO_PULL_UP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;

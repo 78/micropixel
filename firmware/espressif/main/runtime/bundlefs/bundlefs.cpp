@@ -782,6 +782,7 @@ bundlefs_error_t bundlefs_list(bundlefs_file_info_t* files_out, uint32_t capacit
         std::snprintf(files_out[index].name, sizeof(files_out[index].name), "%s", entry.name.data());
         files_out[index].size = entry.size;
         files_out[index].content_id = entry.content_id;
+        std::copy(entry.sha256.begin(), entry.sha256.end(), files_out[index].sha256);
     }
     return BUNDLEFS_OK;
 }

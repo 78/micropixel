@@ -64,7 +64,7 @@ class SystemShell final {
                                                                      uint64_t trigger_timestamp_us = 0U);
     void UpdateStatusLayer(const StatusLayerModel& model);
     void LeaveStatusLayer(uint64_t trigger_timestamp_us = 0U);
-    void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent);
+    void UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu);
     void ApplyBrightness(uint8_t percent);
     void ApplyVolume(uint8_t percent);
     [[nodiscard]] std::expected<void, SystemUiError> ShowShutdown();

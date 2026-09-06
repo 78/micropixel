@@ -13,8 +13,8 @@ Host UI。先按仓库根目录 README 初始化 submodule，
 bash tools/p4.sh build-host
 bash tools/p4.sh flash-host /dev/cu.usbmodemPORT  # 保留 App Store
 bash tools/p4.sh monitor /dev/cu.usbmodemPORT     # 仅监控，不构建或烧录
-bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT  # 清空并写入七个示例 App
-bash tools/p4.sh flash-all /dev/cu.usbmodemPORT   # Host 和七个示例 App，不跑测试
+bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT  # 清空并写入四个示例 App
+bash tools/p4.sh flash-all /dev/cu.usbmodemPORT   # Host 和四个示例 App，不跑测试
 bash tools/p4.sh test                              # 仅发布前或推送前运行
 bash tools/p4.sh --help
 ```

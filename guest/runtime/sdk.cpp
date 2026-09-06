@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#include <new>
+
 #include "abi/micropixel_abi.h"
 #include "runtime/display_transform.hpp"
 #include "runtime/panic.hpp"
@@ -67,18 +69,63 @@ void DiagnosticLine(const char* message) {
     }
 }
 
+// Bounded, allocation-free builder for the single-line panic report. The Host
+// keeps the last line that starts with kPanicPrefix and attaches it to the
+// session failure, so everything a developer needs must fit on this one line.
+constexpr char kPanicPrefix[] = "panic: ";
+
+class PanicLine final {
+   public:
+    void Append(const char* text) {
+        if (text == nullptr) {
+            return;
+        }
+        while (*text != '\0' && length_ + 1U < sizeof(buffer_)) {
+            buffer_[length_++] = *text++;
+        }
+        buffer_[length_] = '\0';
+    }
+
+    void AppendDecimal(int32_t value) {
+        char digits[12];
+        uint32_t count = 0U;
+        uint32_t magnitude = value < 0 ? 0U - static_cast<uint32_t>(value) : static_cast<uint32_t>(value);
+        do {
+            digits[count++] = static_cast<char>('0' + magnitude % 10U);
+            magnitude /= 10U;
+        } while (magnitude != 0U);
+        if (value < 0) {
+            Append("-");
+        }
+        while (count != 0U && length_ + 1U < sizeof(buffer_)) {
+            buffer_[length_++] = digits[--count];
+        }
+        buffer_[length_] = '\0';
+    }
+
+    [[nodiscard]] const char* c_str() const { return buffer_; }
+
+   private:
+    char buffer_[256]{};
+    uint32_t length_{};
+};
+
 void RequireOk(int32_t status, const char* operation) {
     if (status != MICROPIXEL_STATUS_OK) {
         micropixel::runtime::Panic(operation, status);
     }
 }
 
+// Builtins lower to memory.copy / memory.fill (Guests always build with
+// -mbulk-memory); -ffreestanding would otherwise keep the byte loops.
 void CopyBytes(void* destination, const void* source, uint32_t length) {
-    auto* output = static_cast<uint8_t*>(destination);
-    const auto* input = static_cast<const uint8_t*>(source);
-    for (uint32_t index = 0U; index < length; ++index) {
-        output[index] = input[index];
-    }
+    __builtin_memcpy(destination, source, length);
+}
+
+void ZeroBytes(void* destination, uint32_t length) { __builtin_memset(destination, 0, length); }
+
+constexpr uint32_t AlignUp(uint32_t value, uint32_t alignment) {
+    return (value + alignment - 1U) / alignment * alignment;
 }
 
 micropixel::Error ErrorFromStatus(int32_t status) {
@@ -89,6 +136,7 @@ micropixel::Error ErrorFromStatus(int32_t status) {
         case MICROPIXEL_STATUS_INVALID_MEMORY:
             return Error{ErrorCode::kInvalidArgument};
         case MICROPIXEL_STATUS_CLOSED:
+        case MICROPIXEL_STATUS_STALE_STATE:
             return Error{ErrorCode::kInvalidState};
         case MICROPIXEL_STATUS_UNSUPPORTED:
             return Error{ErrorCode::kUnsupported};
@@ -138,6 +186,16 @@ micropixel_system_launch_arguments_response_t cached_launch_arguments{};
 bool launch_arguments_loaded{};
 micropixel_input_info_t cached_input_info{};
 bool input_info_loaded{};
+
+// The Host allows one Direct Surface per App, so buffer ownership lives here
+// rather than in the move-only DirectSurface object: Application updates the
+// mask when it decodes SURFACE_RELEASED, DirectSurface reads it.
+struct DirectSurfaceState final {
+    uint32_t handle{};
+    uint32_t busy_mask{};
+};
+
+DirectSurfaceState direct_surface_state{};
 
 struct SensorHandleState final {
     uint32_t handle{};
@@ -409,9 +467,16 @@ const DisplayTransform& CurrentDisplayTransform() { return LoadDisplayContext();
 namespace micropixel::runtime {
 
 [[noreturn]] void Panic(const char* operation, int32_t status) {
-    DiagnosticLine("guest panic");
-    DiagnosticLine(operation);
-    DiagnosticLine(StatusName(status));
+    // One line, e.g. "panic: graphics.info failed: buffer_too_small (status=-6)".
+    PanicLine line;
+    line.Append(kPanicPrefix);
+    line.Append(operation);
+    line.Append(" failed: ");
+    line.Append(StatusName(status));
+    line.Append(" (status=");
+    line.AppendDecimal(status);
+    line.Append(")");
+    DiagnosticLine(line.c_str());
     __builtin_trap();
 }
 
@@ -514,8 +579,10 @@ Result<void> KVStore::Remove(const char* key) const {
     if (reason == nullptr || BoundedLength(reason) == MICROPIXEL_ABI_MAX_LOG_BYTES) {
         runtime::Panic("panic.reason", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    DiagnosticLine("guest panic");
-    DiagnosticLine(reason);
+    PanicLine line;
+    line.Append(kPanicPrefix);
+    line.Append(reason);
+    DiagnosticLine(line.c_str());
     __builtin_trap();
 }
 
@@ -630,6 +697,7 @@ Result<AudioInfo> Audio::info() const {
         raw.interface_minor < MICROPIXEL_AUDIO_INTERFACE_MINOR) {
         return unexpected(Error{ErrorCode::kUnsupported});
     }
+    const bool pcm_streams = (raw.capabilities & MICROPIXEL_AUDIO_CAPABILITY_PCM_STREAM) != 0U;
     return AudioInfo{
         raw.sample_rate,
         raw.max_voices,
@@ -638,6 +706,8 @@ Result<AudioInfo> Audio::info() const {
         raw.max_clips,
         raw.max_playbacks,
         (raw.capabilities & MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS) != 0U,
+        pcm_streams ? raw.max_pcm_streams : static_cast<uint16_t>(0U),
+        pcm_streams,
     };
 }
 
@@ -867,6 +937,126 @@ Result<Playback> Audio::Play(AssetId asset, PlaybackOptions options) const {
     return Play(*clip, options);
 }
 
+Result<PcmStream> Audio::OpenPcmStream(const PcmStreamOptions& options) const {
+    if (options.sample_rate == 0U || options.channels == 0U || options.channels > MICROPIXEL_AUDIO_PCM_MAX_CHANNELS ||
+        options.capacity_frames == 0U || options.capacity_frames > MICROPIXEL_AUDIO_PCM_MAX_CAPACITY_FRAMES ||
+        options.low_water_frames >= options.capacity_frames || options.volume_per_mille > 1000U) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    micropixel_audio_pcm_stream_open_request_t request{};
+    request.size = sizeof(request);
+    request.volume_per_mille = options.volume_per_mille;
+    request.sample_rate = options.sample_rate;
+    request.channels = options.channels;
+    request.flags = MICROPIXEL_AUDIO_PCM_STREAM_NONE;
+    request.capacity_frames = options.capacity_frames;
+    request.low_water_frames = options.low_water_frames;
+    micropixel_audio_pcm_stream_open_response_t response{};
+    uint32_t response_size = 0U;
+    int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
+                                 MICROPIXEL_AUDIO_INTERFACE_MINOR);
+    if (status == MICROPIXEL_STATUS_OK) {
+        status = CallService(audio_service, MICROPIXEL_AUDIO_METHOD_PCM_STREAM_OPEN, &request, sizeof(request),
+                             &response, sizeof(response), response_size);
+    }
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.stream == 0U ||
+        response.capacity_frames < options.capacity_frames) {
+        runtime::Panic("audio.pcm_stream.open", MICROPIXEL_STATUS_INTERNAL);
+    }
+    return PcmStream{response.stream, options.sample_rate, options.channels, response.capacity_frames};
+}
+
+PcmStream::PcmStream(PcmStream&& other) noexcept
+    : handle_(other.handle_),
+      sample_rate_(other.sample_rate_),
+      channels_(other.channels_),
+      capacity_frames_(other.capacity_frames_),
+      free_frames_(other.free_frames_) {
+    other.handle_ = 0U;
+}
+
+PcmStream& PcmStream::operator=(PcmStream&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        handle_ = other.handle_;
+        sample_rate_ = other.sample_rate_;
+        channels_ = other.channels_;
+        capacity_frames_ = other.capacity_frames_;
+        free_frames_ = other.free_frames_;
+        other.handle_ = 0U;
+    }
+    return *this;
+}
+
+PcmStream::~PcmStream() { Reset(); }
+
+Result<uint32_t> PcmStream::Write(const int16_t* frames, uint32_t frame_count) {
+    if (handle_ == 0U) {
+        return unexpected(Error{ErrorCode::kInvalidState});
+    }
+    if (frames == nullptr && frame_count != 0U) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    constexpr uint32_t kHeaderBytes = sizeof(micropixel_audio_pcm_stream_write_request_t);
+    static_assert(kHeaderBytes < MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES, "PCM write header exceeds ABI request");
+    const uint32_t frame_bytes = static_cast<uint32_t>(channels_) * sizeof(int16_t);
+    const uint32_t frames_per_request = (MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES - kHeaderBytes) / frame_bytes;
+    // Not zero-initialised: every byte sent is written by the copies below.
+    alignas(4) uint8_t request[MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES];
+    uint32_t written = 0U;
+    // The ring only takes what fits; stop at the first short acceptance so the
+    // caller sees a contiguous prefix and can resume from `written`.
+    while (written < frame_count) {
+        uint32_t chunk = frame_count - written;
+        if (chunk > frames_per_request) {
+            chunk = frames_per_request;
+        }
+        const uint32_t payload_bytes = chunk * frame_bytes;
+        const uint32_t request_size = kHeaderBytes + payload_bytes;
+        micropixel_audio_pcm_stream_write_request_t header{};
+        header.size = static_cast<uint16_t>(request_size);
+        header.stream = handle_;
+        header.frame_count = chunk;
+        CopyBytes(request, &header, sizeof(header));
+        CopyBytes(request + kHeaderBytes, frames + static_cast<size_t>(written) * channels_, payload_bytes);
+        micropixel_audio_pcm_stream_write_response_t response{};
+        uint32_t response_size = 0U;
+        const int32_t status = CallService(audio_service, MICROPIXEL_AUDIO_METHOD_PCM_STREAM_WRITE, request,
+                                           request_size, &response, sizeof(response), response_size);
+        if (status != MICROPIXEL_STATUS_OK) {
+            return unexpected(ErrorFromStatus(status));
+        }
+        if (response_size < sizeof(response) || response.size < sizeof(response) || response.accepted_frames > chunk) {
+            runtime::Panic("audio.pcm_stream.write", MICROPIXEL_STATUS_INTERNAL);
+        }
+        written += response.accepted_frames;
+        free_frames_ = response.free_frames;
+        if (response.accepted_frames < chunk) {
+            break;
+        }
+    }
+    return written;
+}
+
+Result<void> PcmStream::Close() {
+    if (handle_ == 0U) {
+        return unexpected(Error{ErrorCode::kInvalidState});
+    }
+    micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+    const int32_t status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_PCM_STREAM_CLOSE, &request, sizeof(request));
+    handle_ = 0U;
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
+}
+
+void PcmStream::Reset() {
+    if (handle_ != 0U) {
+        (void)Close();
+    }
+}
+
 Timer::~Timer() { Reset(); }
 
 void Timer::Cancel() {
@@ -942,7 +1132,11 @@ RendererInfo Renderer::info() const {
                         raw.max_batch_instances,
                         raw.max_containers,
                         raw.max_sprite_batches,
-                        raw.max_scene_bytes};
+                        raw.max_scene_bytes,
+                        (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_DIRECT_SCANOUT) != 0U,
+                        (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED) != 0U,
+                        raw.max_full_frame_fps,
+                        raw.raster_pool_bytes};
 }
 
 namespace {
@@ -1723,6 +1917,481 @@ TextureUpdateBatch Renderer::BeginTextureUpdateBatch() const {
     return TextureUpdateBatch{TextureUpdateBatch::CapabilityToken{}};
 }
 
+Result<DirectSurface> Renderer::CreateDirectSurface(uint32_t buffer_count, DirectSurfaceBuffers buffers,
+                                                    uint32_t upscale) const {
+    const micropixel_graphics_info_t& raw = LoadPhysicalGraphicsInfo();
+    const bool guest_buffers = buffers == DirectSurfaceBuffers::kGuest;
+    if (buffer_count == 0U || buffer_count > MICROPIXEL_SURFACE_MAX_BUFFERS || upscale == 0U ||
+        raw.width % upscale != 0U || raw.height % upscale != 0U) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    if (raw.size < sizeof(raw) || direct_surface_state.handle != 0U) {
+        // Graphics < 1.5 Host, or a surface already exists on this side.
+        return unexpected(ErrorFromStatus(direct_surface_state.handle != 0U ? MICROPIXEL_STATUS_RESOURCE_EXHAUSTED
+                                                                            : MICROPIXEL_STATUS_UNSUPPORTED));
+    }
+    const uint32_t buffer_width = raw.width / upscale;
+    const uint32_t buffer_height = raw.height / upscale;
+    const uint32_t pitch = buffer_width * 2U;
+    // Every buffer starts on a MICROPIXEL_SURFACE_BUFFER_ALIGNMENT boundary so
+    // the Host can hand it to DMA without a staging copy.
+    const uint32_t buffer_bytes = AlignUp(pitch * buffer_height, MICROPIXEL_SURFACE_BUFFER_ALIGNMENT);
+    uint8_t* storage = nullptr;
+    if (guest_buffers) {
+        storage =
+            static_cast<uint8_t*>(::operator new(static_cast<size_t>(buffer_bytes) * buffer_count,
+                                                 std::align_val_t{MICROPIXEL_SURFACE_BUFFER_ALIGNMENT}, std::nothrow));
+        if (storage == nullptr) {
+            return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED));
+        }
+        ZeroBytes(storage, buffer_bytes * buffer_count);
+    }
+
+    micropixel_surface_create_request_t request{};
+    request.size = sizeof(request);
+    // Buffer size, not panel size: Host buffers are allocated at it and every
+    // present enlarges by `upscale`.
+    request.width = buffer_width;
+    request.height = buffer_height;
+    request.pixel_format = MICROPIXEL_PIXEL_FORMAT_RGB565;
+    request.buffer_count = buffer_count;
+    request.flags = guest_buffers ? MICROPIXEL_SURFACE_CREATE_GUEST_BUFFERS : 0U;
+    micropixel_surface_create_response_t response{};
+    uint32_t response_size = 0U;
+    const int32_t status = CallService(graphics_service, MICROPIXEL_GRAPHICS_METHOD_SURFACE_CREATE, &request,
+                                       sizeof(request), &response, sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) {
+        if (storage != nullptr) {
+            ::operator delete(storage, std::align_val_t{MICROPIXEL_SURFACE_BUFFER_ALIGNMENT});
+        }
+        return unexpected(ErrorFromStatus(status));
+    }
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.surface == 0U ||
+        response.native_pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) {
+        runtime::Panic("surface.create.response", MICROPIXEL_STATUS_INTERNAL);
+    }
+    direct_surface_state.handle = response.surface;
+    direct_surface_state.busy_mask = 0U;
+    return DirectSurface{response.surface,
+                         raw.width,
+                         raw.height,
+                         buffer_width,
+                         buffer_height,
+                         buffer_count,
+                         storage,
+                         response.native_flags,
+                         response.max_full_frame_fps};
+}
+
+DirectSurface::DirectSurface(uint32_t handle, uint32_t width, uint32_t height, uint32_t buffer_width,
+                             uint32_t buffer_height, uint32_t buffer_count, uint8_t* storage, uint32_t native_flags,
+                             uint16_t max_full_frame_fps)
+    : handle_(handle),
+      width_(width),
+      height_(height),
+      buffer_width_(buffer_width),
+      buffer_height_(buffer_height),
+      buffer_count_(buffer_count),
+      storage_(storage),
+      max_full_frame_fps_(max_full_frame_fps),
+      rgb565_byte_swapped_((native_flags & MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED) != 0U),
+      direct_scanout_((native_flags & MICROPIXEL_SURFACE_NATIVE_DIRECT_SCANOUT) != 0U) {}
+
+DirectSurface::DirectSurface(DirectSurface&& other) noexcept
+    : handle_(other.handle_),
+      width_(other.width_),
+      height_(other.height_),
+      buffer_width_(other.buffer_width_),
+      buffer_height_(other.buffer_height_),
+      buffer_count_(other.buffer_count_),
+      storage_(other.storage_),
+      max_full_frame_fps_(other.max_full_frame_fps_),
+      rgb565_byte_swapped_(other.rgb565_byte_swapped_),
+      direct_scanout_(other.direct_scanout_) {
+    other.handle_ = 0U;
+    other.storage_ = nullptr;
+}
+
+DirectSurface& DirectSurface::operator=(DirectSurface&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        handle_ = other.handle_;
+        width_ = other.width_;
+        height_ = other.height_;
+        buffer_width_ = other.buffer_width_;
+        buffer_height_ = other.buffer_height_;
+        buffer_count_ = other.buffer_count_;
+        storage_ = other.storage_;
+        max_full_frame_fps_ = other.max_full_frame_fps_;
+        rgb565_byte_swapped_ = other.rgb565_byte_swapped_;
+        direct_scanout_ = other.direct_scanout_;
+        other.handle_ = 0U;
+        other.storage_ = nullptr;
+    }
+    return *this;
+}
+
+DirectSurface::~DirectSurface() { Reset(); }
+
+void DirectSurface::Reset() {
+    if (handle_ != 0U) {
+        // DESTROY returns every buffer before it completes, so the storage is
+        // safe to free as soon as the call comes back.
+        micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+        (void)CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_SURFACE_DESTROY, &request, sizeof(request));
+        if (direct_surface_state.handle == handle_) {
+            direct_surface_state.handle = 0U;
+            direct_surface_state.busy_mask = 0U;
+        }
+        handle_ = 0U;
+    }
+    if (storage_ != nullptr) {
+        ::operator delete(storage_, std::align_val_t{MICROPIXEL_SURFACE_BUFFER_ALIGNMENT});
+        storage_ = nullptr;
+    }
+    width_ = 0U;
+    height_ = 0U;
+    buffer_width_ = 0U;
+    buffer_height_ = 0U;
+    buffer_count_ = 0U;
+}
+
+uint16_t* DirectSurface::Buffer(uint32_t index) {
+    if (!valid() || storage_ == nullptr || index >= buffer_count_) {
+        return nullptr;
+    }
+    const uint32_t stride = AlignUp(buffer_bytes(), MICROPIXEL_SURFACE_BUFFER_ALIGNMENT);
+    return reinterpret_cast<uint16_t*>(storage_ + static_cast<size_t>(stride) * index);
+}
+
+const uint16_t* DirectSurface::Buffer(uint32_t index) const {
+    if (!valid() || storage_ == nullptr || index >= buffer_count_) {
+        return nullptr;
+    }
+    const uint32_t stride = AlignUp(buffer_bytes(), MICROPIXEL_SURFACE_BUFFER_ALIGNMENT);
+    return reinterpret_cast<const uint16_t*>(storage_ + static_cast<size_t>(stride) * index);
+}
+
+bool DirectSurface::Busy(uint32_t index) const {
+    return valid() && direct_surface_state.handle == handle_ && index < buffer_count_ &&
+           (direct_surface_state.busy_mask & (1U << index)) != 0U;
+}
+
+bool DirectSurface::AcquireFree(uint32_t& index_out) const {
+    if (!valid()) {
+        return false;
+    }
+    for (uint32_t index = 0U; index < buffer_count_; ++index) {
+        if (!Busy(index)) {
+            index_out = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+Result<void> DirectSurface::Present(uint32_t index) {
+    if (!valid() || index >= buffer_count_) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    if (Busy(index)) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_STALE_STATE));
+    }
+    micropixel_surface_present_request_t request{};
+    request.size = sizeof(request);
+    request.surface = handle_;
+    request.buffer_index = index;
+    // Host buffers are named by index alone (pixels/length stay 0).
+    if (storage_ != nullptr) {
+        request.pixels = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(Buffer(index)));
+        request.length = buffer_bytes();
+    }
+    request.pitch = pitch();
+    request.src_width = buffer_width_;
+    request.src_height = buffer_height_;
+    request.flags =
+        buffer_width_ != width_ || buffer_height_ != height_ ? MICROPIXEL_SURFACE_PRESENT_SCALE_NEAREST : 0U;
+    const int32_t status =
+        CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_SURFACE_PRESENT, &request, sizeof(request));
+    if (status != MICROPIXEL_STATUS_OK) {
+        return unexpected(ErrorFromStatus(status));
+    }
+    direct_surface_state.busy_mask |= 1U << index;
+    return {};
+}
+
+// ---- Graphics 1.6 raster kernels ----------------------------------------
+namespace {
+
+// One draw list is open at a time (single-threaded Guest), so the wire buffer
+// is a runtime static rather than part of the move-only list object; Begin()
+// refuses a second list while raster_wire_open.
+alignas(8) uint8_t raster_wire[MICROPIXEL_GRAPHICS_MAX_RASTER_BYTES]{};
+bool raster_wire_open = false;
+
+}  // namespace
+
+Result<SurfaceRaster> Renderer::CreateSurfaceRaster() const {
+    const micropixel_graphics_info_t& raw = LoadPhysicalGraphicsInfo();
+    if (raw.raster_pool_bytes == 0U || raw.raster_max_textures == 0U || raw.raster_max_light_levels == 0U ||
+        (graphics_service.info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER) == 0U) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_UNSUPPORTED));
+    }
+    return SurfaceRaster{raw.raster_pool_bytes, raw.raster_max_textures, raw.raster_max_light_levels};
+}
+
+Result<void> SurfaceRaster::UploadTexture(uint8_t slot, uint32_t width, uint32_t height, RasterLayout layout,
+                                          const uint8_t* texels) const {
+    if (!valid()) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_UNSUPPORTED));
+    }
+    if (texels == nullptr || slot >= max_textures_ || width < MICROPIXEL_GRAPHICS_RASTER_MIN_TEXTURE_SIZE ||
+        width > MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURE_SIZE || (width & (width - 1U)) != 0U ||
+        height < MICROPIXEL_GRAPHICS_RASTER_MIN_TEXTURE_SIZE || height > MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURE_SIZE ||
+        (height & (height - 1U)) != 0U) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    micropixel_raster_texture_upload_request_t request{};
+    request.size = sizeof(request);
+    request.slot = slot;
+    request.width = static_cast<uint16_t>(width);
+    request.height = static_cast<uint16_t>(height);
+    request.layout = static_cast<uint16_t>(layout);
+    request.pixels = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(texels));
+    request.length = width * height;
+    const int32_t status =
+        CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD, &request, sizeof(request));
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : unexpected(ErrorFromStatus(status));
+}
+
+Result<void> SurfaceRaster::UploadLitPalette(uint32_t light_levels, const uint16_t* entries) const {
+    if (!valid()) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_UNSUPPORTED));
+    }
+    if (entries == nullptr || light_levels == 0U || light_levels > max_light_levels_) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    micropixel_raster_palette_upload_request_t request{};
+    request.size = sizeof(request);
+    request.light_levels = static_cast<uint16_t>(light_levels);
+    request.pixels = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(entries));
+    request.length = light_levels * MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES * sizeof(uint16_t);
+    const int32_t status =
+        CallVoid(graphics_service, MICROPIXEL_GRAPHICS_METHOD_RASTER_PALETTE_UPLOAD, &request, sizeof(request));
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : unexpected(ErrorFromStatus(status));
+}
+
+RasterDrawList SurfaceRaster::Begin(DirectSurface& surface, uint32_t buffer_index) const {
+    if (!valid() || !surface.valid() || !surface.host_buffers() || buffer_index >= surface.buffer_count() ||
+        surface.Busy(buffer_index) || raster_wire_open) {
+        return RasterDrawList{};
+    }
+    return RasterDrawList{buffer_index, static_cast<uint16_t>(surface.buffer_width()),
+                          static_cast<uint16_t>(surface.buffer_height()), static_cast<uint16_t>(surface.pitch())};
+}
+
+RasterDrawList::RasterDrawList(uint32_t target_buffer, uint16_t width, uint16_t height, uint16_t pitch)
+    : target_buffer_(target_buffer),
+      open_(true),
+      width_(width),
+      height_(height),
+      pitch_(pitch),
+      wire_size_(sizeof(micropixel_raster_header_t)) {
+    raster_wire_open = true;
+}
+
+RasterDrawList::~RasterDrawList() { Close(); }
+
+RasterDrawList::RasterDrawList(RasterDrawList&& other) noexcept
+    : target_buffer_(other.target_buffer_),
+      open_(other.open_),
+      width_(other.width_),
+      height_(other.height_),
+      pitch_(other.pitch_),
+      record_count_(other.record_count_),
+      wire_size_(other.wire_size_),
+      status_(other.status_) {
+    other.open_ = false;  // ownership of the wire buffer moved here
+    other.Close();
+}
+
+RasterDrawList& RasterDrawList::operator=(RasterDrawList&& other) noexcept {
+    if (this != &other) {
+        Close();  // drop whatever this list held (and its wire ownership)
+        target_buffer_ = other.target_buffer_;
+        open_ = other.open_;
+        width_ = other.width_;
+        height_ = other.height_;
+        pitch_ = other.pitch_;
+        record_count_ = other.record_count_;
+        wire_size_ = other.wire_size_;
+        status_ = other.status_;
+        other.open_ = false;  // ownership of the wire buffer moved here
+        other.Close();
+    }
+    return *this;
+}
+
+void RasterDrawList::Close() {
+    if (open_) {
+        raster_wire_open = false;
+    }
+    target_buffer_ = 0U;
+    open_ = false;
+    width_ = 0U;
+    height_ = 0U;
+    pitch_ = 0U;
+    record_count_ = 0U;
+    wire_size_ = 0U;
+    status_ = MICROPIXEL_STATUS_OK;
+}
+
+bool RasterDrawList::Append(const void* record, uint32_t size) {
+    if (!open()) {
+        status_ = MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        return false;
+    }
+    if (wire_size_ + size > sizeof(raster_wire) || record_count_ == 0xFFFFU) {
+        Flush();
+    }
+    CopyBytes(raster_wire + wire_size_, record, size);
+    wire_size_ += size;
+    ++record_count_;
+    return status_ == MICROPIXEL_STATUS_OK;
+}
+
+void RasterDrawList::Flush() {
+    if (record_count_ == 0U) {
+        return;
+    }
+    micropixel_raster_header_t header{};
+    header.magic = MICROPIXEL_GRAPHICS_RASTER_MAGIC;
+    header.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
+    header.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
+    header.total_size = wire_size_;
+    header.target_buffer = target_buffer_;
+    header.target_width = width_;
+    header.target_height = height_;
+    header.target_pitch = pitch_;
+    header.record_count = record_count_;
+    CopyBytes(raster_wire, &header, sizeof(header));
+    const int32_t status = micropixel_service_submit(graphics_service.info.handle, MICROPIXEL_GRAPHICS_CHANNEL_RASTER,
+                                                     raster_wire, wire_size_);
+    if (status != MICROPIXEL_STATUS_OK && status_ == MICROPIXEL_STATUS_OK) {
+        status_ = status;
+    }
+    wire_size_ = sizeof(header);
+    record_count_ = 0U;
+}
+
+bool RasterDrawList::Column(uint16_t x, int16_t y0, int16_t y1, uint8_t texture, uint8_t light, uint16_t u,
+                            int32_t v_start, int32_t v_step, bool transparent) {
+    micropixel_raster_column_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_COLUMN;
+    record.flags = transparent ? MICROPIXEL_RASTER_COLUMN_TRANSPARENT_INDEX0 : 0U;
+    record.texture = texture;
+    record.light = light;
+    record.x = x;
+    record.y0 = y0;
+    record.y1 = y1;
+    record.u = u;
+    record.v_start = v_start;
+    record.v_step = v_step;
+    return Append(&record, sizeof(record));
+}
+
+bool RasterDrawList::SpanPair(uint16_t y_floor, uint16_t y_ceiling, uint16_t x0, uint16_t x1, uint8_t floor_texture,
+                              uint8_t ceiling_texture, uint8_t light, int32_t s, int32_t t, int32_t ds, int32_t dt) {
+    micropixel_raster_span_pair_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_SPAN_PAIR;
+    record.floor_texture = floor_texture;
+    record.ceiling_texture = ceiling_texture;
+    record.y_floor = y_floor;
+    record.y_ceiling = y_ceiling;
+    record.x0 = x0;
+    record.x1 = x1;
+    record.light = light;
+    record.s = s;
+    record.t = t;
+    record.ds = ds;
+    record.dt = dt;
+    return Append(&record, sizeof(record));
+}
+
+namespace {
+
+// Clamps a Rect to the int16/uint16 fields of a raster record. Anything wider
+// than the field range cannot be meant literally; the Host clips the rest.
+bool ClampRasterRect(Rect rect, int16_t& x, int16_t& y, uint16_t& width, uint16_t& height) {
+    if (rect.width <= 0 || rect.height <= 0 || rect.x < INT16_MIN || rect.x > INT16_MAX || rect.y < INT16_MIN ||
+        rect.y > INT16_MAX) {
+        return false;
+    }
+    x = static_cast<int16_t>(rect.x);
+    y = static_cast<int16_t>(rect.y);
+    width = static_cast<uint16_t>(rect.width > UINT16_MAX ? UINT16_MAX : rect.width);
+    height = static_cast<uint16_t>(rect.height > UINT16_MAX ? UINT16_MAX : rect.height);
+    return true;
+}
+
+}  // namespace
+
+bool RasterDrawList::Sprite(Rect destination, uint8_t texture, uint8_t light, uint16_t u0, uint16_t v0,
+                            uint16_t src_width, uint16_t src_height, bool transparent) {
+    micropixel_raster_sprite_t record{};
+    if (!ClampRasterRect(destination, record.x, record.y, record.width, record.height)) {
+        return false;
+    }
+    record.type = MICROPIXEL_RASTER_RECORD_SPRITE;
+    record.flags = transparent ? MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 : 0U;
+    record.texture = texture;
+    record.light = light;
+    record.u0 = u0;
+    record.v0 = v0;
+    record.src_width = src_width;
+    record.src_height = src_height;
+    return Append(&record, sizeof(record));
+}
+
+bool RasterDrawList::SolidSprite(Rect destination, uint8_t texture, Color color, uint16_t u0, uint16_t v0,
+                                 uint16_t src_width, uint16_t src_height, bool transparent) {
+    micropixel_raster_sprite_t record{};
+    if (!ClampRasterRect(destination, record.x, record.y, record.width, record.height)) {
+        return false;
+    }
+    record.type = MICROPIXEL_RASTER_RECORD_SPRITE;
+    record.flags = static_cast<uint8_t>(MICROPIXEL_RASTER_SPRITE_SOLID_COLOR |
+                                        (transparent ? MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 : 0U));
+    record.texture = texture;
+    record.u0 = u0;
+    record.v0 = v0;
+    record.src_width = src_width;
+    record.src_height = src_height;
+    record.color = color.rgb565();
+    return Append(&record, sizeof(record));
+}
+
+bool RasterDrawList::FillRect(Rect area, Color color, uint8_t alpha) {
+    micropixel_raster_rect_t record{};
+    if (alpha == 0U || !ClampRasterRect(area, record.x, record.y, record.width, record.height)) {
+        return false;
+    }
+    record.type = MICROPIXEL_RASTER_RECORD_RECT;
+    record.alpha = alpha;
+    record.color = color.rgb565();
+    return Append(&record, sizeof(record));
+}
+
+Result<void> RasterDrawList::Finish() {
+    if (!open()) {
+        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+    }
+    Flush();
+    const int32_t status = status_;
+    Close();
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : unexpected(ErrorFromStatus(status));
+}
+
 // Service capabilities are resolved lazily by the operation that needs them.
 // This keeps non-graphical Guests usable on headless bring-up profiles while
 // Renderer and touch-coordinate paths still validate the display contract.
@@ -1791,6 +2460,33 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
             runtime::Panic("application.wait_event.audio_payload", MICROPIXEL_STATUS_INTERNAL);
         }
         event = Event{AudioPlaybackEvent{timestamp, raw.status == MICROPIXEL_STATUS_OK, raw.source}};
+        return true;
+    }
+
+    if (raw.service_id == MICROPIXEL_SERVICE_AUDIO && raw.event_id == MICROPIXEL_AUDIO_EVENT_PCM_STREAM_LOW_WATER) {
+        micropixel_audio_pcm_event_payload_t payload{};
+        CopyBytes(&payload, raw.payload, sizeof(payload));
+        if (payload.stream == 0U || payload.stream != raw.source || payload.reserved[0] != 0U ||
+            payload.reserved[1] != 0U || raw.status != MICROPIXEL_STATUS_OK) {
+            runtime::Panic("application.wait_event.pcm_payload", MICROPIXEL_STATUS_INTERNAL);
+        }
+        event = Event{PcmStreamEvent{timestamp, payload.free_frames, raw.source}};
+        return true;
+    }
+
+    if (raw.service_id == MICROPIXEL_SERVICE_GRAPHICS && raw.event_id == MICROPIXEL_GRAPHICS_EVENT_SURFACE_RELEASED) {
+        micropixel_surface_event_payload_t payload{};
+        CopyBytes(&payload, raw.payload, sizeof(payload));
+        if (payload.surface == 0U || payload.surface != raw.source ||
+            payload.buffer_index >= MICROPIXEL_SURFACE_MAX_BUFFERS || raw.status != MICROPIXEL_STATUS_OK) {
+            runtime::Panic("application.wait_event.surface_payload", MICROPIXEL_STATUS_INTERNAL);
+        }
+        // Releases for a surface that was already destroyed may still be queued;
+        // they are delivered but do not touch the live surface's ownership.
+        if (payload.surface == direct_surface_state.handle) {
+            direct_surface_state.busy_mask &= ~(1U << payload.buffer_index);
+        }
+        event = Event{SurfaceReleasedEvent{timestamp, payload.buffer_index, raw.source}};
         return true;
     }
 

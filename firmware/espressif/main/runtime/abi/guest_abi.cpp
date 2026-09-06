@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "runtime/abi/abi_bridge.h"
 #include "runtime/guest_context.hpp"
+#include "runtime/wamr/diagnostics.h"
 #include "runtime/wamr/watchdog.h"
 #include "wasm_export.h"
 
@@ -100,8 +101,10 @@ extern "C" int32_t micropixel_runtime_service_call(wasm_exec_env_t exec_env, mic
         return MICROPIXEL_STATUS_INTERNAL;
     }
     micropixel_watchdog_pause();
+    micropixel_check_heap("before service_call");
     const int32_t status = context->ServiceCall(service, method_id, request, request_size, response, response_capacity,
                                                 *response_size_out);
+    micropixel_check_heap("after service_call");
     micropixel_watchdog_resume();
     return status;
 }
@@ -113,6 +116,9 @@ extern "C" int32_t micropixel_runtime_service_submit(wasm_exec_env_t exec_env, m
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     auto* context = GetContext(exec_env);
-    return context != nullptr ? context->ServiceSubmit(service, channel_id, bytes, length)
-                              : static_cast<int32_t>(MICROPIXEL_STATUS_INTERNAL);
+    micropixel_check_heap("before service_submit");
+    const int32_t status = context != nullptr ? context->ServiceSubmit(service, channel_id, bytes, length)
+                                              : static_cast<int32_t>(MICROPIXEL_STATUS_INTERNAL);
+    micropixel_check_heap("after service_submit");
+    return status;
 }

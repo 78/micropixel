@@ -31,7 +31,7 @@ build_and_run() {
     shift
     local test_binary="$test_output_dir/${name}_test"
 
-    "$cxx" \
+    python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
         -std=c++23 \
         -Wall -Wextra -Werror \
         -I "$workspace_root/tools/tests/firmware_stubs" \
@@ -47,7 +47,7 @@ build_and_run_c() {
     shift
     local test_binary="$test_output_dir/${name}_test"
 
-    "$cc" \
+    python3 "$workspace_root/tools/tests/build_host_test.py" "$cc" \
         -std=c17 \
         -Wall -Wextra -Werror \
         -I "$workspace_root/tools/tests/watchdog_stubs" \
@@ -95,6 +95,10 @@ build_and_run system_gesture_router \
 build_and_run host_pointer_event_queue \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_host_pointer_event_queue.cpp"
+
+build_and_run hall_cover_mask \
+    "$workspace_root/tools/tests/test_hall_cover_mask.cpp" \
+    "$workspace_root/firmware/espressif/main/host/ui/lvgl/square_common/hall_cover_mask.cpp"
 
 build_and_run hall_carousel \
     "$workspace_root/tools/tests/test_hall_carousel.cpp"
@@ -246,7 +250,55 @@ build_and_run gpio_service \
     "$workspace_root/firmware/espressif/main/runtime/services/gpio_service.cpp" \
     "$workspace_root/firmware/espressif/main/device/device_services.cpp"
 
-"$cxx" \
+# Uses the real EventQueue (FreeRTOS shims), so the firmware include path must
+# precede the stub directory like event_queue_test below.
+python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
+    -std=c++23 \
+    -Wall -Wextra -Werror \
+    -pthread \
+    -I "$workspace_root/firmware/espressif/main" \
+    -I "$workspace_root/guest" \
+    -I "$workspace_root/tools/tests/firmware_stubs" \
+    "$workspace_root/tools/tests/test_direct_surface_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/direct_surface_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/event_queue.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp" \
+    -o "$test_output_dir/direct_surface_service_test"
+"$test_output_dir/direct_surface_service_test"
+
+# Graphics 1.6 raster kernels and the RasterService in front of them; shares
+# the in-flight veto with DirectSurfaceService, hence the same link set.
+python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
+    -std=c++23 \
+    -Wall -Wextra -Werror \
+    -pthread \
+    -I "$workspace_root/firmware/espressif/main" \
+    -I "$workspace_root/guest" \
+    -I "$workspace_root/tools/tests/firmware_stubs" \
+    "$workspace_root/tools/tests/test_raster_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/graphics/raster_kernels.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/raster_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/direct_surface_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/event_queue.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp" \
+    -o "$test_output_dir/raster_service_test"
+"$test_output_dir/raster_service_test"
+
+python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
+    -std=c++23 \
+    -Wall -Wextra -Werror \
+    -pthread \
+    -I "$workspace_root/firmware/espressif/main" \
+    -I "$workspace_root/guest" \
+    -I "$workspace_root/tools/tests/firmware_stubs" \
+    "$workspace_root/tools/tests/test_pcm_stream_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/audio/pcm_stream_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/event_queue.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp" \
+    -o "$test_output_dir/pcm_stream_service_test"
+"$test_output_dir/pcm_stream_service_test"
+
+python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -std=c++23 \
     -Wall -Wextra -Werror \
     -pthread \

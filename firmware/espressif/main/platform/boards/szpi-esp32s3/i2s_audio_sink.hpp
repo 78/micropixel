@@ -27,6 +27,7 @@ class I2sAudioSink final : public audio::AudioOutputPeripheral {
     [[nodiscard]] esp_err_t Stop() override { return sink_.Stop(); }
     void Shutdown() override { sink_.Shutdown(); }
     [[nodiscard]] const char* Name() const override { return sink_.Name(); }
+    [[nodiscard]] uint32_t SampleRate() const override { return sink_.SampleRate(); }
 
    private:
     static esp_err_t SetAmplifier(void* context, bool enabled);

@@ -21,7 +21,6 @@ constexpr uint8_t kConfigPort1 = 0x07U;
 constexpr uint8_t kPaSwitchMask = 1U << 1U;
 constexpr uint8_t kBtPowerMask = 1U << 6U;
 constexpr uint8_t kPaEnableMask = 1U << 0U;
-constexpr uint32_t kSampleRate = 16000U;
 constexpr uint32_t kWakeupMs = 64U;
 
 esp_err_t InitializeBtAudioMode() {
@@ -75,6 +74,8 @@ esp_err_t InitializeBtAudioMode() {
 
 }  // namespace
 
+uint32_t I2sAudioSink::SampleRate() const { return board::kAudioSampleRate; }
+
 void I2sAudioSink::Configure(i2c_master_dev_handle_t io_expander, buses::I2cExecutor& i2c_executor) {
     io_expander_ = io_expander;
     i2c_executor_ = &i2c_executor;
@@ -121,7 +122,7 @@ esp_err_t I2sAudioSink::Initialize() {
     channel_config.auto_clear_after_cb = true;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_config, &tx_, nullptr), kTag, "create I2S channel");
     i2s_std_config_t standard_config{};
-    standard_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kSampleRate);
+    standard_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(board::kAudioSampleRate);
     standard_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO);
     standard_config.gpio_cfg.mclk = I2S_GPIO_UNUSED;
     standard_config.gpio_cfg.bclk = board::kAudioBitClock;
@@ -142,7 +143,8 @@ esp_err_t I2sAudioSink::Start(int32_t* scratch_frames, uint32_t frame_count) {
     if (status == ESP_OK) {
         status = UpdateRegister(kOutputPort1, kPaEnableMask, 0U);
     }
-    const uint32_t wakeup_chunks = (kWakeupMs * kSampleRate + frame_count * 1000U - 1U) / (frame_count * 1000U);
+    const uint32_t wakeup_chunks =
+        (kWakeupMs * board::kAudioSampleRate + frame_count * 1000U - 1U) / (frame_count * 1000U);
     for (uint32_t chunk = 0U; status == ESP_OK && chunk < wakeup_chunks; ++chunk) {
         status = WriteSilence(scratch_frames, frame_count);
     }

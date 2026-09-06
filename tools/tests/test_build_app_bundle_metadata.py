@@ -1,5 +1,7 @@
 import json
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 import zlib
@@ -86,7 +88,7 @@ class PackageMetadataTests(unittest.TestCase):
             )
         )
 
-    def write_manifest(self, root: Path, title: object) -> Path:
+    def write_manifest(self, root: Path, title: object, **extra: object) -> Path:
         path = root / "app.json"
         path.write_text(
             json.dumps(
@@ -95,6 +97,7 @@ class PackageMetadataTests(unittest.TestCase):
                     "app_id": "micropixel.test",
                     "title": title,
                     "sources": ["unused.cpp"],
+                    **extra,
                 },
                 ensure_ascii=False,
             ),
@@ -145,6 +148,55 @@ class PackageMetadataTests(unittest.TestCase):
             path.write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "threading must be none or shared-memory"):
                 bundle.load_package_manifest(path)
+
+    def aot_section_flags(self, root: Path, *extra_arguments: str, **manifest_extra: object) -> int:
+        manifest = self.write_manifest(root, "Test", **manifest_extra)
+        aot = root / "fake.aot"
+        aot.write_bytes(b"\0asm-fake-aot")
+        output = root / "out.bundle.bin"
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "build_app_bundle.py"),
+                "--app-manifest",
+                str(manifest),
+                "--aot",
+                str(aot),
+                "--aot-target",
+                "riscv32-ilp32f",
+                "--output",
+                str(output),
+                *extra_arguments,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        data = output.read_bytes()
+        header = bundle.HEADER.unpack_from(data, 0)
+        toc_offset = header[4]
+        section_count = header[7]
+        for index in range(section_count):
+            section = bundle.SECTION.unpack_from(data, toc_offset + index * bundle.SECTION.size)
+            if section[0] == bundle.KIND_AOT:
+                return section[9]
+        self.fail("bundle has no AOT section")
+
+    def test_unchecked_memory_flag_is_declared_only_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checked = self.aot_section_flags(Path(directory))
+            self.assertEqual(checked, bundle.AOT_FLAG_THREADING_DECLARED)
+        with tempfile.TemporaryDirectory() as directory:
+            unchecked = self.aot_section_flags(Path(directory), "--unchecked-memory")
+            self.assertEqual(unchecked, bundle.AOT_FLAG_THREADING_DECLARED | bundle.AOT_FLAG_UNCHECKED_MEMORY)
+
+    def test_pinned_memory_flag_follows_the_app_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pinned = self.aot_section_flags(Path(directory), pinned_memory=True)
+            self.assertEqual(pinned, bundle.AOT_FLAG_THREADING_DECLARED | bundle.AOT_FLAG_PINNED_MEMORY)
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_manifest(Path(directory), "Test", pinned_memory=1)
+            with self.assertRaisesRegex(ValueError, "pinned_memory must be true or false"):
+                bundle.load_app_manifest(path)
 
     def test_default_locale_requires_a_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

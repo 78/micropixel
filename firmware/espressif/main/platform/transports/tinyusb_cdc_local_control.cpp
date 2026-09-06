@@ -13,7 +13,11 @@ namespace {
 constexpr char kTag[] = "tinyusb_local_control";
 constexpr char kProtocolPrefix[] = "MPX1 ";
 constexpr size_t kReadCapacity = 512U;
-constexpr uint32_t kTaskStackSize = 4U * 1024U;
+// Command buffers already live on the heap; the remaining depth is libc
+// printf, mbedtls base64 and TinyUSB write paths. 4 KiB left ~220 B of
+// headroom while serving diagnostics, which is one bad day away from
+// corrupting the transport we rely on for recovery.
+constexpr uint32_t kTaskStackSize = 8U * 1024U;
 
 }  // namespace
 
@@ -38,8 +42,8 @@ esp_err_t TinyUsbCdcLocalControl::Start(DevelopmentCommandSink development_sink,
         return ESP_ERR_NO_MEM;
     }
     line_framer_.Bind(command_, kCommandCapacity);
-    if (xTaskCreate(TaskEntry, "micropixel_cdc", kTaskStackSize, this, task_policy::kUsbLocalControlPriority, &task_) !=
-        pdPASS) {
+    if (xTaskCreatePinnedToCore(TaskEntry, "micropixel_cdc", kTaskStackSize, this,
+                                task_policy::kUsbLocalControlPriority, &task_, task_policy::kSystemCore) != pdPASS) {
         heap_caps_free(command_);
         command_ = nullptr;
         heap_caps_free(io_workspace_);

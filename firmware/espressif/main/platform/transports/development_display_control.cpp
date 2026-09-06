@@ -42,7 +42,8 @@ bool TransmitJpeg(const uint8_t* jpeg_bytes, uint32_t jpeg_size, uint32_t sequen
 
 esp_err_t DevelopmentDisplayControl::Start(lv_display_t* display, device::Input& input,
                                            DevelopmentLocalControlTransport& transport, uint32_t width, uint32_t height,
-                                           lvgl::DisplayCaptureSource display_source) {
+                                           lvgl::DisplayCaptureSource display_source,
+                                           DevelopmentCaptureHook capture_hook) {
     if (display == nullptr || width == 0U || height == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -52,6 +53,7 @@ esp_err_t DevelopmentDisplayControl::Start(lv_display_t* display, device::Input&
     width_ = width;
     height_ = height;
     display_source_ = display_source;
+    capture_hook_ = capture_hook;
     ESP_LOGI(kTag, "development commands=%s, %s <phase> <id> <x> <y> <pressure>", kCaptureCommand, kTouchCommand);
     return transport.Start(ReceiveCommand, this);
 }
@@ -108,7 +110,14 @@ void DevelopmentDisplayControl::ProcessCommand(const char* command) {
 }
 
 void DevelopmentDisplayControl::CaptureAndTransmit() {
-    auto capture_result = lvgl::CaptureScreenJpeg(display_, width_, height_, display_source_);
+    std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> capture_result =
+        std::unexpected(host_ui::SystemUiError::kUnavailable);
+    if (capture_hook_.capture != nullptr) {
+        capture_result = capture_hook_.capture(capture_hook_.context);
+    }
+    if (!capture_result.has_value()) {
+        capture_result = lvgl::CaptureScreenJpeg(display_, width_, height_, display_source_);
+    }
     if (!capture_result.has_value()) {
         ESP_LOGE(kTag, "display-buffer screen capture failed");
         return;

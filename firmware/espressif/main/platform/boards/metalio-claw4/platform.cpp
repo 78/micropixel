@@ -70,7 +70,13 @@ namespace {
 namespace board_detail = metalio_claw4::detail;
 
 void* AllocateImageBuffer(size_t size, lv_color_format_t) {
-    return heap_caps_aligned_alloc(64U, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // DMA cache invalidation must not overlap a neighbouring allocation.
+    constexpr size_t kAlignment = 128U;
+    if (size > SIZE_MAX - (kAlignment - 1U)) {
+        return nullptr;
+    }
+    const size_t allocation_bytes = (size + kAlignment - 1U) / kAlignment * kAlignment;
+    return heap_caps_aligned_alloc(kAlignment, allocation_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
 void FreeImageBuffer(void* buffer) { heap_caps_free(buffer); }
@@ -228,7 +234,8 @@ esp_err_t InitializeLvgl(board_detail::MetalioClaw4BoardState& state) {
         return ESP_FAIL;
     }
     state.display_pipeline.BindLvgl(state.display);
-    status = state.guest_graphics.Initialize(state.display, state.display_pipeline.DirectFramebuffers());
+    status = state.guest_graphics.Initialize(state.display, state.display_pipeline.DirectFramebuffers(),
+                                             state.display_pipeline.DirectScanout());
     if (status != ESP_OK) {
         return status;
     }
@@ -252,8 +259,8 @@ esp_err_t InitializeLvgl(board_detail::MetalioClaw4BoardState& state) {
     lvgl::RequestDisplayRefresh(state.display);
     status = esp_lv_adapter_start();
     if (status == ESP_OK) {
-        status = metalio_claw4::InitializeScreenCapture(state.display, state.touch_input, board_detail::kWidth,
-                                                        board_detail::kHeight);
+        status = metalio_claw4::InitializeScreenCapture(state.display, state.board_io.Panel(), state.touch_input,
+                                                        board_detail::kWidth, board_detail::kHeight);
     }
     return status;
 }
@@ -348,7 +355,7 @@ std::expected<void, device::PowerError> EnterLowPowerImpl(board_detail::MetalioC
     };
     const auto cancel_sleep_entry = [&state]() -> std::expected<void, device::PowerError> {
         ESP_LOGI(board_detail::kTag, "light sleep canceled by a power press during the entry transition");
-        state.power_key.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+        state.power_key.GuardWakeButtonUntilRelease();
         return RestoreDisplayAfterSleep(state);
     };
 
@@ -385,7 +392,7 @@ std::expected<void, device::PowerError> EnterLowPowerImpl(board_detail::MetalioC
                      "light sleep returned: status=ESP_OK duration=%" PRIu64 " ms causes=0x%08" PRIx32
                      " gpio=0x%016" PRIx64,
                      sleep_duration_us / 1000U, wake_causes, gpio_wakeup_status);
-            state.power_key.GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + 2000000U);
+            state.power_key.GuardWakeButtonUntilRelease();
             break;
         }
 
@@ -468,7 +475,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
         }};
         registration.SetGraphics(graphics_);
         registration.SetInput(state_.ui.Input());
-        registration.SetAudioOutput(audio_output_, 16000U);
+        registration.SetAudioOutput(audio_output_, audio_output_.SampleRate());
         registration.SetBattery(state_.battery);
         registration.SetWifi(wifi_);
         registration.SetPower(*this);

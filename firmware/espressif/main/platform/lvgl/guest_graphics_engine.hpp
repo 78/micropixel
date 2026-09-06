@@ -17,6 +17,7 @@
 #include "platform/graphics/esp_pixel_compositor.hpp"
 #endif
 #include "platform/graphics/guest_scene.hpp"
+#include "platform/lvgl/display/direct_surface_presenter.hpp"
 #include "platform/lvgl/display/dirty_region_coalescer.hpp"
 #include "platform/lvgl/display/display_pipeline.hpp"
 #include "platform/lvgl/fonts/bitmap_font_rasterizer.hpp"
@@ -46,7 +47,10 @@ class GuestGraphicsEngine final {
     // Periodic telemetry text is written to the console from this executor
     // instead of the Guest task. Without one the text is logged inline.
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) { background_executor_ = &executor; }
-    [[nodiscard]] esp_err_t Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers);
+    // `scanout` describes how a Direct Surface reaches this panel; the default
+    // keeps every Guest frame on the composited App Surface path.
+    [[nodiscard]] esp_err_t Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers,
+                                       const DirectScanoutProfile& scanout = {});
     void RebindFramebuffers(DirectFramebufferAccess* framebuffers);
 
     [[nodiscard]] bool Available() const { return true; }
@@ -63,8 +67,51 @@ class GuestGraphicsEngine final {
     [[nodiscard]] bool ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination);
     void Release();
 
+    // Direct Surface (Graphics 1.5). While one exists Scene submits and
+    // streaming bitmap presents are rejected; the presenter owns the panel.
+    [[nodiscard]] int32_t CreateDirectSurface(const device::DirectSurfaceConfig& config,
+                                              const device::DirectSurfaceReleaseSink& sink,
+                                              device::DirectSurfaceInfo& info_out);
+    [[nodiscard]] int32_t PresentDirectSurface(const device::DirectSurfacePresentation& presentation);
+    void SuspendDirectSurface();
+    void ResumeDirectSurface();
+    [[nodiscard]] int32_t DestroyDirectSurface();
+
     [[nodiscard]] lv_obj_t* FrameLocked() const { return guest_frame_; }
     [[nodiscard]] uint32_t GuestPresentedFrameSequence() const { return guest_presented_frame_sequence_; }
+    // True while the Guest owns a Direct Surface. Host overlays drawn above it
+    // force the full-frame composited path, so callers avoid them.
+    [[nodiscard]] bool DirectSurfaceActive() const { return direct_surface_presenter_.Created(); }
+    [[nodiscard]] bool DirectScanoutAvailable() const { return direct_surface_presenter_.DirectScanoutAvailable(); }
+    // True when composited App Surface frames can also bypass LVGL (RGB565
+    // blit panels). Host overlays then go through the presenter for every
+    // Guest, not only Direct Surface ones, or they would keep LVGL in charge.
+    [[nodiscard]] bool AppSurfaceScanoutEnabled() const {
+        return direct_surface_presenter_.AppSurfaceFrameScanoutEnabled();
+    }
+    // Whether Host UI meant for the running Guest should be blended by the
+    // presenter (ScanoutOverlayImage) rather than drawn as an LVGL object.
+    [[nodiscard]] bool PresenterOverlayWanted() const {
+        return DirectScanoutAvailable() && (DirectSurfaceActive() || AppSurfaceScanoutEnabled());
+    }
+    // Host task: while the presenter scans App Surface frames out itself the
+    // LVGL draw buffers (and any shadow of them) are stale; development
+    // screenshots read the surface on the panel instead. Returns false when
+    // LVGL owns the panel. The pixels may change while being read.
+    [[nodiscard]] bool DirectlyScannedAppSurface(graphics::ConstPixelSurface& surface_out) const;
+    // Frames the presenter put on the panel or composited: Direct Surface
+    // presents plus App Surface frames scanned out directly.
+    [[nodiscard]] uint32_t DirectSurfaceFramesPresented() const { return direct_surface_presenter_.FramesPresented(); }
+    // Host UI blended into scanned-out Guest frames (see ScanoutOverlayImage).
+    [[nodiscard]] bool SetDirectSurfaceOverlay(ScanoutOverlayLayer layer, const ScanoutOverlayImage& image) {
+        return direct_surface_presenter_.SetOverlay(layer, image);
+    }
+    void ClearDirectSurfaceOverlay(ScanoutOverlayLayer layer) { direct_surface_presenter_.ClearOverlay(layer); }
+    // LVGL task, under the lock: adopts a frame the presenter published but
+    // the publish timer has not picked up yet, so the following refresh shows
+    // it. Used before a transition captures the displayed frame; otherwise the
+    // timer would adopt it after the transition and flash the stale frame.
+    void FlushPendingFrameLocked() { AdoptPendingFrameLocked(false); }
     [[nodiscard]] bool RefreshSynchronizationAvailable() const { return display_refresh_ready_ != nullptr; }
     void DrainRefreshReady();
     void WaitForRefreshReady();
@@ -75,6 +122,29 @@ class GuestGraphicsEngine final {
     static bool ValidateFontHandle(void* context, micropixel_font_handle_t font);
 
     static void PublishTimerCallback(lv_timer_t* timer);
+    // Presenter task: copies (and converts) one Direct Surface frame into a
+    // free App Surface and publishes it like a composed scene.
+    static bool CompositeDirectFrame(void* context, const device::DirectSurfacePresentation& frame,
+                                     bool source_byte_swapped);
+    // LVGL task, under the lock: whether any visible Host object is stacked
+    // above the Guest frame (status layer, dialogs, performance overlay).
+    [[nodiscard]] bool HostUiVisibleLocked() const;
+    void PublishDirectSurface(uint8_t surface);
+    // Presenter task (AppSurfaceFrameSource): pops the mailbox (or reports the
+    // displayed surface) as a App Surface frame; the surface becomes displayed_surface_
+    // so no compose touches it while the panel reads it.
+    static bool AcquireAppSurfaceFrame(void* context, bool pending_only, AppSurfaceFrame& frame_out);
+    // Presenter task (AppSurfaceFrameSource): LVGL takes the panel back, so the
+    // displayed surface is re-published with whole-frame damage and the LVGL
+    // task is woken to adopt it.
+    static void AppSurfaceFrameHandedToLvgl(void* context, bool panel_stale);
+    // Guest task: whether the frame just published should go to the presenter.
+    [[nodiscard]] bool AppSurfaceScanoutWanted() const {
+        return app_surface_count_ >= 2U && direct_surface_presenter_.AppSurfaceFrameScanoutWanted();
+    }
+    // Presenter task: puts an opaque Guest container on screen (dismissing the
+    // launch bitmap) when no App Surface exists to composite into.
+    void AttachBareGuestFrame();
 
     // ---- Surface rotation and lock-free publish -----------------------------
     //
@@ -162,6 +232,9 @@ class GuestGraphicsEngine final {
     [[nodiscard]] bool EnsureSceneStorage();
     void ReleaseFonts(const micropixel_font_handle_t* fonts, uint32_t count);
     [[nodiscard]] bool RetainFonts(const micropixel_font_handle_t* fonts, uint32_t count);
+    // Allocates the App Surface pixel storage once; it is never freed.
+    [[nodiscard]] bool AllocateAppSurfaceStorage();
+    // Storage plus a fresh compositor for the current Guest.
     [[nodiscard]] bool EnsureAppSurfaceStorage();
     [[nodiscard]] graphics::PixelSurface SurfaceAt(uint8_t index) const;
     [[nodiscard]] bool ComposeUnderLock() const { return app_surface_count_ < 2U; }
@@ -194,7 +267,7 @@ class GuestGraphicsEngine final {
     // adopting, read by the Guest under publish_lock_ to pick a compose target.
     uint8_t displayed_surface_{};
     PendingFrame pending_{};
-    portMUX_TYPE publish_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    mutable portMUX_TYPE publish_lock_ = portMUX_INITIALIZER_UNLOCKED;
     // Long-period LVGL timer the Guest marks ready after publishing so the
     // LVGL task wakes and adopts even while its refresh timer is paused.
     lv_timer_t* publish_timer_{};
@@ -216,6 +289,7 @@ class GuestGraphicsEngine final {
     std::optional<graphics::GuestScene> guest_scene_{};
     DirtyRegionCoalescer dirty_region_coalescer_{};
     DirtyRegionStats refresh_damage_{};
+    DirectSurfacePresenter direct_surface_presenter_{};
     FontRegistry& fonts_;
     BitmapFontRasterizer bitmap_font_rasterizer_;
     GuestPresentationHooks presentation_hooks_{};
@@ -251,6 +325,11 @@ class GuestGraphicsEngine final {
         uint64_t max_total_us{};
         // Published frames superseded in the mailbox before LVGL adopted them.
         uint32_t frames_replaced{};
+        // Published frames handed to the presenter instead of LVGL.
+        uint32_t frames_to_presenter{};
+        // Published frames left in the mailbox because the presenter queue was
+        // full while it owned the panel.
+        uint32_t frames_deferred{};
 
         void Reset() { *this = {}; }
     };

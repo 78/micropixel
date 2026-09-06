@@ -10,7 +10,7 @@ Unless otherwise noted, project-authored source code, documentation, and assets 
 
 - fork: <https://github.com/78/wasm-micro-runtime>;
 - branch: `wamr-host/esp-idf-psram`;
-- pinned commit: `4dbe3b6efe776fde06468e47f342c1d351879cf0`;
+- pinned commit: `af07c787ac6f7d1d20555f97ddc184f5fc13731a`;
 - upstream: <https://github.com/bytecodealliance/wasm-micro-runtime>;
 - license: Apache-2.0 WITH LLVM-exception.
 

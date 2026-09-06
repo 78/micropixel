@@ -31,6 +31,11 @@ struct MicropixelTestEspTimer final {
 
 using esp_timer_handle_t = MicropixelTestEspTimer*;
 
+inline int64_t esp_timer_get_time() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 inline esp_err_t esp_timer_create(const esp_timer_create_args_t* arguments, esp_timer_handle_t* timer_out) {
     if (arguments == nullptr || arguments->callback == nullptr || timer_out == nullptr) {
         return ESP_ERR_INVALID_ARG;

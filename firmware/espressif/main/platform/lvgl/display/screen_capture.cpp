@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "lvgl.h"
+#include "platform/lvgl/display/scanout_stage_pool.hpp"
 #include "soc/soc_caps.h"
 #if SOC_JPEG_ENCODE_SUPPORTED
 #include "driver/jpeg_encode.h"
@@ -26,24 +27,56 @@ struct RawCapture final {
     DisplayCapturePixelFormat format{DisplayCapturePixelFormat::kRgb565};
 };
 
+// Capture buffers are one panel frame each. While a Guest with a pinned linear
+// memory runs, the PSRAM heap rarely has that much contiguous space left, so
+// the boot-time scanout stage pool is tried first and the heap only as a
+// fallback. Capture is opportunistic: it leaves the two slots a status layer
+// or Hall transition needs (compose + wire) so a screenshot taken while the
+// status layer is open never degrades the transition to the software path.
+constexpr uint32_t kTransitionStageReserve = 2U;
+
+[[nodiscard]] uint8_t* AcquireFrameBuffer(uint32_t bytes, size_t& capacity, bool output) {
+    ScanoutStagePool& pool = ScanoutStagePool::Instance();
+    if (pool.Ready() && pool.slot_bytes() >= bytes) {
+        uint8_t* slot = pool.Acquire(bytes, kTransitionStageReserve);
+        if (slot != nullptr) {
+            capacity = pool.slot_bytes();
+            return slot;
+        }
+    }
+#if SOC_JPEG_ENCODE_SUPPORTED
+    jpeg_encode_memory_alloc_cfg_t config{
+        .buffer_direction = output ? JPEG_ENC_ALLOC_OUTPUT_BUFFER : JPEG_ENC_ALLOC_INPUT_BUFFER,
+    };
+    return static_cast<uint8_t*>(jpeg_alloc_encoder_mem(bytes, &config, &capacity));
+#else
+    (void)output;
+    capacity = bytes;
+    return static_cast<uint8_t*>(heap_caps_aligned_calloc(16U, bytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+#endif
+}
+
+void ReleaseFrameBuffer(uint8_t* buffer) {
+    if (buffer == nullptr) {
+        return;
+    }
+    ScanoutStagePool& pool = ScanoutStagePool::Instance();
+    if (pool.Owns(buffer)) {
+        pool.Release(buffer);
+    } else {
+        heap_caps_free(buffer);
+    }
+}
+
 void Release(RawCapture& capture) {
-    heap_caps_free(capture.pixels);
+    ReleaseFrameBuffer(capture.pixels);
     capture = {};
 }
 
-void ReleaseJpeg(uint8_t* data) { heap_caps_free(data); }
+void ReleaseJpeg(uint8_t* data) { ReleaseFrameBuffer(data); }
 
 bool AllocateInput(uint32_t bytes, RawCapture& capture) {
-#if SOC_JPEG_ENCODE_SUPPORTED
-    jpeg_encode_memory_alloc_cfg_t config{
-        .buffer_direction = JPEG_ENC_ALLOC_INPUT_BUFFER,
-    };
-    capture.pixels = static_cast<uint8_t*>(jpeg_alloc_encoder_mem(bytes, &config, &capture.capacity));
-#else
-    capture.capacity = bytes;
-    capture.pixels =
-        static_cast<uint8_t*>(heap_caps_aligned_calloc(16U, bytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-#endif
+    capture.pixels = AcquireFrameBuffer(bytes, capture.capacity, false);
     capture.bytes = bytes;
     return capture.pixels != nullptr && capture.capacity >= bytes;
 }
@@ -98,13 +131,10 @@ bool CaptureDisplayBuffer(lv_display_t* display, uint32_t width, uint32_t height
 
 bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint8_t*& jpeg_bytes, uint32_t& jpeg_size) {
 #if SOC_JPEG_ENCODE_SUPPORTED
-    jpeg_encode_memory_alloc_cfg_t output_config{
-        .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER,
-    };
     size_t output_capacity = 0U;
-    jpeg_bytes = static_cast<uint8_t*>(jpeg_alloc_encoder_mem(capture.bytes, &output_config, &output_capacity));
+    jpeg_bytes = AcquireFrameBuffer(capture.bytes, output_capacity, true);
     if (jpeg_bytes == nullptr || output_capacity > UINT32_MAX) {
-        heap_caps_free(jpeg_bytes);
+        ReleaseFrameBuffer(jpeg_bytes);
         jpeg_bytes = nullptr;
         return false;
     }
@@ -132,7 +162,7 @@ bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint
     }
     if (status != ESP_OK || jpeg_size == 0U) {
         ESP_LOGE(kTag, "hardware JPEG encode failed: %s", esp_err_to_name(status));
-        heap_caps_free(jpeg_bytes);
+        ReleaseFrameBuffer(jpeg_bytes);
         jpeg_bytes = nullptr;
         jpeg_size = 0U;
         return false;
@@ -142,10 +172,11 @@ bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint
     if (width > INT32_MAX || height > INT32_MAX || capture.bytes > INT32_MAX) {
         return false;
     }
-    const uint32_t output_capacity = capture.bytes;
-    jpeg_bytes =
-        static_cast<uint8_t*>(heap_caps_aligned_calloc(16U, output_capacity, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (jpeg_bytes == nullptr) {
+    size_t output_capacity = 0U;
+    jpeg_bytes = AcquireFrameBuffer(capture.bytes, output_capacity, true);
+    if (jpeg_bytes == nullptr || output_capacity > INT32_MAX) {
+        ReleaseFrameBuffer(jpeg_bytes);
+        jpeg_bytes = nullptr;
         return false;
     }
     jpeg_enc_config_t config = DEFAULT_JPEG_ENC_CONFIG();
@@ -171,7 +202,7 @@ bool EncodeJpeg(const RawCapture& capture, uint32_t width, uint32_t height, uint
     }
     if (status != JPEG_ERR_OK || encoded_size <= 0) {
         ESP_LOGE(kTag, "software JPEG encode failed: status=%d", static_cast<int>(status));
-        heap_caps_free(jpeg_bytes);
+        ReleaseFrameBuffer(jpeg_bytes);
         jpeg_bytes = nullptr;
         return false;
     }

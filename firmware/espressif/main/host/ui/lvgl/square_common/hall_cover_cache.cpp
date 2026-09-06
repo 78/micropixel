@@ -21,6 +21,7 @@ void HallCoverCache::BindUi(HallCoverCacheUi ui) { ui_ = ui; }
 
 void HallCoverCache::BeginCatalog(const host_ui::HallModel& model, uint32_t app_count, uint64_t catalog_signature) {
     Pause();
+    ++catalog_generation_;
     sources_.fill({});
     app_count_ = std::min<uint32_t>(app_count, host_ui::kMaxHallApps);
     for (uint32_t index = 0U; index < app_count_; ++index) {
@@ -54,7 +55,7 @@ bool HallCoverCache::Prepared(uint32_t app_index, host_ui::HallCoverModel& cover
         return false;
     }
     const auto cached = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
-        return entry.pixels != nullptr && entry.key == source.cache_key;
+        return entry.pixels != nullptr && entry.identity.Matches({source.cache_key, source.data, catalog_generation_});
     });
     if (cached != entries_.end()) {
         cached->app_index = app_index;
@@ -65,13 +66,12 @@ bool HallCoverCache::Prepared(uint32_t app_index, host_ui::HallCoverModel& cover
 bool HallCoverCache::PrepareSource(const host_ui::HallCoverModel& source, host_ui::HallCoverModel& cover) {
     const uint32_t stride = HallCoverStride(config_.target_size);
     const uint32_t bytes = HallCoverBytes(config_.target_size);
-    if (source.format == host_ui::HallCoverFormat::kRgb888 && source.width == config_.target_size &&
-        source.height == config_.target_size && source.stride == stride && source.size == bytes) {
+    if (HallCoverCachePolicy::CanUseSourceDirectly(source, config_.target_size)) {
         cover = source;
         return true;
     }
     const auto cached = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
-        return entry.pixels != nullptr && entry.key == source.cache_key;
+        return entry.pixels != nullptr && entry.identity.Matches({source.cache_key, source.data, catalog_generation_});
     });
     if (cached == entries_.end()) {
         return false;
@@ -81,7 +81,7 @@ bool HallCoverCache::PrepareSource(const host_ui::HallCoverModel& source, host_u
              .width = config_.target_size,
              .height = config_.target_size,
              .stride = stride,
-             .cache_key = cached->key};
+             .cache_key = cached->identity.key};
     return true;
 }
 
@@ -169,13 +169,14 @@ void HallCoverCache::Process(const Job& job) {
                              sources_[job.app_index].cache_key == job.source.cache_key;
         if (current) {
             auto existing = std::find_if(entries_.begin(), entries_.end(), [&](const Entry& entry) {
-                return entry.pixels != nullptr && entry.key == job.source.cache_key;
+                return entry.pixels != nullptr &&
+                       entry.identity.Matches({job.source.cache_key, job.source.data, catalog_generation_});
             });
             if (existing == entries_.end()) {
                 std::array<HallCoverCacheSlot, kCapacity> slots{};
                 for (size_t index = 0U; index < slots.size(); ++index) {
                     slots[index] = {.occupied = entries_[index].pixels != nullptr,
-                                    .key = entries_[index].key,
+                                    .key = entries_[index].identity.key,
                                     .app_index = entries_[index].app_index};
                 }
                 const size_t slot_index = HallCoverCachePolicy::ReplacementIndex(
@@ -183,7 +184,9 @@ void HallCoverCache::Process(const Job& job) {
                 if (slot_index != HallCoverCachePolicy::kNoSlot) {
                     Entry& slot = entries_[slot_index];
                     ReleaseEntry(slot);
-                    slot = {.pixels = pixels, .key = job.source.cache_key, .app_index = job.app_index};
+                    slot = {.pixels = pixels,
+                            .identity = {job.source.cache_key, job.source.data, catalog_generation_},
+                            .app_index = job.app_index};
                     pixels = nullptr;
                     existing = entries_.begin() + static_cast<std::ptrdiff_t>(slot_index);
                 }
@@ -195,7 +198,7 @@ void HallCoverCache::Process(const Job& job) {
                                        .width = config_.target_size,
                                        .height = config_.target_size,
                                        .stride = HallCoverStride(config_.target_size),
-                                       .cache_key = existing->key});
+                                       .cache_key = existing->identity.key});
                 if (ui_.request_refresh != nullptr) {
                     ui_.request_refresh(ui_.context);
                 }

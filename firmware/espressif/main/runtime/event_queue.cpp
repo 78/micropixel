@@ -239,6 +239,13 @@ bool EventQueue::PushRequired(const micropixel_event_t& event) {
     return false;
 }
 
+bool EventQueue::PushAdvisory(const micropixel_event_t& event) {
+    if (queue_ == nullptr || !accepting_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return xQueueSend(queue_, &event, 0U) == pdTRUE;
+}
+
 PeriodicPushResult EventQueue::PushPeriodicCoalesced(const micropixel_event_t& event) {
     uint32_t encoded_index = event.source & 0xffU;
     if (queue_ == nullptr || !accepting_.load(std::memory_order_acquire) || encoded_index == 0U ||

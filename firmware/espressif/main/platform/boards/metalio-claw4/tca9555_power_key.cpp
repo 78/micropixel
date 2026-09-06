@@ -26,7 +26,7 @@ constexpr uint8_t kPowerKeyPulseMask = 1U << 4U;
 constexpr uint8_t kPowerInputMask = (1U << 2U) | (1U << 3U);
 constexpr int kI2cTimeoutMs = 20;
 constexpr uint64_t kPowerClickGuardUs = 2000000U;
-constexpr uint16_t kPowerOffLongPressMs = 2000U;
+constexpr uint16_t kPowerOffLongPressMs = 1000U;
 constexpr TickType_t kPowerOffPulseHalfPeriod = pdMS_TO_TICKS(100U);
 constexpr uint32_t kWakeLineDrainAttempts = 4U;
 constexpr TickType_t kWakeLineSettleDelay = 1U;
@@ -66,6 +66,11 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander, buses
         return status;
     }
     (void)RecordRawLevel(initial_port0, initial_port1, initial_interrupt_level);
+    if (last_key_level_ == BUTTON_ACTIVE) {
+        // The same physical hold that powered the board must not become a
+        // sleep click or power-off request once Host sinks are registered.
+        wake_key_release_required_.store(true, std::memory_order_release);
+    }
 
     driver_.owner = this;
     driver_.base.enable_power_save = true;
@@ -114,6 +119,7 @@ esp_err_t Tca9555PowerKey::Initialize(i2c_master_dev_handle_t io_expander, buses
         return status;
     }
 
+    GuardWakeButtonUntilRelease();
     ESP_LOGI(kTag, "ready: TCA9555 P0.5 active-low, TCA_INT GPIO%d low-level wake", board::kIoExpanderInterrupt);
     return ESP_OK;
 }
@@ -227,8 +233,13 @@ bool Tca9555PowerKey::PowerPressOccurredAfterRequest() const {
            power_request_generation_.load(std::memory_order_acquire);
 }
 
+void Tca9555PowerKey::GuardWakeButtonUntilRelease() {
+    GuardWakeButtonUntilRelease(static_cast<uint64_t>(esp_timer_get_time()) + kPowerClickGuardUs);
+}
+
 void Tca9555PowerKey::GuardWakeButtonUntilRelease(uint64_t click_deadline_us) {
     wake_key_release_required_.store(true, std::memory_order_release);
+    RememberWakePressGeneration();
     SuppressSingleClicksUntil(click_deadline_us);
 
     uint8_t port0 = 0U;
@@ -239,12 +250,31 @@ void Tca9555PowerKey::GuardWakeButtonUntilRelease(uint64_t click_deadline_us) {
         return;
     }
     if ((port0 & kPowerKeyMask) != 0U) {
-        wake_key_release_required_.store(false, std::memory_order_release);
-        power_request_generation_.store(press_generation_.load(std::memory_order_acquire), std::memory_order_release);
+        RearmAfterWakeRelease();
         ESP_LOGI(kTag, "wake key already released; guarded clicks remain suppressed");
         return;
     }
     ESP_LOGI(kTag, "wake key remains pressed; power requests are blocked until release");
+}
+
+void Tca9555PowerKey::RearmAfterWakeRelease() {
+    wake_key_release_required_.store(false, std::memory_order_release);
+    power_request_generation_.store(press_generation_.load(std::memory_order_acquire), std::memory_order_release);
+    SuppressSingleClicksUntil(static_cast<uint64_t>(esp_timer_get_time()) + kPowerClickGuardUs);
+}
+
+void Tca9555PowerKey::RememberWakePressGeneration() {
+    const uint32_t generation = press_generation_.load(std::memory_order_acquire);
+    if (generation == 0U) {
+        return;
+    }
+    wake_click_generation_.store(generation, std::memory_order_release);
+    wake_click_generation_valid_.store(true, std::memory_order_release);
+}
+
+bool Tca9555PowerKey::IsWakeOrPowerOnPress() const {
+    return wake_click_generation_valid_.load(std::memory_order_acquire) &&
+           press_generation_.load(std::memory_order_acquire) == wake_click_generation_.load(std::memory_order_acquire);
 }
 
 void Tca9555PowerKey::SuppressSingleClicksUntil(uint64_t deadline_us) {
@@ -356,7 +386,7 @@ uint8_t Tca9555PowerKey::RecordRawLevel(uint8_t port0, uint8_t port1, int interr
     raw_level_known_ = true;
     last_key_level_ = key_level;
     if (key_level == BUTTON_INACTIVE && wake_key_release_required_.exchange(false, std::memory_order_acq_rel)) {
-        power_request_generation_.store(press_generation_.load(std::memory_order_acquire), std::memory_order_release);
+        RearmAfterWakeRelease();
         ESP_LOGI(kTag, "wake key release observed at raw input; power requests rearmed");
     }
     const bool power_inputs_changed = power_inputs_known_ && power_inputs != last_power_inputs_;
@@ -421,11 +451,7 @@ void Tca9555PowerKey::ButtonEvent(void* button, void* context) {
         ESP_LOGI(kTag, "event %s, pressed=%" PRIu32 " ms", iot_button_get_event_str(event),
                  iot_button_get_pressed_time(button_handle));
         if (owner != nullptr && owner->wake_key_release_required_.exchange(false, std::memory_order_acq_rel)) {
-            // This press was consumed as the wake source. Make it the new
-            // baseline so a later automatic-sleep request does not mistake it
-            // for a press that happened during that new transition.
-            owner->power_request_generation_.store(owner->press_generation_.load(std::memory_order_acquire),
-                                                   std::memory_order_release);
+            owner->RearmAfterWakeRelease();
             ESP_LOGI(kTag, "wake key released; power requests rearmed");
         }
         return;
@@ -433,10 +459,13 @@ void Tca9555PowerKey::ButtonEvent(void* button, void* context) {
     ESP_LOGI(kTag, "event %s", iot_button_get_event_str(event));
     if (event == BUTTON_PRESS_DOWN && owner != nullptr) {
         owner->press_generation_.fetch_add(1U, std::memory_order_acq_rel);
+        if (owner->wake_key_release_required_.load(std::memory_order_acquire)) {
+            owner->RememberWakePressGeneration();
+        }
     }
     if (event != BUTTON_SINGLE_CLICK || owner == nullptr) {
         if (event == BUTTON_LONG_PRESS_START && owner != nullptr) {
-            if (owner->wake_key_release_required_.load(std::memory_order_acquire)) {
+            if (owner->wake_key_release_required_.load(std::memory_order_acquire) || owner->IsWakeOrPowerOnPress()) {
                 ESP_LOGI(kTag, "suppressing power-off hold until the wake key is released");
                 return;
             }
@@ -449,13 +478,17 @@ void Tca9555PowerKey::ButtonEvent(void* button, void* context) {
             if (sink == nullptr || !sink(sink_context, static_cast<uint64_t>(esp_timer_get_time()))) {
                 ESP_LOGI(kTag, "power-off request rejected by Host power supervisor");
             } else {
-                ESP_LOGI(kTag, "two-second power-button hold accepted as a power-off request");
+                ESP_LOGI(kTag, "one-second power-button hold accepted as a power-off request");
             }
         }
         return;
     }
     if (owner->wake_key_release_required_.load(std::memory_order_acquire)) {
         ESP_LOGI(kTag, "suppressing power-button click until the wake key is released");
+        return;
+    }
+    if (owner->IsWakeOrPowerOnPress()) {
+        ESP_LOGI(kTag, "suppressing power-button click from the wake or power-on hold");
         return;
     }
 

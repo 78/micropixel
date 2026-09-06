@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 #include "abi/micropixel_abi.h"
 #include "device/contracts/input.hpp"
@@ -21,6 +22,7 @@ struct AppDescriptor final {
     std::array<char, kAppIdCapacity> app_id{};
     std::array<char, kDisplayNameCapacity> display_name{};
     uint32_t bundle_size{};
+    std::array<uint8_t, 32U> sha256{};
 };
 
 struct CatalogSnapshot final {
@@ -124,5 +126,13 @@ struct HostResult final {
     bool has_diagnostic{};
     bool ok{};
 };
+
+// Lower-case hex of a SHA-256 digest, NUL terminated (shared by the local and
+// remote control agents' App list responses).
+inline void FormatSha256Hex(const std::array<uint8_t, 32U>& digest, std::array<char, 65U>& text_out) {
+    for (size_t index = 0U; index < digest.size(); ++index) {
+        std::snprintf(text_out.data() + index * 2U, 3U, "%02x", digest[index]);
+    }
+}
 
 }  // namespace micropixel::firmware::control

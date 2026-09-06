@@ -92,6 +92,7 @@ class SquareSystemUiState final {
     [[nodiscard]] platform::lvgl::GuestPresentationHooks GuestFrameHooks();
     [[nodiscard]] device::Input& Input() { return input_router; }
     [[nodiscard]] lv_obj_t* GuestFrameLocked() const { return guest_graphics_.FrameLocked(); }
+    void FlushPendingGuestFrameLocked() { guest_graphics_.FlushPendingFrameLocked(); }
     [[nodiscard]] bool GuestRefreshSynchronizationAvailable() const {
         return guest_graphics_.RefreshSynchronizationAvailable();
     }
@@ -155,7 +156,10 @@ class SquareSystemUiState final {
                                                                               void* action_context);
     void UpdateStatusLayer(const host_ui::StatusLayerModel& model);
     void LeaveStatusLayer(uint64_t trigger_timestamp_us);
-    void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent);
+    void UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu);
+    // Direct Surface HUD: logs the sample and hands the off-screen LVGL
+    // rendering to the presenter as a scanout overlay.
+    void PublishDirectSurfacePerformanceSample();
     void ApplyTheme(host_ui::SystemThemeMode mode);
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowShutdown(
         PrepareHardwareCallback prepare_locked = nullptr, void* prepare_context = nullptr);
@@ -218,9 +222,14 @@ class SquareSystemUiState final {
     void* before_launch_presentation_context_{};
     PrepareHardwareCallback before_root_release_locked_{};
     void* before_root_release_context_{};
-    uint8_t performance_cpu_percent_{};
+    CpuUsageSample performance_cpu_{};
     bool performance_overlay_requested_{};
     bool guest_actions_watched_{};
+    // Direct Surface telemetry: FPS window and whether the presenter currently
+    // holds an overlay published by us.
+    uint32_t performance_direct_frames_{};
+    int64_t performance_direct_sample_us_{};
+    bool performance_direct_overlay_published_{};
 };
 
 }  // namespace micropixel::host_ui::lvgl::square_common

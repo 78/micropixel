@@ -7,13 +7,11 @@ guest/
 ├── abi/          # Runtime Host ABI、唯一允许的 import 清单
 ├── runtime/      # startup 与 typed SDK → C ABI binding
 ├── sdk/          # Restricted C++23 typed Public API
-├── apps/demo/    # 可导航的 SDK 功能演示应用
+├── apps/sdk-demo/    # 可导航的 SDK 功能演示应用
 ├── apps/snake/   # 完整产品应用及其 metadata、素材
 ├── apps/blocks/  # 触控俄罗斯方块产品应用
 ├── apps/tilt/    # 加速度计控制的 100 关滚球迷宫
-├── apps/showcase/ # 四个轻量 Showcase App 的共享实现
-├── apps/{tap-counter,color-lab,pixel-sketch,orbit-pad}/
-│                 # 用于多 App 大厅与 Guest SDK 验收的四个独立 Bundle
+├── apps/maze-break/ # Direct Surface 全屏软渲染的 2.5D 射击游戏（体感 + 触摸）
 └── tests/        # P4 Runtime/SDK conformance
 ```
 
@@ -21,7 +19,7 @@ guest/
 核心 ABI，并导出内部入口 `__micropixel_start`；`runtime/sdk.cpp` 集中负责 Public SDK 到 C ABI
 的转换。Public SDK 头文件不直接包含 ABI 头。
 
-[`apps/demo/`](apps/demo/) 是 SDK 用法和真机手工检查的统一入口。它只生成一个 Bundle，运行后可从
+[`apps/sdk-demo/`](apps/sdk-demo/) 是 SDK 用法和真机手工检查的统一入口。它只生成一个 Bundle，运行后可从
 同一界面进入 Timer/Clock/Log、Input/Random、Storage、Resource/Atlas、Audio 和 Devices/Hardware 页面。每项能力的
 实现位于命名明确的独立 CPP，AI 可以按功能直接定位；Renderer 由首页和所有页面共同使用，不再维护
 单独的静态绘图程序。
@@ -29,7 +27,9 @@ guest/
 `tests/conformance/` 保留 Event、Timer/Clock、Renderer、退出语义、watchdog 和 Service 边界
 验收。历史 S3 Guest、独立 benchmark 和编译失败样例已经移除；需要这类测试时按当前接口重写。
 完整产品应用 [`apps/snake/`](apps/snake/)、[`apps/blocks/`](apps/blocks/) 和
-[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。
+[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。[`apps/maze-break/`](apps/maze-break/) 不走 Scene，而是向 Host buffer 的
+`DirectSurface` 提交 Graphics 1.6 `SurfaceRaster` draw list（墙/地板/精灵/文字都由 Host kernel 光栅化），
+是全屏渲染路径与 `--benchmark` 分段统计的验收载体。
 
 所有游戏音效使用 `apps/<game>/audio/sfx.json` 作为唯一参数源，并在正式 Bundle 构建中执行感知分析门禁。
 事件层级、重复暴露、跨游戏对齐和真机 A/B 流程见
@@ -48,7 +48,7 @@ SDK 初始化时根据物理屏幕建立短边为 720 的逻辑坐标；App 通�
 唯一输入，不需要为每个 App 编写 build 脚本：
 
 ```sh
-python3 tools/micropixel --transport usb run guest/apps/demo
+python3 tools/micropixel --transport usb run guest/apps/sdk-demo
 
 # 已安装 CLI 时，在包含 app.json 的项目目录中可直接运行：
 micropixel --transport usb run
@@ -60,14 +60,24 @@ micropixel --transport usb run
 `micropixel build`；离线 `micropixel package` 必须显式传入 `--aot-target riscv32-ilp32f` 或
 `--aot-target xtensa`。
 
+`build`/`package`/`run`/`app install` 采用与 Ninja 相同的增量规则：产物旁有 `*.stamp.json` 记录上次的
+构建参数和输入清单（`app.json`、sources、项目内头文件与 `#include "..."` 到的共享头、资源、`sfx.json`、
+翻译文件、`guest/{sdk,runtime,abi}` 和生成器脚本）；参数与清单一致且没有输入比产物新时直接复用，输出
+`Package unchanged, reusing`。只比 mtime，不哈希内容；`--force` 强制重新编译打包。
+
+`APP_LIST` / `app.list` 现在带 Catalog SHA-256。`run`/`app install` 在本地 Bundle 的 `appId`、大小和 digest
+与已装版本一致时跳过整包上传，返回 `already_installed`；旧固件没有该字段时仍完整安装。`--force` 同时绕过
+这层短路径。`run` 即使包没变也会 `APP_STOP` 再 `APP_START`。
+
 完整产品基线仍可使用：
 
 ```sh
-bash tools/p4.sh build-all
+bash tools/p4.sh build-host
+bash tools/p4.sh build-apps
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
-`flash-apps` 明确替换 App Store，并写入八个示例 App；不再提供会把任意 Bundle 直接写入
+`flash-apps` 明确替换 App Store，并写入四个示例 App；不再提供会把任意 Bundle 直接写入
 分区的独立公开脚本。单 App 开发安装走 USB Local Control 或 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；
@@ -75,6 +85,15 @@ bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 AOT 调用栈，但继续保留软件越界检查与内存诊断。需要显式选择时使用
 `--profile development|release|size`。链接器只允许 [`abi/allowed_imports.txt`](abi/allowed_imports.txt)
 列出的 Runtime import，拼写错误或未授权 import 会在构建阶段失败。
+
+所有模式都启用 Wasm bulk memory：`memcpy`/`memmove`/`memset` 直接降为 `memory.copy`/`memory.fill`，
+由 Host AOT 变成原生块拷贝。注意 Guest 用 `-ffreestanding` 编译，编译器不会把手写字节循环自动识别成
+memcpy；整帧拷贝、清屏和大块搬运请显式调用 `memcpy`/`memset`。
+
+`micropixel build|package|run|app install --unchecked-memory` 让 wamrc 关闭线性内存越界检查
+（`--bounds-checks=0`），并在 Bundle 的 AOT section 置 `UNCHECKED_MEMORY` 位。这样的 Guest 不再被沙箱
+隔离，产品 Host 拒绝加载；只有以 `CONFIG_MICROPIXEL_ALLOW_UNCHECKED_AOT=y` 构建的开发 Host 放行，用途是
+用同一个 App 做 A/B，量出 bounds-check 的真实开销，再决定是否为本地信任 Bundle 提供正式通道。
 
 Guest 使用 wasi-sdk 33 的 no-exception libc++ profile。常用 header-only STL、动态容器和
 `new/delete` 由统一 CLI 配置并按引用裁剪；App 不需要选择或链接独立 STL 模块。OS 相关标准库、
@@ -92,7 +111,7 @@ Guest 代码不得直接依赖 ESP-IDF 或具体开发板。需要访问设备�
 copyable Service View，Service 创建的 Host Resource 才使用 move-only RAII。
 
 Guest AOT 的兼容性基线是 MicroPixel WAMR fork commit
-`4dbe3b6efe776fde06468e47f342c1d351879cf0` 和 AOT format v6，不是 `wamrc 2.4.3` 版本字符串。
+`af07c787ac6f7d1d20555f97ddc184f5fc13731a` 和 AOT format v6，不是 `wamrc 2.4.3` 版本字符串。
 上游 WAMR 2.4.3 至 2.4.5 生成的 AOT v5 不能用于当前固件。
 
 项目自有 C/C++ 代码遵循

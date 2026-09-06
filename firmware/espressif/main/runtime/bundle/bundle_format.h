@@ -55,8 +55,17 @@ typedef enum micropixel_bundle_aot_flag {
     /* flags=0 identifies a legacy Bundle without an explicit threading declaration. */
     MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED = 1U << 0U,
     MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY = 1U << 1U,
+    /* The AOT was compiled with --bounds-checks=0. Product Hosts refuse it;
+     * only CONFIG_MICROPIXEL_ALLOW_UNCHECKED_AOT builds load it. */
+    MICROPIXEL_BUNDLE_AOT_FLAG_UNCHECKED_MEMORY = 1U << 2U,
+    /* The Host reserves the Guest's whole linear-memory ceiling at start so
+     * memory.grow never relocates the base; required for GUEST_BUFFERS Direct
+     * Surfaces, whose Host pointers into Guest memory outlive a call. Without
+     * it the memory starts small and grows. */
+    MICROPIXEL_BUNDLE_AOT_FLAG_PINNED_MEMORY = 1U << 3U,
     MICROPIXEL_BUNDLE_AOT_FLAG_MASK =
-        MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED | MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY,
+        MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED | MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY |
+        MICROPIXEL_BUNDLE_AOT_FLAG_UNCHECKED_MEMORY | MICROPIXEL_BUNDLE_AOT_FLAG_PINNED_MEMORY,
 } micropixel_bundle_aot_flag_t;
 
 typedef enum micropixel_bundle_display_profile {

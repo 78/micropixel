@@ -24,9 +24,13 @@ namespace {
 
 constexpr char kTag[] = "micropixel_audio";
 constexpr uint32_t kFramesPerChunk = 128U;
-constexpr uint32_t kMaxPcmStreams = 2U;
+// Pull-model PCM voices: two Opus playbacks plus one Guest PCM stream. The
+// runtime services enforce the per-kind quota; the mixer only sizes its slots.
+constexpr uint32_t kMaxCompressedPlaybacks = 2U;
+constexpr uint32_t kMaxGuestPcmStreams = 1U;
+constexpr uint32_t kPcmVoiceCount = kMaxCompressedPlaybacks + kMaxGuestPcmStreams;
 constexpr uint32_t kAudioTaskStackSize = 4096U;
-constexpr BaseType_t kAudioTaskCore = 0;
+constexpr BaseType_t kAudioTaskCore = task_policy::kSystemCore;
 constexpr uint32_t kAudioIdleGraceMs = 10000U;
 
 enum class EngineState : uint8_t {
@@ -56,7 +60,7 @@ struct AudioEngineState final {
     std::atomic<TaskHandle_t> task{};
     SemaphoreHandle_t voices_mutex{};
     SynthVoice voices[kMaxVoices]{};
-    PcmVoice pcm_voices[kMaxPcmStreams]{};
+    PcmVoice pcm_voices[kPcmVoiceCount]{};
     device::PcmCompletionSink pcm_completion_sink{};
     void* pcm_completion_context{};
     AudioOutputPeripheral* sink{};
@@ -76,7 +80,7 @@ constexpr device::PcmStreamHandle PcmHandle(uint32_t index, uint32_t generation)
 
 PcmVoice* FindPcmVoiceLocked(device::PcmStreamHandle handle) {
     const uint32_t encoded_index = handle & 0xffU;
-    if (encoded_index == 0U || encoded_index > kMaxPcmStreams) {
+    if (encoded_index == 0U || encoded_index > kPcmVoiceCount) {
         return nullptr;
     }
     PcmVoice& voice = State().pcm_voices[encoded_index - 1U];
@@ -87,12 +91,12 @@ struct AudioChunkState final {
     bool rendered_audio{};
     bool active_after{};
     uint32_t completion_count{};
-    device::PcmCompletion completions[kMaxPcmStreams]{};
+    device::PcmCompletion completions[kPcmVoiceCount]{};
 };
 
 struct AudioTaskBuffers final {
     int32_t output_frames[kFramesPerChunk * 2U]{};
-    int16_t pcm_samples[kMaxPcmStreams][kFramesPerChunk]{};
+    int16_t pcm_samples[kPcmVoiceCount][kFramesPerChunk]{};
 };
 
 bool HasPlayableVoiceLocked() {
@@ -135,9 +139,9 @@ AudioChunkState FillAudioChunk(AudioTaskBuffers& buffers) {
     AudioChunkState chunk{};
     if (!State().suspended.load(std::memory_order_acquire)) {
         std::memset(buffers.pcm_samples, 0, sizeof(buffers.pcm_samples));
-        uint32_t pcm_frames[kMaxPcmStreams]{};
-        uint16_t pcm_volumes[kMaxPcmStreams]{};
-        for (uint32_t index = 0U; index < kMaxPcmStreams; ++index) {
+        uint32_t pcm_frames[kPcmVoiceCount]{};
+        uint16_t pcm_volumes[kPcmVoiceCount]{};
+        for (uint32_t index = 0U; index < kPcmVoiceCount; ++index) {
             PcmVoice& voice = State().pcm_voices[index];
             if (!voice.active || voice.paused || voice.source.read == nullptr) {
                 continue;
@@ -170,7 +174,7 @@ AudioChunkState FillAudioChunk(AudioTaskBuffers& buffers) {
                     mixed += AudioMixer::NextSample(voice, State().sine_table);
                 }
             }
-            for (uint32_t index = 0U; index < kMaxPcmStreams; ++index) {
+            for (uint32_t index = 0U; index < kPcmVoiceCount; ++index) {
                 if (frame < pcm_frames[index]) {
                     chunk.rendered_audio = true;
                     mixed += static_cast<int32_t>(buffers.pcm_samples[index][frame]) * pcm_volumes[index] / 1000;
@@ -374,9 +378,10 @@ int32_t AudioEngine::GetInfo(micropixel_audio_info_t& info) {
     info.supported_waveforms = (1U << MICROPIXEL_AUDIO_WAVE_SINE) | (1U << MICROPIXEL_AUDIO_WAVE_SQUARE) |
                                (1U << MICROPIXEL_AUDIO_WAVE_TRIANGLE) | (1U << MICROPIXEL_AUDIO_WAVE_NOISE);
     info.max_tone_duration_ms = MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS;
-    info.capabilities = MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS;
+    info.capabilities = MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS | MICROPIXEL_AUDIO_CAPABILITY_PCM_STREAM;
     info.max_clips = 16U;
-    info.max_playbacks = kMaxPcmStreams;
+    info.max_playbacks = kMaxCompressedPlaybacks;
+    info.max_pcm_streams = kMaxGuestPcmStreams;
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -428,7 +433,7 @@ int32_t AudioEngine::StartPcm(const device::PcmSource& source, uint32_t token, u
     }
     PcmVoice* selected = nullptr;
     uint32_t selected_index = 0U;
-    for (uint32_t index = 0U; index < kMaxPcmStreams; ++index) {
+    for (uint32_t index = 0U; index < kPcmVoiceCount; ++index) {
         if (!State().pcm_voices[index].active) {
             selected = &State().pcm_voices[index];
             selected_index = index;

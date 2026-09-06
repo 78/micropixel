@@ -164,6 +164,18 @@ adapters::GraphicsOperations MakeGuestGraphicsOperations(GuestGraphicsOperations
                 }
             },
         .release_guest_resources = [](void* opaque) { Binding(opaque).engine->Release(); },
+        .create_direct_surface =
+            [](void* opaque, const device::DirectSurfaceConfig& config, const device::DirectSurfaceReleaseSink& sink,
+               device::DirectSurfaceInfo& info) {
+                return Binding(opaque).engine->CreateDirectSurface(config, sink, info);
+            },
+        .present_direct_surface =
+            [](void* opaque, const device::DirectSurfacePresentation& presentation) {
+                return Binding(opaque).engine->PresentDirectSurface(presentation);
+            },
+        .suspend_direct_surface = [](void* opaque) { Binding(opaque).engine->SuspendDirectSurface(); },
+        .resume_direct_surface = [](void* opaque) { Binding(opaque).engine->ResumeDirectSurface(); },
+        .destroy_direct_surface = [](void* opaque) { return Binding(opaque).engine->DestroyDirectSurface(); },
     };
 }
 

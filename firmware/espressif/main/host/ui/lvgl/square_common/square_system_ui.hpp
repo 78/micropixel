@@ -70,7 +70,7 @@ class SquareSystemUi final : public host_ui::SystemUi {
                                                                               void* action_context) override;
     void UpdateStatusLayer(const host_ui::StatusLayerModel& model) override;
     void LeaveStatusLayer(uint64_t trigger_timestamp_us) override;
-    void UpdatePerformanceOverlay(bool enabled, uint8_t cpu_percent) override;
+    void UpdatePerformanceOverlay(bool enabled, const CpuUsageSample& cpu) override;
     void ApplyBrightness(uint8_t percent) override;
     void ApplyVolume(uint8_t percent) override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowShutdown() override;

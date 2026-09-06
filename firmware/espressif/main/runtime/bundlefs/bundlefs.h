@@ -43,6 +43,7 @@ typedef struct bundlefs_file_info {
     char name[BUNDLEFS_MAX_NAME_LENGTH + 1U];
     uint32_t size;
     uint32_t content_id;
+    uint8_t sha256[BUNDLEFS_SHA256_SIZE];
 } bundlefs_file_info_t;
 
 typedef struct bundlefs_store_info {

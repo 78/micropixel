@@ -184,8 +184,11 @@ bool SystemTransitionCompositor::UpdateBackgroundRegionLocked(lv_obj_t* root, co
         return false;
     }
 
-    const uint32_t scratch_bytes =
-        static_cast<uint32_t>(snapshot_width) * static_cast<uint32_t>(snapshot_height) * kBytesPerPixel;
+    // Snapshot reshapes the buffer with LV_STRIDE_AUTO, including row padding.
+    const uint32_t packed_stride = static_cast<uint32_t>(snapshot_width) * kBytesPerPixel;
+    const uint32_t scratch_stride =
+        lv_draw_buf_width_to_stride(static_cast<uint32_t>(snapshot_width), LV_COLOR_FORMAT_RGB888);
+    const uint32_t scratch_bytes = scratch_stride * static_cast<uint32_t>(snapshot_height);
     const uint32_t scratch_allocation_bytes = AlignPpaBufferSize(scratch_bytes);
     auto* scratch = static_cast<uint8_t*>(
         heap_caps_aligned_alloc(kPpaBufferAlignment, scratch_allocation_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -194,12 +197,16 @@ bool SystemTransitionCompositor::UpdateBackgroundRegionLocked(lv_obj_t* root, co
     }
 
     lv_draw_buf_t snapshot{};
-    const uint32_t scratch_stride = static_cast<uint32_t>(snapshot_width) * kBytesPerPixel;
     const bool captured =
         lv_draw_buf_init(&snapshot, static_cast<uint32_t>(snapshot_width), static_cast<uint32_t>(snapshot_height),
                          LV_COLOR_FORMAT_RGB888, scratch_stride, scratch, scratch_bytes) == LV_RESULT_OK &&
         lv_snapshot_take_to_draw_buf(root, LV_COLOR_FORMAT_RGB888, &snapshot) == LV_RESULT_OK;
     if (captured) {
+        // DMA2D/PPA CopyRgb888 takes a pixel width, not a padded byte stride.
+        for (uint32_t row = 1U; scratch_stride != packed_stride && row < static_cast<uint32_t>(snapshot_height);
+             ++row) {
+            std::memmove(scratch + row * packed_stride, scratch + row * scratch_stride, packed_stride);
+        }
         lv_draw_buf_flush_cache(&snapshot, nullptr);
     }
     const bool copied =

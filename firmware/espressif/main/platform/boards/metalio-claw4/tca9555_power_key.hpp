@@ -30,6 +30,7 @@ class Tca9555PowerKey final {
     [[nodiscard]] esp_err_t PrepareForLightSleep();
     [[nodiscard]] bool IsPressed();
     [[nodiscard]] bool PowerPressOccurredAfterRequest() const;
+    void GuardWakeButtonUntilRelease();
     void GuardWakeButtonUntilRelease(uint64_t click_deadline_us);
     void SuppressSingleClicksUntil(uint64_t deadline_us);
     [[noreturn]] void PowerOff();
@@ -49,6 +50,9 @@ class Tca9555PowerKey final {
     [[nodiscard]] uint8_t RecordRawLevel(uint8_t port0, uint8_t port1, int interrupt_level);
     [[nodiscard]] esp_err_t EnterPowerSave();
     [[nodiscard]] esp_err_t ExitPowerSave();
+    void RearmAfterWakeRelease();
+    void RememberWakePressGeneration();
+    [[nodiscard]] bool IsWakeOrPowerOnPress() const;
 
     static uint8_t GetKeyLevel(button_driver_t* driver);
     static esp_err_t EnterPowerSaveCallback(button_driver_t* driver);
@@ -75,7 +79,9 @@ class Tca9555PowerKey final {
     std::atomic<uint64_t> suppress_single_click_until_us_{};
     std::atomic<uint32_t> press_generation_{};
     std::atomic<uint32_t> power_request_generation_{};
+    std::atomic<uint32_t> wake_click_generation_{};
     std::atomic_bool wake_key_release_required_{};
+    std::atomic_bool wake_click_generation_valid_{};
     bool raw_level_known_{};
     bool power_inputs_known_{};
     bool isr_registered_{};

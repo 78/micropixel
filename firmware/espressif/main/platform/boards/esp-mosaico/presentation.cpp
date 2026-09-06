@@ -20,6 +20,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
 #include "lvgl.h"
 #include "platform/adapters/graphics_adapter.hpp"
@@ -198,10 +199,8 @@ void MosaicoPresentation::ApplyVolume(uint8_t percent) {
 }
 
 bool MosaicoPresentation::RetainNativeCover(const host_ui::HallCoverModel& source, host_ui::HallCoverModel& prepared) {
-    if (source.format != host_ui::HallCoverFormat::kRgb888 || source.data != state_.guest_snapshot_cover ||
-        source.width == 0U || source.height != source.width ||
-        source.stride != host_ui::lvgl::square_common::HallCoverStride(source.width) ||
-        source.size != source.stride * source.height) {
+    if (source.data != state_.guest_snapshot_cover ||
+        !host_ui::lvgl::square_common::HallCoverCachePolicy::CanUseSourceDirectly(source, source.width)) {
         return false;
     }
     prepared = source;

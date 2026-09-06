@@ -1,5 +1,14 @@
 menu "WAMR application quotas"
 
+    config MICROPIXEL_HEAP_CHECKPOINTS
+        bool "Check Host heap at Guest service and lifecycle boundaries"
+        default n
+        depends on HEAP_POISONING_LIGHT || HEAP_POISONING_COMPREHENSIVE
+        help
+            Diagnostic only: walk all Host heaps before and after Guest service
+            calls and during teardown. Abort on the first detected corruption.
+            Full heap walks affect frame timing; disable for performance tests.
+
     config MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES
         int "Maximum Wasm linear-memory pages per Guest"
         range 2 128
@@ -20,6 +29,42 @@ menu "WAMR application quotas"
             transient work. WAMR linear-memory allocations and growth are
             admitted only while this reserve remains available. Bitmap pixels
             allocate directly from PSRAM and are not subject to this reserve.
+
+    config MICROPIXEL_RASTER_KERNELS
+        bool "Graphics 1.6 Host raster kernels"
+        default y
+        help
+            Offer RASTER_TEXTURE_UPLOAD / RASTER_PALETTE_UPLOAD and the RASTER
+            channel. Uploaded INDEX8 textures and the lit palette are
+            allocated from PSRAM per upload and freed when the session ends;
+            the ABI limits (32 textures of at most 128x128 plus a 32-level
+            palette) already bound a session to 528 KiB, so there is no
+            separate byte quota. Disabling drops CAP_RASTER from the Graphics
+            descriptor and the RASTER channel reports UNSUPPORTED.
+
+    config MICROPIXEL_RASTER_POOL_INTERNAL_SRAM
+        bool "Place raster kernel textures in internal SRAM"
+        depends on MICROPIXEL_RASTER_KERNELS
+        default n
+        help
+            Allocate raster resources from internal SRAM first and fall back to
+            PSRAM. The kernels read one texel per output pixel, so the L1 cache
+            already hides most of the PSRAM latency; on ESP-Mosaico the SRAM
+            placement measured within noise of PSRAM while pinning the whole
+            pool in the ~70 KiB of internal SRAM that stays
+            free during a Guest session (the default pool no longer fits
+            there). Leave disabled unless a board shows a measurable raster
+            win.
+
+    config MICROPIXEL_ALLOW_UNCHECKED_AOT
+        bool "Load Bundles whose AOT was compiled without bounds checks"
+        default n
+        help
+            `micropixel build --unchecked-memory` compiles the Guest AOT with
+            --bounds-checks=0 and marks the Bundle's AOT section with
+            UNCHECKED_MEMORY. Such a Guest can read and write any Host memory,
+            so product firmware refuses it. Enable only on development Hosts
+            used to measure the bounds-check overhead of a trusted local App.
 
     config WAMR_RUNTIME_MAX_GUEST_THREADS
         int "Maximum child threads per guest"
@@ -245,6 +290,16 @@ menu "MicroPixel board backends"
             background executor, so the ~1.5 KiB burst does not stall the Guest
             frame. Disable to compile the periodic telemetry out of the Host
             entirely; startup and error logs are unaffected.
+
+    config MICROPIXEL_APP_SURFACE_STARTUP_TELEMETRY_FRAMES
+        int "Initial App Surface frames with detailed telemetry"
+        depends on MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+        range 1 8
+        default 1
+        help
+            Log one initial report per App by default. Select 8 when investigating
+            startup rendering; periodic reports and layer-cache transitions are
+            unaffected. Each report costs about 1.5 KiB of console traffic.
 
     config MICROPIXEL_APP_SURFACE_DMA2D_DIRECT_COPY
         bool "Drive DMA2D copies directly with row-window cache maintenance"

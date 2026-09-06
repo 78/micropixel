@@ -83,6 +83,12 @@ class PanelTransitionCompositor final : public host_ui::lvgl::square_common::Sta
     [[nodiscard]] bool SyncDisplayedSource(const uint8_t* source, uint32_t source_width, uint32_t source_height,
                                            const PanelTransitionRect& destination);
     void ClearStatusLayerBuffers();
+    // Full-frame RGB565 staging comes from the shared ScanoutStagePool while a
+    // transition (or the open status layer) owns the panel.
+    [[nodiscard]] uint8_t* AcquireFrame();
+    void ReleaseFrame(uint8_t*& frame);
+    [[nodiscard]] bool EnsureStages();
+    void ReleaseStages();
     void Release();
 
     lv_display_t* display_{};

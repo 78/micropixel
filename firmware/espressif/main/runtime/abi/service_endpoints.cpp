@@ -1,5 +1,6 @@
 #include "runtime/abi/service_endpoints.hpp"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstring>
 
@@ -30,6 +31,33 @@ int32_t WriteResult(const Result& result, uint8_t* response, uint32_t response_c
         return result.error().status;
     }
     return WriteValue<Value>(*result, response, response_capacity, response_size_out);
+}
+
+// Append-only response structures (the GET_INFO family): a Guest compiled
+// against an older header hands over a shorter buffer. As long as it covers the
+// structure's first published version, it receives the prefix it knows;
+// `response_size_out` reports what was copied and `Value::size` still carries
+// the Host's full size so a newer Guest can tell which tail fields are present.
+template <typename Value>
+int32_t WritePrefix(const Value& value, uint32_t min_size, uint8_t* response, uint32_t response_capacity,
+                    uint32_t& response_size_out) {
+    if (response == nullptr || response_capacity < min_size) {
+        response_size_out = sizeof(Value);
+        return MICROPIXEL_STATUS_BUFFER_TOO_SMALL;
+    }
+    const uint32_t copied = std::min<uint32_t>(response_capacity, sizeof(Value));
+    std::memcpy(response, &value, copied);
+    response_size_out = copied;
+    return MICROPIXEL_STATUS_OK;
+}
+
+template <typename Value, typename Result>
+int32_t WritePrefixResult(const Result& result, uint32_t min_size, uint8_t* response, uint32_t response_capacity,
+                          uint32_t& response_size_out) {
+    if (!result) {
+        return result.error().status;
+    }
+    return WritePrefix<Value>(*result, min_size, response, response_capacity, response_size_out);
 }
 
 template <typename Result>
@@ -538,16 +566,18 @@ int32_t RandomServiceEndpoint::Call(uint32_t method_id, const uint8_t*, uint32_t
 
 ServiceDescriptor GraphicsServiceEndpoint::Describe() const {
     auto result = context_.GraphicsInfo();
-    const uint32_t max_submit_bytes = result ? result->max_scene_bytes : MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES;
+    const uint32_t max_scene_bytes = result ? result->max_scene_bytes : MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES;
+    const bool raster = context_.RasterAvailable();
+    const uint32_t max_raster_bytes = raster ? MICROPIXEL_GRAPHICS_MAX_RASTER_BYTES : 0U;
     return ServiceDescriptor{
         .service_id = MICROPIXEL_SERVICE_GRAPHICS,
         .interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
         .interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR,
-        .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_SUBMIT,
-        .capabilities = 0U,
+        .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_SUBMIT | MICROPIXEL_SERVICE_FLAG_EVENTS,
+        .capabilities = raster ? static_cast<uint32_t>(MICROPIXEL_GRAPHICS_CAP_RASTER) : 0U,
         .max_request_bytes = sizeof(micropixel_graphics_measure_text_request_t) + MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES,
         .max_response_bytes = sizeof(micropixel_graphics_info_t),
-        .max_submit_bytes = max_submit_bytes,
+        .max_submit_bytes = max_scene_bytes > max_raster_bytes ? max_scene_bytes : max_raster_bytes,
     };
 }
 
@@ -557,8 +587,8 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
         if (!EmptyRequest(request_size)) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        return WriteResult<micropixel_graphics_info_t>(context_.GraphicsInfo(), response, response_capacity,
-                                                       response_size_out);
+        return WritePrefixResult<micropixel_graphics_info_t>(context_.GraphicsInfo(), MICROPIXEL_GRAPHICS_INFO_MIN_SIZE,
+                                                             response, response_capacity, response_size_out);
     }
     if (method_id == MICROPIXEL_GRAPHICS_METHOD_MEASURE_TEXT) {
         micropixel_graphics_measure_text_request_t wire{};
@@ -572,10 +602,53 @@ int32_t GraphicsServiceEndpoint::Call(uint32_t method_id, const uint8_t* request
             context_.MeasureText(wire.font, reinterpret_cast<const char*>(request + sizeof(wire)), wire.text_length),
             response, response_capacity, response_size_out);
     }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_SURFACE_CREATE) {
+        micropixel_surface_create_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_surface_create_response_t>(context_.SurfaceCreate(wire), response,
+                                                                 response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_SURFACE_PRESENT) {
+        micropixel_surface_present_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        response_size_out = 0U;
+        return ResultStatus(context_.SurfacePresent(wire));
+    }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_SURFACE_DESTROY) {
+        micropixel_handle_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        response_size_out = 0U;
+        return ResultStatus(context_.SurfaceDestroy(wire.handle));
+    }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD) {
+        micropixel_raster_texture_upload_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        response_size_out = 0U;
+        return ResultStatus(context_.RasterTextureUpload(wire));
+    }
+    if (method_id == MICROPIXEL_GRAPHICS_METHOD_RASTER_PALETTE_UPLOAD) {
+        micropixel_raster_palette_upload_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        response_size_out = 0U;
+        return ResultStatus(context_.RasterPaletteUpload(wire));
+    }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }
 
 int32_t GraphicsServiceEndpoint::Submit(uint32_t channel_id, const uint8_t* bytes, uint32_t length) {
+    if (channel_id == MICROPIXEL_GRAPHICS_CHANNEL_RASTER) {
+        return ResultStatus(context_.RasterSubmit(bytes, length));
+    }
     if (channel_id != MICROPIXEL_GRAPHICS_CHANNEL_SCENE) {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
@@ -612,7 +685,7 @@ ServiceDescriptor AudioServiceEndpoint::Describe() const {
         .interface_minor = MICROPIXEL_AUDIO_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_EVENTS,
         .capabilities = capabilities,
-        .max_request_bytes = sizeof(micropixel_audio_tone_t),
+        .max_request_bytes = MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES,
         .max_response_bytes = sizeof(micropixel_audio_info_t),
     };
 }
@@ -623,8 +696,8 @@ int32_t AudioServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, u
         if (!EmptyRequest(request_size)) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
-        return WriteResult<micropixel_audio_info_t>(context_.AudioInfo(), response, response_capacity,
-                                                    response_size_out);
+        return WritePrefixResult<micropixel_audio_info_t>(context_.AudioInfo(), MICROPIXEL_AUDIO_INFO_MIN_SIZE,
+                                                          response, response_capacity, response_size_out);
     }
     if (method_id == MICROPIXEL_AUDIO_METHOD_PLAY_TONE) {
         micropixel_audio_tone_t wire{};
@@ -656,6 +729,26 @@ int32_t AudioServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, u
         auto result = context_.AudioStartPlayback(wire);
         return result ? WriteHandle(*result, response, response_capacity, response_size_out) : result.error().status;
     }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PCM_STREAM_OPEN) {
+        micropixel_audio_pcm_stream_open_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        return WriteResult<micropixel_audio_pcm_stream_open_response_t>(context_.AudioOpenPcmStream(wire), response,
+                                                                        response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PCM_STREAM_WRITE) {
+        micropixel_audio_pcm_stream_write_request_t wire{};
+        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        // The payload is only 2-byte aligned relative to the request start, so
+        // hand the service a pointer it may memcpy from rather than index.
+        const uint32_t payload_bytes = request_size - static_cast<uint32_t>(sizeof(wire));
+        return WriteResult<micropixel_audio_pcm_stream_write_response_t>(
+            context_.AudioWritePcmStream(wire, reinterpret_cast<const int16_t*>(request + sizeof(wire)), payload_bytes),
+            response, response_capacity, response_size_out);
+    }
     if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_SET_VOLUME) {
         micropixel_audio_playback_volume_request_t wire{};
         if (!ReadRequest(request, request_size, wire) || wire.playback == 0U || wire.reserved0 != 0U ||
@@ -683,6 +776,9 @@ int32_t AudioServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, u
     if (method_id == MICROPIXEL_AUDIO_METHOD_PLAYBACK_GET_STATE) {
         return WriteResult<micropixel_audio_playback_state_response_t>(context_.AudioPlaybackState(handle), response,
                                                                        response_capacity, response_size_out);
+    }
+    if (method_id == MICROPIXEL_AUDIO_METHOD_PCM_STREAM_CLOSE) {
+        return ResultStatus(context_.AudioClosePcmStream(handle));
     }
     return MICROPIXEL_STATUS_UNSUPPORTED;
 }

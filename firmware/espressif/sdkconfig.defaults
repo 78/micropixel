@@ -25,6 +25,9 @@ CONFIG_WAMR_ENABLE_DUMP_CALL_STACK=y
 CONFIG_WAMR_ENABLE_LIB_PTHREAD=y
 CONFIG_WAMR_ENABLE_SHARED_MEMORY=y
 CONFIG_WAMR_LINEAR_MEMORY_IN_PSRAM=y
+# Compile pinned-memory support; AppSession enables it only for Bundles that
+# declare pinned_memory. Other Guests keep demand-grown linear memory.
+CONFIG_WAMR_LINEAR_MEMORY_RESERVE_MAX=y
 CONFIG_WAMR_AOT_CODE_IN_PSRAM=y
 
 # All Ogg Opus decoders run serially on MicroPixel's single audio decode worker,
@@ -39,7 +42,10 @@ CONFIG_OPUS_OGG_DECODER_PREFER_PSRAM=y
 # Guest and Host service limits are part of the product contract, not a board
 # capability. Board profiles may still tighten a limit in a later defaults file.
 CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES=128
-CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES=1048576
+# Keep Host headroom when admitting Guest memory growth and resource allocations.
+# Pinned-memory Bundles reserve their ceiling at instantiation; ordinary Bundles
+# grow on demand. Boot-time App Surface allocations already reduce free PSRAM.
+CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES=2097152
 CONFIG_MICROPIXEL_MAX_BITMAPS=128
 CONFIG_WAMR_RUNTIME_MAX_GUEST_THREADS=2
 CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS=1000

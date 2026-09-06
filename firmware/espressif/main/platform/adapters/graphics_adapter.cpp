@@ -48,4 +48,39 @@ void GraphicsAdapter::DismissLaunchBitmap() { operations_.dismiss_launch_bitmap(
 
 void GraphicsAdapter::ReleaseGuestResources() { operations_.release_guest_resources(operations_.context); }
 
+int32_t GraphicsAdapter::CreateDirectSurface(const device::DirectSurfaceConfig& config,
+                                             const device::DirectSurfaceReleaseSink& sink,
+                                             device::DirectSurfaceInfo& info_out) {
+    if (operations_.create_direct_surface == nullptr) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    return operations_.create_direct_surface(operations_.context, config, sink, info_out);
+}
+
+int32_t GraphicsAdapter::PresentDirectSurface(const device::DirectSurfacePresentation& presentation) {
+    if (operations_.present_direct_surface == nullptr) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    return operations_.present_direct_surface(operations_.context, presentation);
+}
+
+void GraphicsAdapter::SuspendDirectSurface() {
+    if (operations_.suspend_direct_surface != nullptr) {
+        operations_.suspend_direct_surface(operations_.context);
+    }
+}
+
+void GraphicsAdapter::ResumeDirectSurface() {
+    if (operations_.resume_direct_surface != nullptr) {
+        operations_.resume_direct_surface(operations_.context);
+    }
+}
+
+int32_t GraphicsAdapter::DestroyDirectSurface() {
+    if (operations_.destroy_direct_surface == nullptr) {
+        return MICROPIXEL_STATUS_NOT_FOUND;
+    }
+    return operations_.destroy_direct_surface(operations_.context);
+}
+
 }  // namespace micropixel::platform::adapters

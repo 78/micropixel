@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "runtime/memory/guest_psram.hpp"
+#include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -94,6 +95,24 @@ bool ValidateThreadingDeclaration(const AotPackage& package, char* error_buf, si
     ESP_LOGI(kTag, "Guest threading policy: app=%s mode=%s", package.raw().app_id,
              declared_shared ? "shared-memory" : "none");
     return true;
+}
+
+// An AOT built with --bounds-checks=0 is not sandboxed: every Guest load and
+// store reaches Host memory unchecked. The AOT file does not record the
+// choice, so the Bundle declares it and product Hosts refuse the declaration.
+bool ValidateMemoryCheckDeclaration(const AotPackage& package, char* error_buf, size_t error_buf_size) {
+    const bool unchecked = (package.raw().aot_flags & MICROPIXEL_BUNDLE_AOT_FLAG_UNCHECKED_MEMORY) != 0U;
+    if (!unchecked) {
+        return true;
+    }
+#if CONFIG_MICROPIXEL_ALLOW_UNCHECKED_AOT
+    ESP_LOGW(kTag, "loading UNCHECKED_MEMORY Bundle on a development Host: app=%s", package.raw().app_id);
+    return true;
+#else
+    std::snprintf(error_buf, error_buf_size,
+                  "Bundle AOT was compiled without bounds checks; this Host does not allow unchecked Guests");
+    return false;
+#endif
 }
 
 constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
@@ -221,7 +240,8 @@ WamrFailure MakeFailure(WamrError code, const char* message) {
     return failure;
 }
 
-wasm_module_inst_t InstantiateGuest(wasm_module_t module, char* error_buf, uint32_t error_buf_size) {
+wasm_module_inst_t InstantiateGuest(wasm_module_t module, bool pinned_memory, char* error_buf,
+                                    uint32_t error_buf_size) {
     const size_t internal_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t psram_before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
@@ -262,14 +282,16 @@ wasm_module_inst_t InstantiateGuest(wasm_module_t module, char* error_buf, uint3
         return nullptr;
     }
 
+    // Per session: the pinning policy differs between Bundles.
+    ESP_LOGI(kTag,
+             "guest linear memory: base=%p, initial=%" PRIu64 ", host-max=%" PRIu64 " (%" PRIu32
+             " pages), largest-before=%zu, region=PSRAM, %s",
+             linear_base, linear_size, effective_max_bytes, effective_max_pages, psram_largest,
+             pinned_memory ? "pinned at host-max" : "grows on demand");
     if (!guest_memory_placement_logged) {
         const size_t internal_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         const size_t psram_after = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
-        ESP_LOGI(kTag,
-                 "guest linear memory: base=%p, initial=%" PRIu64 ", host-max=%" PRIu64 " (%" PRIu32
-                 " pages), largest-before=%zu, region=PSRAM",
-                 linear_base, linear_size, effective_max_bytes, effective_max_pages, psram_largest);
         ESP_LOGI(kTag, "WAMR instance metadata: %p, region=internal SRAM", module_inst);
         ESP_LOGI(kTag, "placement allocation delta: internal=%zu, PSRAM=%zu bytes", internal_before - internal_after,
                  psram_before - psram_after);
@@ -330,7 +352,8 @@ LoadedModule::~LoadedModule() { Reset(); }
 
 std::expected<LoadedModule, WamrFailure> LoadedModule::Load(const AotPackage& package) {
     WamrFailure failure{.code = WamrError::kModuleLoad};
-    if (!ValidateThreadingDeclaration(package, failure.message.data(), failure.message.size())) {
+    if (!ValidateThreadingDeclaration(package, failure.message.data(), failure.message.size()) ||
+        !ValidateMemoryCheckDeclaration(package, failure.message.data(), failure.message.size())) {
         return std::unexpected(failure);
     }
     LoadedModule module;
@@ -345,30 +368,47 @@ wasm_module_t LoadedModule::get() const { return module_; }
 
 void LoadedModule::Reset() {
     if (module_ != nullptr) {
+        micropixel_check_heap("before AOT unload");
         wasm_runtime_unload(module_);
+        micropixel_check_heap("after AOT unload");
         module_ = nullptr;
         ESP_LOGI(kTag, "AOT module unloaded");
     }
 }
 
 GuestInstance::GuestInstance(GuestInstance&& other) noexcept
-    : instance_(std::exchange(other.instance_, nullptr)), exec_env_(std::exchange(other.exec_env_, nullptr)) {}
+    : instance_(std::exchange(other.instance_, nullptr)),
+      exec_env_(std::exchange(other.exec_env_, nullptr)),
+      pinned_memory_(std::exchange(other.pinned_memory_, false)) {}
 
 GuestInstance& GuestInstance::operator=(GuestInstance&& other) noexcept {
     if (this != &other) {
         Reset();
         instance_ = std::exchange(other.instance_, nullptr);
         exec_env_ = std::exchange(other.exec_env_, nullptr);
+        pinned_memory_ = std::exchange(other.pinned_memory_, false);
     }
     return *this;
 }
 
 GuestInstance::~GuestInstance() { Reset(); }
 
-std::expected<GuestInstance, WamrFailure> GuestInstance::Instantiate(wasm_module_t module) {
+std::expected<GuestInstance, WamrFailure> GuestInstance::Instantiate(wasm_module_t module, bool pinned_memory) {
     WamrFailure failure{.code = WamrError::kGuestInstantiation};
     GuestInstance guest;
-    guest.instance_ = InstantiateGuest(module, failure.message.data(), failure.message.size());
+#if CONFIG_WAMR_LINEAR_MEMORY_RESERVE_MAX
+    // Read by WAMR while it allocates the linear memory below. Sessions are
+    // created one at a time on the Host task, so the global is not racy.
+    wasm_runtime_set_linear_memory_reserve_max(pinned_memory);
+    guest.pinned_memory_ = pinned_memory;
+#else
+    if (pinned_memory) {
+        return std::unexpected(MakeFailure(WamrError::kGuestInstantiation,
+                                           "Bundle requires pinned linear memory but the Host runtime lacks "
+                                           "CONFIG_WAMR_LINEAR_MEMORY_RESERVE_MAX"));
+    }
+#endif
+    guest.instance_ = InstantiateGuest(module, pinned_memory, failure.message.data(), failure.message.size());
     if (guest.instance_ == nullptr) {
         return std::unexpected(failure);
     }
@@ -393,11 +433,15 @@ wasm_exec_env_t GuestInstance::exec_env() const { return exec_env_; }
 
 void GuestInstance::Reset() {
     if (exec_env_ != nullptr) {
+        micropixel_check_heap("before exec env destroy");
         wasm_runtime_destroy_exec_env(exec_env_);
+        micropixel_check_heap("after exec env destroy");
         exec_env_ = nullptr;
     }
     if (instance_ != nullptr) {
+        micropixel_check_heap("before Guest deinstantiate");
         wasm_runtime_deinstantiate(instance_);
+        micropixel_check_heap("after Guest deinstantiate");
         instance_ = nullptr;
         ESP_LOGI(kTag, "Guest instance deinstantiated");
     }

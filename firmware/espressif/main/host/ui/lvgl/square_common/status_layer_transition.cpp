@@ -6,6 +6,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "platform/lvgl/display/scanout_arbiter.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "src/core/lv_refr_private.h"
 
@@ -59,6 +60,10 @@ std::expected<StatusLayerPresentation, host_ui::SystemUiError> PresentStatusLaye
     uint64_t trigger_timestamp_us, host_ui::SystemUiActionSink action_sink, void* action_context,
     bool allow_software_animation) {
     const int64_t started_us = esp_timer_get_time();
+    // A Direct Surface Guest may own the panel; the arbiter makes it hand the
+    // panel back (and publish its displayed frame) before the compositor
+    // captures the framebuffer below.
+    const platform::lvgl::SystemScanoutScope scanout_scope;
     // Page changes such as System Settings -> Hall request an asynchronous
     // LVGL refresh. Flush that damage before the hardware compositor freezes
     // the direct framebuffers; otherwise it can retain the previous page as
@@ -108,6 +113,7 @@ std::expected<StatusLayerPresentation, host_ui::SystemUiError> PresentStatusLaye
 StatusLayerPresentation DismissStatusLayer(lv_display_t* display, StatusLayerUi& ui, StatusLayerTransition& transition,
                                            uint64_t trigger_timestamp_us, bool allow_software_animation) {
     const int64_t started_us = esp_timer_get_time();
+    const platform::lvgl::SystemScanoutScope scanout_scope;
     ui.Deactivate();
     const bool hardware_started = transition.BeginStatusLayerTransition(
         false, ui.TransitionScrimRgb(), ui.TransitionScrimOpacity(), trigger_timestamp_us);

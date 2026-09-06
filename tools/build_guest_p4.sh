@@ -78,6 +78,10 @@ build_sdk_example sdk_hello "$workspace_root/guest/tests/conformance/sdk_hello.c
 build_sdk_example event_wait "$workspace_root/guest/tests/conformance/event_wait.cpp"
 build_sdk_example graphics_protocol "$workspace_root/guest/tests/conformance/graphics_protocol.cpp"
 build_sdk_example graphics_invalid_pointer "$workspace_root/guest/tests/conformance/graphics_invalid_pointer.cpp"
+build_sdk_example direct_surface_present "$workspace_root/guest/tests/conformance/direct_surface_present.cpp"
+build_sdk_example direct_surface_invalid "$workspace_root/guest/tests/conformance/direct_surface_invalid.cpp"
+build_sdk_example graphics_raster "$workspace_root/guest/tests/conformance/graphics_raster.cpp"
+build_sdk_example info_prefix "$workspace_root/guest/tests/conformance/info_prefix.cpp"
 build_sdk_example touch_pressure "$workspace_root/guest/tests/conformance/touch_pressure.cpp"
 build_sdk_example key_input "$workspace_root/guest/tests/conformance/key_input.cpp"
 build_sdk_example timer_counter "$workspace_root/guest/tests/conformance/timer_counter.cpp"
@@ -88,14 +92,16 @@ build_sdk_example watchdog_spin "$workspace_root/guest/tests/conformance/watchdo
 build_sdk_example sdk_panic "$workspace_root/guest/tests/conformance/sdk_panic.cpp"
 build_sdk_example application_assert "$workspace_root/guest/tests/conformance/application_assert.cpp"
 build_sdk_example audio_synth "$workspace_root/guest/tests/conformance/audio_synth.cpp"
+build_sdk_example audio_pcm_stream "$workspace_root/guest/tests/conformance/audio_pcm_stream.cpp"
 build_sdk_example service_control "$workspace_root/guest/tests/conformance/service_control.cpp"
 build_sdk_example stl "$workspace_root/guest/tests/conformance/stl.cpp"
 build_sdk_example linear_memory_limit "$workspace_root/guest/tests/conformance/linear_memory_limit.cpp"
 
 built_guests=(
     bad_import sdk_hello event_wait graphics_protocol graphics_invalid_pointer
+    direct_surface_present direct_surface_invalid graphics_raster info_prefix
     touch_pressure key_input timer_counter
-    run_handler_after run_handler_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth service_control stl
+    run_handler_after run_handler_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth audio_pcm_stream service_control stl
     linear_memory_limit
 )
 for guest_name in "${built_guests[@]}"; do

@@ -20,9 +20,9 @@ constexpr char kTag[] = "mosaico_power";
 constexpr uint32_t kCodecPowerStabilizationMs = 10U;
 constexpr uint32_t kEventQueueCapacity = 8U;
 constexpr uint32_t kWorkerStackBytes = 4096U;
-constexpr BaseType_t kWorkerCore = 0;
+constexpr BaseType_t kWorkerCore = task_policy::kSystemCore;
 constexpr uint32_t kDebounceMs = 20U;
-constexpr uint64_t kLongPressUs = 2000000U;
+constexpr uint64_t kLongPressUs = 1000000U;
 constexpr uint64_t kClickGuardUs = 2000000U;
 
 esp_err_t ConfigureOutput(gpio_num_t pin, int level, gpio_mode_t mode = GPIO_MODE_OUTPUT) {

@@ -1,0 +1,3 @@
+# Diagnostic overlay: heap guards and Guest service/lifecycle checkpoints.
+CONFIG_HEAP_POISONING_LIGHT=y
+CONFIG_MICROPIXEL_HEAP_CHECKPOINTS=y

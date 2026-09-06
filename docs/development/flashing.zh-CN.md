@@ -176,10 +176,10 @@ Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面�
 
 ```sh
 python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
-    app install guest/apps/demo
+    app install guest/apps/sdk-demo
 ```
 
-## 4. 完整烧录 Host 和八个示例 App
+## 4. 完整烧录 Host 和四个示例 App
 
 新设备或需要同时更新 Host 与 BundleFS 元数据时，使用：
 
@@ -189,8 +189,8 @@ bash tools/p4.sh flash-all "$P4_PORT"
 
 该入口会：
 
-1. 构建 Host 固件和 Blocks、Snake、Tilt、Demo 及四个 Showcase Bundle；
-2. 生成包含八个 App 的 BundleFS 镜像；
+1. 构建 Host 固件和 Blocks、Snake、Tilt 和 SDK Demo；
+2. 生成包含四个 App 的 BundleFS 镜像；
 3. 烧录 bootloader、分区表、OTA 初始数据和 Host 固件；
 4. 清空并烧录 App Store，随后读回校验。
 
@@ -202,11 +202,11 @@ bash tools/p4.sh test
 
 成功时命令末尾会输出 `System Shell P4 flashed on ... with eight Apps.`。脚本不再自动抓取启动日志，
 用 `bash tools/p4.sh monitor "$P4_PORT"` 确认 `System Shell ready: App Hall rendered with apps=8`；
-设备复位后应在 App Hall 中看到八个 App，并可在第一行左右滑动浏览。
+设备复位后应在 App Hall 中看到四个 App，并可在第一行左右滑动浏览。
 
-## 5. USB 烧录八个示例 App
+## 5. USB 烧录四个示例 App
 
-Host 固件和分区表未变化时，直接清空旧 App Store 并烧录已有的八个示例 Bundle：
+Host 固件和分区表未变化时，直接清空旧 App Store 并烧录已有的四个示例 Bundle：
 
 ```sh
 bash tools/p4.sh flash-apps "$P4_PORT"
@@ -228,13 +228,13 @@ bash tools/p4.sh reset-app-store "$P4_PORT"
 
 ```sh
 python3 tools/micropixel --transport usb --port "$P4_PORT" app list
-python3 tools/micropixel --transport usb --port "$P4_PORT" app install build/apps/demo/demo.bundle.bin
+python3 tools/micropixel --transport usb --port "$P4_PORT" app install build/apps/sdk-demo/sdk-demo.bundle.bin
 python3 tools/micropixel --transport usb --port "$P4_PORT" app start micropixel.demo
 python3 tools/micropixel --transport usb --port "$P4_PORT" app stop
 python3 tools/micropixel --transport usb --port "$P4_PORT" app uninstall micropixel.demo
 ```
 
-`micropixel --transport usb app install guest/apps/demo` 会先按正式流程构建和打包，再通过同一协议安装；
+`micropixel --transport usb app install guest/apps/sdk-demo` 会先按正式流程构建和打包，再通过同一协议安装；
 传入现有 `.bundle.bin` 时则直接安装。`app install` 和 `run` 会在终端显示安装进度：`0–99%` 跟随已确认的
 Bundle 分块，设备完成校验、BundleFS 写时复制和 Catalog 提交后显示 `100%`。安装、升级和卸载仍由
 HostController 串行执行；运行中的 Guest 必须先停止。Bundle 数据使用分块确认传输，
@@ -246,7 +246,9 @@ Windows 使用 pyserial 的 COM 端口后端，代码路径受支持，但尚未
 
 该协议依赖正在运行的 Host 固件，不适用于下载模式或 bootloader。monitor、esptool 和本地控制共享板卡的
 USB CDC 端口，不能同时占用。截图统一使用 `micropixel --transport usb screenshot`，在 P4 与 S31 上使用
-相同的 JPEG framing，并只抓取当前显示提交缓冲。
+相同的 JPEG framing，并只抓取当前显示提交缓冲。Claw4 上当 Direct Surface 或系统转场持有 dummy draw
+时，LVGL 绘制缓冲不再是屏幕内容，截图改为读取正在显示的 DPI framebuffer，因此也能抓 Guest 全屏软渲染
+的画面。
 
 ## 7. Conformance 配置与串口调试
 
@@ -278,7 +280,7 @@ bash tools/p4.sh monitor "$P4_PORT"
 
 - 终端中 Host 固件和 BundleFS 元数据均报告写入校验成功；
 - monitor 中出现 `System Shell ready: App Hall rendered with apps=8`；
-- App Hall 中可左右滑动浏览并启动八个示例 App；
+- App Hall 中可左右滑动浏览并启动四个示例 App；
 - 状态栏中的亮度和音量控制生效。
 
 常见失败：
@@ -300,3 +302,30 @@ bash tools/p4.sh monitor "$P4_PORT"
   release target，更新检查会落到兼容旧 P4 的默认目录并下载 P4 镜像。先用 `bash tools/s31.sh flash-host`
   进行一次保留 NVS 与 `app_store` 的 USB Host 更新；`0.3.0` 及以后版本会显式请求 `esp-mosaico`，后续可
   正常 OTA。不要把服务器默认 target 改成 S31，否则会让同版本的旧 P4 设备下载错误镜像。
+
+## 9. App 切换时的堆损坏诊断固件
+
+需要定位越界写或退出阶段的堆损坏时，可在独立配置文件上叠加诊断配置：
+
+```sh
+export P4_SDKCONFIG="$PWD/build/host-esp32p4/sdkconfig.heap-debug"
+export P4_SDKCONFIG_DEFAULTS="$PWD/firmware/espressif/sdkconfig.defaults;$PWD/firmware/espressif/sdkconfig.p4.defaults;$PWD/firmware/espressif/sdkconfig.heap-debug.defaults"
+bash tools/p4.sh build-host
+bash tools/p4.sh flash-host "$P4_PORT"
+bash tools/p4.sh monitor "$P4_PORT"
+```
+
+该配置开启 Light heap poisoning 和 `MICROPIXEL_HEAP_CHECKPOINTS`。Host 在 Guest 服务调用前后、
+PNG 解码和资源销毁边界检查堆；发现损坏会输出 `MICROPIXEL HEAP CORRUPTION: stage=...`，
+随后输出堆完整性错误并停止。分配器也可能先检测到 canary 损坏并直接触发断言；应保留首次错误前后的日志。
+检查点标记的是发现损坏的位置，异步任务可能在两个检查点之间写坏内存，不能直接视为写坏位置。
+
+全堆检查影响帧率和调度，只用于故障复现。恢复正常固件时取消以上两个环境变量，重新执行
+`build-host` 和 `flash-host`。诊断版和正常版共用 build 目录，烧录前必须构建需要的版本；
+`flash-host` 保留现有 App Store。
+
+诊断检查现在先输出 `HEAP CHECK begin: <阶段>`，成功后输出同阶段的 `HEAP CHECK ok`。
+若检查器自身因块头损坏而崩溃，最后一个没有对应 `ok` 的 `begin` 即为检查阶段。
+这些串口输出会增加诊断版延迟。大厅渲染、转场截图、启动封面保留和快照释放均设有边界检查。
+可用 `P4_HOST_BUILD_DIR` 指定独立诊断构建目录，避免正常构建覆盖 ELF；分析 panic 时必须使用
+与设备启动日志中 ELF SHA256 匹配的 ELF。

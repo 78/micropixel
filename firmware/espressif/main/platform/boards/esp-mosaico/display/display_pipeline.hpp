@@ -25,6 +25,16 @@ class MosaicoDisplayPipeline final : public lvgl::DisplayPipeline {
     [[nodiscard]] lvgl::DisplayGeometry Geometry() const override { return geometry_; }
     [[nodiscard]] lvgl::DisplayCapabilities Capabilities() const override;
     [[nodiscard]] lvgl::DirectFramebufferAccess* DirectFramebuffers() override { return nullptr; }
+    // CO5300 over QSPI takes byte-swapped RGB565 straight from a dummy-draw
+    // blit; a full 480x480 transfer bounds the panel at about 42 fps.
+    [[nodiscard]] lvgl::DirectScanoutProfile DirectScanout() const override {
+        return {.mode = lvgl::DirectScanoutProfile::Mode::kBlitRgb565,
+                .rgb565_byte_swapped = true,
+                .max_full_frame_fps = kDirectScanoutMaxFps,
+                // Same CO5300 window constraint as RoundArea().
+                .blit_x_alignment = 4U,
+                .blit_y_alignment = 2U};
+    }
     [[nodiscard]] esp_err_t Suspend() override;
     [[nodiscard]] esp_err_t Resume() override;
     [[nodiscard]] esp_err_t SetBrightness(uint32_t per_ten_thousand) override;
@@ -36,6 +46,8 @@ class MosaicoDisplayPipeline final : public lvgl::DisplayPipeline {
     [[nodiscard]] async_color_convert_handle_t ShadowCopyDma2d() const { return shadow_copy_dma2d_; }
 
    private:
+    static constexpr uint16_t kDirectScanoutMaxFps = 42U;
+
     static void Flush(lv_display_t* display, const lv_area_t* area, uint8_t* pixels);
     static void RoundArea(lv_area_t* area, void* context);
     [[nodiscard]] bool CaptureDisplayedShadow(lv_display_t* display, const lv_area_t* area, uint8_t* pixels);

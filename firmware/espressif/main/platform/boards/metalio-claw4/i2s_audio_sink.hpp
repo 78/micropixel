@@ -19,6 +19,7 @@ class I2sAudioSink final : public audio::AudioOutputPeripheral {
     [[nodiscard]] esp_err_t Stop() override;
     void Shutdown() override;
     [[nodiscard]] const char* Name() const override { return "Claw4 I2S/BT"; }
+    [[nodiscard]] uint32_t SampleRate() const override;
 
    private:
     [[nodiscard]] esp_err_t UpdateRegister(uint8_t address, uint8_t set_mask, uint8_t clear_mask);

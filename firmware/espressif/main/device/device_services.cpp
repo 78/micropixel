@@ -234,6 +234,25 @@ void GraphicsService::DismissLaunchBitmap() const { implementation_.DismissLaunc
 
 void GraphicsService::ReleaseGuestResources() const { implementation_.ReleaseGuestResources(); }
 
+DeviceResult<DirectSurfaceInfo> GraphicsService::CreateDirectSurface(const DirectSurfaceConfig& config,
+                                                                     const DirectSurfaceReleaseSink& sink) const {
+    DirectSurfaceInfo info{};
+    const int32_t status = implementation_.CreateDirectSurface(config, sink, info);
+    return status == MICROPIXEL_STATUS_OK ? DeviceResult<DirectSurfaceInfo>{info} : Fail<DirectSurfaceInfo>(status);
+}
+
+DeviceResult<void> GraphicsService::PresentDirectSurface(const DirectSurfacePresentation& presentation) const {
+    return StatusResult(implementation_.PresentDirectSurface(presentation));
+}
+
+void GraphicsService::SuspendDirectSurface() const { implementation_.SuspendDirectSurface(); }
+
+void GraphicsService::ResumeDirectSurface() const { implementation_.ResumeDirectSurface(); }
+
+DeviceResult<void> GraphicsService::DestroyDirectSurface() const {
+    return StatusResult(implementation_.DestroyDirectSurface());
+}
+
 DeviceResult<micropixel_input_info_t> InputService::GetInfo() const {
     micropixel_input_info_t info{};
     int32_t status = implementation_.GetInfo(info);

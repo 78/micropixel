@@ -40,6 +40,8 @@ inline constexpr int kAudioI2sPort = 0;
 inline constexpr gpio_num_t kAudioBitClock = GPIO_NUM_12;
 inline constexpr gpio_num_t kAudioWordSelect = GPIO_NUM_10;
 inline constexpr gpio_num_t kAudioDataOut = GPIO_NUM_9;
+// Mix/output rate of the BT audio bridge.
+inline constexpr uint32_t kAudioSampleRate = 16000U;
 
 }  // namespace micropixel::platform::metalio_claw4::board
 

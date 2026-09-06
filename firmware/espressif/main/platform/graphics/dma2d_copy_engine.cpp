@@ -14,8 +14,27 @@ namespace micropixel::platform::graphics {
 namespace {
 
 constexpr const char* kTag = "dma2d_copy";
-constexpr uint32_t kBytesPerPixel = 3U;  // BGR888 only
 constexpr uint32_t kDataBurstLength = 128U;
+
+// Opaque formats the M2M path moves: 3 B/px BGR888 and 2 B/px RGB565. A
+// BGR888 source may land in an RGB565 destination through the transmit
+// channel's colour-space converter; every other pair must match exactly.
+uint32_t BytesPerPixel(SurfacePixelFormat format) {
+    if (format == SurfacePixelFormat::kBgr888) {
+        return 3U;
+    }
+    return format == SurfacePixelFormat::kRgb565 ? 2U : 0U;
+}
+
+uint32_t DescriptorPixelBytes(SurfacePixelFormat format) {
+    return format == SurfacePixelFormat::kBgr888 ? DMA2D_DESCRIPTOR_PBYTE_3B0_PER_PIXEL
+                                                 : DMA2D_DESCRIPTOR_PBYTE_2B0_PER_PIXEL;
+}
+
+bool SupportedPair(SurfacePixelFormat source, SurfacePixelFormat destination) {
+    return source == destination ||
+           (source == SurfacePixelFormat::kBgr888 && destination == SurfacePixelFormat::kRgb565);
+}
 
 // A copy failure takes the whole App Surface frame down, so the first
 // occurrence of each cause is worth one line on the console.
@@ -50,32 +69,33 @@ void ReportFailure(FailureStage stage_id, esp_err_t status, const Dma2dCopyBlock
 // range spans whole rows between the first and last touched byte, which is what
 // the PPA driver does for its "extended window" and keeps the call count at one
 // per block instead of one per row.
-bool SyncBlockRows(const uint8_t* base, uint32_t stride, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
-                   int flags) {
+bool SyncBlockRows(const uint8_t* base, uint32_t stride, uint32_t bytes_per_pixel, uint32_t x, uint32_t y,
+                   uint32_t width, uint32_t height, int flags) {
     if (esp_cache_get_line_size_by_addr(const_cast<uint8_t*>(base)) == 0U) {
         return true;
     }
-    const std::size_t begin = static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * kBytesPerPixel;
+    const std::size_t begin = static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * bytes_per_pixel;
     const std::size_t end =
-        static_cast<std::size_t>(y + height - 1U) * stride + static_cast<std::size_t>(x + width) * kBytesPerPixel;
+        static_cast<std::size_t>(y + height - 1U) * stride + static_cast<std::size_t>(x + width) * bytes_per_pixel;
     return esp_cache_msync(const_cast<uint8_t*>(base + begin), end - begin, flags | ESP_CACHE_MSYNC_FLAG_UNALIGNED) ==
            ESP_OK;
 }
 
-uint32_t PhysicalWidth(uint32_t stride) { return stride / kBytesPerPixel; }
+uint32_t PhysicalWidth(uint32_t stride, uint32_t bytes_per_pixel) { return stride / bytes_per_pixel; }
 uint32_t PhysicalHeight(uint32_t size, uint32_t stride) { return stride == 0U ? 0U : size / stride; }
 
 template <typename Surface>
-bool ValidBgr888Surface(const Surface& surface) {
-    if (surface.pixels == nullptr || surface.format != SurfacePixelFormat::kBgr888 || surface.width == 0U ||
-        surface.height == 0U || surface.stride % kBytesPerPixel != 0U) {
+bool ValidOpaqueSurface(const Surface& surface) {
+    const uint32_t bytes_per_pixel = BytesPerPixel(surface.format);
+    if (surface.pixels == nullptr || bytes_per_pixel == 0U || surface.width == 0U || surface.height == 0U ||
+        surface.stride % bytes_per_pixel != 0U) {
         return false;
     }
-    const uint64_t row_bytes = static_cast<uint64_t>(surface.origin_x + surface.width) * kBytesPerPixel;
+    const uint64_t row_bytes = static_cast<uint64_t>(surface.origin_x + surface.width) * bytes_per_pixel;
     const uint64_t required =
         static_cast<uint64_t>(surface.stride) * (surface.origin_y + surface.height - 1U) + row_bytes;
     return surface.stride >= row_bytes && required <= surface.size &&
-           PhysicalWidth(surface.stride) <= DMA2D_LL_DESC_2D_FIELD_MAX &&
+           PhysicalWidth(surface.stride, bytes_per_pixel) <= DMA2D_LL_DESC_2D_FIELD_MAX &&
            PhysicalHeight(surface.size, surface.stride) <= DMA2D_LL_DESC_2D_FIELD_MAX;
 }
 
@@ -86,9 +106,9 @@ bool RectInside(const Surface& surface, SurfaceRect rect) {
            static_cast<int64_t>(rect.y) + rect.height <= surface.height;
 }
 
-void SetupDescriptor(dma2d_descriptor_t& descriptor, const uint8_t* buffer, uint32_t picture_width,
-                     uint32_t picture_height, uint32_t x, uint32_t y, uint32_t width, uint32_t height, bool last,
-                     dma2d_descriptor_t* next) {
+void SetupDescriptor(dma2d_descriptor_t& descriptor, const uint8_t* buffer, SurfacePixelFormat format,
+                     uint32_t picture_width, uint32_t picture_height, uint32_t x, uint32_t y, uint32_t width,
+                     uint32_t height, bool last, dma2d_descriptor_t* next) {
     std::memset(&descriptor, 0, sizeof(descriptor));
     descriptor.owner = DMA2D_DESCRIPTOR_BUFFER_OWNER_DMA;
     descriptor.suc_eof = last ? 1U : 0U;
@@ -99,7 +119,7 @@ void SetupDescriptor(dma2d_descriptor_t& descriptor, const uint8_t* buffer, uint
     descriptor.vb_size = height;
     descriptor.x = x;
     descriptor.y = y;
-    descriptor.pbyte = DMA2D_DESCRIPTOR_PBYTE_3B0_PER_PIXEL;
+    descriptor.pbyte = DescriptorPixelBytes(format);
     descriptor.mode = DMA2D_DESCRIPTOR_BLOCK_RW_MODE_SINGLE;
     descriptor.buffer = const_cast<uint8_t*>(buffer);
     descriptor.next = last ? nullptr : next;
@@ -173,9 +193,18 @@ bool Dma2dCopyEngine::CopyBlocks(const Dma2dCopyBlock* blocks, std::size_t count
     if (pool_ == nullptr || blocks == nullptr || count == 0U || count > kMaxBlocks) {
         return false;
     }
+    // The colour-space converter is programmed once per transaction, so every
+    // block in the chain has to be the same kind of copy as the first.
+    const SurfacePixelFormat source_format = blocks[0].source.format;
+    const SurfacePixelFormat destination_format = blocks[0].destination.format;
+    if (!SupportedPair(source_format, destination_format)) {
+        ReportFailure(FailureStage::kValidate, ESP_ERR_NOT_SUPPORTED, &blocks[0]);
+        return false;
+    }
     for (std::size_t index = 0U; index < count; ++index) {
         const Dma2dCopyBlock& block = blocks[index];
-        if (!ValidBgr888Surface(block.source) || !ValidBgr888Surface(block.destination) ||
+        if (block.source.format != source_format || block.destination.format != destination_format ||
+            !ValidOpaqueSurface(block.source) || !ValidOpaqueSurface(block.destination) ||
             !RectInside(block.source, block.source_rect) || !RectInside(block.destination, block.destination_rect) ||
             block.source_rect.width != block.destination_rect.width ||
             block.source_rect.height != block.destination_rect.height) {
@@ -183,6 +212,9 @@ bool Dma2dCopyEngine::CopyBlocks(const Dma2dCopyBlock* blocks, std::size_t count
             return false;
         }
     }
+    tx_csc_option_ = source_format == destination_format ? DMA2D_CSC_TX_NONE : DMA2D_CSC_TX_RGB888_TO_RGB565;
+    const uint32_t source_pixel_bytes = BytesPerPixel(source_format);
+    const uint32_t destination_pixel_bytes = BytesPerPixel(destination_format);
     auto descriptor_at = [this](dma2d_descriptor_t* base, std::size_t index) {
         return reinterpret_cast<dma2d_descriptor_t*>(reinterpret_cast<uint8_t*>(base) +
                                                      index * descriptor_stride_bytes_);
@@ -202,17 +234,19 @@ bool Dma2dCopyEngine::CopyBlocks(const Dma2dCopyBlock* blocks, std::size_t count
         const std::size_t width_bin = width < 16U ? 0U : width < 64U ? 1U : width < 256U ? 2U : 3U;
         ++blocks_by_width_[width_bin];
         pixels_by_width_[width_bin] += static_cast<uint64_t>(width) * height;
-        SetupDescriptor(*descriptor_at(tx_descriptors_, index), block.source.pixels, PhysicalWidth(block.source.stride),
+        SetupDescriptor(*descriptor_at(tx_descriptors_, index), block.source.pixels, source_format,
+                        PhysicalWidth(block.source.stride, source_pixel_bytes),
                         PhysicalHeight(block.source.size, block.source.stride), source_x, source_y, width, height, last,
                         descriptor_at(tx_descriptors_, index + 1U));
-        SetupDescriptor(*descriptor_at(rx_descriptors_, index), block.destination.pixels,
-                        PhysicalWidth(block.destination.stride),
+        SetupDescriptor(*descriptor_at(rx_descriptors_, index), block.destination.pixels, destination_format,
+                        PhysicalWidth(block.destination.stride, destination_pixel_bytes),
                         PhysicalHeight(block.destination.size, block.destination.stride), destination_x, destination_y,
                         width, height, last, descriptor_at(rx_descriptors_, index + 1U));
-        if (!SyncBlockRows(block.source.pixels, block.source.stride, source_x, source_y, width, height,
-                           ESP_CACHE_MSYNC_FLAG_DIR_C2M) ||
-            !SyncBlockRows(block.destination.pixels, block.destination.stride, destination_x, destination_y, width,
-                           height, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE)) {
+        if (!SyncBlockRows(block.source.pixels, block.source.stride, source_pixel_bytes, source_x, source_y, width,
+                           height, ESP_CACHE_MSYNC_FLAG_DIR_C2M) ||
+            !SyncBlockRows(block.destination.pixels, block.destination.stride, destination_pixel_bytes, destination_x,
+                           destination_y, width, height,
+                           ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE)) {
             ReportFailure(FailureStage::kRowSync, ESP_FAIL, &block);
             return false;
         }
@@ -295,7 +329,7 @@ bool Dma2dCopyEngine::OnJobPicked(uint32_t channel_count, const dma2d_trans_chan
     (void)dma2d_set_transfer_ability(rx_channel, &ability);
 
     dma2d_csc_config_t tx_csc{};
-    tx_csc.tx_csc_option = DMA2D_CSC_TX_NONE;
+    tx_csc.tx_csc_option = engine->tx_csc_option_;
     tx_csc.pre_scramble = DMA2D_SCRAMBLE_ORDER_BYTE2_1_0;
     tx_csc.post_scramble = DMA2D_SCRAMBLE_ORDER_BYTE2_1_0;
     dma2d_csc_config_t rx_csc{};

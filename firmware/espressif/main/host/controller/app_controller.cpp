@@ -13,7 +13,6 @@ namespace {
 
 constexpr char kTag[] = "micropixel_apps";
 constexpr size_t kWamrTaskStackSize = 16U * 1024U;
-constexpr int kWamrTaskCore = 0;
 
 class PthreadAttributes final {
    public:
@@ -48,7 +47,7 @@ class ScopedPthreadConfiguration final {
     ScopedPthreadConfiguration() {
         parent_config_found_ = esp_pthread_get_cfg(&parent_config_) == ESP_OK;
         esp_pthread_cfg_t wamr_config = parent_config_found_ ? parent_config_ : esp_pthread_get_default_config();
-        wamr_config.pin_to_core = kWamrTaskCore;
+        wamr_config.pin_to_core = task_policy::kGuestCore;
         wamr_config.prio = static_cast<int>(task_policy::kGuestPriority);
         wamr_config.inherit_cfg = false;
         priority_ = wamr_config.prio;
@@ -135,8 +134,8 @@ std::expected<void, AppControllerError> AppController::Start(
         return std::unexpected(AppControllerError::kThreadCreation);
     }
     joinable_ = true;
-    ESP_LOGI(kTag, "WAMR task policy: core=%d priority=%d (FPU-stable affinity)", kWamrTaskCore,
-             configuration.priority());
+    ESP_LOGI(kTag, "WAMR task policy: core=%d priority=%d (dedicated Guest core, FPU-stable affinity)",
+             static_cast<int>(task_policy::kGuestCore), configuration.priority());
     configuration.Restore();
     return {};
 }

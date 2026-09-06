@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "runtime/bundle/bundle_format.h"
 #include "work/task_policy.hpp"
@@ -12,8 +13,9 @@ namespace micropixel::runtime {
 namespace {
 
 constexpr uint32_t kWorkerStackBytes = 8U * 1024U;
-constexpr BaseType_t kWorkerCore = 0;
+constexpr BaseType_t kWorkerCore = task_policy::kSystemCore;
 constexpr uint32_t kInputChunkBytes = 4096U;
+constexpr const char* kTag = "audio_playback";
 
 uint32_t NextGeneration(uint32_t current) {
     uint32_t next = (current + 1U) & 0x00ffffffU;
@@ -35,6 +37,14 @@ AudioPlaybackService::AudioPlaybackService(const micropixel_aot_package_t& packa
           heap_caps_calloc(kMaxPlaybacks * kRingFrames, sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) {
     if (mutex_ == nullptr || completions_ == nullptr || worker_stopped_ == nullptr || ring_storage_ == nullptr) {
         return;
+    }
+    if (auto info = audio_.GetInfo(); info) {
+        if (info->sample_rate >= kDecodeSampleRate && info->sample_rate % kDecodeSampleRate == 0U) {
+            upsample_factor_ = info->sample_rate / kDecodeSampleRate;
+        } else {
+            ESP_LOGW(kTag, "mix rate %lu Hz is not a multiple of %lu Hz; Opus clips play at the wrong pitch",
+                     static_cast<unsigned long>(info->sample_rate), static_cast<unsigned long>(kDecodeSampleRate));
+        }
     }
     for (uint32_t index = 0U; index < kMaxPlaybacks; ++index) {
         playbacks_[index].owner = this;
@@ -241,7 +251,8 @@ ServiceResult<micropixel_audio_playback_handle_t> AudioPlaybackService::Start(
         return FailService<micropixel_audio_playback_handle_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     selected->generation = NextGeneration(selected->generation);
-    selected->decoder.emplace(true, 16000U, 1U);
+    selected->decoder.emplace(true, kDecodeSampleRate, 1U);
+    selected->upsampler.Reset(upsample_factor_);
     selected->clip = clip;
     selected->stream = 0U;
     selected->input_offset = 0U;
@@ -435,17 +446,32 @@ device::PcmReadResult AudioPlaybackService::ReadPcm(void* context, int16_t* samp
     }
     const uint32_t read = slot->read_position.load(std::memory_order_relaxed);
     const uint32_t write = slot->write_position.load(std::memory_order_acquire);
-    const uint32_t count = std::min(capacity, write - read);
-    const uint32_t first = std::min(count, kRingFrames - (read % kRingFrames));
-    std::memcpy(samples, slot->ring + (read % kRingFrames), first * sizeof(int16_t));
-    std::memcpy(samples + first, slot->ring, (count - first) * sizeof(int16_t));
-    slot->read_position.store(read + count, std::memory_order_release);
+    uint32_t consumed = 0U;
+    uint32_t produced = 0U;
+    if (slot->upsampler.factor() == 1U) {
+        consumed = std::min(capacity, write - read);
+        const uint32_t first = std::min(consumed, kRingFrames - (read % kRingFrames));
+        std::memcpy(samples, slot->ring + (read % kRingFrames), first * sizeof(int16_t));
+        std::memcpy(samples + first, slot->ring, (consumed - first) * sizeof(int16_t));
+        produced = consumed;
+    } else {
+        // Decoder output is 16 kHz; interpolate up to the mix rate on the fly.
+        produced = slot->upsampler.Produce(samples, capacity, [&](int16_t& sample) {
+            if (read + consumed == write) {
+                return false;
+            }
+            sample = slot->ring[(read + consumed) % kRingFrames];
+            ++consumed;
+            return true;
+        });
+    }
+    slot->read_position.store(read + consumed, std::memory_order_release);
     if (slot->owner != nullptr && slot->owner->worker_ != nullptr) {
         xTaskNotifyGive(slot->owner->worker_);
     }
     return {
-        .frames = count,
-        .finished = slot->eof.load(std::memory_order_acquire) && read + count == write,
+        .frames = produced,
+        .finished = slot->eof.load(std::memory_order_acquire) && read + consumed == write && slot->upsampler.Idle(),
     };
 }
 

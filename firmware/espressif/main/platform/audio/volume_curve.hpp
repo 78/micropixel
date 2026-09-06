@@ -7,16 +7,17 @@ namespace micropixel::platform::audio {
 
 inline constexpr uint32_t kVolumeControlScale = 10000U;
 
-// Rounded gain for a -30 dB to 0 dB logarithmic volume law. Index zero is
-// true mute; every ten slider points above it add approximately 3 dB.
+// Rounded logarithmic gain from -54 dB at 1% to 0 dB at 100%.
+// The first active setting matches 10% of the former -60 dB curve.
+// Zero is true mute. Gain = round(10000 * 10^(-54 * (100 - percent) / 99 / 20)).
 inline constexpr uint16_t kVolumeDbOutput[] = {
-    0U,    327U,  339U,  351U,  363U,  376U,  389U,  403U,  417U,  432U,  447U,   462U,  479U,  495U,  513U,
-    531U,  550U,  569U,  589U,  610U,  631U,  653U,  676U,  700U,  724U,  750U,   776U,  804U,  832U,  861U,
-    891U,  923U,  955U,  989U,  1023U, 1059U, 1096U, 1135U, 1175U, 1216U, 1259U,  1303U, 1349U, 1396U, 1445U,
-    1496U, 1549U, 1603U, 1660U, 1718U, 1778U, 1841U, 1905U, 1972U, 2042U, 2113U,  2188U, 2265U, 2344U, 2427U,
-    2512U, 2600U, 2692U, 2786U, 2884U, 2985U, 3090U, 3199U, 3311U, 3428U, 3548U,  3673U, 3802U, 3936U, 4074U,
-    4217U, 4365U, 4519U, 4677U, 4842U, 5012U, 5188U, 5370U, 5559U, 5754U, 5957U,  6166U, 6383U, 6607U, 6839U,
-    7079U, 7328U, 7586U, 7852U, 8128U, 8414U, 8710U, 9016U, 9333U, 9661U, 10000U,
+    0U,    20U,   21U,   23U,   24U,   26U,   27U,   29U,   31U,   33U,   35U,    37U,   40U,   42U,   45U,
+    48U,   51U,   54U,   58U,   62U,   66U,   70U,   75U,   79U,   85U,   90U,    96U,   102U,  109U,  116U,
+    123U,  131U,  140U,  149U,  158U,  169U,  180U,  191U,  204U,  217U,  231U,   246U,  262U,  279U,  297U,
+    316U,  337U,  359U,  382U,  407U,  433U,  461U,  491U,  523U,  556U,  593U,   631U,  672U,  715U,  762U,
+    811U,  864U,  920U,  979U,  1043U, 1110U, 1182U, 1259U, 1341U, 1427U, 1520U,  1618U, 1723U, 1835U, 1954U,
+    2081U, 2215U, 2359U, 2512U, 2675U, 2848U, 3033U, 3229U, 3438U, 3661U, 3899U,  4151U, 4420U, 4707U, 5012U,
+    5337U, 5683U, 6051U, 6443U, 6861U, 7305U, 7779U, 8283U, 8820U, 9391U, 10000U,
 };
 
 constexpr uint16_t VolumeOutputPerTenThousand(uint8_t percent) {

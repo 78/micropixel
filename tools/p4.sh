@@ -67,17 +67,15 @@ Normal development commands:
                                      rebuild or touch the app_store partition.
   monitor [PORT]                     Monitor the running ESP32-P4 Host without
                                      building, flashing, erasing, or testing.
-  build-apps                         Build Blocks, Snake, Tilt, Demo, and four Showcase Bundles.
-  build-all                          Build Host plus eight example Apps and the
-                                     App Store image. Run no tests; flash nothing.
-  flash-apps [PORT]                  Clear app_store and flash eight example Apps
+  build-apps                         Build Blocks, Snake, Tilt, and SDK Demo Bundles.
+  flash-apps [PORT]                  Clear app_store and flash four example Apps
                                      over USB. Uses the unique connected ESP32-P4
                                      when PORT is omitted.
 
 Explicit full/destructive commands:
   fullclean-host                     Delete the Host build cache with idf.py fullclean.
   flash-all [PORT]                   Build and flash the Host, then clear and flash
-                                     eight example Apps. Run no tests.
+                                     four example Apps. Run no tests.
   reset-app-store [PORT]             Recovery only: clear app_store to an EMPTY Catalog.
   install-apps-examples              Non-USB alternative: install examples through
                                      Remote Control while preserving other Apps.
@@ -434,7 +432,7 @@ build_release() {
     build_app_package blocks
     build_app_package snake
     build_app_package tilt
-    build_app_package demo
+    build_app_package sdk-demo
     build_host
     mkdir -p "$system_shell_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
@@ -442,7 +440,7 @@ build_release() {
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
         "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
-        "$workspace_root/build/apps/demo/demo.bundle.bin"
+        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
     echo "==> Creating browser-flashable image with Blocks, Snake, Tilt, and SDK Demo"
     python3 "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \
@@ -483,9 +481,9 @@ monitor_host() {
 }
 
 build_example_apps() {
-    echo "==> Building eight example Apps"
+    echo "==> Building four example Apps"
     local app_name
-    for app_name in blocks snake tilt demo tap-counter color-lab pixel-sketch orbit-pad; do
+    for app_name in blocks snake tilt sdk-demo; do
         build_app_package "$app_name"
     done
 }
@@ -505,14 +503,10 @@ app_store_partition_info() {
 
 create_example_app_store_image() {
     local bundles=(
-        "$workspace_root/build/apps/orbit-pad/orbit-pad.bundle.bin"
-        "$workspace_root/build/apps/pixel-sketch/pixel-sketch.bundle.bin"
-        "$workspace_root/build/apps/color-lab/color-lab.bundle.bin"
-        "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin"
         "$workspace_root/build/apps/blocks/blocks.bundle.bin"
         "$workspace_root/build/apps/snake/snake.bundle.bin"
         "$workspace_root/build/apps/tilt/tilt.bundle.bin"
-        "$workspace_root/build/apps/demo/demo.bundle.bin"
+        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
     )
     local bundle
     for bundle in "${bundles[@]}"; do
@@ -547,8 +541,8 @@ write_app_store_image() {
     fi
 }
 
-build_all() {
-    echo "==> Building Host + eight example Apps + App Store image (no tests, no flash)"
+prepare_full_flash() {
+    echo "==> Building Host + four example Apps + App Store image (no tests, no flash)"
     build_example_apps
     build_host
     create_example_app_store_image
@@ -566,13 +560,13 @@ flash_all() {
     local requested_port="$1"
     local baud="${P4_BAUD:-2000000}"
     local port
-    build_all
+    prepare_full_flash
     port="$(resolve_port "$requested_port")"
     echo "==> Flashing Host at $baud baud"
     idf_host metalio-claw4 flash --baud "$baud" --port "$port"
-    echo "==> Clearing app_store and flashing eight example Apps"
+    echo "==> Clearing app_store and flashing four example Apps"
     write_app_store_image "$port" "$example_app_store_image" true
-    echo "System Shell P4 flashed on $port with eight Apps."
+    echo "System Shell P4 flashed on $port with four Apps."
     echo "Verify with: bash tools/p4.sh monitor $port (expect 'System Shell ready: App Hall rendered')"
 }
 
@@ -640,23 +634,20 @@ install_example_apps() {
     install_bundle "$workspace_root/build/apps/blocks/blocks.bundle.bin" Blocks
     install_bundle "$workspace_root/build/apps/snake/snake.bundle.bin" Snake
     install_bundle "$workspace_root/build/apps/tilt/tilt.bundle.bin" Tilt
-    install_bundle "$workspace_root/build/apps/demo/demo.bundle.bin" Demo
-    install_bundle "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin" "Tap Counter"
-    install_bundle "$workspace_root/build/apps/color-lab/color-lab.bundle.bin" "Color Lab"
-    install_bundle "$workspace_root/build/apps/pixel-sketch/pixel-sketch.bundle.bin" "Pixel Sketch"
-    install_bundle "$workspace_root/build/apps/orbit-pad/orbit-pad.bundle.bin" "Orbit Pad"
+    install_bundle "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin" "SDK Demo"
 }
 
 run_tests() {
     echo "==> Explicit release/pre-push test suite"
     bash "$workspace_root/tools/build_guest_p4.sh"
-    build_all
+    prepare_full_flash
     build_null
     bash "$workspace_root/tools/check_firmware_style.sh" --format-only
     bash "$workspace_root/tools/tests/test_firmware_host.sh"
     PYTHONPATH="$workspace_root${PYTHONPATH:+:$PYTHONPATH}" \
         python3 -m unittest tools.tests.test_build_app_store_image tools.tests.test_analyze_sfx \
             tools.tests.test_build_app_bundle_metadata tools.tests.test_build_font_cbin \
+            tools.tests.test_build_host_test \
             tools.tests.test_generate_builtin_fonts \
             tools.tests.test_generate_localization tools.tests.test_firmware \
             tools.tests.test_tilt_level_generator -v
@@ -664,11 +655,7 @@ run_tests() {
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
         "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
-        "$workspace_root/build/apps/demo/demo.bundle.bin" \
-        "$workspace_root/build/apps/tap-counter/tap-counter.bundle.bin" \
-        "$workspace_root/build/apps/color-lab/color-lab.bundle.bin" \
-        "$workspace_root/build/apps/pixel-sketch/pixel-sketch.bundle.bin" \
-        "$workspace_root/build/apps/orbit-pad/orbit-pad.bundle.bin"
+        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
     bash -n "$workspace_root"/tools/*.sh
     echo "P4 release/pre-push test suite passed."
 }
@@ -679,7 +666,7 @@ flash_example_apps() {
     require_idf
     create_example_app_store_image
     port="$(resolve_port "$requested_port")"
-    echo "==> USB App flash: clearing app_store and writing eight example Apps"
+    echo "==> USB App flash: clearing app_store and writing four example Apps"
     write_app_store_image "$port" "$example_app_store_image"
 }
 
@@ -740,10 +727,6 @@ case "$command_name" in
     install-apps-examples)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         install_example_apps
-        ;;
-    build-all)
-        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
-        build_all
         ;;
     flash-all)
         [[ $# -le 1 ]] || { usage >&2; exit 2; }

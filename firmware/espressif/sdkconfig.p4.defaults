@@ -9,6 +9,8 @@ CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
 # WAMR linear memory and the Host comparison buffer request PSRAM explicitly.
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # The attached device is P4 rev 1.3. ESP-IDF treats pre-v3 and v3+ P4 as

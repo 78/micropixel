@@ -23,6 +23,7 @@
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/guest_graphics_engine.hpp"
 #include "soc/soc_caps.h"
+#include "work/task_policy.hpp"
 
 namespace micropixel::platform::metalio_claw4::detail {
 
@@ -33,7 +34,7 @@ inline constexpr int kWidth = board::kDisplayWidth;
 inline constexpr int kHeight = board::kDisplayHeight;
 static_assert(kWidth == ui_profile::Layout::kWidth);
 static_assert(kHeight == ui_profile::Layout::kHeight);
-inline constexpr BaseType_t kLvglTaskCore = 1;
+inline constexpr BaseType_t kLvglTaskCore = task_policy::kSystemCore;
 inline constexpr uint32_t kRefreshPeriodMs = 1000;
 inline constexpr uint32_t kLvglIdleTimeoutMs = 1000;
 inline constexpr uint32_t kLvglMaximumWaitMs = 120U * 1000U;

@@ -18,7 +18,7 @@ I2sAudioSink::I2sAudioSink()
               .data_out = board::kAudioDataOut,
               .amplifier_enable = board::kAudioAmplifierEnable,
               .codec_i2c_address = board::kAudioCodecI2cAddress,
-              .sample_rate = 16000U,
+              .sample_rate = board::kAudioSampleRate,
               .i2c_clock_hz = 100000U,
               .amplifier_preroll_ms = 24U,
               .dma_descriptor_count = 6U,

@@ -14,6 +14,8 @@ class Playback;
 class Timer;
 class GpioInput;
 class Haptic;
+class DirectSurface;
+class PcmStream;
 
 enum class EventType : uint16_t {
     kUnknown,
@@ -27,6 +29,8 @@ enum class EventType : uint16_t {
     kDeviceRemoved,
     kGpioEdge,
     kHapticFinished,
+    kSurfaceReleased,
+    kPcmStreamLowWater,
 };
 
 enum class TouchPhase : uint8_t {
@@ -170,6 +174,30 @@ class AudioPlaybackEvent final {
     friend class Playback;
 };
 
+// A Guest PCM stream drained to its low-water mark; `free_frames` is how much
+// the Guest may write right away.
+class PcmStreamEvent final {
+   public:
+    constexpr PcmStreamEvent(const PcmStreamEvent&) = default;
+    constexpr PcmStreamEvent& operator=(const PcmStreamEvent&) = default;
+
+    [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
+    [[nodiscard]] constexpr uint32_t free_frames() const { return free_frames_; }
+
+   private:
+    constexpr PcmStreamEvent() = default;
+    constexpr PcmStreamEvent(TimePoint timestamp, uint32_t free_frames, uint32_t source)
+        : timestamp_(timestamp), free_frames_(free_frames), source_(source) {}
+
+    TimePoint timestamp_{};
+    uint32_t free_frames_{};
+    uint32_t source_{};
+
+    friend class Application;
+    friend class Event;
+    friend class PcmStream;
+};
+
 class DeviceEvent final {
    public:
     [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
@@ -232,6 +260,26 @@ class HapticEvent final {
     friend class Haptic;
 };
 
+// The Host finished reading a presented DirectSurface buffer; the Guest may
+// render into it again.
+class SurfaceReleasedEvent final {
+   public:
+    [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
+    [[nodiscard]] constexpr uint32_t buffer_index() const { return buffer_index_; }
+
+   private:
+    constexpr SurfaceReleasedEvent() = default;
+    constexpr SurfaceReleasedEvent(TimePoint timestamp, uint32_t buffer_index, uint32_t source)
+        : timestamp_(timestamp), buffer_index_(buffer_index), source_(source) {}
+
+    TimePoint timestamp_{};
+    uint32_t buffer_index_{};
+    uint32_t source_{};
+    friend class Application;
+    friend class Event;
+    friend class DirectSurface;
+};
+
 class Event final {
    public:
     constexpr Event() = default;
@@ -249,6 +297,8 @@ class Event final {
     [[nodiscard]] const AudioPlaybackEvent* PlaybackFrom(const Playback& source) const;
     [[nodiscard]] const GpioEdgeEvent* EdgeFrom(const GpioInput& source) const;
     [[nodiscard]] const HapticEvent* HapticFrom(const Haptic& source) const;
+    [[nodiscard]] const SurfaceReleasedEvent* ReleasedFrom(const DirectSurface& source) const;
+    [[nodiscard]] const PcmStreamEvent* LowWaterFrom(const PcmStream& source) const;
     [[nodiscard]] constexpr const TouchEvent* touch() const { return type_ == EventType::kTouch ? &touch_ : nullptr; }
     [[nodiscard]] constexpr const KeyEvent* key() const { return type_ == EventType::kKey ? &key_ : nullptr; }
     [[nodiscard]] constexpr const DeviceEvent* device() const {
@@ -265,6 +315,12 @@ class Event final {
     }
     [[nodiscard]] constexpr const HapticEvent* haptic() const {
         return type_ == EventType::kHapticFinished ? &haptic_ : nullptr;
+    }
+    [[nodiscard]] constexpr const SurfaceReleasedEvent* surface_released() const {
+        return type_ == EventType::kSurfaceReleased ? &surface_released_ : nullptr;
+    }
+    [[nodiscard]] constexpr const PcmStreamEvent* pcm_stream() const {
+        return type_ == EventType::kPcmStreamLowWater ? &pcm_stream_ : nullptr;
     }
 
     explicit constexpr Event(TimePoint timestamp) : type_(EventType::kUnknown), timestamp_(timestamp) {}
@@ -291,6 +347,12 @@ class Event final {
     explicit constexpr Event(HapticEvent haptic)
         : type_(EventType::kHapticFinished), timestamp_(haptic.timestamp()), haptic_(haptic) {}
 
+    explicit constexpr Event(SurfaceReleasedEvent released)
+        : type_(EventType::kSurfaceReleased), timestamp_(released.timestamp()), surface_released_(released) {}
+
+    explicit constexpr Event(PcmStreamEvent low_water)
+        : type_(EventType::kPcmStreamLowWater), timestamp_(low_water.timestamp()), pcm_stream_(low_water) {}
+
     EventType type_{EventType::kUnknown};
     TimePoint timestamp_{};
     TimerEvent timer_{};
@@ -300,6 +362,8 @@ class Event final {
     DeviceEvent device_{};
     GpioEdgeEvent gpio_edge_{};
     HapticEvent haptic_{};
+    SurfaceReleasedEvent surface_released_{};
+    PcmStreamEvent pcm_stream_{};
     friend class Application;
 };
 

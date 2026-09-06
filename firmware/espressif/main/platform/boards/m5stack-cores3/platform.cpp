@@ -131,7 +131,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
         }
         registration.SetGraphics(graphics_);
         if (audio_status == ESP_OK) {
-            registration.SetAudioOutput(audio_output_, 16000U, &hardware_);
+            registration.SetAudioOutput(audio_output_, audio_output_.SampleRate(), &hardware_);
         }
         registration.SetBattery(battery_);
         registration.SetPower(*this);

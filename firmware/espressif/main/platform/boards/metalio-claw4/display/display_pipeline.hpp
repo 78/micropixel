@@ -22,6 +22,13 @@ class MetalioClaw4DisplayPipeline final : public lvgl::DisplayPipeline {
     [[nodiscard]] lvgl::DisplayGeometry Geometry() const override { return geometry_; }
     [[nodiscard]] lvgl::DisplayCapabilities Capabilities() const override;
     [[nodiscard]] lvgl::DirectFramebufferAccess* DirectFramebuffers() override { return &framebuffers_; }
+    // Guest RGB565 frames are PPA-converted into a free DPI RGB888 framebuffer
+    // and flipped at vsync.
+    [[nodiscard]] lvgl::DirectScanoutProfile DirectScanout() const override {
+        return {.mode = lvgl::DirectScanoutProfile::Mode::kFramebufferRgb888,
+                .rgb565_byte_swapped = false,
+                .max_full_frame_fps = kDirectScanoutMaxFps};
+    }
     [[nodiscard]] esp_err_t Suspend() override;
     [[nodiscard]] esp_err_t Resume() override;
     [[nodiscard]] esp_err_t SetBrightness(uint32_t per_ten_thousand) override;
@@ -30,6 +37,8 @@ class MetalioClaw4DisplayPipeline final : public lvgl::DisplayPipeline {
     [[nodiscard]] esp_lcd_panel_io_handle_t PanelIo() const { return board_io_.PanelIo(); }
 
    private:
+    static constexpr uint16_t kDirectScanoutMaxFps = 60U;
+
     class DpiFramebuffers final : public lvgl::DirectFramebufferAccess {
        public:
         void Bind(lv_display_t* display, esp_lcd_panel_handle_t panel);

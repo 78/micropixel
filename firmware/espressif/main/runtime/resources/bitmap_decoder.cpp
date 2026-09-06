@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "png.h"
+#include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -32,7 +33,16 @@ void ReadPngBytes(png_structp png, png_bytep output, png_size_t size) {
     reader->offset += size;
 }
 
-void PngError(png_structp png, png_const_charp) { png_longjmp(png, 1); }
+// libpng reports the reason only through this callback before it longjmps
+// back into DecodePng; keep it so the failure log can say what went wrong.
+// Decodes run on the Guest task only, so one slot is enough.
+char gPngErrorMessage[96];
+
+void PngError(png_structp png, png_const_charp message) {
+    std::strncpy(gPngErrorMessage, message != nullptr ? message : "", sizeof(gPngErrorMessage) - 1U);
+    gPngErrorMessage[sizeof(gPngErrorMessage) - 1U] = '\0';
+    png_longjmp(png, 1);
+}
 
 void PngWarning(png_structp, png_const_charp) {}
 
@@ -129,6 +139,7 @@ void PackRgb565Row(const uint8_t* rgb, uint8_t* output, uint32_t width) {
 
 bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_opaque_format,
                device::BitmapView& view) {
+    micropixel_check_heap("before PNG decode");
     uint32_t expected_width = 0U;
     uint32_t expected_height = 0U;
     if (!PreflightPng(asset, expected_width, expected_height)) {
@@ -153,9 +164,12 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_o
         heap_caps_free(const_cast<uint8_t*>(row_buffer));
         heap_caps_free(const_cast<uint8_t*>(decoded));
         png_destroy_read_struct(&png, &info, nullptr);
-        ESP_LOGE(kTag, "streaming libpng decode failed: bytes=%u", asset.size);
+        ESP_LOGE(kTag, "streaming libpng decode failed: bytes=%u reason=%s free-psram=%u largest=%u", asset.size,
+                 gPngErrorMessage, static_cast<unsigned>(heap_caps_get_free_size(kBitmapPsramCapabilities)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(kBitmapPsramCapabilities)));
         return false;
     }
+    gPngErrorMessage[0] = '\0';
 
     PngMemoryReader reader{asset.data, asset.size, 0U};
     png_set_read_fn(png, &reader, ReadPngBytes);
@@ -232,9 +246,10 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_o
     png_read_end(png, info);
     png_destroy_read_struct(&png, &info, nullptr);
 
+    micropixel_check_heap("after PNG decode");
     auto* pixels = const_cast<uint8_t*>(decoded);
     view = {pixels, static_cast<uint32_t>(output_size), width, height, width * bytes_per_pixel, pixel_format};
-    ESP_LOGI(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu format=%" PRIu32 " output=%p", width,
+    ESP_LOGD(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu format=%" PRIu32 " output=%p", width,
              height, output_size, pixel_format, pixels);
     return true;
 }

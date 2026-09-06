@@ -21,6 +21,9 @@ class AudioOutputPeripheral {
     [[nodiscard]] virtual esp_err_t Stop() = 0;
     virtual void Shutdown() = 0;
     [[nodiscard]] virtual const char* Name() const = 0;
+    // Frame rate the peripheral clocks out; the mixer renders at exactly this
+    // rate, so it is the board's single source of truth for the mix rate.
+    [[nodiscard]] virtual uint32_t SampleRate() const = 0;
 
    protected:
     AudioOutputPeripheral() = default;

@@ -19,7 +19,8 @@ namespace micropixel::platform::lvgl {
 namespace {
 
 constexpr char kTag[] = "guest_graphics";
-constexpr size_t kAppSurfaceAlignment = 64U;
+// App surfaces are DMA/PPA destinations; reserve complete P4 cache lines.
+constexpr size_t kAppSurfaceAlignment = 128U;
 constexpr uint32_t kAppSurfaceStrideAlignmentPixels = 16U;
 constexpr uint32_t kAppSurfaceTransformScratchRows = 16U;
 // The publish timer is only ever fired explicitly with lv_timer_ready(); the
@@ -117,7 +118,8 @@ bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_hand
     return context != nullptr && static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font) != nullptr;
 }
 
-esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers) {
+esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers,
+                                          const DirectScanoutProfile& scanout) {
     if (display == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -159,7 +161,28 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebuff
                  esp_err_to_name(compositor_status));
     }
 #endif
-    (void)framebuffers;
+    const esp_err_t presenter_status = direct_surface_presenter_.Initialize(
+        display_, static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), scanout, framebuffers,
+        {.context = this, .composite = CompositeDirectFrame});
+    if (presenter_status != ESP_OK) {
+        ESP_LOGW(kTag, "Direct Surface presenter unavailable: %s", esp_err_to_name(presenter_status));
+    }
+    // App Surface storage is Host display memory. Allocating it here, before
+    // any Guest exists, keeps it out of the Guest's PSRAM budget: the pinned
+    // linear memory (CONFIG_WAMR_LINEAR_MEMORY_RESERVE_MAX) is sized from the
+    // free PSRAM at instantiation, so a lazy allocation later would find the
+    // heap already claimed by the Guest.
+    if (!EnsureAppSurfaceStorage()) {
+        ESP_LOGW(kTag, "App Surface storage deferred; first Guest frame allocates it");
+    }
+    if (presenter_status == ESP_OK) {
+        // Scene / bitmap frames can bypass the LVGL render + flush: an RGB565
+        // App Surface is what a blit panel consumes, a BGR888 one is what the
+        // DPI framebuffers hold. The presenter ignores the source on profiles
+        // it cannot serve.
+        direct_surface_presenter_.SetAppSurfaceFrameSource(
+            {.context = this, .acquire = AcquireAppSurfaceFrame, .handed_to_lvgl = AppSurfaceFrameHandedToLvgl});
+    }
     // Initialize() runs before the LVGL task starts, so creating the timer
     // here needs no lock.
     publish_timer_ = lv_timer_create(PublishTimerCallback, kPublishTimerPeriodMs, this);
@@ -188,6 +211,15 @@ void GuestGraphicsEngine::DisplayRefreshStartEvent(lv_event_t* event) {
     // Adopt before the dirty areas are coalesced so the newest Guest frame is
     // what this refresh copies to the panel.
     engine->AdoptPendingFrameLocked(true);
+    if (engine->direct_surface_presenter_.Created()) {
+        // Every Host UI change invalidates something and lands here, so this
+        // is where the presenter learns whether LVGL has to blend an overlay.
+        engine->direct_surface_presenter_.SetHostUiVisible(engine->HostUiVisibleLocked());
+    } else if (engine->direct_surface_presenter_.AppSurfaceFrameScanoutEnabled()) {
+        // Same rule for App Surface scanout (HostUiVisibleLocked() also reports
+        // visible while no Guest frame is on screen for the presenter to take over).
+        engine->direct_surface_presenter_.SetHostUiVisible(engine->HostUiVisibleLocked());
+    }
     engine->refresh_damage_ = engine->dirty_region_coalescer_.Coalesce(engine->display_);
     engine->guest_refresh_active_ = engine->guest_refresh_pending_;
     engine->guest_refresh_pending_ = false;
@@ -259,6 +291,11 @@ int32_t GuestGraphicsEngine::GetInfo(micropixel_graphics_info_t& info) const {
     info.max_batch_instances = MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES;
     info.max_sprite_batches = MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES;
     info.reserved0 = 0U;
+    device::DirectSurfaceInfo surface{};
+    direct_surface_presenter_.FillInfo(surface);
+    info.native_pixel_format = surface.native_pixel_format;
+    info.native_flags = surface.native_flags;
+    info.max_full_frame_fps = surface.max_full_frame_fps;
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -326,8 +363,8 @@ bool GuestGraphicsEngine::EnsureSceneStorage() {
     return true;
 }
 
-bool GuestGraphicsEngine::EnsureAppSurfaceStorage() {
-    if (app_surface_compositor_.has_value()) {
+bool GuestGraphicsEngine::AllocateAppSurfaceStorage() {
+    if (app_surface_pixels_ != nullptr) {
         return true;
     }
     if (app_surface_allocation_failed_ || width_ <= 0 || height_ <= 0 ||
@@ -348,8 +385,6 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorage() {
                   CONFIG_MICROPIXEL_APP_SURFACE_COUNT <=
                       static_cast<int>(graphics::AppSurfaceCompositor::kMaxSurfaces));
     app_surface_count_ = static_cast<uint8_t>(CONFIG_MICROPIXEL_APP_SURFACE_COUNT);
-    displayed_surface_ = 0U;
-    pending_ = {};
     // Surfaces first, then the Layer cache slot.
     app_surface_pixels_ = static_cast<uint8_t*>(
         heap_caps_aligned_alloc(kAppSurfaceAlignment, static_cast<size_t>(allocation_bytes * (app_surface_count_ + 1U)),
@@ -367,15 +402,29 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorage() {
         ESP_LOGW(kTag, "App Surface allocation failed; retaining LVGL Guest fallback");
         return false;
     }
-
-    constexpr graphics::DamageMergePolicy kDamageMergePolicy{
-        .max_extra_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS,
-        .max_region_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS,
-    };
     app_surface_pixel_bytes_ = static_cast<uint32_t>(pixel_bytes);
     app_surface_allocation_bytes_ = static_cast<uint32_t>(allocation_bytes);
     app_surface_stride_ = static_cast<uint32_t>(stride);
     app_surface_layer_pixels_ = app_surface_pixels_ + app_surface_allocation_bytes_ * app_surface_count_;
+    return true;
+}
+
+bool GuestGraphicsEngine::EnsureAppSurfaceStorage() {
+    if (app_surface_compositor_.has_value()) {
+        return true;
+    }
+    // The pixel storage is allocated once and kept for the firmware lifetime
+    // (see Initialize()); only the compositor is rebuilt per Guest so scene
+    // state never leaks from one App into the next.
+    if (!AllocateAppSurfaceStorage()) {
+        return false;
+    }
+    displayed_surface_ = 0U;
+    pending_ = {};
+    constexpr graphics::DamageMergePolicy kDamageMergePolicy{
+        .max_extra_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS,
+        .max_region_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS,
+    };
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
     graphics::PixelCompositor& pixel_compositor = hardware_pixel_compositor_;
 #else
@@ -505,6 +554,21 @@ void GuestGraphicsEngine::PublishSurface(uint8_t surface, bool visual_changed) {
     if (replaced) {
         ++submit_stage_telemetry_.frames_replaced;
     }
+    if (AppSurfaceScanoutWanted() && direct_surface_presenter_.PresentAppSurfaceFrame()) {
+        // The presenter task pops the mailbox and sends the damage windows to
+        // the panel; LVGL is not woken. Should the presenter find it cannot
+        // (Host UI appeared meanwhile), it re-publishes the frame to LVGL.
+        ++submit_stage_telemetry_.frames_to_presenter;
+        return;
+    }
+    if (direct_surface_presenter_.AppSurfaceFrameExclusive()) {
+        // Request refused (queue full) while the presenter still owns the
+        // panel: an LVGL flush now would land in dummy draw and the damage
+        // would never reach the panel. The frame stays in the mailbox for the
+        // next request; damage keeps accumulating there.
+        ++submit_stage_telemetry_.frames_deferred;
+        return;
+    }
     if (publish_timer_ != nullptr) {
         // Plain stores on a timer LVGL never deletes; the adapter wake makes
         // the LVGL task re-run its timers even while the refresh timer is
@@ -522,6 +586,14 @@ void GuestGraphicsEngine::ClearPendingFrame() {
 
 void GuestGraphicsEngine::AdoptPendingFrameLocked(bool inside_refresh) {
     PendingFrame frame{};
+    // While the presenter owns the panel every LVGL flush lands in dummy draw.
+    // Host overlays (performance HUD, gesture hint) still trigger refreshes;
+    // adopting here would take the frame out of the mailbox, drop its damage
+    // on the floor and leave those pixels stale on the panel for good. The
+    // presenter hands the frame back with whole-frame damage when it leaves.
+    if (direct_surface_presenter_.AppSurfaceFrameExclusive()) {
+        return;
+    }
     taskENTER_CRITICAL(&publish_lock_);
     if (pending_.surface != kNoSurface) {
         frame = pending_;
@@ -595,17 +667,13 @@ void GuestGraphicsEngine::ReleaseAppSurfaceLocked() {
     ClearPendingFrame();
     app_surface_active_ = false;
     app_surface_image_ = nullptr;
+    // Drop the per-Guest compositor but keep the pixel storage: it was
+    // allocated before any Guest claimed PSRAM, and once a pinned linear
+    // memory has taken the rest of the heap it could not be re-allocated,
+    // leaving every later App without a composited fallback (black Host UI
+    // over Direct Surfaces, no frame to hand to the Hall transition).
     app_surface_compositor_.reset();
-    heap_caps_free(app_surface_operation_storage_);
-    heap_caps_free(app_surface_pixels_);
-    app_surface_operation_storage_ = nullptr;
-    app_surface_pixels_ = nullptr;
-    app_surface_layer_pixels_ = nullptr;
-    app_surface_pixel_bytes_ = 0U;
-    app_surface_allocation_bytes_ = 0U;
-    app_surface_stride_ = 0U;
     app_surface_image_descriptor_ = {};
-    app_surface_allocation_failed_ = false;
     app_surface_frame_sequence_ = 0U;
     scene_wire_bytes_ = 0U;
     scene_wire_records_ = 0U;
@@ -688,10 +756,11 @@ void GuestGraphicsEngine::PublishScene(const device::TextureAccess& textures, ui
 void GuestGraphicsEngine::LogSceneTelemetry(const graphics::AppSurfaceFrameResult& result, uint32_t sequence) {
     const bool layer_snapshot_transition = result.layer_snapshot_used != layer_snapshot_telemetry_active_;
     layer_snapshot_telemetry_active_ = result.layer_snapshot_used;
+    constexpr uint32_t kStartupFrames = CONFIG_MICROPIXEL_APP_SURFACE_STARTUP_TELEMETRY_FRAMES;
     const bool periodic = (sequence % kSceneTelemetryPeriodFrames) == 0U;
-    const bool transition_line = layer_snapshot_transition && sequence > 8U && !periodic;
+    const bool transition_line = layer_snapshot_transition && sequence > kStartupFrames && !periodic;
     const bool stage_line = periodic && submit_stage_telemetry_.frames != 0U;
-    if (!transition_line && !periodic && sequence > 8U) {
+    if (!transition_line && !periodic && sequence > kStartupFrames) {
         return;
     }
     if (!BeginTelemetryReport()) {
@@ -709,7 +778,7 @@ void GuestGraphicsEngine::LogSceneTelemetry(const graphics::AppSurfaceFrameResul
                             result.damage_pixels, result.draw_operations_replayed, scene_wire_records_,
                             scene_wire_instances_);
     }
-    if (sequence <= 8U || (sequence % kSceneTelemetryPeriodFrames) == 0U) {
+    if (sequence <= kStartupFrames || periodic) {
         const SoftwarePixelCompositorStats software = software_pixel_compositor_.Stats();
         struct HardwareStats final {
             uint32_t ppa_fills{};
@@ -814,14 +883,25 @@ void GuestGraphicsEngine::LogSceneTelemetry(const graphics::AppSurfaceFrameResul
         // The current frame's compose time is already accumulated; its lock/apply
         // share lands in the next window, which is negligible over the period.
         const SubmitStageTelemetry& stages = submit_stage_telemetry_;
-        AppendTelemetryLine("submit stages (%" PRIu32 " frames avg us): lock-wait=%" PRIu64 " apply=%" PRIu64
-                            " compose=%" PRIu64 " (normalize=%" PRIu64 " damage=%" PRIu64 " render=%" PRIu64
-                            ") total=%" PRIu64 " max-total=%" PRIu64 " replaced=%" PRIu32,
-                            stages.frames, stages.lock_wait_us / stages.frames, stages.apply_us / stages.frames,
-                            stages.compose_us / stages.frames, stages.normalize_us / stages.frames,
-                            stages.damage_us / stages.frames, stages.render_us / stages.frames,
-                            stages.total_us / stages.frames, stages.max_total_us, stages.frames_replaced);
+        AppendTelemetryLine(
+            "submit stages (%" PRIu32 " frames avg us): lock-wait=%" PRIu64 " apply=%" PRIu64 " compose=%" PRIu64
+            " (normalize=%" PRIu64 " damage=%" PRIu64 " render=%" PRIu64 ") total=%" PRIu64 " max-total=%" PRIu64
+            " replaced=%" PRIu32 " direct-scanout=%" PRIu32 " deferred=%" PRIu32,
+            stages.frames, stages.lock_wait_us / stages.frames, stages.apply_us / stages.frames,
+            stages.compose_us / stages.frames, stages.normalize_us / stages.frames, stages.damage_us / stages.frames,
+            stages.render_us / stages.frames, stages.total_us / stages.frames, stages.max_total_us,
+            stages.frames_replaced, stages.frames_to_presenter, stages.frames_deferred);
         submit_stage_telemetry_.Reset();
+        const DirectSurfacePresenter::AppSurfaceFrameStats scanout =
+            direct_surface_presenter_.TakeAppSurfaceFrameStats();
+        if (scanout.frames != 0U) {
+            AppendTelemetryLine("direct scanout (%" PRIu32 " frames avg): copy=%" PRIu64 " us (dma2d blocks=%" PRIu32
+                                " cache=%" PRIu64 " us wait=%" PRIu64 " us) flip=%" PRIu64 " us pixels=%" PRIu64
+                                " whole=%" PRIu32,
+                                scanout.frames, scanout.copy_us / scanout.frames, scanout.blocks / scanout.frames,
+                                scanout.cache_us / scanout.frames, scanout.wait_us / scanout.frames,
+                                scanout.flip_us / scanout.frames, scanout.pixels / scanout.frames, scanout.whole);
+        }
     }
 #if CONFIG_ESP_LVGL_ADAPTER_ENABLE_PERFORMANCE_TELEMETRY
     if (periodic) {
@@ -927,7 +1007,17 @@ void GuestGraphicsEngine::EmitTelemetryReport() {}
 #endif
 
 void GuestGraphicsEngine::Release() {
-    if (display_ == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (display_ == nullptr) {
+        return;
+    }
+    // Drains the presenter (and leaves dummy draw) before the LVGL tree and
+    // the App Surface it composites into are torn down.
+    (void)direct_surface_presenter_.Destroy();
+    direct_surface_presenter_.ReleaseAppSurfaceFrames();
+    // A Guest stopped while paused leaves the presenter suspended; the next
+    // Guest's App Surface frames must be eligible for direct scanout again.
+    direct_surface_presenter_.Resume();
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
     if (guest_frame_ != nullptr) {
@@ -971,6 +1061,10 @@ void GuestGraphicsEngine::Release() {
 int32_t GuestGraphicsEngine::Submit(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures) {
     if (display_ == nullptr || bytes == nullptr || textures.resolve == nullptr) {
         return MICROPIXEL_STATUS_INTERNAL;
+    }
+    if (direct_surface_presenter_.Created()) {
+        // The panel belongs to the Direct Surface until the Guest destroys it.
+        return MICROPIXEL_STATUS_STALE_STATE;
     }
     if (!EnsureTextureStorage() || !EnsureSceneStorage()) {
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
@@ -1220,6 +1314,303 @@ int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
 
 bool GuestGraphicsEngine::ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination) {
     return software_pixel_compositor_.ScaleBitmap(source, destination);
+}
+
+// ---- Direct Surface -------------------------------------------------------------
+
+int32_t GuestGraphicsEngine::CreateDirectSurface(const device::DirectSurfaceConfig& config,
+                                                 const device::DirectSurfaceReleaseSink& sink,
+                                                 device::DirectSurfaceInfo& info_out) {
+    if (display_ == nullptr) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+    if (!direct_surface_presenter_.Ready()) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    // Exclusive scanout presents straight to the panel. App Surface is only
+    // mandatory for pure-composited boards; Host-UI fallback allocates it
+    // lazily in CompositeDirectFrame so an 8 MiB pinned linear memory still
+    // leaves enough PSRAM for Direct Surface games.
+    if (direct_surface_presenter_.RequiresAppSurface() && !EnsureAppSurfaceStorage()) {
+        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+    }
+    const int32_t status = direct_surface_presenter_.Create(config, sink, info_out);
+    if (status == MICROPIXEL_STATUS_OK && app_surface_compositor_.has_value()) {
+        // Direct frames bypass the compositor's damage tracking; a later Scene
+        // submit must rebuild every pixel instead of replaying carry-over.
+        app_surface_compositor_->Reset();
+    }
+    return status;
+}
+
+int32_t GuestGraphicsEngine::PresentDirectSurface(const device::DirectSurfacePresentation& presentation) {
+    return direct_surface_presenter_.Present(presentation);
+}
+
+void GuestGraphicsEngine::SuspendDirectSurface() { direct_surface_presenter_.Suspend(); }
+
+void GuestGraphicsEngine::ResumeDirectSurface() { direct_surface_presenter_.Resume(); }
+
+int32_t GuestGraphicsEngine::DestroyDirectSurface() {
+    const int32_t status = direct_surface_presenter_.Destroy();
+    if (status == MICROPIXEL_STATUS_OK && app_surface_compositor_.has_value()) {
+        app_surface_compositor_->Reset();
+    }
+    return status;
+}
+
+namespace {
+
+// Names the Host UI object that keeps the Direct Surface out of exclusive
+// scanout. Rate limited: REFR_START fires for every refresh.
+void LogHostUiBlocker(const char* where, lv_obj_t* object) {
+#if CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+    static uint32_t count = 0U;
+    if (++count > 3U && (count % 300U) != 0U) {
+        return;
+    }
+    ESP_LOGI(kTag, "Direct Surface stays composited: %s object=%p class=%p size=%dx%d opa=%u", where, object,
+             static_cast<const void*>(object != nullptr ? lv_obj_get_class(object) : nullptr),
+             object != nullptr ? static_cast<int>(lv_obj_get_width(object)) : 0,
+             object != nullptr ? static_cast<int>(lv_obj_get_height(object)) : 0,
+             object != nullptr ? static_cast<unsigned>(lv_obj_get_style_opa(object, LV_PART_MAIN)) : 0U);
+#else
+    (void)where;
+    (void)object;
+#endif
+}
+
+}  // namespace
+
+bool GuestGraphicsEngine::HostUiVisibleLocked() const {
+    lv_obj_t* screen = lv_screen_active();
+    if (guest_frame_ == nullptr || screen == nullptr || lv_obj_get_parent(guest_frame_) != screen) {
+        // Nothing of the Guest is on screen yet: LVGL must draw the frame that
+        // creates it.
+        LogHostUiBlocker("no guest frame on screen", guest_frame_);
+        return true;
+    }
+    // Siblings below the (opaque, full-screen) Guest frame are hidden by it.
+    const uint32_t child_count = lv_obj_get_child_count(screen);
+    for (uint32_t index = static_cast<uint32_t>(lv_obj_get_index(guest_frame_)) + 1U; index < child_count; ++index) {
+        lv_obj_t* sibling = lv_obj_get_child(screen, index);
+        if (!lv_obj_has_flag(sibling, LV_OBJ_FLAG_HIDDEN)) {
+            LogHostUiBlocker("screen sibling above guest frame", sibling);
+            return true;
+        }
+    }
+    for (lv_obj_t* layer : {lv_layer_top(), lv_layer_sys()}) {
+        if (layer == nullptr) {
+            continue;
+        }
+        const uint32_t layer_children = lv_obj_get_child_count(layer);
+        for (uint32_t index = 0U; index < layer_children; ++index) {
+            lv_obj_t* child = lv_obj_get_child(layer, index);
+            if (!lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) {
+                LogHostUiBlocker(layer == lv_layer_top() ? "top layer child" : "sys layer child", child);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void GuestGraphicsEngine::AttachBareGuestFrame() {
+    if (display_ == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    if (guest_frame_ == nullptr) {
+        guest_frame_ = lv_obj_create(lv_screen_active());
+        StyleFullscreenContainer(guest_frame_, width_, height_, 0x000000U);
+        bool needs_present = true;
+        if (presentation_hooks_.prepare_frame_locked != nullptr) {
+            // Deletes the launch bitmap / "Loading..." root like a Scene frame would.
+            presentation_hooks_.prepare_frame_locked(presentation_hooks_.context, guest_frame_, true, needs_present);
+        }
+        guest_refresh_pending_ = true;
+        RequestDisplayRefresh(display_);
+        ESP_LOGW(kTag, "Direct Surface without App Surface: bare Guest frame attached; Host UI overlays show black");
+    }
+    esp_lv_adapter_unlock();
+}
+
+void GuestGraphicsEngine::PublishDirectSurface(uint8_t surface) {
+    taskENTER_CRITICAL(&publish_lock_);
+    pending_.surface = surface;
+    pending_.damage_overflow = true;
+    pending_.visual_changed = true;
+    taskEXIT_CRITICAL(&publish_lock_);
+    if (publish_timer_ != nullptr) {
+        lv_timer_ready(publish_timer_);
+    }
+    (void)esp_lv_adapter_request_wake();
+}
+
+bool GuestGraphicsEngine::AcquireAppSurfaceFrame(void* context, bool pending_only, AppSurfaceFrame& frame_out) {
+    auto* engine = static_cast<GuestGraphicsEngine*>(context);
+    if (engine == nullptr || engine->app_surface_pixels_ == nullptr || engine->app_surface_count_ < 2U) {
+        return false;
+    }
+    PendingFrame frame{};
+    uint8_t surface = kNoSurface;
+    bool whole = false;
+    taskENTER_CRITICAL(&engine->publish_lock_);
+    if (engine->pending_.surface != kNoSurface) {
+        // Same hand-over as AdoptPendingFrameLocked: the surface becomes the
+        // displayed one, so the compositor never writes into it while the
+        // panel transfer reads it.
+        frame = engine->pending_;
+        engine->pending_ = {};
+        engine->displayed_surface_ = frame.surface;
+        surface = frame.surface;
+        whole = frame.damage_overflow;
+    } else if (!pending_only) {
+        surface = engine->displayed_surface_;
+        whole = true;
+    }
+    taskEXIT_CRITICAL(&engine->publish_lock_);
+    if (surface == kNoSurface) {
+        return false;
+    }
+    const graphics::PixelSurface pixels = engine->SurfaceAt(surface);
+    frame_out = {};
+    frame_out.pixels = pixels.pixels;
+    frame_out.stride = pixels.stride;
+    frame_out.length = pixels.size;
+    frame_out.bytes_per_pixel = engine->app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? 2U : 3U;
+    frame_out.whole = whole;
+    if (!whole) {
+        const size_t count =
+            frame.damage.Size() < AppSurfaceFrame::kMaxRects ? frame.damage.Size() : AppSurfaceFrame::kMaxRects;
+        for (size_t index = 0U; index < count; ++index) {
+            const graphics::DamageRect damage = frame.damage[index].rect;
+            frame_out.rects[index] = {.x = damage.x, .y = damage.y, .width = damage.width, .height = damage.height};
+        }
+        frame_out.rect_count = static_cast<uint32_t>(count);
+    }
+    return true;
+}
+
+bool GuestGraphicsEngine::DirectlyScannedAppSurface(graphics::ConstPixelSurface& surface_out) const {
+    if (!direct_surface_presenter_.AppSurfaceFrameExclusive() || app_surface_pixels_ == nullptr) {
+        return false;
+    }
+    taskENTER_CRITICAL(&publish_lock_);
+    const uint8_t displayed = displayed_surface_;
+    taskEXIT_CRITICAL(&publish_lock_);
+    const graphics::PixelSurface surface = SurfaceAt(displayed);
+    surface_out = {
+        .pixels = surface.pixels,
+        .size = surface.size,
+        .width = surface.width,
+        .height = surface.height,
+        .stride = surface.stride,
+        .format = surface.format,
+    };
+    return true;
+}
+
+void GuestGraphicsEngine::AppSurfaceFrameHandedToLvgl(void* context, bool panel_stale) {
+    auto* engine = static_cast<GuestGraphicsEngine*>(context);
+    if (engine == nullptr) {
+        return;
+    }
+    taskENTER_CRITICAL(&engine->publish_lock_);
+    if (engine->pending_.surface == kNoSurface) {
+        engine->pending_.surface = engine->displayed_surface_;
+    }
+    if (panel_stale) {
+        // LVGL's image still points at the surface it last adopted and its
+        // draw buffers predate the presenter's blits: redraw everything.
+        engine->pending_.damage_overflow = true;
+    }
+    engine->pending_.visual_changed = true;
+    taskEXIT_CRITICAL(&engine->publish_lock_);
+    if (engine->publish_timer_ != nullptr) {
+        lv_timer_ready(engine->publish_timer_);
+    }
+    (void)esp_lv_adapter_request_wake();
+}
+
+bool GuestGraphicsEngine::CompositeDirectFrame(void* context, const device::DirectSurfacePresentation& frame,
+                                               bool source_byte_swapped) {
+    auto* engine = static_cast<GuestGraphicsEngine*>(context);
+    if (engine == nullptr) {
+        return false;
+    }
+    if (!engine->EnsureAppSurfaceStorage() || !engine->app_surface_compositor_.has_value()) {
+        // No PSRAM left for the composited fallback. The frame is lost, but
+        // the Guest still has to take over the screen from the launch
+        // bitmap, otherwise the Host UI stays "visible" and the presenter
+        // never enters exclusive scanout.
+        engine->AttachBareGuestFrame();
+        return false;
+    }
+    const bool lock = engine->ComposeUnderLock();
+    if (lock && esp_lv_adapter_lock(-1) != ESP_OK) {
+        return false;
+    }
+    const uint8_t target = engine->AcquireComposeSurface();
+    const graphics::PixelSurface destination = engine->SurfaceAt(target);
+    const bool bgr888 = destination.format == graphics::SurfacePixelFormat::kBgr888;
+    const bool same_size = frame.src_width == destination.width && frame.src_height == destination.height;
+    bool converted = false;
+    if (!source_byte_swapped) {
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED && !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+        graphics::PixelCompositor& compositor = engine->hardware_pixel_compositor_;
+#else
+        graphics::PixelCompositor& compositor = engine->software_pixel_compositor_;
+#endif
+        const graphics::ConstPixelSurface source{
+            .pixels = frame.pixels,
+            .size = frame.length,
+            .width = frame.src_width,
+            .height = frame.src_height,
+            .stride = frame.pitch,
+            .format = graphics::SurfacePixelFormat::kRgb565,
+        };
+        const graphics::SurfaceRect source_rect{.x = 0,
+                                                .y = 0,
+                                                .width = static_cast<int32_t>(frame.src_width),
+                                                .height = static_cast<int32_t>(frame.src_height)};
+        const graphics::SurfaceRect destination_rect{.x = 0,
+                                                     .y = 0,
+                                                     .width = static_cast<int32_t>(destination.width),
+                                                     .height = static_cast<int32_t>(destination.height)};
+        converted = compositor.Blit(source, source_rect, destination, destination_rect, 255U);
+    }
+    if (!converted) {
+        // Panel byte order (or no accelerator): plain CPU conversion.
+        const bool swap = source_byte_swapped;
+        for (uint32_t y = 0U; y < destination.height; ++y) {
+            const uint32_t source_y = same_size ? y : y * frame.src_height / destination.height;
+            const auto* source_row = reinterpret_cast<const uint16_t*>(frame.pixels + source_y * frame.pitch);
+            uint8_t* destination_row = destination.pixels + y * destination.stride;
+            for (uint32_t x = 0U; x < destination.width; ++x) {
+                const uint32_t source_x = same_size ? x : x * frame.src_width / destination.width;
+                uint16_t pixel = source_row[source_x];
+                if (swap) {
+                    pixel = static_cast<uint16_t>((pixel << 8U) | (pixel >> 8U));
+                }
+                if (bgr888) {
+                    const uint8_t red = static_cast<uint8_t>((pixel >> 11U) & 0x1FU);
+                    const uint8_t green = static_cast<uint8_t>((pixel >> 5U) & 0x3FU);
+                    const uint8_t blue = static_cast<uint8_t>(pixel & 0x1FU);
+                    destination_row[x * 3U + 0U] = static_cast<uint8_t>((blue << 3U) | (blue >> 2U));
+                    destination_row[x * 3U + 1U] = static_cast<uint8_t>((green << 2U) | (green >> 4U));
+                    destination_row[x * 3U + 2U] = static_cast<uint8_t>((red << 3U) | (red >> 2U));
+                } else {
+                    reinterpret_cast<uint16_t*>(destination_row)[x] = pixel;
+                }
+            }
+        }
+    }
+    engine->PublishDirectSurface(target);
+    if (lock) {
+        engine->AdoptPendingFrameLocked(false);
+        esp_lv_adapter_unlock();
+    }
+    return true;
 }
 
 }  // namespace micropixel::platform::lvgl

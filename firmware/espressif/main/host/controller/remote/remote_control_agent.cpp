@@ -1,6 +1,7 @@
 #include "host/controller/remote/remote_control_agent.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -540,8 +541,8 @@ bool RemoteControlAgent::Start(bool enabled) {
                            "Unable to allocate Remote Control task context in PSRAM");
         return false;
     }
-    if (xTaskCreate(TaskEntry, "micropixel_remote", kTaskStackBytes, this, task_policy::kRemoteControlPriority,
-                    &task_) != pdPASS) {
+    if (xTaskCreatePinnedToCore(TaskEntry, "micropixel_remote", kTaskStackBytes, this,
+                                task_policy::kRemoteControlPriority, &task_, task_policy::kSystemCore) != pdPASS) {
         task_ = nullptr;
         ReleaseTaskContext();
         SetConnectionState(host_ui::RemoteControlConnectionState::kBackoff, "Unable to start Remote Control task");
@@ -1330,6 +1331,9 @@ bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identit
         (void)cJSON_AddStringToObject(item, "appId", app.app_id.data());
         (void)cJSON_AddStringToObject(item, "displayName", app.display_name.data());
         (void)cJSON_AddNumberToObject(item, "bundleSizeBytes", app.bundle_size);
+        std::array<char, 65U> sha256{};
+        control::FormatSha256Hex(app.sha256, sha256);
+        (void)cJSON_AddStringToObject(item, "sha256", sha256.data());
         (void)cJSON_AddStringToObject(item, "source", "app_store");
         const bool active = active_app[0] != '\0' && active_app == app.app_id;
         (void)cJSON_AddBoolToObject(item, "active", active);

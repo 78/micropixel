@@ -3,19 +3,24 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <cstring>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "src/core/lv_obj_draw_private.h"
+#include "src/draw/snapshot/lv_snapshot.h"
 
 namespace micropixel::host_ui::lvgl::square_common {
 namespace {
 
 constexpr char kTag[] = "micropixel_status";
 constexpr uint16_t kTransitionComplete = 1000U;
+constexpr lv_opa_t kPerformanceOverlayBackingOpa = 176;
 
 constexpr int32_t Scale480To720(int32_t value) { return value * 3 / 2; }
 
@@ -684,6 +689,8 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(status_layer_));
 }
 
+StatusLayerUi::~StatusLayerUi() { heap_caps_free(performance_snapshot_pixels_); }
+
 std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host_ui::StatusLayerModel& model,
                                                                       host_ui::SystemUiActionSink action_sink,
                                                                       void* action_context) {
@@ -755,7 +762,7 @@ bool StatusLayerUi::PerformanceOverlayVisibleLocked() const {
     return performance_overlay_ != nullptr && !lv_obj_has_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
 }
 
-void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_percent,
+void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, const CpuUsageSample& cpu,
                                                    uint32_t guest_presented_frame_sequence) {
     if (!enabled) {
         if (performance_overlay_ != nullptr) {
@@ -768,31 +775,11 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
         return;
     }
 
-    if (performance_overlay_ == nullptr) {
-        performance_overlay_ = lv_obj_create(lv_screen_active());
-        ResolveLayoutLocked();
-        const lv_font_t* font = platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall);
-        const int32_t line_height = font->line_height;
-        const int32_t horizontal_padding = std::max<int32_t>(2, line_height / 4);
-        const int32_t vertical_padding = std::max<int32_t>(1, line_height / 10);
-        lv_obj_set_size(performance_overlay_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_all(performance_overlay_, 0, 0);
-        lv_obj_set_style_pad_hor(performance_overlay_, horizontal_padding, 0);
-        lv_obj_set_style_pad_ver(performance_overlay_, vertical_padding, 0);
-        lv_obj_set_style_radius(performance_overlay_, std::max<int32_t>(2, line_height / 3), 0);
-        lv_obj_set_style_border_width(performance_overlay_, 0, 0);
-        lv_obj_set_style_bg_color(performance_overlay_, lv_color_hex(theme::kPerformanceOverlayBackground), 0);
-        // Keep the translucent backing tightly fitted to the text so it remains
-        // a small, PPA-eligible blend instead of a full-screen cost.
-        lv_obj_set_style_bg_opa(performance_overlay_, 176, 0);
-        lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_CLICKABLE);
-        performance_label_ = CreateLabel(performance_overlay_, "", font, theme::kPrimaryText, 0, 0);
-        lv_obj_set_size(performance_label_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_text_align(performance_label_, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(performance_overlay_, LV_ALIGN_TOP_MID, 0, layout_->performance_overlay_y);
-    }
+    EnsurePerformanceOverlayLocked();
     lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+    // On-screen (LVGL-composited) HUD keeps its translucent backing; the
+    // Direct Surface snapshot path switches it to opaque.
+    lv_obj_set_style_bg_opa(performance_overlay_, kPerformanceOverlayBackingOpa, 0);
 
     const int64_t now_us = esp_timer_get_time();
     if (performance_last_sample_us_ != 0 && now_us > performance_last_sample_us_) {
@@ -803,12 +790,115 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, uint8_t cpu_per
     }
     performance_last_frame_sequence_ = guest_presented_frame_sequence;
     performance_last_sample_us_ = now_us;
-    char performance_text[32]{};
-    (void)std::snprintf(performance_text, sizeof(performance_text), "CPU %u%%  FPS %" PRIu32,
-                        static_cast<unsigned>(cpu_percent), performance_fps_);
-    lv_label_set_text(performance_label_, performance_text);
+    SetPerformanceOverlayTextLocked(cpu, performance_fps_);
     RaisePerformanceOverlayLocked();
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(performance_overlay_));
+}
+
+void StatusLayerUi::EnsurePerformanceOverlayLocked() {
+    if (performance_overlay_ != nullptr) {
+        return;
+    }
+    performance_overlay_ = lv_obj_create(lv_screen_active());
+    ResolveLayoutLocked();
+    const lv_font_t* font = platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall);
+    const int32_t line_height = font->line_height;
+    const int32_t horizontal_padding = std::max<int32_t>(2, line_height / 4);
+    const int32_t vertical_padding = std::max<int32_t>(1, line_height / 10);
+    lv_obj_set_size(performance_overlay_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(performance_overlay_, 0, 0);
+    lv_obj_set_style_pad_hor(performance_overlay_, horizontal_padding, 0);
+    lv_obj_set_style_pad_ver(performance_overlay_, vertical_padding, 0);
+    lv_obj_set_style_radius(performance_overlay_, std::max<int32_t>(2, line_height / 3), 0);
+    lv_obj_set_style_border_width(performance_overlay_, 0, 0);
+    lv_obj_set_style_bg_color(performance_overlay_, lv_color_hex(theme::kPerformanceOverlayBackground), 0);
+    // Keep the translucent backing tightly fitted to the text so it remains
+    // a small, PPA-eligible blend instead of a full-screen cost.
+    lv_obj_set_style_bg_opa(performance_overlay_, kPerformanceOverlayBackingOpa, 0);
+    lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_CLICKABLE);
+    // Created hidden; UpdatePerformanceOverlayLocked shows it, the Direct
+    // Surface snapshot path never does.
+    lv_obj_add_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+    performance_label_ = CreateLabel(performance_overlay_, "", font, theme::kPrimaryText, 0, 0);
+    lv_obj_set_size(performance_label_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_align(performance_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(performance_overlay_, LV_ALIGN_TOP_MID, 0, layout_->performance_overlay_y);
+}
+
+void StatusLayerUi::SetPerformanceOverlayTextLocked(const CpuUsageSample& cpu, uint32_t fps) {
+    // "CPU 45% [0:12 1:78]  FPS 42": the per-core split shows whether the Guest
+    // core or the system core is the one running out of headroom.
+    char performance_text[48]{};
+    if (cpu.core_count >= 2U) {
+        (void)std::snprintf(performance_text, sizeof(performance_text), "CPU %u%% [0:%u 1:%u]  FPS %" PRIu32,
+                            static_cast<unsigned>(cpu.total_percent), static_cast<unsigned>(cpu.per_core_percent[0]),
+                            static_cast<unsigned>(cpu.per_core_percent[1]), fps);
+    } else {
+        (void)std::snprintf(performance_text, sizeof(performance_text), "CPU %u%%  FPS %" PRIu32,
+                            static_cast<unsigned>(cpu.total_percent), fps);
+    }
+    lv_label_set_text(performance_label_, performance_text);
+}
+
+bool StatusLayerUi::RenderPerformanceOverlaySnapshotLocked(const CpuUsageSample& cpu, uint32_t fps,
+                                                           PerformanceOverlaySnapshot& snapshot_out) {
+    snapshot_out = {};
+    EnsurePerformanceOverlayLocked();
+    if (!lv_obj_has_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN)) {
+        // Switching from the on-screen HUD: hide it and let LVGL erase it.
+        lv_obj_add_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+        platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(performance_overlay_));
+    }
+    SetPerformanceOverlayTextLocked(cpu, fps);
+    // The presenter blends this snapshot into every scanned-out frame in front
+    // of the panel DMA. An opaque backing turns that blend into a row copy
+    // (~0.2 ms) instead of a per-pixel PSRAM read-modify-write (~0.9 ms), which
+    // is the difference between 39 and 41 fps on a 480x480 panel.
+    lv_obj_set_style_bg_opa(performance_overlay_, LV_OPA_COVER, 0);
+    lv_obj_align(performance_overlay_, LV_ALIGN_TOP_MID, 0, layout_->performance_overlay_y);
+    lv_obj_update_layout(performance_overlay_);
+
+    const int32_t ext_draw_size = lv_obj_get_ext_draw_size(performance_overlay_);
+    const int32_t width = lv_obj_get_width(performance_overlay_) + ext_draw_size * 2;
+    const int32_t height = lv_obj_get_height(performance_overlay_) + ext_draw_size * 2;
+    if (ext_draw_size < 0 || width <= 0 || height <= 0 || width > layout_->screen_width ||
+        height > layout_->screen_height) {
+        return false;
+    }
+    // lv_snapshot reshapes the buffer to LVGL's aligned stride for this width
+    // (LV_DRAW_BUF_STRIDE_ALIGN); the text width changes with every sample, so
+    // ask LVGL for the stride instead of assuming width * 4.
+    const uint32_t stride = lv_draw_buf_width_to_stride(static_cast<uint32_t>(width), LV_COLOR_FORMAT_ARGB8888);
+    const uint32_t bytes = stride * static_cast<uint32_t>(height);
+    if (performance_snapshot_pixels_ == nullptr || performance_snapshot_capacity_ < bytes) {
+        heap_caps_free(performance_snapshot_pixels_);
+        performance_snapshot_pixels_ =
+            static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        performance_snapshot_capacity_ = performance_snapshot_pixels_ != nullptr ? bytes : 0U;
+    }
+    if (performance_snapshot_pixels_ == nullptr) {
+        return false;
+    }
+    std::memset(performance_snapshot_pixels_, 0, bytes);
+    lv_draw_buf_t snapshot{};
+    // lv_snapshot draws the object itself even while hidden; only hidden
+    // children are skipped, and the label is not hidden.
+    const bool captured =
+        lv_draw_buf_init(&snapshot, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                         LV_COLOR_FORMAT_ARGB8888, stride, performance_snapshot_pixels_, bytes) == LV_RESULT_OK &&
+        lv_snapshot_take_to_draw_buf(performance_overlay_, LV_COLOR_FORMAT_ARGB8888, &snapshot) == LV_RESULT_OK;
+    if (!captured || snapshot.header.w != static_cast<uint32_t>(width) ||
+        snapshot.header.h != static_cast<uint32_t>(height) || snapshot.header.stride != stride) {
+        return false;
+    }
+    snapshot_out.pixels = performance_snapshot_pixels_;
+    snapshot_out.width = static_cast<uint32_t>(width);
+    snapshot_out.height = static_cast<uint32_t>(height);
+    snapshot_out.stride = stride;
+    snapshot_out.x = lv_obj_get_x(performance_overlay_) - ext_draw_size;
+    snapshot_out.y = lv_obj_get_y(performance_overlay_) - ext_draw_size;
+    return true;
 }
 
 }  // namespace micropixel::host_ui::lvgl::square_common

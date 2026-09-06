@@ -95,6 +95,72 @@ Graphics 1.4 把 `CONTAINER` record 末尾原本必须为零的 `reserved0` 改�
 1.4 keyframe 的 container mask 必须包含 `CONTAINER_FLAGS`；未声明该 property 的 patch 必须回显当前值，
 与 `sibling_order` 相同；未知 flag 位被拒绝。
 
+Graphics 1.5 增加 Direct Surface：面向全屏软件渲染（raycaster、伪 3D、模拟器）的整帧呈现路径，与
+retained Scene 互斥使用。它不新增 Core import，只增加三个 method 和一个 event：
+
+- `SURFACE_CREATE {width, height, pixel_format, buffer_count 1..3, flags}` 返回 surface handle、
+  `native_pixel_format`、`native_flags` 和 `max_full_frame_fps`。当前 `pixel_format` 只接受 `RGB565`；一个
+  Session 同时最多一个 Direct Surface。`flags=0`（默认）是 **Host buffer**：Host 在 PSRAM 分配
+  `buffer_count` 个 buffer 尺寸、面板字节序的 buffer，Guest 从不映射它们，只能通过 1.6 的
+  `CHANNEL_RASTER` 记录按 buffer index 绘制。`GUEST_BUFFERS` 则由 Guest 在线性内存里自备 buffer 并按地址
+  present；因为 Host 在 buffer 在飞期间持有指向 Guest 内存的指针，Bundle 必须声明 `pinned_memory`，否则
+  create 返回 `UNSUPPORTED`。两种 buffer 的 `width/height` 都是 **buffer 尺寸**：等于 `GET_INFO` 的物理
+  尺寸，或物理尺寸在两个轴上除以同一个整数（present 时带 `SCALE_NEAREST`，Host 放大）；
+- `SURFACE_PRESENT {surface, buffer_index, pixels, length, pitch, src_width, src_height, flags}`。Host
+  buffer 下 `pixels/length` 为 0、`pitch = src_width * 2`、`src_width/src_height` 等于 buffer 尺寸，只有
+  `buffer_index` 有意义。`GUEST_BUFFERS` 下 `pixels` 是 Guest 线性内存偏移，Host 校验
+  `pixels..pixels+length` 完整落在当前线性内存内、按 `MICROPIXEL_SURFACE_BUFFER_ALIGNMENT`（64 B）对齐、
+  `pitch >= src_width * 2` 且 `pitch * src_height <= length`。两种模式下 `buffer_index < buffer_count` 且该
+  buffer 不在飞。任何失败返回 `INVALID_ARGUMENT`/`STALE_STATE`，不 trap。present 成功后该 buffer 归
+  Host，直到 `GRAPHICS_EVENT_SURFACE_RELEASED`（payload `{surface, buffer_index, timestamp_us}`）把它归还；
+  Guest 在收到前不得改写。独占扫描输出的 Host 会保留当前显示的 buffer 直到下一帧替换它或 surface 销毁，
+  所以 `buffer_count=1` 每帧都要等待，流畅渲染至少用 2。present 的像素**始终**是 `native_flags` 声明的面板
+  字节序：Host buffer 由 Host 保持该序，`GUEST_BUFFERS` 的 Guest 看到 `RGB565_BYTE_SWAPPED` 时自己换序写入，
+  wire 上不再有字节序 flag。`SCALE_NEAREST` 允许两种 buffer 的 `src_width/src_height` 为物理尺寸的
+  整数分之一，Host 用最近邻放大；
+- `SURFACE_DESTROY {handle}` 阻塞到在飞 buffer 全部归还，之后 handle 失效；destroy 本身即视为归还，
+  期间不再投递 `RELEASED`；
+  destroy 后 present 返回 `NOT_FOUND`。Session 暂停时 Host 停止扫描输出并归还在飞 buffer；App 退出时
+  Host 释放 surface。
+- `GET_INFO` 末尾追加 `native_pixel_format`、`native_flags`、`max_full_frame_fps`（`size` 由 40 变 52，旧
+  Host 的 40 字节响应表示不支持 Direct Surface）。`native_flags` 的 `RGB565_BYTE_SWAPPED` 表示面板要求
+  高字节先发，`DIRECT_SCANOUT` 表示 Host 有零拷贝扫描输出路径；没有该位时 present 仍然正确，只是经 App
+  Surface 合成。
+
+Host 语义：Direct Surface 处于独占扫描输出时，系统 UI（Status Layer、系统手势、过渡动画）一旦可见，Host
+退出独占并临时把 present 回落到 App Surface 拷贝路径，隐藏后恢复；Guest 无需感知，只按 `RELEASED` 节奏
+复用 buffer。
+
+Graphics 1.6 增加 Host 光栅 kernel：Guest 保留几何（光线投射、地板行、billboard 排序与深度测试），把逐像素
+贴图循环交给 Host 在 Guest task 上原生执行，目标是 Host buffer 模式的 Direct Surface，Guest 不接触任何像素。
+它不新增 Core import，只增加两个 method、一个 submit channel 和 `GET_INFO` 尾字段：
+
+- Service descriptor 的 `capabilities` 含 `MICROPIXEL_GRAPHICS_CAP_RASTER` 时可用；`GET_INFO` 末尾追加
+  `raster_pool_bytes`（0 表示 Host 未编译资源池）、`raster_max_textures`（32）和 `raster_max_light_levels`
+  （32），`size` 由 52 变 60；
+- `RASTER_TEXTURE_UPLOAD {slot, width, height, layout, pixels, length}` 把 INDEX8 纹理复制进 Host 资源池
+  （ABI 上限 528 KiB；`CONFIG_MICROPIXEL_RASTER_KERNELS=n` 时为 0 且不提供 CAP_RASTER）。宽高是 `[8, 128]` 内的 2 的幂，
+  `layout` 为 `COLUMN_MAJOR`（`pixels[u * height + v]`，供 COLUMN 记录）或 `ROW_MAJOR`（供 SPAN_PAIR 记录），
+  `length == width * height`。重复上传同一 slot 替换旧纹理；被拒绝的上传（`INVALID_ARGUMENT`、
+  `INVALID_MEMORY`、`RESOURCE_EXHAUSTED`）保留旧纹理；
+- `RASTER_PALETTE_UPLOAD {light_levels 1..32, pixels, length}` 上传 `light_levels x 256` 个 canonical
+  RGB565 word，`[light][index]` 是纹素 `index` 在光照级 `light` 下写入的颜色；Host 按目标 surface 的
+  `native_flags` 自行换序，Guest 不关心面板字节序；
+- `MICROPIXEL_GRAPHICS_CHANNEL_RASTER` 提交一个 `micropixel_raster_header_t`（magic `'MPRS'`、目标
+  `target_buffer/target_width/target_height/target_pitch`、`record_count`）加连续记录，总长不超过
+  `MICROPIXEL_GRAPHICS_MAX_RASTER_BYTES`（32 KiB）。目标是当前 Direct Surface 的 Host buffer
+  `target_buffer`，尺寸字段必须与之一致；没有 Host buffer surface、buffer 在飞或没有调色板都是
+  `STALE_STATE`。记录类型：
+  `COLUMN {x, y0..y1, texture, light, u, v_start, v_step}` 沿一列按 16.16 步进取 `texel(u, v >> 16)`，
+  `TRANSPARENT_INDEX0` 跳过纹素 0（世界 sprite）；`SPAN_PAIR {y_floor, y_ceiling, x0..x1, floor_texture,
+  ceiling_texture, light, s, t, ds, dt}` 用同一条 (s, t) 走线填地板行和镜像天花板行；
+  `SPRITE {x, y, width, height, texture, light, u0, v0, src_width, src_height, color}` 把 COLUMN_MAJOR 纹理的
+  一块矩形最近邻缩放到目标矩形，目标可以部分出界由 Host 裁剪，`SOLID_COLOR` 让每个绘制的纹素写 `color`
+  而不查调色板（字形图集、单色覆盖层）；`RECT {x, y, width, height, color, alpha}` 裁剪后填充，`alpha=255`
+  直写，更小则按通道 blend，`alpha=0` 拒绝。Host 先整体校验（COLUMN/SPAN_PAIR 坐标在目标内、SPRITE/RECT
+  尺寸非 0、slot 已占用且 layout 匹配、`light < light_levels`、reserved 为 0），任一记录非法则整批拒绝且
+  不写任何像素；校验通过后同步执行，`service_submit` 返回时像素已在 Host buffer 中。
+
 Graphics/Resource 的 `MICROPIXEL_PIXEL_FORMAT_RGB565` 值为 `3`，表示内存中的 canonical little-endian
 RGB565 word：bit 15..11 为 R、10..5 为 G、4..0 为 B；紧凑行宽为 `width * 2`。它与 panel wire byte
 order 无关，末端 transport 若需要高字节先发，必须在 panel 层单独换序。BGR888、BGRA8888 的既有值和
@@ -110,11 +176,28 @@ Audio 1.1 在原有有界 `PLAY_TONE` 基础上增加 Ogg Opus source/playback �
 - `PLAYBACK_START` 创建一次播放实例，随后可 `PAUSE`、`RESUME`、`SET_VOLUME`、`GET_STATE` 或
   `STOP`；最多同时两条 compressed playback，clip 与 playback 配额由 `GET_INFO` 返回；
 - playback 独立 pin clip。Guest 释放 clip handle 不会中断已经开始的播放，播放终止后 Host 才撤销 pin；
-- Host 固定输出 16 kHz mono PCM，并拥有设备主音量。每条 playback 只有 0..1000 的相对音量和 loop flag；
+- Host 混音率是板级参数并由 `GET_INFO.sample_rate` 如实上报（Claw4 与 S3 板 16 kHz、Mosaico 32 kHz），
+  Opus 始终解码为 16 kHz mono 再按整数比线性插值上采样；Host 拥有设备主音量。每条 playback 只有
+  0..1000 的相对音量和 loop flag；
 - 自然结束或解码失败投递 `AUDIO_EVENT_PLAYBACK_FINISHED`，`source` 和 payload 都携带 playback handle，
   `status` 区分成功与失败；主动 `STOP` 不投递完成事件；
 - 压缩数据直接读取当前 App Bundle 的只读映射，Guest 不上传 PCM 或 codec packets。网络 URL、下载进度、
   缓存与取消以后由 Resource/Network Service 管理，不改变 Audio source/playback 的所有权语义。
+
+Audio 1.2 增加 Guest 生成 PCM 的推流通道，能力位 `AUDIO_CAPABILITY_PCM_STREAM`：
+
+- `PCM_STREAM_OPEN{sample_rate, channels, capacity_frames, low_water_frames, volume_per_mille}`：
+  `sample_rate` 必须等于混音率或是其整数分频，Host 线性插值上采样；`channels` 为 1 或 2，立体声平均
+  下混到单声道混音器；`capacity_frames` 决定 Host 在 PSRAM 中分配的固定环形缓冲（最大 65536 帧，
+  Host 可向上取整并在响应中返回实际容量）。每个 Session 同时只有一条流，配额由 `max_pcm_streams` 上报；
+- `PCM_STREAM_WRITE`：header 后紧跟 `frame_count × channels` 个 int16，整个请求
+  ≤ `MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES`（4096）。Host 只拷贝能放进环的前缀并返回
+  `accepted_frames`/`free_frames`，Guest 以此获得背压；欠载时混音器播放静音而不结束流；
+- `PCM_STREAM_CLOSE(handle)`；`STOP_ALL` 和 Session 结束也会关闭流。App 暂停不关闭流，缓冲数据在恢复后
+  继续播放；
+- 事件 `AUDIO_EVENT_PCM_STREAM_LOW_WATER{stream, free_frames}`：缓冲帧数降到 `low_water_frames` 及以下时
+  由音频任务非阻塞投递一次，下一次成功 WRITE 重新武装；`low_water_frames = 0` 关闭该事件。事件是
+  advisory，队列满时不阻塞音频任务，而是保持武装等待下一个混音块重试。
 
 ### 设备发现与外设 Service
 
@@ -143,7 +226,7 @@ GPIO ISR 只写入最小 POD 队列，由任务上下文转换为 Guest event。
 
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、
-Input touch、Input semantic key、Audio playback finished、Devices added/removed、GPIO edge、
+Input touch、Input semantic key、Audio playback finished、Audio PCM stream low water、Devices added/removed、GPIO edge、
 Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表。
 
 - 周期 Timer 队列中同一 handle 最多保留一条记录。积压时 `elapsed_us` 累加，`missed_count` 统计未单独

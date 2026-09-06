@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "micro_opus/ogg_opus_decoder.h"
+#include "runtime/audio/linear_upsampler.hpp"
 #include "runtime/bundle/bundle_reader.h"
 #include "runtime/event_queue.hpp"
 #include "runtime/services/service_result.hpp"
@@ -44,6 +45,7 @@ class AudioPlaybackService final {
     static constexpr uint32_t kMaxPlaybacks = 2U;
     static constexpr uint32_t kRingFrames = 4096U;
     static constexpr uint32_t kDecodeFrames = 1920U;
+    static constexpr uint32_t kDecodeSampleRate = 16000U;
 
     struct ClipSlot final {
         micropixel_bundle_asset_view_t asset{};
@@ -57,6 +59,8 @@ class AudioPlaybackService final {
     struct PlaybackSlot final {
         AudioPlaybackService* owner{};
         std::optional<micro_opus::OggOpusDecoder> decoder;
+        // Audio-task-only: 16 kHz decoder output -> mix rate.
+        LinearUpsampler upsampler{};
         int16_t* ring{};
         ClipSlot* clip{};
         device::PcmStreamHandle stream{};
@@ -97,6 +101,9 @@ class AudioPlaybackService final {
     ClipSlot clips_[kMaxClips]{};
     PlaybackSlot playbacks_[kMaxPlaybacks]{};
     std::atomic<bool> stopping_{};
+    // Mix rate / kDecodeSampleRate; stays 1 (pass-through) when the board rate
+    // is not an integer multiple.
+    uint32_t upsample_factor_{1U};
     uint32_t event_sequence_{};
     bool shutdown_complete_{};
 };

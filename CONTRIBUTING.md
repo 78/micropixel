@@ -13,6 +13,11 @@ python3 -m unittest tools.tests.test_analyze_sfx -v
 bash -n tools/*.sh
 ```
 
+`bash tools/tests/test_firmware_host.sh` 每次都会执行全部 Host 测试，但会复用未变化的测试二进制。
+编译缓存位于 `build/host-tests/`，通过编译器解析依赖并检查源码、头文件内容、编译参数和工具链环境；
+修改这些输入后自动重编译。Bundle reader 的多组集成测试也共用该缓存。需要强制重编译时使用
+`HOST_TEST_REBUILD=1 bash tools/tests/test_firmware_host.sh`，或删除 `build/host-tests/`。
+
 涉及固件行为时，还应完成 ESP32-P4 Host 构建和相应真机回归。PR 中请写明测试环境、执行命令和结果；
 不要提交串口日志、性能采样、构建目录、固件镜像或设备标识。
 

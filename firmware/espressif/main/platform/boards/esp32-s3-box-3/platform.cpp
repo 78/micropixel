@@ -134,7 +134,7 @@ class Esp32S3Box3Board final : public Board {
         registration.SetInput(state_.ui.Input());
         registration.SetGraphics(graphics_);
         if (audio_config_status == ESP_OK) {
-            registration.SetAudioOutput(audio_output_, 16000U);
+            registration.SetAudioOutput(audio_output_, audio_output_.SampleRate());
         }
         registration.SetWifi(wifi_);
         registration.SetLocalControl(state_.local_control);
