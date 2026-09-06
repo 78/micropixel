@@ -17,6 +17,7 @@
 #include "platform/graphics/esp_pixel_compositor.hpp"
 #endif
 #include "platform/graphics/guest_scene.hpp"
+#include "platform/graphics/scene_storage.hpp"
 #include "platform/lvgl/display/direct_surface_presenter.hpp"
 #include "platform/lvgl/display/dirty_region_coalescer.hpp"
 #include "platform/lvgl/display/display_pipeline.hpp"
@@ -229,7 +230,7 @@ class GuestGraphicsEngine final {
     static void EmitTelemetryReportJob(void* context);
     void EmitTelemetryReport();
     [[nodiscard]] bool EnsureTextureStorage();
-    [[nodiscard]] bool EnsureSceneStorage();
+    [[nodiscard]] bool EnsureSceneStorage(graphics::SceneCapacity capacity);
     void ReleaseFonts(const micropixel_font_handle_t* fonts, uint32_t count);
     [[nodiscard]] bool RetainFonts(const micropixel_font_handle_t* fonts, uint32_t count);
     // Allocates the App Surface pixel storage once; it is never freed.
@@ -276,11 +277,7 @@ class GuestGraphicsEngine final {
     uint32_t app_surface_allocation_bytes_{};
     uint32_t app_surface_stride_{};
     uint32_t software_transform_scratch_bytes_{};
-    graphics::AppDrawOperation* app_surface_operation_storage_{};
-    graphics::GuestSceneNode* guest_scene_node_storage_{};
-    graphics::GuestSceneSpriteInstance* guest_scene_instance_storage_{};
-    graphics::GuestSceneContainer* guest_scene_container_storage_{};
-    uint16_t* guest_scene_draw_order_storage_{};
+    graphics::SceneStorage scene_storage_;
     LvglSoftwarePixelCompositor software_pixel_compositor_{};
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
     graphics::EspPixelCompositor hardware_pixel_compositor_;

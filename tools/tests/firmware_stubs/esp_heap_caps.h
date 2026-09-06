@@ -18,12 +18,27 @@ static inline void* heap_caps_calloc(size_t count, size_t size, unsigned capabil
     return calloc(count, size);
 }
 
+#ifdef MICROPIXEL_TEST_TRACK_PSRAM
+void* micropixel_test_psram_allocate(size_t size);
+void micropixel_test_psram_free(void* memory);
+#endif
+
 static inline void* heap_caps_aligned_alloc(size_t alignment, size_t size, unsigned capabilities) {
     (void)alignment;
     (void)capabilities;
+#ifdef MICROPIXEL_TEST_TRACK_PSRAM
+    return micropixel_test_psram_allocate(size);
+#else
     return malloc(size);
+#endif
 }
 
-static inline void heap_caps_free(void* memory) { free(memory); }
+static inline void heap_caps_free(void* memory) {
+#ifdef MICROPIXEL_TEST_TRACK_PSRAM
+    micropixel_test_psram_free(memory);
+#else
+    free(memory);
+#endif
+}
 
 #endif

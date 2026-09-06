@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "device/contracts/graphics.hpp"
 #include "platform/graphics/damage_region_set.hpp"
@@ -61,6 +62,12 @@ struct AppDrawOperation final {
     micropixel_font_handle_t font{};
     uint16_t text_length{};
     char text[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+};
+
+struct AppSurfaceStorageView final {
+    std::span<AppDrawOperation> operations;
+    std::span<uint16_t> stale_indices;
+    std::span<uint16_t> sorted_indices;
 };
 
 struct AppLayerState final {
@@ -129,14 +136,13 @@ class AppSurfaceCompositor final {
     static constexpr size_t kMaxDamageRegions = 16U;
     static constexpr size_t kMaxSurfaces = 3U;
 
-    AppSurfaceCompositor(AppDrawOperation* first_scene, AppDrawOperation* second_scene, uint32_t operation_capacity,
-                         PixelCompositor& pixels, DamageMergePolicy damage_policy, TextRasterizer* text = nullptr)
-        : current_(first_scene),
-          scratch_(second_scene),
-          operation_capacity_(operation_capacity),
-          pixels_(pixels),
-          text_(text),
-          damage_policy_(damage_policy) {}
+    AppSurfaceCompositor(AppSurfaceStorageView storage, PixelCompositor& pixels, DamageMergePolicy damage_policy,
+                         TextRasterizer* text = nullptr)
+        : pixels_(pixels), text_(text), damage_policy_(damage_policy) {
+        RebindStorage(storage);
+    }
+    // Preserves damage, layer and incremental normalization state during growth.
+    void RebindStorage(AppSurfaceStorageView storage);
 
     AppSurfaceCompositor(const AppSurfaceCompositor&) = delete;
     AppSurfaceCompositor& operator=(const AppSurfaceCompositor&) = delete;
@@ -219,8 +225,8 @@ class AppSurfaceCompositor final {
     TextRasterizer* text_{};
     DamageMergePolicy damage_policy_{};
     DamageRegionSet<kMaxDamageRegions> damage_{};
-    uint16_t stale_operation_indices_[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
-    uint16_t stable_to_sorted_index_[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
+    uint16_t* stale_operation_indices_{};
+    uint16_t* stable_to_sorted_index_{};
     uint32_t current_count_{};
     uint32_t normalized_operations_{};
     uint16_t stale_operation_count_{};

@@ -325,41 +325,14 @@ bool GuestGraphicsEngine::EnsureTextureStorage() {
     return true;
 }
 
-bool GuestGraphicsEngine::EnsureSceneStorage() {
-    if (guest_scene_.has_value()) {
-        return true;
-    }
-    guest_scene_node_storage_ = static_cast<graphics::GuestSceneNode*>(
-        heap_caps_aligned_calloc(alignof(graphics::GuestSceneNode), 2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
-                                 sizeof(graphics::GuestSceneNode), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    guest_scene_instance_storage_ = static_cast<graphics::GuestSceneSpriteInstance*>(heap_caps_aligned_calloc(
-        alignof(graphics::GuestSceneSpriteInstance), 2U * MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES,
-        sizeof(graphics::GuestSceneSpriteInstance), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    guest_scene_container_storage_ = static_cast<graphics::GuestSceneContainer*>(
-        heap_caps_aligned_calloc(alignof(graphics::GuestSceneContainer), 2U * (MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U),
-                                 sizeof(graphics::GuestSceneContainer), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    guest_scene_draw_order_storage_ =
-        static_cast<uint16_t*>(heap_caps_aligned_calloc(alignof(uint16_t), 2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
-                                                        sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (guest_scene_node_storage_ == nullptr || guest_scene_instance_storage_ == nullptr ||
-        guest_scene_container_storage_ == nullptr || guest_scene_draw_order_storage_ == nullptr) {
-        heap_caps_free(guest_scene_node_storage_);
-        heap_caps_free(guest_scene_instance_storage_);
-        heap_caps_free(guest_scene_container_storage_);
-        heap_caps_free(guest_scene_draw_order_storage_);
-        guest_scene_node_storage_ = nullptr;
-        guest_scene_instance_storage_ = nullptr;
-        guest_scene_container_storage_ = nullptr;
-        guest_scene_draw_order_storage_ = nullptr;
+bool GuestGraphicsEngine::EnsureSceneStorage(graphics::SceneCapacity capacity) {
+    if (!scene_storage_.Grow(capacity, guest_scene_ ? &*guest_scene_ : nullptr,
+                             app_surface_compositor_ ? &*app_surface_compositor_ : nullptr)) {
         return false;
     }
-    guest_scene_.emplace(guest_scene_node_storage_, guest_scene_node_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
-                         MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, guest_scene_instance_storage_,
-                         guest_scene_instance_storage_ + MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES,
-                         MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES, guest_scene_container_storage_,
-                         guest_scene_container_storage_ + MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U,
-                         guest_scene_draw_order_storage_,
-                         guest_scene_draw_order_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES);
+    if (!guest_scene_) {
+        guest_scene_.emplace(scene_storage_.SceneView());
+    }
     return true;
 }
 
@@ -389,15 +362,8 @@ bool GuestGraphicsEngine::AllocateAppSurfaceStorage() {
     app_surface_pixels_ = static_cast<uint8_t*>(
         heap_caps_aligned_alloc(kAppSurfaceAlignment, static_cast<size_t>(allocation_bytes * (app_surface_count_ + 1U)),
                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    app_surface_operation_storage_ = static_cast<graphics::AppDrawOperation*>(
-        heap_caps_aligned_calloc(kAppSurfaceAlignment, 2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
-                                 sizeof(graphics::AppDrawOperation), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (app_surface_pixels_ == nullptr || app_surface_operation_storage_ == nullptr) {
-        heap_caps_free(app_surface_pixels_);
-        heap_caps_free(app_surface_operation_storage_);
-        app_surface_pixels_ = nullptr;
+    if (app_surface_pixels_ == nullptr) {
         app_surface_layer_pixels_ = nullptr;
-        app_surface_operation_storage_ = nullptr;
         app_surface_allocation_failed_ = true;
         ESP_LOGW(kTag, "App Surface allocation failed; retaining LVGL Guest fallback");
         return false;
@@ -430,9 +396,8 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorage() {
 #else
     graphics::PixelCompositor& pixel_compositor = software_pixel_compositor_;
 #endif
-    app_surface_compositor_.emplace(
-        app_surface_operation_storage_, app_surface_operation_storage_ + MICROPIXEL_GRAPHICS_MAX_SCENE_NODES,
-        MICROPIXEL_GRAPHICS_MAX_SCENE_NODES, pixel_compositor, kDamageMergePolicy, &bitmap_font_rasterizer_);
+    app_surface_compositor_.emplace(scene_storage_.SurfaceView(), pixel_compositor, kDamageMergePolicy,
+                                    &bitmap_font_rasterizer_);
     app_surface_compositor_->SetLayerCache({
         .pixels = app_surface_layer_pixels_,
         .size = app_surface_allocation_bytes_,
@@ -458,7 +423,7 @@ bool GuestGraphicsEngine::EnsureAppSurfaceStorage() {
              width_, height_, app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? "RGB565" : "RGB888",
              app_surface_stride_, app_surface_pixel_bytes_, static_cast<unsigned>(app_surface_count_),
              app_surface_allocation_bytes_, software_transform_scratch_bytes_,
-             2U * MICROPIXEL_GRAPHICS_MAX_SCENE_NODES * sizeof(graphics::AppDrawOperation));
+             2U * scene_storage_.OperationCapacity() * sizeof(graphics::AppDrawOperation));
     return true;
 }
 
@@ -1046,14 +1011,7 @@ void GuestGraphicsEngine::Release() {
     scene_fonts_ = nullptr;
     scratch_fonts_ = nullptr;
     guest_scene_.reset();
-    heap_caps_free(guest_scene_node_storage_);
-    guest_scene_node_storage_ = nullptr;
-    heap_caps_free(guest_scene_instance_storage_);
-    guest_scene_instance_storage_ = nullptr;
-    heap_caps_free(guest_scene_container_storage_);
-    guest_scene_container_storage_ = nullptr;
-    heap_caps_free(guest_scene_draw_order_storage_);
-    guest_scene_draw_order_storage_ = nullptr;
+    scene_storage_.Reset();
     fonts_.ReleaseGuestFonts();
     esp_lv_adapter_unlock();
 }
@@ -1066,7 +1024,11 @@ int32_t GuestGraphicsEngine::Submit(const uint8_t* bytes, uint32_t length, const
         // The panel belongs to the Direct Surface until the Guest destroys it.
         return MICROPIXEL_STATUS_STALE_STATE;
     }
-    if (!EnsureTextureStorage() || !EnsureSceneStorage()) {
+    const auto capacity = graphics::ReadSceneCapacity(bytes, length);
+    if (!capacity) {
+        return capacity.error();
+    }
+    if (!EnsureTextureStorage() || !EnsureSceneStorage(*capacity)) {
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
     // Scene apply, resource retention, composition and publish all run on the

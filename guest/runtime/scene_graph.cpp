@@ -301,7 +301,7 @@ class SceneState final {
     }
 
     uint16_t AllocateNode(const Container& parent) {
-        if (static_cast<uint32_t>(node_count) + batch_instance_count >= MICROPIXEL_GRAPHICS_MAX_SCENE_NODES) {
+        if (node_count >= MICROPIXEL_GRAPHICS_MAX_SCENE_NODES) {
             runtime::Panic("scene.nodes.full", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
         }
         const uint16_t parent_id = ParentId(parent);
@@ -1668,8 +1668,6 @@ SpriteBatch Container::CreateSpriteBatch(uint16_t capacity, uint8_t opacity) {
 SpriteBatch Container::CreateSpriteBatchInternal(uint32_t texture, uint16_t capacity, uint8_t opacity) {
     ValidateHandle(state_);
     if (capacity == 0U || capacity > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES ||
-        static_cast<uint32_t>(state_->node_count) + state_->batch_instance_count + capacity >
-            MICROPIXEL_GRAPHICS_MAX_SCENE_NODES ||
         static_cast<uint32_t>(state_->batch_instance_count) + capacity > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES) {
         runtime::Panic("scene.batch.create", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }

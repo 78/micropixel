@@ -61,7 +61,7 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
 
 Graphics wire 是 retained Scene 协议。首个提交发送完整 keyframe，之后仅发送 Container、Sprite、
 SpriteBatch instance、Shape、Label 或 SurfaceNode 的属性差量；消息携带 generation、base revision 和
-revision，Host 在固定容量 scratch scene 中完成整包验证后再原子交换。SpriteBatch 可让蛇身、方块、
+revision，Host 在本次提交期间容量固定的 scratch scene 中完成整包验证后再原子交换。SpriteBatch 可让蛇身、方块、
 爆炸和粒子共享一个 Host 节点，patch 只携带变化的 instance。Texture/SurfaceNode 同时携带 destination 与
 source rectangle，opacity 与资源自身逐像素 alpha 相乘；不透明复制、缩放和填充分别映射到
 DMA2D/PPA 快速路径。容量由 `max_scene_nodes`、`max_batch_instances`、`max_containers`、
@@ -130,6 +130,12 @@ retained Scene 互斥使用。它不新增 Core import，只增加三个 method 
 Host 语义：Direct Surface 处于独占扫描输出时，系统 UI（Status Layer、系统手势、过渡动画）一旦可见，Host
 退出独占并临时把 present 回落到 App Surface 拷贝路径，隐藏后恢复；Guest 无需感知，只按 `RELEASED` 节奏
 复用 buffer。
+
+Graphics 1.7 保持 Scene record 布局不变，将节点与 Batch 实例预算分开：节点最多 256，实例总数
+最多 1024（每个 Batch 仍计一个节点），完整 Scene 消息最多 128 KiB。新 SDK 请求 1.7，旧 Host
+在 Service 协商时拒绝；新 Host 继续接受旧 minor 的消息。Host 不按 ABI 上限预分配，按提交需求
+显式扩容 PSRAM 数组，所有新缓冲申请成功后才迁移旧场景和合成状态。OOM 拒绝提交且保留旧场景；
+绘制期间不分配，挂起保留，App 结束释放。App 不声明容量，GET_INFO 仍报告安全上限。
 
 Graphics 1.6 增加 Host 光栅 kernel：Guest 保留几何（光线投射、地板行、billboard 排序与深度测试），把逐像素
 贴图循环交给 Host 在 Guest task 上原生执行，目标是 Host buffer 模式的 Direct Surface，Guest 不接触任何像素。
@@ -250,7 +256,7 @@ Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表�
 - Graphics scene wire 由 `micropixel_graphics_scene_header_t` 开始。Keyframe 必须完整声明 background、连续
   node slot、所有 Container 和每个 drawable 的 `NODE_LINK`，并以新的非零 generation、`base_revision=0`、
   `revision=1` 发布；Patch 必须精确
-  引用 Host 当前的 generation 与 base revision，且 revision 只增加 1。Host 对固定容量 scratch scene 完成
+  引用 Host 当前的 generation 与 base revision，且 revision 只增加 1。Host 对本次提交期间容量固定的 scratch scene 完成
   所有 record、property mask、slot、Container、父链、同级顺序、坐标、UTF-8、Font 和 Texture 校验后才原子交换。任一字段失败不
   改变当前 scene；base revision 不匹配返回 `MICROPIXEL_STATUS_STALE_STATE`，SDK 下一帧发送新 keyframe。
   Node ID 在同一 scene generation 内稳定，0 是最底层；结构变化由 SDK 发送新 keyframe，并按创建顺序把

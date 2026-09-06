@@ -13,7 +13,7 @@ int main() {
     micropixel_graphics_info_t info{};
     uint32_t response_size = 0U;
     if (micropixel_service_call(service.handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U,
-                                reinterpret_cast<uint8_t*>(&info), sizeof(info) - 1U,
+                                reinterpret_cast<uint8_t*>(&info), MICROPIXEL_GRAPHICS_INFO_MIN_SIZE - 1U,
                                 &response_size) != MICROPIXEL_STATUS_BUFFER_TOO_SMALL) {
         return 70;
     }
@@ -27,7 +27,7 @@ int main() {
         info.max_scene_bytes != MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES ||
         info.max_scene_nodes != MICROPIXEL_GRAPHICS_MAX_SCENE_NODES ||
         info.max_batch_instances != MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES ||
-        info.max_layers != MICROPIXEL_GRAPHICS_MAX_LAYERS ||
+        info.max_containers != MICROPIXEL_GRAPHICS_MAX_CONTAINERS ||
         info.max_sprite_batches != MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES || info.reserved0 != 0U) {
         return 72;
     }
@@ -78,7 +78,7 @@ int main() {
     };
     if (renderer_info.max_scene_nodes() != info.max_scene_nodes ||
         renderer_info.max_batch_instances() != info.max_batch_instances ||
-        renderer_info.max_containers() != info.max_layers ||
+        renderer_info.max_containers() != info.max_containers ||
         renderer_info.max_sprite_batches() != info.max_sprite_batches ||
         renderer_info.max_scene_bytes() != info.max_scene_bytes ||
         safe_insets.top != scale_inset(info.safe_inset_top, renderer_info.height(), info.height) ||
@@ -114,6 +114,8 @@ int main() {
                                   micropixel::SystemFont::kMedium);
     {
         auto update = scene.BeginUpdate();
+        snake.SetInstanceVisible(update, 2U, false);
+        snake.SetInstanceVisible(update, 3U, false);
         snake.SetInstance(update, 0U,
                           {.destination = {40, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
         snake.SetInstance(update, 1U,
@@ -154,6 +156,27 @@ int main() {
         }
     }
 
+    // Graphics 1.7: grow an existing scene to 1024 total instances, then
+    // patch its final slot. Node count no longer consumes instance capacity.
+    auto expanded = game.CreateSpriteBatch(1020U);
+    {
+        auto update = scene.BeginUpdate();
+        for (uint16_t index = 0U; index < 1019U; ++index) {
+            expanded.SetInstanceVisible(update, index, false);
+        }
+        expanded.SetInstance(update, 1019U, {.destination = {100, 200, 12, 12}, .color = micropixel::Color::Green()});
+        if (!update.Present()) {
+            return 84;
+        }
+    }
+    {
+        auto update = scene.BeginUpdate();
+        expanded.SetInstanceVisible(update, 1019U, false);
+        if (!update.Present()) {
+            return 85;
+        }
+    }
+
     texture.Reset();
     micropixel::Timer redraw_guard = app.timers().After(micropixel::Duration::Milliseconds(50));
     micropixel::Event redraw_event = app.WaitEvent();
@@ -168,6 +191,6 @@ int main() {
             return 81;
         }
     }
-    app.log().Info("graphics_protocol: retained Scene keyframe/patch and resource pinning accepted");
+    app.log().Info("graphics_protocol: 1024 instances, growth/patch and resource pinning accepted");
     return 0;
 }

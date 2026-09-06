@@ -135,6 +135,14 @@ build_and_run app_surface_compositor \
     "$workspace_root/firmware/espressif/main/platform/graphics/guest_scene.cpp" \
     "$workspace_root/firmware/espressif/main/device/text.cpp"
 
+build_and_run scene_storage \
+    -DMICROPIXEL_TEST_TRACK_PSRAM \
+    "$workspace_root/tools/tests/test_scene_storage.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/app_surface_compositor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/pixel_compositor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/graphics/guest_scene.cpp" \
+    "$workspace_root/firmware/espressif/main/device/text.cpp"
+
 build_and_run guest_scene \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_guest_scene.cpp" \

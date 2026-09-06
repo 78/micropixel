@@ -102,7 +102,9 @@ Sprite 适合独立图像，SpriteBatch 适合蛇身、方块和粒子；Shape/R
 分配像素 surface。Label 使用 Small/Medium/Large/Title 语义字体，具体字号由 Host profile 决定。
 [symbols.hpp](symbols.hpp)提供保证存在于系统字体的图标。
 
-Scene 容量从 RendererInfo 查询。Guest 存储按实际工作集增长，但仍受 Host/ABI 上限约束；页面和
+Scene 容量从 RendererInfo 查询。Graphics 1.7 分别提供 256 个节点和 1024 个 Batch 实例，
+实例不再消耗节点预算（Batch 本身仍是一个节点）。Host 按实际提交需求扩容，App 无需声明或预留
+Host 容量；资源不足时提交失败，挂起保留缓冲，退出释放。Guest 存储按实际工作集增长，但仍受 Host/ABI 上限约束；页面和
 Batch 的槽位可以复用，不能把动态容器理解为无限资源。
 
 `cache_content` 是 Host 渲染提示，当前用于选择根级 Layer 快照容器，适合内容不变的整体平移。

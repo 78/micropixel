@@ -38,6 +38,7 @@ C/C++ 修改遵循[代码风格](docs/development/code-style.zh-CN.md)；其他�
   不轻易增加七个 Core imports。已发布 ID 不得改义或复用，C ABI 不暴露 C++ 布局、STL 或 Host 指针。
 - Host 验证跨 ABI 的 pointer/length、handle、generation、所属 Guest 和容量，不能只信任 SDK 校验。
 - Host 实时和跨任务路径用固定容量队列、数组或对象池；不隐式扩容、不使用 detached task。
+  Scene 提交入口允许按经校验的需求显式扩容 PSRAM 数组：失败保留旧场景，绘制期间不分配，App 结束释放。
   资源用 move-only RAII 或显式 shutdown protocol，析构只做 best-effort cleanup；不用裸 new/delete
   承担实时资源所有权。exception 和 RTTI 关闭。
 - ISR 只记录最小 POD 并唤醒任务，不调用 WAMR、Guest 或 LVGL。Guest 热路径不同步输出大段日志。

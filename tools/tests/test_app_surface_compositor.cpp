@@ -137,23 +137,17 @@ class HardwareProbePixelCompositor final : public graphics::PixelCompositor {
 
 struct Fixture final {
     HardwareProbePixelCompositor pixels{};
-    std::array<graphics::AppDrawOperation, 16U> first_operations{};
-    std::array<graphics::AppDrawOperation, 16U> second_operations{};
-    std::array<graphics::GuestSceneNode, 16U> first_nodes{};
-    std::array<graphics::GuestSceneNode, 16U> second_nodes{};
-    std::array<graphics::GuestSceneSpriteInstance, 16U> first_instances{};
-    std::array<graphics::GuestSceneSpriteInstance, 16U> second_instances{};
-    std::array<graphics::GuestSceneContainer, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U> first_containers{};
-    std::array<graphics::GuestSceneContainer, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U> second_containers{};
-    std::array<uint16_t, 16U> first_draw_order{};
-    std::array<uint16_t, 16U> second_draw_order{};
-    graphics::GuestScene scene{
-        first_nodes.data(),      second_nodes.data(),      static_cast<uint16_t>(first_nodes.size()),
-        first_instances.data(),  second_instances.data(),  static_cast<uint16_t>(first_instances.size()),
-        first_containers.data(), second_containers.data(), first_draw_order.data(),
-        second_draw_order.data()};
-    graphics::AppSurfaceCompositor compositor{first_operations.data(), second_operations.data(),
-                                              static_cast<uint32_t>(first_operations.size()), pixels, kNoOverdraw};
+    std::array<graphics::AppDrawOperation, 32U> operations{};
+    std::array<graphics::GuestSceneNode, 32U> nodes{};
+    std::array<graphics::GuestSceneSpriteInstance, 32U> instances{};
+    std::array<graphics::GuestSceneContainer, 2U * (MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U)> containers{};
+    std::array<uint16_t, 32U> draw_order{};
+    std::array<uint8_t, 16U> node_changes{};
+    std::array<uint8_t, 16U> instance_changes{};
+    std::array<uint16_t, 16U> stale_indices{};
+    std::array<uint16_t, 16U> sorted_indices{};
+    graphics::GuestScene scene{{nodes, instances, containers, draw_order, node_changes, instance_changes}};
+    graphics::AppSurfaceCompositor compositor{{operations, stale_indices, sorted_indices}, pixels, kNoOverdraw};
 
     int32_t Apply(const std::vector<uint8_t>& bytes, int32_t width, int32_t height,
                   micropixel::device::BitmapResolver resolver = nullptr, void* context = nullptr) {

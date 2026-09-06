@@ -239,19 +239,13 @@ bool ValidateFont(void*, micropixel_font_handle_t font) { return font == 1U; }
 
 template <size_t NodeCapacity, size_t InstanceCapacity>
 struct SceneStorage final {
-    std::array<graphics::GuestSceneNode, NodeCapacity> first_nodes{};
-    std::array<graphics::GuestSceneNode, NodeCapacity> second_nodes{};
-    std::array<graphics::GuestSceneSpriteInstance, InstanceCapacity> first_instances{};
-    std::array<graphics::GuestSceneSpriteInstance, InstanceCapacity> second_instances{};
-    std::array<graphics::GuestSceneContainer, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U> first_containers{};
-    std::array<graphics::GuestSceneContainer, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U> second_containers{};
-    std::array<uint16_t, NodeCapacity> first_draw_order{};
-    std::array<uint16_t, NodeCapacity> second_draw_order{};
-    graphics::GuestScene scene{
-        first_nodes.data(),      second_nodes.data(),      static_cast<uint16_t>(NodeCapacity),
-        first_instances.data(),  second_instances.data(),  static_cast<uint16_t>(InstanceCapacity),
-        first_containers.data(), second_containers.data(), first_draw_order.data(),
-        second_draw_order.data()};
+    std::array<graphics::GuestSceneNode, 2U * NodeCapacity> nodes{};
+    std::array<graphics::GuestSceneSpriteInstance, 2U * InstanceCapacity> instances{};
+    std::array<graphics::GuestSceneContainer, 2U * (MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U)> containers{};
+    std::array<uint16_t, 2U * NodeCapacity> order{};
+    std::array<uint8_t, NodeCapacity> node_changes{};
+    std::array<uint8_t, InstanceCapacity> instance_changes{};
+    graphics::GuestScene scene{{nodes, instances, containers, order, node_changes, instance_changes}};
 };
 
 void KeyframeAndPatchesAreAtomicAndRevisioned() {
@@ -636,9 +630,8 @@ void RootViewportAcceptsOffscreenLocalGeometry() {
     invalid.Add(Background(0U));
     invalid.Add(empty);
     const auto& invalid_bytes = invalid.Finish();
-    assert(invalid_scene.Apply(invalid_bytes.data(), static_cast<uint32_t>(invalid_bytes.size()), 8, 4,
-                               ResolveBitmap, nullptr, ValidateFont, nullptr) ==
-           MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    assert(invalid_scene.Apply(invalid_bytes.data(), static_cast<uint32_t>(invalid_bytes.size()), 8, 4, ResolveBitmap,
+                               nullptr, ValidateFont, nullptr) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
 }
 
 void SceneTransactionsSerializeNetPropertyChanges() {

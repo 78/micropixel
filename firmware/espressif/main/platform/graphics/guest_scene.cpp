@@ -1,5 +1,6 @@
 #include "platform/graphics/guest_scene.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -145,11 +146,40 @@ bool ZeroPadding(const uint8_t* bytes, uint32_t begin, uint32_t end) {
 
 }  // namespace
 
+void GuestScene::RebindStorage(GuestSceneStorageView storage) {
+    const auto copy = [](auto* destination, const auto* source, size_t count) {
+        if (count != 0U) {
+            std::copy_n(source, count, destination);
+        }
+    };
+    copy(storage.nodes.data(), current_, node_count_);
+    copy(storage.instances.data(), current_instances_, batch_instance_count_);
+    if (containers_ != nullptr) {
+        copy(storage.containers.data(), containers_, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U);
+    }
+    copy(storage.draw_order.data(), draw_node_order_, node_count_);
+    copy(storage.node_changes.data(), node_changes_, node_count_);
+    copy(storage.instance_changes.data(), instance_changes_, batch_instance_count_);
+    capacity_ = static_cast<uint16_t>(storage.nodes.size() / 2U);
+    instance_capacity_ = static_cast<uint16_t>(storage.instances.size() / 2U);
+    current_ = storage.nodes.data();
+    scratch_ = current_ + capacity_;
+    current_instances_ = storage.instances.data();
+    scratch_instances_ = current_instances_ + instance_capacity_;
+    containers_ = storage.containers.data();
+    scratch_containers_ = containers_ + MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U;
+    draw_node_order_ = storage.draw_order.data();
+    scratch_draw_node_order_ = draw_node_order_ + capacity_;
+    node_changes_ = storage.node_changes.data();
+    instance_changes_ = storage.instance_changes.data();
+}
+
 int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical_width, int32_t logical_height,
                           device::BitmapResolver bitmap_resolver, void* bitmap_context,
                           device::FontValidator font_validator, void* font_context) {
     micropixel_graphics_scene_header_t header{};
-    if (capacity_ == 0U || capacity_ > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES || instance_capacity_ == 0U ||
+    if (length > MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES || capacity_ == 0U ||
+        capacity_ > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES || instance_capacity_ == 0U ||
         instance_capacity_ > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES || current_ == nullptr || scratch_ == nullptr ||
         current_instances_ == nullptr || scratch_instances_ == nullptr || containers_ == nullptr ||
         scratch_containers_ == nullptr || draw_node_order_ == nullptr || scratch_draw_node_order_ == nullptr ||
@@ -158,8 +188,7 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         header.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
         header.interface_minor > MICROPIXEL_GRAPHICS_INTERFACE_MINOR || header.flags != 0U ||
         header.total_size != length || header.node_count > capacity_ ||
-        header.batch_instance_count > instance_capacity_ ||
-        static_cast<uint32_t>(header.node_count) + header.batch_instance_count > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES) {
+        header.batch_instance_count > instance_capacity_) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     const bool container_protocol = header.interface_minor >= 2U;
@@ -181,9 +210,9 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         return patch ? MICROPIXEL_STATUS_STALE_STATE : MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
 
-    std::memset(node_changes_, 0, sizeof(node_changes_));
+    std::memset(node_changes_, 0, capacity_ * sizeof(*node_changes_));
     std::memset(container_changes_, 0, sizeof(container_changes_));
-    std::memset(instance_changes_, 0, sizeof(instance_changes_));
+    std::memset(instance_changes_, 0, instance_capacity_ * sizeof(*instance_changes_));
     std::memset(scratch_draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(scratch_draw_node_order_[0]));
     last_apply_was_keyframe_ = false;
     background_changed_ = false;
@@ -792,9 +821,9 @@ void GuestScene::Reset() {
     background_rgb888_ = 0U;
     generation_ = 0U;
     revision_ = 0U;
-    std::memset(node_changes_, 0, sizeof(node_changes_));
+    std::memset(node_changes_, 0, capacity_ * sizeof(*node_changes_));
     std::memset(container_changes_, 0, sizeof(container_changes_));
-    std::memset(instance_changes_, 0, sizeof(instance_changes_));
+    std::memset(instance_changes_, 0, instance_capacity_ * sizeof(*instance_changes_));
     if (draw_node_order_ != nullptr && scratch_draw_node_order_ != nullptr) {
         std::memset(draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(draw_node_order_[0]));
         std::memset(scratch_draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(scratch_draw_node_order_[0]));

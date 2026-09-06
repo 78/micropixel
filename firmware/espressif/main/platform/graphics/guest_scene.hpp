@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "device/contracts/graphics.hpp"
 
@@ -71,25 +72,22 @@ struct GuestSceneContainer final {
     bool cached_content{};
 };
 
-// Fixed-capacity authoritative scene. Every message is applied to scratch and
-// becomes visible only after the complete message and resulting scene pass
-// validation.
+struct GuestSceneStorageView final {
+    std::span<GuestSceneNode> nodes;
+    std::span<GuestSceneSpriteInstance> instances;
+    std::span<GuestSceneContainer> containers;
+    std::span<uint16_t> draw_order;
+    std::span<uint8_t> node_changes;
+    std::span<uint8_t> instance_changes;
+};
+
+// Authoritative scene: Apply never allocates and commits only a valid message.
 class GuestScene final {
    public:
-    GuestScene(GuestSceneNode* first, GuestSceneNode* second, uint16_t capacity,
-               GuestSceneSpriteInstance* first_instances, GuestSceneSpriteInstance* second_instances,
-               uint16_t instance_capacity, GuestSceneContainer* first_containers,
-               GuestSceneContainer* second_containers, uint16_t* first_draw_order, uint16_t* second_draw_order)
-        : current_(first),
-          scratch_(second),
-          capacity_(capacity),
-          current_instances_(first_instances),
-          scratch_instances_(second_instances),
-          instance_capacity_(instance_capacity),
-          containers_(first_containers),
-          scratch_containers_(second_containers),
-          draw_node_order_(first_draw_order),
-          scratch_draw_node_order_(second_draw_order) {}
+    explicit GuestScene(GuestSceneStorageView storage) { RebindStorage(storage); }
+    // Called only between submissions with equal or larger, disjoint storage.
+    // Copies the committed state before the owner releases the old allocation.
+    void RebindStorage(GuestSceneStorageView storage);
 
     GuestScene(const GuestScene&) = delete;
     GuestScene& operator=(const GuestScene&) = delete;
@@ -143,11 +141,11 @@ class GuestScene final {
     uint32_t background_rgb888_{};
     uint32_t generation_{};
     uint32_t revision_{};
-    uint8_t node_changes_[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
+    uint8_t* node_changes_{};
     uint8_t container_changes_[MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U]{};
     uint16_t* draw_node_order_{};
     uint16_t* scratch_draw_node_order_{};
-    uint8_t instance_changes_[MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES]{};
+    uint8_t* instance_changes_{};
     bool last_apply_was_keyframe_{};
     bool background_changed_{};
     bool tree_order_changed_{};

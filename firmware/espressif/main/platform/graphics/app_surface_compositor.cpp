@@ -1,5 +1,6 @@
 #include "platform/graphics/app_surface_compositor.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -284,6 +285,21 @@ AppLayerState NormalizeLayer(const GuestScene& scene) {
 }
 
 }  // namespace
+
+void AppSurfaceCompositor::RebindStorage(AppSurfaceStorageView storage) {
+    const size_t capacity = storage.operations.size() / 2U;
+    if (current_count_ != 0U) {
+        std::copy_n(current_, current_count_, storage.operations.data());
+        // Scratch can contain an older keyframe larger than the current frame.
+        std::copy_n(scratch_, operation_capacity_, storage.operations.data() + capacity);
+        std::copy_n(stale_operation_indices_, stale_operation_count_, storage.stale_indices.data());
+    }
+    current_ = storage.operations.data();
+    scratch_ = capacity == 0U ? nullptr : current_ + capacity;
+    operation_capacity_ = static_cast<uint32_t>(capacity);
+    stale_operation_indices_ = storage.stale_indices.data();
+    stable_to_sorted_index_ = storage.sorted_indices.data();
+}
 
 AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scene, const GuestSceneNode& node,
                                                           const GuestSceneSpriteInstance* instance,
