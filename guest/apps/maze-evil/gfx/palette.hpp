@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "apps/maze-break/gfx/view_config.hpp"
+#include "apps/maze-evil/gfx/view_config.hpp"
 
 namespace maze_break::gfx {
 

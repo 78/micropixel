@@ -1,4 +1,4 @@
-#include "apps/maze-break/game/level.hpp"
+#include "apps/maze-evil/game/level.hpp"
 
 namespace maze_break::game {
 

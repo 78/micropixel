@@ -3,10 +3,10 @@
 
 #include <stdint.h>
 
-#include "apps/maze-break/audio/sound_ids.hpp"
-#include "apps/maze-break/game/level.hpp"
-#include "apps/maze-break/gfx/sprites.hpp"
-#include "apps/maze-break/rc_math.hpp"
+#include "apps/maze-evil/audio/sound_ids.hpp"
+#include "apps/maze-evil/game/level.hpp"
+#include "apps/maze-evil/gfx/sprites.hpp"
+#include "apps/maze-evil/rc_math.hpp"
 
 namespace maze_break::game {
 

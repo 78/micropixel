@@ -1,4 +1,4 @@
-#include "apps/maze-break/gfx/palette.hpp"
+#include "apps/maze-evil/gfx/palette.hpp"
 
 namespace maze_break::gfx {
 namespace {

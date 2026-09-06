@@ -1,4 +1,4 @@
-#include "apps/maze-break/gfx/font.hpp"
+#include "apps/maze-evil/gfx/font.hpp"
 
 namespace maze_break::gfx {
 namespace {

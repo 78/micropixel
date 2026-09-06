@@ -11,7 +11,7 @@ guest/
 ├── apps/snake/   # 完整产品应用及其 metadata、素材
 ├── apps/blocks/  # 触控俄罗斯方块产品应用
 ├── apps/tilt/    # 加速度计控制的 100 关滚球迷宫
-├── apps/maze-break/ # Direct Surface 全屏软渲染的 2.5D 射击游戏（体感 + 触摸）
+├── apps/maze-evil/ # Direct Surface 全屏软渲染的 2.5D 射击游戏（体感 + 触摸）
 └── tests/        # P4 Runtime/SDK conformance
 ```
 
@@ -27,7 +27,7 @@ guest/
 `tests/conformance/` 保留 Event、Timer/Clock、Renderer、退出语义、watchdog 和 Service 边界
 验收。历史 S3 Guest、独立 benchmark 和编译失败样例已经移除；需要这类测试时按当前接口重写。
 完整产品应用 [`apps/snake/`](apps/snake/)、[`apps/blocks/`](apps/blocks/) 和
-[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。[`apps/maze-break/`](apps/maze-break/) 不走 Scene，而是向 Host buffer 的
+[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。[`apps/maze-evil/`](apps/maze-evil/) 不走 Scene，而是向 Host buffer 的
 `DirectSurface` 提交 Graphics 1.6 `SurfaceRaster` draw list（墙/地板/精灵/文字都由 Host kernel 光栅化），
 是全屏渲染路径与 `--benchmark` 分段统计的验收载体。
 

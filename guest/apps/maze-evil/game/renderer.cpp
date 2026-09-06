@@ -1,9 +1,9 @@
-#include "apps/maze-break/game/renderer.hpp"
+#include "apps/maze-evil/game/renderer.hpp"
 
-#include "apps/maze-break/gfx/font.hpp"
-#include "apps/maze-break/gfx/palette.hpp"
-#include "apps/maze-break/gfx/textures.hpp"
-#include "apps/maze-break/rc_math.hpp"
+#include "apps/maze-evil/gfx/font.hpp"
+#include "apps/maze-evil/gfx/palette.hpp"
+#include "apps/maze-evil/gfx/textures.hpp"
+#include "apps/maze-evil/rc_math.hpp"
 
 namespace maze_break::game {
 namespace {
@@ -90,9 +90,8 @@ int Renderer::LightFor(float distance) const {
 
 namespace {
 
-// Host raster textures are powers of two on both axes; sprites are 16x16,
-// 16x32, 32x32, one 16x24 barrel, the 64x48 shotgun and the 28x20 muzzle
-// flash, so pad each axis up to the next power of two.
+// Host raster textures are powers of two on both axes. World sprites use
+// 32/64-pixel canvases; the 128x96 shotgun and 56x40 flash need padding.
 constexpr int PadToPowerOfTwo(int value) {
     int padded = 8;
     while (padded < value) {
@@ -101,7 +100,7 @@ constexpr int PadToPowerOfTwo(int value) {
     return padded;
 }
 
-constexpr int kMaxSpriteTexels = 64 * 64;
+constexpr int kMaxSpriteTexels = 128 * 128;
 static_assert(gfx::kGlyphAtlasBytes <= kMaxSpriteTexels, "glyph atlas must fit the upload scratch");
 
 }  // namespace
@@ -123,7 +122,7 @@ bool Renderer::UploadResources(const micropixel::SurfaceRaster& raster) {
             return false;
         }
     }
-    // Sprites are decoded row-major; the Host COLUMN and SPRITE kernels want
+    // Sprites are stored row-major; the Host COLUMN and SPRITE kernels want
     // column-major, so transpose into a scratch texture padded with the
     // transparent index.
     static uint8_t scratch[kMaxSpriteTexels];
@@ -515,7 +514,7 @@ bool Renderer::DrawThings(micropixel::RasterDrawList& list, const World& world) 
             continue;
         }
         const bool self_lit = thing.sprite == gfx::kSprFireballA || thing.sprite == gfx::kSprFireballB ||
-                              thing.sprite == gfx::kSprTorchA || thing.sprite == gfx::kSprTorchB;
+                              gfx::IsTorchSprite(thing.sprite);
         const int light = self_lit ? gfx::kLightLevels - 1 : LightFor(transform_y);
 
         const int32_t u_step = (sprite.width << 16) / sprite_width;
@@ -559,15 +558,20 @@ bool Renderer::DrawWeapon(micropixel::RasterDrawList& list, const World& world) 
     const int bob_x = static_cast<int>(math::Sin(p.bob_phase) * 6.0F * bob_amount) * s;
     const int bob_y = static_cast<int>(math::Fabs(math::Cos(p.bob_phase)) * 4.0F * bob_amount) * s;
     const int recoil = static_cast<int>(p.recoil * 16.0F) * s;
-    const int gun_scale = 2 * s;
+    const int gun_scale = s;
+    const int flash_scale = s;
     // The status bar hides the bottom hud_height_ rows; tuck the stock under it.
-    const int gun_x = (width - gun.width * gun_scale) / 2 + bob_x;
-    const int gun_y = height - hud_height_ - gun.height * gun_scale + 8 * s + bob_y + recoil;
+    // The sprite's barrel axis runs from (48, 2) to (64, 50). Project it
+    // toward the crosshair instead of using a resolution-dependent side offset.
+    const int resting_y = height - hud_height_ - gun.height * gun_scale + 8 * s;
+    const int muzzle_y = resting_y + 2 * s;
+    const int gun_x = width / 2 - 48 * s + (muzzle_y - height / 2) / 3 + bob_x;
+    const int gun_y = resting_y + bob_y + recoil;
     bool ok = true;
     if (world.muzzle_flash()) {
         const gfx::Sprite& flash = gfx::SpriteFor(gfx::kSprMuzzleFlash);
-        ok = BlitSprite(list, gfx::kSprMuzzleFlash, width / 2 - flash.width * gun_scale / 2 + bob_x,
-                        gun_y - flash.height * gun_scale + 12 * s, gun_scale);
+        ok = BlitSprite(list, gfx::kSprMuzzleFlash, gun_x + 48 * s - flash.width * flash_scale / 2,
+                        gun_y - flash.height * flash_scale + 6 * s, flash_scale);
     }
     return BlitSprite(list, gfx::kSprShotgun, gun_x, gun_y, gun_scale) && ok;
 }

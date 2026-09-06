@@ -1,6 +1,6 @@
-#include "apps/maze-break/input/motion_controls.hpp"
+#include "apps/maze-evil/input/motion_controls.hpp"
 
-#include "apps/maze-break/rc_math.hpp"
+#include "apps/maze-evil/rc_math.hpp"
 #include "sdk/devices.hpp"
 
 namespace maze_break::input {

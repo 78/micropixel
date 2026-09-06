@@ -1,6 +1,6 @@
-#include "apps/maze-break/game/world.hpp"
+#include "apps/maze-evil/game/world.hpp"
 
-#include "apps/maze-break/rc_math.hpp"
+#include "apps/maze-evil/rc_math.hpp"
 
 namespace maze_break::game {
 namespace {
@@ -255,7 +255,7 @@ void World::Update(float dt, const Controls& controls) {
     CheckExit();
     for (int i = 0; i < decoration_count_; ++i) {
         if (decorations_[i].animated) {
-            decorations_[i].sprite = (static_cast<int>(time_ * 6.0F) & 1) ? gfx::kSprTorchB : gfx::kSprTorchA;
+            decorations_[i].sprite = gfx::kTorchFrames[static_cast<int>(time_ * 8.0F) & 3];
         }
     }
     fire_was_down_ = controls.fire;

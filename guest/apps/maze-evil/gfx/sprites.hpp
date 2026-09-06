@@ -29,11 +29,18 @@ enum SpriteId : uint8_t {
     kSprBarrel,
     kSprShotgun,
     kSprMuzzleFlash,
+    kSprTorchC,
+    kSprTorchD,
     kSprCount,
 };
 
-// Decodes the ASCII art into palette indices. Must run after BuildPalette().
-void BuildSprites();
+inline constexpr SpriteId kTorchFrames[] = {kSprTorchA, kSprTorchB, kSprTorchC, kSprTorchD};
+
+[[nodiscard]] constexpr bool IsTorchSprite(SpriteId id) {
+    return id == kSprTorchA || id == kSprTorchB || id == kSprTorchC || id == kSprTorchD;
+}
+
+// Art is quantized offline and stored as immutable palette-indexed pixels.
 [[nodiscard]] const Sprite& SpriteFor(SpriteId id);
 
 }  // namespace maze_break::gfx

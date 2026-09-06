@@ -3,10 +3,10 @@
 
 #include <stdint.h>
 
-#include "apps/maze-break/game/world.hpp"
-#include "apps/maze-break/gfx/sprites.hpp"
-#include "apps/maze-break/gfx/textures.hpp"
-#include "apps/maze-break/gfx/view_config.hpp"
+#include "apps/maze-evil/game/world.hpp"
+#include "apps/maze-evil/gfx/sprites.hpp"
+#include "apps/maze-evil/gfx/textures.hpp"
+#include "apps/maze-evil/gfx/view_config.hpp"
 #include "sdk/graphics.hpp"
 
 namespace maze_break::game {
@@ -33,9 +33,8 @@ class Renderer {
     // `view` must describe a buffer no larger than kMaxViewWidth x kMaxViewHeight.
     void Initialize(const gfx::ViewConfig& view);
     // Uploads textures, sprites, the glyph atlas and the lit palette to the
-    // Host raster kernels. Palette, textures and sprites must already be
-    // built. Returns false when any upload is refused; the renderer is then
-    // unusable.
+    // Host raster kernels. The lighting palette must already be built; art
+    // pixels are immutable. Returns false when any upload is refused.
     [[nodiscard]] bool UploadResources(const micropixel::SurfaceRaster& raster);
     // Appends the frame's records to `list` (open on the target buffer). The
     // list is left open for the caller's overlays and Finish(). Returns false

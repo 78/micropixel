@@ -1,4 +1,4 @@
-#include "apps/maze-break/input/touch_controls.hpp"
+#include "apps/maze-evil/input/touch_controls.hpp"
 
 namespace maze_break::input {
 namespace {

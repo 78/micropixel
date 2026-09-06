@@ -37,3 +37,6 @@ CMakeUserPresets.json
 /guest/apps/mario/
 /guest/apps/graphics-scroll-benchmark/
 /demos/
+
+# Local Maze Evil art sources; the SDK example ships prepared assets.
+/guest/apps/maze-evil/assets/source/

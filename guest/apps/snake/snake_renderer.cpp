@@ -5,6 +5,7 @@ namespace snake {
 namespace {
 
 constexpr int32_t kBoardPadding = 8;
+constexpr int32_t kStatusProgressBarTextInset = 16;
 constexpr micropixel::Rect kBoardClip{
     kBoardX - kBoardPadding,
     kBoardY - kBoardPadding,
@@ -566,7 +567,7 @@ void SnakeGame::RenderHud(micropixel::SceneUpdate& update, const Theme& theme) {
     uint32_t fill_width = duration_us == 0U ? 1U : static_cast<uint32_t>((remaining_us * full_width) / duration_us);
     fill_width = fill_width == 0U ? 1U : (fill_width > full_width ? full_width : fill_width);
     const int32_t bar_x = safe_left + status_bounds.x;
-    const int32_t bar_y = status_bounds.y + status_bounds.height - 4;
+    const int32_t bar_y = status_bounds.y + status_bounds.height - kStatusProgressBarTextInset;
     SetSolidInstance(combo_batch_, update, 0U, {bar_x, bar_y, status_bounds.width, 4},
                      micropixel::Color::Rgb(38U, 38U, 38U));
     SetSolidInstance(combo_batch_, update, 1U, {bar_x, bar_y, static_cast<int32_t>(fill_width), 4},

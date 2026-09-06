@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "apps/maze-break/gfx/textures.hpp"
+#include "apps/maze-evil/gfx/textures.hpp"
 
 namespace maze_break::game {
 

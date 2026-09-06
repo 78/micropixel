@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "apps/maze-break/audio/sound_ids.hpp"
+#include "apps/maze-evil/audio/sound_ids.hpp"
 #include "sdk/application.hpp"
 #include "sdk/audio.hpp"
 #include "sdk/event.hpp"

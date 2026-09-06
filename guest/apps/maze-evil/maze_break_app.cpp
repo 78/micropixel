@@ -1,17 +1,17 @@
-#include "apps/maze-break/maze_break_app.hpp"
+#include "apps/maze-evil/maze_break_app.hpp"
 
 #include <stdint.h>
 
-#include "apps/maze-break/game/renderer.hpp"
-#include "apps/maze-break/game/world.hpp"
-#include "apps/maze-break/gfx/font.hpp"
-#include "apps/maze-break/gfx/palette.hpp"
-#include "apps/maze-break/gfx/sprites.hpp"
-#include "apps/maze-break/gfx/textures.hpp"
-#include "apps/maze-break/input/motion_controls.hpp"
-#include "apps/maze-break/input/touch_controls.hpp"
-#include "apps/maze-break/maze_break_audio.hpp"
-#include "apps/maze-break/rc_math.hpp"
+#include "apps/maze-evil/game/renderer.hpp"
+#include "apps/maze-evil/game/world.hpp"
+#include "apps/maze-evil/gfx/font.hpp"
+#include "apps/maze-evil/gfx/palette.hpp"
+#include "apps/maze-evil/gfx/sprites.hpp"
+#include "apps/maze-evil/gfx/textures.hpp"
+#include "apps/maze-evil/input/motion_controls.hpp"
+#include "apps/maze-evil/input/touch_controls.hpp"
+#include "apps/maze-evil/maze_break_audio.hpp"
+#include "apps/maze-evil/rc_math.hpp"
 #include "sdk/micropixel.hpp"
 
 namespace maze_break {
@@ -181,7 +181,7 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
         case micropixel::EventType::kTouch:
             if (!started_) {
                 const auto& touch = *event.touch();
-                if (!calibrating_ && touch.phase() == micropixel::TouchPhase::kDown) {
+                if (touch.phase() == micropixel::TouchPhase::kDown) {
                     start_touch_down_ = true;
                     start_touch_id_ = touch.id();
                 } else if (start_touch_down_ && touch.id() == start_touch_id_ &&
@@ -199,7 +199,7 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
         case micropixel::EventType::kKey:
             if (!started_) {
                 if (event.key()->code() == micropixel::KeyCode::kConfirm) {
-                    if (!calibrating_ && event.key()->phase() == micropixel::KeyPhase::kDown) {
+                    if (event.key()->phase() == micropixel::KeyPhase::kDown) {
                         start_key_down_ = true;
                     } else if (event.key()->phase() == micropixel::KeyPhase::kUp) {
                         const bool pressed = start_key_down_;
@@ -224,14 +224,19 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
 }
 
 void MazeBreakApp::RequestStart() {
-    if (calibrating_) {
+    if (started_) {
         return;
     }
-    calibrating_ = true;
+    started_ = true;
+    calibrating_ = motion_mode_;
     calibration_started_us_ = app_.clock().Now().microseconds();
+    last_frame_us_ = calibration_started_us_;
     if (motion_mode_) {
         motion_.Recalibrate();
     }
+    audio_.StartBgm();
+    stats_ = FrameStats{};
+    stats_.window_start_us = calibration_started_us_;
 }
 
 bool MazeBreakApp::DrawInstructions(micropixel::RasterDrawList& list) {
@@ -274,7 +279,7 @@ bool MazeBreakApp::DrawInstructions(micropixel::RasterDrawList& list) {
         }
     };
 
-    text(120, 0, "MAZE BREAK", white);
+    text(120, 0, "MAZE EVIL", white);
     // Side view: a person looks at an upright screen, held in front of the face.
     circle(72, 32, 9, white, false);
     rect(79, 30, 5, 3, white);  // nose points towards the screen
@@ -321,8 +326,7 @@ bool MazeBreakApp::DrawInstructions(micropixel::RasterDrawList& list) {
     text(180, 174, "TAP / HOLD", white);
     text(120, 191, motion_mode_ ? "FUNCTION 1.5S: RECENTER" : "FUNCTION: FIRE", white);
     rect(12, 207, 216, 13, cyan);
-    text(120, 210, calibrating_ ? "HOLD STILL..." : "TAP ANYWHERE TO START",
-         gfx::PaletteRgb565(gfx::Index(gfx::kGray, 1)));
+    text(120, 210, "TAP ANYWHERE TO START", gfx::PaletteRgb565(gfx::Index(gfx::kGray, 1)));
     return ok;
 }
 
@@ -353,6 +357,17 @@ game::Controls MazeBreakApp::GatherControls(uint64_t now_us, float dt) {
     game::Controls controls = touch_.Consume(now_us);
     if (motion_mode_) {
         motion_.Poll();
+        if (calibrating_) {
+            if (motion_.ready()) {
+                calibrating_ = false;
+            } else if (now_us - calibration_started_us_ >= 3'000'000U) {
+                calibrating_ = false;
+                motion_mode_ = false;
+                touch_.SetMotionMode(false);
+                app_.log().Info("maze-break: calibration timed out; continuing with touch controls");
+                return controls;
+            }
+        }
         const input::MotionControls::Sample motion = motion_.Consume();
         controls.forward = math::Clamp(controls.forward + motion.forward, -1.0F, 1.0F);
         controls.turn += motion.turn_rate * kTiltTurnRate * dt + motion.yaw_delta;
@@ -451,8 +466,6 @@ int MazeBreakApp::Run() {
     view_.hud_scale = view_.width >= 720 ? 3 : (view_.width >= 400 ? 2 : 1);
 
     gfx::BuildPalette();
-    gfx::BuildTextures();
-    gfx::BuildSprites();
     renderer_.Initialize(view_);
     if (!renderer_.UploadResources(raster_)) {
         app_.log().Error("maze-break: Host raster refused the texture or palette upload");
@@ -532,25 +545,7 @@ int MazeBreakApp::Run() {
         }
         const float dt = static_cast<float>(dt_us) * 1e-6F;
 
-        if (!started_ && calibrating_) {
-            if (motion_mode_) {
-                motion_.Poll();
-                // A missing sensor must not leave the start screen stuck forever.
-                if (!motion_.ready() && now_us - calibration_started_us_ >= 3'000'000U) {
-                    motion_mode_ = false;
-                    touch_.SetMotionMode(false);
-                    calibrating_ = false;
-                    app_.log().Info("maze-break: calibration timed out; showing touch instructions");
-                }
-            }
-            if (calibrating_ && (!motion_mode_ || motion_.ready())) {
-                started_ = true;
-                calibrating_ = false;
-                audio_.StartBgm();
-                stats_ = FrameStats{};
-                stats_.window_start_us = now_us;
-            }
-        } else if (started_) {
+        if (started_) {
             const game::Controls controls = GatherControls(now_us, dt);
             const game::Phase phase_before = world_.phase();
             world_.Update(dt, controls);

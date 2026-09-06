@@ -127,7 +127,7 @@ Host-owned 纹理不占 Guest C++ heap，但仍受 PSRAM 动态准入限制。
 
 默认 DirectSurface buffer 由 Host 持有，Guest 不映射像素，使用 SurfaceRaster 上传 INDEX8 纹理和
 canonical RGB565 调色板，再提交绘制记录。Guest 决定几何、遮挡和顺序，Host 执行逐像素操作。
-完整调用签名见 [graphics.hpp](graphics.hpp)，可运行示例见 [迷城突围 / Maze Break](../apps/maze-break/)。
+完整调用签名见 [graphics.hpp](graphics.hpp)，可运行示例见 [Maze Evil](../apps/maze-evil/)。
 
 帧的生命周期是“取得空闲 buffer → 绘制并 Finish → Present → Host 归还”：
 

@@ -1,4 +1,4 @@
-#include "apps/maze-break/maze_break_audio.hpp"
+#include "apps/maze-evil/maze_break_audio.hpp"
 
 #include "maze-break_assets.hpp"
 #include "maze-break_sfx_profiles.hpp"

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "apps/maze-break/game/world.hpp"
+#include "apps/maze-evil/game/world.hpp"
 #include "sdk/event.hpp"
 
 namespace maze_break::input {
