@@ -1351,6 +1351,152 @@ def guest_threading_flags(threading: str) -> tuple[str, list[str], list[str], li
     raise CliError("Guest threading must be none or shared-memory")
 
 
+# Objects live under the selected build output, separated by compiler command.
+# Track actual compiler dependencies (including system/generated headers), not
+# just quoted includes. Hash each dependency once per invocation so regenerated
+# headers with identical contents do not cause unrelated App units to rebuild.
+GUEST_OBJECT_CACHE_VERSION = 1
+GUEST_COMPILE_ENVIRONMENT_KEYS = (
+    "CPATH", "CPLUS_INCLUDE_PATH", "C_INCLUDE_PATH", "SDKROOT",
+    "CCC_OVERRIDE_OPTIONS", "CLANG_CONFIG_FILE_SYSTEM_DIR", "CLANG_CONFIG_FILE_USER_DIR",
+    "SOURCE_DATE_EPOCH",
+)
+
+
+def _read_guest_depfile(path: Path) -> list[Path]:
+    # -MT object fixes the target spelling. Clang uses Make escaping here, not
+    # shell quoting: spaces/# are backslash escaped and literal $ becomes $$.
+    text = path.read_text(encoding="utf-8").replace("\\\n", "")
+    if not text.startswith("object:"):
+        raise CliError(f"Invalid compiler dependency file: {path}")
+    words: list[str] = []
+    word: list[str] = []
+    index = len("object:")
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            index += 1
+            word.append(text[index])
+        elif char == "$" and text[index:index + 2] == "$$":
+            word.append("$")
+            index += 1
+        elif char.isspace():
+            if word:
+                words.append("".join(word))
+                word = []
+        else:
+            word.append(char)
+        index += 1
+    if word:
+        words.append("".join(word))
+    if not words:
+        raise CliError(f"Empty compiler dependency file: {path}")
+    return sorted({Path(word).absolute() for word in words})
+
+
+def _write_guest_cache_json(path: Path, value: Any) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _guest_file_identity(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return {"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _compile_guest_objects(
+    command: list[str], sources: list[Path], output_dir: Path, force: bool,
+) -> tuple[list[Path], list[Path]]:
+    compiler = Path(command[0]).absolute()
+    # The WASI distribution uses clang++.cfg for its no-exception sysroot.
+    # Include adjacent configs as well as the binary in toolchain identity.
+    toolchain_inputs = sorted({compiler, compiler.resolve(), *compiler.resolve().parent.glob("*.cfg")})
+    identity = {
+        "schema_version": GUEST_OBJECT_CACHE_VERSION,
+        "command": command,
+        "cwd": str(Path.cwd()),
+        "toolchain": [_guest_file_identity(path) for path in toolchain_inputs],
+        "environment": {key: os.environ.get(key, "") for key in GUEST_COMPILE_ENVIRONMENT_KEYS},
+    }
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
+    cache_dir = output_dir.resolve() / "obj" / key
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    fingerprints: dict[Path, tuple[tuple[int, int, int], str]] = {}
+
+    def fingerprint(path: Path) -> str:
+        stat = path.stat()
+        signature = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        cached = fingerprints.get(path)
+        if cached is None or cached[0] != signature:
+            fingerprints[path] = (signature, hashlib.sha256(path.read_bytes()).hexdigest())
+        return fingerprints[path][1]
+
+    objects: list[Path] = []
+    build_inputs: set[Path] = set(toolchain_inputs)
+    compiled = 0
+    for source in sources:
+        source = source.absolute()
+        source_key = hashlib.sha256(str(source).encode()).hexdigest()[:20]
+        obj = cache_dir / f"{source.stem}-{source_key}.o"
+        depfile = obj.with_suffix(".d")
+        stamp_path = obj.with_suffix(".json")
+        dependencies: list[Path] = []
+        reusable = False
+        if not force:
+            try:
+                stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+                dependencies = _read_guest_depfile(depfile)
+                reusable = (
+                    stamp["identity"] == identity
+                    and stamp["object"] == _guest_file_identity(obj)
+                    and source in dependencies
+                    and stamp["dependencies"] == {str(path): fingerprint(path) for path in dependencies}
+                )
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError, CliError):
+                pass
+        if not reusable:
+            temporary = obj.with_name(f".{obj.stem}.{uuid.uuid4().hex}.tmp.o")
+            temporary_depfile = temporary.with_suffix(".d")
+            started = time.time_ns()
+            try:
+                subprocess.run(
+                    [*command, "-MD", "-MF", str(temporary_depfile), "-MT", "object",
+                     "-c", str(source), "-o", str(temporary)],
+                    check=True,
+                )
+                dependencies = _read_guest_depfile(temporary_depfile)
+                # Do not certify a result whose inputs changed during compile.
+                # It can still be linked now; the next invocation will rebuild.
+                stable = all(path.stat().st_mtime_ns <= started for path in dependencies)
+                dependency_hashes = {str(path): fingerprint(path) for path in dependencies}
+                stamp_path.unlink(missing_ok=True)
+                temporary.replace(obj)
+                temporary_depfile.replace(depfile)
+                if stable:
+                    _write_guest_cache_json(stamp_path, {
+                        "identity": identity,
+                        "object": _guest_file_identity(obj),
+                        "dependencies": dependency_hashes,
+                    })
+            finally:
+                temporary.unlink(missing_ok=True)
+                temporary_depfile.unlink(missing_ok=True)
+            compiled += 1
+        objects.append(obj)
+        build_inputs.update(dependencies)
+        build_inputs.update((obj, depfile, stamp_path))
+    print(f"Guest objects: {compiled} compiled, {len(objects) - compiled} reused ({cache_dir})")
+    return objects, sorted(build_inputs)
+
+
+def _guest_build_inputs_path(output_dir: Path, name: str) -> Path:
+    return output_dir / f"{name}.build-inputs.json"
+
+
 def _run_build_sources(args: argparse.Namespace) -> None:
     root = sdk_root()
     name = args.name or Path(args.source).stem
@@ -1434,25 +1580,54 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     wasm_output = output_dir / f"{name}.wasm"
     aot_output = output_dir / f"{name}.aot"
 
+    compile_command = [
+        wasi_clangxx,
+        f"--target={target}",
+        "-std=c++23",
+        "-ffreestanding",
+        *thread_compile_flags,
+        "-mno-reference-types",
+        *compile_flags,
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-fno-threadsafe-statics",
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        *include_flags,
+    ]
+    objects, object_inputs = _compile_guest_objects(
+        compile_command,
+        [
+            root / "guest/runtime/c_runtime.cpp",
+            root / "guest/runtime/cxx_runtime.cpp",
+            root / "guest/runtime/startup.cpp",
+            root / "guest/runtime/service_binding.cpp",
+            root / "guest/runtime/panic.cpp",
+            root / "guest/runtime/system.cpp",
+            root / "guest/runtime/storage.cpp",
+            root / "guest/runtime/audio.cpp",
+            root / "guest/runtime/timers.cpp",
+            root / "guest/runtime/devices.cpp",
+            root / "guest/runtime/display_context.cpp",
+            root / "guest/runtime/graphics.cpp",
+            root / "guest/runtime/direct_surface.cpp",
+            root / "guest/runtime/surface_raster.cpp",
+            root / "guest/runtime/application.cpp",
+            root / "guest/runtime/scene_graph.cpp",
+            *sources,
+        ],
+        output_dir,
+        bool(getattr(args, "force", False)),
+    )
     subprocess.run(
         [
             wasi_clangxx,
             f"--target={target}",
-            "-std=c++23",
             "-nostdlib",
-            "-ffreestanding",
-            *thread_compile_flags,
-            "-mno-reference-types",
-            *compile_flags,
             "-fno-exceptions",
-            "-fno-rtti",
-            "-fno-threadsafe-statics",
-            "-ffunction-sections",
-            "-fdata-sections",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            *include_flags,
             "-Wl,--no-entry",
             *thread_link_flags,
             f"-Wl,--max-memory={GUEST_LINEAR_MEMORY_ABSOLUTE_MAX_BYTES}",
@@ -1466,12 +1641,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             "-Wl,--export-if-defined=__micropixel_test_key_input",
             "-Wl,--export-if-defined=__micropixel_test_run_handler",
             *link_flags,
-            str(root / "guest/runtime/c_runtime.cpp"),
-            str(root / "guest/runtime/cxx_runtime.cpp"),
-            str(root / "guest/runtime/startup.cpp"),
-            str(root / "guest/runtime/sdk.cpp"),
-            str(root / "guest/runtime/scene_graph.cpp"),
-            *(str(source) for source in sources),
+            *(str(obj) for obj in objects),
             "-lc++",
             "-o",
             str(wasm_output),
@@ -1496,6 +1666,12 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             str(wasm_output),
         ],
         check=True,
+    )
+    # Feed compiler-discovered headers and toolchain files into the outer
+    # project/Bundle stamp too, so its fast path cannot hide a stale object.
+    _write_guest_cache_json(
+        _guest_build_inputs_path(output_dir, name),
+        [str(path) for path in sorted({*object_inputs, Path(wamrc).absolute()})],
     )
     memory_mode = "unchecked memory" if unchecked_memory else "checked memory"
     print(
@@ -1633,7 +1809,7 @@ def project_output_directory(project: ProjectManifest, override: str | None) -> 
 # Incremental build stamps follow the Ninja model: an output is reused when the
 # recorded command identity and input set match and no input is newer than the
 # output. Inputs are compared by stat mtime only; contents are never hashed.
-BUILD_STAMP_SCHEMA_VERSION = 1
+BUILD_STAMP_SCHEMA_VERSION = 2
 BUILD_INPUT_HEADER_SUFFIXES = frozenset({".h", ".hpp", ".inc"})
 BUILD_INPUT_SDK_DIRECTORIES = ("guest/sdk", "guest/runtime", "guest/abi")
 BUILD_INPUT_GENERATOR_SCRIPTS = ("micropixel", "build_app_bundle.py", "generate_localization.py", "analyze_sfx.py")
@@ -1688,9 +1864,8 @@ def _manifest_referenced_files(project: ProjectManifest) -> list[Path]:
 
 
 def _quoted_include_closure(seeds: list[Path], project_root: Path) -> list[Path]:
-    # Cheap substitute for compiler depfiles: follow #include "..." from the
-    # project sources so shared headers outside the project tree (for example
-    # sdk/ui/*.hpp reached through -I guest) count as inputs.
+    # Seed dependencies before compiler depfiles exist: follow #include "..."
+    # so shared headers outside the project tree count as initial inputs.
     include_roots = (project_root, sdk_root() / "guest")
     visited: set[Path] = set()
     pending = list(seeds)
@@ -1728,6 +1903,15 @@ def collect_project_build_inputs(project: ProjectManifest, output_dir: Path) -> 
         path for path in _walk_input_files(project_root, skipped) if path.suffix in BUILD_INPUT_HEADER_SUFFIXES
     )
     inputs.update(_quoted_include_closure(sorted(inputs), project_root))
+    compiler_inputs = _guest_build_inputs_path(output_dir, project.name)
+    if compiler_inputs.is_file():
+        try:
+            recorded_inputs = json.loads(compiler_inputs.read_text(encoding="utf-8"))
+            if isinstance(recorded_inputs, list) and all(isinstance(path, str) for path in recorded_inputs):
+                inputs.update(Path(path) for path in recorded_inputs)
+        except (OSError, UnicodeError, ValueError):
+            pass
+
     for relative in BUILD_INPUT_SDK_DIRECTORIES:
         directory = root / relative
         if directory.is_dir():
@@ -1759,6 +1943,7 @@ def build_command_identity(
         "threading": project.threading,
         "pinned_memory": project.pinned_memory,
         "wamrc_extra_flags": environment.get("MICROPIXEL_WAMRC_EXTRA_FLAGS", ""),
+        "compile_environment": {key: os.environ.get(key, "") for key in GUEST_COMPILE_ENVIRONMENT_KEYS},
         "toolchain": {key: environment.get(key, "").strip() for key in BUILD_TOOLCHAIN_ENVIRONMENT_KEYS},
     }
 
@@ -1879,9 +2064,10 @@ def build_project(
         output_dir_override=output_dir,
         threading=project.threading,
         unchecked_memory=unchecked_memory,
+        force=force,
     )
     _run_build_sources(build_args)
-    write_build_stamp(aot_output, command, inputs)
+    write_build_stamp(aot_output, command, collect_project_build_inputs(project, output_dir))
     return aot_output
 
 
@@ -1919,7 +2105,8 @@ def package_project(
             generated_include_override=generated_dir,
             output_dir_override=output_dir,
             threading=project.threading,
-                unchecked_memory=unchecked_memory,
+            unchecked_memory=unchecked_memory,
+            force=force,
         )
         _run_build_sources(build_args)
         aot_output = output_dir / f"{project.name}.aot"
@@ -1932,7 +2119,7 @@ def package_project(
     if resource_pack is not None:
         arguments.extend(["--resource-pack", str(resource_pack)])
     _run_bundle_builder(arguments)
-    write_build_stamp(bundle_output, command, inputs)
+    write_build_stamp(bundle_output, command, collect_project_build_inputs(project, output_dir))
     print(f"Package ready: {bundle_output}")
     return bundle_output
 

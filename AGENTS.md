@@ -21,7 +21,7 @@ Host 路径均相对 `firmware/espressif/main/`。
 |---|---|---|
 | 环境、构建和项目概览 | `tools/` | [README](README.md) |
 | 架构与职责划分 | `device/`、`runtime/`、`platform/` | [架构](docs/design/architecture.zh-CN.md)、[Firmware 导航](firmware/espressif/main/README.md) |
-| Guest 应用与 SDK | `guest/apps/`、`guest/sdk/`、`guest/runtime/sdk.cpp` | [Guest 构建](guest/README.md)、[SDK](guest/sdk/README.md) |
+| Guest 应用与 SDK | `guest/apps/`、`guest/sdk/`、`guest/runtime/` | [Guest 构建](guest/README.md)、[SDK](guest/sdk/README.md) |
 | wire / Service | `guest/abi/`、`runtime/abi/`、`runtime/services/` | [ABI](guest/abi/README.md)、[ABI header](guest/abi/micropixel_abi.h) |
 | 大厅、状态层、系统手势 | `host/ui/`、`host/controller/` | [Firmware 导航](firmware/espressif/main/README.md) |
 | 图形与性能 | `platform/graphics/`、`platform/lvgl/`、`runtime/graphics/` | [图形诊断](docs/development/graphics-performance.zh-CN.md) |

@@ -4,7 +4,7 @@
 [`micropixel_abi.h`](micropixel_abi.h) 为准；[`allowed_imports.txt`](allowed_imports.txt)
 是 Public Guest 唯一允许的 Host import 清单。
 
-普通应用只使用 `guest/sdk/` 的强类型 C++ API。`guest/runtime/sdk.cpp` 负责 Service 打开、
+普通应用只使用 `guest/sdk/` 的强类型 C++ API。`guest/runtime/` 负责 Service 打开、
 wire struct 编解码、句柄所有权和错误转换，应用不直接依赖 C ABI。
 
 ## 七个稳定入口

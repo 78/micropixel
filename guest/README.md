@@ -16,8 +16,26 @@ guest/
 ```
 
 普通开发者只实现标准 `int main()`。`runtime/startup.cpp` 在执行 C++ 初始化和 `main()` 前检查
-核心 ABI，并导出内部入口 `__micropixel_start`；`runtime/sdk.cpp` 集中负责 Public SDK 到 C ABI
+核心 ABI，并导出内部入口 `__micropixel_start`；`runtime/` 集中负责 Public SDK 到 C ABI
 的转换。Public SDK 头文件不直接包含 ABI 头。
+
+Runtime binding 按能力拆分，新增实现应放入对应模块：
+
+| 实现 | 职责 |
+| --- | --- |
+| `service_binding.hpp/.cpp` | Service 打开与调用、错误映射、wire 字节操作 |
+| `panic.cpp`、`system.cpp` | 诊断与日志、时钟、随机数、语言和启动参数 |
+| `storage.cpp`、`timers.cpp` | KV 存储与 Timer 生命周期 |
+| `audio.cpp`、`devices.cpp` | 音频资源与播放、设备枚举及 Sensor/GPIO/Haptics/Power |
+| `display_context.cpp` | Graphics/Input 信息缓存与共享坐标契约 |
+| `graphics.cpp` | Renderer 信息、字体、纹理和更新批次 |
+| `direct_surface.cpp`、`surface_raster.cpp` | Surface 缓冲区所有权与光栅命令 |
+| `application.cpp` | 事件循环与 wire 事件解码 |
+| `scene_graph.cpp` | Scene 状态与增量提交 |
+
+各能力持有自身 Service 缓存。Graphics binding 共用 `display_context` 的 Service 缓存；
+DirectSurface 模块持有缓冲区忙碌状态，Application 解码释放事件后通过内部函数通知它。
+Sensor 句柄表保留在设备模块内。内部头只服务于 Runtime，不进入 Public SDK。
 
 [`apps/sdk-demo/`](apps/sdk-demo/) 是 SDK 用法和真机手工检查的统一入口。它只生成一个 Bundle，运行后可从
 同一界面进入 Timer/Clock/Log、Input/Random、Storage、Resource/Atlas、Audio 和 Devices/Hardware 页面。每项能力的
@@ -61,9 +79,19 @@ micropixel --transport usb run
 `--aot-target xtensa`。
 
 `build`/`package`/`run`/`app install` 采用与 Ninja 相同的增量规则：产物旁有 `*.stamp.json` 记录上次的
-构建参数和输入清单（`app.json`、sources、项目内头文件与 `#include "..."` 到的共享头、资源、`sfx.json`、
-翻译文件、`guest/{sdk,runtime,abi}` 和生成器脚本）；参数与清单一致且没有输入比产物新时直接复用，输出
-`Package unchanged, reusing`。只比 mtime，不哈希内容；`--force` 强制重新编译打包。
+构建参数和输入清单（`app.json`、sources、项目内头文件、编译器发现的传递依赖和工具链文件、资源、
+`sfx.json`、翻译文件、`guest/{sdk,runtime,abi}` 和生成器脚本）；参数与清单一致且没有输入比产物新时
+直接复用，输出 `Package unchanged, reusing`。这一整包检查只比 mtime。
+
+需要重建时，CLI 在输出目录的 `obj/<编译配置摘要>/` 中复用独立 `.o`，只编译源码或所包含头文件
+内容变化的 translation unit，然后重新链接 Wasm、生成 AOT。每个 `.o` 旁有 Clang 生成的 `.d`
+依赖文件和 `.json` 缓存记录；依赖包含系统与生成头文件，内容摘要避免生成头文件原样重写引发无谓
+编译。编译参数、编译器或其配置变化会切换缓存；同名源文件按完整路径区分。
+
+仓库内 App 默认缓存于 `build/apps/<app>/obj/`，外部项目缓存于项目自己的 `build/obj/`，
+单源文件构建默认使用 `build/guest-p4/obj/`；`--output-dir` 同时改变产物和缓存目录。
+终端会显示本次编译与复用的 object 数量。删除 `obj/` 可清理缓存，`--force` 会绕过 object 和整包
+缓存，强制重新编译打包。
 
 `APP_LIST` / `app.list` 现在带 Catalog SHA-256。`run`/`app install` 在本地 Bundle 的 `appId`、大小和 digest
 与已装版本一致时跳过整包上传，返回 `already_installed`；旧固件没有该字段时仍完整安装。`--force` 同时绕过

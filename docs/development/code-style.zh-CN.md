@@ -194,7 +194,7 @@ Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service
 ## 6. Public SDK 与 ABI 边界
 
 - `guest/sdk/*.hpp` 是应用可包含的 Public API，不直接包含 `guest/abi/*.h`；
-- `guest/runtime/sdk.cpp` 负责 typed SDK 到 C ABI 的 lowering 和错误映射；
+- `guest/runtime/` 负责 typed SDK 到 C ABI 的 lowering 和错误映射；
 - `guest/abi/*.h`、Wasm import module 和 `__micropixel_start` 是 Runtime 内部协议；
 - startup 在调用应用 `main()` 前完成核心 ABI 兼容检查；
 - Public Event 只暴露 typed payload，不暴露 `data0/data1`、raw handle 或 buffer layout；

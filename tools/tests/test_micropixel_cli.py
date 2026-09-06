@@ -1795,5 +1795,163 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(resumed.timeout, 30.0)
 
 
+class GuestObjectCacheTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.compiler = self.root / "clang++"
+        self.compiler.write_bytes(b"compiler-v1")
+        self.command = [str(self.compiler), "--target=wasm32-wasip1", "-O1"]
+        self.header = self.root / "generated #$.hpp"
+        self.header.write_text("constexpr int value = 1;\n")
+        self.first = self.root / "one" / "main.cpp"
+        self.second = self.root / "two" / "main.cpp"
+        for source in (self.first, self.second):
+            source.parent.mkdir()
+            source.write_text("int fixture;\n")
+        self.dependencies = {self.first: [self.first, self.header], self.second: [self.second]}
+        self.calls: list[Path] = []
+        self.output = self.root / "build"
+        self.runner = patch.object(CLI.subprocess, "run", side_effect=self.compile)
+        self.runner.start()
+        self.addCleanup(self.runner.stop)
+
+    def compile(self, command: list[str], **kwargs: object) -> None:
+        source = Path(command[command.index("-c") + 1])
+        self.calls.append(source)
+        Path(command[command.index("-o") + 1]).write_bytes(b"object:" + source.read_bytes())
+        depfile = Path(command[command.index("-MF") + 1])
+        escaped = [str(path).replace("$", "$$").replace("#", "\\#").replace(" ", "\\ ")
+                   for path in self.dependencies[source]]
+        depfile.write_text("object: " + " \\\n  ".join(escaped) + "\n")
+
+    def build(self, force: bool = False) -> list[Path]:
+        with redirect_stdout(io.StringIO()):
+            objects, _ = CLI._compile_guest_objects(
+                self.command, [self.first, self.second], self.output, force
+            )
+        return objects
+
+    def test_reuses_objects_and_rebuilds_only_changed_translation_unit(self) -> None:
+        objects = self.build()
+        self.assertNotEqual(objects[0], objects[1], "equal basenames must not collide")
+        self.assertTrue(all(path.is_relative_to(self.output / "obj") for path in objects))
+        self.assertEqual(self.calls, [self.first, self.second])
+        self.calls.clear()
+        self.assertEqual(self.build(), objects)
+        self.assertEqual(self.calls, [])
+        self.first.write_text("int changed;\n")
+        self.build()
+        self.assertEqual(self.calls, [self.first])
+
+    def test_generated_header_content_change_invalidates_only_its_users(self) -> None:
+        self.build()
+        self.calls.clear()
+        self.header.write_text(self.header.read_text())
+        self.build()
+        self.assertEqual(self.calls, [], "rewriting identical generated content must reuse objects")
+        self.header.write_text("constexpr int value = 2;\n")
+        self.build()
+        self.assertEqual(self.calls, [self.first])
+
+    def test_removed_dependency_is_recompiled_and_replaced(self) -> None:
+        self.build()
+        self.calls.clear()
+        self.header.unlink()
+        self.dependencies[self.first] = [self.first]
+        self.build()
+        self.assertEqual(self.calls, [self.first])
+        self.calls.clear()
+        self.build()
+        self.assertEqual(self.calls, [])
+
+    def test_compiler_flags_environment_and_force_invalidate_cache(self) -> None:
+        original = self.build()
+        self.calls.clear()
+        self.command[-1] = "-Oz"
+        self.assertNotEqual(self.build(), original)
+        self.assertEqual(len(self.calls), 2)
+        self.calls.clear()
+        self.command[-1] = "-O1"
+        self.assertEqual(self.build(), original)
+        self.assertEqual(self.calls, [], "switching back can reuse the old configuration")
+        self.compiler.write_bytes(b"compiler-v2-longer")
+        self.assertNotEqual(self.build(), original)
+        self.assertEqual(len(self.calls), 2)
+        self.calls.clear()
+        with patch.dict(os.environ, {"CPATH": str(self.root / "includes")}):
+            self.build()
+        self.assertEqual(len(self.calls), 2)
+        self.calls.clear()
+        self.build(force=True)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_missing_or_damaged_cache_files_rebuild_safely(self) -> None:
+        objects = self.build()
+        for path in (objects[0], objects[0].with_suffix(".d"), objects[0].with_suffix(".json")):
+            with self.subTest(path=path):
+                self.calls.clear()
+                path.write_text("damaged")
+                self.build()
+                self.assertEqual(self.calls, [self.first])
+                self.calls.clear()
+                path.unlink()
+                self.build()
+                self.assertEqual(self.calls, [self.first])
+
+    def test_failed_compile_does_not_publish_partial_objects(self) -> None:
+        objects = self.build()
+        original = objects[0].read_bytes()
+        self.first.write_text("invalid C++")
+
+        def fail(command: list[str], **kwargs: object) -> None:
+            Path(command[command.index("-o") + 1]).write_bytes(b"partial")
+            raise CLI.subprocess.CalledProcessError(1, command)
+
+        with patch.object(CLI.subprocess, "run", side_effect=fail):
+            with self.assertRaises(CLI.subprocess.CalledProcessError):
+                self.build()
+        self.assertEqual(objects[0].read_bytes(), original)
+        self.assertEqual(list(objects[0].parent.glob("*.tmp.*")), [])
+        self.calls.clear()
+        self.first.write_text("int repaired;\n")
+        self.build()
+        self.assertEqual(self.calls, [self.first])
+
+    def test_compiler_config_change_invalidates_cache(self) -> None:
+        config = self.root / "clang++.cfg"
+        config.write_text("--sysroot=/old")
+        objects = self.build()
+        self.calls.clear()
+        config.write_text("--sysroot=/new-toolchain")
+        self.assertNotEqual(self.build(), objects)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_project_stamp_tracks_compiler_discovered_external_headers(self) -> None:
+        project_dir = self.root / "project"
+        project_dir.mkdir()
+        (project_dir / "main.cpp").write_text("int main() { return 0; }\n")
+        (project_dir / "app.json").write_text(json.dumps({
+            "schema_version": 1, "app_id": "vendor.cache-test", "title": "Cache Test",
+            "sources": ["main.cpp"],
+        }))
+        project = CLI.load_project_manifest(project_dir / "app.json")
+        self.output.mkdir()
+        CLI._write_guest_cache_json(
+            CLI._guest_build_inputs_path(self.output, project.name), [str(self.header)]
+        )
+        inputs = CLI.collect_project_build_inputs(project, self.output)
+        self.assertIn(self.header, inputs)
+        output = self.output / "test.aot"
+        output.write_bytes(b"aot")
+        command = {"test": "command"}
+        CLI.write_build_stamp(output, command, inputs)
+        self.assertTrue(CLI.build_output_up_to_date(output, command, inputs))
+        newer = output.stat().st_mtime_ns + 1_000_000_000
+        os.utime(self.header, ns=(newer, newer))
+        self.assertFalse(CLI.build_output_up_to_date(output, command, inputs))
+
+
 if __name__ == "__main__":
     unittest.main()
