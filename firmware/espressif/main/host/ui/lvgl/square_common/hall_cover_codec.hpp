@@ -14,7 +14,6 @@ namespace micropixel::host_ui::lvgl::square_common {
 [[nodiscard]] uint32_t HallCoverBytes(uint32_t size);
 
 [[nodiscard]] bool DecodeHallCoverRgb888(const host_ui::HallCoverModel& source, uint32_t target_size,
-                                         uint32_t corner_radius, uint32_t top_background_rgb,
-                                         uint32_t bottom_background_rgb, uint8_t* destination);
+                                         uint32_t corner_radius, uint32_t top_background_rgb, uint8_t* destination);
 
 }  // namespace micropixel::host_ui::lvgl::square_common

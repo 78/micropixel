@@ -19,7 +19,6 @@ struct HallCoverCacheConfig final {
     uint32_t target_size{};
     uint32_t corner_radius{};
     uint32_t top_background_rgb{};
-    uint32_t bottom_background_rgb{};
 };
 
 struct HallCoverCacheUi final {
@@ -48,7 +47,7 @@ class HallCoverCache final {
     void Pause();
     // Pause() must complete before this is called. The LVGL lock must be held
     // because releasing entries may detach visible image descriptors.
-    void SetBackgroundColorsLocked(uint32_t top_background_rgb, uint32_t bottom_background_rgb);
+    void SetBackgroundColorLocked(uint32_t top_background_rgb);
     void Release();
 
    private:

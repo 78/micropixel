@@ -9,6 +9,7 @@
 #include "esp_lv_adapter.h"
 #include "host/ui/lvgl/square_common/default_keyboard.hpp"
 #include "host/ui/lvgl/square_common/symbols.hpp"
+#include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -260,11 +261,7 @@ void WifiSettingsUi::DrawActionSheetLocked() {
         action_sheet_visible_ = false;
         return;
     }
-    lv_obj_t* overlay = CreateOverlay(root_);
-    lv_obj_add_event_cb(overlay, OverlayCancelEvent, LV_EVENT_SHORT_CLICKED, this);
-    lv_obj_t* panel = CreateSystemPanel(overlay, *layout_);
-    lv_obj_set_width(panel, layout_->width - layout_->safe_horizontal * 2);
-    lv_obj_center(panel);
+    lv_obj_t* panel = system_detail_internal::CreateActionSheet(*layout_, root_, OverlayCancelEvent, this);
     const host_ui::WifiNetworkModel& network = model_.saved_networks[selected_saved_index_];
     lv_obj_t* title = CreateSystemLabel(panel, network.ssid.data(), layout_->heading_font, theme::kPrimaryText);
     lv_obj_set_width(title, LV_PCT(100));

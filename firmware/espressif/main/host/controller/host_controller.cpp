@@ -178,35 +178,37 @@ host_ui::HallStatusBarModel MakeHallStatusBarModel(const device::WifiSnapshot& w
             .battery = MakeHallBatteryModel(battery)};
 }
 
-host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, const device::WifiSnapshot& wifi,
-                                 const device::BatterySnapshot& battery, host_ui::HallStatus status,
-                                 const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U,
-                                 bool launch_enabled = true, const HallCoverMappings* covers = nullptr,
-                                 const std::optional<uint32_t>& suspended_index = std::nullopt,
-                                 const host_ui::HallCoverModel* suspended_snapshot = nullptr,
-                                 uint64_t transition_trigger_us = 0U, bool firmware_update_available = false,
-                                 const control::InstallActivity* install_activity = nullptr) {
+void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog& catalog,
+                   const device::WifiSnapshot& wifi, const device::BatterySnapshot& battery, host_ui::HallStatus status,
+                   const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U, bool launch_enabled = true,
+                   const HallCoverMappings* covers = nullptr,
+                   const std::optional<uint32_t>& suspended_index = std::nullopt,
+                   const host_ui::HallCoverModel* suspended_snapshot = nullptr, uint64_t transition_trigger_us = 0U,
+                   bool firmware_update_available = false, const control::InstallActivity* install_activity = nullptr) {
     const bool install_active = install_activity != nullptr && install_activity->active;
-    host_ui::HallModel model{.app_count = std::min(catalog.count, host_ui::kMaxHallApps),
-                             .status_app_id = outcome != nullptr ? outcome->app_id.data() : nullptr,
-                             .status_error_phase = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
-                                                       ? runtime::AppSessionErrorPhase(outcome->error)
-                                                       : nullptr,
-                             .status_error_code = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
-                                                      ? runtime::AppSessionErrorCode(outcome->error)
-                                                      : nullptr,
-                             .status_error_detail = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
-                                                        ? outcome->detail.data()
-                                                        : nullptr,
-                             .status = status,
-                             .detail = detail,
-                             .status_exit_code = outcome != nullptr ? outcome->exit_code : 0,
-                             .status_has_exit_code = outcome != nullptr && outcome->has_exit_code,
-                             .launch_enabled = launch_enabled && !install_active,
-                             .status_bar = MakeHallStatusBarModel(wifi, battery),
-                             .transition_trigger_us = transition_trigger_us,
-                             .firmware_update_available = firmware_update_available,
-                             .install_active = install_active};
+    // Reset reused entries, including covers and running/installing flags.
+    for (auto& app : model.apps) {
+        app = {};
+    }
+    model.app_count = std::min(catalog.count, host_ui::kMaxHallApps);
+    model.status_app_id = outcome != nullptr ? outcome->app_id.data() : nullptr;
+    model.status_error_phase = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
+                                   ? runtime::AppSessionErrorPhase(outcome->error)
+                                   : nullptr;
+    model.status_error_code = outcome != nullptr && status == host_ui::HallStatus::kAppFailed
+                                  ? runtime::AppSessionErrorCode(outcome->error)
+                                  : nullptr;
+    model.status_error_detail =
+        outcome != nullptr && status == host_ui::HallStatus::kAppFailed ? outcome->detail.data() : nullptr;
+    model.status = status;
+    model.detail = detail;
+    model.status_exit_code = outcome != nullptr ? outcome->exit_code : 0;
+    model.status_has_exit_code = outcome != nullptr && outcome->has_exit_code;
+    model.launch_enabled = launch_enabled && !install_active;
+    model.status_bar = MakeHallStatusBarModel(wifi, battery);
+    model.transition_trigger_us = transition_trigger_us;
+    model.firmware_update_available = firmware_update_available;
+    model.install_active = install_active;
     bool installing_app_found = false;
     for (uint32_t index = 0U; index < catalog.count && index < host_ui::kMaxHallApps; ++index) {
         model.apps[index].app_id = catalog.apps[index].app_id.data();
@@ -247,12 +249,13 @@ host_ui::HallModel MakeHallModel(const runtime::InstalledAppCatalog& catalog, co
             model.status = host_ui::HallStatus::kReady;
         }
     }
-    return model;
 }
 
 void OpenHallCovers(const runtime::InstalledAppCatalog& catalog, HallCoverMappings& covers_out,
                     const std::optional<uint32_t>& snapshot_index = std::nullopt) {
-    covers_out = {};
+    for (auto& cover : covers_out) {
+        cover = {};
+    }
     const uint32_t visible_count = std::min(catalog.count, host_ui::kMaxHallApps);
     for (uint32_t index = 0U; index < visible_count; ++index) {
         if (snapshot_index.has_value() && *snapshot_index == index) {
@@ -474,6 +477,36 @@ bool SameFirmwareUpdate(const host_ui::RemoteControlModel& left, const host_ui::
 bool FirmwareUpdateInProgress(host_ui::FirmwareUpdateState state) {
     return state == host_ui::FirmwareUpdateState::kDownloading || state == host_ui::FirmwareUpdateState::kVerifying ||
            state == host_ui::FirmwareUpdateState::kInstalling;
+}
+
+struct FirmwareUpdateSummary {
+    bool in_progress;
+    bool available;
+};
+
+[[gnu::noinline]] FirmwareUpdateSummary ReadFirmwareUpdate(remote_control::RemoteControlAgent& agent) {
+    const auto snapshot = agent.Snapshot();
+    return {FirmwareUpdateInProgress(snapshot.firmware_update_state), snapshot.firmware_update_available};
+}
+
+[[gnu::noinline]] void RefreshHallStatus(host_ui::SystemShell& shell, host_ui::StatusLayerModel& status,
+                                         device::Wifi& wifi, device::Battery& battery) {
+    const auto snapshot = wifi.Snapshot();
+    RefreshWifiStatus(status, snapshot);
+    shell.UpdateHallStatusBar(MakeHallStatusBarModel(snapshot, battery.Snapshot()));
+}
+
+[[gnu::noinline]] void InitializeHostSettings(host_ui::SystemSettingsStore& store, host_ui::StatusLayerModel& status,
+                                              device::Wifi& wifi, remote_control::RemoteControlAgent& agent) {
+    auto settings = agent.Snapshot();
+    if (store.ready() && !store.LoadRemoteControl(settings)) {
+        ESP_LOGW(kTag, "Remote Control settings could not be restored; using disabled default");
+        settings.enabled = false;
+    }
+    if (!agent.Start(settings.enabled)) {
+        ESP_LOGW(kTag, "Remote Control agent is unavailable for this boot");
+    }
+    RefreshWifiStatus(status, wifi.Snapshot());
 }
 
 TickType_t DeadlineWaitTimeout(int64_t deadline_us) {
@@ -1559,6 +1592,11 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
                         host_ui::HallStatus status, uint32_t detail, host_ui::StatusLayerModel& status_model,
                         host_ui::SystemSettingsStore& settings_store,
                         remote_control::RemoteControlAgent& remote_control) {
+    auto hall_model = MakePsramObject<host_ui::HallModel>();
+    if (!hall_model) {
+        ESP_LOGE(kTag, "failed to allocate Hall model");
+        return;
+    }
     HallCoverMappings covers{};
     OpenHallCovers(catalog, covers);
     RemoteCommandPump power_pump{
@@ -1597,8 +1635,9 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
         const device::BatterySnapshot battery_snapshot = battery.Snapshot();
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control.Snapshot();
         const bool firmware_update_available = remote_control_snapshot.firmware_update_available;
-        if (!ShowHall(shell, MakeHallModel(catalog, wifi_snapshot, battery_snapshot, status, nullptr, detail, false,
-                                           &covers, std::nullopt, nullptr, 0U, firmware_update_available))) {
+        FillHallModel(*hall_model, catalog, wifi_snapshot, battery_snapshot, status, nullptr, detail, false, &covers,
+                      std::nullopt, nullptr, 0U, firmware_update_available);
+        if (!ShowHall(shell, *hall_model)) {
             return;
         }
         shell.UpdatePerformanceOverlay(status_model.performance_overlay_enabled, host_ui::CpuUsageSample{});
@@ -1733,10 +1772,10 @@ class ActiveHost final {
 
     [[nodiscard]] const runtime::InstalledAppCatalog& catalog() const { return catalog_; }
 
-    void Run() {
+    [[gnu::noinline]] void Run() {
         for (;;) {
             if (shell_.PowerOffRequested()) {
-                if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+                if (ReadFirmwareUpdate(remote_control_).in_progress) {
                     (void)shell_.ConsumePowerOffRequested();
                     ESP_LOGW(kTag, "power off ignored while firmware update is in progress");
                 } else {
@@ -1770,17 +1809,22 @@ class ActiveHost final {
                (lifecycle == AppLifecycleState::kNotRunning || lifecycle == AppLifecycleState::kSuspended);
     }
 
-    [[nodiscard]] bool ShowCurrentHall() {
+    // Snapshot scratch must be released before entering the nested LVGL render path.
+    [[gnu::noinline]] void PrepareCurrentHall() {
         const device::WifiSnapshot wifi_snapshot = wifi_.Snapshot();
         RefreshWifiStatus(status_model_, wifi_snapshot);
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control_.Snapshot();
         hall_firmware_update_available_ = remote_control_snapshot.firmware_update_available;
         controls_.CopyInstallActivity(hall_install_activity_);
+        FillHallModel(hall_model_, catalog_, wifi_snapshot, battery_.Snapshot(), hall_status_, outcome_, hall_detail_,
+                      CanLaunch(), &covers_, suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
+                      hall_firmware_update_available_, &hall_install_activity_);
+    }
+
+    [[nodiscard]] bool ShowCurrentHall() {
+        PrepareCurrentHall();
         micropixel_check_heap("before Hall render");
-        if (!ShowHall(shell_, MakeHallModel(catalog_, wifi_snapshot, battery_.Snapshot(), hall_status_, outcome_,
-                                            hall_detail_, CanLaunch(), &covers_, suspended_index_, &suspended_snapshot_,
-                                            hall_transition_trigger_us_, hall_firmware_update_available_,
-                                            &hall_install_activity_))) {
+        if (!ShowHall(shell_, hall_model_)) {
             return false;
         }
         micropixel_check_heap("after Hall render");
@@ -1873,7 +1917,9 @@ class ActiveHost final {
 
     void ReleaseHallCovers() {
         shell_.PauseHallCoverLoading();
-        covers_ = {};
+        for (auto& cover : covers_) {
+            cover = {};
+        }
     }
 
     void RestoreHallCovers() { OpenHallCovers(catalog_, covers_, suspended_index_); }
@@ -1971,7 +2017,9 @@ class ActiveHost final {
 
     void BeginRemoteInputSequence(const control::HostCommand& command) {
         auto& state = RemoteInputSequence();
-        state = {};
+        // Reconstruct in place: aggregate assignment materializes the whole sequence on the stack.
+        std::destroy_at(&state);
+        std::construct_at(&state);
         state.command = command;
         state.result.command_id = command.command_id;
         state.result.source = command.source;
@@ -2284,7 +2332,7 @@ class ActiveHost final {
         if (shell_.PowerTransitionRequested()) {
             return true;
         }
-        if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+        if (ReadFirmwareUpdate(remote_control_).in_progress) {
             return true;
         }
         if (RemoteInputSequence().active) {
@@ -2322,7 +2370,7 @@ class ActiveHost final {
         if (shell_.PowerTransitionRequested()) {
             return true;
         }
-        if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+        if (ReadFirmwareUpdate(remote_control_).in_progress) {
             if (!RunFirmwareUpdate(shell_, remote_control_, nullptr)) {
                 return false;
             }
@@ -2365,12 +2413,11 @@ class ActiveHost final {
                 next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
             }
             if (now_us >= next_hall_status_sample_us) {
-                shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_.Snapshot(), battery_.Snapshot()));
+                RefreshHallStatus(shell_, status_model_, wifi_, battery_);
                 next_hall_status_sample_us = now_us + kHallStatusSamplePeriodUs;
             }
-            const host_ui::RemoteControlModel remote_control_snapshot = remote_control_.Snapshot();
-            if (FirmwareUpdateInProgress(remote_control_snapshot.firmware_update_state) ||
-                remote_control_snapshot.firmware_update_available != hall_firmware_update_available_) {
+            const auto update = ReadFirmwareUpdate(remote_control_);
+            if (update.in_progress || update.available != hall_firmware_update_available_) {
                 return true;
             }
             if (!pending_action.has_value()) {
@@ -2382,18 +2429,16 @@ class ActiveHost final {
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kWifiStateChanged) {
-                const device::WifiSnapshot wifi_snapshot = wifi_.Snapshot();
-                RefreshWifiStatus(status_model_, wifi_snapshot);
-                shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_snapshot, battery_.Snapshot()));
+                RefreshHallStatus(shell_, status_model_, wifi_, battery_);
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kBatteryStateChanged) {
-                shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_.Snapshot(), battery_.Snapshot()));
+                RefreshHallStatus(shell_, status_model_, wifi_, battery_);
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kTimeStateChanged) {
-                shell_.UpdateHallStatusBar(MakeHallStatusBarModel(wifi_.Snapshot(), battery_.Snapshot()));
+                RefreshHallStatus(shell_, status_model_, wifi_, battery_);
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
@@ -2656,7 +2701,7 @@ class ActiveHost final {
             if (ProcessRemoteCommands()) {
                 return;
             }
-            if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+            if (ReadFirmwareUpdate(remote_control_).in_progress) {
                 if (app_controller_.state() == AppLifecycleState::kForeground) {
                     SuspendToHall(0U);
                 }
@@ -2815,7 +2860,7 @@ class ActiveHost final {
     }
 
     void RunPowerCycle() {
-        if (FirmwareUpdateInProgress(remote_control_.Snapshot().firmware_update_state)) {
+        if (ReadFirmwareUpdate(remote_control_).in_progress) {
             (void)shell_.ConsumePowerButtonPressed();
             shell_.NotifyPowerCycleCompleted();
             ESP_LOGW(kTag, "power button ignored while firmware update is in progress");
@@ -2984,6 +3029,7 @@ class ActiveHost final {
         shell_.UpdatePerformanceOverlay(false, host_ui::CpuUsageSample{});
     }
 
+    host_ui::HallModel hall_model_{};
     runtime::InstalledAppCatalog catalog_;
     HallCoverMappings covers_;
     AppController app_controller_;
@@ -3113,15 +3159,7 @@ void HostController::Run() {
             return snapshot.external_power_available;
         },
         this);
-    host_ui::RemoteControlModel remote_control_settings = remote_control_.Snapshot();
-    if (settings_store.ready() && !settings_store.LoadRemoteControl(remote_control_settings)) {
-        ESP_LOGW(kTag, "Remote Control settings could not be restored; using disabled default");
-        remote_control_settings.enabled = false;
-    }
-    if (!remote_control_.Start(remote_control_settings.enabled)) {
-        ESP_LOGW(kTag, "Remote Control agent is unavailable for this boot");
-    }
-    RefreshWifiStatus(status_model, wifi_.Snapshot());
+    InitializeHostSettings(settings_store, status_model, wifi_, remote_control_);
     shell_.ApplyTheme(status_model.theme_mode);
     shell_.ApplyBrightness(status_model.brightness_percent);
     shell_.ApplyVolume(status_model.volume_percent);

@@ -36,7 +36,7 @@ uint32_t HallCoverStride(uint32_t size) { return LV_DRAW_BUF_STRIDE(size, LV_COL
 uint32_t HallCoverBytes(uint32_t size) { return HallCoverStride(size) * size; }
 
 bool DecodeHallCoverRgb888(const host_ui::HallCoverModel& source, uint32_t target_size, uint32_t corner_radius,
-                           uint32_t top_background_rgb, uint32_t bottom_background_rgb, uint8_t* destination) {
+                           uint32_t top_background_rgb, uint8_t* destination) {
     if (source.data == nullptr || source.size == 0U || source.width == 0U || source.height == 0U || target_size == 0U ||
         destination == nullptr) {
         return false;
@@ -55,8 +55,7 @@ bool DecodeHallCoverRgb888(const host_ui::HallCoverModel& source, uint32_t targe
         decoded = true;
     }
     if (decoded) {
-        MaskHallCoverRgb888(destination, target_size, destination_stride, corner_radius, top_background_rgb,
-                            bottom_background_rgb);
+        MaskHallCoverRgb888(destination, target_size, destination_stride, corner_radius, top_background_rgb);
     }
     return decoded;
 }

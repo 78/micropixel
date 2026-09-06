@@ -8,6 +8,7 @@
 #include "host/ui/system_ui.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
+#include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common::system_detail_internal {
 
@@ -146,6 +147,22 @@ inline lv_obj_t* CreateActionSheet(const SystemPageLayout& layout, lv_obj_t* roo
     lv_obj_set_style_border_color(sheet, lv_color_hex(border_color), 0);
     lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, -layout.safe_horizontal);
+    // Translate independently of bottom alignment and content-driven height.
+    // LVGL removes animations targeting the sheet when the object is deleted.
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, sheet);
+    lv_anim_set_values(&animation, layout.height, 0);
+    lv_anim_set_duration(&animation, 100U);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&animation, [](void* object, int32_t offset) {
+        auto* sheet = static_cast<lv_obj_t*>(object);
+        lv_obj_set_style_translate_y(sheet, offset, 0);
+        // Invalidation alone waits for the slow static-scene refresh timer.
+        // Publish every animation step, including the final resting position.
+        platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(sheet));
+    });
+    lv_anim_start(&animation);
     return sheet;
 }
 

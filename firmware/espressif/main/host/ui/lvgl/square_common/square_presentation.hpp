@@ -23,7 +23,6 @@ struct HallTransitionPresentation final {
     uint32_t intermediate_size{};
     uint32_t cover_corner_radius{};
     uint32_t cover_top_background_rgb{};
-    uint32_t cover_bottom_background_rgb{};
     bool card_valid{};
 };
 

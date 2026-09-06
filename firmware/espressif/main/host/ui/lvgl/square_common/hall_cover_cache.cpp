@@ -151,9 +151,8 @@ void HallCoverCache::Process(const Job& job) {
     const uint32_t allocation_bytes = (bytes + kAlignment - 1U) / kAlignment * kAlignment;
     auto* pixels = static_cast<uint8_t*>(
         heap_caps_aligned_calloc(kAlignment, allocation_bytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    bool decoded =
-        pixels != nullptr && DecodeHallCoverRgb888(job.source, config_.target_size, config_.corner_radius,
-                                                   config_.top_background_rgb, config_.bottom_background_rgb, pixels);
+    bool decoded = pixels != nullptr && DecodeHallCoverRgb888(job.source, config_.target_size, config_.corner_radius,
+                                                              config_.top_background_rgb, pixels);
     if (decoded) {
         lv_draw_buf_t draw_buf{};
         decoded = lv_draw_buf_init(&draw_buf, config_.target_size, config_.target_size, LV_COLOR_FORMAT_RGB888,
@@ -261,12 +260,11 @@ void HallCoverCache::Pause() {
     }
 }
 
-void HallCoverCache::SetBackgroundColorsLocked(uint32_t top_background_rgb, uint32_t bottom_background_rgb) {
+void HallCoverCache::SetBackgroundColorLocked(uint32_t top_background_rgb) {
     for (Entry& entry : entries_) {
         ReleaseEntry(entry);
     }
     config_.top_background_rgb = top_background_rgb;
-    config_.bottom_background_rgb = bottom_background_rgb;
     window_first_ = host_ui::kMaxHallApps;
     window_last_ = host_ui::kMaxHallApps;
 }

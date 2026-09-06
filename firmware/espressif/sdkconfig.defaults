@@ -58,7 +58,7 @@ CONFIG_MICROPIXEL_ENABLE_CONFORMANCE_TEST_HOOKS=n
 
 # FirmwareApp startup performs synchronous System UI and bundle initialization
 # on the ESP main task. Use the same measured stack allowance on every target.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=14336
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
 
 # Guest-visible GPIO edge handlers run from IRAM and read the pin level while
 # the Flash cache may be unavailable. Keep their ESP-IDF GPIO dependencies in

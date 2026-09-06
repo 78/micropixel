@@ -64,7 +64,6 @@ class SystemDetailUi final {
     enum class AppOverlay : uint8_t {
         kNone,
         kActions,
-        kInformation,
         kUninstallConfirmation,
         kUninstallUnavailable,
     };
@@ -102,7 +101,6 @@ class SystemDetailUi final {
     static void AppManagementRowEvent(lv_event_t* event);
     static void AppManagementCancelEvent(lv_event_t* event);
     static void AppManagementOpenEvent(lv_event_t* event);
-    static void AppManagementInformationEvent(lv_event_t* event);
     static void AppManagementUninstallEvent(lv_event_t* event);
     static void AppManagementConfirmUninstallEvent(lv_event_t* event);
     static void AppManagementDisplayEvent(lv_event_t* event);
@@ -117,7 +115,6 @@ class SystemDetailUi final {
     void RenderAppManagementLocked();
     void RenderAppManagementOverlayLocked();
     void DrawAppManagementActionsLocked();
-    void DrawAppManagementInformationLocked();
     void DrawAppManagementUninstallUnavailableLocked();
     void DrawAppManagementUninstallConfirmationLocked();
     void QueueAppManagementRender();

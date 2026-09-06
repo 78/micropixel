@@ -86,8 +86,7 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
                    static_cast<uint16_t>(profile.square.height)),
       hall_cover_cache({.target_size = profile.square.hall_card_width,
                         .corner_radius = static_cast<uint32_t>(profile.hall_card.radius),
-                        .top_background_rgb = theme::kHallBackground,
-                        .bottom_background_rgb = theme::kHallCardBackground}),
+                        .top_background_rgb = theme::kHallBackground}),
       hall_cover_descriptors(g_hall_storage.cover_descriptors),
       hall_cover_sources(g_hall_storage.cover_sources),
       hall_idle_cover_sources(g_hall_storage.idle_cover_sources),
@@ -868,7 +867,7 @@ void SquareSystemUiState::ApplyTheme(host_ui::SystemThemeMode mode) {
         return;
     }
     if (theme::SetModeLocked(ThemeMode(mode))) {
-        hall_cover_cache.SetBackgroundColorsLocked(theme::kHallBackground, theme::kHallCardBackground);
+        hall_cover_cache.SetBackgroundColorLocked(theme::kHallBackground);
         if (theme_changed_locked_ != nullptr) {
             theme_changed_locked_(theme_changed_context_);
         }

@@ -20,7 +20,7 @@ void CheckStride(uint32_t size, uint32_t stride, uint32_t radius) {
     const size_t bytes = static_cast<size_t>(stride) * size;
     std::vector<uint8_t> storage(kGuard + bytes + kGuard, kUntouched);
     auto* pixels = storage.data() + kGuard;
-    MaskHallCoverRgb888(pixels, size, stride, radius, 0x123456U, 0x111214U);
+    MaskHallCoverRgb888(pixels, size, stride, radius, 0x123456U);
     Check(std::all_of(storage.begin(), storage.begin() + kGuard, [](uint8_t b) { return b == kUntouched; }));
     Check(std::all_of(storage.begin() + kGuard + bytes, storage.end(), [](uint8_t b) { return b == kUntouched; }));
     for (uint32_t y = 0U; y < size; ++y) {
@@ -29,8 +29,11 @@ void CheckStride(uint32_t size, uint32_t stride, uint32_t radius) {
         }
     }
     Check(pixels[0] == 0x56U && pixels[1] == 0x34U && pixels[2] == 0x12U);
-    const size_t bottom_right = static_cast<size_t>(size - 1U) * stride + (size - 1U) * 3U;
-    Check(pixels[bottom_right] == 0x14U && pixels[bottom_right + 1U] == 0x12U && pixels[bottom_right + 2U] == 0x11U);
+    const size_t top_right = (size - 1U) * 3U;
+    Check(pixels[top_right] == 0x56U && pixels[top_right + 1U] == 0x34U && pixels[top_right + 2U] == 0x12U);
+    // Launch reuses these pixels: neither bottom corner may contain card background.
+    Check(std::all_of(pixels + static_cast<size_t>(size - radius) * stride, pixels + bytes,
+                      [](uint8_t b) { return b == kUntouched; }));
     Check(pixels[static_cast<size_t>(size / 2U) * stride + (size / 2U) * 3U] == kUntouched);
 }
 

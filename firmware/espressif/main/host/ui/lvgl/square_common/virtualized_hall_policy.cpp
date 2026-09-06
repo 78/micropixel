@@ -48,15 +48,13 @@ HallTransitionPresentation HallTransitionPresentationFor(const SquareSystemUiPro
         .intermediate_size = profile.square.transition_intermediate_width,
         .cover_corner_radius = static_cast<uint32_t>(profile.hall_card.radius),
         .cover_top_background_rgb = theme::kHallBackground,
-        .cover_bottom_background_rgb = theme::kHallCardBackground,
         .card_valid = index < host_ui::kMaxHallApps,
     };
 }
 
 void MaskHallTransitionCoverRgb888(const HallTransitionPresentation& presentation, uint8_t* destination) {
     MaskHallCoverRgb888(destination, presentation.cover_size, presentation.cover_stride,
-                        presentation.cover_corner_radius, presentation.cover_top_background_rgb,
-                        presentation.cover_bottom_background_rgb);
+                        presentation.cover_corner_radius, presentation.cover_top_background_rgb);
 }
 
 VirtualizedHallPolicy::VirtualizedHallPolicy(SquareSystemUiState& state, SquarePresentation& presentation)

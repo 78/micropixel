@@ -6,7 +6,7 @@
 namespace micropixel::host_ui::lvgl::square_common {
 
 void MaskHallCoverRgb888(uint8_t* destination, uint32_t size, uint32_t stride, uint32_t radius,
-                         uint32_t top_background_rgb, uint32_t bottom_background_rgb) {
+                         uint32_t top_background_rgb) {
     if (destination == nullptr || size == 0U || size > UINT32_MAX / 3U || stride < size * 3U || radius <= 1U) {
         return;
     }
@@ -28,8 +28,6 @@ void MaskHallCoverRgb888(uint8_t* destination, uint32_t size, uint32_t stride, u
             }
             set_pixel(x, y, top_background_rgb);
             set_pixel(size - 1U - x, y, top_background_rgb);
-            set_pixel(x, size - 1U - y, bottom_background_rgb);
-            set_pixel(size - 1U - x, size - 1U - y, bottom_background_rgb);
         }
     }
 }

@@ -14,11 +14,25 @@ using system_detail_internal::Button;
 using system_detail_internal::CreateActionSheet;
 using system_detail_internal::FormatSize;
 using system_detail_internal::Header;
-using system_detail_internal::InformationRow;
 using system_detail_internal::kTag;
 using system_detail_internal::Label;
 using system_detail_internal::Panel;
 using system_detail_internal::Scroll;
+
+void AppSizeRow(lv_obj_t* parent, const char* text, uint32_t size_kib, platform::lvgl::SystemFontRole text_role,
+                uint32_t text_color) {
+    lv_obj_t* row = CreateSystemColumn(parent, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_t* label = Label(row, text, text_role, text_color);
+    lv_obj_set_width(label, 0);
+    lv_obj_set_flex_grow(label, 1);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    char size[28]{};
+    FormatSize(size_kib, size, sizeof(size));
+    (void)Label(row, size, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+}
 }  // namespace
 
 std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLocked(
@@ -89,9 +103,8 @@ void SystemDetailUi::RenderAppManagementLocked() {
         lv_obj_t* name = Label(app_text, app.display_name, platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
         lv_obj_set_width(name, LV_PCT(100));
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        char size[28]{};
-        FormatSize(app.bundle_size_kib, size, sizeof(size));
-        (void)Label(app_text, size, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+        AppSizeRow(app_text, system_detail_internal::DisplayText(app.app_id, "Unknown"), app.bundle_size_kib,
+                   platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
 
         (void)square_common::CreateSystemMoreIndicator(row, 32, 52, 6, 5);
     }
@@ -111,9 +124,6 @@ void SystemDetailUi::RenderAppManagementOverlayLocked() {
     switch (app_management_overlay_) {
         case AppOverlay::kActions:
             DrawAppManagementActionsLocked();
-            break;
-        case AppOverlay::kInformation:
-            DrawAppManagementInformationLocked();
             break;
         case AppOverlay::kUninstallConfirmation:
             DrawAppManagementUninstallConfirmationLocked();
@@ -243,15 +253,6 @@ void SystemDetailUi::AppManagementOpenEvent(lv_event_t* event) {
     }
 }
 
-void SystemDetailUi::AppManagementInformationEvent(lv_event_t* event) {
-    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr) {
-        ui->app_management_overlay_ = AppOverlay::kInformation;
-        ui->BeginAppManagementLatencyProbe("information.open");
-        ui->QueueAppManagementRender();
-    }
-}
-
 void SystemDetailUi::AppManagementUninstallEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr) {
@@ -276,9 +277,8 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
     lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
                                         &app_management_overlay_root_);
-    lv_obj_t* title = Label(sheet, app.display_name, platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    AppSizeRow(sheet, app.display_name, app.bundle_size_kib, platform::lvgl::SystemFontRole::kLarge,
+               theme::kPrimaryText);
     lv_obj_t* open = Button(layout_, sheet, app_management_model_.launch_available ? "Open" : "Open unavailable",
                             app_management_model_.launch_available ? theme::kPrimaryText : theme::kDisabledText);
     if (app_management_model_.launch_available) {
@@ -287,29 +287,10 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
         lv_obj_remove_flag(open, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_opa(open, LV_OPA_40, 0);
     }
-    lv_obj_t* information = Button(layout_, sheet, "App Information");
-    lv_obj_add_event_cb(information, AppManagementInformationEvent, LV_EVENT_SHORT_CLICKED, this);
     lv_obj_t* uninstall = Button(layout_, sheet, "Uninstall", theme::kDanger);
     lv_obj_add_event_cb(uninstall, AppManagementUninstallEvent, LV_EVENT_SHORT_CLICKED, this);
     lv_obj_t* cancel = Button(layout_, sheet, "Cancel", theme::kSecondaryText);
     lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
-}
-
-void SystemDetailUi::DrawAppManagementInformationLocked() {
-    const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
-                                        &app_management_overlay_root_);
-    lv_obj_t* title = Label(sheet, app.display_name, platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_t* details = Panel(layout_, sheet, 0);
-    InformationRow(layout_, details, "App ID", app.app_id != nullptr ? app.app_id : "Unknown");
-    char size[24]{};
-    FormatSize(app.bundle_size_kib, size, sizeof(size));
-    InformationRow(layout_, details, "Bundle Size", size);
-    InformationRow(layout_, details, "Runtime", "WebAssembly AOT");
-    lv_obj_t* done = Button(layout_, sheet, "Done");
-    lv_obj_add_event_cb(done, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
 }
 
 void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
