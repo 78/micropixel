@@ -1,20 +1,16 @@
 #include "apps/blocks/blocks_game.hpp"
+#include "blocks_assets.hpp"
 
 namespace blocks {
 namespace {
 
-constexpr uint32_t kPlayfieldSurfaceCount = 4U;
-constexpr uint32_t kRowsPerSurface = kBoardRows / kPlayfieldSurfaceCount;
-constexpr uint32_t kSurfaceHeight = kRowsPerSurface * static_cast<uint32_t>(kCellPitch);
 constexpr uint8_t kGhostVisual = 0x40U;
 constexpr uint8_t kActiveVisual = 0x80U;
 constexpr uint8_t kFlashVisual = 0xe0U;
-constexpr Rgb kScreenBackground{5U, 5U, 5U};
 // Keep these on stable RGB565 gray levels. The menu's 50% black overlay
 // preserves them as neutral 8/16-level grays instead of quantizing individual
 // channels differently near black.
 constexpr Rgb kBoardBackground{16U, 16U, 16U};
-constexpr Rgb kGridColor{32U, 32U, 32U};
 constexpr Rgb kBorderColor{38U, 38U, 38U};
 constexpr Rgb kBestScoreColor{196U, 144U, 38U};
 
@@ -24,30 +20,6 @@ uint32_t LogicalStrokeWidth(uint32_t logical_extent, uint32_t physical_extent) {
     }
     const uint32_t width = (logical_extent + physical_extent - 1U) / physical_extent;
     return width == 0U ? 1U : width;
-}
-
-Rgb MixRgb(Rgb foreground, Rgb background, uint8_t opacity) {
-    const uint32_t inverse = 255U - opacity;
-    return {static_cast<uint8_t>((foreground.red * opacity + background.red * inverse + 127U) / 255U),
-            static_cast<uint8_t>((foreground.green * opacity + background.green * inverse + 127U) / 255U),
-            static_cast<uint8_t>((foreground.blue * opacity + background.blue * inverse + 127U) / 255U)};
-}
-
-bool InsideRoundedRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t radius) {
-    if (x < 0 || y < 0 || x >= width || y >= height) {
-        return false;
-    }
-    if (x >= radius && x < width - radius) {
-        return true;
-    }
-    if (y >= radius && y < height - radius) {
-        return true;
-    }
-    const int32_t center_x = x < radius ? radius : width - radius - 1;
-    const int32_t center_y = y < radius ? radius : height - radius - 1;
-    const int32_t dx = x - center_x;
-    const int32_t dy = y - center_y;
-    return dx * dx + dy * dy <= radius * radius;
 }
 
 bool PieceOccupies(ActivePiece piece, uint32_t column, uint32_t row) {
@@ -79,19 +51,6 @@ void SetSolid(micropixel::SpriteBatch& batch, micropixel::SceneUpdate& update, u
 
 }  // namespace
 
-void BlocksGame::InitializePlayfieldSurfaces() {
-    static_assert(kBoardRows % kPlayfieldSurfaceCount == 0U);
-    for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
-        auto result = renderer_.CreateStreamingTexture({static_cast<uint32_t>(kPlayfieldWidth), kSurfaceHeight},
-                                                       micropixel::PixelFormat::kRgb565);
-        micropixel::Assert(result.has_value(), "blocks: streaming surface allocation failed");
-        playfield_surfaces_[index] = static_cast<micropixel::StreamingTexture&&>(result.value());
-    }
-    visual_cache_valid_ = false;
-    SyncPlayfield();
-    app_.log().Info("blocks: four retained StreamingSurfaces ready");
-}
-
 uint8_t BlocksGame::VisualCell(uint32_t column, uint32_t row) const {
     if (clear_effect_remaining_us_ != 0U && (clear_rows_mask_ & (1U << row)) != 0U) {
         const uint32_t elapsed = static_cast<uint32_t>(240000U - clear_effect_remaining_us_);
@@ -113,90 +72,39 @@ uint8_t BlocksGame::VisualCell(uint32_t column, uint32_t row) const {
     return model_.board_cell(column, row);
 }
 
-void BlocksGame::PutCellPixel(uint32_t x, uint32_t y, Rgb color) {
-    const uint16_t packed = static_cast<uint16_t>(((static_cast<uint16_t>(color.red) >> 3U) << 11U) |
-                                                  ((static_cast<uint16_t>(color.green) >> 2U) << 5U) |
-                                                  (static_cast<uint16_t>(color.blue) >> 3U));
-    const uint32_t offset = (y * static_cast<uint32_t>(kCellPitch) + x) * 2U;
-    cell_pixels_[offset] = static_cast<uint8_t>(packed);
-    cell_pixels_[offset + 1U] = static_cast<uint8_t>(packed >> 8U);
-}
-
-void BlocksGame::RasterizeCell(uint32_t column, uint32_t row, uint8_t visual) {
-    const uint32_t origin_x = column * static_cast<uint32_t>(kCellPitch);
-    const uint32_t origin_y = row * static_cast<uint32_t>(kCellPitch);
-    const uint32_t vertical_grid_width = LogicalStrokeWidth(renderer_info_.width(), renderer_info_.physical_width());
-    const uint32_t horizontal_grid_width =
-        LogicalStrokeWidth(renderer_info_.height(), renderer_info_.physical_height());
-    for (uint32_t y = 0U; y < static_cast<uint32_t>(kCellPitch); ++y) {
-        for (uint32_t x = 0U; x < static_cast<uint32_t>(kCellPitch); ++x) {
-            const int32_t global_x = static_cast<int32_t>(origin_x + x);
-            const int32_t global_y = static_cast<int32_t>(origin_y + y);
-            Rgb color = kScreenBackground;
-            const bool outer = InsideRoundedRect(global_x, global_y, kPlayfieldWidth, kPlayfieldHeight, 14);
-            const bool inner =
-                InsideRoundedRect(global_x - 2, global_y - 2, kPlayfieldWidth - 4, kPlayfieldHeight - 4, 12);
-            if (outer) {
-                color = inner ? kBoardBackground : kBorderColor;
-                const bool vertical_grid = global_x != 0 && x < vertical_grid_width;
-                const bool horizontal_grid = global_y != 0 && y < horizontal_grid_width;
-                if (inner && (vertical_grid || horizontal_grid)) {
-                    color = kGridColor;
-                }
-            }
-            PutCellPixel(x, y, color);
-        }
-    }
-    if ((visual & 0xe0U) == kFlashVisual) {
-        const Rgb flash = MixRgb(Rgb{255U, 255U, 255U}, ThemeForLevel(model_.level()).accent,
-                                 static_cast<uint8_t>(80U + (visual & 0x07U) * 22U));
-        for (uint32_t y = 1U; y + 1U < static_cast<uint32_t>(kCellPitch); ++y) {
-            for (uint32_t x = 1U; x + 1U < static_cast<uint32_t>(kCellPitch); ++x) {
-                PutCellPixel(x, y, flash);
-            }
-        }
-        return;
-    }
-    const uint8_t type_value = visual & 0x0fU;
-    if (type_value == 0U || type_value > kTetrominoCount) {
-        return;
-    }
-    const Rgb piece = ColorForTetromino(static_cast<Tetromino>(type_value - 1U));
-    const bool ghost = (visual & kGhostVisual) != 0U && (visual & kActiveVisual) == 0U;
-    const Rgb fill = ghost ? MixRgb(piece, kBoardBackground, 56U) : piece;
-    const Rgb highlight = MixRgb(Rgb{255U, 255U, 255U}, fill, ghost ? 24U : 72U);
-    for (uint32_t y = 1U; y <= 28U; ++y) {
-        for (uint32_t x = 1U; x <= 28U; ++x) {
-            if (!InsideRoundedRect(static_cast<int32_t>(x) - 1, static_cast<int32_t>(y) - 1, 28, 28, 4) ||
-                (ghost && x >= 4U && x <= 25U && y >= 4U && y <= 25U)) {
-                continue;
-            }
-            PutCellPixel(x, y, y == 3U && x >= 5U && x <= 24U ? highlight : fill);
-        }
-    }
-}
-
 void BlocksGame::SyncPlayfield() {
-    micropixel::TextureUpdateBatch update_batch = renderer_.BeginTextureUpdateBatch();
+    InitializeScene();
+    const auto result = scene_.Update([&](micropixel::SceneUpdate& update) { UpdatePlayfield(update); });
+    micropixel::Assert(result.has_value(), "blocks: playfield scene update failed");
+}
+
+void BlocksGame::UpdatePlayfield(micropixel::SceneUpdate& update) {
     for (uint32_t row = 0U; row < kBoardRows; ++row) {
         for (uint32_t column = 0U; column < kBoardColumns; ++column) {
-            const uint32_t cache_index = row * kBoardColumns + column;
+            const uint16_t slot = static_cast<uint16_t>(row * kBoardColumns + column);
             const uint8_t visual = VisualCell(column, row);
-            if (visual_cache_valid_ && visual_cells_[cache_index] == visual) {
+            if (visual_cache_valid_ && visual_cells_[slot] == visual) {
                 continue;
             }
-            RasterizeCell(column, row, visual);
-            const uint32_t surface_index = row / kRowsPerSurface;
-            const int32_t local_y = static_cast<int32_t>(row % kRowsPerSurface) * kCellPitch;
-            micropixel::Assert(playfield_surfaces_[surface_index]
-                                   .Update({static_cast<int32_t>(column) * kCellPitch, local_y, kCellPitch, kCellPitch},
-                                           cell_pixels_, sizeof(cell_pixels_), static_cast<uint32_t>(kCellPitch) * 2U)
-                                   .has_value(),
-                               "blocks: surface cell update failed");
-            visual_cells_[cache_index] = visual;
+            const bool flash = (visual & 0xe0U) == kFlashVisual;
+            const uint8_t type = visual & 0x0fU;
+            if (!flash && (type == 0U || type > kTetrominoCount)) {
+                playfield_batch_.SetInstanceVisible(update, slot, false);
+            } else {
+                const bool ghost = (visual & kGhostVisual) != 0U && (visual & kActiveVisual) == 0U;
+                const uint32_t theme = (model_.level() == 0U ? 0U : model_.level() - 1U) % kThemeCount;
+                const micropixel::Rect source = flash ? micropixel::Rect{static_cast<int32_t>(visual & 0x07U) * 30,
+                                                                         static_cast<int32_t>(4U + theme) * 30, 30, 30}
+                                                      : micropixel::Rect{(type - 1) * 30, ghost ? 30 : 0, 30, 30};
+                playfield_batch_.SetInstance(
+                    update, slot,
+                    {.destination = {kBoardX + static_cast<int32_t>(column) * kCellPitch,
+                                     kBoardY + static_cast<int32_t>(row) * kCellPitch, kCellPitch, kCellPitch},
+                     .source = source});
+            }
+            visual_cells_[slot] = visual;
         }
     }
-    micropixel::Assert(update_batch.Finish().has_value(), "blocks: surface update transaction failed");
     visual_cache_valid_ = true;
 }
 
@@ -207,18 +115,23 @@ void BlocksGame::InitializeScene() {
     root_container_ = scene_.CreateContainer(
         {.clip = {0, 0, static_cast<int32_t>(kScreenWidth), static_cast<int32_t>(kScreenHeight)},
          .translation = {ContentOffsetX(renderer_info_.width()), ContentOffsetY(renderer_info_.height())}});
-    for (uint32_t index = 0U; index < kPlayfieldSurfaceCount; ++index) {
-        const int32_t y = kBoardY + static_cast<int32_t>(index * kSurfaceHeight);
-        playfield_nodes_[index] = root_container_.CreateSurfaceNode(
-            playfield_surfaces_[index], {kBoardX, y, kPlayfieldWidth, static_cast<int32_t>(kSurfaceHeight)},
-            {0, 0, kPlayfieldWidth, static_cast<int32_t>(kSurfaceHeight)});
-    }
+    auto atlas = app_.resources().LoadTexture(blocks_assets::playfield_atlas);
+    micropixel::Assert(atlas.has_value(), "blocks: playfield atlas load failed");
+    playfield_atlas_ = static_cast<micropixel::Texture&&>(atlas.value());
+    const uint32_t stroke = LogicalStrokeWidth(renderer_info_.width(), renderer_info_.physical_width());
+    auto background = app_.resources().LoadTexture(stroke > 1U ? blocks_assets::playfield_background_thick
+                                                               : blocks_assets::playfield_background_thin);
+    micropixel::Assert(background.has_value(), "blocks: playfield background load failed");
+    playfield_background_ = static_cast<micropixel::Texture&&>(background.value());
+    (void)root_container_.CreateSprite(playfield_background_, {kBoardX, kBoardY, kPlayfieldWidth, kPlayfieldHeight},
+                                       {0, 0, kPlayfieldWidth, kPlayfieldHeight});
+    playfield_batch_ = root_container_.CreateSpriteBatch(playfield_atlas_, kBoardColumns * kBoardRows);
     for (uint32_t index = 0U; index < kSidebarPanelCount; ++index) {
         sidebar_panels_[index] = root_container_.CreateRoundedRect(
             kSidebarPanelRects[index],
             {.fill = AsColor(kBoardBackground), .stroke = AsColor(kBorderColor), .radius = 12, .stroke_width = 3});
     }
-    mini_piece_batch_ = root_container_.CreateSpriteBatch(24U);
+    mini_piece_batch_ = root_container_.CreateSpriteBatch(playfield_atlas_, 8U);
     status_batch_ = root_container_.CreateSpriteBatch(2U);
     const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
     const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
@@ -284,7 +197,7 @@ void BlocksGame::InitializeScene() {
 
 void BlocksGame::RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first_instance, Tetromino type,
                                  int32_t center_x, int32_t top, bool muted, bool visible) {
-    for (uint16_t index = 0U; index < 12U; ++index) {
+    for (uint16_t index = 0U; index < 4U; ++index) {
         mini_piece_batch_.SetInstanceVisible(update, first_instance + index, false);
     }
     if (!visible) {
@@ -306,11 +219,6 @@ void BlocksGame::RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first
     const int32_t width = static_cast<int32_t>(maximum_x - minimum_x + 1U) * pitch;
     const int32_t origin_x = center_x - width / 2 - static_cast<int32_t>(minimum_x) * pitch;
     const int32_t origin_y = top - static_cast<int32_t>(minimum_y) * pitch;
-    micropixel::Color color = AsColor(ColorForTetromino(type));
-    if (muted) {
-        color = micropixel::Color::Mix(color, micropixel::Color::Rgb(10U, 10U, 10U), 96U);
-    }
-    const micropixel::Color highlight = micropixel::Color::Mix(micropixel::Color::White(), color, 72U);
     uint16_t output = 0U;
     for (uint32_t y = 0U; y < 4U; ++y) {
         for (uint32_t x = 0U; x < 4U; ++x) {
@@ -319,12 +227,9 @@ void BlocksGame::RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first
             }
             const int32_t cell_x = origin_x + static_cast<int32_t>(x) * pitch;
             const int32_t cell_y = origin_y + static_cast<int32_t>(y) * pitch;
-            SetSolid(mini_piece_batch_, update, first_instance + output++,
-                     {cell_x + 3, cell_y + 1, pitch - 6, pitch - 2}, color);
-            SetSolid(mini_piece_batch_, update, first_instance + output++,
-                     {cell_x + 1, cell_y + 3, pitch - 2, pitch - 6}, color);
-            SetSolid(mini_piece_batch_, update, first_instance + output++, {cell_x + 5, cell_y + 3, pitch - 10, 2},
-                     highlight);
+            mini_piece_batch_.SetInstance(update, first_instance + output++,
+                                          {.destination = {cell_x, cell_y, pitch, pitch},
+                                           .source = {static_cast<int32_t>(type) * 30, muted ? 90 : 60, 24, 24}});
         }
     }
 }
@@ -463,19 +368,16 @@ void BlocksGame::RenderOverlay(micropixel::SceneUpdate& update) {
 }
 
 void BlocksGame::Render() {
-    for (const micropixel::StreamingTexture& surface : playfield_surfaces_) {
-        micropixel::Assert(surface.valid(), "blocks: playfield surface missing");
-    }
     InitializeScene();
-    SyncPlayfield();
     const Theme& theme = ThemeForLevel(model_.level());
     auto presented = scene_.Update([&](micropixel::SceneUpdate& update) {
+        UpdatePlayfield(update);
         RenderHeader(update, theme);
         RenderSidebar(update, theme);
         const int32_t center = kSidebarPanelRects[0].x + kSidebarPanelRects[0].width / 2;
         RenderMiniPiece(update, 0U, model_.held(), center, kSidebarPanelRects[0].y + 54, !model_.hold_available(),
                         model_.has_hold());
-        RenderMiniPiece(update, 12U, model_.next(), center, kSidebarPanelRects[1].y + 54, false, true);
+        RenderMiniPiece(update, 4U, model_.next(), center, kSidebarPanelRects[1].y + 54, false, true);
         RenderStatusEffect(update, theme);
         RenderOverlay(update);
     });

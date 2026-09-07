@@ -26,7 +26,6 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
       best_score_(best_score),
       audio_available_(audio_available) {
     model_.Reset(kDefaultRandomSeed);
-    InitializePlayfieldSurfaces();
 }
 
 void BlocksGame::StartNewGame() {
@@ -210,8 +209,8 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
         return;
     }
 
-    const bool hard_drop = gesture_axis_ != GestureAxis::kHorizontal &&
-                           IsHardDropGesture(total_dx, total_dy, elapsed_us);
+    const bool hard_drop =
+        gesture_axis_ != GestureAxis::kHorizontal && IsHardDropGesture(total_dx, total_dy, elapsed_us);
     const bool was_moved = gesture_moved_;
     const bool started_in_pause = gesture_started_in_pause_;
     const bool started_in_hold = gesture_started_in_hold_;

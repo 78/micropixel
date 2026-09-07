@@ -105,7 +105,7 @@ bash tools/p4.sh build-apps
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
-`flash-apps` 明确替换 App Store，并写入四个示例 App；不再提供会把任意 Bundle 直接写入
+`flash-apps` 明确替换 App Store，并写入五个示例 App；不再提供会把任意 Bundle 直接写入
 分区的独立公开脚本。单 App 开发安装走 USB Local Control 或 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；

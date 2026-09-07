@@ -5,6 +5,21 @@
       "name": "launch",
       "format": "png",
       "path": "source/launch-transparent-360.png"
+    },
+    {
+      "name": "playfield_atlas",
+      "format": "png",
+      "path": "source/playfield_atlas.png"
+    },
+    {
+      "name": "playfield_background_thin",
+      "format": "png",
+      "path": "source/playfield_background_1.png"
+    },
+    {
+      "name": "playfield_background_thick",
+      "format": "png",
+      "path": "source/playfield_background_2.png"
     }
   ]
 }

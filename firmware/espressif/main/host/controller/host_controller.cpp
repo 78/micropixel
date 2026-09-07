@@ -1830,6 +1830,9 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool ShowCurrentHall() {
+        if (hall_covers_released_ || hall_cover_snapshot_index_ != suspended_index_) {
+            RestoreHallCovers();
+        }
         PrepareCurrentHall();
         micropixel_check_heap("before Hall render");
         if (!ShowHall(shell_, hall_model_)) {
@@ -1915,6 +1918,8 @@ class ActiveHost final {
         }
         catalog_ = std::move(*reloaded_catalog);
         OpenHallCovers(catalog_, covers_);
+        hall_covers_released_ = false;
+        hall_cover_snapshot_index_.reset();
         UpdateControlCatalog(controls_, catalog_);
         RefreshStatusMetrics(status_model_, catalog_, battery_);
         hall_status_ = catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady;
@@ -1928,9 +1933,15 @@ class ActiveHost final {
         for (auto& cover : covers_) {
             cover = {};
         }
+        hall_covers_released_ = true;
     }
 
-    void RestoreHallCovers() { OpenHallCovers(catalog_, covers_, suspended_index_); }
+    void RestoreHallCovers() {
+        shell_.PauseHallCoverLoading();
+        OpenHallCovers(catalog_, covers_, suspended_index_);
+        hall_covers_released_ = false;
+        hall_cover_snapshot_index_ = suspended_index_;
+    }
 
     [[nodiscard]] bool UninstallInstalledApp(uint32_t app_index) {
         if (app_controller_.state() != AppLifecycleState::kNotRunning || app_index >= catalog_.count) {
@@ -2662,6 +2673,12 @@ class ActiveHost final {
             micropixel_check_heap("after leave Hall");
         }
 
+        // The retained launch cover / Guest view owns its pixels now. Release
+        // the Hall file mappings before mapping the full Bundle: a fragmented
+        // Bundle can otherwise contain a run already mapped by its cover,
+        // which spi_flash_mmap_pages rejects with ESP_ERR_INVALID_STATE.
+        ReleaseHallCovers();
+
         const runtime::InstalledApp& selected_app = catalog_.apps[selected_index];
         if (!resumed_existing) {
             controls_.UpdateAppLifecycle(selected_app.app_id.data(), "starting");
@@ -3040,6 +3057,9 @@ class ActiveHost final {
     host_ui::HallModel hall_model_{};
     runtime::InstalledAppCatalog catalog_;
     HallCoverMappings covers_;
+    bool hall_covers_released_{};
+    // The snapshot card has no file mapping; stopping it must reopen its cover.
+    std::optional<uint32_t> hall_cover_snapshot_index_;
     AppController app_controller_;
     device::DeviceServices& devices_;
     host_ui::SystemShell& shell_;

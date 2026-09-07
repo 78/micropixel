@@ -61,21 +61,21 @@ Normal development commands:
   build-host                         Incrementally build only the ESP32-P4 Host.
   build-null                         Compile the hardware-independent Null board
                                      in its own build directory; never flash it.
-  build-release                      Build Host, Blocks, Snake, Tilt, and SDK Demo; create a browser-flashable
-                                     micropixel-full.bin containing only those four Apps.
+  build-release                      Build Host, SDK Demo, Snake, Maze Evil, Blocks, and Tilt; create a
+                                     browser-flashable micropixel-full.bin containing those five Apps.
   flash-host [PORT]                  Flash the already-built Host only; do not
                                      rebuild or touch the app_store partition.
   monitor [PORT]                     Monitor the running ESP32-P4 Host without
                                      building, flashing, erasing, or testing.
-  build-apps                         Build Blocks, Snake, Tilt, and SDK Demo Bundles.
-  flash-apps [PORT]                  Clear app_store and flash four example Apps
+  build-apps                         Build SDK Demo, Snake, Maze Evil, Blocks, and Tilt Bundles.
+  flash-apps [PORT]                  Clear app_store and flash five example Apps
                                      over USB. Uses the unique connected ESP32-P4
                                      when PORT is omitted.
 
 Explicit full/destructive commands:
   fullclean-host                     Delete the Host build cache with idf.py fullclean.
   flash-all [PORT]                   Build and flash the Host, then clear and flash
-                                     four example Apps. Run no tests.
+                                     five example Apps. Run no tests.
   reset-app-store [PORT]             Recovery only: clear app_store to an EMPTY Catalog.
   install-apps-examples              Non-USB alternative: install examples through
                                      Remote Control while preserving other Apps.
@@ -428,20 +428,22 @@ build_app_package() {
 }
 
 build_release() {
-    echo "==> Building release Apps: Blocks, Snake, Tilt, and SDK Demo"
-    build_app_package blocks
-    build_app_package snake
-    build_app_package tilt
+    echo "==> Building release Apps: SDK Demo, Snake, Maze Evil, Blocks, and Tilt"
     build_app_package sdk-demo
+    build_app_package snake
+    build_app_package maze-evil
+    build_app_package blocks
+    build_app_package tilt
     build_host
     mkdir -p "$system_shell_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
         --output "$release_app_store_image" \
-        "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
-        "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
-        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
-    echo "==> Creating browser-flashable image with Blocks, Snake, Tilt, and SDK Demo"
+        "$workspace_root/build/apps/maze-evil/maze-evil.bundle.bin" \
+        "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/tilt/tilt.bundle.bin"
+    echo "==> Creating browser-flashable image with SDK Demo, Snake, Maze Evil, Blocks, and Tilt"
     python3 "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \
         --app-store-image "$release_app_store_image" \
@@ -481,9 +483,9 @@ monitor_host() {
 }
 
 build_example_apps() {
-    echo "==> Building four example Apps"
+    echo "==> Building five example Apps"
     local app_name
-    for app_name in blocks snake tilt sdk-demo; do
+    for app_name in sdk-demo snake maze-evil blocks tilt; do
         build_app_package "$app_name"
     done
 }
@@ -503,10 +505,11 @@ app_store_partition_info() {
 
 create_example_app_store_image() {
     local bundles=(
-        "$workspace_root/build/apps/blocks/blocks.bundle.bin"
-        "$workspace_root/build/apps/snake/snake.bundle.bin"
-        "$workspace_root/build/apps/tilt/tilt.bundle.bin"
         "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
+        "$workspace_root/build/apps/snake/snake.bundle.bin"
+        "$workspace_root/build/apps/maze-evil/maze-evil.bundle.bin"
+        "$workspace_root/build/apps/blocks/blocks.bundle.bin"
+        "$workspace_root/build/apps/tilt/tilt.bundle.bin"
     )
     local bundle
     for bundle in "${bundles[@]}"; do
@@ -542,7 +545,7 @@ write_app_store_image() {
 }
 
 prepare_full_flash() {
-    echo "==> Building Host + four example Apps + App Store image (no tests, no flash)"
+    echo "==> Building Host + five example Apps + App Store image (no tests, no flash)"
     build_example_apps
     build_host
     create_example_app_store_image
@@ -553,7 +556,7 @@ prepare_full_flash() {
         echo "App Store image is larger than app_store ($image_size > $partition_size)." >&2
         return 2
     fi
-    echo "==> App Store image ready: $example_app_store_image (8 Apps)"
+    echo "==> App Store image ready: $example_app_store_image (5 Apps)"
 }
 
 flash_all() {
@@ -564,9 +567,9 @@ flash_all() {
     port="$(resolve_port "$requested_port")"
     echo "==> Flashing Host at $baud baud"
     idf_host metalio-claw4 flash --baud "$baud" --port "$port"
-    echo "==> Clearing app_store and flashing four example Apps"
+    echo "==> Clearing app_store and flashing five example Apps"
     write_app_store_image "$port" "$example_app_store_image" true
-    echo "System Shell P4 flashed on $port with four Apps."
+    echo "System Shell P4 flashed on $port with five Apps."
     echo "Verify with: bash tools/p4.sh monitor $port (expect 'System Shell ready: App Hall rendered')"
 }
 
@@ -654,6 +657,7 @@ run_tests() {
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" \
         "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
+        "$workspace_root/build/apps/maze-evil/maze-evil.bundle.bin" \
         "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
         "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
     bash -n "$workspace_root"/tools/*.sh
@@ -666,7 +670,7 @@ flash_example_apps() {
     require_idf
     create_example_app_store_image
     port="$(resolve_port "$requested_port")"
-    echo "==> USB App flash: clearing app_store and writing four example Apps"
+    echo "==> USB App flash: clearing app_store and writing five example Apps"
     write_app_store_image "$port" "$example_app_store_image"
 }
 

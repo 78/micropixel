@@ -859,12 +859,15 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
     }
 
     bundlefs_mapping_t bundlefs_mapping;
-    if (bundlefs_mmap(file, 0U, header.bundle_size, &bundlefs_mapping) != BUNDLEFS_OK) {
+    const bundlefs_error_t map_error = bundlefs_mmap(file, 0U, header.bundle_size, &bundlefs_mapping);
+    if (map_error != BUNDLEFS_OK) {
+        ESP_LOGE(TAG, "Bundle mapping failed: bytes=%" PRIu32 " error=%u", header.bundle_size, (unsigned)map_error);
         return false;
     }
     const uint8_t* bundle_bytes = bundlefs_mapping.data;
     const micropixel_bundle_header_t* mapped_header = (const micropixel_bundle_header_t*)bundle_bytes;
     if (memcmp(mapped_header, &header, sizeof(header)) != 0) {
+        ESP_LOGE(TAG, "Mapped Bundle header differs from flash read");
         bundlefs_munmap(&bundlefs_mapping);
         return false;
     }
@@ -894,7 +897,12 @@ bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_pac
             }
         }
         const uint8_t* section_data = bundle_bytes + section->offset;
-        if (fnv1a32(section_data, section->size) != section->hash) {
+        const uint32_t actual_hash = fnv1a32(section_data, section->size);
+        if (actual_hash != section->hash) {
+            ESP_LOGE(TAG,
+                     "Mapped Bundle section hash mismatch: index=%" PRIu32 " offset=%" PRIu32 " size=%" PRIu32
+                     " expected=%08" PRIx32 " actual=%08" PRIx32,
+                     index, section->offset, section->size, section->hash, actual_hash);
             bundlefs_munmap(&bundlefs_mapping);
             return false;
         }

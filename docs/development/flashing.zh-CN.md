@@ -89,7 +89,7 @@ bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
 方向编译门禁，没有 flash 或 monitor 能力。
 
 `build-release` 生成 `build/host-esp32s31-mosaico/micropixel-full.bin`，供在线烧录页使用。完整镜像中的
-App Store 固定包含 Blocks、Snake、Tilt 和 SDK Demo 四个集成 App；生成器从 ESP-IDF 的
+App Store 固定包含 SDK Demo、Snake、Maze Evil、Blocks 和 Tilt 五个集成 App；生成器从 ESP-IDF 的
 `flasher_args.json` 读取 S31 的 16 MiB Flash 容量并拒绝任何越界区域。
 
 ESP-Mosaico 板载 Type-C 连接的是 USB 2.0 HS OTG，而不是左侧模块接口引出的 USB Serial/JTAG。Host
@@ -182,7 +182,7 @@ python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
     app install guest/apps/sdk-demo
 ```
 
-## 4. 完整烧录 Host 和四个示例 App
+## 4. 完整烧录 Host 和五个示例 App
 
 新设备或需要同时更新 Host 与 BundleFS 元数据时，使用：
 
@@ -192,8 +192,8 @@ bash tools/p4.sh flash-all "$P4_PORT"
 
 该入口会：
 
-1. 构建 Host 固件和 Blocks、Snake、Tilt 和 SDK Demo；
-2. 生成包含四个 App 的 BundleFS 镜像；
+1. 构建 Host 固件和 SDK Demo、Snake、Maze Evil、Blocks 和 Tilt；
+2. 生成包含五个 App 的 BundleFS 镜像；
 3. 烧录 bootloader、分区表、OTA 初始数据和 Host 固件；
 4. 清空并烧录 App Store，随后读回校验。
 
@@ -203,13 +203,13 @@ bash tools/p4.sh flash-all "$P4_PORT"
 bash tools/p4.sh test
 ```
 
-成功时命令末尾会输出 `System Shell P4 flashed on ... with eight Apps.`。脚本不再自动抓取启动日志，
-用 `bash tools/p4.sh monitor "$P4_PORT"` 确认 `System Shell ready: App Hall rendered with apps=8`；
-设备复位后应在 App Hall 中看到四个 App，并可在第一行左右滑动浏览。
+成功时命令末尾会输出 `System Shell P4 flashed on ... with five Apps.`。脚本不再自动抓取启动日志，
+用 `bash tools/p4.sh monitor "$P4_PORT"` 确认 `System Shell ready: App Hall rendered with apps=5`；
+设备复位后应在 App Hall 中看到五个 App，并可左右滑动浏览。
 
-## 5. USB 烧录四个示例 App
+## 5. USB 烧录五个示例 App
 
-Host 固件和分区表未变化时，直接清空旧 App Store 并烧录已有的四个示例 Bundle：
+Host 固件和分区表未变化时，直接清空旧 App Store 并烧录已有的五个示例 Bundle：
 
 ```sh
 bash tools/p4.sh flash-apps "$P4_PORT"
@@ -283,7 +283,7 @@ bash tools/p4.sh monitor "$P4_PORT"
 
 - 终端中 Host 固件和 BundleFS 元数据均报告写入校验成功；
 - monitor 中出现 `System Shell ready: App Hall rendered with apps=8`；
-- App Hall 中可左右滑动浏览并启动四个示例 App；
+- App Hall 中可左右滑动浏览并启动五个示例 App；
 - 状态栏中的亮度和音量控制生效。
 
 常见失败：

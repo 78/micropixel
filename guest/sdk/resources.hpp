@@ -13,7 +13,6 @@ class Scene;
 class Renderer;
 class Resources;
 class StreamingTexture;
-class SurfaceNode;
 class Font;
 
 class AssetId final {
@@ -58,7 +57,6 @@ class Texture final {
 
     friend class Container;
     friend class SpriteNode;
-    friend class SurfaceNode;
     friend class SpriteBatch;
     friend class Renderer;
     friend class Resources;
@@ -96,7 +94,7 @@ class Font final {
     friend class Resources;
 };
 
-class StreamingTexture final {
+class [[deprecated("Use Scene/SpriteBatch or DirectSurface.")]] StreamingTexture final {
    public:
     StreamingTexture() = default;
     StreamingTexture(const StreamingTexture&) = delete;
@@ -108,8 +106,14 @@ class StreamingTexture final {
     [[nodiscard]] constexpr uint32_t width() const { return texture_.width(); }
     [[nodiscard]] constexpr uint32_t height() const { return texture_.height(); }
     [[nodiscard]] constexpr PixelFormat pixel_format() const { return pixel_format_; }
-    [[nodiscard]] Result<void> Update(Rect dirty, const uint8_t* pixels, uint32_t byte_length, uint32_t pitch);
-    void Reset() { texture_.Reset(); }
+    [[deprecated("Use Scene/SpriteBatch or DirectSurface.")]] [[nodiscard]] Result<void> Update(Rect dirty,
+                                                                                                const uint8_t* pixels,
+                                                                                                uint32_t byte_length,
+                                                                                                uint32_t pitch);
+    [[deprecated("Use Scene/SpriteBatch or DirectSurface.")]]
+    void Reset() {
+        texture_.Reset();
+    }
 
    private:
     StreamingTexture(Texture texture, PixelFormat pixel_format)
@@ -120,10 +124,9 @@ class StreamingTexture final {
 
     friend class Renderer;
     friend class Container;
-    friend class SurfaceNode;
 };
 
-class TextureUpdateBatch final {
+class [[deprecated("Use Scene updates or DirectSurface presentation.")]] TextureUpdateBatch final {
    public:
     TextureUpdateBatch(const TextureUpdateBatch&) = delete;
     TextureUpdateBatch& operator=(const TextureUpdateBatch&) = delete;
@@ -131,7 +134,7 @@ class TextureUpdateBatch final {
     TextureUpdateBatch& operator=(TextureUpdateBatch&&) = delete;
     ~TextureUpdateBatch();
 
-    [[nodiscard]] Result<void> Finish();
+    [[deprecated("Use Scene updates or DirectSurface presentation.")]] [[nodiscard]] Result<void> Finish();
 
    private:
     struct CapabilityToken {};

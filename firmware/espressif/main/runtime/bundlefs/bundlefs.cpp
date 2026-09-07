@@ -633,6 +633,8 @@ bundlefs_error_t MapFileState(const esp_partition_t* partition, const FileState&
     const esp_err_t error = spi_flash_mmap_pages(pages, page_count, SPI_FLASH_MMAP_FLAG_DATA, &mapping, &handle);
     free(pages);
     if (error != ESP_OK) {
+        ESP_LOGE(kTag, "Flash page mapping failed: pages=%" PRIu32 " bytes=%" PRIu32 " error=%s", page_count, size,
+                 esp_err_to_name(error));
         return BUNDLEFS_ERR_UNAVAILABLE;
     }
     *mapping_out = bundlefs_mapping_t{

@@ -1,8 +1,8 @@
 # Juicy Blocks
 
 Juicy Blocks 是与 Juicy Snake 同系列的 720×720 触控俄罗斯方块 Guest App。界面沿用近黑终端 HUD、
-关卡强调色、`TextButton` 和固定容量运行时结构。棋盘由 4 个 Host PSRAM offscreen surface 组成，
-活动块移动只上传发生变化的格子，不再按帧重建整棵绘图对象树。
+关卡强调色、`TextButton` 和固定容量运行时结构。棋盘使用静态 atlas 和固定容量 SpriteBatch，
+活动块移动只提交变化格子的属性，不再上传像素。
 
 ```text
 blocks/
@@ -12,14 +12,14 @@ blocks/
 ├── blocks_common.hpp
 ├── blocks_model.hpp/.cpp       # 10×20 棋盘、7-bag、Hold、Ghost 和计分
 ├── blocks_game.hpp/.cpp        # 状态机、触控、计时和存档
-├── blocks_renderer.cpp         # HUD、4 条带 surface、格子光栅化与脏区同步
+├── blocks_renderer.cpp         # HUD、棋盘 Batch 与格子属性差量同步
 ├── blocks_audio.cpp            # 由统一 profile 驱动的短音效
 ├── audio/                      # 音效参数、感知约束和校准说明
 ├── blocks_app.cpp              # 资源加载与事件循环
 ├── blocks_model_test.cpp       # 可原生运行的规则回归
 └── assets/
     ├── manifest.json
-    └── source/                 # 启动图源文件
+    └── source/                 # 启动图、棋盘素材及生成器/测试
 ```
 
 构建 App Bundle：
@@ -37,15 +37,25 @@ python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 1 级 750 ms、12 级 240 ms、20 级 200 ms 和 99 级 100 ms。到达 99 级后等级和下落周期都不再变化。
 内部使用微秒精度，软降和硬降仍允许熟练玩家主动加快节奏。
 
-渲染器把 10×20 棋盘按每 5 行拆为 4 个 `300×150 RGB565` offscreen surface，棋盘底色、圆角边框和网格
-也直接光栅化到这些 surface；右侧卡片使用 `RoundedRectNode`，START/RESTART 使用 `TextButton`，因此不再
-加载棋盘和纯色按钮贴图。Guest 缓存 200 个
-visual-cell code，逻辑变化后重新合成活动块、Ghost 和落定棋盘，只对 code 改变的 `30×30` 格子调用
-`StreamingTexture::Update()`。每次 `SyncPlayfield()` 用一个 `TextureUpdateBatch` 包住全部写入；Host
-按 surface 合并脏格，commit 时统一 invalidate 并只唤醒一次 compositor。合并后的活动块区域通常超过
-4096 pixels，可进入 Host PPA RGB888 image SRM 路径，不再把逐格 CPU fallback 过程暴露到屏幕。
-普通横移/旋转只提交对应 Scene 对象的属性差量；HUD、Hold/Next 和 overlay 仅在状态变化时更新。
-离屏 buffer 数量和脏格统计只保留在 Host 诊断日志中，不占用发布版 HUD。
+棋盘使用静态背景 Sprite 和固定容量 200 的 `SpriteBatch`，每个格子对应一个稳定槽位。
+Guest 保留 visual-cell code 缓存，活动块、Ghost、落定方块和消行闪烁只更新变化格子的 atlas source
+或可见性；`SyncPlayfield()` 提交一个 Scene 事务，完整 `Render()` 把棋盘与 HUD 合并在同一事务中。
+不再创建 StreamingTexture、逐格生成像素或上传像素缓冲。
+
+静态 atlas 保留原来的圆角轮廓、顶部高光、22×22 空心 Ghost，以及五套主题各八级消行闪烁。
+Hold/Next 共用 atlas 的原尺寸预览图案（含暗色 Hold），固定使用八个实例。背景保留圆角边框，
+按显示缩放选择一或两个逻辑像素宽的网格。右侧卡片继续使用 `RoundedRectNode`，按钮使用 `TextButton`。
+纹理 Batch 不支持颜色 tint，因此消行颜色也烘焙在 atlas 内，通过 source 切换。
+
+素材生成器从 `blocks_common.hpp` 读取方块和主题配色；修改配色或像素几何后重新生成源 PNG：
+
+```sh
+python3 guest/apps/blocks/assets/source/generate_playfield.py
+python3 guest/apps/blocks/assets/source/test_playfield.py
+python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
+```
+
+生成与素材测试需要 Pillow。生成的源 PNG 随应用维护，资源 pack 和 Bundle 仍只由正式构建产生。
 
 顶部 HUD 与 Juicy Snake 使用同一套圆角屏布局规则：标题和右侧 Level/Score/Best、Combo 分别消费
 `RendererInfo::safe_area_insets()` 的左右内缩，标题另保留 12 个逻辑像素的视觉 padding。
@@ -66,10 +76,10 @@ python3 tools/micropixel --transport usb --port /dev/cu.usbmodem1101 \
   --screenshot build/captures/blocks-playing.jpg
 ```
 
-规则回归可原生运行；设备集成还应检查启动日志中的四条
-`created offscreen surface ... 300x150`，并确认纯横移日志没有新的 `touch submit`。真机还应出现
-`offscreen frame ... unions=... ppa-eligible=... stage=...`；持续横移时每个 frame 只发布一次 refresh，
-且常规移动的 `ppa-eligible` 应大于 0：
+规则回归可原生运行。真机集成需检查菜单、暂停/继续、满盘、旋转、硬降、Hold/Next、Ghost
+与单行/多行消除，确认没有残影，圆角和高光在 720 与 480 物理分辨率下可见。
+启动日志应显示 `retained playfield batch with static rounded-block atlas`。
+性能验收同时比较 Guest 提交、Host 合成分段和最终画面；不能沿用旧 offscreen surface 的 PPA 命中率基线。
 
 ```sh
 clang++ -std=c++23 -O1 -g -fsanitize=address,undefined -DMICROPIXEL_MODEL_TESTING \

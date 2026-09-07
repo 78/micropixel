@@ -6,7 +6,7 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 
 ## 工具链兼容性
 
-当前 SDK 版本为 0.13.0，使用受限 C++23 和固定 commit 的
+当前 SDK 版本为 0.14.0，使用受限 C++23 和固定 commit 的
 [MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime)
 `af07c787ac6f7d1d20555f97ddc184f5fc13731a`，生成 AOT format v6。
 wamrc 自报版本不足以判断兼容性。构建、打包和目标架构选择统一使用
@@ -80,7 +80,6 @@ Host 先显示保留画面，需要重建动态内容的应用可再重绘。Gue
 | 场景 | 模型 | 原因 |
 |---|---|---|
 | 页面、精灵、对象移动 | Scene | 保留对象，仅传递变化属性 |
-| 棋盘、画布的局部像素变化 | StreamingTexture + Scene | 按 dirty rect 更新 |
 | raycaster 等整帧光栅 | DirectSurface + SurfaceRaster | 批量绘制到 Host buffer，减少像素传输 |
 
 ### Scene 与布局
@@ -111,7 +110,7 @@ Batch 的槽位可以复用，不能把动态容器理解为无限资源。
 它不保证任意子树缓存，也不应被当作影响画面语义的 API；缓存行为与诊断见
 [Graphics 性能文档](../../docs/development/graphics-performance.zh-CN.md)。
 
-### Texture 与局部像素更新
+### Texture 与 atlas
 
 使用生成的 AssetId 加载资源，不手写 TOC 数字或运行时名称查找。LoadTexture 同步返回 Texture，
 并适配到物理屏幕；只有应用提供且正确选择物理分辨率素材时才用 LoadNativeTexture，其他尺寸回退
@@ -120,10 +119,7 @@ LoadTexture。Scene 独立持有纹理引用，Guest Reset 后仍可正确重绘
 动画优先使用 atlas：加载一次、逐帧改变 source rect。时间由应用事件循环驱动，当前没有
 AnimationClip/Track。资源清单、生成绑定与 Bundle 工作流见 [Guest 构建](../README.md)。
 
-StreamingTexture 按矩形更新，输入同时提供 byte length 和 pitch，SDK 分块传输，Host 再验证范围。
-TextureUpdateBatch 在 Finish 时合并刷新。格式名描述 Guest 内存：Bgr888 为 B/G/R，Bgra8888 为
-B/G/R/A，Rgb565 为 little-endian 16-bit RGB565。不透明像素可用 RGB565，透明内容保留 BGRA8888。
-Host-owned 纹理不占 Guest C++ heap，但仍受 PSRAM 动态准入限制。
+StreamingTexture 和 TextureUpdateBatch 相关接口均为 deprecated；图形开发使用 Scene/SpriteBatch 或 DirectSurface。
 
 ### DirectSurface 与 SurfaceRaster
 

@@ -1344,39 +1344,6 @@ void SpriteNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void SurfaceNode::SetDestination(SceneUpdate& update, Rect destination) {
-    ValidateUpdate(state_, update);
-    SceneNodeData& node = state_->Node(id_, generation_);
-    if (node.destination == destination) {
-        return;
-    }
-    const SceneNodeData& original = state_->RememberNode(id_);
-    node.destination = destination;
-    UpdateNodeGeometryDirty(node, original);
-}
-
-void SurfaceNode::SetSource(SceneUpdate& update, Rect source) {
-    ValidateUpdate(state_, update);
-    SceneNodeData& node = state_->Node(id_, generation_);
-    if (node.source == source) {
-        return;
-    }
-    const SceneNodeData& original = state_->RememberNode(id_);
-    node.source = source;
-    UpdateNodeContentDirty(node, original);
-}
-
-void SurfaceNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
-    ValidateUpdate(state_, update);
-    SceneNodeData& node = state_->Node(id_, generation_);
-    if (node.opacity == opacity) {
-        return;
-    }
-    const SceneNodeData& original = state_->RememberNode(id_);
-    node.opacity = opacity;
-    UpdateNodeAppearanceDirty(node, original);
-}
-
 void LabelNode::SetPosition(SceneUpdate& update, Point position) {
     ValidateUpdate(state_, update);
     SceneNodeData& node = state_->Node(id_, generation_);
@@ -1623,29 +1590,6 @@ SpriteNode Container::CreateSprite(const Texture& texture, Rect destination, Rec
     node.texture_physical_height = texture.physical_height_;
     node.source = source;
     return SpriteNode{state_, id, node.generation};
-}
-
-SurfaceNode Container::CreateSurfaceNode(const StreamingTexture& surface, Rect destination, Rect source,
-                                         uint8_t opacity) {
-    ValidateHandle(state_);
-    if (!surface.valid()) {
-        runtime::Panic("scene.surface.create", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-    }
-    const uint16_t id = state_->AllocateNode(*this);
-    SceneNodeData& node = state_->nodes[id];
-    node.kind = SceneNodeKind::kSprite;
-    node.dirty = FullMask(SceneNodeKind::kSprite);
-    node.visible = true;
-    node.destination = destination;
-    node.color = Color::Black();
-    node.opacity = opacity;
-    node.texture = surface.texture_.handle_;
-    node.texture_logical_width = surface.texture_.width_;
-    node.texture_logical_height = surface.texture_.height_;
-    node.texture_physical_width = surface.texture_.physical_width_;
-    node.texture_physical_height = surface.texture_.physical_height_;
-    node.source = source;
-    return SurfaceNode{state_, id, node.generation};
 }
 
 SpriteBatch Container::CreateSpriteBatch(const Texture& texture, uint16_t capacity, uint8_t opacity) {

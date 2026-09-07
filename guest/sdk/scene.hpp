@@ -13,7 +13,6 @@ class ContainerNode;
 class ShapeNode;
 class RoundedRectNode;
 class SpriteNode;
-class SurfaceNode;
 class LabelNode;
 class SpriteBatch;
 
@@ -103,8 +102,6 @@ class Container {
     [[nodiscard]] RoundedRectNode CreateRoundedRect(Rect rect, const RoundedRectStyle& style);
     [[nodiscard]] SpriteNode CreateSprite(const Texture& texture, Rect destination, Rect source,
                                           uint8_t opacity = 255U);
-    [[nodiscard]] SurfaceNode CreateSurfaceNode(const StreamingTexture& surface, Rect destination, Rect source,
-                                                uint8_t opacity = 255U);
     [[nodiscard]] SpriteBatch CreateSpriteBatch(const Texture& texture, uint16_t capacity, uint8_t opacity = 255U);
     // A textureless batch is a batch of colored quads and maps directly to
     // accelerated fills. It is the preferred representation for grid games.
@@ -185,18 +182,6 @@ class SpriteNode final : public NodeHandle {
     void SetDestination(SceneUpdate& update, Rect destination);
     void SetSource(SceneUpdate& update, Rect source);
     void SetTexture(SceneUpdate& update, const Texture& texture);
-    void SetOpacity(SceneUpdate& update, uint8_t opacity);
-
-   private:
-    using NodeHandle::NodeHandle;
-    friend class Container;
-};
-
-class SurfaceNode final : public NodeHandle {
-   public:
-    constexpr SurfaceNode() = default;
-    void SetDestination(SceneUpdate& update, Rect destination);
-    void SetSource(SceneUpdate& update, Rect source);
     void SetOpacity(SceneUpdate& update, uint8_t opacity);
 
    private:

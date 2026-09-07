@@ -77,6 +77,7 @@ build_bad_import
 build_sdk_example sdk_hello "$workspace_root/guest/tests/conformance/sdk_hello.cpp"
 build_sdk_example event_wait "$workspace_root/guest/tests/conformance/event_wait.cpp"
 build_sdk_example graphics_protocol "$workspace_root/guest/tests/conformance/graphics_protocol.cpp"
+build_sdk_example graphics_streaming_legacy "$workspace_root/guest/tests/conformance/graphics_streaming_legacy.cpp"
 build_sdk_example graphics_invalid_pointer "$workspace_root/guest/tests/conformance/graphics_invalid_pointer.cpp"
 build_sdk_example direct_surface_present "$workspace_root/guest/tests/conformance/direct_surface_present.cpp"
 build_sdk_example direct_surface_invalid "$workspace_root/guest/tests/conformance/direct_surface_invalid.cpp"
@@ -98,7 +99,7 @@ build_sdk_example stl "$workspace_root/guest/tests/conformance/stl.cpp"
 build_sdk_example linear_memory_limit "$workspace_root/guest/tests/conformance/linear_memory_limit.cpp"
 
 built_guests=(
-    bad_import sdk_hello event_wait graphics_protocol graphics_invalid_pointer
+    bad_import sdk_hello event_wait graphics_protocol graphics_streaming_legacy graphics_invalid_pointer
     direct_surface_present direct_surface_invalid graphics_raster info_prefix
     touch_pressure key_input timer_counter
     run_handler_after run_handler_multiple main_failure watchdog_spin sdk_panic application_assert audio_synth audio_pcm_stream service_control stl

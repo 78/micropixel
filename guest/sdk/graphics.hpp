@@ -16,7 +16,6 @@ class Container;
 class ContainerNode;
 class ShapeNode;
 class SpriteNode;
-class SurfaceNode;
 class LabelNode;
 class SpriteBatch;
 struct SceneDescriptor;
@@ -390,8 +389,13 @@ class Renderer final {
     [[nodiscard]] RendererInfo info() const;
     [[nodiscard]] Scene CreateScene(Color background = Color::Black()) const;
     [[nodiscard]] Scene CreateScene(const SceneDescriptor& descriptor) const;
-    [[nodiscard]] Result<StreamingTexture> CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
-    [[nodiscard]] TextureUpdateBatch BeginTextureUpdateBatch() const;
+    // Compatibility only. Prefer retained Scene objects or DirectSurface for full-frame rendering.
+    [[deprecated(
+        "Use Scene/SpriteBatch for retained graphics or CreateDirectSurface for full-frame "
+        "rendering.")]] [[nodiscard]] Result<StreamingTexture>
+    CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
+    [[deprecated("Use Scene updates or DirectSurface presentation.")]] [[nodiscard]] TextureUpdateBatch
+    BeginTextureUpdateBatch() const;
     // One DirectSurface per App at a time. `upscale` shrinks the buffers to
     // physical size / upscale in both axes (must divide both exactly) and the
     // Host enlarges each presented frame (PPA where available, nearest

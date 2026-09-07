@@ -74,7 +74,7 @@ python3 tools/micropixel package guest/apps/sdk-demo --aot-target riscv32-ilp32f
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
-`flash-apps` 会清空 App Store 并写入 Blocks、Snake、Tilt 和 SDK Demo，共四个示例 App。
+`flash-apps` 会清空 App Store 并写入 SDK Demo、Snake、Maze Evil、Blocks 和 Tilt，共五个示例 App。
 
 构建输出统一写入 `build/apps/sdk-demo/`。Audio 页显示 Host 返回的实际采样率；当前 Metalio-Claw4 与
 ESP-Mosaico 音频硬件链路均为 16 kHz。页面可以分别试听 sine、square、triangle、noise 和 Bundle Ogg Opus；

@@ -167,7 +167,7 @@ NVS 不影响应用。格式、迁移和恢复规则只在 [BundleFS 文档](bun
 
 ## 8. 发布基线
 
-四个集成应用覆盖完整游戏、公开 Service、局部像素更新、传感器和多 Bundle 生命周期。
+五个集成应用覆盖完整游戏、公开 Service、DirectSurface、传感器和多 Bundle 生命周期。
 自动门禁与命令统一见 [CONTRIBUTING](../../CONTRIBUTING.md)，真机流程见
 [构建与烧录](../development/flashing.zh-CN.md)。
 
@@ -180,7 +180,7 @@ NVS 不影响应用。格式、迁移和恢复规则只在 [BundleFS 文档](bun
 1. Bundle requirements 与 WAMR instance 创建前的完整兼容性 preflight。
 2. 权限声明、grant 与 method 级检查。
 3. Resource/Graphics/Input 协议版本冻结、兼容 fixture 和 wire 负向/fuzz 回归。
-4. Texture、Timer、Run/Stop 与四个集成应用的真机回归；Mosaico 传感器轴向和磁场校准验收。
+4. Texture、Timer、Run/Stop 与五个集成应用的真机回归；Mosaico 传感器轴向和磁场校准验收。
 5. 生产 package 签名与授权、网络配置、TLS 负向真机矩阵，以及在线安装/升级/卸载的断电和错误恢复矩阵。
 
 ## 9. 架构禁止项

@@ -89,16 +89,6 @@ int main() {
         return 75;
     }
 
-    auto texture_result = renderer.CreateStreamingTexture(micropixel::Size{2U, 2U}, micropixel::PixelFormat::kBgr888);
-    if (!texture_result) {
-        return 76;
-    }
-    micropixel::StreamingTexture texture = static_cast<micropixel::StreamingTexture&&>(texture_result.value());
-    const uint8_t texture_pixels[]{0U, 0U, 255U, 0U, 255U, 0U, 255U, 0U, 0U, 255U, 255U, 255U};
-    if (!texture.Update(micropixel::Rect{0, 0, 2, 2}, texture_pixels, sizeof(texture_pixels), 6U)) {
-        return 77;
-    }
-
     auto scene = renderer.CreateScene({.logical_width = renderer_info.width(),
                                        .logical_height = renderer_info.height(),
                                        .background = micropixel::Color::Black()});
@@ -109,7 +99,6 @@ int main() {
     auto terrain = game.CreateContainer({.clip = {0, 100, 200, 60}, .cache_content = true});
     auto ground = terrain.CreateShape({0, 40, 400, 20}, micropixel::Color::Green());
     auto snake = game.CreateSpriteBatch(4U);
-    auto image = game.CreateSurfaceNode(texture, {420, 40, 56, 56}, {0, 0, 2, 2}, 192U);
     auto label = game.CreateLabel({52, 56}, "graphics_protocol: scene keyframe", micropixel::Color::White(),
                                   micropixel::SystemFont::kMedium);
     {
@@ -177,20 +166,6 @@ int main() {
         }
     }
 
-    texture.Reset();
-    micropixel::Timer redraw_guard = app.timers().After(micropixel::Duration::Milliseconds(50));
-    micropixel::Event redraw_event = app.WaitEvent();
-    if (redraw_event.TimerFrom(redraw_guard) == nullptr) {
-        return 80;
-    }
-    {
-        auto update = scene.BeginUpdate();
-        image.SetVisible(update, false);
-        label.SetText(update, "graphics_protocol: texture lifetime safe");
-        if (!update.Present()) {
-            return 81;
-        }
-    }
-    app.log().Info("graphics_protocol: 1024 instances, growth/patch and resource pinning accepted");
+    app.log().Info("graphics_protocol: 1024 instances and growth/patch accepted");
     return 0;
 }

@@ -31,11 +31,9 @@ class BlocksGame final {
     void HandleOutcome(const LockOutcome& outcome);
     void HandlePlayGesture(const micropixel::TouchEvent& touch);
     void ResetGesture();
-    void InitializePlayfieldSurfaces();
     void SyncPlayfield();
     void InitializeScene();
-    void RasterizeCell(uint32_t column, uint32_t row, uint8_t visual);
-    void PutCellPixel(uint32_t x, uint32_t y, Rgb color);
+    void UpdatePlayfield(micropixel::SceneUpdate& update);
     [[nodiscard]] uint8_t VisualCell(uint32_t column, uint32_t row) const;
     void RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first_instance, Tetromino type, int32_t center_x,
                          int32_t top, bool muted, bool visible);
@@ -66,7 +64,9 @@ class BlocksGame final {
     micropixel::RendererInfo renderer_info_;
     micropixel::Scene scene_;
     micropixel::ContainerNode root_container_{};
-    micropixel::SurfaceNode playfield_nodes_[4U]{};
+    micropixel::Texture playfield_atlas_{};
+    micropixel::Texture playfield_background_{};
+    micropixel::SpriteBatch playfield_batch_{};
     micropixel::RoundedRectNode sidebar_panels_[kSidebarPanelCount]{};
     micropixel::SpriteBatch mini_piece_batch_{};
     micropixel::SpriteBatch status_batch_{};
@@ -78,7 +78,6 @@ class BlocksGame final {
     micropixel::ui::FlexContainer game_over_panel_{};
     micropixel::Audio audio_;
     BlocksModel model_{};
-    micropixel::StreamingTexture playfield_surfaces_[4U]{};
     ScheduledTone scheduled_tones_[8U]{};
     Screen screen_{Screen::kMenu};
     uint32_t best_score_{};
@@ -94,7 +93,6 @@ class BlocksGame final {
     int32_t gesture_anchor_y_{};
     uint32_t gesture_touch_id_{};
     uint8_t visual_cells_[kBoardColumns * kBoardRows]{};
-    alignas(4) uint8_t cell_pixels_[kCellPitch * kCellPitch * 2U]{};
     bool gesture_active_{};
     bool gesture_moved_{};
     bool gesture_started_in_pause_{};

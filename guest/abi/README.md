@@ -60,9 +60,9 @@ ID/版本查找；后续 call/submit 只做句柄边界检查、数组索引和�
 - Timer、Input 等真正的异步通知通过 `micropixel_event_t` 返回；v1 Resource 加载是同步 call。
 
 Graphics wire 是 retained Scene 协议。首个提交发送完整 keyframe，之后仅发送 Container、Sprite、
-SpriteBatch instance、Shape、Label 或 SurfaceNode 的属性差量；消息携带 generation、base revision 和
+SpriteBatch instance、Shape 或 Label 的属性差量；消息携带 generation、base revision 和
 revision，Host 在本次提交期间容量固定的 scratch scene 中完成整包验证后再原子交换。SpriteBatch 可让蛇身、方块、
-爆炸和粒子共享一个 Host 节点，patch 只携带变化的 instance。Texture/SurfaceNode 同时携带 destination 与
+爆炸和粒子共享一个 Host 节点，patch 只携带变化的 instance。Texture 节点同时携带 destination 与
 source rectangle，opacity 与资源自身逐像素 alpha 相乘；不透明复制、缩放和填充分别映射到
 DMA2D/PPA 快速路径。容量由 `max_scene_nodes`、`max_batch_instances`、`max_containers`、
 `max_sprite_batches` 和 `max_scene_bytes` 明确给出。

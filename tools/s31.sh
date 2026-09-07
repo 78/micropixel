@@ -52,7 +52,7 @@ Usage: bash tools/s31.sh COMMAND [PORT] [--reset]
 
 ESP32-S31 board aliases backed by the common firmware profile tool:
   build-host      Incrementally build only the ESP-Mosaico Host.
-  build-release   Build the Host and the four release Apps, then create a
+  build-release   Build the Host and the five release Apps, then create a
                   browser-flashable full image for ESP-Mosaico.
   flash-host      Flash the already-built Host; preserve app_store and do not
                   rebuild or rewrite SDK Demo/App Bundles.
@@ -287,21 +287,23 @@ build_app_package() {
 }
 
 build_release() {
-    echo "==> Building ESP-Mosaico release Apps: Blocks, Snake, Tilt, and SDK Demo"
-    build_app_package blocks
-    build_app_package snake
-    build_app_package tilt
+    echo "==> Building ESP-Mosaico release Apps: SDK Demo, Snake, Maze Evil, Blocks, and Tilt"
     build_app_package sdk-demo
+    build_app_package snake
+    build_app_package maze-evil
+    build_app_package blocks
+    build_app_package tilt
     build_profile esp-mosaico
     mkdir -p "$system_shell_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
         --app-store-size 0x0800000 \
         --output "$release_app_store_image" \
-        "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin" \
         "$workspace_root/build/apps/snake/snake.bundle.bin" \
-        "$workspace_root/build/apps/tilt/tilt.bundle.bin" \
-        "$workspace_root/build/apps/sdk-demo/sdk-demo.bundle.bin"
-    echo "==> Creating ESP-Mosaico browser image with Blocks, Snake, Tilt, and SDK Demo"
+        "$workspace_root/build/apps/maze-evil/maze-evil.bundle.bin" \
+        "$workspace_root/build/apps/blocks/blocks.bundle.bin" \
+        "$workspace_root/build/apps/tilt/tilt.bundle.bin"
+    echo "==> Creating ESP-Mosaico browser image with SDK Demo, Snake, Maze Evil, Blocks, and Tilt"
     python3 "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$host_build_dir" \
         --app-store-image "$release_app_store_image" \
