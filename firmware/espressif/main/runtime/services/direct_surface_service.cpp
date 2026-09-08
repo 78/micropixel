@@ -3,6 +3,7 @@
 #include <cinttypes>
 #include <cstring>
 
+#include "device/contracts/graphics.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
@@ -61,11 +62,11 @@ ServiceResult<micropixel_surface_create_response_t> DirectSurfaceService::Create
     const micropixel_surface_create_request_t& request) {
     if (request.size != sizeof(request) || request.reserved0 != 0U || request.width == 0U || request.height == 0U ||
         request.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565 || request.buffer_count == 0U ||
-        request.buffer_count > MICROPIXEL_SURFACE_MAX_BUFFERS ||
+        request.buffer_count > micropixel::device::graphics_limits::kMaxSurfaceBuffers ||
         (request.flags & ~MICROPIXEL_SURFACE_CREATE_GUEST_BUFFERS) != 0U) {
         return FailService<micropixel_surface_create_response_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    if (created_.load(std::memory_order_acquire)) {
+    if (created_.load(std::memory_order_acquire) || next_handle_ == 0U) {
         return FailService<micropixel_surface_create_response_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     const bool host_buffers = (request.flags & MICROPIXEL_SURFACE_CREATE_GUEST_BUFFERS) == 0U;
@@ -95,9 +96,6 @@ ServiceResult<micropixel_surface_create_response_t> DirectSurfaceService::Create
     // Publish the handle before the device can release anything.
     retiring_.store(false, std::memory_order_release);
     handle_ = next_handle_++;
-    if (next_handle_ == 0U) {
-        next_handle_ = 1U;
-    }
     buffer_count_ = request.buffer_count;
     created_.store(true, std::memory_order_release);
     auto result = graphics_.CreateDirectSurface(config, {.context = this, .release = OnBufferReleased});
@@ -108,7 +106,7 @@ ServiceResult<micropixel_surface_create_response_t> DirectSurfaceService::Create
     }
     micropixel_surface_create_response_t response{};
     response.size = sizeof(response);
-    response.surface = handle_;
+    response.surface_handle = handle_;
     response.native_pixel_format = result->native_pixel_format;
     response.native_flags = result->native_flags;
     response.max_full_frame_fps = result->max_full_frame_fps;
@@ -120,8 +118,10 @@ ServiceResult<micropixel_surface_create_response_t> DirectSurfaceService::Create
     return response;
 }
 
-int32_t DirectSurfaceService::HostBuffer(uint32_t index, HostBufferView& view_out) const {
-    if (!created_.load(std::memory_order_acquire) || !host_buffers_ || index >= buffer_count_) {
+int32_t DirectSurfaceService::HostBuffer(micropixel_surface_handle_t surface_handle, uint32_t index,
+                                         HostBufferView& view_out) const {
+    if (!created_.load(std::memory_order_acquire) || surface_handle != handle_ || !host_buffers_ ||
+        index >= buffer_count_) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     if ((in_flight_mask_.load(std::memory_order_acquire) & (1U << index)) != 0U) {
@@ -135,12 +135,12 @@ ServiceResult<void> DirectSurfaceService::Present(const micropixel_surface_prese
     if (request.size != sizeof(request) || request.reserved0 != 0U) {
         return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    if (!created_.load(std::memory_order_acquire) || request.surface != handle_) {
+    if (!created_.load(std::memory_order_acquire) || request.surface_handle != handle_) {
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
     }
-    if (request.buffer_index >= buffer_count_ || request.src_width == 0U || request.src_height == 0U ||
+    if (request.buffer_index >= buffer_count_ || request.source_width == 0U || request.source_height == 0U ||
         (request.pitch % kBytesPerRgb565) != 0U ||
-        static_cast<uint64_t>(request.pitch) < static_cast<uint64_t>(request.src_width) * kBytesPerRgb565 ||
+        static_cast<uint64_t>(request.pitch) < static_cast<uint64_t>(request.source_width) * kBytesPerRgb565 ||
         (request.flags & ~MICROPIXEL_SURFACE_PRESENT_SCALE_NEAREST) != 0U) {
         return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
@@ -154,14 +154,14 @@ ServiceResult<void> DirectSurfaceService::Present(const micropixel_surface_prese
     if (host_buffers_) {
         // The buffer is ours; the request may only name it, whole.
         if (request.pixels != 0U || request.length != 0U || request.pitch != host_pitch_ ||
-            request.src_width != host_width_ || request.src_height != host_height_) {
+            request.source_width != host_width_ || request.source_height != host_height_) {
             return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
         }
         pixels = host_pixels_[request.buffer_index];
         length = host_pitch_ * host_height_;
     } else {
         if (request.length == 0U || (request.pixels % MICROPIXEL_SURFACE_BUFFER_ALIGNMENT) != 0U ||
-            static_cast<uint64_t>(request.pitch) * request.src_height > request.length) {
+            static_cast<uint64_t>(request.pitch) * request.source_height > request.length) {
             return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
         }
         if (memory_.resolve == nullptr || !memory_.resolve(memory_.context, request.pixels, request.length, &pixels) ||
@@ -173,8 +173,8 @@ ServiceResult<void> DirectSurfaceService::Present(const micropixel_surface_prese
         .pixels = pixels,
         .length = length,
         .pitch = request.pitch,
-        .src_width = request.src_width,
-        .src_height = request.src_height,
+        .source_width = request.source_width,
+        .source_height = request.source_height,
         .flags = request.flags,
         .buffer_index = static_cast<uint8_t>(request.buffer_index),
         // Both buffer kinds are presented in panel order (ABI contract).
@@ -192,8 +192,8 @@ ServiceResult<void> DirectSurfaceService::Present(const micropixel_surface_prese
     return {};
 }
 
-ServiceResult<void> DirectSurfaceService::Destroy(micropixel_surface_handle_t surface) {
-    if (!created_.load(std::memory_order_acquire) || surface != handle_) {
+ServiceResult<void> DirectSurfaceService::Destroy(micropixel_surface_handle_t surface_handle) {
+    if (!created_.load(std::memory_order_acquire) || surface_handle != handle_) {
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
     }
     // The device returns every buffer before DestroyDirectSurface returns;
@@ -233,7 +233,7 @@ void DirectSurfaceService::OnBufferReleased(void* context, uint8_t buffer_index,
     if (service == nullptr || !service->created_.load(std::memory_order_acquire)) {
         return;
     }
-    if (buffer_index < MICROPIXEL_SURFACE_MAX_BUFFERS) {
+    if (buffer_index < micropixel::device::graphics_limits::kMaxSurfaceBuffers) {
         service->in_flight_mask_.fetch_and(~(1U << buffer_index), std::memory_order_release);
     }
     if (service->retiring_.load(std::memory_order_acquire)) {
@@ -249,7 +249,7 @@ void DirectSurfaceService::OnBufferReleased(void* context, uint8_t buffer_index,
     event.timestamp_us = timestamp_us >= origin ? timestamp_us - origin : 0U;
     event.sequence = service->sequence_.fetch_add(1U, std::memory_order_relaxed) + 1U;
     micropixel_surface_event_payload_t payload{};
-    payload.surface = service->handle_;
+    payload.surface_handle = service->handle_;
     payload.buffer_index = buffer_index;
     payload.timestamp_us = event.timestamp_us;
     static_assert(sizeof(payload) <= sizeof(event.payload));

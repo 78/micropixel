@@ -25,6 +25,7 @@ uint32_t BytesPerPixel(SurfacePixelFormat format) {
         case SurfacePixelFormat::kBgra8888:
             return 4U;
         case SurfacePixelFormat::kRgb565:
+        case SurfacePixelFormat::kRgb565Swapped:
             return 2U;
     }
     return 0U;
@@ -38,6 +39,8 @@ lv_color_format_t LvColorFormat(SurfacePixelFormat format) {
             return LV_COLOR_FORMAT_ARGB8888;
         case SurfacePixelFormat::kRgb565:
             return LV_COLOR_FORMAT_RGB565;
+        case SurfacePixelFormat::kRgb565Swapped:
+            return LV_COLOR_FORMAT_UNKNOWN;
     }
     return LV_COLOR_FORMAT_UNKNOWN;
 }
@@ -268,7 +271,7 @@ bool LvglSoftwarePixelCompositor::Fill(PixelSurface destination, SurfaceRect rec
     if (clipped.width == 0 || clipped.height == 0) {
         return true;
     }
-    if (destination.stride > INT32_MAX) {
+    if (destination.stride > INT32_MAX || destination.format == SurfacePixelFormat::kRgb565Swapped) {
         const bool succeeded = reference_.Fill(destination, rect, rgb888, opacity);
         if (succeeded && opacity != 255U) {
             stats_.alpha_blend_pixels += static_cast<uint64_t>(clipped.width) * clipped.height;
@@ -318,7 +321,9 @@ bool LvglSoftwarePixelCompositor::Blit(ConstPixelSurface source, SurfaceRect sou
     if (clipped.width == 0 || clipped.height == 0) {
         return true;
     }
-    if (source.stride > INT32_MAX || destination.stride > INT32_MAX) {
+    if (source.stride > INT32_MAX || destination.stride > INT32_MAX ||
+        source.format == SurfacePixelFormat::kRgb565Swapped ||
+        destination.format == SurfacePixelFormat::kRgb565Swapped) {
         const bool succeeded = reference_.Blit(source, source_rect, destination, destination_rect, opacity);
         if (succeeded) {
             RecordBlit(source, destination, clipped, opacity);

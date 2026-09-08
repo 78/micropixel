@@ -20,7 +20,7 @@ bool HapticsService::TakeLock() { return mutex_ != nullptr && xSemaphoreTake(mut
 
 void HapticsService::GiveLock() { (void)xSemaphoreGive(mutex_); }
 
-HapticsService::Slot* HapticsService::Find(micropixel_haptic_handle_t handle) {
+HapticsService::Slot* HapticsService::Find(micropixel_haptics_handle_t handle) {
     const uint32_t encoded_index = handle & 0xffU;
     if (encoded_index == 0U || encoded_index > limits::kMaxHapticHandles) {
         return nullptr;
@@ -68,7 +68,7 @@ ServiceResult<void> HapticsService::Play(const micropixel_haptics_play_request_t
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(request.haptic);
+    Slot* slot = Find(request.haptics_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -80,7 +80,7 @@ ServiceResult<void> HapticsService::Play(const micropixel_haptics_play_request_t
         return FailService<void>(result.error().status);
     }
     if (TakeLock()) {
-        slot = Find(request.haptic);
+        slot = Find(request.haptics_handle);
         if (slot != nullptr) {
             slot->playing = true;
         }
@@ -89,11 +89,11 @@ ServiceResult<void> HapticsService::Play(const micropixel_haptics_play_request_t
     return {};
 }
 
-ServiceResult<void> HapticsService::Stop(micropixel_haptic_handle_t haptic) {
+ServiceResult<void> HapticsService::Stop(micropixel_haptics_handle_t haptics_handle) {
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(haptic);
+    Slot* slot = Find(haptics_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -105,15 +105,15 @@ ServiceResult<void> HapticsService::Stop(micropixel_haptic_handle_t haptic) {
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> HapticsService::Release(micropixel_haptic_handle_t haptic) {
-    auto stopped = Stop(haptic);
+ServiceResult<void> HapticsService::Release(micropixel_haptics_handle_t haptics_handle) {
+    auto stopped = Stop(haptics_handle);
     if (!stopped) {
         return stopped;
     }
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(haptic);
+    Slot* slot = Find(haptics_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -169,7 +169,7 @@ void HapticsService::HandleFinished(micropixel_device_id_t device) {
     if (!TakeLock()) {
         return;
     }
-    micropixel_haptic_handle_t handle = 0U;
+    micropixel_haptics_handle_t handle = 0U;
     uint32_t sequence = 0U;
     for (Slot& slot : slots_) {
         if (slot.handle != 0U && slot.device == device && slot.playing) {

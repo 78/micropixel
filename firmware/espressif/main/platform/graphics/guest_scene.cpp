@@ -6,28 +6,27 @@
 #include <utility>
 
 #include "abi/micropixel_abi.h"
+#include "device/contracts/graphics.hpp"
 #include "device/text.hpp"
 
 namespace micropixel::platform::graphics {
 namespace {
 
-constexpr uint32_t kNodeBaseMask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE |
-                                   MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY | MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER;
+// First minor using the current Scene layout. Keep this baseline when adding
+// backward-compatible Graphics features; it is not the Host current minor.
+
+constexpr uint32_t kNodeBaseMask =
+    MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY;
 constexpr uint32_t kNodeVisualMask = kNodeBaseMask | MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
 constexpr uint32_t kRectMask = kNodeVisualMask;
 constexpr uint32_t kRoundedRectMask = kNodeVisualMask;
 constexpr uint32_t kTextureMask = kNodeVisualMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
 constexpr uint32_t kTextMask = kNodeVisualMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
 constexpr uint32_t kSpriteBatchMask = kNodeBaseMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
-constexpr uint32_t kLayerMask = MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP | MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION |
-                                MICROPIXEL_GRAPHICS_SCENE_LAYER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER;
 constexpr uint32_t kContainerMask =
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
-    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE;
-// Graphics 1.4 adds the FLAGS property; older Guests must not set it and must
-// leave the (then reserved) flags field zero.
-constexpr uint32_t kContainerMask14 = kContainerMask | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
 constexpr uint16_t kKnownContainerFlags = MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT;
 constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
@@ -44,24 +43,11 @@ bool Read(const uint8_t* bytes, uint32_t length, uint32_t offset, Value& value) 
 
 bool ValidRgb888(uint32_t color) { return (color & 0xff000000U) == 0U; }
 
-bool ValidRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t logical_width, int32_t logical_height) {
-    return x >= 0 && y >= 0 && width > 0 && height > 0 && static_cast<int64_t>(x) + width <= logical_width &&
-           static_cast<int64_t>(y) + height <= logical_height;
-}
-
 bool ValidClippedLocalRect(int32_t x, int32_t y, int32_t width, int32_t height) {
     const int64_t right = static_cast<int64_t>(x) + width;
     const int64_t bottom = static_cast<int64_t>(y) + height;
     return width > 0 && height > 0 && right >= INT32_MIN && right <= INT32_MAX && bottom >= INT32_MIN &&
            bottom <= INT32_MAX;
-}
-
-bool ValidTranslatedRect(int32_t x, int32_t y, int32_t width, int32_t height, int32_t translate_x, int32_t translate_y,
-                         int32_t logical_width, int32_t logical_height) {
-    const int64_t translated_x = static_cast<int64_t>(x) + translate_x;
-    const int64_t translated_y = static_cast<int64_t>(y) + translate_y;
-    return translated_x >= 0 && translated_y >= 0 && width > 0 && height > 0 && translated_x + width <= logical_width &&
-           translated_y + height <= logical_height;
 }
 
 uint32_t BitmapBytesPerPixel(uint32_t format) {
@@ -155,48 +141,92 @@ void GuestScene::RebindStorage(GuestSceneStorageView storage) {
     copy(storage.nodes.data(), current_, node_count_);
     copy(storage.instances.data(), current_instances_, batch_instance_count_);
     if (containers_ != nullptr) {
-        copy(storage.containers.data(), containers_, MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U);
+        copy(storage.containers.data(), containers_, static_cast<size_t>(container_count_) + 1U);
+        copy(storage.container_changes.data(), container_changes_, static_cast<size_t>(container_count_) + 1U);
     }
     copy(storage.draw_order.data(), draw_node_order_, node_count_);
     copy(storage.node_changes.data(), node_changes_, node_count_);
     copy(storage.instance_changes.data(), instance_changes_, batch_instance_count_);
+    // Live text is rewritten into the front of the new arena; node offsets in
+    // the new node array are updated as it goes.
+    char* text = storage.text.data();
+    uint32_t used = 0U;
+    for (uint16_t index = 0U; index < node_count_; ++index) {
+        GuestSceneNode& node = storage.nodes[index];
+        if (node.kind != GuestSceneNodeKind::kText) {
+            continue;
+        }
+        std::memcpy(text + used, text_ + node.text_offset, static_cast<size_t>(node.text_length) + 1U);
+        node.text_offset = used;
+        used += static_cast<uint32_t>(node.text_length) + 1U;
+    }
     capacity_ = static_cast<uint16_t>(storage.nodes.size() / 2U);
     instance_capacity_ = static_cast<uint16_t>(storage.instances.size() / 2U);
+    container_capacity_ = static_cast<uint16_t>(storage.containers.size() / 2U - 1U);
     current_ = storage.nodes.data();
     scratch_ = current_ + capacity_;
     current_instances_ = storage.instances.data();
     scratch_instances_ = current_instances_ + instance_capacity_;
     containers_ = storage.containers.data();
-    scratch_containers_ = containers_ + MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U;
+    scratch_containers_ = containers_ + container_capacity_ + 1U;
     draw_node_order_ = storage.draw_order.data();
     scratch_draw_node_order_ = draw_node_order_ + capacity_;
     node_changes_ = storage.node_changes.data();
     instance_changes_ = storage.instance_changes.data();
+    container_changes_ = storage.container_changes.data();
+    node_marks_ = storage.node_marks.data();
+    instance_marks_ = storage.instance_marks.data();
+    container_marks_ = storage.container_marks.data();
+    text_capacity_ = static_cast<uint32_t>(storage.text.size() / 2U);
+    text_arena_ = text;
+    text_ = text;
+    text_used_ = used;
+}
+
+uint32_t GuestScene::TextLive() const {
+    uint32_t live = 0U;
+    for (uint16_t index = 0U; index < node_count_; ++index) {
+        if (current_[index].kind == GuestSceneNodeKind::kText) {
+            live += static_cast<uint32_t>(current_[index].text_length) + 1U;
+        }
+    }
+    return live;
+}
+
+void GuestScene::CompactText() {
+    // The arena has two halves; live text moves to the other half so pointers
+    // retained from the last committed scene stay readable until the next
+    // compaction, which cannot happen before a new scene replaced them.
+    if (text_arena_ == nullptr) {
+        return;
+    }
+    char* destination = text_ == text_arena_ ? text_arena_ + text_capacity_ : text_arena_;
+    uint32_t used = 0U;
+    for (uint16_t index = 0U; index < node_count_; ++index) {
+        GuestSceneNode& node = current_[index];
+        if (node.kind != GuestSceneNodeKind::kText) {
+            continue;
+        }
+        std::memcpy(destination + used, text_ + node.text_offset, static_cast<size_t>(node.text_length) + 1U);
+        node.text_offset = used;
+        used += static_cast<uint32_t>(node.text_length) + 1U;
+    }
+    text_ = destination;
+    text_used_ = used;
 }
 
 int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical_width, int32_t logical_height,
                           device::BitmapResolver bitmap_resolver, void* bitmap_context,
                           device::FontValidator font_validator, void* font_context) {
     micropixel_graphics_scene_header_t header{};
-    if (length > MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES || capacity_ == 0U ||
-        capacity_ > MICROPIXEL_GRAPHICS_MAX_SCENE_NODES || instance_capacity_ == 0U ||
-        instance_capacity_ > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES || current_ == nullptr || scratch_ == nullptr ||
-        current_instances_ == nullptr || scratch_instances_ == nullptr || containers_ == nullptr ||
-        scratch_containers_ == nullptr || draw_node_order_ == nullptr || scratch_draw_node_order_ == nullptr ||
-        logical_width <= 0 || logical_height <= 0 || !Read(bytes, length, 0U, header) ||
-        header.magic != MICROPIXEL_GRAPHICS_SCENE_MAGIC ||
-        header.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
-        header.interface_minor > MICROPIXEL_GRAPHICS_INTERFACE_MINOR || header.flags != 0U ||
+    if (length > micropixel::device::graphics_limits::kMaxSceneBytes || capacity_ == 0U || instance_capacity_ == 0U ||
+        current_ == nullptr || scratch_ == nullptr || current_instances_ == nullptr || scratch_instances_ == nullptr ||
+        containers_ == nullptr || scratch_containers_ == nullptr || draw_node_order_ == nullptr ||
+        scratch_draw_node_order_ == nullptr || text_ == nullptr || node_marks_ == nullptr ||
+        instance_marks_ == nullptr || container_marks_ == nullptr || logical_width <= 0 || logical_height <= 0 ||
+        !Read(bytes, length, 0U, header) || header.magic != MICROPIXEL_GRAPHICS_SCENE_MAGIC || header.flags != 0U ||
         header.total_size != length || header.node_count > capacity_ ||
-        header.batch_instance_count > instance_capacity_) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    const bool container_protocol = header.interface_minor >= 2U;
-    const bool container_flags_protocol = header.interface_minor >= 4U;
-    const uint32_t container_mask = container_flags_protocol ? kContainerMask14 : kContainerMask;
-    const uint16_t max_containers =
-        container_protocol ? MICROPIXEL_GRAPHICS_MAX_CONTAINERS : MICROPIXEL_GRAPHICS_MAX_LAYERS;
-    if (header.container_count > max_containers) {
+        header.batch_instance_count > instance_capacity_ || header.container_count > container_capacity_) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     const bool keyframe = header.kind == MICROPIXEL_GRAPHICS_SCENE_KEYFRAME;
@@ -211,8 +241,11 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
     }
 
     std::memset(node_changes_, 0, capacity_ * sizeof(*node_changes_));
-    std::memset(container_changes_, 0, sizeof(container_changes_));
+    std::memset(container_changes_, 0, (static_cast<size_t>(container_capacity_) + 1U) * sizeof(*container_changes_));
     std::memset(instance_changes_, 0, instance_capacity_ * sizeof(*instance_changes_));
+    std::memset(node_marks_, 0, header.node_count);
+    std::memset(instance_marks_, 0, header.batch_instance_count);
+    std::memset(container_marks_, 0, static_cast<size_t>(header.container_count) + 1U);
     std::memset(scratch_draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(scratch_draw_node_order_[0]));
     last_apply_was_keyframe_ = false;
     background_changed_ = false;
@@ -227,7 +260,7 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         for (uint16_t index = 0U; index < capacity_; ++index) {
             scratch_[index] = {};
         }
-        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++index) {
+        for (uint16_t index = 0U; index <= scratch_container_count; ++index) {
             scratch_containers_[index] = {};
         }
         for (uint16_t index = 0U; index < instance_capacity_; ++index) {
@@ -238,7 +271,7 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         for (uint16_t index = 0U; index < node_count_; ++index) {
             scratch_[index] = current_[index];
         }
-        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++index) {
+        for (uint16_t index = 0U; index <= container_count_; ++index) {
             scratch_containers_[index] = containers_[index];
         }
         for (uint16_t index = 0U; index < batch_instance_count_; ++index) {
@@ -246,13 +279,11 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
         }
     }
 
+    // Per-Apply marks live in storage: bit 0 = record seen, bit 1 = link seen.
+    constexpr uint8_t kSeen = 0x01U;
+    constexpr uint8_t kLinkSeen = 0x02U;
     bool background_seen = false;
-    bool node_seen[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
-    bool container_seen[MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U]{};
-    bool node_link_seen[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
-    bool instance_seen[MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES]{};
     uint16_t next_instance_offset = 0U;
-    uint8_t batch_count = 0U;
     uint32_t offset = sizeof(header);
     for (uint16_t record_index = 0U; record_index < header.record_count; ++record_index) {
         micropixel_graphics_scene_record_header_t record{};
@@ -269,55 +300,13 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             scratch_background = value.rgb888;
             background_seen = true;
             background_changed_ = true;
-        } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_LAYER) {
-            micropixel_graphics_scene_layer_record_t value{};
-            if (container_protocol || record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
-                value.layer_id == 0U || value.layer_id > scratch_container_count || value.reserved0 != 0U ||
-                container_seen[value.layer_id] || value.property_mask == 0U ||
-                (value.property_mask & ~kLayerMask) != 0U || (keyframe && value.property_mask != kLayerMask)) {
-                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-            }
-            GuestSceneContainer& layer = scratch_containers_[value.layer_id];
-            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP) != 0U) {
-                layer.clip_x = value.clip_x;
-                layer.clip_y = value.clip_y;
-                layer.width = value.width;
-                layer.height = value.height;
-            }
-            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION) != 0U) {
-                layer.translate_x = value.translate_x;
-                layer.translate_y = value.translate_y;
-            }
-            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_APPEARANCE) != 0U) {
-                if (value.visible > 1U) {
-                    return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-                }
-                layer.opacity = value.opacity;
-                layer.visible = value.visible != 0U;
-            }
-            if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER) != 0U) {
-                layer.z_order = value.z_order;
-            }
-            if (!ValidRect(layer.clip_x, layer.clip_y, layer.width, layer.height, logical_width, logical_height) ||
-                !ValidTranslatedRect(layer.clip_x, layer.clip_y, layer.width, layer.height, layer.translate_x,
-                                     layer.translate_y, logical_width, logical_height)) {
-                return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-            }
-            layer.parent_container_id = 0U;
-            layer.sibling_order = value.layer_id;
-            container_seen[value.layer_id] = true;
-            container_changes_[value.layer_id] = static_cast<uint8_t>(value.property_mask);
-            tree_order_changed_ =
-                tree_order_changed_ || (value.property_mask & MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER) != 0U;
         } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_CONTAINER) {
             micropixel_graphics_scene_container_record_t value{};
-            if (!container_protocol || record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
-                value.container_id == 0U || value.container_id > scratch_container_count ||
-                value.parent_container_id > scratch_container_count ||
+            if (record.size != sizeof(value) || !Read(bytes, length, offset, value) || value.container_id == 0U ||
+                value.container_id > scratch_container_count || value.parent_container_id > scratch_container_count ||
                 value.parent_container_id == value.container_id || (value.flags & ~kKnownContainerFlags) != 0U ||
-                (!container_flags_protocol && value.flags != 0U) || container_seen[value.container_id] ||
-                value.property_mask == 0U || (value.property_mask & ~container_mask) != 0U ||
-                (keyframe && value.property_mask != container_mask)) {
+                (container_marks_[value.container_id] & kSeen) != 0U || value.property_mask == 0U ||
+                (value.property_mask & ~kContainerMask) != 0U || (keyframe && value.property_mask != kContainerMask)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
             GuestSceneContainer& container = scratch_containers_[value.container_id];
@@ -340,8 +329,8 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP) != 0U) {
                 container.clip_x = value.clip_x;
                 container.clip_y = value.clip_y;
-                container.width = value.width;
-                container.height = value.height;
+                container.width = value.clip_width;
+                container.height = value.clip_height;
             }
             if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION) != 0U) {
                 container.translate_x = value.translate_x;
@@ -357,22 +346,21 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER) != 0U) {
                 container.z_order = value.z_order;
             }
-            container_seen[value.container_id] = true;
+            container_marks_[value.container_id] = kSeen;
             container_changes_[value.container_id] = static_cast<uint8_t>(value.property_mask);
             tree_order_changed_ =
                 tree_order_changed_ || (value.property_mask & (MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
                                                                MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE)) != 0U;
         } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_NODE_LINK) {
             micropixel_graphics_scene_node_link_record_t value{};
-            if (!container_protocol || !keyframe || record.size != sizeof(value) ||
-                !Read(bytes, length, offset, value) || value.node_id >= scratch_node_count ||
-                value.parent_container_id > scratch_container_count || value.reserved0 != 0U ||
-                node_link_seen[value.node_id] || !node_seen[value.node_id]) {
+            if (!keyframe || record.size != sizeof(value) || !Read(bytes, length, offset, value) ||
+                value.node_id >= scratch_node_count || value.parent_container_id > scratch_container_count ||
+                value.reserved0 != 0U || node_marks_[value.node_id] != kSeen) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
             scratch_[value.node_id].parent_container_id = value.parent_container_id;
             scratch_[value.node_id].sibling_order = value.sibling_order;
-            node_link_seen[value.node_id] = true;
+            node_marks_[value.node_id] |= kLinkSeen;
         } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_BATCH_INSTANCES) {
             micropixel_graphics_scene_batch_instances_record_t value{};
             if (!Read(bytes, length, offset, value) || value.batch_node_id >= scratch_node_count ||
@@ -391,7 +379,7 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                 const uint16_t batch_instance = value.first_instance + instance;
                 const uint16_t scene_instance = batch.batch_instance_offset + batch_instance;
                 micropixel_graphics_scene_sprite_instance_t wire{};
-                if (scene_instance >= scratch_batch_instance_count || instance_seen[scene_instance] ||
+                if (scene_instance >= scratch_batch_instance_count || instance_marks_[scene_instance] != 0U ||
                     !Read(bytes, length,
                           offset + sizeof(value) +
                               static_cast<uint32_t>(instance) * sizeof(micropixel_graphics_scene_sprite_instance_t),
@@ -419,17 +407,15 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                 if ((value.property_mask & MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY) != 0U) {
                     target.flags = static_cast<uint8_t>(wire.flags & MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBLE);
                 }
-                instance_seen[scene_instance] = true;
+                instance_marks_[scene_instance] = kSeen;
                 instance_changes_[scene_instance] = static_cast<uint8_t>(value.property_mask);
             }
         } else {
             micropixel_graphics_scene_node_header_t node_header{};
             const uint32_t required_mask = RequiredMask(record.opcode);
             if (required_mask == 0U || !Read(bytes, length, offset, node_header) ||
-                node_header.node_id >= scratch_node_count ||
-                (container_protocol ? node_header.container_id != 0U
-                                    : node_header.layer_id > scratch_container_count) ||
-                node_seen[node_header.node_id] || node_header.property_mask == 0U ||
+                node_header.node_id >= scratch_node_count || node_header.reserved0 != 0U ||
+                node_marks_[node_header.node_id] != 0U || node_header.property_mask == 0U ||
                 (node_header.property_mask & ~(required_mask | MICROPIXEL_GRAPHICS_SCENE_NODE_KIND)) != 0U ||
                 (keyframe && node_header.property_mask != (required_mask | MICROPIXEL_GRAPHICS_SCENE_NODE_KIND))) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
@@ -448,10 +434,6 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             if (replacing) {
                 node = {};
                 node.kind = NodeKind(record.opcode);
-            }
-            if (!container_protocol && (node_header.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER) != 0U) {
-                node.parent_container_id = node_header.layer_id;
-                node.sibling_order = static_cast<uint16_t>(MICROPIXEL_GRAPHICS_MAX_LAYERS + 1U + node_header.node_id);
             }
             if ((node_header.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY) != 0U) {
                 node.visible = (node_header.flags & MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE) != 0U;
@@ -511,7 +493,7 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                     node.opacity = value.opacity;
                 }
                 if ((value.node.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT) != 0U) {
-                    node.texture = value.texture;
+                    node.texture_handle = value.texture_handle;
                     node.source_x = value.source_x;
                     node.source_y = value.source_y;
                     node.source_width = value.source_width;
@@ -520,19 +502,18 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             } else if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_SPRITE_BATCH) {
                 micropixel_graphics_scene_sprite_batch_record_t value{};
                 if (record.size != sizeof(value) || !Read(bytes, length, offset, value) || value.reserved0 != 0U ||
-                    (value.node.flags & ~MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE) != 0U || value.capacity == 0U ||
-                    value.capacity > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES) {
+                    (value.node.flags & ~MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE) != 0U || value.capacity == 0U) {
                     return MICROPIXEL_STATUS_INVALID_ARGUMENT;
                 }
                 if (keyframe) {
-                    if (batch_count >= MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES ||
-                        static_cast<uint32_t>(next_instance_offset) + value.capacity > scratch_batch_instance_count) {
+                    // Batches are bounded by the node budget and by the total
+                    // instance count the header declared; no separate cap.
+                    if (static_cast<uint32_t>(next_instance_offset) + value.capacity > scratch_batch_instance_count) {
                         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
                     }
                     node.batch_instance_offset = next_instance_offset;
                     node.batch_capacity = value.capacity;
                     next_instance_offset += value.capacity;
-                    ++batch_count;
                 } else if (value.capacity != node.batch_capacity) {
                     return MICROPIXEL_STATUS_INVALID_ARGUMENT;
                 }
@@ -540,7 +521,7 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                     node.opacity = value.opacity;
                 }
                 if ((value.node.property_mask & MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT) != 0U) {
-                    node.texture = value.texture;
+                    node.texture_handle = value.texture_handle;
                 }
             } else {
                 micropixel_graphics_scene_text_record_t value{};
@@ -551,7 +532,8 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                 if (record.size < sizeof(value) ||
                     (value.node.flags &
                      ~(MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE | MICROPIXEL_GRAPHICS_SCENE_TEXT_CENTERED)) != 0U ||
-                    value.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES || record.size != expected_size ||
+                    value.text_length > micropixel::device::graphics_limits::kMaxTextBytes || value.reserved0 != 0U ||
+                    record.size != expected_size ||
                     !ZeroPadding(bytes, offset + sizeof(value) + value.text_length, offset + record.size)) {
                     return MICROPIXEL_STATUS_INVALID_ARGUMENT;
                 }
@@ -568,13 +550,20 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
                         !device::IsValidUtf8(bytes + offset + sizeof(value), value.text_length)) {
                         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
                     }
-                    node.font = value.font;
+                    // The owner sized the arena for this message; failing here
+                    // means the storage contract was broken, not the Guest.
+                    if (text_capacity_ - text_used_ < static_cast<uint32_t>(value.text_length) + 1U) {
+                        return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
+                    }
+                    node.font_handle = value.font_handle;
                     node.text_length = value.text_length;
-                    std::memcpy(node.text, bytes + offset + sizeof(value), value.text_length);
-                    node.text[value.text_length] = '\0';
+                    node.text_offset = text_used_;
+                    std::memcpy(text_ + text_used_, bytes + offset + sizeof(value), value.text_length);
+                    text_[text_used_ + value.text_length] = '\0';
+                    text_used_ += static_cast<uint32_t>(value.text_length) + 1U;
                 }
             }
-            node_seen[node_header.node_id] = true;
+            node_marks_[node_header.node_id] |= kSeen;
             node_changes_[node_header.node_id] = static_cast<uint8_t>(node_header.property_mask);
         }
         offset += record.size;
@@ -587,17 +576,17 @@ int32_t GuestScene::Apply(const uint8_t* bytes, uint32_t length, int32_t logical
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         for (uint16_t node = 0U; node < scratch_node_count; ++node) {
-            if (!node_seen[node] || (container_protocol && !node_link_seen[node])) {
+            if (node_marks_[node] != (kSeen | kLinkSeen)) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
         }
-        for (uint16_t layer = 1U; layer <= scratch_container_count; ++layer) {
-            if (!container_seen[layer]) {
+        for (uint16_t container = 1U; container <= scratch_container_count; ++container) {
+            if (container_marks_[container] == 0U) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
         }
         for (uint16_t instance = 0U; instance < scratch_batch_instance_count; ++instance) {
-            if (!instance_seen[instance]) {
+            if (instance_marks_[instance] == 0U) {
                 return MICROPIXEL_STATUS_INVALID_ARGUMENT;
             }
         }
@@ -661,8 +650,8 @@ bool GuestScene::ValidateResult(device::BitmapResolver bitmap_resolver, void* bi
             }
         } else if (node.kind == GuestSceneNodeKind::kTexture) {
             device::BitmapView bitmap{};
-            if (!valid_geometry(node.x, node.y, node.width, node.height) || node.texture == 0U ||
-                bitmap_resolver == nullptr || !bitmap_resolver(bitmap_context, node.texture, bitmap) ||
+            if (!valid_geometry(node.x, node.y, node.width, node.height) || node.texture_handle == 0U ||
+                bitmap_resolver == nullptr || !bitmap_resolver(bitmap_context, node.texture_handle, bitmap) ||
                 !ValidBitmap(bitmap)) {
                 return false;
             }
@@ -677,11 +666,11 @@ bool GuestScene::ValidateResult(device::BitmapResolver bitmap_resolver, void* bi
             }
         } else if (node.kind == GuestSceneNodeKind::kSpriteBatch) {
             device::BitmapView bitmap{};
-            const bool textured = node.texture != 0U;
+            const bool textured = node.texture_handle != 0U;
             if (node.batch_capacity == 0U ||
                 static_cast<uint32_t>(node.batch_instance_offset) + node.batch_capacity > batch_instance_count ||
-                (textured && (bitmap_resolver == nullptr || !bitmap_resolver(bitmap_context, node.texture, bitmap) ||
-                              !ValidBitmap(bitmap)))) {
+                (textured && (bitmap_resolver == nullptr ||
+                              !bitmap_resolver(bitmap_context, node.texture_handle, bitmap) || !ValidBitmap(bitmap)))) {
                 return false;
             }
             for (uint16_t instance_index = 0U; instance_index < node.batch_capacity; ++instance_index) {
@@ -707,10 +696,11 @@ bool GuestScene::ValidateResult(device::BitmapResolver bitmap_resolver, void* bi
                     }
                 }
             }
-        } else if (!ValidRgb888(node.rgb888) || node.font == 0U || node.text_length == 0U ||
-                   node.text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES || font_validator == nullptr ||
-                   !font_validator(font_context, node.font) ||
-                   !device::IsValidUtf8(reinterpret_cast<const uint8_t*>(node.text), node.text_length)) {
+        } else if (!ValidRgb888(node.rgb888) || node.font_handle == 0U || node.text_length == 0U ||
+                   node.text_length > micropixel::device::graphics_limits::kMaxTextBytes || font_validator == nullptr ||
+                   !font_validator(font_context, node.font_handle) ||
+                   node.text_offset + node.text_length >= text_capacity_ ||
+                   !device::IsValidUtf8(reinterpret_cast<const uint8_t*>(text_ + node.text_offset), node.text_length)) {
             return false;
         }
     }
@@ -822,8 +812,12 @@ void GuestScene::Reset() {
     generation_ = 0U;
     revision_ = 0U;
     std::memset(node_changes_, 0, capacity_ * sizeof(*node_changes_));
-    std::memset(container_changes_, 0, sizeof(container_changes_));
+    if (container_changes_ != nullptr) {
+        std::memset(container_changes_, 0,
+                    (static_cast<size_t>(container_capacity_) + 1U) * sizeof(*container_changes_));
+    }
     std::memset(instance_changes_, 0, instance_capacity_ * sizeof(*instance_changes_));
+    text_used_ = 0U;
     if (draw_node_order_ != nullptr && scratch_draw_node_order_ != nullptr) {
         std::memset(draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(draw_node_order_[0]));
         std::memset(scratch_draw_node_order_, 0, static_cast<size_t>(capacity_) * sizeof(scratch_draw_node_order_[0]));
@@ -833,7 +827,7 @@ void GuestScene::Reset() {
     tree_order_changed_ = false;
     valid_ = false;
     if (containers_ != nullptr && scratch_containers_ != nullptr) {
-        for (uint16_t index = 0U; index <= MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++index) {
+        for (uint16_t index = 0U; index <= container_capacity_; ++index) {
             containers_[index] = {};
             scratch_containers_[index] = {};
         }

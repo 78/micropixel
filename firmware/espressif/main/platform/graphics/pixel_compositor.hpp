@@ -8,6 +8,7 @@ enum class SurfacePixelFormat : uint8_t {
     kBgr888,
     kBgra8888,
     kRgb565,
+    kRgb565Swapped,
 };
 
 struct SurfaceRect final {

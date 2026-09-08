@@ -55,9 +55,8 @@ class TextButton final {
         auto position = CenteredLabelPosition(local_bounds, measured.value(), properties.overflow);
         if (!position.has_value()) {
             if (TextExceedsBounds(local_bounds, measured.value())) {
-                auto diagnostic =
-                    FormatOverflowDiagnostic("rejected", properties.bounds, measured.value(), text.c_str(),
-                                             properties.overflow, true);
+                auto diagnostic = FormatOverflowDiagnostic("rejected", properties.bounds, measured.value(),
+                                                           text.c_str(), properties.overflow, true);
                 Panic(diagnostic.c_str());
             }
             auto diagnostic =
@@ -72,15 +71,22 @@ class TextButton final {
         result.style_ = properties.style;
         result.overflow_ = properties.overflow;
         result.bounds_ = properties.bounds;
-        result.container_ = parent.CreateContainer(
-            {.clip = local_bounds, .translation = {properties.bounds.x, properties.bounds.y}});
-        result.background_ = result.container_.CreateRoundedRect(
-            local_bounds, {.fill = properties.style.background, .radius = properties.style.corner_radius});
-        result.feedback_ = result.container_.CreateRoundedRect(local_bounds, {.fill = properties.style.feedback,
-                                                                              .radius = properties.style.corner_radius,
-                                                                              .opacity = result.FeedbackOpacity()});
-        result.label_ = result.container_.CreateLabel(position.value(), text.c_str(), properties.style.text,
-                                                      properties.style.font, true);
+        result.container_ =
+            parent.CreateContainer({.clip = local_bounds, .translation = {properties.bounds.x, properties.bounds.y}})
+                .value();
+        result.background_ = result.container_
+                                 .CreateRoundedRect(local_bounds, {.fill = properties.style.background,
+                                                                   .radius = properties.style.corner_radius})
+                                 .value();
+        result.feedback_ = result.container_
+                               .CreateRoundedRect(local_bounds, {.fill = properties.style.feedback,
+                                                                 .radius = properties.style.corner_radius,
+                                                                 .opacity = result.FeedbackOpacity()})
+                               .value();
+        result.label_ =
+            result.container_
+                .CreateLabel(position.value(), text.c_str(), properties.style.text, properties.style.font, true)
+                .value();
         result.text_ = text;
         result.metrics_ = measured.value();
         result.UpdateClipped(TextExceedsBounds(local_bounds, result.metrics_));
@@ -103,8 +109,7 @@ class TextButton final {
 
     [[nodiscard]] static FixedString<kDiagnosticBytes> FormatOverflowDiagnostic(const char* action, Rect bounds,
                                                                                 const TextMetrics& metrics,
-                                                                                const char* text,
-                                                                                TextOverflow overflow,
+                                                                                const char* text, TextOverflow overflow,
                                                                                 bool clipped) {
         return FormatTextOverflowDiagnostic("TextButton", action, bounds, metrics, text, overflow, clipped);
     }
@@ -114,34 +119,29 @@ class TextButton final {
         return {static_cast<uint32_t>(bounds_.width), static_cast<uint32_t>(bounds_.height)};
     }
 
-    void Destroy(SceneUpdate& update) { container_.Destroy(update); }
+    void Destroy() { (void)container_.Destroy(); }
 
     [[nodiscard]] ButtonUpdate OnTouch(const TouchEvent& event) {
-        return valid() ? interaction_.OnTouch(event.WithPosition(container_.ToLocal(event.position())))
-                       : ButtonUpdate{};
-    }
-
-    [[nodiscard]] ButtonUpdate OnTouch(SceneUpdate& update, const TouchEvent& event) {
         if (!valid()) {
             return {};
         }
         const ButtonUpdate result = interaction_.OnTouch(event.WithPosition(container_.ToLocal(event.position())));
         if (result.visual_changed) {
-            Sync(update);
+            Sync();
         }
         return result;
     }
 
     // Apply interaction-driven opacity and visibility to retained nodes. Apps
-    // normally call this in the same SceneUpdate used for the rest of a frame.
-    void Sync(SceneUpdate& update) {
-        container_.SetVisible(update, visible_);
+    // normally call this in the same pending frame used for the rest of a frame.
+    void Sync() {
+        container_.SetVisible(visible_);
         const uint8_t opacity = FeedbackOpacity();
-        feedback_.SetOpacity(update, opacity);
-        feedback_.SetVisible(update, opacity != 0U);
+        feedback_.SetOpacity(opacity);
+        feedback_.SetVisible(opacity != 0U);
     }
 
-    [[nodiscard]] Result<void> SetBounds(SceneUpdate& update, Rect bounds) {
+    [[nodiscard]] Result<void> SetBounds(Rect bounds) {
         if (bounds.x == bounds_.x && bounds.y == bounds_.y && bounds.width == bounds_.width &&
             bounds.height == bounds_.height) {
             return {};
@@ -154,17 +154,17 @@ class TextButton final {
         }
         bounds_ = bounds;
         interaction_.SetBounds(local_bounds);
-        container_.SetClip(update, local_bounds);
-        container_.SetTranslation(update, {bounds.x, bounds.y});
-        background_.SetRect(update, local_bounds);
-        feedback_.SetRect(update, local_bounds);
-        label_.SetPosition(update, position.value());
+        container_.SetClip(local_bounds);
+        container_.SetTranslation({bounds.x, bounds.y});
+        background_.SetRect(local_bounds);
+        feedback_.SetRect(local_bounds);
+        label_.SetPosition(position.value());
         UpdateClipped(TextExceedsBounds(local_bounds, metrics_));
-        Sync(update);
+        Sync();
         return {};
     }
 
-    [[nodiscard]] Result<void> SetText(SceneUpdate& update, const char* text) {
+    [[nodiscard]] Result<void> SetText(const char* text) {
         FixedString<kMaxTextBytes + 1U> candidate;
         if (!CopyText(text, candidate)) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
@@ -184,13 +184,13 @@ class TextButton final {
         }
         text_ = candidate;
         metrics_ = measured.value();
-        label_.SetText(update, text_.c_str());
-        label_.SetPosition(update, position.value());
+        label_.SetText(text_.c_str());
+        label_.SetPosition(position.value());
         UpdateClipped(TextExceedsBounds(interaction_.bounds(), metrics_));
         return {};
     }
 
-    [[nodiscard]] Result<void> SetStyle(SceneUpdate& update, TextButtonStyle style) {
+    [[nodiscard]] Result<void> SetStyle(TextButtonStyle style) {
         const Renderer renderer{Renderer::CapabilityToken{}};
         auto measured = renderer.MeasureText(text_.c_str(), style.font);
         if (!measured.has_value()) {
@@ -203,42 +203,42 @@ class TextButton final {
         }
         style_ = style;
         metrics_ = measured.value();
-        background_.SetFillColor(update, style_.background);
-        background_.SetRadius(update, style_.corner_radius);
-        feedback_.SetFillColor(update, style_.feedback);
-        feedback_.SetRadius(update, style_.corner_radius);
-        label_.SetColor(update, style_.text);
-        label_.SetFont(update, style_.font);
-        label_.SetPosition(update, position.value());
+        background_.SetFillColor(style_.background);
+        background_.SetRadius(style_.corner_radius);
+        feedback_.SetFillColor(style_.feedback);
+        feedback_.SetRadius(style_.corner_radius);
+        label_.SetColor(style_.text);
+        label_.SetFont(style_.font);
+        label_.SetPosition(position.value());
         UpdateClipped(TextExceedsBounds(interaction_.bounds(), metrics_));
-        Sync(update);
+        Sync();
         return {};
     }
 
-    void SetEnabled(SceneUpdate& update, bool enabled) {
+    void SetEnabled(bool enabled) {
         if (interaction_.enabled() == enabled) {
             return;
         }
         interaction_.SetEnabled(enabled);
-        Sync(update);
+        Sync();
     }
 
-    void SetVisible(SceneUpdate& update, bool visible) {
+    void SetVisible(bool visible) {
         visible_ = visible;
         if (!visible_) {
             interaction_.Reset();
         }
-        Sync(update);
+        Sync();
     }
 
-    void Reset(SceneUpdate& update) {
+    void Reset() {
         interaction_.Reset();
-        Sync(update);
+        Sync();
     }
 
-    void SetHitPadding(SceneUpdate& update, uint16_t hit_padding) {
+    void SetHitPadding(uint16_t hit_padding) {
         interaction_.SetHitPadding(hit_padding);
-        Sync(update);
+        Sync();
     }
 
     [[nodiscard]] constexpr Rect bounds() const { return bounds_; }

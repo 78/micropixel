@@ -7,6 +7,10 @@
 
 namespace micropixel::device {
 
+// Touch points tracked per frame across drivers and the event queue; reported
+// to the Guest as micropixel_input_info_t.max_touch_points.
+inline constexpr uint32_t kMaxTouchPoints = 5U;
+
 enum class TouchPhase : uint8_t {
     kDown,
     kMove,

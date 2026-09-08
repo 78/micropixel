@@ -76,14 +76,14 @@ int32_t SensorPeripheral::GetInfo(device::PeripheralChannelId channel, micropixe
     info_out.value_count = 3U;
     if (channel == kAcceleration && acceleration_.available()) {
         info_out.kind = MICROPIXEL_SENSOR_ACCELERATION;
-        info_out.minimum_interval_us = acceleration_.minimum_interval_us();
-        info_out.maximum_interval_us = 60000000U;
+        info_out.min_interval_us = acceleration_.min_interval_us();
+        info_out.max_interval_us = 60000000U;
         return MICROPIXEL_STATUS_OK;
     }
     if (channel == kMagneticField && magnetic_field_.available()) {
         info_out.kind = MICROPIXEL_SENSOR_MAGNETIC_FIELD;
-        info_out.minimum_interval_us = magnetic_field_.minimum_interval_us();
-        info_out.maximum_interval_us = 60000000U;
+        info_out.min_interval_us = magnetic_field_.min_interval_us();
+        info_out.max_interval_us = 60000000U;
         return MICROPIXEL_STATUS_OK;
     }
     return MICROPIXEL_STATUS_NOT_FOUND;

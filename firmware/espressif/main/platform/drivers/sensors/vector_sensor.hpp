@@ -18,7 +18,7 @@ class VectorSensor {
     [[nodiscard]] virtual esp_err_t Suspend() = 0;
     [[nodiscard]] virtual esp_err_t Read(float (&values)[3]) = 0;
     [[nodiscard]] virtual bool available() const = 0;
-    [[nodiscard]] virtual uint32_t minimum_interval_us() const = 0;
+    [[nodiscard]] virtual uint32_t min_interval_us() const = 0;
 
    protected:
     VectorSensor() = default;

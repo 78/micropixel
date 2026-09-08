@@ -79,7 +79,7 @@ int32_t GpioPeripheral::GetInfo(device::PeripheralChannelId channel, micropixel_
     info_out.line_number = line->line_number;
     info_out.capabilities = MICROPIXEL_GPIO_CAP_INPUT | MICROPIXEL_GPIO_CAP_OUTPUT | MICROPIXEL_GPIO_CAP_PULL_UP |
                             MICROPIXEL_GPIO_CAP_PULL_DOWN | MICROPIXEL_GPIO_CAP_EDGE_EVENTS | MICROPIXEL_GPIO_CAP_PWM;
-    info_out.maximum_pwm_frequency_hz = kMaximumPwmFrequencyHz;
+    info_out.max_pwm_frequency_hz = kMaximumPwmFrequencyHz;
     return MICROPIXEL_STATUS_OK;
 }
 

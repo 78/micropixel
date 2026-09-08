@@ -57,6 +57,13 @@ build_and_run_c() {
     "$test_binary"
 }
 
+build_and_run frame_timing \
+    "$workspace_root/tools/tests/test_frame_timing.cpp"
+
+build_and_run guest_timers \
+    "$workspace_root/tools/tests/test_guest_timers.cpp" \
+    "$workspace_root/guest/runtime/timers.cpp"
+
 build_and_run app_controller \
     -pthread \
     -include "$workspace_root/tools/tests/firmware_stubs/runtime/app_runtime.hpp" \
@@ -119,6 +126,7 @@ build_and_run guest_psram \
     "$workspace_root/tools/tests/test_guest_psram.cpp"
 
 build_and_run bitmap_store \
+    -DMICROPIXEL_TEST_TRACK_HEAP -fsanitize=address,undefined -g \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_bitmap_store.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/resources/bitmap_store.cpp"
@@ -283,6 +291,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -I "$workspace_root/firmware/espressif/main" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
+    -DMICROPIXEL_TEST_TRACK_HEAP -fsanitize=address,undefined -g \
     "$workspace_root/tools/tests/test_raster_service.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/graphics/raster_kernels.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/services/raster_service.cpp" \

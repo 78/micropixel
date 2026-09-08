@@ -21,7 +21,7 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
       strings_(blocks_strings::ForLocale(app.localization().CurrentLocale())),
       renderer_(renderer),
       renderer_info_(renderer_info),
-      scene_(renderer.CreateScene(micropixel::Color::Rgb(5U, 5U, 5U))),
+      scene_(renderer.CreateScene(micropixel::Color::Rgb(5U, 5U, 5U)).value()),
       audio_(audio),
       best_score_(best_score),
       audio_available_(audio_available) {

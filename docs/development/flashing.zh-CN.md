@@ -244,7 +244,8 @@ HostController 串行执行；运行中的 Guest 必须先停止。Bundle 数据
 设备重新计算 SHA-256，并在完整 Bundle/AOT/资源校验通过后提交 BundleFS Catalog。
 
 macOS/Linux 端口通常形如 `/dev/cu.usbmodemXXXX` 或 `/dev/ttyACM0`；Windows 端口形如 `COM7`，可直接传给
-`--port`。端口自动探测同样按 ESP32 USB Serial/JTAG 的 VID/PID 工作。当前实现已在 macOS 真机验证；
+`--port`。指定 `--port` 即选择 USB 本地控制，不必再写 `--transport usb`。端口自动探测同样按 ESP32 USB
+Serial/JTAG 的 VID/PID 工作。当前实现已在 macOS 真机验证；
 Windows 使用 pyserial 的 COM 端口后端，代码路径受支持，但尚未完成项目真机验证。
 
 该协议依赖正在运行的 Host 固件，不适用于下载模式或 bootloader。monitor、esptool 和本地控制共享板卡的

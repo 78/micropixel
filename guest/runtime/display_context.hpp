@@ -2,6 +2,7 @@
 #define MICROPIXEL_GUEST_RUNTIME_DISPLAY_CONTEXT_HPP
 
 #include "runtime/display_transform.hpp"
+#include "runtime/graphics_limits.hpp"
 #include "runtime/service_binding.hpp"
 #include "sdk/geometry.hpp"
 

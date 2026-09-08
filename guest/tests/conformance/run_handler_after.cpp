@@ -6,7 +6,7 @@ extern "C" __attribute__((export_name("__micropixel_test_run_handler"))) void __
 
 int main() {
     micropixel::Application app;
-    micropixel::Timer once = app.timers().After(20_ms);
+    micropixel::Timer once = app.timers().After(20_ms).value();
     bool fired = false;
     app.Run([&](const micropixel::Event& event) -> micropixel::EventResult {
         if (event.TimerFrom(once) != nullptr) {

@@ -28,15 +28,16 @@ class AudioPlaybackService final {
 
     [[nodiscard]] bool valid() const;  // NOLINT(readability-identifier-naming)
     [[nodiscard]] ServiceResult<micropixel_audio_clip_info_t> LoadClip(uint32_t asset_id);
-    [[nodiscard]] ServiceResult<void> ReleaseClip(micropixel_audio_clip_handle_t clip);
+    [[nodiscard]] ServiceResult<void> ReleaseClip(micropixel_audio_clip_handle_t clip_handle);
     [[nodiscard]] ServiceResult<micropixel_audio_playback_handle_t> Start(
         const micropixel_audio_playback_start_request_t& request);
-    [[nodiscard]] ServiceResult<void> Pause(micropixel_audio_playback_handle_t playback);
-    [[nodiscard]] ServiceResult<void> Resume(micropixel_audio_playback_handle_t playback);
-    [[nodiscard]] ServiceResult<void> SetVolume(micropixel_audio_playback_handle_t playback, uint16_t volume_per_mille);
-    [[nodiscard]] ServiceResult<void> Stop(micropixel_audio_playback_handle_t playback);
+    [[nodiscard]] ServiceResult<void> Pause(micropixel_audio_playback_handle_t playback_handle);
+    [[nodiscard]] ServiceResult<void> Resume(micropixel_audio_playback_handle_t playback_handle);
+    [[nodiscard]] ServiceResult<void> SetVolume(micropixel_audio_playback_handle_t playback_handle,
+                                                uint16_t volume_per_mille);
+    [[nodiscard]] ServiceResult<void> Stop(micropixel_audio_playback_handle_t playback_handle);
     [[nodiscard]] ServiceResult<micropixel_audio_playback_state_response_t> State(
-        micropixel_audio_playback_handle_t playback);
+        micropixel_audio_playback_handle_t playback_handle);
     [[nodiscard]] ServiceResult<void> StopAll();
     void Shutdown();
 

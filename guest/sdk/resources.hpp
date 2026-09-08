@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <span>
+
 #include "sdk/graphics.hpp"
 #include "sdk/result.hpp"
 
@@ -12,7 +14,6 @@ class Application;
 class Scene;
 class Renderer;
 class Resources;
-class StreamingTexture;
 class Font;
 
 class AssetId final {
@@ -36,6 +37,9 @@ class Texture final {
     [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
     [[nodiscard]] constexpr uint32_t width() const { return width_; }
     [[nodiscard]] constexpr uint32_t height() const { return height_; }
+    // Dynamic textures publish new pixels on the next Present. Existing scene
+    // references follow updates automatically; failed updates retain old pixels.
+    [[nodiscard]] Result<void> Update(Rect dirty, std::span<const uint8_t> pixels, uint32_t pitch);
     void Reset();
 
    private:
@@ -58,9 +62,10 @@ class Texture final {
     friend class Container;
     friend class SpriteNode;
     friend class SpriteBatch;
+    friend class RasterDrawList;
     friend class Renderer;
     friend class Resources;
-    friend class StreamingTexture;
+    friend struct Material3D;
 };
 
 class Font final {
@@ -80,10 +85,10 @@ class Font final {
     void Reset();
 
    private:
-    constexpr Font(uint16_t handle, uint16_t size, uint16_t line_height, int16_t ascent, int16_t descent)
+    constexpr Font(uint32_t handle, uint16_t size, uint16_t line_height, int16_t ascent, int16_t descent)
         : handle_(handle), size_(size), line_height_(line_height), ascent_(ascent), descent_(descent) {}
 
-    uint16_t handle_{};
+    uint32_t handle_{};
     uint16_t size_{};
     uint16_t line_height_{};
     int16_t ascent_{};
@@ -94,65 +99,16 @@ class Font final {
     friend class Resources;
 };
 
-class [[deprecated("Use Scene/SpriteBatch or DirectSurface.")]] StreamingTexture final {
-   public:
-    StreamingTexture() = default;
-    StreamingTexture(const StreamingTexture&) = delete;
-    StreamingTexture& operator=(const StreamingTexture&) = delete;
-    StreamingTexture(StreamingTexture&&) noexcept = default;
-    StreamingTexture& operator=(StreamingTexture&&) noexcept = default;
-
-    [[nodiscard]] constexpr bool valid() const { return texture_.valid(); }
-    [[nodiscard]] constexpr uint32_t width() const { return texture_.width(); }
-    [[nodiscard]] constexpr uint32_t height() const { return texture_.height(); }
-    [[nodiscard]] constexpr PixelFormat pixel_format() const { return pixel_format_; }
-    [[deprecated("Use Scene/SpriteBatch or DirectSurface.")]] [[nodiscard]] Result<void> Update(Rect dirty,
-                                                                                                const uint8_t* pixels,
-                                                                                                uint32_t byte_length,
-                                                                                                uint32_t pitch);
-    [[deprecated("Use Scene/SpriteBatch or DirectSurface.")]]
-    void Reset() {
-        texture_.Reset();
-    }
-
-   private:
-    StreamingTexture(Texture texture, PixelFormat pixel_format)
-        : texture_(static_cast<Texture&&>(texture)), pixel_format_(pixel_format) {}
-
-    Texture texture_{};
-    PixelFormat pixel_format_{PixelFormat::kBgr888};
-
-    friend class Renderer;
-    friend class Container;
-};
-
-class [[deprecated("Use Scene updates or DirectSurface presentation.")]] TextureUpdateBatch final {
-   public:
-    TextureUpdateBatch(const TextureUpdateBatch&) = delete;
-    TextureUpdateBatch& operator=(const TextureUpdateBatch&) = delete;
-    TextureUpdateBatch(TextureUpdateBatch&& other) noexcept;
-    TextureUpdateBatch& operator=(TextureUpdateBatch&&) = delete;
-    ~TextureUpdateBatch();
-
-    [[deprecated("Use Scene updates or DirectSurface presentation.")]] [[nodiscard]] Result<void> Finish();
-
-   private:
-    struct CapabilityToken {};
-    explicit constexpr TextureUpdateBatch(CapabilityToken) : active_(true) {}
-    bool active_{};
-
-    friend class Renderer;
-};
+enum class TextureScale : uint8_t { kNative, kDisplay };
 
 class Resources final {
    public:
-    [[nodiscard]] Result<Texture> LoadTexture(AssetId asset) const;
-    // Loads the encoded bitmap at its authored pixel dimensions. This is for
-    // applications that ship an explicitly selected physical-resolution
-    // variant. Ordinary logical-canvas assets should continue to use
-    // LoadTexture(), which adapts them to the current display scale.
-    [[nodiscard]] Result<Texture> LoadNativeTexture(AssetId asset) const;
+    // Native preserves authored pixels for shared Scene/Raster sampling.
+    // Display explicitly selects the logical-canvas adaptation used by 2D UI.
+    [[nodiscard]] Result<Texture> LoadTexture(AssetId asset, TextureScale scale = TextureScale::kNative) const;
     [[nodiscard]] Result<Font> LoadFont(AssetId asset) const;
+    [[nodiscard]] Result<Texture> CreateDynamicTexture(Size size, PixelFormat format,
+                                                       std::span<const uint8_t> pixels = {}, uint32_t pitch = 0) const;
 
    private:
     struct CapabilityToken {};

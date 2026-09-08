@@ -75,8 +75,8 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
     if (raw.service_id == MICROPIXEL_SERVICE_AUDIO && raw.event_id == MICROPIXEL_AUDIO_EVENT_PLAYBACK_FINISHED) {
         micropixel_audio_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        if (payload.playback == 0U || payload.playback != raw.source || payload.reserved[0] != 0U ||
-            payload.reserved[1] != 0U || payload.reserved[2] != 0U || raw.status > MICROPIXEL_STATUS_OK) {
+        if (payload.playback_handle == 0U || payload.playback_handle != raw.source || payload.reserved0[0] != 0U ||
+            payload.reserved0[1] != 0U || payload.reserved0[2] != 0U || raw.status > MICROPIXEL_STATUS_OK) {
             runtime::Panic("application.wait_event.audio_payload", MICROPIXEL_STATUS_INTERNAL);
         }
         event = Event{AudioPlaybackEvent{timestamp, raw.status == MICROPIXEL_STATUS_OK, raw.source}};
@@ -86,8 +86,8 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
     if (raw.service_id == MICROPIXEL_SERVICE_AUDIO && raw.event_id == MICROPIXEL_AUDIO_EVENT_PCM_STREAM_LOW_WATER) {
         micropixel_audio_pcm_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        if (payload.stream == 0U || payload.stream != raw.source || payload.reserved[0] != 0U ||
-            payload.reserved[1] != 0U || raw.status != MICROPIXEL_STATUS_OK) {
+        if (payload.stream_handle == 0U || payload.stream_handle != raw.source || payload.reserved0[0] != 0U ||
+            payload.reserved0[1] != 0U || raw.status != MICROPIXEL_STATUS_OK) {
             runtime::Panic("application.wait_event.pcm_payload", MICROPIXEL_STATUS_INTERNAL);
         }
         event = Event{PcmStreamEvent{timestamp, payload.free_frames, raw.source}};
@@ -97,13 +97,13 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
     if (raw.service_id == MICROPIXEL_SERVICE_GRAPHICS && raw.event_id == MICROPIXEL_GRAPHICS_EVENT_SURFACE_RELEASED) {
         micropixel_surface_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        if (payload.surface == 0U || payload.surface != raw.source ||
-            payload.buffer_index >= MICROPIXEL_SURFACE_MAX_BUFFERS || raw.status != MICROPIXEL_STATUS_OK) {
+        if (payload.surface_handle == 0U || payload.surface_handle != raw.source ||
+            payload.buffer_index >= runtime::limits::kMaxSurfaceBuffers || raw.status != MICROPIXEL_STATUS_OK) {
             runtime::Panic("application.wait_event.surface_payload", MICROPIXEL_STATUS_INTERNAL);
         }
         // Releases for a surface that was already destroyed may still be queued;
         // they are delivered but do not touch the live surface's ownership.
-        ReleaseSurfaceBuffer(payload.surface, payload.buffer_index);
+        ReleaseSurfaceBuffer(payload.surface_handle, payload.buffer_index);
         event = Event{SurfaceReleasedEvent{timestamp, payload.buffer_index, raw.source}};
         return true;
     }
@@ -126,13 +126,12 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
     if (raw.service_id == MICROPIXEL_SERVICE_GPIO && raw.event_id == MICROPIXEL_GPIO_EVENT_EDGE) {
         micropixel_gpio_event_payload_t payload{};
         CopyBytes(&payload, raw.payload, sizeof(payload));
-        if (raw.source == 0U || payload.device == 0U || payload.value > 1U ||
+        if (raw.source == 0U || payload.value > 1U ||
             (payload.edge != MICROPIXEL_GPIO_EDGE_RISING && payload.edge != MICROPIXEL_GPIO_EDGE_FALLING) ||
-            payload.reserved0 != 0U) {
+            payload.reserved0[0] != 0U || payload.reserved0[1] != 0U) {
             runtime::Panic("application.wait_event.gpio_payload", MICROPIXEL_STATUS_INTERNAL);
         }
-        event = Event{GpioEdgeEvent{timestamp, DeviceId{payload.device}, payload.value != 0U,
-                                    static_cast<GpioEdge>(payload.edge), raw.source}};
+        event = Event{GpioEdgeEvent{timestamp, payload.value != 0U, static_cast<GpioEdge>(payload.edge), raw.source}};
         return true;
     }
 

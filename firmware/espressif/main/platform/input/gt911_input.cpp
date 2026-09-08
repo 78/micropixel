@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include "device/contracts/input.hpp"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
@@ -100,13 +101,11 @@ int32_t Gt911Input::GetInfo(micropixel_input_info_t& info) {
     }
     info = {};
     info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_INPUT_INTERFACE_MAJOR;
-    info.interface_minor = 0U;
     /* GT911 reports contact area/strength, not calibrated touch pressure. */
     info.capabilities = 0U;
     info.logical_width = width_;
     info.logical_height = height_;
-    info.max_touch_points = MICROPIXEL_MAX_TOUCH_POINTS;
+    info.max_touch_points = micropixel::device::kMaxTouchPoints;
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -235,18 +234,19 @@ void Gt911Input::ProcessInterrupt() {
     if (read_status != ESP_OK) {
         ESP_LOGW(kTag, "GT911 sample read failed: %s", esp_err_to_name(read_status));
     } else {
-        esp_lcd_touch_point_data_t points[MICROPIXEL_MAX_TOUCH_POINTS]{};
+        esp_lcd_touch_point_data_t points[micropixel::device::kMaxTouchPoints]{};
         uint8_t point_count = 0U;
-        esp_err_t data_status = esp_lcd_touch_get_data(touch_, points, &point_count, MICROPIXEL_MAX_TOUCH_POINTS);
+        esp_err_t data_status =
+            esp_lcd_touch_get_data(touch_, points, &point_count, micropixel::device::kMaxTouchPoints);
         if (data_status != ESP_OK) {
             ESP_LOGW(kTag, "GT911 sample decode failed: %s", esp_err_to_name(data_status));
         } else {
             uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
-            bool previous_seen[MICROPIXEL_MAX_TOUCH_POINTS]{};
+            bool previous_seen[micropixel::device::kMaxTouchPoints]{};
             for (uint8_t point_index = 0U; point_index < point_count; ++point_index) {
                 const auto& point = points[point_index];
                 int32_t previous_index = -1;
-                for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+                for (uint32_t index = 0U; index < micropixel::device::kMaxTouchPoints; ++index) {
                     if (active_touches_[index].active && active_touches_[index].point.track_id == point.track_id) {
                         previous_index = static_cast<int32_t>(index);
                         previous_seen[index] = true;
@@ -264,7 +264,7 @@ void Gt911Input::ProcessInterrupt() {
                 Emit(sample);
             }
 
-            for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+            for (uint32_t index = 0U; index < micropixel::device::kMaxTouchPoints; ++index) {
                 if (!active_touches_[index].active || previous_seen[index]) {
                     continue;
                 }

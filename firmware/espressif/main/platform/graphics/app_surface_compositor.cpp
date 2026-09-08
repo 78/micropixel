@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "abi/micropixel_abi.h"
+#include "device/contracts/graphics.hpp"
 
 namespace micropixel::platform::graphics {
 namespace {
@@ -17,6 +18,7 @@ uint32_t BytesPerPixel(SurfacePixelFormat format) {
         case SurfacePixelFormat::kBgra8888:
             return format == SurfacePixelFormat::kBgr888 ? 3U : 4U;
         case SurfacePixelFormat::kRgb565:
+        case SurfacePixelFormat::kRgb565Swapped:
             return 2U;
     }
     return 0U;
@@ -96,11 +98,11 @@ bool SameVisual(const AppDrawOperation& left, const AppDrawOperation& right) {
                left.radius == right.radius && left.stroke_width == right.stroke_width;
     }
     if (left.kind == AppDrawOperationKind::kTexture) {
-        return left.texture == right.texture && SameRect(left.source, right.source) &&
+        return left.texture_handle == right.texture_handle && SameRect(left.source, right.source) &&
                SameBitmap(left.bitmap, right.bitmap);
     }
-    return left.rgb888 == right.rgb888 && left.font == right.font && left.text_length == right.text_length &&
-           std::memcmp(left.text, right.text, left.text_length) == 0;
+    return left.rgb888 == right.rgb888 && left.font_handle == right.font_handle &&
+           left.text_length == right.text_length && std::memcmp(left.text, right.text, left.text_length) == 0;
 }
 
 bool Intersects(SurfaceRect left, SurfaceRect right) {
@@ -218,6 +220,16 @@ bool LayerRect(const AppLayerState& layer, SurfaceRect& rect) {
     return layer.valid && Offset(layer.clip, layer.translate_x, layer.translate_y, rect);
 }
 
+bool LayerIsIsolated(const AppDrawOperation* operations, uint32_t count, const AppLayerState& layer) {
+    SurfaceRect bounds{};
+    if (!layer.valid || !LayerRect(layer, bounds)) return false;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& operation = operations[i];
+        if (operation.visible && !operation.in_layer && Intersects(operation.bounds, bounds)) return false;
+    }
+    return true;
+}
+
 bool FullSurfaceRect(PixelSurface destination, SurfaceRect& rect) {
     if (destination.width > INT32_MAX || destination.height > INT32_MAX) {
         return false;
@@ -250,11 +262,8 @@ uint64_t DamagePixels(const DamageRegionSet<AppSurfaceCompositor::kMaxDamageRegi
     return pixels;
 }
 
-// Selects the container whose subtree the compositor may snapshot and move
-// as one Layer. A root-level container flagged CACHED_CONTENT (Graphics 1.4)
-// is the Guest's explicit choice; without one, the first container keeps the
-// historical role so pre-1.4 Guests behave as before.
-// Returns 0 when the scene has no containers.
+// Selects the first root-level container explicitly marked for pixel caching.
+// Returns 0 when no container requests a cache.
 uint8_t SelectLayerContainer(const GuestScene& scene) {
     if (scene.ContainerCount() < 1U) {
         return 0U;
@@ -265,7 +274,7 @@ uint8_t SelectLayerContainer(const GuestScene& scene) {
             return static_cast<uint8_t>(id);
         }
     }
-    return 1U;
+    return 0U;
 }
 
 AppLayerState NormalizeLayer(const GuestScene& scene) {
@@ -287,18 +296,24 @@ AppLayerState NormalizeLayer(const GuestScene& scene) {
 }  // namespace
 
 void AppSurfaceCompositor::RebindStorage(AppSurfaceStorageView storage) {
+    // Retained operations point at the old scene text arena, which the owner
+    // releases after this call, so the next frame is a full normalize and a
+    // full redraw. Surfaces keep their carry state; content damage covers it.
     const size_t capacity = storage.operations.size() / 2U;
-    if (current_count_ != 0U) {
-        std::copy_n(current_, current_count_, storage.operations.data());
-        // Scratch can contain an older keyframe larger than the current frame.
-        std::copy_n(scratch_, operation_capacity_, storage.operations.data() + capacity);
-        std::copy_n(stale_operation_indices_, stale_operation_count_, storage.stale_indices.data());
-    }
     current_ = storage.operations.data();
     scratch_ = capacity == 0U ? nullptr : current_ + capacity;
     operation_capacity_ = static_cast<uint32_t>(capacity);
     stale_operation_indices_ = storage.stale_indices.data();
     stable_to_sorted_index_ = storage.sorted_indices.data();
+    container_path_ = storage.container_path.data();
+    container_path_capacity_ = static_cast<uint32_t>(storage.container_path.size());
+    current_count_ = 0U;
+    stale_operation_count_ = 0U;
+    synchronized_ = false;
+    scratch_synchronized_ = false;
+    retained_text_invalid_ = false;
+    layer_snapshot_active_ = false;
+    current_layer_ = {};
 }
 
 AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scene, const GuestSceneNode& node,
@@ -312,9 +327,9 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
         if (instance == nullptr) {
             return AppSurfaceStatus::kInvalidArgument;
         }
-        const bool textured = node.texture != 0U;
+        const bool textured = node.texture_handle != 0U;
         ConstPixelSurface bitmap_surface{};
-        if (textured && (resolver == nullptr || !resolver(resolver_context, node.texture, operation.bitmap) ||
+        if (textured && (resolver == nullptr || !resolver(resolver_context, node.texture_handle, operation.bitmap) ||
                          !BitmapSurface(operation.bitmap, bitmap_surface))) {
             return AppSurfaceStatus::kUnsupported;
         }
@@ -322,7 +337,7 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
         operation.visible = node.visible && (instance->flags & MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBLE) != 0U;
         operation.opacity =
             static_cast<uint8_t>((static_cast<uint32_t>(node.opacity) * instance->opacity + 127U) / 255U);
-        operation.texture = node.texture;
+        operation.texture_handle = node.texture_handle;
         operation.rgb888 = instance->rgb888;
         operation.destination = {
             .x = instance->x, .y = instance->y, .width = instance->width, .height = instance->height};
@@ -346,7 +361,7 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
             operation.radius = node.radius;
             operation.stroke_width = node.stroke_width;
         } else if (node.kind == GuestSceneNodeKind::kTexture) {
-            if (resolver == nullptr || !resolver(resolver_context, node.texture, operation.bitmap)) {
+            if (resolver == nullptr || !resolver(resolver_context, node.texture_handle, operation.bitmap)) {
                 return AppSurfaceStatus::kInvalidArgument;
             }
             ConstPixelSurface bitmap_surface{};
@@ -354,7 +369,7 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
                 return AppSurfaceStatus::kUnsupported;
             }
             operation.kind = AppDrawOperationKind::kTexture;
-            operation.texture = node.texture;
+            operation.texture_handle = node.texture_handle;
             operation.source = {
                 .x = node.source_x, .y = node.source_y, .width = node.source_width, .height = node.source_height};
         } else {
@@ -363,11 +378,11 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
             }
             operation.kind = AppDrawOperationKind::kText;
             operation.opacity = 255U;
-            operation.font = node.font;
+            operation.font_handle = node.font_handle;
             operation.text_length = node.text_length;
-            std::memcpy(operation.text, node.text, node.text_length + 1U);
+            operation.text = scene.Text(node);
             RasterTextMetrics metrics{};
-            if (!text_->Measure(operation.font, operation.text, operation.text_length, metrics) ||
+            if (!text_->Measure(operation.font_handle, operation.text, operation.text_length, metrics) ||
                 metrics.width > INT32_MAX || metrics.height > INT32_MAX) {
                 return AppSurfaceStatus::kInvalidArgument;
             }
@@ -382,11 +397,14 @@ AppSurfaceStatus AppSurfaceCompositor::NormalizeOperation(const GuestScene& scen
         }
     }
 
-    uint16_t path[MICROPIXEL_GRAPHICS_MAX_CONTAINERS]{};
+    // Ancestor chain, leaf first; the scene guarantees it is acyclic, the
+    // bound only protects against a broken invariant.
+    uint16_t* path = container_path_;
     uint16_t depth = 0U;
     uint16_t container_id = node.parent_container_id;
     while (container_id != 0U) {
-        if (container_id > scene.ContainerCount() || depth >= MICROPIXEL_GRAPHICS_MAX_CONTAINERS) {
+        if (path == nullptr || container_id > scene.ContainerCount() || depth >= container_path_capacity_ ||
+            depth > scene.ContainerCount()) {
             return AppSurfaceStatus::kInvalidArgument;
         }
         path[depth++] = container_id;
@@ -653,7 +671,7 @@ bool AppSurfaceCompositor::ReplayOperations(PixelSurface destination, const AppD
             } else {
                 rendered = text_ != nullptr &&
                            text_->Draw(operation_target, local_destination.x, local_destination.y, operation.rgb888,
-                                       operation.font, operation.text, operation.text_length);
+                                       operation.font_handle, operation.text, operation.text_length);
             }
             if (!rendered) {
                 render_failure_ = {
@@ -857,8 +875,9 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentScene(const GuestScene& scene
     AppLayerState scratch_layer{};
     // Operation in_layer bits are only refreshed for changed nodes on the
     // patch path, so a change of the Layer container itself needs a full pass.
-    bool incremental = synchronized_ && !scene.LastApplyWasKeyframe() && !scene.TreeOrderChanged() &&
-                       SelectLayerContainer(scene) == current_layer_.layer_id;
+    bool incremental = synchronized_ && !retained_text_invalid_ && !scene.LastApplyWasKeyframe() &&
+                       !scene.TreeOrderChanged() && SelectLayerContainer(scene) == current_layer_.layer_id;
+    retained_text_invalid_ = false;
     for (uint16_t node_index = 0U; incremental && node_index < scene.NodeCount(); ++node_index) {
         const uint32_t changes = scene.NodeChanges(node_index);
         incremental = (changes & MICROPIXEL_GRAPHICS_SCENE_NODE_KIND) == 0U &&
@@ -919,11 +938,16 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentNormalized(uint32_t scratch_c
                                             scratch_layer.translate_y != current_layer_.translate_y);
     // Stay on an active snapshot as long as the layer content is unchanged;
     // the snapshot remains an exact copy of the layer whether it moves or not.
-    bool use_layer_snapshot = layer_snapshot_active_ && same_layer && !layer_content_changed;
+    // Opaque snapshots include the Scene background in uncovered pixels.
+    // They are equivalent only when no other subtree overlaps either extent;
+    // otherwise replay normally so a cache hint cannot hide or move siblings.
+    const bool isolated = !background_changed && LayerIsIsolated(current_, current_count_, current_layer_) &&
+                          LayerIsIsolated(scratch_, scratch_count, scratch_layer);
+    bool use_layer_snapshot = layer_snapshot_active_ && same_layer && !layer_content_changed && isolated;
     // The layer snapshot is captured from the last presented surface, which
     // holds the complete previous frame regardless of which surface is drawn
     // next.
-    if (!use_layer_snapshot && layer_translation_changed && previous_frame_available && known_destination &&
+    if (!use_layer_snapshot && isolated && layer_translation_changed && previous_frame_available && known_destination &&
         current_layer_.valid && !layer_content_changed &&
         CaptureLayer(slots_[last_presented_].surface, current_layer_)) {
         use_layer_snapshot = true;
@@ -1000,91 +1024,6 @@ AppSurfaceFrameResult AppSurfaceCompositor::PresentNormalized(uint32_t scratch_c
     current_layer_ = scratch_layer;
     layer_snapshot_active_ = use_layer_snapshot;
     synchronized_ = true;
-    RecordCarryDamage(slot, content_damage_);
-    return Result(AppSurfaceStatus::kOk, !damage_.Empty(), draw_operations_replayed);
-}
-
-AppSurfaceFrameResult AppSurfaceCompositor::RefreshBitmap(const uint8_t* bitmap_data, DamageRect source_damage,
-                                                          PixelSurface destination) {
-    damage_.Clear();
-    content_damage_.Clear();
-    normalized_operations_ = 0U;
-    incremental_normalization_ = false;
-    normalize_us_ = 0U;
-    damage_us_ = 0U;
-    render_us_ = 0U;
-    if (!ValidDestination(destination) || !synchronized_ || bitmap_data == nullptr || source_damage.width == 0U ||
-        source_damage.height == 0U) {
-        return Result(AppSurfaceStatus::kInvalidArgument, false);
-    }
-    // The bitmap refresh can land on any surface of the rotation: the mapped
-    // regions describe the content change, and the destination additionally
-    // receives whatever it missed while other surfaces were presented.
-    const uint8_t slot = ClaimSlot(destination);
-    if (slot == kNoSlot) {
-        return Result(AppSurfaceStatus::kInvalidArgument, false);
-    }
-    const bool full_redraw = slots_[slot].carry_overflow;
-    const uint64_t dirty_right = static_cast<uint64_t>(source_damage.x) + source_damage.width;
-    const uint64_t dirty_bottom = static_cast<uint64_t>(source_damage.y) + source_damage.height;
-    for (uint32_t index = 0U; index < current_count_; ++index) {
-        const AppDrawOperation& operation = current_[index];
-        if (!operation.visible || (layer_snapshot_active_ && operation.in_layer) ||
-            operation.kind != AppDrawOperationKind::kTexture || operation.bitmap.data != bitmap_data) {
-            continue;
-        }
-        const uint32_t source_left = static_cast<uint32_t>(operation.source.x);
-        const uint32_t source_top = static_cast<uint32_t>(operation.source.y);
-        const uint64_t source_right = static_cast<uint64_t>(source_left) + operation.source.width;
-        const uint64_t source_bottom = static_cast<uint64_t>(source_top) + operation.source.height;
-        const uint64_t clipped_left = source_damage.x > source_left ? source_damage.x : source_left;
-        const uint64_t clipped_top = source_damage.y > source_top ? source_damage.y : source_top;
-        const uint64_t clipped_right = dirty_right < source_right ? dirty_right : source_right;
-        const uint64_t clipped_bottom = dirty_bottom < source_bottom ? dirty_bottom : source_bottom;
-        if (clipped_right <= clipped_left || clipped_bottom <= clipped_top) {
-            continue;
-        }
-        const uint64_t relative_left = clipped_left - source_left;
-        const uint64_t relative_top = clipped_top - source_top;
-        const uint64_t relative_right = clipped_right - source_left;
-        const uint64_t relative_bottom = clipped_bottom - source_top;
-        const int32_t destination_left =
-            operation.destination.x + static_cast<int32_t>(relative_left * operation.destination.width /
-                                                           static_cast<uint32_t>(operation.source.width));
-        const int32_t destination_top =
-            operation.destination.y + static_cast<int32_t>(relative_top * operation.destination.height /
-                                                           static_cast<uint32_t>(operation.source.height));
-        const int32_t destination_right =
-            operation.destination.x +
-            static_cast<int32_t>((relative_right * operation.destination.width + operation.source.width - 1U) /
-                                 static_cast<uint32_t>(operation.source.width));
-        const int32_t destination_bottom =
-            operation.destination.y +
-            static_cast<int32_t>((relative_bottom * operation.destination.height + operation.source.height - 1U) /
-                                 static_cast<uint32_t>(operation.source.height));
-        const SurfaceRect mapped{.x = destination_left,
-                                 .y = destination_top,
-                                 .width = destination_right - destination_left,
-                                 .height = destination_bottom - destination_top};
-        if (!AddDamage(destination, Intersection(mapped, operation.bounds))) {
-            return Result(AppSurfaceStatus::kResourceExhausted, false);
-        }
-    }
-    content_damage_ = damage_;
-    if (full_redraw) {
-        SurfaceRect full{};
-        if (!FullSurfaceRect(destination, full) || !AddDamage(destination, full)) {
-            return Result(AppSurfaceStatus::kResourceExhausted, false);
-        }
-    } else if (!AddCarryDamage(destination, slot)) {
-        return Result(AppSurfaceStatus::kResourceExhausted, false);
-    }
-    uint32_t draw_operations_replayed = 0U;
-    if (!damage_.Empty() && !RenderDamage(destination, current_, current_count_, background_rgb888_, current_layer_,
-                                          layer_snapshot_active_, draw_operations_replayed)) {
-        synchronized_ = false;
-        return Result(AppSurfaceStatus::kRenderFailed, false, draw_operations_replayed);
-    }
     RecordCarryDamage(slot, content_damage_);
     return Result(AppSurfaceStatus::kOk, !damage_.Empty(), draw_operations_replayed);
 }

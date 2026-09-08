@@ -58,18 +58,14 @@ class GuestGraphicsEngine final {
     [[nodiscard]] int32_t GetInfo(micropixel_graphics_info_t& info) const;
     [[nodiscard]] int32_t Submit(const uint8_t* bytes, uint32_t length, const device::TextureAccess& textures);
     [[nodiscard]] int32_t LoadFont(const device::FontResourceView& resource, micropixel_font_info_t& info_out);
-    [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t font);
-    [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
+    [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t font_handle);
+    [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
                                       micropixel_text_metrics_t& metrics_out);
-    [[nodiscard]] int32_t BeginBitmapUpdateFrame();
-    [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                       uint32_t height, const uint8_t* pixels, uint32_t stride);
-    [[nodiscard]] int32_t CommitBitmapUpdateFrame();
     [[nodiscard]] bool ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination);
     void Release();
 
-    // Direct Surface (Graphics 1.5). While one exists Scene submits and
-    // streaming bitmap presents are rejected; the presenter owns the panel.
+    // Direct Surface. While one exists Scene submits are rejected; the
+    // presenter owns the panel.
     [[nodiscard]] int32_t CreateDirectSurface(const device::DirectSurfaceConfig& config,
                                               const device::DirectSurfaceReleaseSink& sink,
                                               device::DirectSurfaceInfo& info_out);
@@ -120,7 +116,7 @@ class GuestGraphicsEngine final {
    private:
     static void DisplayRefreshStartEvent(lv_event_t* event);
     static void DisplayRefreshReadyEvent(lv_event_t* event);
-    static bool ValidateFontHandle(void* context, micropixel_font_handle_t font);
+    static bool ValidateFontHandle(void* context, micropixel_font_handle_t font_handle);
 
     static void PublishTimerCallback(lv_timer_t* timer);
     // Presenter task: copies (and converts) one Direct Surface frame into a
@@ -241,16 +237,11 @@ class GuestGraphicsEngine final {
     [[nodiscard]] bool ComposeUnderLock() const { return app_surface_count_ < 2U; }
     void ShowAppSurfaceLocked();
     void HideAppSurfaceLocked();
-    // Guest task: composes a streaming bitmap change into a free surface and
-    // publishes it. Returns whether anything visible changed.
-    [[nodiscard]] bool RefreshAppSurfaceBitmap(const uint8_t* bitmap_data, graphics::DamageRect damage);
-    // Refreshes every region and, with a single surface, adopts inline under
-    // the LVGL lock. Returns whether anything visible changed.
-    [[nodiscard]] bool PresentBitmapDamage(const graphics::DamageRegion* regions, size_t count);
     void ReleaseAppSurfaceLocked();
 
-    static constexpr uint32_t kBitmapDamageCapacity = 16U;
-    static constexpr uint32_t kMaxSceneTextures = MICROPIXEL_GRAPHICS_MAX_SCENE_NODES;
+    // Distinct textures (and fonts) one committed scene may retain. Host
+    // sizing policy: the bitmap and font stores hold fewer handles than this.
+    static constexpr uint32_t kMaxSceneTextures = 256U;
 
     int32_t width_{};
     int32_t height_{};
@@ -290,11 +281,6 @@ class GuestGraphicsEngine final {
     FontRegistry& fonts_;
     BitmapFontRasterizer bitmap_font_rasterizer_;
     GuestPresentationHooks presentation_hooks_{};
-    graphics::DamageRegionSet<kBitmapDamageCapacity> bitmap_damage_{};
-    uint64_t bitmap_frame_started_us_{};
-    uint64_t bitmap_frame_bytes_{};
-    uint32_t bitmap_frame_updates_{};
-    uint32_t bitmap_frame_sequence_{};
     micropixel_texture_handle_t* texture_storage_{};
     micropixel_texture_handle_t* scene_textures_{};
     micropixel_texture_handle_t* scratch_textures_{};
@@ -338,7 +324,6 @@ class GuestGraphicsEngine final {
     int64_t display_refresh_started_us_{};
     StaticSemaphore_t display_refresh_ready_storage_{};
     SemaphoreHandle_t display_refresh_ready_{};
-    bool bitmap_update_frame_active_{};
     bool app_surface_active_{};
     bool app_surface_allocation_failed_{};
     // A boolean deliberately coalesces any number of Guest updates into the

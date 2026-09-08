@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "device/contracts/graphics.hpp"
 #include "runtime/event_queue.hpp"
 #include "runtime/services/direct_surface_service.hpp"
 
@@ -36,12 +37,6 @@ class FakeGraphics final : public micropixel::device::Graphics {
                                       micropixel_text_metrics_t&) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
-    [[nodiscard]] int32_t BeginBitmapUpdateFrame() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
-    [[nodiscard]] int32_t UpdateBitmap(const micropixel::device::BitmapView&, uint32_t, uint32_t, uint32_t, uint32_t,
-                                       const uint8_t*, uint32_t) override {
-        return MICROPIXEL_STATUS_UNSUPPORTED;
-    }
-    [[nodiscard]] int32_t CommitBitmapUpdateFrame() override { return MICROPIXEL_STATUS_UNSUPPORTED; }
     [[nodiscard]] int32_t ScaleBitmap(const micropixel::device::BitmapView&,
                                       const micropixel::device::BitmapView&) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;
@@ -122,7 +117,7 @@ class FakeGraphics final : public micropixel::device::Graphics {
 
    private:
     void ReleaseAll() {
-        for (uint8_t index = 0U; index < MICROPIXEL_SURFACE_MAX_BUFFERS; ++index) {
+        for (uint8_t index = 0U; index < micropixel::device::graphics_limits::kMaxSurfaceBuffers; ++index) {
             if ((in_flight_mask & (1U << index)) != 0U) {
                 Release(index, 5000U);
             }
@@ -161,28 +156,29 @@ micropixel_surface_create_request_t HostCreateRequest(uint32_t buffer_count) {
     return request;
 }
 
-micropixel_surface_present_request_t PresentRequest(micropixel_surface_handle_t surface, uint32_t buffer_index) {
+micropixel_surface_present_request_t PresentRequest(micropixel_surface_handle_t surface_handle, uint32_t buffer_index) {
     micropixel_surface_present_request_t request{};
     request.size = sizeof(request);
-    request.surface = surface;
+    request.surface_handle = surface_handle;
     request.buffer_index = buffer_index;
     request.pixels = 0x10000U + buffer_index * kFrameBytes;
     request.length = kFrameBytes;
     request.pitch = kWidth * 2U;
-    request.src_width = kWidth;
-    request.src_height = kHeight;
+    request.source_width = kWidth;
+    request.source_height = kHeight;
     return request;
 }
 
-micropixel_surface_present_request_t HostPresentRequest(micropixel_surface_handle_t surface, uint32_t buffer_index) {
-    micropixel_surface_present_request_t request = PresentRequest(surface, buffer_index);
+micropixel_surface_present_request_t HostPresentRequest(micropixel_surface_handle_t surface_handle,
+                                                        uint32_t buffer_index) {
+    micropixel_surface_present_request_t request = PresentRequest(surface_handle, buffer_index);
     request.pixels = 0U;
     request.length = 0U;
     return request;
 }
 
-bool PopRelease(micropixel::runtime::EventQueue& events, micropixel_surface_handle_t surface, uint32_t buffer_index,
-                uint64_t expected_timestamp_us) {
+bool PopRelease(micropixel::runtime::EventQueue& events, micropixel_surface_handle_t surface_handle,
+                uint32_t buffer_index, uint64_t expected_timestamp_us) {
     micropixel_event_t event{};
     if (events.Wait(event, 0U) != micropixel::runtime::EventWaitResult::kReceived) {
         return false;
@@ -190,9 +186,9 @@ bool PopRelease(micropixel::runtime::EventQueue& events, micropixel_surface_hand
     micropixel_surface_event_payload_t payload{};
     std::memcpy(&payload, event.payload, sizeof(payload));
     return event.service_id == MICROPIXEL_SERVICE_GRAPHICS &&
-           event.event_id == MICROPIXEL_GRAPHICS_EVENT_SURFACE_RELEASED && event.source == surface &&
+           event.event_id == MICROPIXEL_GRAPHICS_EVENT_SURFACE_RELEASED && event.source == surface_handle &&
            event.status == MICROPIXEL_STATUS_OK && event.timestamp_us == expected_timestamp_us &&
-           payload.surface == surface && payload.buffer_index == buffer_index &&
+           payload.surface_handle == surface_handle && payload.buffer_index == buffer_index &&
            payload.timestamp_us == expected_timestamp_us;
 }
 
@@ -225,39 +221,41 @@ int main() {
     // Host buffers need neither: the Guest never addresses them.
     {
         micropixel::runtime::HostBufferView none{};
-        Require(service.HostBuffer(0U, none) == MICROPIXEL_STATUS_NOT_FOUND);
+        Require(service.HostBuffer(0U, 0U, none) == MICROPIXEL_STATUS_NOT_FOUND);
         auto host = service.Create(HostCreateRequest(2U));
         Require(host.has_value() && backend.created && backend.config.flags == 0U);
         Require(service.native_byte_swapped());
         micropixel::runtime::HostBufferView view{};
-        Require(service.HostBuffer(0U, view) == MICROPIXEL_STATUS_OK && view.pixels != nullptr &&
+        Require(service.HostBuffer(host->surface_handle, 0U, view) == MICROPIXEL_STATUS_OK && view.pixels != nullptr &&
                 view.width == kWidth && view.height == kHeight && view.pitch == kWidth * 2U);
         Require(view.pixels[0] == 0U && view.pixels[kFrameBytes - 1U] == 0U);
-        Require(service.HostBuffer(2U, view) == MICROPIXEL_STATUS_NOT_FOUND);
+        Require(service.HostBuffer(host->surface_handle, 2U, view) == MICROPIXEL_STATUS_NOT_FOUND);
         micropixel::runtime::HostBufferView other{};
-        Require(service.HostBuffer(1U, other) == MICROPIXEL_STATUS_OK && other.pixels != view.pixels);
+        Require(service.HostBuffer(host->surface_handle, 1U, other) == MICROPIXEL_STATUS_OK &&
+                other.pixels != view.pixels);
         // A Host-buffer present names the buffer only; addresses are refused,
         // and so is a geometry other than the buffer's.
-        auto present = PresentRequest(host->surface, 0U);
+        auto present = PresentRequest(host->surface_handle, 0U);
         Require(service.Present(present).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-        present = HostPresentRequest(host->surface, 0U);
-        present.src_width = kWidth / 2U;
+        present = HostPresentRequest(host->surface_handle, 0U);
+        present.source_width = kWidth / 2U;
         present.pitch = kWidth;
         present.flags = MICROPIXEL_SURFACE_PRESENT_SCALE_NEAREST;
         Require(service.Present(present).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-        Require(service.Present(HostPresentRequest(host->surface, 0U)).has_value());
+        Require(service.Present(HostPresentRequest(host->surface_handle, 0U)).has_value());
         Require(backend.last.pixels == view.pixels && backend.last.length == kFrameBytes &&
                 backend.last.pitch == kWidth * 2U && backend.last.byte_swapped && backend.last.flags == 0U);
         // While in flight the kernels may not write it and it cannot be
         // presented again; the release hands it back.
-        Require(service.HostBuffer(0U, view) == MICROPIXEL_STATUS_STALE_STATE);
-        Require(service.Present(HostPresentRequest(host->surface, 0U)).error().status == MICROPIXEL_STATUS_STALE_STATE);
-        Require(service.HostBuffer(1U, other) == MICROPIXEL_STATUS_OK);
+        Require(service.HostBuffer(host->surface_handle, 0U, view) == MICROPIXEL_STATUS_STALE_STATE);
+        Require(service.Present(HostPresentRequest(host->surface_handle, 0U)).error().status ==
+                MICROPIXEL_STATUS_STALE_STATE);
+        Require(service.HostBuffer(host->surface_handle, 1U, other) == MICROPIXEL_STATUS_OK);
         backend.Release(0U, 2000U);
-        Require(PopRelease(events, host->surface, 0U, 1000U));
-        Require(service.HostBuffer(0U, view) == MICROPIXEL_STATUS_OK);
-        Require(service.Destroy(host->surface).has_value());
-        Require(service.HostBuffer(0U, view) == MICROPIXEL_STATUS_NOT_FOUND);
+        Require(PopRelease(events, host->surface_handle, 0U, 1000U));
+        Require(service.HostBuffer(host->surface_handle, 0U, view) == MICROPIXEL_STATUS_OK);
+        Require(service.Destroy(host->surface_handle).has_value());
+        Require(service.HostBuffer(host->surface_handle, 0U, view) == MICROPIXEL_STATUS_NOT_FOUND);
         Require(QueueEmpty(events));
     }
 
@@ -266,7 +264,7 @@ int main() {
     // Create validation happens before the device is touched.
     auto bad = CreateRequest(0U);
     Require(service.Create(bad).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    bad = CreateRequest(MICROPIXEL_SURFACE_MAX_BUFFERS + 1U);
+    bad = CreateRequest(micropixel::device::graphics_limits::kMaxSurfaceBuffers + 1U);
     Require(service.Create(bad).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
     bad = CreateRequest(2U);
     bad.pixel_format = MICROPIXEL_PIXEL_FORMAT_BGR888;
@@ -288,13 +286,13 @@ int main() {
 
     auto created = service.Create(CreateRequest(2U));
     Require(created.has_value());
-    Require(created->size == sizeof(*created) && created->surface != 0U);
+    Require(created->size == sizeof(*created) && created->surface_handle != 0U);
     Require(created->native_pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 &&
             created->native_flags ==
                 (MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED | MICROPIXEL_SURFACE_NATIVE_DIRECT_SCANOUT) &&
             created->max_full_frame_fps == 42U);
     Require(backend.created && backend.config.buffer_count == 2U && backend.config.flags == 0U);
-    const micropixel_surface_handle_t surface = created->surface;
+    const micropixel_surface_handle_t surface = created->surface_handle;
     Require(service.Create(CreateRequest(1U)).error().status == MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
 
     // Present validation: every malformed request is refused before the device
@@ -371,8 +369,8 @@ int main() {
 
     // A new surface gets a fresh handle; Shutdown tears it down for teardown.
     auto second = service.Create(CreateRequest(3U));
-    Require(second.has_value() && second->surface != surface);
-    Require(service.Present(PresentRequest(second->surface, 2U)).has_value());
+    Require(second.has_value() && second->surface_handle != surface);
+    Require(service.Present(PresentRequest(second->surface_handle, 2U)).has_value());
     service.Shutdown();
     Require(!backend.created && backend.destroy_count == 3U);
     Require(QueueEmpty(events));

@@ -7,6 +7,18 @@
 
 namespace micropixel::device {
 
+// Graphics capacity policy shared by Runtime and Platform and reported to the
+// Guest through micropixel_graphics_info_t. Scene nodes, containers and batch
+// instances have no count cap: storage grows per submit up to the wire's
+// uint16 ids and fails with RESOURCE_EXHAUSTED when PSRAM runs out. The values
+// here bound one message, one text run and the Direct Surface ring.
+namespace graphics_limits {
+inline constexpr uint32_t kMaxTextBytes = 1024U;
+inline constexpr uint32_t kMaxSceneBytes = 128U * 1024U;
+inline constexpr uint32_t kMaxRasterBytes = 32768U;
+inline constexpr uint32_t kMaxSurfaceBuffers = 3U;
+}  // namespace graphics_limits
+
 struct BitmapView final {
     const uint8_t* data{};
     uint32_t size{};
@@ -23,9 +35,9 @@ struct FontResourceView final {
 };
 
 using BitmapResolver = bool (*)(void* context, micropixel_texture_handle_t bitmap, BitmapView& view_out);
-using FontValidator = bool (*)(void* context, micropixel_font_handle_t font);
-using TextureRetainer = bool (*)(void* context, micropixel_texture_handle_t texture);
-using TextureReleaser = void (*)(void* context, micropixel_texture_handle_t texture);
+using FontValidator = bool (*)(void* context, micropixel_font_handle_t font_handle);
+using TextureRetainer = bool (*)(void* context, micropixel_texture_handle_t texture_handle);
+using TextureReleaser = void (*)(void* context, micropixel_texture_handle_t texture_handle);
 
 // Access to one Guest's Texture store. An implementation that retains pixel pointers
 // past Submit() must retain every Texture referenced by the published scene and
@@ -65,8 +77,8 @@ struct DirectSurfacePresentation final {
     uint8_t* pixels{};
     uint32_t length{};
     uint32_t pitch{};
-    uint32_t src_width{};
-    uint32_t src_height{};
+    uint32_t source_width{};
+    uint32_t source_height{};
     uint32_t flags{};
     uint8_t buffer_index{};
     // Pixels hold RGB565 with the two bytes of every pixel swapped (the order
@@ -95,13 +107,9 @@ class Graphics {
     [[nodiscard]] virtual int32_t GetInfo(micropixel_graphics_info_t& info) = 0;
     [[nodiscard]] virtual int32_t Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) = 0;
     [[nodiscard]] virtual int32_t LoadFont(const FontResourceView& resource, micropixel_font_info_t& info_out) = 0;
-    [[nodiscard]] virtual int32_t ReleaseFont(micropixel_font_handle_t font) = 0;
-    [[nodiscard]] virtual int32_t MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
-                                              micropixel_text_metrics_t& metrics_out) = 0;
-    [[nodiscard]] virtual int32_t BeginBitmapUpdateFrame() = 0;
-    [[nodiscard]] virtual int32_t UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                               uint32_t height, const uint8_t* pixels, uint32_t stride) = 0;
-    [[nodiscard]] virtual int32_t CommitBitmapUpdateFrame() = 0;
+    [[nodiscard]] virtual int32_t ReleaseFont(micropixel_font_handle_t font_handle) = 0;
+    [[nodiscard]] virtual int32_t MeasureText(micropixel_font_handle_t font_handle, const char* text,
+                                              uint32_t text_length, micropixel_text_metrics_t& metrics_out) = 0;
     // One blocking hardware-assisted resize used by the Resource background
     // path. Source and destination have identical pixel formats.
     [[nodiscard]] virtual int32_t ScaleBitmap(const BitmapView& source, const BitmapView& destination) = 0;

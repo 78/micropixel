@@ -1,9 +1,13 @@
 #include "runtime/display_context.hpp"
 
+#include "runtime/graphics_limits.hpp"
+
 namespace micropixel::runtime {
 
 namespace {
 ServiceCache graphics_service;
+GraphicsLimits cached_graphics_limits{};
+bool graphics_limits_loaded{};
 ServiceCache input_service;
 micropixel_graphics_info_t cached_graphics_info{};
 bool graphics_info_loaded{};
@@ -25,18 +29,16 @@ const micropixel_graphics_info_t& LoadPhysicalGraphicsInfo() {
                               sizeof(cached_graphics_info), response_size),
                   "graphics.info");
         if (response_size < sizeof(cached_graphics_info) || cached_graphics_info.size < sizeof(cached_graphics_info) ||
-            cached_graphics_info.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
             (cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
              cached_graphics_info.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) ||
             cached_graphics_info.width == 0U || cached_graphics_info.height == 0U ||
-            cached_graphics_info.max_scene_bytes < MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES ||
-            cached_graphics_info.max_scene_nodes == 0U || cached_graphics_info.max_batch_instances == 0U ||
-            cached_graphics_info.max_containers == 0U || cached_graphics_info.max_sprite_batches == 0U ||
             static_cast<uint32_t>(cached_graphics_info.safe_inset_left) + cached_graphics_info.safe_inset_right >=
                 cached_graphics_info.width ||
             static_cast<uint32_t>(cached_graphics_info.safe_inset_top) + cached_graphics_info.safe_inset_bottom >=
                 cached_graphics_info.height ||
-            cached_graphics_info.reserved0 != 0U) {
+            cached_graphics_info.reserved0 != 0U || cached_graphics_info.max_surface_buffers == 0U ||
+            cached_graphics_info.max_text_bytes == 0U ||
+            cached_graphics_info.max_scene_bytes < sizeof(micropixel_graphics_scene_header_t)) {
             micropixel::runtime::Panic("graphics.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         if (input_info_loaded && (cached_graphics_info.width != cached_input_info.logical_width ||
@@ -46,6 +48,19 @@ const micropixel_graphics_info_t& LoadPhysicalGraphicsInfo() {
         graphics_info_loaded = true;
     }
     return cached_graphics_info;
+}
+
+const GraphicsLimits& LoadGraphicsLimits() {
+    if (!graphics_limits_loaded) {
+        const micropixel_graphics_info_t& info = LoadPhysicalGraphicsInfo();
+        const auto clamp = [](uint32_t host, uint32_t guest) { return host < guest ? host : guest; };
+        cached_graphics_limits.max_text_bytes = clamp(info.max_text_bytes, limits::kMaxTextBytes);
+        cached_graphics_limits.max_scene_bytes = clamp(info.max_scene_bytes, limits::kMaxSceneBytes);
+        cached_graphics_limits.max_raster_bytes = clamp(info.max_raster_bytes, limits::kMaxRasterBytes);
+        cached_graphics_limits.max_surface_buffers = clamp(info.max_surface_buffers, limits::kMaxSurfaceBuffers);
+        graphics_limits_loaded = true;
+    }
+    return cached_graphics_limits;
 }
 
 const micropixel::detail::DisplayTransform& LoadDisplayContext() {
@@ -81,10 +96,8 @@ const micropixel_input_info_t& LoadInputInfo() {
                               sizeof(cached_input_info), response_size),
                   "input.info");
         if (response_size < sizeof(cached_input_info) || cached_input_info.size < sizeof(cached_input_info) ||
-            cached_input_info.interface_major != MICROPIXEL_INPUT_INTERFACE_MAJOR ||
             cached_input_info.logical_width == 0U || cached_input_info.logical_height == 0U ||
-            cached_input_info.max_touch_points == 0U ||
-            cached_input_info.max_touch_points > MICROPIXEL_MAX_TOUCH_POINTS) {
+            cached_input_info.max_touch_points == 0U) {
             micropixel::runtime::Panic("input.info.incompatible", MICROPIXEL_STATUS_UNSUPPORTED);
         }
         if (graphics_info_loaded && (cached_input_info.logical_width != cached_graphics_info.width ||

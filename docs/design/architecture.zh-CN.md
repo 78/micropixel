@@ -101,15 +101,22 @@ GPIO 只暴露板级白名单，打开形成独占租用，释放后恢复安全
 
 ## 5. Graphics 与 Resource
 
+正式版前的 Scene、2.5D 前端与共享资源设计见
+[SDK API 重构](sdk-api.zh-CN.md)。以下描述当前实现，迁移验收完成后再替换为新基线。
+
 图形提供两种应用模型，系统 UI 的所有权保持一致：
 
 - **Scene** 保存对象树，适合页面、精灵和局部更新。Guest 提交属性变化，Host 验证后只重绘受影响区域。
 - **DirectSurface** 管理整帧缓冲，适合 raycaster 等全屏渲染。默认缓冲由 Host 持有，Guest 提交
-  SurfaceRaster 绘制记录；算法和场景判断留在 Guest，逐像素循环在 Host 执行。
+  RasterResources 绘制记录；算法和场景判断留在 Guest，逐像素循环在 Host 执行。
 
-Scene 的 Container 同时表达子树生命周期、局部坐标和继承属性。一次更新是事务：失败时当前画面和
-旧对象身份保持不变，回滚创建的 handle 失效。首次和结构变化提交 keyframe，普通更新提交净差量 patch；
-Host 用 generation/revision 验证基线，必要时重新同步完整 Scene。
+Scene 的 Container 表达子树生命周期、局部坐标和继承属性。新路径的 setter 只修改 Guest 状态，
+Renderer::Present 统一提交；失败保留待提交状态，删除的 handle 不会复活。可以保存多个场景，
+切换发送 keyframe；普通更新提交净差量 patch。Host 用 generation/revision 验证基线。
+
+2.5D / 伪 3D 游戏不走通用浮点网格：Guest SDK 的几何前端（`Raycaster` 等）把地图、相机和
+billboard 变成 RasterResources 记录，每像素填充仍由 Host 的 INDEX8 + 光照调色板整数内核完成。
+不提供通用浮点网格与逐像素深度缓冲：MCU 没有值得依赖的浮点吞吐。ABI 2.0 的 Graphics 使用原有 Core transport。
 
 布局和输入使用 SDK 的同一逻辑坐标空间，SDK 将其转换为物理坐标后发送。Host 不重复实现应用布局。
 应用从 RendererInfo 查询尺寸、安全区和容量，不能靠板名判断；字体使用 Host 提供的语义角色。
@@ -124,7 +131,7 @@ DirectSurface 存活期间拒绝 Scene submit。Present 后缓冲归 Host，释�
 保证线性内存增长不移动基址，其代价是提前占用连续 PSRAM。暂停期间停止扫描并归还在飞缓冲。
 
 Texture 的 Guest 句柄和 Scene 引用独立计数：Guest Reset 只释放自己的引用，仍被 Scene 使用的像素
-必须继续存在。StreamingTexture 用于局部像素更新，批量更新合并 damage。资源加载可在 Host 后台解码，
+必须继续存在。可变像素只通过动态纹理快照更新，不存在原地写入的 streaming 纹理。资源加载可在 Host 后台解码，
 公开加载调用仍同步等待。动画时间由 Guest 驱动，当前不提供 Host AnimationClip/Track。
 
 ## 6. 所有权、并发与错误
@@ -137,11 +144,8 @@ Host 实时与跨任务路径使用固定容量队列、数组和对象池，不
 任务核心和优先级集中在 [task_policy.hpp](../../firmware/espressif/main/work/task_policy.hpp)，
 后台解码、持久化和日志不得阻塞 Guest 热路径。ISR 不调用 WAMR、Guest 或 LVGL。
 
-Scene 存储是显式扩容的例外：节点/实例分别限于 256/1024，按消息实际需求分档申请 PSRAM 数组，
-App 不声明容量。提交入口先校验消息结构和计数，所有新缓冲申请成功后迁移并统一替换；OOM 返回
-资源不足且保留旧场景。解析与绘制期间不分配，挂起保留容量，App 结束或启动失败清理时释放。
-Scene 消息上限为 128 KiB，不意味着预分配同等大小的 Host 消息缓冲。帧缓冲与 Layer 像素继续由 Host
-按显示生命周期保留。回归覆盖满容量、扩容后 patch、每次分配的 OOM 回滚、复用与释放。
+Scene 与 Raster 仅在提交或上传入口按需显式分配，失败保留原状态，绘制期间不分配。应用资源随
+Session 释放，显示缓冲按显示生命周期管理；具体资源契约见 [ABI](../../guest/abi/README.md)。
 
 Guest 线性内存位于 PSRAM，按需增长，当前策略上限为 8 MiB，并受最大连续块与 Host 安全水位约束。
 Host-owned 纹理和 surface 在实际分配时同样检查安全水位，不提前占满理论配额。这样轻量应用能把内存
@@ -158,7 +162,8 @@ AOT section，按 CPU 架构分别构建；安装在写入 App Store 前拒绝�
 容器为未来多架构留有空间，但多 AOT 选择尚未启用。
 
 BundleFS 使用写时复制：先写并验证新数据，最后提交新 Catalog，掉电后选择最后一代有效记录。
-离散数据块减少连续空洞问题，代价是升级时必须同时容纳新旧版本。Catalog 位于 app_store，擦除系统
+离散数据块减少连续空洞问题。App Store 重装已安装 App 时先卸载旧版本再安装，只需容纳新版本，
+但删除后失败会让该 App 处于未安装状态。Catalog 位于 app_store，擦除系统
 NVS 不影响应用。格式、迁移和恢复规则只在 [BundleFS 文档](bundlefs.zh-CN.md)维护。
 
 设备能力回答“能否提供操作”，权限回答“当前应用是否获准操作”。Service 发现和版本协商不等于授权；

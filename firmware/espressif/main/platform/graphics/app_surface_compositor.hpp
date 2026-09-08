@@ -32,10 +32,11 @@ class TextRasterizer {
     TextRasterizer(const TextRasterizer&) = delete;
     TextRasterizer& operator=(const TextRasterizer&) = delete;
 
-    [[nodiscard]] virtual bool Measure(micropixel_font_handle_t font, const char* text, uint16_t text_length,
+    [[nodiscard]] virtual bool Measure(micropixel_font_handle_t font_handle, const char* text, uint16_t text_length,
                                        RasterTextMetrics& metrics) const = 0;
     [[nodiscard]] virtual bool Draw(PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
-                                    micropixel_font_handle_t font, const char* text, uint16_t text_length) const = 0;
+                                    micropixel_font_handle_t font_handle, const char* text,
+                                    uint16_t text_length) const = 0;
 
    protected:
     TextRasterizer() = default;
@@ -56,18 +57,22 @@ struct AppDrawOperation final {
     uint32_t radius{};
     uint32_t stroke_width{};
     uint8_t opacity{};
-    micropixel_texture_handle_t texture{};
+    micropixel_texture_handle_t texture_handle{};
     SurfaceRect source{};
     device::BitmapView bitmap{};
-    micropixel_font_handle_t font{};
+    micropixel_font_handle_t font_handle{};
     uint16_t text_length{};
-    char text[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+    // NUL-terminated text owned by the GuestScene text arena. Valid while the
+    // scene that produced this operation is committed and for the following
+    // compose; SceneStorage invalidates retained operations before a rebind.
+    const char* text{};
 };
 
 struct AppSurfaceStorageView final {
     std::span<AppDrawOperation> operations;
     std::span<uint16_t> stale_indices;
     std::span<uint16_t> sorted_indices;
+    std::span<uint16_t> container_path;  // container capacity + 1
 };
 
 struct AppLayerState final {
@@ -150,14 +155,21 @@ class AppSurfaceCompositor final {
     [[nodiscard]] AppSurfaceFrameResult PresentScene(const GuestScene& scene, PixelSurface destination,
                                                      device::BitmapResolver resolver, void* resolver_context);
 
-    // Re-composites every current texture operation whose source window
-    // intersects pixels changed in a StreamingTexture.
-    [[nodiscard]] AppSurfaceFrameResult RefreshBitmap(const uint8_t* bitmap_data, DamageRect source_damage,
-                                                      PixelSurface destination);
-
     void SetLayerCache(PixelSurface cache);
     void SetClock(AppSurfaceClock clock) { clock_ = clock; }
     void Reset();
+    // The scene text arena was compacted: retained operations still compare
+    // correctly this frame but every operation must be rebuilt from the scene.
+    // A second compaction before any compose (a rejected submit in between)
+    // reuses the half they point at, so they are dropped instead.
+    void InvalidateRetainedText() {
+        if (retained_text_invalid_) {
+            current_count_ = 0U;
+            synchronized_ = false;
+            layer_snapshot_active_ = false;
+        }
+        retained_text_invalid_ = true;
+    }
 
     [[nodiscard]] const AppSurfaceRenderFailure& LastRenderFailure() const { return render_failure_; }
 
@@ -170,7 +182,7 @@ class AppSurfaceCompositor final {
     [[nodiscard]] size_t ContentDamageCount() const { return content_damage_.Size(); }
     [[nodiscard]] DamageRect ContentDamage(size_t index) const { return content_damage_[index].rect; }
     [[nodiscard]] uint32_t CurrentOperationCount() const { return current_count_; }
-    // True once a scene has been presented and RefreshBitmap may be used.
+    // True once a scene has been presented.
     [[nodiscard]] bool Synchronized() const { return synchronized_; }
 
    private:
@@ -221,6 +233,8 @@ class AppSurfaceCompositor final {
     AppDrawOperation* current_{};
     AppDrawOperation* scratch_{};
     uint32_t operation_capacity_{};
+    uint16_t* container_path_{};
+    uint32_t container_path_capacity_{};
     PixelCompositor& pixels_;
     TextRasterizer* text_{};
     DamageMergePolicy damage_policy_{};
@@ -237,6 +251,7 @@ class AppSurfaceCompositor final {
     bool background_valid_{};
     bool synchronized_{};
     bool scratch_synchronized_{};
+    bool retained_text_invalid_{};
     bool incremental_normalization_{};
     // slots_[last_presented_] received the last Present and therefore holds
     // the complete previous frame; it is the source for Layer snapshots.

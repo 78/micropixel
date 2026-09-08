@@ -26,7 +26,7 @@ struct SensorReadResult final {
 };
 
 [[nodiscard]] Result<SensorOpenResult> OpenSensor(DeviceId device, SensorKind expected_kind);
-[[nodiscard]] Result<SensorReadResult> ReadSensor(uint32_t handle, SensorKind expected_kind);
+[[nodiscard]] Result<SensorReadResult> ReadSensor(uint32_t handle, DeviceId device, SensorKind expected_kind);
 [[nodiscard]] Result<Duration> SetSensorSampleInterval(uint32_t handle, Duration interval);
 void ReleaseSensor(uint32_t handle);
 
@@ -53,7 +53,7 @@ class Sensor final {
     [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
     [[nodiscard]] constexpr DeviceId id() const { return device_; }
     [[nodiscard]] Result<SensorSample<Reading>> Read() const {
-        auto raw = detail::ReadSensor(handle_, SensorTraits<Reading>::kKind);
+        auto raw = detail::ReadSensor(handle_, device_, SensorTraits<Reading>::kKind);
         if (!raw) {
             return unexpected(raw.error());
         }

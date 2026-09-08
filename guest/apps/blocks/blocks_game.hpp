@@ -33,14 +33,14 @@ class BlocksGame final {
     void ResetGesture();
     void SyncPlayfield();
     void InitializeScene();
-    void UpdatePlayfield(micropixel::SceneUpdate& update);
+    void UpdatePlayfield();
     [[nodiscard]] uint8_t VisualCell(uint32_t column, uint32_t row) const;
-    void RenderMiniPiece(micropixel::SceneUpdate& update, uint16_t first_instance, Tetromino type, int32_t center_x,
-                         int32_t top, bool muted, bool visible);
-    void RenderHeader(micropixel::SceneUpdate& update, const Theme& theme);
-    void RenderSidebar(micropixel::SceneUpdate& update, const Theme& theme);
-    void RenderStatusEffect(micropixel::SceneUpdate& update, const Theme& theme);
-    void RenderOverlay(micropixel::SceneUpdate& update);
+    void RenderMiniPiece(uint16_t first_instance, Tetromino type, int32_t center_x, int32_t top, bool muted,
+                         bool visible);
+    void RenderHeader(const Theme& theme);
+    void RenderSidebar(const Theme& theme);
+    void RenderStatusEffect(const Theme& theme);
+    void RenderOverlay();
 
     [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
                                              uint16_t volume_per_mille, uint16_t attack_ms = 4U,

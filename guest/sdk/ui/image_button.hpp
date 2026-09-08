@@ -59,9 +59,9 @@ class ImageButton final {
         auto position = TextPosition(local_bounds, measured.value(), properties.overflow);
         if (!position.has_value()) {
             const bool clipped = TextExceedsBounds(local_bounds, measured.value());
-            const auto diagnostic = FormatTextOverflowDiagnostic(
-                "ImageButton", clipped ? "rejected" : "invalid-layout", properties.bounds, measured.value(),
-                text.c_str(), properties.overflow, clipped);
+            const auto diagnostic =
+                FormatTextOverflowDiagnostic("ImageButton", clipped ? "rejected" : "invalid-layout", properties.bounds,
+                                             measured.value(), text.c_str(), properties.overflow, clipped);
             Panic(diagnostic.c_str());
         }
 
@@ -72,11 +72,15 @@ class ImageButton final {
         result.overflow_ = properties.overflow;
         result.bounds_ = properties.bounds;
         result.source_ = properties.source;
-        result.container_ = parent.CreateContainer(
-            {.clip = local_bounds, .translation = {properties.bounds.x, properties.bounds.y}});
-        result.image_ = result.container_.CreateSprite(texture, local_bounds, properties.source, result.ImageOpacity());
-        result.label_ = result.container_.CreateLabel(position.value(), text.c_str(), properties.style.text,
-                                                      properties.style.font, true);
+        result.container_ =
+            parent.CreateContainer({.clip = local_bounds, .translation = {properties.bounds.x, properties.bounds.y}})
+                .value();
+        result.image_ =
+            result.container_.CreateSprite(texture, local_bounds, properties.source, result.ImageOpacity()).value();
+        result.label_ =
+            result.container_
+                .CreateLabel(position.value(), text.c_str(), properties.style.text, properties.style.font, true)
+                .value();
         result.text_ = text;
         result.metrics_ = measured.value();
         result.UpdateClipped(TextExceedsBounds(local_bounds, result.metrics_));
@@ -89,30 +93,25 @@ class ImageButton final {
         return {static_cast<uint32_t>(bounds_.width), static_cast<uint32_t>(bounds_.height)};
     }
 
-    void Destroy(SceneUpdate& update) { container_.Destroy(update); }
+    void Destroy() { (void)container_.Destroy(); }
 
     [[nodiscard]] ButtonUpdate OnTouch(const TouchEvent& event) {
-        return valid() ? interaction_.OnTouch(event.WithPosition(container_.ToLocal(event.position())))
-                       : ButtonUpdate{};
-    }
-
-    [[nodiscard]] ButtonUpdate OnTouch(SceneUpdate& update, const TouchEvent& event) {
         if (!valid()) {
             return {};
         }
         const ButtonUpdate result = interaction_.OnTouch(event.WithPosition(container_.ToLocal(event.position())));
         if (result.visual_changed) {
-            Sync(update);
+            Sync();
         }
         return result;
     }
 
-    void Sync(SceneUpdate& update) {
-        container_.SetVisible(update, visible_);
-        image_.SetOpacity(update, ImageOpacity());
+    void Sync() {
+        container_.SetVisible(visible_);
+        image_.SetOpacity(ImageOpacity());
     }
 
-    [[nodiscard]] Result<void> SetBounds(SceneUpdate& update, Rect bounds) {
+    [[nodiscard]] Result<void> SetBounds(Rect bounds) {
         if (bounds == bounds_) {
             return {};
         }
@@ -124,16 +123,16 @@ class ImageButton final {
         }
         bounds_ = bounds;
         interaction_.SetBounds(local_bounds);
-        container_.SetClip(update, local_bounds);
-        container_.SetTranslation(update, {bounds.x, bounds.y});
-        image_.SetDestination(update, local_bounds);
-        label_.SetPosition(update, position.value());
+        container_.SetClip(local_bounds);
+        container_.SetTranslation({bounds.x, bounds.y});
+        image_.SetDestination(local_bounds);
+        label_.SetPosition(position.value());
         UpdateClipped(TextExceedsBounds(local_bounds, metrics_));
-        Sync(update);
+        Sync();
         return {};
     }
 
-    [[nodiscard]] Result<void> SetText(SceneUpdate& update, const char* text) {
+    [[nodiscard]] Result<void> SetText(const char* text) {
         FixedString<kMaxTextBytes + 1U> candidate;
         if (!CopyText(text, candidate)) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
@@ -153,13 +152,13 @@ class ImageButton final {
         }
         text_ = candidate;
         metrics_ = measured.value();
-        label_.SetText(update, text_.c_str());
-        label_.SetPosition(update, position.value());
+        label_.SetText(text_.c_str());
+        label_.SetPosition(position.value());
         UpdateClipped(TextExceedsBounds(interaction_.bounds(), metrics_));
         return {};
     }
 
-    [[nodiscard]] Result<void> SetStyle(SceneUpdate& update, ImageButtonStyle style) {
+    [[nodiscard]] Result<void> SetStyle(ImageButtonStyle style) {
         if (style == style_) {
             return {};
         }
@@ -175,48 +174,48 @@ class ImageButton final {
         }
         style_ = style;
         metrics_ = measured.value();
-        label_.SetColor(update, style_.text);
-        label_.SetFont(update, style_.font);
-        label_.SetPosition(update, position.value());
+        label_.SetColor(style_.text);
+        label_.SetFont(style_.font);
+        label_.SetPosition(position.value());
         UpdateClipped(TextExceedsBounds(interaction_.bounds(), metrics_));
-        Sync(update);
+        Sync();
         return {};
     }
 
-    [[nodiscard]] Result<void> SetImage(SceneUpdate& update, const Texture& texture, Rect source) {
+    [[nodiscard]] Result<void> SetImage(const Texture& texture, Rect source) {
         if (!texture.valid() || !ValidSource(texture, source)) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
         }
         source_ = source;
-        image_.SetTexture(update, texture);
-        image_.SetSource(update, source);
+        image_.SetTexture(texture);
+        image_.SetSource(source);
         return {};
     }
 
-    void SetEnabled(SceneUpdate& update, bool enabled) {
+    void SetEnabled(bool enabled) {
         if (interaction_.enabled() == enabled) {
             return;
         }
         interaction_.SetEnabled(enabled);
-        Sync(update);
+        Sync();
     }
 
-    void SetVisible(SceneUpdate& update, bool visible) {
+    void SetVisible(bool visible) {
         visible_ = visible;
         if (!visible_) {
             interaction_.Reset();
         }
-        Sync(update);
+        Sync();
     }
 
-    void Reset(SceneUpdate& update) {
+    void Reset() {
         interaction_.Reset();
-        Sync(update);
+        Sync();
     }
 
-    void SetHitPadding(SceneUpdate& update, uint16_t hit_padding) {
+    void SetHitPadding(uint16_t hit_padding) {
         interaction_.SetHitPadding(hit_padding);
-        Sync(update);
+        Sync();
     }
 
     [[nodiscard]] constexpr Rect bounds() const { return bounds_; }

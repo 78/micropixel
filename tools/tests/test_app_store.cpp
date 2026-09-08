@@ -28,6 +28,7 @@ std::array<FakeFile, BUNDLEFS_MAX_FILES> files;
 uint32_t file_count = 0U;
 FakeFile staged;
 bool writer_active = false;
+bool fail_next_write = false;
 uint32_t checks = 0U;
 
 void Check(bool condition, const char* message) {
@@ -79,9 +80,8 @@ uint32_t HeaderHash(const micropixel_bundle_header_t& input) {
     return value;
 }
 
-std::vector<uint8_t> MakeBundle(
-    std::string_view app_id, uint8_t fill,
-    uint32_t aot_target_mask = MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F) {
+std::vector<uint8_t> MakeBundle(std::string_view app_id, uint8_t fill,
+                                uint32_t aot_target_mask = MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F) {
     std::vector<uint8_t> bundle(MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT, fill);
     const bool component = app_id.starts_with("fonts.");
     micropixel_bundle_header_t header{};
@@ -117,6 +117,7 @@ void Reset() {
     file_count = 0U;
     staged = {};
     writer_active = false;
+    fail_next_write = false;
 }
 
 void TestEmptyInstallUpdateAndRemove() {
@@ -142,18 +143,61 @@ void TestEmptyInstallUpdateAndRemove() {
     auto second_bundle = MakeBundle("demo", 0x72U);
     installed = micropixel::runtime::InstallApp(Request(second_bundle, "demo"));
     Check(installed.has_value() && installed->changed && file_count == 1U && files[0].data == second_bundle,
-          "same AppId must atomically replace one BundleFS file");
+          "same AppId must remove the old file and install the new one");
 
     auto invalid_request = Request(first_bundle, "demo");
     invalid_request.expected_sha256[0] ^= 0xffU;
     Check(
         micropixel::runtime::InstallApp(invalid_request).error() == micropixel::runtime::AppStoreError::kHashMismatch &&
             files[0].data == second_bundle,
-        "hash failure must leave the active file unchanged");
+        "package digest failure must be detected before the installed version is removed");
 
+    fail_next_write = true;
+    Check(micropixel::runtime::InstallApp(Request(first_bundle, "demo")).error() ==
+                  micropixel::runtime::AppStoreError::kFlashWrite &&
+              file_count == 0U && !writer_active,
+          "reinstall failing after removal must leave the App uninstalled without a lingering writer");
+    Check(micropixel::runtime::UninstallApp("demo").error() == micropixel::runtime::AppStoreError::kNotFound,
+          "App removed by a failed reinstall must be reported as missing");
+
+    installed = micropixel::runtime::InstallApp(Request(second_bundle, "demo"));
+    Check(installed.has_value() && installed->changed && file_count == 1U, "App must reinstall after a failure");
     Check(micropixel::runtime::UninstallApp("demo").has_value(), "installed App must uninstall");
     Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 0U,
           "uninstalled App must disappear");
+}
+
+void TestReinstallReclaimsOldVersionSpace() {
+    Reset();
+    // The fake store has 24 MiB; a first version that fills most of it must
+    // still be replaceable by another large version because the old blocks
+    // are released before the new file is staged.
+    constexpr size_t kLargeSize = 20U * 1024U * 1024U;
+    auto first = MakeBundle("large", 0x11U);
+    first.resize(kLargeSize, 0x11U);
+    micropixel_bundle_header_t header{};
+    std::memcpy(&header, first.data(), sizeof(header));
+    header.bundle_size = first.size();
+    header.header_hash = HeaderHash(header);
+    std::memcpy(first.data(), &header, sizeof(header));
+    Check(micropixel::runtime::InstallApp(Request(first, "large")).has_value(), "large first version must install");
+
+    auto second = first;
+    std::fill(second.begin() + sizeof(header) + sizeof(micropixel_bundle_section_t), second.end(), 0x22U);
+    auto installed = micropixel::runtime::InstallApp(Request(second, "large"));
+    Check(installed.has_value() && installed->changed && file_count == 1U && files[0].data == second,
+          "reinstall must only require the space left after removing the old version");
+
+    auto oversized = second;
+    oversized.resize(30U * 1024U * 1024U, 0x33U);
+    std::memcpy(&header, oversized.data(), sizeof(header));
+    header.bundle_size = oversized.size();
+    header.header_hash = HeaderHash(header);
+    std::memcpy(oversized.data(), &header, sizeof(header));
+    Check(micropixel::runtime::InstallApp(Request(oversized, "large")).error() ==
+                  micropixel::runtime::AppStoreError::kNoSpace &&
+              file_count == 1U && files[0].data == second,
+          "a version that cannot fit even after removal must be rejected before the old one is removed");
 }
 
 void TestIdentityAndCapacityErrors() {
@@ -175,8 +219,9 @@ void TestIdentityAndCapacityErrors() {
                   micropixel::runtime::AppStoreError::kIncompatibleAotTarget &&
               !writer_active && staged.data.empty(),
           "legacy App without AOT target metadata must be rejected before BundleFS staging begins");
-    auto ambiguous = MakeBundle("ambiguous", 0x63U, MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F |
-                                                        MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3);
+    auto ambiguous =
+        MakeBundle("ambiguous", 0x63U,
+                   MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F | MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3);
     Check(micropixel::runtime::InstallApp(Request(ambiguous, "ambiguous")).error() ==
                   micropixel::runtime::AppStoreError::kInvalidPackage &&
               !writer_active && staged.data.empty(),
@@ -202,10 +247,11 @@ void TestNewestInstallIsListedFirst() {
 
     snake = MakeBundle("snake", 0x64U);
     Check(micropixel::runtime::InstallApp(Request(snake, "snake")).has_value(), "Snake update must install");
-    Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() &&
-              std::strcmp(catalog.apps[0].app_id.data(), "demo") == 0 &&
-              std::strcmp(catalog.apps[1].app_id.data(), "snake") == 0,
-          "updating an App must preserve its catalog position");
+    Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 3U &&
+              std::strcmp(catalog.apps[0].app_id.data(), "snake") == 0 &&
+              std::strcmp(catalog.apps[1].app_id.data(), "demo") == 0 &&
+              std::strcmp(catalog.apps[2].app_id.data(), "blocks") == 0,
+          "reinstalling an App removes it first, so it is listed as the newest install");
 }
 
 void TestComponentTrustVisibilityAndProtection() {
@@ -330,6 +376,10 @@ bundlefs_error_t bundlefs_write(bundlefs_writer_t* writer, const void* data, uin
     if (!writer_active || writer == nullptr || writer->opaque[0] != 1U || data == nullptr) {
         return BUNDLEFS_ERR_INVALID_ARGUMENT;
     }
+    if (fail_next_write) {
+        fail_next_write = false;
+        return BUNDLEFS_ERR_IO;
+    }
     const auto* bytes = static_cast<const uint8_t*>(data);
     staged.data.insert(staged.data.end(), bytes, bytes + size);
     return BUNDLEFS_OK;
@@ -447,6 +497,7 @@ void micropixel_close_aot_package(micropixel_aot_package_t* package) {
 
 int main() {
     TestEmptyInstallUpdateAndRemove();
+    TestReinstallReclaimsOldVersionSpace();
     TestIdentityAndCapacityErrors();
     TestNewestInstallIsListedFirst();
     TestComponentTrustVisibilityAndProtection();

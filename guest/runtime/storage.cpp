@@ -15,27 +15,36 @@ ServiceCache storage_service;
 
 bool StorageKeyLength(const char* key, uint32_t& length_out);
 
-bool FillStorageKeyRequest(const char* key, micropixel_storage_key_request_t& request_out) {
+// Header followed by the key bytes, as GET and REMOVE expect.
+struct StorageKeyRequest final {
+    uint8_t bytes[sizeof(micropixel_storage_key_request_t) + MICROPIXEL_STORAGE_MAX_KEY_BYTES]{};
+    uint32_t size{};
+};
+
+bool FillStorageKeyRequest(const char* key, StorageKeyRequest& request_out) {
     uint32_t key_length = 0U;
     if (!StorageKeyLength(key, key_length)) {
         return false;
     }
     request_out = {};
-    request_out.size = sizeof(request_out);
-    request_out.key_length = static_cast<uint16_t>(key_length);
-    CopyBytes(request_out.key, key, key_length);
+    request_out.size = sizeof(micropixel_storage_key_request_t) + key_length;
+    micropixel_storage_key_request_t header{};
+    header.size = static_cast<uint16_t>(request_out.size);
+    header.key_length = static_cast<uint16_t>(key_length);
+    CopyBytes(request_out.bytes, &header, sizeof(header));
+    CopyBytes(request_out.bytes + sizeof(header), key, key_length);
     return true;
 }
 
 int32_t GetStorageValue(const char* key, uint8_t* bytes, uint32_t capacity, uint32_t& size_out) {
-    micropixel_storage_key_request_t request{};
+    StorageKeyRequest request{};
     if (!FillStorageKeyRequest(key, request) || (bytes == nullptr && capacity != 0U) ||
         capacity > MICROPIXEL_STORAGE_MAX_VALUE_BYTES) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     int32_t status = OpenService(storage_service, MICROPIXEL_SERVICE_STORAGE, 1U, 0U);
-    return status == MICROPIXEL_STATUS_OK ? CallService(storage_service, MICROPIXEL_STORAGE_METHOD_GET, &request,
-                                                        sizeof(request), bytes, capacity, size_out)
+    return status == MICROPIXEL_STATUS_OK ? CallService(storage_service, MICROPIXEL_STORAGE_METHOD_GET, request.bytes,
+                                                        request.size, bytes, capacity, size_out)
                                           : status;
 }
 
@@ -154,13 +163,13 @@ Result<void> KVStore::SetBytes(const char* key, const uint8_t* bytes, uint32_t l
 }
 
 Result<void> KVStore::Remove(const char* key) const {
-    micropixel_storage_key_request_t request{};
+    StorageKeyRequest request{};
     if (!FillStorageKeyRequest(key, request)) {
         return unexpected(Error{ErrorCode::kInvalidArgument});
     }
     int32_t status = OpenService(storage_service, MICROPIXEL_SERVICE_STORAGE, 1U, 0U);
     if (status == MICROPIXEL_STATUS_OK) {
-        status = CallVoid(storage_service, MICROPIXEL_STORAGE_METHOD_REMOVE, &request, sizeof(request));
+        status = CallVoid(storage_service, MICROPIXEL_STORAGE_METHOD_REMOVE, request.bytes, request.size);
     }
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));

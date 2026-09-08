@@ -16,11 +16,11 @@ class InputInfo final {
    private:
     static constexpr uint16_t kPressureCapability = 1U << 0U;
     static constexpr uint16_t kKeyEventsCapability = 1U << 1U;
-    constexpr InputInfo(uint16_t max_touch_points, uint16_t capabilities)
+    constexpr InputInfo(uint16_t max_touch_points, uint32_t capabilities)
         : max_touch_points_(max_touch_points), capabilities_(capabilities) {}
 
     uint16_t max_touch_points_{};
-    uint16_t capabilities_{};
+    uint32_t capabilities_{};
 
     friend class Input;
 };

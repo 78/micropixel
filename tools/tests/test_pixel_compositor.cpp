@@ -21,6 +21,37 @@ graphics::PixelSurface BgrSurface(std::array<uint8_t, Size>& pixels, uint32_t wi
     };
 }
 
+void ScaledSamplingMatchesIndependentPixelCoordinates() {
+    graphics::SoftwarePixelCompositor pixels;
+    std::array<uint8_t, 6 * 5 * 4> texels{};
+    for (uint32_t i = 0; i < 30; ++i) {
+        texels[i * 4] = i * 7;
+        texels[i * 4 + 1] = i * 3;
+        texels[i * 4 + 2] = 255 - i * 5;
+        texels[i * 4 + 3] = (i % 3) * 127;
+    }
+    graphics::ConstPixelSurface source{texels.data(), texels.size(), 6, 5, 24, graphics::SurfacePixelFormat::kBgra8888};
+    for (auto format : {graphics::SurfacePixelFormat::kRgb565, graphics::SurfacePixelFormat::kRgb565Swapped})
+        for (int width = 1; width <= 13; ++width)
+            for (int height = 1; height <= 11; ++height) {
+                std::array<uint8_t, 10 * 8 * 2> actual{}, expected{};
+                actual.fill(0x55);
+                expected = actual;
+                graphics::PixelSurface output{actual.data(), actual.size(), 10, 8, 20, format};
+                graphics::PixelSurface reference{expected.data(), expected.size(), 10, 8, 20, format};
+                const graphics::SurfaceRect destination{-2, -1, width, height};
+                const graphics::SurfaceRect region{1, 1, 4, 3};
+                assert(pixels.Blit(source, region, output, destination, 173));
+                for (int y = 0; y < 8; ++y)
+                    for (int x = 0; x < 10; ++x) {
+                        if (x >= destination.x + width || y >= destination.y + height) continue;
+                        const int sx = region.x + int64_t(x - destination.x) * region.width / width;
+                        const int sy = region.y + int64_t(y - destination.y) * region.height / height;
+                        assert(pixels.Blit(source, {sx, sy, 1, 1}, reference, {x, y, 1, 1}, 173));
+                    }
+                assert(actual == expected);
+            }
+}
 void FillClipsAndUsesCanonicalBgrOrder() {
     graphics::SoftwarePixelCompositor compositor;
     std::array<uint8_t, 3U * 2U * 2U> pixels{};
@@ -86,6 +117,21 @@ void BlitUsesNearestNeighborAndDestinationClipping() {
     assert(destination_pixels[4] == 255U);
     assert(destination_pixels[8] == 0U);
     assert(destination_pixels[7] == 255U);
+}
+
+void SwappedRgb565CompositesWithoutAFullFrameConversion() {
+    graphics::SoftwarePixelCompositor pixels;
+    std::array<uint8_t, 8> bytes{};
+    graphics::PixelSurface target{bytes.data(), bytes.size(), 4, 1, 8, graphics::SurfacePixelFormat::kRgb565Swapped};
+    assert(pixels.Fill(target, {0, 0, 4, 1}, 0xff0000, 255));
+    for (unsigned i = 0; i < 4; ++i) assert(bytes[i * 2] == 0xf8 && bytes[i * 2 + 1] == 0);
+    assert(pixels.Fill(target, {1, 0, 1, 1}, 0x0000ff, 128));
+    assert(bytes[0] == 0xf8 && bytes[1] == 0 && bytes[6] == 0xf8 && bytes[7] == 0);
+    std::array<uint8_t, 8> canonical{};
+    graphics::PixelSurface out{canonical.data(), canonical.size(), 4, 1, 8, graphics::SurfacePixelFormat::kRgb565};
+    assert(pixels.Blit(target.ReadOnly(), {0, 0, 4, 1}, out, {0, 0, 4, 1}, 255));
+    for (unsigned i = 0; i < 4; ++i)
+        assert(canonical[i * 2] == bytes[i * 2 + 1] && canonical[i * 2 + 1] == bytes[i * 2]);
 }
 
 void Rgb565RoundTripsPrimaryColors() {
@@ -336,10 +382,12 @@ void RejectsMalformedSurfaceStorage() {
 }  // namespace
 
 int main() {
+    ScaledSamplingMatchesIndependentPixelCoordinates();
     FillClipsAndUsesCanonicalBgrOrder();
     FillBlendsWithExactOpacity();
     BgraSourceAlphaMultipliesUniformOpacity();
     BlitUsesNearestNeighborAndDestinationClipping();
+    SwappedRgb565CompositesWithoutAFullFrameConversion();
     Rgb565RoundTripsPrimaryColors();
     RoundedRectDrawsFillStrokeAndKeepsCornersTransparent();
     RoundedRectAlphaBlendsIntoRgb565();

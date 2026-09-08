@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "device/contracts/graphics.hpp"
+
 namespace micropixel::platform::lvgl {
 namespace {
 
@@ -14,8 +16,8 @@ struct Rgb final {
 };
 
 bool CopyTerminated(const char* text, uint16_t text_length,
-                    char (&terminated)[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]) {
-    if (text == nullptr || text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES) {
+                    char (&terminated)[micropixel::device::graphics_limits::kMaxTextBytes + 1U]) {
+    if (text == nullptr || text_length == 0U || text_length > micropixel::device::graphics_limits::kMaxTextBytes) {
         return false;
     }
     std::memcpy(terminated, text, text_length);
@@ -69,7 +71,10 @@ bool NextCodepoint(const char* text, uint16_t length, uint32_t& offset, uint32_t
 bool ValidDestination(graphics::PixelSurface destination) {
     const uint32_t bytes_per_pixel = destination.format == graphics::SurfacePixelFormat::kBgr888
                                          ? 3U
-                                         : (destination.format == graphics::SurfacePixelFormat::kRgb565 ? 2U : 0U);
+                                         : ((destination.format == graphics::SurfacePixelFormat::kRgb565 ||
+                                             destination.format == graphics::SurfacePixelFormat::kRgb565Swapped)
+                                                ? 2U
+                                                : 0U);
     if (destination.pixels == nullptr || destination.width == 0U || destination.height == 0U || bytes_per_pixel == 0U ||
         destination.width > UINT32_MAX - destination.origin_x ||
         destination.origin_x + destination.width > UINT32_MAX / bytes_per_pixel) {
@@ -92,6 +97,8 @@ Rgb ReadPixel(const uint8_t* pixel, graphics::SurfacePixelFormat format) {
     }
     uint16_t packed = 0U;
     std::memcpy(&packed, pixel, sizeof(packed));
+    if (format == graphics::SurfacePixelFormat::kRgb565Swapped)
+        packed = static_cast<uint16_t>((packed << 8) | (packed >> 8));
     return {
         .red = Expand5(static_cast<uint16_t>((packed >> 11U) & 0x1fU)),
         .green = Expand6(static_cast<uint16_t>((packed >> 5U) & 0x3fU)),
@@ -106,8 +113,10 @@ void WritePixel(uint8_t* pixel, graphics::SurfacePixelFormat format, Rgb color) 
         pixel[2] = color.red;
         return;
     }
-    const uint16_t packed =
+    uint16_t packed =
         static_cast<uint16_t>((Compress5(color.red) << 11U) | (Compress6(color.green) << 5U) | Compress5(color.blue));
+    if (format == graphics::SurfacePixelFormat::kRgb565Swapped)
+        packed = static_cast<uint16_t>((packed << 8) | (packed >> 8));
     std::memcpy(pixel, &packed, sizeof(packed));
 }
 
@@ -192,7 +201,7 @@ bool DrawGlyph(graphics::PixelSurface destination, int32_t x, int32_t y, Rgb for
 bool BitmapFontRasterizer::Measure(micropixel_font_handle_t font_handle, const char* text, uint16_t text_length,
                                    graphics::RasterTextMetrics& metrics) const {
     const lv_font_t* font = fonts_.ResolveRetainedHandle(font_handle);
-    char terminated[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+    char terminated[micropixel::device::graphics_limits::kMaxTextBytes + 1U]{};
     if (font == nullptr || !CopyTerminated(text, text_length, terminated)) {
         return false;
     }
@@ -209,7 +218,7 @@ bool BitmapFontRasterizer::Draw(graphics::PixelSurface destination, int32_t x, i
                                 micropixel_font_handle_t font_handle, const char* text, uint16_t text_length) const {
     const lv_font_t* font = fonts_.ResolveRetainedHandle(font_handle);
     if (!ValidDestination(destination) || font == nullptr || text == nullptr || text_length == 0U ||
-        text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES || (rgb888 & 0xff000000U) != 0U) {
+        text_length > micropixel::device::graphics_limits::kMaxTextBytes || (rgb888 & 0xff000000U) != 0U) {
         return false;
     }
     const Rgb foreground{.red = static_cast<uint8_t>(rgb888 >> 16U),

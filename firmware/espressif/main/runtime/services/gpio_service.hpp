@@ -23,10 +23,10 @@ class GpioService final {
 
     [[nodiscard]] bool valid() const { return mutex_ != nullptr; }  // NOLINT(readability-identifier-naming)
     [[nodiscard]] ServiceResult<micropixel_gpio_open_response_t> Open(const micropixel_gpio_open_request_t& request);
-    [[nodiscard]] ServiceResult<micropixel_gpio_value_response_t> Read(micropixel_gpio_handle_t gpio);
-    [[nodiscard]] ServiceResult<void> Write(micropixel_gpio_handle_t gpio, bool value);
-    [[nodiscard]] ServiceResult<void> SetPwmDuty(micropixel_gpio_handle_t gpio, uint16_t duty_per_mille);
-    [[nodiscard]] ServiceResult<void> Release(micropixel_gpio_handle_t gpio);
+    [[nodiscard]] ServiceResult<micropixel_gpio_value_response_t> Read(micropixel_gpio_handle_t gpio_handle);
+    [[nodiscard]] ServiceResult<void> Write(micropixel_gpio_handle_t gpio_handle, bool value);
+    [[nodiscard]] ServiceResult<void> SetPwmDuty(micropixel_gpio_handle_t gpio_handle, uint16_t duty_per_mille);
+    [[nodiscard]] ServiceResult<void> Release(micropixel_gpio_handle_t gpio_handle);
     void Suspend();
     [[nodiscard]] bool Resume();
     void Shutdown();

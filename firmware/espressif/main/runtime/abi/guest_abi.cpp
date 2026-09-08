@@ -87,7 +87,7 @@ extern "C" int32_t micropixel_runtime_service_open(wasm_exec_env_t exec_env, uin
                               : static_cast<int32_t>(MICROPIXEL_STATUS_INTERNAL);
 }
 
-extern "C" int32_t micropixel_runtime_service_call(wasm_exec_env_t exec_env, micropixel_service_handle_t service,
+extern "C" int32_t micropixel_runtime_service_call(wasm_exec_env_t exec_env, micropixel_service_handle_t service_handle,
                                                    uint32_t method_id, const uint8_t* request, uint32_t request_size,
                                                    uint8_t* response, uint32_t response_capacity,
                                                    uint32_t* response_size_out) {
@@ -102,22 +102,23 @@ extern "C" int32_t micropixel_runtime_service_call(wasm_exec_env_t exec_env, mic
     }
     micropixel_watchdog_pause();
     micropixel_check_heap("before service_call");
-    const int32_t status = context->ServiceCall(service, method_id, request, request_size, response, response_capacity,
-                                                *response_size_out);
+    const int32_t status = context->ServiceCall(service_handle, method_id, request, request_size, response,
+                                                response_capacity, *response_size_out);
     micropixel_check_heap("after service_call");
     micropixel_watchdog_resume();
     return status;
 }
 
-extern "C" int32_t micropixel_runtime_service_submit(wasm_exec_env_t exec_env, micropixel_service_handle_t service,
-                                                     uint32_t channel_id, const uint8_t* bytes, uint32_t length) {
+extern "C" int32_t micropixel_runtime_service_submit(wasm_exec_env_t exec_env,
+                                                     micropixel_service_handle_t service_handle, uint32_t channel_id,
+                                                     const uint8_t* bytes, uint32_t length) {
     micropixel_watchdog_checkpoint();
     if (bytes == nullptr || length == 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     auto* context = GetContext(exec_env);
     micropixel_check_heap("before service_submit");
-    const int32_t status = context != nullptr ? context->ServiceSubmit(service, channel_id, bytes, length)
+    const int32_t status = context != nullptr ? context->ServiceSubmit(service_handle, channel_id, bytes, length)
                                               : static_cast<int32_t>(MICROPIXEL_STATUS_INTERNAL);
     micropixel_check_heap("after service_submit");
     return status;

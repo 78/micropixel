@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "device/contracts/input.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
@@ -30,7 +31,7 @@ EspLcdTouchInput::~EspLcdTouchInput() {
 
 esp_err_t EspLcdTouchInput::Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor) {
     if (touch == nullptr || width_ <= 0 || height_ <= 0 || max_touch_points_ == 0U ||
-        max_touch_points_ > MICROPIXEL_MAX_TOUCH_POINTS) {
+        max_touch_points_ > micropixel::device::kMaxTouchPoints) {
         return ESP_ERR_INVALID_ARG;
     }
     touch_ = touch;
@@ -91,10 +92,10 @@ esp_err_t EspLcdTouchInput::PrimeEntry(void* context) {
     if (read_status == ESP_ERR_INVALID_RESPONSE) {
         return ESP_OK;
     }
-    esp_lcd_touch_point_data_t points[MICROPIXEL_MAX_TOUCH_POINTS]{};
+    esp_lcd_touch_point_data_t points[micropixel::device::kMaxTouchPoints]{};
     uint8_t point_count = 0U;
     const esp_err_t data_status =
-        esp_lcd_touch_get_data(input->touch_, points, &point_count, MICROPIXEL_MAX_TOUCH_POINTS);
+        esp_lcd_touch_get_data(input->touch_, points, &point_count, micropixel::device::kMaxTouchPoints);
     if (data_status != ESP_OK) {
         return data_status;
     }
@@ -107,8 +108,6 @@ int32_t EspLcdTouchInput::GetInfo(micropixel_input_info_t& info) {
     }
     info = {};
     info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_INPUT_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_INPUT_INTERFACE_MINOR;
     info.capabilities = 0U;
     info.logical_width = width_;
     info.logical_height = height_;
@@ -224,15 +223,16 @@ void EspLcdTouchInput::ProcessInterrupt() {
     } else if (read_status != ESP_OK) {
         ESP_LOGW(kTag, "touch sample read failed: %s", esp_err_to_name(read_status));
     } else {
-        esp_lcd_touch_point_data_t points[MICROPIXEL_MAX_TOUCH_POINTS]{};
+        esp_lcd_touch_point_data_t points[micropixel::device::kMaxTouchPoints]{};
         uint8_t point_count = 0U;
-        const esp_err_t data_status = esp_lcd_touch_get_data(touch_, points, &point_count, MICROPIXEL_MAX_TOUCH_POINTS);
+        const esp_err_t data_status =
+            esp_lcd_touch_get_data(touch_, points, &point_count, micropixel::device::kMaxTouchPoints);
         if (data_status != ESP_OK) {
             ESP_LOGW(kTag, "touch sample decode failed: %s", esp_err_to_name(data_status));
         } else {
             sample_decoded = true;
             const uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
-            bool previous_seen[MICROPIXEL_MAX_TOUCH_POINTS]{};
+            bool previous_seen[micropixel::device::kMaxTouchPoints]{};
             for (uint8_t point_index = 0U; point_index < point_count; ++point_index) {
                 auto& point = points[point_index];
                 // CST9217 occasionally reports the exclusive panel extent
@@ -241,7 +241,7 @@ void EspLcdTouchInput::ProcessInterrupt() {
                 point.x = std::min<uint16_t>(point.x, static_cast<uint16_t>(width_ - 1));
                 point.y = std::min<uint16_t>(point.y, static_cast<uint16_t>(height_ - 1));
                 int32_t previous_index = -1;
-                for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+                for (uint32_t index = 0U; index < micropixel::device::kMaxTouchPoints; ++index) {
                     if (active_touches_[index].active && active_touches_[index].point.track_id == point.track_id) {
                         previous_index = static_cast<int32_t>(index);
                         previous_seen[index] = true;
@@ -255,7 +255,7 @@ void EspLcdTouchInput::ProcessInterrupt() {
                       .pressure_per_mille = 0U,
                       .phase = previous_index >= 0 ? device::TouchPhase::kMove : device::TouchPhase::kDown});
             }
-            for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+            for (uint32_t index = 0U; index < micropixel::device::kMaxTouchPoints; ++index) {
                 if (!active_touches_[index].active || previous_seen[index]) {
                     continue;
                 }

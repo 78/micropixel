@@ -35,12 +35,10 @@ void AudioMixer::InitializeSineTable(int16_t (&table)[kSynthSineTableSize]) {
 }
 
 bool AudioMixer::ValidTone(const micropixel_audio_tone_t& tone) {
-    return tone.size == sizeof(tone) && tone.interface_major == MICROPIXEL_AUDIO_INTERFACE_MAJOR &&
-           tone.waveform >= MICROPIXEL_AUDIO_WAVE_SINE && tone.waveform <= MICROPIXEL_AUDIO_WAVE_NOISE &&
-           tone.volume_per_mille <= 1000U && tone.duration_ms != 0U &&
-           tone.duration_ms <= MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS && tone.attack_ms <= tone.duration_ms &&
-           tone.release_ms <= tone.duration_ms && tone.reserved[0] == 0U && tone.reserved[1] == 0U &&
-           tone.reserved[2] == 0U &&
+    return tone.size == sizeof(tone) && tone.waveform >= MICROPIXEL_AUDIO_WAVE_SINE &&
+           tone.waveform <= MICROPIXEL_AUDIO_WAVE_NOISE && tone.volume_per_mille <= 1000U && tone.duration_ms != 0U &&
+           tone.duration_ms <= kMaxToneDurationMs && tone.attack_ms <= tone.duration_ms &&
+           tone.release_ms <= tone.duration_ms && tone.reserved0 == 0U &&
            (tone.waveform == MICROPIXEL_AUDIO_WAVE_NOISE ||
             (tone.frequency_millihz >= 20000U && tone.frequency_millihz <= 20000000U));
 }

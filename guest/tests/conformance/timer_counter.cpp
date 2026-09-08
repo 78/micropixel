@@ -20,8 +20,10 @@ micropixel::TimerEvent WaitForTimer(const micropixel::Application& app, const mi
 
 int main() {
     micropixel::Application app;
+    const auto invalid = app.timers().Every(micropixel::Duration{});
+    if (invalid || invalid.error().code() != micropixel::ErrorCode::kInvalidArgument) return 47;
 
-    micropixel::Timer one_shot = app.timers().After(micropixel::Duration::Milliseconds(100));
+    micropixel::Timer one_shot = app.timers().After(micropixel::Duration::Milliseconds(100)).value();
     micropixel::TimePoint run_started = app.clock().Now();
 
     micropixel::TimerEvent one_shot_event = WaitForTimer(app, one_shot);
@@ -29,7 +31,7 @@ int main() {
         return 34;
     }
 
-    micropixel::Timer periodic = app.timers().Every(micropixel::Duration::Milliseconds(50));
+    micropixel::Timer periodic = app.timers().Every(micropixel::Duration::Milliseconds(50)).value();
 
     micropixel::TimePoint previous{};
     for (uint32_t count = 0; count < 4U; ++count) {
@@ -39,14 +41,14 @@ int main() {
         }
         previous = tick.timestamp();
     }
-    periodic.Cancel();
+    periodic.Cancel().value();
     if (periodic.valid()) {
         return 42;
     }
-    periodic.Cancel();
+    periodic.Cancel().value();
 
     /* The guard Timer proves that no event from the cancelled Timer follows. */
-    micropixel::Timer guard = app.timers().After(micropixel::Duration::Milliseconds(120));
+    micropixel::Timer guard = app.timers().After(micropixel::Duration::Milliseconds(120)).value();
     micropixel::TimerEvent guard_event = WaitForTimer(app, guard);
     if (!DurationBetween(guard_event.delta(), 100000U, 260000U)) {
         return 43;
@@ -54,19 +56,19 @@ int main() {
 
     /* Leave one fast periodic event pending while RAII churn keeps the Guest
        out of WaitEvent(). Further ticks must coalesce into that one event. */
-    micropixel::Timer coalescing = app.timers().Every(micropixel::Duration::Milliseconds(1));
+    micropixel::Timer coalescing = app.timers().Every(micropixel::Duration::Milliseconds(1)).value();
     (void)WaitForTimer(app, coalescing);
 
     /* Reuse Host slots repeatedly; move-only RAII must Reset every handle. */
     for (uint32_t iteration = 0; iteration < 256U; ++iteration) {
-        micropixel::Timer temporary = app.timers().After(micropixel::Duration::Seconds(60));
+        micropixel::Timer temporary = app.timers().After(micropixel::Duration::Seconds(60)).value();
         (void)temporary;
     }
     micropixel::TimerEvent coalesced = WaitForTimer(app, coalescing);
     if (coalesced.missed_count() == 0U) {
         return 45;
     }
-    coalescing.Cancel();
+    coalescing.Cancel().value();
     if (coalescing.valid()) {
         return 44;
     }

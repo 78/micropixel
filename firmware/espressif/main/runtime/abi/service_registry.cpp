@@ -2,12 +2,12 @@
 
 namespace micropixel::runtime {
 
-bool ServiceRegistry::Resolve(micropixel_service_handle_t service, ServiceHandler*& handler_out,
+bool ServiceRegistry::Resolve(micropixel_service_handle_t service_handle, ServiceHandler*& handler_out,
                               const ServiceDescriptor*& descriptor_out) const {
-    if (service == 0U || service > service_count_) {
+    if (service_handle == 0U || service_handle > service_count_) {
         return false;
     }
-    const uint32_t index = service - 1U;
+    const uint32_t index = service_handle - 1U;
     handler_out = handlers_[index];
     descriptor_out = &descriptors_[index];
     return true;
@@ -33,7 +33,7 @@ int32_t ServiceRegistry::Open(uint32_t service_id, uint32_t required_interface_v
         info_out = {};
         info_out.size = sizeof(info_out);
         info_out.service_id = descriptor.service_id;
-        info_out.handle = index + 1U;
+        info_out.service_handle = index + 1U;
         info_out.interface_major = descriptor.interface_major;
         info_out.interface_minor = descriptor.interface_minor;
         info_out.flags = descriptor.flags;
@@ -46,13 +46,13 @@ int32_t ServiceRegistry::Open(uint32_t service_id, uint32_t required_interface_v
     return MICROPIXEL_STATUS_NOT_FOUND;
 }
 
-int32_t ServiceRegistry::Call(micropixel_service_handle_t service, uint32_t method_id, const uint8_t* request,
+int32_t ServiceRegistry::Call(micropixel_service_handle_t service_handle, uint32_t method_id, const uint8_t* request,
                               uint32_t request_size, uint8_t* response, uint32_t response_capacity,
                               uint32_t& response_size_out) const {
     response_size_out = 0U;
     ServiceHandler* handler = nullptr;
     const ServiceDescriptor* descriptor = nullptr;
-    if (!Resolve(service, handler, descriptor)) {
+    if (!Resolve(service_handle, handler, descriptor)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     if ((descriptor->flags & MICROPIXEL_SERVICE_FLAG_CALL) == 0U) {
@@ -65,11 +65,11 @@ int32_t ServiceRegistry::Call(micropixel_service_handle_t service, uint32_t meth
     return handler->Call(method_id, request, request_size, response, response_capacity, response_size_out);
 }
 
-int32_t ServiceRegistry::Submit(micropixel_service_handle_t service, uint32_t channel_id, const uint8_t* bytes,
+int32_t ServiceRegistry::Submit(micropixel_service_handle_t service_handle, uint32_t channel_id, const uint8_t* bytes,
                                 uint32_t length) const {
     ServiceHandler* handler = nullptr;
     const ServiceDescriptor* descriptor = nullptr;
-    if (!Resolve(service, handler, descriptor)) {
+    if (!Resolve(service_handle, handler, descriptor)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     if ((descriptor->flags & MICROPIXEL_SERVICE_FLAG_SUBMIT) == 0U) {

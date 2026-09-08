@@ -10,9 +10,11 @@ namespace micropixel::runtime::limits {
 
 inline constexpr uint32_t kEventQueueCapacity = 16U;
 inline constexpr uint32_t kMaxTimers = 8U;
-inline constexpr uint32_t kMaxSensorHandles = MICROPIXEL_MAX_SENSOR_HANDLES;
-inline constexpr uint32_t kMaxGpioHandles = MICROPIXEL_MAX_GPIO_HANDLES;
-inline constexpr uint32_t kMaxHapticHandles = MICROPIXEL_MAX_HAPTIC_HANDLES;
+// Concurrent handle slots per session. These are Host policy, not wire
+// contract: the Guest learns exhaustion through RESOURCE_EXHAUSTED on OPEN.
+inline constexpr uint32_t kMaxSensorHandles = 8U;
+inline constexpr uint32_t kMaxGpioHandles = 16U;
+inline constexpr uint32_t kMaxHapticHandles = 2U;
 inline constexpr uint32_t kMaxResourceRequests = 8U;
 #if defined(CONFIG_MICROPIXEL_MAX_BITMAPS)
 inline constexpr uint32_t kMaxBitmaps = CONFIG_MICROPIXEL_MAX_BITMAPS;

@@ -17,14 +17,13 @@ void Check(bool condition, const char* message) {
 micropixel_audio_tone_t Tone(uint16_t waveform = MICROPIXEL_AUDIO_WAVE_SINE) {
     return {
         .size = sizeof(micropixel_audio_tone_t),
-        .interface_major = MICROPIXEL_AUDIO_INTERFACE_MAJOR,
         .waveform = waveform,
         .volume_per_mille = 800U,
+        .attack_ms = 2U,
         .frequency_millihz = 440000U,
         .duration_ms = 10U,
-        .attack_ms = 2U,
         .release_ms = 2U,
-        .reserved = {},
+        .reserved0 = 0U,
     };
 }
 
@@ -70,8 +69,8 @@ void AudioOutputLifecycleIsBounded() {
 }  // namespace
 
 int main() {
-    using micropixel::platform::audio::kSynthSineTableSize;
     using micropixel::platform::audio::AudioMixer;
+    using micropixel::platform::audio::kSynthSineTableSize;
     using micropixel::platform::audio::SynthVoice;
 
     int16_t sine_table[kSynthSineTableSize]{};
@@ -81,7 +80,7 @@ int main() {
 
     micropixel_audio_tone_t tone = Tone();
     Check(AudioMixer::ValidTone(tone), "valid tone was rejected");
-    tone.reserved[1] = 1U;
+    tone.reserved0 = 1U;
     Check(!AudioMixer::ValidTone(tone), "reserved fields must be zero");
     tone = Tone();
     tone.volume_per_mille = 1001U;

@@ -17,17 +17,18 @@ DeviceResult<void> StatusResult(int32_t status) {
 
 }  // namespace
 
-DeviceResult<micropixel_devices_list_response_t> DevicesService::List(uint16_t kind) const {
+DeviceResult<micropixel_devices_list_response_t> DevicesService::List(uint16_t kind, uint16_t first_index) const {
     if (kind > MICROPIXEL_DEVICE_KIND_NETWORK) {
         return Fail<micropixel_devices_list_response_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     const uint32_t count = implementation_.Count();
-    if (count > MICROPIXEL_MAX_DEVICES) {
+    if (count > UINT16_MAX) {
         return Fail<micropixel_devices_list_response_t>(MICROPIXEL_STATUS_INTERNAL);
     }
     micropixel_devices_list_response_t response{};
     response.size = sizeof(response);
     response.generation = implementation_.Generation();
+    uint32_t matched = 0U;
     for (uint32_t index = 0U; index < count; ++index) {
         micropixel_device_info_t info{};
         const int32_t status = implementation_.GetByIndex(index, info);
@@ -37,10 +38,15 @@ DeviceResult<micropixel_devices_list_response_t> DevicesService::List(uint16_t k
                 status == MICROPIXEL_STATUS_OK ? static_cast<int32_t>(MICROPIXEL_STATUS_INTERNAL) : status;
             return Fail<micropixel_devices_list_response_t>(failure);
         }
-        if (kind == MICROPIXEL_DEVICE_KIND_ANY || info.kind == kind) {
+        if (kind != MICROPIXEL_DEVICE_KIND_ANY && info.kind != kind) {
+            continue;
+        }
+        if (matched >= first_index && response.count < MICROPIXEL_DEVICES_LIST_PAGE_SIZE) {
             response.devices[response.count++] = info.device;
         }
+        ++matched;
     }
+    response.total_count = static_cast<uint16_t>(matched);
     return response;
 }
 
@@ -127,18 +133,18 @@ void HapticsService::SetCompletionSink(HapticCompletionSink sink, void* context)
     implementation_.SetCompletionSink(sink, context);
 }
 
-DeviceResult<micropixel_power_info_response_t> PowerInfoService::Get(micropixel_device_id_t device) {
+DeviceResult<micropixel_power_info_t> PowerInfoService::Get(micropixel_device_id_t device) {
     micropixel_device_info_t device_info{};
     const int32_t device_status = devices_.GetById(device, device_info);
     if (device_status != MICROPIXEL_STATUS_OK) {
-        return Fail<micropixel_power_info_response_t>(device_status);
+        return Fail<micropixel_power_info_t>(device_status);
     }
     if (device_info.kind != MICROPIXEL_DEVICE_KIND_POWER) {
-        return Fail<micropixel_power_info_response_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        return Fail<micropixel_power_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
 
     const BatterySnapshot snapshot = battery_.Snapshot();
-    micropixel_power_info_response_t response{};
+    micropixel_power_info_t response{};
     response.size = sizeof(response);
     response.device = device;
     if (snapshot.external_power_available && snapshot.external_power_connected) {
@@ -183,6 +189,11 @@ DeviceResult<micropixel_graphics_info_t> GraphicsService::GetInfo() const {
     info.safe_inset_right = static_cast<uint16_t>(safe_area.right_pixels);
     info.safe_inset_bottom = static_cast<uint16_t>(safe_area.bottom_pixels);
     info.safe_inset_left = static_cast<uint16_t>(safe_area.left_pixels);
+    info.max_surface_buffers = graphics_limits::kMaxSurfaceBuffers;
+    info.max_text_bytes = graphics_limits::kMaxTextBytes;
+    info.max_scene_bytes = graphics_limits::kMaxSceneBytes;
+    // max_raster_bytes is filled by the Runtime, which knows whether the
+    // raster kernels are bound to this session.
     return info;
 }
 
@@ -197,29 +208,16 @@ DeviceResult<micropixel_font_info_t> GraphicsService::LoadFont(const FontResourc
                                           : Fail<micropixel_font_info_t>(status);
 }
 
-DeviceResult<void> GraphicsService::ReleaseFont(micropixel_font_handle_t font) const {
-    return StatusResult(implementation_.ReleaseFont(font));
+DeviceResult<void> GraphicsService::ReleaseFont(micropixel_font_handle_t font_handle) const {
+    return StatusResult(implementation_.ReleaseFont(font_handle));
 }
 
-DeviceResult<micropixel_text_metrics_t> GraphicsService::MeasureText(micropixel_font_handle_t font, const char* text,
-                                                                     uint32_t text_length) const {
+DeviceResult<micropixel_text_metrics_t> GraphicsService::MeasureText(micropixel_font_handle_t font_handle,
+                                                                     const char* text, uint32_t text_length) const {
     micropixel_text_metrics_t metrics{};
-    const int32_t status = implementation_.MeasureText(font, text, text_length, metrics);
+    const int32_t status = implementation_.MeasureText(font_handle, text, text_length, metrics);
     return status == MICROPIXEL_STATUS_OK ? DeviceResult<micropixel_text_metrics_t>{metrics}
                                           : Fail<micropixel_text_metrics_t>(status);
-}
-
-DeviceResult<void> GraphicsService::BeginBitmapUpdateFrame() const {
-    return StatusResult(implementation_.BeginBitmapUpdateFrame());
-}
-
-DeviceResult<void> GraphicsService::UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                                 uint32_t height, const uint8_t* pixels, uint32_t stride) const {
-    return StatusResult(implementation_.UpdateBitmap(bitmap, x, y, width, height, pixels, stride));
-}
-
-DeviceResult<void> GraphicsService::CommitBitmapUpdateFrame() const {
-    return StatusResult(implementation_.CommitBitmapUpdateFrame());
 }
 
 DeviceResult<void> GraphicsService::ScaleBitmap(const BitmapView& source, const BitmapView& destination) const {

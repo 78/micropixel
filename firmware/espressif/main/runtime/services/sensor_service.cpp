@@ -63,11 +63,11 @@ ServiceResult<micropixel_sensor_open_response_t> SensorService::Open(micropixel_
         return FailService<micropixel_sensor_open_response_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     uint32_t interval_us = kDefaultSampleIntervalUs;
-    if (interval_us < info->minimum_interval_us) {
-        interval_us = info->minimum_interval_us;
+    if (interval_us < info->min_interval_us) {
+        interval_us = info->min_interval_us;
     }
-    if (interval_us > info->maximum_interval_us) {
-        interval_us = info->maximum_interval_us;
+    if (interval_us > info->max_interval_us) {
+        interval_us = info->max_interval_us;
     }
     auto started = sensors_.Start(device, interval_us);
     if (!started) {
@@ -83,8 +83,8 @@ ServiceResult<micropixel_sensor_open_response_t> SensorService::Open(micropixel_
     slot.device = device;
     slot.kind = info->kind;
     slot.interval_us = interval_us;
-    slot.minimum_interval_us = info->minimum_interval_us;
-    slot.maximum_interval_us = info->maximum_interval_us;
+    slot.min_interval_us = info->min_interval_us;
+    slot.max_interval_us = info->max_interval_us;
     slot.handle = (slot.generation << 8U) | (selected_index + 1U);
     const micropixel_sensor_handle_t handle = slot.handle;
     GiveLock();
@@ -92,16 +92,16 @@ ServiceResult<micropixel_sensor_open_response_t> SensorService::Open(micropixel_
     micropixel_sensor_open_response_t response{};
     response.size = sizeof(response);
     response.kind = info->kind;
-    response.sensor = handle;
+    response.sensor_handle = handle;
     response.device = device;
     return response;
 }
 
-ServiceResult<micropixel_sensor_reading_t> SensorService::Read(micropixel_sensor_handle_t sensor) {
+ServiceResult<micropixel_sensor_reading_t> SensorService::Read(micropixel_sensor_handle_t sensor_handle) {
     if (!TakeLock()) {
         return FailService<micropixel_sensor_reading_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(sensor);
+    Slot* slot = Find(sensor_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<micropixel_sensor_reading_t>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -116,24 +116,23 @@ ServiceResult<micropixel_sensor_reading_t> SensorService::Read(micropixel_sensor
     micropixel_sensor_reading_t reading{};
     reading.size = sizeof(reading);
     reading.kind = kind;
-    reading.sensor = sensor;
+    reading.sensor_handle = sensor_handle;
     reading.device = device;
     reading.timestamp_us = clock_.FromGlobalTime(values->timestamp_us);
     std::memcpy(reading.values, values->values, sizeof(reading.values));
     return reading;
 }
 
-ServiceResult<void> SensorService::SetSampleInterval(micropixel_sensor_handle_t sensor, uint64_t interval_us) {
+ServiceResult<void> SensorService::SetSampleInterval(micropixel_sensor_handle_t sensor_handle, uint64_t interval_us) {
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(sensor);
+    Slot* slot = Find(sensor_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
     }
-    if (interval_us < slot->minimum_interval_us || interval_us > slot->maximum_interval_us ||
-        interval_us > UINT32_MAX) {
+    if (interval_us < slot->min_interval_us || interval_us > slot->max_interval_us || interval_us > UINT32_MAX) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
@@ -147,11 +146,11 @@ ServiceResult<void> SensorService::SetSampleInterval(micropixel_sensor_handle_t 
     return {};
 }
 
-ServiceResult<void> SensorService::Release(micropixel_sensor_handle_t sensor) {
+ServiceResult<void> SensorService::Release(micropixel_sensor_handle_t sensor_handle) {
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(sensor);
+    Slot* slot = Find(sensor_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);

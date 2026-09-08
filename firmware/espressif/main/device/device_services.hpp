@@ -29,7 +29,7 @@ class DevicesService final {
    public:
     explicit DevicesService(DeviceCatalog& implementation) : implementation_(implementation) {}
 
-    [[nodiscard]] DeviceResult<micropixel_devices_list_response_t> List(uint16_t kind) const;
+    [[nodiscard]] DeviceResult<micropixel_devices_list_response_t> List(uint16_t kind, uint16_t first_index) const;
     [[nodiscard]] DeviceResult<micropixel_device_info_t> GetInfo(micropixel_device_id_t device) const;
 
    private:
@@ -86,7 +86,7 @@ class PowerInfoService final {
    public:
     PowerInfoService(DeviceCatalog& devices, Battery& battery) : devices_(devices), battery_(battery) {}
 
-    [[nodiscard]] DeviceResult<micropixel_power_info_response_t> Get(micropixel_device_id_t device);
+    [[nodiscard]] DeviceResult<micropixel_power_info_t> Get(micropixel_device_id_t device);
 
    private:
     DeviceCatalog& devices_;
@@ -102,13 +102,9 @@ class GraphicsService final {
     [[nodiscard]] DeviceResult<micropixel_graphics_info_t> GetInfo() const;
     [[nodiscard]] DeviceResult<void> Submit(const uint8_t* bytes, uint32_t length, const TextureAccess& textures) const;
     [[nodiscard]] DeviceResult<micropixel_font_info_t> LoadFont(const FontResourceView& resource) const;
-    [[nodiscard]] DeviceResult<void> ReleaseFont(micropixel_font_handle_t font) const;
-    [[nodiscard]] DeviceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font, const char* text,
-                                                                      uint32_t text_length) const;
-    [[nodiscard]] DeviceResult<void> BeginBitmapUpdateFrame() const;
-    [[nodiscard]] DeviceResult<void> UpdateBitmap(const BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                                  uint32_t height, const uint8_t* pixels, uint32_t stride) const;
-    [[nodiscard]] DeviceResult<void> CommitBitmapUpdateFrame() const;
+    [[nodiscard]] DeviceResult<void> ReleaseFont(micropixel_font_handle_t font_handle) const;
+    [[nodiscard]] DeviceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font_handle,
+                                                                      const char* text, uint32_t text_length) const;
     [[nodiscard]] DeviceResult<void> ScaleBitmap(const BitmapView& source, const BitmapView& destination) const;
     [[nodiscard]] DeviceResult<void> ShowLaunchBitmap(const BitmapView& bitmap) const;
     void DismissLaunchBitmap() const;

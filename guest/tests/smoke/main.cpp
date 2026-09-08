@@ -6,7 +6,7 @@ int main() {
     log.Info("Runtime Guest started: ABI, startup and log import passed");
 
     const micropixel::TimePoint started = app.clock().Now();
-    micropixel::Timer timer = app.timers().After(micropixel::Duration::Milliseconds(100U));
+    micropixel::Timer timer = app.timers().After(micropixel::Duration::Milliseconds(100U)).value();
     micropixel::Event event;
     if (!app.WaitEventFor(event, micropixel::Duration::Seconds(2U))) {
         log.Error("Runtime Guest failed: event_wait timed out");

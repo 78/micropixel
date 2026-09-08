@@ -68,10 +68,10 @@ class TiltGame final {
     void AdvanceEffects(uint64_t delta_us);
     void SpawnTrail();
     void SpawnParticles(PointF origin, uint32_t count);
-    void RenderObjects(micropixel::SceneUpdate& update);
-    void RenderEffects(micropixel::SceneUpdate& update);
-    void RenderHud(micropixel::SceneUpdate& update);
-    void RenderModal(micropixel::SceneUpdate& update);
+    void RenderObjects();
+    void RenderEffects();
+    void RenderHud();
+    void RenderModal();
     [[nodiscard]] micropixel::Rect FrameSource(ObjectFrame frame) const;
     [[nodiscard]] micropixel::Rect BoardTileFrameSource(BoardTileFrame frame) const;
     [[nodiscard]] micropixel::Rect FanFrameSource(uint32_t frame) const;

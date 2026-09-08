@@ -5,6 +5,7 @@
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
+#include "platform/memory/graphics_buffer_alignment.hpp"
 
 namespace micropixel::platform::lvgl {
 
@@ -28,7 +29,7 @@ class ScanoutStagePool final {
     static constexpr uint32_t kMaxSlots = 6U;
     // Address and size alignment of every slot; covers PPA/DMA2D descriptor
     // and cache line requirements on P4/S31.
-    static constexpr uint32_t kSlotAlignment = 128U;
+    static constexpr uint32_t kSlotAlignment = memory::kGraphicsBufferAlignment;
 
     static ScanoutStagePool& Instance();
 

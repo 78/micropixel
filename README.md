@@ -171,7 +171,8 @@ micropixel --transport usb run
 安装或启动失败时，CLI 会尽力恢复此前运行的 App。
 
 只有一台 ESP32 USB Serial/JTAG 设备时端口会自动探测；否则在 macOS/Linux 使用
-`--port /dev/cu.usbmodemXXXX`，在 Windows 使用 `--port COM7`（替换为设备管理器显示的端口）。USB
+`--port /dev/cu.usbmodemXXXX`，在 Windows 使用 `--port COM7`（替换为设备管理器显示的端口）。
+指定 `--port` 即选择 USB 本地控制，不必再写 `--transport usb`。USB
 本地控制与串口 monitor/esptool 共享端口，使用前应退出 monitor。当前已在 macOS 真机验证；Windows
 由 pyserial COM 端口后端支持，但尚未完成项目真机验证。
 协议和安全边界见 [USB 本地控制](docs/design/usb-local-control.zh-CN.md)。

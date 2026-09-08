@@ -13,7 +13,7 @@ class StoragePage final {
     void Enter(DemoContext& context) {
         std::array<micropixel::Rect, 2U> bounds{};
         LayoutButtonRow(context, bounds);
-        page_container_ = context.root_container.CreateContainer();
+        page_container_ = context.root_container.CreateContainer().value();
         CreateButtons(bounds);
         auto stored = context.app.storage().GetU32(kCounterKey);
         if (stored.has_value()) {
@@ -76,7 +76,7 @@ class StoragePage final {
                               MutedColor(), micropixel::SystemFont::kSmall);
 
         for (auto& button : buttons_) {
-            button.Sync(commands.scene_update());
+            button.Sync();
         }
     }
 

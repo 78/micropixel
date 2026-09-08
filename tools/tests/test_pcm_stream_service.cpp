@@ -92,7 +92,7 @@ micropixel_audio_pcm_stream_open_request_t OpenRequest(uint32_t sample_rate, uin
 micropixel_audio_pcm_stream_write_request_t WriteRequest(uint32_t stream, uint32_t frames, uint32_t payload_bytes) {
     micropixel_audio_pcm_stream_write_request_t request{};
     request.size = static_cast<uint16_t>(sizeof(request) + payload_bytes);
-    request.stream = stream;
+    request.stream_handle = stream;
     request.frame_count = frames;
     return request;
 }
@@ -126,12 +126,12 @@ void TestUpsampler() {
     index = 0U;
     const int16_t single[1] = {400};
     Require(upsampler.Produce(out, 3U, [&](int16_t& sample) {
-                if (index == 1U) {
-                    return false;
-                }
-                sample = single[index++];
-                return true;
-            }) == 3U);
+        if (index == 1U) {
+            return false;
+        }
+        sample = single[index++];
+        return true;
+    }) == 3U);
     Require(out[0] == 100 && out[1] == 200 && out[2] == 300);
     Require(!upsampler.Idle());
     Require(upsampler.Produce(out, 3U, [&](int16_t&) { return false; }) == 1U);
@@ -153,7 +153,7 @@ void TestOpenValidation() {
     Require(service.Open(request).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
     request = OpenRequest(16000U, 1U, 4096U, 4096U);
     Require(service.Open(request).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    request = OpenRequest(16000U, 1U, MICROPIXEL_AUDIO_PCM_MAX_CAPACITY_FRAMES + 1U, 0U);
+    request = OpenRequest(16000U, 1U, micropixel::runtime::PcmStreamService::kMaxCapacityFrames + 1U, 0U);
     Require(service.Open(request).error().status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
     // 22050 does not divide 32000; 48000 exceeds it.
     Require(service.Open(OpenRequest(22050U, 1U, 4096U, 0U)).error().status == MICROPIXEL_STATUS_UNSUPPORTED);
@@ -161,15 +161,14 @@ void TestOpenValidation() {
     Require(!audio.active);
 
     auto opened = service.Open(OpenRequest(kMixRate, 1U, 1024U, 0U));
-    Require(opened && opened->stream != 0U && opened->capacity_frames == 1024U);
+    Require(opened && opened->stream_handle != 0U && opened->capacity_frames == 1024U);
     Require(audio.active && audio.volume == 800U);
     // Only one stream per session.
-    Require(service.Open(OpenRequest(kMixRate, 1U, 1024U, 0U)).error().status ==
-            MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-    Require(service.Close(opened->stream + 1U).error().status == MICROPIXEL_STATUS_NOT_FOUND);
-    Require(service.Close(opened->stream).has_value());
+    Require(service.Open(OpenRequest(kMixRate, 1U, 1024U, 0U)).error().status == MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    Require(service.Close(opened->stream_handle + 1U).error().status == MICROPIXEL_STATUS_NOT_FOUND);
+    Require(service.Close(opened->stream_handle).has_value());
     Require(!audio.active && audio.stop_count == 1U);
-    Require(service.Close(opened->stream).error().status == MICROPIXEL_STATUS_NOT_FOUND);
+    Require(service.Close(opened->stream_handle).error().status == MICROPIXEL_STATUS_NOT_FOUND);
 }
 
 void TestWriteBackpressureAndPassThrough() {
@@ -179,15 +178,14 @@ void TestWriteBackpressureAndPassThrough() {
     micropixel::runtime::PcmStreamService service{audio_service, events, 0};
     auto opened = service.Open(OpenRequest(kMixRate, 1U, 256U, 0U));
     Require(opened.has_value());
-    const uint32_t stream = opened->stream;
+    const uint32_t stream = opened->stream_handle;
 
     std::vector<int16_t> samples(300U);
     for (uint32_t index = 0U; index < samples.size(); ++index) {
         samples[index] = static_cast<int16_t>(index);
     }
     // Payload length must match frame_count * channels.
-    Require(service
-                .Write(WriteRequest(stream, 10U, 10U * sizeof(int16_t)), samples.data(), 9U * sizeof(int16_t))
+    Require(service.Write(WriteRequest(stream, 10U, 10U * sizeof(int16_t)), samples.data(), 9U * sizeof(int16_t))
                 .error()
                 .status == MICROPIXEL_STATUS_INVALID_ARGUMENT);
     Require(service.Write(WriteRequest(stream + 1U, 10U, 10U * sizeof(int16_t)), samples.data(), 10U * sizeof(int16_t))
@@ -233,7 +231,7 @@ void TestUpsampledStereoAndLowWater() {
     // 16 kHz stereo into a 32 kHz mono mixer, low-water at 64 source frames.
     auto opened = service.Open(OpenRequest(16000U, 2U, 512U, 64U));
     Require(opened && opened->capacity_frames == 512U);
-    const uint32_t stream = opened->stream;
+    const uint32_t stream = opened->stream_handle;
 
     // Left = 200, right = 400 -> mono 300 for every frame.
     std::vector<int16_t> stereo(2U * 128U);
@@ -258,7 +256,7 @@ void TestUpsampledStereoAndLowWater() {
             event.status == MICROPIXEL_STATUS_OK);
     micropixel_audio_pcm_event_payload_t payload{};
     std::memcpy(&payload, event.payload, sizeof(payload));
-    Require(payload.stream == stream && payload.free_frames == 512U - 64U);
+    Require(payload.stream_handle == stream && payload.free_frames == 512U - 64U);
     // Delivered once per crossing: draining further does not repeat it.
     read = audio.Pull(out, 128U);
     Require(read.frames == 128U);

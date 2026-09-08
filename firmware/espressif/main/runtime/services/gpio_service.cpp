@@ -81,16 +81,16 @@ ServiceResult<micropixel_gpio_open_response_t> GpioService::Open(const micropixe
     micropixel_gpio_open_response_t response{};
     response.size = sizeof(response);
     response.mode = request.mode;
-    response.gpio = handle;
+    response.gpio_handle = handle;
     response.device = request.device;
     return response;
 }
 
-ServiceResult<micropixel_gpio_value_response_t> GpioService::Read(micropixel_gpio_handle_t gpio) {
+ServiceResult<micropixel_gpio_value_response_t> GpioService::Read(micropixel_gpio_handle_t gpio_handle) {
     if (!TakeLock()) {
         return FailService<micropixel_gpio_value_response_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(gpio);
+    Slot* slot = Find(gpio_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<micropixel_gpio_value_response_t>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -103,16 +103,16 @@ ServiceResult<micropixel_gpio_value_response_t> GpioService::Read(micropixel_gpi
     }
     micropixel_gpio_value_response_t response{};
     response.size = sizeof(response);
-    response.gpio = gpio;
+    response.gpio_handle = gpio_handle;
     response.value = *value ? 1U : 0U;
     return response;
 }
 
-ServiceResult<void> GpioService::Write(micropixel_gpio_handle_t gpio, bool value) {
+ServiceResult<void> GpioService::Write(micropixel_gpio_handle_t gpio_handle, bool value) {
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(gpio);
+    Slot* slot = Find(gpio_handle);
     if (slot == nullptr || slot->mode != MICROPIXEL_GPIO_MODE_OUTPUT) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -123,11 +123,11 @@ ServiceResult<void> GpioService::Write(micropixel_gpio_handle_t gpio, bool value
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> GpioService::SetPwmDuty(micropixel_gpio_handle_t gpio, uint16_t duty_per_mille) {
+ServiceResult<void> GpioService::SetPwmDuty(micropixel_gpio_handle_t gpio_handle, uint16_t duty_per_mille) {
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(gpio);
+    Slot* slot = Find(gpio_handle);
     if (slot == nullptr || slot->mode != MICROPIXEL_GPIO_MODE_PWM) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -138,11 +138,11 @@ ServiceResult<void> GpioService::SetPwmDuty(micropixel_gpio_handle_t gpio, uint1
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> GpioService::Release(micropixel_gpio_handle_t gpio) {
+ServiceResult<void> GpioService::Release(micropixel_gpio_handle_t gpio_handle) {
     if (!TakeLock()) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Slot* slot = Find(gpio);
+    Slot* slot = Find(gpio_handle);
     if (slot == nullptr) {
         GiveLock();
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -243,7 +243,6 @@ void GpioService::HandleEdge(micropixel_device_id_t device, bool value) {
     event.sequence = sequence;
     event.status = MICROPIXEL_STATUS_OK;
     micropixel_gpio_event_payload_t payload{};
-    payload.device = device;
     payload.value = value ? 1U : 0U;
     payload.edge = observed_edge;
     std::memcpy(event.payload, &payload, sizeof(payload));

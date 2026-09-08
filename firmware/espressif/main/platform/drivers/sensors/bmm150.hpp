@@ -19,7 +19,7 @@ class Bmm150 final : public VectorSensor {
     [[nodiscard]] esp_err_t Suspend() override;
     [[nodiscard]] esp_err_t Read(float (&values)[3]) override;
     [[nodiscard]] bool available() const override { return device_handle_ != nullptr; }
-    [[nodiscard]] uint32_t minimum_interval_us() const override { return 33334U; }
+    [[nodiscard]] uint32_t min_interval_us() const override { return 33334U; }
 
    private:
     static int8_t ReadRegisters(uint8_t register_address, uint8_t* data, uint32_t length, void* context);

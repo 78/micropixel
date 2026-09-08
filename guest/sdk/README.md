@@ -1,5 +1,8 @@
 # Guest C++ SDK
 
+正式版前的 Scene、2.5D 前端与统一帧 API 迁移设计见
+[SDK API 重构](../../docs/design/sdk-api.zh-CN.md)。该文描述目标接口；本文仍说明当前已实现行为。
+
 SDK 让应用通过强类型对象使用图形、输入、音频和设备能力。应用保存自己的状态，以单线程事件循环
 驱动更新；Host 管理硬件、资源和系统 UI。本文介绍编程模型与易错边界，完整可运行用法见
 [Demo](../apps/sdk-demo/)，底层协议见 [ABI](../abi/README.md)。
@@ -23,7 +26,7 @@ using micropixel::literals::operator""_s;
 
 int main() {
     micropixel::Application app;
-    micropixel::Timer timer = app.timers().Every(1_s);
+    micropixel::Timer timer = app.timers().Every(1_s).value();
     app.Run([&](const micropixel::Event& event) {
         if (const auto* tick = event.TimerFrom(timer)) {
             (void)tick->delta();
@@ -56,9 +59,9 @@ Scene 引用 Texture，播放实例引用 AudioClip；释放 Guest 句柄不会�
 使用 `Duration` 表达间隔、`TimePoint` 表达应用时钟上的时间点，单位写成 `16_ms`、`1_s` 或显式工厂。
 时间运算的溢出、下溢和除零会 trap。应用时钟在暂停时冻结，不能与 Host wall clock 混用。
 
-Timer 由 `app.timers().After/Every()` 创建，通过 `event.TimerFrom(timer)` 匹配来源。
+Timer 由 `app.timers().After/Every()` 返回的 `Result<Timer>` 创建，通过 `event.TimerFrom(timer)` 匹配来源。
 周期通知合并时，`delta()` 累加实际经过时间，`missed_count()` 表示未单独投递的 tick 数。
-Cancel 是幂等终态操作，释放 handle；需要再次调度时创建新 Timer。Reset 和析构只做 best-effort 释放。
+`Cancel()` 返回 `Result<void>`，成功后释放 handle，失败时保留所有权供重试；需要再次调度时创建新 Timer。Reset 和析构只做 best-effort 释放。
 
 Touch position 与 Renderer 共用逻辑坐标；pressure 只有在 capability 声明支持时才有效。
 Key 使用方向、Confirm/Back/Menu 与按位置命名的 South/East/West/North，不依赖手柄上的 A/B/X/Y 标签。
@@ -80,18 +83,19 @@ Host 先显示保留画面，需要重建动态内容的应用可再重绘。Gue
 | 场景 | 模型 | 原因 |
 |---|---|---|
 | 页面、精灵、对象移动 | Scene | 保留对象，仅传递变化属性 |
-| raycaster 等整帧光栅 | DirectSurface + SurfaceRaster | 批量绘制到 Host buffer，减少像素传输 |
+| raycaster 等整帧光栅 | HostSurface + RasterResources | 批量绘制到 Host buffer，减少像素传输 |
+| 内核表达不了的逐像素自绘 | GuestSurface | Guest 直接写线性内存中的整帧像素 |
 
 ### Scene 与布局
 
-一个应用同时最多有一个 Scene。Container 既是子树所有权边界，也是局部坐标空间：创建调用的
-receiver 就是 parent，子对象的位置相对直接父 Container，visibility、opacity、translation 和 clip
-沿父链生效。销毁页面根即可销毁完整子树；隐藏页面则保留资源供恢复使用。
+`Renderer::CreateScene()` 返回 `Result<Scene>`；可以保留多个场景供页面切换。
+Container 是子树所有权边界和局部坐标空间，子对象的位置相对直接父 Container，
+visibility、opacity、translation 和 clip 沿父链生效。
 
-一次 SceneUpdate 是属性事务，必须 Present，或使用 `Scene::Update(lambda)`。
-未提交或提交失败会回滚：旧 handle 继续有效，新创建的 handle 失效；成功销毁后槽位即使复用，旧
-handle 也不能操作新对象。普通更新只发送相对事务开始时的净变化，创建/销毁由 SDK 自动转为 keyframe。
-应用不手动填写 wire record、generation 或 revision。
+直接修改节点后调用 `renderer.Present(scene)`。setter 只修改 Guest 状态；提交失败保留旧画面和
+待提交变化。节点销毁立即失效，失败不恢复已销毁 handle，槽位复用也不能让旧 handle 指向新对象。
+首次、场景切换和结构变化提交 keyframe；其他帧合并净变化。旧 `Scene::Update` 已移除。
+基础节点工厂返回 `Result<节点类型>`；容量不足时不会创建半个节点。具体剩余工作见 [SDK 重构状态](../../docs/design/sdk-api.zh-CN.md)。
 
 布局依据 RendererInfo 的逻辑 width/height 与 safe area。SDK 使用短边 720 的逻辑画布，序列化时统一
 转换为物理值；physical width/height 用于物理素材选择等明确需要原生像素的场景。Touch 属于 Scene
@@ -101,10 +105,12 @@ Sprite 适合独立图像，SpriteBatch 适合蛇身、方块和粒子；Shape/R
 分配像素 surface。Label 使用 Small/Medium/Large/Title 语义字体，具体字号由 Host profile 决定。
 [symbols.hpp](symbols.hpp)提供保证存在于系统字体的图标。
 
-Scene 容量从 RendererInfo 查询。Graphics 1.7 分别提供 256 个节点和 1024 个 Batch 实例，
-实例不再消耗节点预算（Batch 本身仍是一个节点）。Host 按实际提交需求扩容，App 无需声明或预留
-Host 容量；资源不足时提交失败，挂起保留缓冲，退出释放。Guest 存储按实际工作集增长，但仍受 Host/ABI 上限约束；页面和
-Batch 的槽位可以复用，不能把动态容器理解为无限资源。
+Scene 节点、容器和 Batch 实例没有固定计数上限：Host 按实际提交需求扩容，App 无需声明或预留
+Host 容量；wire id 为 uint16，节点数加实例数不超过 65535（Batch 本身仍是一个节点），其余由内存决定。
+创建失败返回 `kResourceExhausted`，Host 端资源不足时提交失败并保留旧场景，挂起保留缓冲，退出释放。
+Label 文本存放在按需增长的 text arena 中，单条文本上限由 Host 报告（当前 1024 字节）；`SetText`
+在 Guest 内存耗尽时 panic。Guest 存储按实际工作集增长；页面和 Batch 的槽位可以复用，不能把动态
+容器理解为无限资源。
 
 `cache_content` 是 Host 渲染提示，当前用于选择根级 Layer 快照容器，适合内容不变的整体平移。
 它不保证任意子树缓存，也不应被当作影响画面语义的 API；缓存行为与诊断见
@@ -112,22 +118,52 @@ Batch 的槽位可以复用，不能把动态容器理解为无限资源。
 
 ### Texture 与 atlas
 
-使用生成的 AssetId 加载资源，不手写 TOC 数字或运行时名称查找。LoadTexture 同步返回 Texture，
-并适配到物理屏幕；只有应用提供且正确选择物理分辨率素材时才用 LoadNativeTexture，其他尺寸回退
-LoadTexture。Scene 独立持有纹理引用，Guest Reset 后仍可正确重绘，最终引用释放才回收像素。
+使用生成的 AssetId 加载资源，不手写 TOC 数字。`LoadTexture(asset)` 保留素材像素尺寸，
+`LoadTexture(asset, TextureScale::kDisplay)` 显式适配 2D 逻辑画布。
+`resources.CreateDynamicTexture(size, format, pixels, pitch)` 返回同一种 `Result<Texture>`。
+`texture.Update(rect, pixels, pitch)` 准备完整的新像素版本，下一次 Present 生效；失败保留旧像素。
+已有节点和材质引用自动跟随更新，不需要每次重新绑定。普通素材 Texture 的 Update 返回 Unsupported。
+ABI 2.0 没有 StreamingTexture / TextureUpdateBatch，动态纹理是唯一的可变纹理路径。
+
+Scene 已接受的快照独立保留纹理引用；Guest 销毁 Texture 不破坏已显示的画面。
 
 动画优先使用 atlas：加载一次、逐帧改变 source rect。时间由应用事件循环驱动，当前没有
 AnimationClip/Track。资源清单、生成绑定与 Bundle 工作流见 [Guest 构建](../README.md)。
 
-StreamingTexture 和 TextureUpdateBatch 相关接口均为 deprecated；图形开发使用 Scene/SpriteBatch 或 DirectSurface。
+### Raycaster（2.5D 前端）
 
-### DirectSurface 与 SurfaceRaster
+`sdk/raycast.hpp` 的 `Raycaster` 在 Guest 内完成栅格世界的几何：射线 DDA、墙与门板投影、
+地板/天花板行设置、覆盖裁剪、billboard 深度排序与逐列 z-test，输出 `RasterDrawList` 的
+`SpanPair` / `Column` 记录；每像素工作由 Host 内核执行，不新增 ABI。App 维护一张行主序的
+`RaycastCell` 数组（4 字节/格：`Empty / Wall(slot) / Slab(slot, open)`），以 `RaycastGrid` 视图交给
+`Cast(camera, grid)`，墙或门变化时改写对应格子；每帧调用 `Cast`、`DrawWorld(list)`、
+`DrawBillboards(list, billboards)`，之后用普通 RasterDrawList 方法追加武器、HUD 和文本。
+`Depth(column)`、`LightFor(distance)`、`Project(x, y)` 供 App 做可见性和瞄准判断。
+所有状态为固定容量数组（`kMaxColumns`、`kMaxBillboards`），`Initialize` 后不再分配。
 
-默认 DirectSurface buffer 由 Host 持有，Guest 不映射像素，使用 SurfaceRaster 上传 INDEX8 纹理和
-canonical RGB565 调色板，再提交绘制记录。Guest 决定几何、遮挡和顺序，Host 执行逐像素操作。
+`sdk/raster_world.hpp` 放 2.5D 前端共享的 `DistanceLighting` / `LightTable` 与 `Billboard`，
+后续的 Mode-7 地面（赛车）与球面视图（earth）复用同一套光照与 billboard 约定。
+maze-evil 的 `game/renderer.cpp` 是当前的完整用法。
+
+### DirectSurface：HostSurface 与 GuestSurface
+
+整帧路径有两种 surface，区别是像素归谁：`HostSurface` 的 buffer 由 Host 持有，Guest 只提交绘制记录；
+`GuestSurface` 的 buffer 在 Guest 线性内存里，App 自己写像素。两者共享基类 `DirectSurface` 的帧背压接口
+（`Busy` / `AcquireFree` / `Present` / `ReleasedFrom`、尺寸与 `direct_scanout` 查询），但绘制入口是类型级的：
+只有 `HostSurface` 有 `Update()`，只有 `GuestSurface` 有 `Buffer()`。一个 App 同时只能有一个 surface，
+`CreateHostSurface()` / `CreateGuestSurface()` 都会因已有 surface 而失败。
+
+`HostSurface` 通过 `surface.Update(buffer_index, callback)` 开始绘制，回调中的 `RasterDrawList&` 自动绑定该 buffer，
+回调返回时自动完成提交。回调签名为 `void(RasterDrawList&)`，列表不能复制或移动，不能手动结束。
+目标无效时不调用回调；绘制失败由 `Update()` 的 `Result<void>` 返回。缓冲区满时会分批提交，
+因此回调不是事务，失败不回滚已绘制的批次；仅成功后调用 `Present()`。
+
+`RasterResources` 负责上传 INDEX8 纹理、canonical RGB565 调色板和 warp 表。它归 Session 而不是某个 surface：
+销毁 `HostSurface` 切到 Scene 再重建，已上传的资源仍然可用，不需要重传；App 结束时统一释放。
+Guest 决定几何、遮挡和顺序，Host 执行逐像素操作。
 完整调用签名见 [graphics.hpp](graphics.hpp)，可运行示例见 [Maze Evil](../apps/maze-evil/)。
 
-帧的生命周期是“取得空闲 buffer → 绘制并 Finish → Present → Host 归还”：
+帧的生命周期是“取得空闲 buffer → 绘制 → Present → Host 归还”：
 
 - Present 成功后 buffer 归 Host；Busy 时不能改写、绘制或重复 Present。
 - 所有 buffer 忙时等待 ReleasedFrom 事件，不能忙循环抢占 CPU。Host 可保留当前显示帧直到下一帧替换，
@@ -137,13 +173,24 @@ canonical RGB565 调色板，再提交绘制记录。Guest 决定几何、遮挡
   时接口语义不变。max_full_frame_fps 是传输上限，不是应用可达到的保证值。
 - buffer 可按整数 upscale 缩小，代价是放大处理与画质变化，必须测量最终呈现时间。
 
-Guest buffer 模式供需要直接写像素的应用使用：Bundle 必须声明 `pinned_memory: true`，保持线性内存
-基址不移动，否则创建返回 Unsupported。像素按面板字节序写入，依据 rgb565_byte_swapped 查询。
-这种模式会提前保留连续内存；默认 Host buffer 无需此声明，Guest 内存按需增长。
+`GuestSurface` 供需要直接写像素的应用使用：Bundle 必须声明 `pinned_memory: true`，保持线性内存
+基址不移动，否则创建返回 Unsupported。通过 `Buffer(index)` 取得行主序 RGB565 像素，`pitch()` 为行字节数，
+像素按面板字节序写入，依据 rgb565_byte_swapped 查询；写之前先确认 `Busy(index)` 为假。
+这种模式会提前保留连续内存；`HostSurface` 无需此声明，Guest 内存按需增长。
 
-SurfaceRaster 的 Column 使用列主序纹理，SpanPair 使用行主序；Sprite/SolidSprite 用于图像和字形，
-FillRect 用于填充或混合。Column/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect 的目标由 Host 裁剪。
-纹理宽高为 8–128 内的 2 的幂；资源上限从 Service 查询，上传被拒绝时保留旧纹理。
+RasterDrawList 的 Column 使用列主序纹理，SpanPair 与 Warp 使用行主序；Sprite/SolidSprite 用于图像和字形，
+FillRect 用于填充或混合。Column/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect/Warp 的目标由 Host 裁剪。
+调色板按槽上传（`UploadLitPalette(slot, ...)`），`SetPalette(slot)` 之后的记录用该槽，一个 App 可以为地表、
+每种精灵和 UI 各留一套调色板。Warp 是 Host 持有的 screen→(u, v, light) 表（`UploadWarpMap` /
+`UpdateWarpRows` 分帧流式上传），每帧只提交一条记录和 `u_offset / v_offset`（`u_fraction_bits` 让 u 带纹素小数，
+贴图可亚纹素滚动）；`SphereView` 用它生成球体
+（本地基准 Earth Garden，未入库），任何视点固定、贴图滚动的映射（天空盒、隧道、水面）都适用。
+纹理宽高使用 16 位字段（1–65535），槽编号保持 8 位（0–255），可重复上传到同一槽替换纹理。
+`texture_slot` 表示槽编号，`light_level` 表示调色板光照档位索引。INDEX8 每像素 1 字节，实际上传受
+可用内存约束，源数据必须完整位于 Guest 内存。建议性能敏感的纹理优先采用 2 的幂尺寸
+（如 512×256），以使用移位和掩码采样快速路径；300×200 等尺寸也支持。
+上传分配失败返回 ResourceExhausted，并保留原纹理或调色板。元数据按需分配在 PSRAM，
+App 结束时释放所有纹理、调色板和元数据。替换期间新旧资源同时存在，需要临时容纳两者。
 
 每个提交批次先验证再写像素。SDK 缓冲满时会自动分批，Finish 返回首个错误；此前已经成功的批次
 不会整体回滚。应用只应在绘制成功后 Present。关闭 Host raster 能力时返回 Unsupported，应用需
@@ -212,7 +259,7 @@ exception、RTTI 与 reference-types 关闭，不能自行增加 WASI import。
 ## 错误策略与 Service 演进
 
 能采取其他动作的业务失败返回 Result，例如资源缺失、解码失败或容量不足；调用方检查结果并选择
-回退或带原因终止。Core Timer、事件等待等基础操作的编程或 Runtime 错误在发生点 panic，避免把
+回退或带原因终止。事件等待等基础操作的编程或 Runtime 错误在发生点 panic，避免把
 机械状态码检查扩散到应用。自定义不可恢复错误使用 Assert/Panic 并提供原因。
 
 Result 提供 expected 风格的值/错误访问；读取错误状态的 value 或成功状态的 error 会 trap。

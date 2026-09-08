@@ -13,7 +13,7 @@ static_assert(std::is_move_constructible_v<micropixel::Playback>);
 static_assert(!std::is_copy_constructible_v<micropixel::Playback>);
 
 void WaitFor(micropixel::Application& app, micropixel::Duration delay) {
-    micropixel::Timer timer = app.timers().After(delay);
+    micropixel::Timer timer = app.timers().After(delay).value();
     for (;;) {
         micropixel::Event event = app.WaitEvent();
         if (event.TimerFrom(timer) != nullptr) {

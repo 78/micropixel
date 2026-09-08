@@ -23,9 +23,9 @@ Metalio-Claw4，同时保留其他方形显示 profile 的自适应降级路径�
 | fan atlas（8 帧） | 768×96 | 512×64 |
 | mechanic atlas（4×2） | 384×192 | 256×128 |
 
-`Resources::LoadNativeTexture()` 保留选中变体的原生像素尺寸。Scene destination 仍使用逻辑坐标，因此
+`Resources::LoadTexture()`（默认 `TextureScale::kNative`）保留选中变体的原生像素尺寸。Scene destination 仍使用逻辑坐标，因此
 480 资源的 400×400 source 显示到 600×600 logical destination 后正好是 400×400 物理像素。未知
-profile 使用 720 资源和普通 `LoadTexture()` 自适应加载。
+profile 使用 720 资源和 `LoadTexture(asset, TextureScale::kDisplay)` 自适应加载。
 
 素材不从概念预览图直接切取。ImageGen 负责标题、星星和冰面等美术母图；母图不包含关卡
 几何、碰撞边界或整块 HUD。`assets/source/levels.json` 是墙体、起点、终点和障碍的唯一几何源，

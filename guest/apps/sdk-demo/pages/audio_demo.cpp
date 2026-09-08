@@ -64,7 +64,7 @@ class AudioPage final {
                 compressed_available_ = false;
             }
         }
-        page_container_ = context.root_container.CreateContainer();
+        page_container_ = context.root_container.CreateContainer().value();
         CreateButtons(context);
     }
 
@@ -138,8 +138,8 @@ class AudioPage final {
                               micropixel::SystemFont::kLarge);
 
         for (uint32_t index = 0U; index < 6U; ++index) {
-            buttons_[index].SetEnabled(commands.scene_update(), index == 4U ? compressed_available_ : available_);
-            buttons_[index].SetVisible(commands.scene_update(), true);
+            buttons_[index].SetEnabled(index == 4U ? compressed_available_ : available_);
+            buttons_[index].SetVisible(true);
         }
     }
 

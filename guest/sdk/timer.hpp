@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "sdk/event.hpp"
+#include "sdk/result.hpp"
 #include "sdk/types.hpp"
 
 namespace micropixel {
@@ -32,7 +33,8 @@ class Timer final {
     [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
     // Terminal, idempotent cancellation. Releases the Host handle and makes
     // this Timer invalid; create another Timer to schedule again.
-    void Cancel();
+    // Failure retains ownership so cancellation can be retried.
+    [[nodiscard]] Result<void> Cancel();
     /* Best-effort release. Safe to call repeatedly and from the destructor. */
     void Reset();
 
@@ -55,10 +57,11 @@ class Timers final {
     constexpr Timers(const Timers&) noexcept = default;
     constexpr Timers& operator=(const Timers&) noexcept = default;
 
-    [[nodiscard]] Timer After(Duration delay) const;
-    [[nodiscard]] Timer Every(Duration period) const;
+    [[nodiscard]] Result<Timer> After(Duration delay) const;
+    [[nodiscard]] Result<Timer> Every(Duration period) const;
 
    private:
+    [[nodiscard]] Result<Timer> Create(Duration delay, bool repeating) const;
     struct CapabilityToken {};
     explicit constexpr Timers(CapabilityToken) noexcept {}
     friend class Application;

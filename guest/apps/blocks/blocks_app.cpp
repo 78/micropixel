@@ -39,7 +39,8 @@ int BlocksAppMain() {
                                    : "blocks: Audio unavailable; visual gameplay continues");
 
     BlocksGame game{app, renderer, display, audio, audio_available, best_score};
-    const micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
+    const micropixel::Timer ticker =
+        app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs)).value();
     game.Render();
     app.log().Info("blocks: ready; retained playfield batch with static rounded-block atlas");
 

@@ -7,12 +7,14 @@
 #include <cstdio>
 #include <cstring>
 
+#include "device/contracts/graphics.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "platform/memory/graphics_buffer_alignment.hpp"
 #include "work/background_executor.hpp"
 
 namespace micropixel::platform::lvgl {
@@ -20,7 +22,7 @@ namespace {
 
 constexpr char kTag[] = "guest_graphics";
 // App surfaces are DMA/PPA destinations; reserve complete P4 cache lines.
-constexpr size_t kAppSurfaceAlignment = 128U;
+constexpr size_t kAppSurfaceAlignment = memory::kGraphicsBufferAlignment;
 constexpr uint32_t kAppSurfaceStrideAlignmentPixels = 16U;
 constexpr uint32_t kAppSurfaceTransformScratchRows = 16U;
 // The publish timer is only ever fired explicitly with lv_timer_ready(); the
@@ -114,8 +116,9 @@ GuestGraphicsEngine::GuestGraphicsEngine(int32_t width, int32_t height, FontRegi
       bitmap_font_rasterizer_(fonts) {
 }
 
-bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_handle_t font) {
-    return context != nullptr && static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font) != nullptr;
+bool GuestGraphicsEngine::ValidateFontHandle(void* context, micropixel_font_handle_t font_handle) {
+    return context != nullptr &&
+           static_cast<GuestGraphicsEngine*>(context)->fonts_.ResolveGuestHandle(font_handle) != nullptr;
 }
 
 esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebufferAccess* framebuffers,
@@ -279,17 +282,10 @@ int32_t GuestGraphicsEngine::GetInfo(micropixel_graphics_info_t& info) const {
     }
     info = {};
     info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
     info.width = width_;
     info.height = height_;
     info.pixel_format = app_surface_format_ == graphics::SurfacePixelFormat::kRgb565 ? MICROPIXEL_PIXEL_FORMAT_RGB565
                                                                                      : MICROPIXEL_PIXEL_FORMAT_BGR888;
-    info.max_containers = MICROPIXEL_GRAPHICS_MAX_CONTAINERS;
-    info.max_scene_bytes = MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES;
-    info.max_scene_nodes = MICROPIXEL_GRAPHICS_MAX_SCENE_NODES;
-    info.max_batch_instances = MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES;
-    info.max_sprite_batches = MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES;
     info.reserved0 = 0U;
     device::DirectSurfaceInfo surface{};
     direct_surface_presenter_.FillInfo(surface);
@@ -326,8 +322,8 @@ bool GuestGraphicsEngine::EnsureTextureStorage() {
 }
 
 bool GuestGraphicsEngine::EnsureSceneStorage(graphics::SceneCapacity capacity) {
-    if (!scene_storage_.Grow(capacity, guest_scene_ ? &*guest_scene_ : nullptr,
-                             app_surface_compositor_ ? &*app_surface_compositor_ : nullptr)) {
+    if (!scene_storage_.Ensure(capacity, guest_scene_ ? &*guest_scene_ : nullptr,
+                               app_surface_compositor_ ? &*app_surface_compositor_ : nullptr)) {
         return false;
     }
     if (!guest_scene_) {
@@ -607,25 +603,6 @@ void GuestGraphicsEngine::AdoptPendingFrameLocked(bool inside_refresh) {
     if (needs_present && !inside_refresh) {
         RequestDisplayRefresh(display_);
     }
-}
-
-bool GuestGraphicsEngine::RefreshAppSurfaceBitmap(const uint8_t* bitmap_data, graphics::DamageRect damage) {
-    if (!app_surface_compositor_.has_value() || !app_surface_compositor_->Synchronized()) {
-        // No scene presented yet (or the surface was reset): the next Submit
-        // rebuilds everything from the retained scene anyway.
-        return false;
-    }
-    const uint8_t target = AcquireComposeSurface();
-    const graphics::AppSurfaceFrameResult result =
-        app_surface_compositor_->RefreshBitmap(bitmap_data, damage, SurfaceAt(target));
-    if (result.status != graphics::AppSurfaceStatus::kOk) {
-        ESP_LOGE(kTag, "App Surface bitmap refresh failed: status=%u", static_cast<unsigned>(result.status));
-        return false;
-    }
-    // Always publish: AcquireComposeSurface() may have taken back a frame that
-    // was still waiting in the mailbox, and that content must reach LVGL.
-    PublishSurface(target, result.visual_changed);
-    return result.visual_changed;
 }
 
 void GuestGraphicsEngine::ReleaseAppSurfaceLocked() {
@@ -998,10 +975,6 @@ void GuestGraphicsEngine::Release() {
     scene_texture_access_ = {};
     ReleaseFonts(scene_fonts_, scene_font_count_);
     scene_font_count_ = 0U;
-    bitmap_update_frame_active_ = false;
-    bitmap_damage_.Clear();
-    bitmap_frame_updates_ = 0U;
-    bitmap_frame_bytes_ = 0U;
     heap_caps_free(texture_storage_);
     texture_storage_ = nullptr;
     scene_textures_ = nullptr;
@@ -1057,21 +1030,27 @@ int32_t GuestGraphicsEngine::Submit(const uint8_t* bytes, uint32_t length, const
     for (uint16_t index = 0U; index < guest_scene_->NodeCount(); ++index) {
         const graphics::GuestSceneNode& node = guest_scene_->Nodes()[index];
         if (node.kind == graphics::GuestSceneNodeKind::kTexture ||
-            (node.kind == graphics::GuestSceneNodeKind::kSpriteBatch && node.texture != 0U)) {
+            (node.kind == graphics::GuestSceneNodeKind::kSpriteBatch && node.texture_handle != 0U)) {
             bool exists = false;
             for (uint32_t current = 0U; current < texture_count; ++current) {
-                exists = exists || scratch_textures_[current] == node.texture;
+                exists = exists || scratch_textures_[current] == node.texture_handle;
+            }
+            if (!exists && texture_count == kMaxSceneTextures) {
+                return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
             }
             if (!exists) {
-                scratch_textures_[texture_count++] = node.texture;
+                scratch_textures_[texture_count++] = node.texture_handle;
             }
         } else if (node.kind == graphics::GuestSceneNodeKind::kText) {
             bool exists = false;
             for (uint32_t current = 0U; current < font_count; ++current) {
-                exists = exists || scratch_fonts_[current] == node.font;
+                exists = exists || scratch_fonts_[current] == node.font_handle;
+            }
+            if (!exists && font_count == kMaxSceneTextures) {
+                return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
             }
             if (!exists) {
-                scratch_fonts_[font_count++] = node.font;
+                scratch_fonts_[font_count++] = node.font_handle;
             }
         }
     }
@@ -1140,15 +1119,17 @@ int32_t GuestGraphicsEngine::LoadFont(const device::FontResourceView& resource, 
     return fonts_.LoadFont(std::span<const uint8_t>(resource.data, resource.size), info_out);
 }
 
-int32_t GuestGraphicsEngine::ReleaseFont(micropixel_font_handle_t font) { return fonts_.ReleaseFont(font); }
+int32_t GuestGraphicsEngine::ReleaseFont(micropixel_font_handle_t font_handle) {
+    return fonts_.ReleaseFont(font_handle);
+}
 
 int32_t GuestGraphicsEngine::MeasureText(micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
                                          micropixel_text_metrics_t& metrics_out) {
-    if (text == nullptr || text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES ||
+    if (text == nullptr || text_length == 0U || text_length > micropixel::device::graphics_limits::kMaxTextBytes ||
         fonts_.ResolveGuestHandle(font_handle) == nullptr) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    char terminated[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+    char terminated[micropixel::device::graphics_limits::kMaxTextBytes + 1U]{};
     std::memcpy(terminated, text, text_length);
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;
@@ -1162,115 +1143,6 @@ int32_t GuestGraphicsEngine::MeasureText(micropixel_font_handle_t font_handle, c
     metrics_out.height = size.y < 0 ? 0U : static_cast<uint32_t>(size.y);
     metrics_out.baseline = font->line_height - font->base_line;
     esp_lv_adapter_unlock();
-    return MICROPIXEL_STATUS_OK;
-}
-
-// Streaming bitmap updates run on the Guest task. The bitmap storage and the
-// frame bookkeeping are private to that task, so only the single-surface
-// configuration needs the LVGL lock (the compose target is the surface LVGL
-// reads), in which case the published frame is adopted inline.
-bool GuestGraphicsEngine::PresentBitmapDamage(const graphics::DamageRegion* regions, size_t count) {
-    const bool lock = ComposeUnderLock();
-    if (lock && esp_lv_adapter_lock(-1) != ESP_OK) {
-        return false;
-    }
-    bool invalidated = false;
-    for (size_t index = 0U; index < count; ++index) {
-        invalidated =
-            RefreshAppSurfaceBitmap(static_cast<const uint8_t*>(regions[index].source), regions[index].rect) ||
-            invalidated;
-    }
-    if (lock) {
-        AdoptPendingFrameLocked(false);
-        esp_lv_adapter_unlock();
-    }
-    return invalidated;
-}
-
-int32_t GuestGraphicsEngine::BeginBitmapUpdateFrame() {
-    if (display_ == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (bitmap_update_frame_active_) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    bitmap_update_frame_active_ = true;
-    bitmap_damage_.Clear();
-    bitmap_frame_updates_ = 0U;
-    bitmap_frame_bytes_ = 0U;
-    bitmap_frame_started_us_ = static_cast<uint64_t>(esp_timer_get_time());
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GuestGraphicsEngine::UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                          uint32_t height, const uint8_t* pixels, uint32_t stride) {
-    const uint32_t bytes_per_pixel = bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-                                         ? 3U
-                                         : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
-                                                ? 4U
-                                                : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
-    if (display_ == nullptr || bitmap.data == nullptr || pixels == nullptr || bytes_per_pixel == 0U ||
-        (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || width == 0U || height == 0U ||
-        static_cast<uint64_t>(x) + width > bitmap.width || static_cast<uint64_t>(y) + height > bitmap.height ||
-        stride != width * bytes_per_pixel || bitmap.stride != bitmap.width * bytes_per_pixel ||
-        bitmap.size != bitmap.stride * bitmap.height) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    if (bitmap_update_frame_active_) {
-        constexpr graphics::DamageMergePolicy kDamageMergePolicy{
-            .max_extra_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS,
-            .max_region_pixels = CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_MAX_PIXELS,
-        };
-        if (!bitmap_damage_.Add(bitmap.data, {.x = x, .y = y, .width = width, .height = height}, kDamageMergePolicy)) {
-            return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
-        }
-    }
-    // The compositor only reads bitmaps while composing on this same task, so
-    // the copy needs no synchronization against LVGL.
-    auto* destination = const_cast<uint8_t*>(bitmap.data) + y * bitmap.stride + x * bytes_per_pixel;
-    for (uint32_t row = 0U; row < height; ++row) {
-        std::memcpy(destination + row * bitmap.stride, pixels + row * stride, stride);
-    }
-    if (bitmap_update_frame_active_) {
-        ++bitmap_frame_updates_;
-        bitmap_frame_bytes_ += static_cast<uint64_t>(stride) * height;
-    } else {
-        const graphics::DamageRegion region{.source = bitmap.data,
-                                            .rect = {.x = x, .y = y, .width = width, .height = height}};
-        (void)PresentBitmapDamage(&region, 1U);
-    }
-    return MICROPIXEL_STATUS_OK;
-}
-
-int32_t GuestGraphicsEngine::CommitBitmapUpdateFrame() {
-    if (display_ == nullptr) {
-        return MICROPIXEL_STATUS_INTERNAL;
-    }
-    if (!bitmap_update_frame_active_) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-
-    const bool invalidated = PresentBitmapDamage(&bitmap_damage_[0], bitmap_damage_.Size());
-
-    const uint32_t updates = bitmap_frame_updates_;
-    const uint64_t bytes = bitmap_frame_bytes_;
-    const size_t damage_count = bitmap_damage_.Size();
-    const uint32_t capacity_merges = bitmap_damage_.CapacityMergeCount();
-    const uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-    const uint64_t elapsed_us = now_us >= bitmap_frame_started_us_ ? now_us - bitmap_frame_started_us_ : 0U;
-    const uint32_t sequence = updates == 0U ? bitmap_frame_sequence_ : ++bitmap_frame_sequence_;
-    bitmap_update_frame_active_ = false;
-    bitmap_damage_.Clear();
-    bitmap_frame_updates_ = 0U;
-    bitmap_frame_bytes_ = 0U;
-
-    if (updates != 0U && (sequence <= 8U || (sequence % kSceneTelemetryPeriodFrames) == 0U)) {
-        ESP_LOGI(kTag,
-                 "offscreen frame #%" PRIu32 ": updates=%" PRIu32 " bytes=%" PRIu64 " regions=%" PRIu32
-                 " capacity-merges=%" PRIu32 " stage=%" PRIu64 " us present=%s",
-                 sequence, updates, bytes, static_cast<uint32_t>(damage_count), capacity_merges, elapsed_us,
-                 invalidated ? "yes" : "no");
-    }
     return MICROPIXEL_STATUS_OK;
 }
 
@@ -1515,7 +1387,7 @@ bool GuestGraphicsEngine::CompositeDirectFrame(void* context, const device::Dire
     const uint8_t target = engine->AcquireComposeSurface();
     const graphics::PixelSurface destination = engine->SurfaceAt(target);
     const bool bgr888 = destination.format == graphics::SurfacePixelFormat::kBgr888;
-    const bool same_size = frame.src_width == destination.width && frame.src_height == destination.height;
+    const bool same_size = frame.source_width == destination.width && frame.source_height == destination.height;
     bool converted = false;
     if (!source_byte_swapped) {
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED && !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
@@ -1526,15 +1398,15 @@ bool GuestGraphicsEngine::CompositeDirectFrame(void* context, const device::Dire
         const graphics::ConstPixelSurface source{
             .pixels = frame.pixels,
             .size = frame.length,
-            .width = frame.src_width,
-            .height = frame.src_height,
+            .width = frame.source_width,
+            .height = frame.source_height,
             .stride = frame.pitch,
             .format = graphics::SurfacePixelFormat::kRgb565,
         };
         const graphics::SurfaceRect source_rect{.x = 0,
                                                 .y = 0,
-                                                .width = static_cast<int32_t>(frame.src_width),
-                                                .height = static_cast<int32_t>(frame.src_height)};
+                                                .width = static_cast<int32_t>(frame.source_width),
+                                                .height = static_cast<int32_t>(frame.source_height)};
         const graphics::SurfaceRect destination_rect{.x = 0,
                                                      .y = 0,
                                                      .width = static_cast<int32_t>(destination.width),
@@ -1545,11 +1417,11 @@ bool GuestGraphicsEngine::CompositeDirectFrame(void* context, const device::Dire
         // Panel byte order (or no accelerator): plain CPU conversion.
         const bool swap = source_byte_swapped;
         for (uint32_t y = 0U; y < destination.height; ++y) {
-            const uint32_t source_y = same_size ? y : y * frame.src_height / destination.height;
+            const uint32_t source_y = same_size ? y : y * frame.source_height / destination.height;
             const auto* source_row = reinterpret_cast<const uint16_t*>(frame.pixels + source_y * frame.pitch);
             uint8_t* destination_row = destination.pixels + y * destination.stride;
             for (uint32_t x = 0U; x < destination.width; ++x) {
-                const uint32_t source_x = same_size ? x : x * frame.src_width / destination.width;
+                const uint32_t source_x = same_size ? x : x * frame.source_width / destination.width;
                 uint16_t pixel = source_row[source_x];
                 if (swap) {
                     pixel = static_cast<uint16_t>((pixel << 8U) | (pixel >> 8U));

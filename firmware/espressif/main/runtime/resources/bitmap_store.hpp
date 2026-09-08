@@ -8,6 +8,7 @@
 #include "device/contracts/graphics.hpp"
 #include "freertos/FreeRTOS.h"
 #include "runtime/runtime_limits.hpp"
+#include "runtime/services/service_result.hpp"
 
 namespace micropixel::runtime {
 
@@ -23,12 +24,15 @@ class BitmapStore final {
     ~BitmapStore();
 
     [[nodiscard]] bool valid() const { return slots_ != nullptr; }  // NOLINT(readability-identifier-naming)
-    [[nodiscard]] micropixel_texture_handle_t Add(const device::BitmapView& view, bool owned,
-                                                  bool mutable_pixels = false);
-    [[nodiscard]] micropixel_texture_handle_t CreateOffscreenSurface(uint32_t width, uint32_t height,
-                                                                     uint32_t pixel_format);
+    [[nodiscard]] micropixel_texture_handle_t Add(const device::BitmapView& view, bool owned);
+    [[nodiscard]] ServiceResult<micropixel_texture_handle_t> CreateDynamic(uint32_t width, uint32_t height,
+                                                                           uint32_t format, const uint8_t* pixels,
+                                                                           uint32_t length, uint32_t pitch);
+    [[nodiscard]] ServiceResult<micropixel_texture_handle_t> UpdateDynamic(micropixel_texture_handle_t source,
+                                                                           uint32_t x, uint32_t y, uint32_t width,
+                                                                           uint32_t height, const uint8_t* pixels,
+                                                                           uint32_t length, uint32_t pitch);
     [[nodiscard]] bool Resolve(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const;
-    [[nodiscard]] bool ResolveMutable(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const;
     [[nodiscard]] bool RetainSceneReference(micropixel_texture_handle_t bitmap);
     void ReleaseSceneReference(micropixel_texture_handle_t bitmap);
     void Release(micropixel_texture_handle_t bitmap);
@@ -36,10 +40,9 @@ class BitmapStore final {
     [[nodiscard]] uint32_t HighWaterMark() const;
 
    private:
+    // Bits above kPublicFlagMask are Host bookkeeping and never reach the Guest.
     enum SlotFlag : uint8_t {
-        kStreaming = MICROPIXEL_TEXTURE_FLAG_STREAMING,
         kOwned = 1U << 5U,
-        kMutablePixels = 1U << 6U,
         kGuestReference = 1U << 7U,
     };
 
@@ -57,7 +60,7 @@ class BitmapStore final {
     static constexpr uint32_t kHandleIndexBits = 8U;
     static constexpr uint32_t kHandleIndexMask = (1U << kHandleIndexBits) - 1U;
     static constexpr uint32_t kHandleGenerationMask = UINT32_MAX >> kHandleIndexBits;
-    static constexpr uint8_t kPublicFlagMask = MICROPIXEL_TEXTURE_FLAG_STREAMING;
+    static constexpr uint8_t kPublicFlagMask = MICROPIXEL_TEXTURE_FLAG_DYNAMIC;
 
     [[nodiscard]] static micropixel_texture_handle_t MakeHandle(uint32_t index, uint32_t generation);
     [[nodiscard]] Slot* ResolveSlotLocked(micropixel_texture_handle_t bitmap);

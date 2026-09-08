@@ -34,7 +34,7 @@ class GridContainer final {
                    properties.column_gap >= 0,
                "grid container properties invalid");
         GridContainer result;
-        result.node_ = parent.CreateContainer({.translation = {properties.bounds.x, properties.bounds.y}});
+        result.node_ = parent.CreateContainer({.translation = {properties.bounds.x, properties.bounds.y}}).value();
         result.properties_ = properties;
         result.bounds_ = properties.bounds;
         return result;
@@ -87,20 +87,20 @@ class GridContainer final {
         return cells_[id].label;
     }
 
-    [[nodiscard]] Result<void> SetText(SceneUpdate& update, uint8_t row, uint8_t column, const char* text) {
+    [[nodiscard]] Result<void> SetText(uint8_t row, uint8_t column, const char* text) {
         Cell* cell = FindCell(row, column);
         if (cell == nullptr) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
         }
-        return cell->label.SetText(update, text);
+        return cell->label.SetText(text);
     }
 
-    [[nodiscard]] Result<void> SetColor(SceneUpdate& update, uint8_t row, uint8_t column, Color color) {
+    [[nodiscard]] Result<void> SetColor(uint8_t row, uint8_t column, Color color) {
         Cell* cell = FindCell(row, column);
         if (cell == nullptr) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
         }
-        cell->label.SetColor(update, color);
+        cell->label.SetColor(color);
         return {};
     }
 
@@ -123,12 +123,12 @@ class GridContainer final {
         return {width, height};
     }
 
-    [[nodiscard]] Result<void> SetBounds(SceneUpdate& update, Rect bounds) {
+    [[nodiscard]] Result<void> SetBounds(Rect bounds) {
         if (bounds.empty()) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
         }
         bounds_ = bounds;
-        node_.SetTranslation(update, {bounds.x, bounds.y});
+        node_.SetTranslation({bounds.x, bounds.y});
         const uint8_t row_count = RowCount();
         if (row_count == 0U) {
             return {};
@@ -154,8 +154,8 @@ class GridContainer final {
             return unexpected(laid_out.error());
         }
         for (Cell& cell : cells_) {
-            auto positioned = cell.label.SetBounds(
-                update, cell_bounds[static_cast<size_t>(cell.row) * properties_.columns + cell.column]);
+            auto positioned =
+                cell.label.SetBounds(cell_bounds[static_cast<size_t>(cell.row) * properties_.columns + cell.column]);
             if (!positioned.has_value()) {
                 return unexpected(positioned.error());
             }
@@ -163,7 +163,7 @@ class GridContainer final {
         return {};
     }
 
-    void SetVisible(SceneUpdate& update, bool visible) { node_.SetVisible(update, visible); }
+    void SetVisible(bool visible) { node_.SetVisible(visible); }
 
     [[nodiscard]] FixedString<kDiagnosticBytes> ToString() const {
         FixedString<kDiagnosticBytes> description;

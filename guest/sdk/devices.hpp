@@ -63,6 +63,7 @@ struct DeviceInfo final {
 
 class DeviceList final {
    public:
+    // SDK-side bound on a full listing; the wire pages in DEVICES_LIST_PAGE_SIZE steps.
     static constexpr uint32_t kCapacity = 64U;
 
     [[nodiscard]] constexpr uint32_t size() const { return count_; }

@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "platform/memory/graphics_buffer_alignment.hpp"
 #include "src/core/lv_obj_draw_private.h"
 #include "src/draw/snapshot/lv_snapshot.h"
 
@@ -19,7 +20,7 @@ namespace micropixel::platform::lvgl {
 namespace {
 
 constexpr char kTag[] = "system_transition";
-constexpr uint32_t kPpaBufferAlignment = 128U;
+constexpr uint32_t kPpaBufferAlignment = memory::kGraphicsBufferAlignment;
 
 constexpr uint32_t AlignPpaBufferSize(uint32_t size) {
     return (size + kPpaBufferAlignment - 1U) / kPpaBufferAlignment * kPpaBufferAlignment;

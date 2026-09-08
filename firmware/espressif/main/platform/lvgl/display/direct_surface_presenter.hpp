@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "platform/lvgl/display/display_pipeline.hpp"
+#include "platform/lvgl/display/frame_timing.hpp"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
 
@@ -388,6 +389,10 @@ class DirectSurfacePresenter final {
     // Written on the presenter task, read by the LVGL task for telemetry.
     std::atomic<uint32_t> frames_scanned_out_{};
     std::atomic<uint32_t> frames_composited_{};
+    void RecordCompletedScanout();
+#if CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+    FrameTiming frame_timing_{};
+#endif
 
     // Overlay state; published and pinned slot indices change under lock_.
     OverlayLayer overlay_layers_[kScanoutOverlayLayers]{};

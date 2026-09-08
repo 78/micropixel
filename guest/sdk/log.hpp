@@ -9,7 +9,7 @@ class Application;
 namespace ui {
 class ImageButton;
 class TextButton;
-}
+}  // namespace ui
 
 // Lightweight view of the logging service for this Guest. Copies refer to the
 // same service and do not own a logging resource.

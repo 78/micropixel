@@ -20,7 +20,7 @@ micropixel_event_t GpioEvent(uint32_t source, uint32_t sequence, uint32_t value,
     event.timestamp_us = 1000U + sequence;
     event.sequence = sequence;
     event.status = MICROPIXEL_STATUS_OK;
-    const micropixel_gpio_event_payload_t payload{0x30005U, value, edge, 0U};
+    const micropixel_gpio_event_payload_t payload{value, edge, {0U, 0U}};
     std::memcpy(event.payload, &payload, sizeof(payload));
     return event;
 }
@@ -45,7 +45,7 @@ int main() {
     std::memcpy(&payload, received.payload, sizeof(payload));
     Require(received.source == latest.source && received.sequence == latest.sequence &&
             received.timestamp_us == latest.timestamp_us);
-    Require(payload.device == 0x30005U && payload.value == 1U && payload.edge == MICROPIXEL_GPIO_EDGE_RISING);
+    Require(payload.value == 1U && payload.edge == MICROPIXEL_GPIO_EDGE_RISING);
 
     micropixel_event_t invalid = first;
     invalid.flags = 1U;

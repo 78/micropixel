@@ -37,7 +37,7 @@ struct GpioInfo final {
     DeviceId id{};
     uint16_t line_number{};
     uint32_t capabilities{};
-    uint32_t maximum_pwm_frequency_hz{};
+    uint32_t max_pwm_frequency_hz{};
 
     [[nodiscard]] constexpr bool Supports(GpioCapability capability) const {
         return (capabilities & static_cast<uint32_t>(capability)) != 0U;

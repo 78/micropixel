@@ -24,8 +24,8 @@ class Sensors final : public micropixel::device::Sensors {
         info.kind = MICROPIXEL_SENSOR_ACCELERATION;
         info.device = device;
         info.value_count = 3U;
-        info.minimum_interval_us = 2500U;
-        info.maximum_interval_us = 60000000U;
+        info.min_interval_us = 2500U;
+        info.max_interval_us = 60000000U;
         return MICROPIXEL_STATUS_OK;
     }
 
@@ -86,13 +86,13 @@ int main() {
     auto opened = service.Open(kSensor, MICROPIXEL_SENSOR_ACCELERATION);
     Require(opened.has_value());
     Require(backend.started && backend.last_interval_us == 10000U);
-    auto pending = service.Read(opened->sensor);
+    auto pending = service.Read(opened->sensor_handle);
     Require(!pending && pending.error().status == MICROPIXEL_STATUS_WOULD_BLOCK);
 
-    auto configured = service.SetSampleInterval(opened->sensor, 5000U);
+    auto configured = service.SetSampleInterval(opened->sensor_handle, 5000U);
     Require(configured.has_value() && backend.last_interval_us == 5000U);
     backend.PublishSample();
-    auto sample = service.Read(opened->sensor);
+    auto sample = service.Read(opened->sensor_handle);
     Require(sample.has_value() && sample->values[1] == 2.0F && backend.read_count != 0U);
 
     service.Suspend();
@@ -100,7 +100,7 @@ int main() {
     Require(service.Resume());
     Require(backend.started && backend.last_interval_us == 5000U);
 
-    Require(service.Release(opened->sensor).has_value());
+    Require(service.Release(opened->sensor_handle).has_value());
     Require(!backend.started);
     const uint32_t starts_after_release = backend.start_count;
     Require(backend.start_count == starts_after_release);

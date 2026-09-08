@@ -35,6 +35,7 @@ compile_commands.json
 CMakeUserPresets.json
 /experiments/
 /guest/apps/mario/
+/guest/apps/earth-garden/
 /guest/apps/graphics-scroll-benchmark/
 /demos/
 

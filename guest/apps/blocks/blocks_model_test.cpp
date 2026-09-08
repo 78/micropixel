@@ -1,7 +1,7 @@
+#include "apps/blocks/blocks_model.hpp"
+
 #include <assert.h>
 #include <stdint.h>
-
-#include "apps/blocks/blocks_model.hpp"
 
 namespace {
 
@@ -92,12 +92,7 @@ void TestCappedDifficultyCurve() {
         uint32_t period_us;
     };
     constexpr ExpectedPeriod kExpected[] = {
-        {1U, 750000U},
-        {12U, 240000U},
-        {20U, 200000U},
-        {99U, 100000U},
-        {100U, 100000U},
-        {200U, 100000U},
+        {1U, 750000U}, {12U, 240000U}, {20U, 200000U}, {99U, 100000U}, {100U, 100000U}, {200U, 100000U},
     };
     for (const ExpectedPeriod expected : kExpected) {
         model.SetLevelForTesting(expected.level);
@@ -150,8 +145,7 @@ void TestRandomPlayAndRenderRunBound() {
             }
             assert(model.score() >= previous_score);
             previous_score = model.score();
-            const uint32_t expected_level =
-                model.lines() / 10U >= 98U ? 99U : model.lines() / 10U + 1U;
+            const uint32_t expected_level = model.lines() / 10U >= 98U ? 99U : model.lines() / 10U + 1U;
             assert(model.level() == expected_level);
             if (model.alive()) {
                 assert(model.ghost_y() >= model.active().y);

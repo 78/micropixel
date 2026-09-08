@@ -3,6 +3,7 @@
 #include <cinttypes>
 #include <cstdlib>
 
+#include "device/contracts/input.hpp"
 #include "esp_log.h"
 #include "freertos/task.h"
 #include "host/ui/gesture_thresholds.hpp"
@@ -31,8 +32,6 @@ SystemGestureRouter::~SystemGestureRouter() { input_.UnbindTouchSink(this); }
 int32_t SystemGestureRouter::GetInfo(micropixel_input_info_t& info) {
     const int32_t status = input_.GetInfo(info);
     if (status == MICROPIXEL_STATUS_OK) {
-        info.interface_major = MICROPIXEL_INPUT_INTERFACE_MAJOR;
-        info.interface_minor = MICROPIXEL_INPUT_INTERFACE_MINOR;
         info.capabilities |= MICROPIXEL_INPUT_CAP_KEY_EVENTS;
     }
     return status;
@@ -190,7 +189,7 @@ bool SystemGestureRouter::Route(const device::TouchSample& sample) {
                         candidate_.replacement_ids[candidate_.replacement_count];
                 }
             } else if (replacement_index == candidate_.replacement_count &&
-                       candidate_.replacement_count < MICROPIXEL_MAX_TOUCH_POINTS) {
+                       candidate_.replacement_count < micropixel::device::kMaxTouchPoints) {
                 candidate_.replacement_ids[candidate_.replacement_count++] = sample.id;
             }
         }

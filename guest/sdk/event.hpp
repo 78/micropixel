@@ -226,17 +226,15 @@ enum class GpioEdge : uint16_t {
 class GpioEdgeEvent final {
    public:
     [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
-    [[nodiscard]] constexpr DeviceId id() const { return device_; }
     [[nodiscard]] constexpr bool value() const { return value_; }
     [[nodiscard]] constexpr GpioEdge edge() const { return edge_; }
 
    private:
     constexpr GpioEdgeEvent() = default;
-    constexpr GpioEdgeEvent(TimePoint timestamp, DeviceId device, bool value, GpioEdge edge, uint32_t source)
-        : timestamp_(timestamp), device_(device), value_(value), edge_(edge), source_(source) {}
+    constexpr GpioEdgeEvent(TimePoint timestamp, bool value, GpioEdge edge, uint32_t source)
+        : timestamp_(timestamp), value_(value), edge_(edge), source_(source) {}
 
     TimePoint timestamp_{};
-    DeviceId device_{};
     bool value_{};
     GpioEdge edge_{GpioEdge::kRising};
     uint32_t source_{};

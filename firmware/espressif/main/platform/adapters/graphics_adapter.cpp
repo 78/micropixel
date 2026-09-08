@@ -16,24 +16,13 @@ int32_t GraphicsAdapter::LoadFont(const device::FontResourceView& resource, micr
     return operations_.load_font(operations_.context, resource, info_out);
 }
 
-int32_t GraphicsAdapter::ReleaseFont(micropixel_font_handle_t font) {
-    return operations_.release_font(operations_.context, font);
+int32_t GraphicsAdapter::ReleaseFont(micropixel_font_handle_t font_handle) {
+    return operations_.release_font(operations_.context, font_handle);
 }
 
-int32_t GraphicsAdapter::MeasureText(micropixel_font_handle_t font, const char* text, uint32_t text_length,
+int32_t GraphicsAdapter::MeasureText(micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
                                      micropixel_text_metrics_t& metrics_out) {
-    return operations_.measure_text(operations_.context, font, text, text_length, metrics_out);
-}
-
-int32_t GraphicsAdapter::BeginBitmapUpdateFrame() { return operations_.begin_bitmap_update_frame(operations_.context); }
-
-int32_t GraphicsAdapter::UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                      uint32_t height, const uint8_t* pixels, uint32_t stride) {
-    return operations_.update_bitmap(operations_.context, bitmap, x, y, width, height, pixels, stride);
-}
-
-int32_t GraphicsAdapter::CommitBitmapUpdateFrame() {
-    return operations_.commit_bitmap_update_frame(operations_.context);
+    return operations_.measure_text(operations_.context, font_handle, text, text_length, metrics_out);
 }
 
 int32_t GraphicsAdapter::ScaleBitmap(const device::BitmapView& source, const device::BitmapView& destination) {

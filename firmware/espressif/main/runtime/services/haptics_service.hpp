@@ -22,15 +22,15 @@ class HapticsService final {
     [[nodiscard]] bool valid() const { return mutex_ != nullptr; }  // NOLINT(readability-identifier-naming)
     [[nodiscard]] ServiceResult<micropixel_handle_response_t> Open(micropixel_device_id_t device);
     [[nodiscard]] ServiceResult<void> Play(const micropixel_haptics_play_request_t& request);
-    [[nodiscard]] ServiceResult<void> Stop(micropixel_haptic_handle_t haptic);
-    [[nodiscard]] ServiceResult<void> Release(micropixel_haptic_handle_t haptic);
+    [[nodiscard]] ServiceResult<void> Stop(micropixel_haptics_handle_t haptics_handle);
+    [[nodiscard]] ServiceResult<void> Release(micropixel_haptics_handle_t haptics_handle);
     void Suspend();
     void Shutdown();
 
    private:
     struct Slot final {
         micropixel_device_id_t device{};
-        micropixel_haptic_handle_t handle{};
+        micropixel_haptics_handle_t handle{};
         uint32_t generation{};
         uint32_t sequence{};
         bool playing{};
@@ -38,7 +38,7 @@ class HapticsService final {
 
     static void OnFinished(void* context, micropixel_device_id_t device, uint64_t timestamp_us);
     void HandleFinished(micropixel_device_id_t device);
-    [[nodiscard]] Slot* Find(micropixel_haptic_handle_t handle);
+    [[nodiscard]] Slot* Find(micropixel_haptics_handle_t handle);
     [[nodiscard]] bool TakeLock();
     void GiveLock();
 

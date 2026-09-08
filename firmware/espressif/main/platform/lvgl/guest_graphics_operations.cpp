@@ -131,20 +131,15 @@ adapters::GraphicsOperations MakeGuestGraphicsOperations(GuestGraphicsOperations
             },
         .load_font = [](void* opaque, const device::FontResourceView& resource,
                         micropixel_font_info_t& info) { return Binding(opaque).engine->LoadFont(resource, info); },
-        .release_font = [](void* opaque,
-                           micropixel_font_handle_t font) { return Binding(opaque).engine->ReleaseFont(font); },
+        .release_font =
+            [](void* opaque, micropixel_font_handle_t font_handle) {
+                return Binding(opaque).engine->ReleaseFont(font_handle);
+            },
         .measure_text =
-            [](void* opaque, micropixel_font_handle_t font, const char* text, uint32_t text_length,
+            [](void* opaque, micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
                micropixel_text_metrics_t& metrics) {
-                return Binding(opaque).engine->MeasureText(font, text, text_length, metrics);
+                return Binding(opaque).engine->MeasureText(font_handle, text, text_length, metrics);
             },
-        .begin_bitmap_update_frame = [](void* opaque) { return Binding(opaque).engine->BeginBitmapUpdateFrame(); },
-        .update_bitmap =
-            [](void* opaque, const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
-               const uint8_t* pixels, uint32_t stride) {
-                return Binding(opaque).engine->UpdateBitmap(bitmap, x, y, width, height, pixels, stride);
-            },
-        .commit_bitmap_update_frame = [](void* opaque) { return Binding(opaque).engine->CommitBitmapUpdateFrame(); },
         .scale_bitmap =
             [](void* opaque, const device::BitmapView& source, const device::BitmapView& destination) {
                 return ScaleBitmap(Binding(opaque), source, destination);

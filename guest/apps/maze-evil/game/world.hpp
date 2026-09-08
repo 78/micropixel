@@ -7,6 +7,7 @@
 #include "apps/maze-evil/game/level.hpp"
 #include "apps/maze-evil/gfx/sprites.hpp"
 #include "apps/maze-evil/rc_math.hpp"
+#include "sdk/raycast.hpp"
 
 namespace maze_break::game {
 
@@ -106,6 +107,10 @@ class World {
     Tile TileAt(int x, int y) const;
     // 0 for non-door tiles; otherwise how far the slab has risen.
     float DoorOpen(int x, int y) const;
+    // The level as Raycaster cells: walls carry their texture slot, doors are
+    // slabs whose `open` follows Door::open. Rewritten by Reset() and
+    // UpdateDoors(); valid until the next Reset().
+    micropixel::RaycastGrid grid() const { return {&cells_[0][0], kMapWidth, kMapHeight}; }
     // Fills renderable billboards; returns the count.
     int CollectThings(Thing* out, int capacity) const;
     // Drains sound events raised since the last call; returns the count. At
@@ -137,6 +142,7 @@ class World {
     void SpawnFireball(float x, float y, float target_x, float target_y);
 
     Tile tiles_[kMapHeight][kMapWidth]{};
+    micropixel::RaycastCell cells_[kMapHeight][kMapWidth]{};
     Player player_{};
     Imp imps_[kMaxImps]{};
     int imp_count_{};

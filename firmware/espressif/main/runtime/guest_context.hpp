@@ -64,15 +64,15 @@ class GuestContext final {
                                       micropixel_service_info_t& info_out, uint32_t info_capacity) const {
         return service_registry_.Open(service_id, required_interface_version, info_out, info_capacity);
     }
-    [[nodiscard]] int32_t ServiceCall(micropixel_service_handle_t service, uint32_t method_id, const uint8_t* request,
-                                      uint32_t request_size, uint8_t* response, uint32_t response_capacity,
-                                      uint32_t& response_size_out) const {
-        return service_registry_.Call(service, method_id, request, request_size, response, response_capacity,
+    [[nodiscard]] int32_t ServiceCall(micropixel_service_handle_t service_handle, uint32_t method_id,
+                                      const uint8_t* request, uint32_t request_size, uint8_t* response,
+                                      uint32_t response_capacity, uint32_t& response_size_out) const {
+        return service_registry_.Call(service_handle, method_id, request, request_size, response, response_capacity,
                                       response_size_out);
     }
-    [[nodiscard]] int32_t ServiceSubmit(micropixel_service_handle_t service, uint32_t channel_id, const uint8_t* bytes,
-                                        uint32_t length) const {
-        return service_registry_.Submit(service, channel_id, bytes, length);
+    [[nodiscard]] int32_t ServiceSubmit(micropixel_service_handle_t service_handle, uint32_t channel_id,
+                                        const uint8_t* bytes, uint32_t length) const {
+        return service_registry_.Submit(service_handle, channel_id, bytes, length);
     }
 
     [[nodiscard]] ServiceResult<micropixel_timer_handle_t> TimerCreate() { return timers_.Create(); }
@@ -82,37 +82,34 @@ class GuestContext final {
     }
     [[nodiscard]] ServiceResult<void> TimerCancel(micropixel_timer_handle_t handle) { return timers_.Cancel(handle); }
     [[nodiscard]] ServiceResult<void> TimerRelease(micropixel_timer_handle_t handle) { return timers_.Release(handle); }
-    [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id) {
-        return resources_.LoadTexture(asset_id);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id, uint32_t scale_numerator,
+                                                                       uint32_t scale_denominator) {
+        return resources_.LoadTexture(asset_id, scale_numerator, scale_denominator);
     }
-    [[nodiscard]] ServiceResult<micropixel_adaptive_texture_info_t> LoadAdaptiveTexture(uint32_t asset_id,
-                                                                                        uint32_t scale_numerator,
-                                                                                        uint32_t scale_denominator) {
-        return resources_.LoadAdaptiveTexture(asset_id, scale_numerator, scale_denominator);
-    }
-    [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture) {
-        return resources_.ReleaseTexture(texture);
+    [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture_handle) {
+        return resources_.ReleaseTexture(texture_handle);
     }
     [[nodiscard]] ServiceResult<micropixel_font_info_t> LoadFont(uint32_t resource_id);
-    [[nodiscard]] ServiceResult<void> ReleaseFont(micropixel_font_handle_t font);
-    [[nodiscard]] ServiceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font, const char* text,
-                                                                       uint32_t text_length);
-    [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateStreamingTexture(uint32_t width, uint32_t height,
-                                                                                  uint32_t pixel_format) {
-        return resources_.CreateStreamingTexture(width, height, pixel_format);
+    [[nodiscard]] ServiceResult<void> ReleaseFont(micropixel_font_handle_t font_handle);
+    [[nodiscard]] ServiceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font_handle,
+                                                                       const char* text, uint32_t text_length);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateDynamicTexture(
+        const micropixel_dynamic_texture_create_request_t& request) {
+        return resources_.CreateDynamicTexture(request);
     }
-    [[nodiscard]] ServiceResult<void> UpdateStreamingTexture(
-        const micropixel_streaming_texture_update_request_t& update, const uint8_t* pixels);
-    [[nodiscard]] ServiceResult<void> BeginTextureUpdateBatch();
-    [[nodiscard]] ServiceResult<void> FinishTextureUpdateBatch();
-    [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture, device::BitmapView& view_out) const {
-        return resources_.ResolveTexture(texture, view_out);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> UpdateDynamicTexture(
+        const micropixel_dynamic_texture_update_request_t& request) {
+        return resources_.UpdateDynamicTexture(request);
+    }
+    [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture_handle, device::BitmapView& view_out) const {
+        return resources_.ResolveTexture(texture_handle, view_out);
     }
     [[nodiscard]] device::DeviceResult<void> GraphicsSubmit(const uint8_t* bytes, uint32_t length);
     // Direct Surface (Graphics 1.5) and raster kernels (Graphics 1.6). Guest
     // offsets are resolved through the memory access bound by the session
     // after instantiation.
     void BindGuestMemory(const GuestMemoryAccess& access) {
+        resources_.BindGuestMemory(access);
         direct_surface_.BindGuestMemory(access);
         raster_.BindGuestMemory(access);
     }
@@ -123,8 +120,8 @@ class GuestContext final {
     [[nodiscard]] ServiceResult<void> SurfacePresent(const micropixel_surface_present_request_t& request) {
         return direct_surface_.Present(request);
     }
-    [[nodiscard]] ServiceResult<void> SurfaceDestroy(micropixel_surface_handle_t surface) {
-        return direct_surface_.Destroy(surface);
+    [[nodiscard]] ServiceResult<void> SurfaceDestroy(micropixel_surface_handle_t surface_handle) {
+        return direct_surface_.Destroy(surface_handle);
     }
     // Device info plus the runtime-owned raster pool fields.
     [[nodiscard]] device::DeviceResult<micropixel_graphics_info_t> GraphicsInfo() const;
@@ -135,14 +132,23 @@ class GuestContext final {
     [[nodiscard]] ServiceResult<void> RasterPaletteUpload(const micropixel_raster_palette_upload_request_t& request) {
         return raster_.UploadPalette(request);
     }
+    [[nodiscard]] ServiceResult<void> RasterWarpUpload(const micropixel_raster_warp_upload_request_t& request) {
+        return raster_.UploadWarp(request);
+    }
     [[nodiscard]] ServiceResult<void> RasterSubmit(const uint8_t* bytes, uint32_t length) {
-        return raster_.Submit(bytes, length, direct_surface_);
+        return raster_.Submit(
+            bytes, length, direct_surface_,
+            [](void* context, uint32_t handle, device::BitmapView& view) {
+                return static_cast<GuestContext*>(context)->ResolveTexture(handle, view);
+            },
+            this);
     }
     [[nodiscard]] device::DeviceResult<micropixel_input_info_t> InputInfo() const { return devices_.input().GetInfo(); }
     [[nodiscard]] device::DeviceResult<micropixel_audio_info_t> AudioInfo() const { return devices_.audio().GetInfo(); }
     [[nodiscard]] device::DeviceResult<uint32_t> RandomU32() const { return devices_.random().U32(); }
-    [[nodiscard]] device::DeviceResult<micropixel_devices_list_response_t> DevicesList(uint16_t kind) const {
-        return devices_.devices().List(kind);
+    [[nodiscard]] device::DeviceResult<micropixel_devices_list_response_t> DevicesList(uint16_t kind,
+                                                                                       uint16_t first_index) const {
+        return devices_.devices().List(kind, first_index);
     }
     [[nodiscard]] device::DeviceResult<micropixel_device_info_t> DeviceInfo(micropixel_device_id_t device) const {
         return devices_.devices().GetInfo(device);
@@ -154,14 +160,15 @@ class GuestContext final {
                                                                               uint16_t expected_kind) {
         return sensors_.Open(device, expected_kind);
     }
-    [[nodiscard]] ServiceResult<micropixel_sensor_reading_t> SensorRead(micropixel_sensor_handle_t sensor) {
-        return sensors_.Read(sensor);
+    [[nodiscard]] ServiceResult<micropixel_sensor_reading_t> SensorRead(micropixel_sensor_handle_t sensor_handle) {
+        return sensors_.Read(sensor_handle);
     }
-    [[nodiscard]] ServiceResult<void> SensorSetSampleInterval(micropixel_sensor_handle_t sensor, uint64_t interval_us) {
-        return sensors_.SetSampleInterval(sensor, interval_us);
+    [[nodiscard]] ServiceResult<void> SensorSetSampleInterval(micropixel_sensor_handle_t sensor_handle,
+                                                              uint64_t interval_us) {
+        return sensors_.SetSampleInterval(sensor_handle, interval_us);
     }
-    [[nodiscard]] ServiceResult<void> SensorRelease(micropixel_sensor_handle_t sensor) {
-        return sensors_.Release(sensor);
+    [[nodiscard]] ServiceResult<void> SensorRelease(micropixel_sensor_handle_t sensor_handle) {
+        return sensors_.Release(sensor_handle);
     }
     [[nodiscard]] device::DeviceResult<micropixel_gpio_info_t> GpioInfo(micropixel_device_id_t device) const {
         return devices_.gpio().GetInfo(device);
@@ -170,16 +177,18 @@ class GuestContext final {
         const micropixel_gpio_open_request_t& request) {
         return gpio_.Open(request);
     }
-    [[nodiscard]] ServiceResult<micropixel_gpio_value_response_t> GpioRead(micropixel_gpio_handle_t gpio) {
-        return gpio_.Read(gpio);
+    [[nodiscard]] ServiceResult<micropixel_gpio_value_response_t> GpioRead(micropixel_gpio_handle_t gpio_handle) {
+        return gpio_.Read(gpio_handle);
     }
-    [[nodiscard]] ServiceResult<void> GpioWrite(micropixel_gpio_handle_t gpio, bool value) {
-        return gpio_.Write(gpio, value);
+    [[nodiscard]] ServiceResult<void> GpioWrite(micropixel_gpio_handle_t gpio_handle, bool value) {
+        return gpio_.Write(gpio_handle, value);
     }
-    [[nodiscard]] ServiceResult<void> GpioSetPwmDuty(micropixel_gpio_handle_t gpio, uint16_t duty_per_mille) {
-        return gpio_.SetPwmDuty(gpio, duty_per_mille);
+    [[nodiscard]] ServiceResult<void> GpioSetPwmDuty(micropixel_gpio_handle_t gpio_handle, uint16_t duty_per_mille) {
+        return gpio_.SetPwmDuty(gpio_handle, duty_per_mille);
     }
-    [[nodiscard]] ServiceResult<void> GpioRelease(micropixel_gpio_handle_t gpio) { return gpio_.Release(gpio); }
+    [[nodiscard]] ServiceResult<void> GpioRelease(micropixel_gpio_handle_t gpio_handle) {
+        return gpio_.Release(gpio_handle);
+    }
     [[nodiscard]] device::DeviceResult<micropixel_haptics_info_t> HapticsInfo(micropixel_device_id_t device) const {
         return devices_.haptics().GetInfo(device);
     }
@@ -189,11 +198,13 @@ class GuestContext final {
     [[nodiscard]] ServiceResult<void> HapticsPlay(const micropixel_haptics_play_request_t& request) {
         return haptics_.Play(request);
     }
-    [[nodiscard]] ServiceResult<void> HapticsStop(micropixel_haptic_handle_t haptic) { return haptics_.Stop(haptic); }
-    [[nodiscard]] ServiceResult<void> HapticsRelease(micropixel_haptic_handle_t haptic) {
-        return haptics_.Release(haptic);
+    [[nodiscard]] ServiceResult<void> HapticsStop(micropixel_haptics_handle_t haptics_handle) {
+        return haptics_.Stop(haptics_handle);
     }
-    [[nodiscard]] device::DeviceResult<micropixel_power_info_response_t> PowerInfo(micropixel_device_id_t device) {
+    [[nodiscard]] ServiceResult<void> HapticsRelease(micropixel_haptics_handle_t haptics_handle) {
+        return haptics_.Release(haptics_handle);
+    }
+    [[nodiscard]] device::DeviceResult<micropixel_power_info_t> PowerInfo(micropixel_device_id_t device) {
         return devices_.power_info().Get(device);
     }
     [[nodiscard]] device::DeviceResult<void> AudioPlayTone(const micropixel_audio_tone_t& tone) const {
@@ -202,29 +213,29 @@ class GuestContext final {
     [[nodiscard]] ServiceResult<micropixel_audio_clip_info_t> AudioLoadClip(uint32_t asset_id) {
         return audio_playback_.LoadClip(asset_id);
     }
-    [[nodiscard]] ServiceResult<void> AudioReleaseClip(micropixel_audio_clip_handle_t clip) {
-        return audio_playback_.ReleaseClip(clip);
+    [[nodiscard]] ServiceResult<void> AudioReleaseClip(micropixel_audio_clip_handle_t clip_handle) {
+        return audio_playback_.ReleaseClip(clip_handle);
     }
     [[nodiscard]] ServiceResult<micropixel_audio_playback_handle_t> AudioStartPlayback(
         const micropixel_audio_playback_start_request_t& request) {
         return audio_playback_.Start(request);
     }
-    [[nodiscard]] ServiceResult<void> AudioPausePlayback(micropixel_audio_playback_handle_t playback) {
-        return audio_playback_.Pause(playback);
+    [[nodiscard]] ServiceResult<void> AudioPausePlayback(micropixel_audio_playback_handle_t playback_handle) {
+        return audio_playback_.Pause(playback_handle);
     }
-    [[nodiscard]] ServiceResult<void> AudioResumePlayback(micropixel_audio_playback_handle_t playback) {
-        return audio_playback_.Resume(playback);
+    [[nodiscard]] ServiceResult<void> AudioResumePlayback(micropixel_audio_playback_handle_t playback_handle) {
+        return audio_playback_.Resume(playback_handle);
     }
-    [[nodiscard]] ServiceResult<void> AudioSetPlaybackVolume(micropixel_audio_playback_handle_t playback,
+    [[nodiscard]] ServiceResult<void> AudioSetPlaybackVolume(micropixel_audio_playback_handle_t playback_handle,
                                                              uint16_t volume_per_mille) {
-        return audio_playback_.SetVolume(playback, volume_per_mille);
+        return audio_playback_.SetVolume(playback_handle, volume_per_mille);
     }
-    [[nodiscard]] ServiceResult<void> AudioStopPlayback(micropixel_audio_playback_handle_t playback) {
-        return audio_playback_.Stop(playback);
+    [[nodiscard]] ServiceResult<void> AudioStopPlayback(micropixel_audio_playback_handle_t playback_handle) {
+        return audio_playback_.Stop(playback_handle);
     }
     [[nodiscard]] ServiceResult<micropixel_audio_playback_state_response_t> AudioPlaybackState(
-        micropixel_audio_playback_handle_t playback) {
-        return audio_playback_.State(playback);
+        micropixel_audio_playback_handle_t playback_handle) {
+        return audio_playback_.State(playback_handle);
     }
     [[nodiscard]] ServiceResult<void> AudioStopAll() {
         pcm_stream_.CloseAll();
@@ -238,8 +249,8 @@ class GuestContext final {
         const micropixel_audio_pcm_stream_write_request_t& request, const int16_t* samples, uint32_t payload_bytes) {
         return pcm_stream_.Write(request, samples, payload_bytes);
     }
-    [[nodiscard]] ServiceResult<void> AudioClosePcmStream(micropixel_audio_pcm_stream_handle_t stream) {
-        return pcm_stream_.Close(stream);
+    [[nodiscard]] ServiceResult<void> AudioClosePcmStream(micropixel_audio_pcm_stream_handle_t stream_handle) {
+        return pcm_stream_.Close(stream_handle);
     }
     [[nodiscard]] ServiceResult<uint32_t> KvGetU32(const char* key, uint32_t key_length) {
         return storage_.GetU32(key, key_length);
@@ -266,10 +277,10 @@ class GuestContext final {
     }
 
    private:
-    static bool ResolveTextureForGraphics(void* context, micropixel_texture_handle_t texture,
+    static bool ResolveTextureForGraphics(void* context, micropixel_texture_handle_t texture_handle,
                                           device::BitmapView& view_out);
-    static bool RetainTextureForGraphics(void* context, micropixel_texture_handle_t texture);
-    static void ReleaseTextureForGraphics(void* context, micropixel_texture_handle_t texture);
+    static bool RetainTextureForGraphics(void* context, micropixel_texture_handle_t texture_handle);
+    static void ReleaseTextureForGraphics(void* context, micropixel_texture_handle_t texture_handle);
     [[nodiscard]] device::TextureAccess GraphicsTextureAccess();
 
     device::DeviceServices& devices_;

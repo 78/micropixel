@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cstring>
-
 #include "device/contracts/audio.hpp"
 #include "device/contracts/battery.hpp"
 #include "device/contracts/graphics.hpp"
@@ -39,42 +37,6 @@ class UnavailableGraphics final : public device::Graphics {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
 
-    [[nodiscard]] int32_t BeginBitmapUpdateFrame() override {
-        if (bitmap_update_frame_active_) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        bitmap_update_frame_active_ = true;
-        return MICROPIXEL_STATUS_OK;
-    }
-
-    [[nodiscard]] int32_t UpdateBitmap(const device::BitmapView& bitmap, uint32_t x, uint32_t y, uint32_t width,
-                                       uint32_t height, const uint8_t* pixels, uint32_t stride) override {
-        const uint32_t bytes_per_pixel =
-            bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-                ? 3U
-                : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
-                       ? 4U
-                       : (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
-        if (bitmap.data == nullptr || pixels == nullptr || width == 0U || height == 0U || bytes_per_pixel == 0U ||
-            (bitmap.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U || x + width > bitmap.width ||
-            y + height > bitmap.height || stride != width * bytes_per_pixel) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        auto* destination = const_cast<uint8_t*>(bitmap.data) + y * bitmap.stride + x * bytes_per_pixel;
-        for (uint32_t row = 0U; row < height; ++row) {
-            std::memcpy(destination + row * bitmap.stride, pixels + row * stride, stride);
-        }
-        return MICROPIXEL_STATUS_OK;
-    }
-
-    [[nodiscard]] int32_t CommitBitmapUpdateFrame() override {
-        if (!bitmap_update_frame_active_) {
-            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        }
-        bitmap_update_frame_active_ = false;
-        return MICROPIXEL_STATUS_OK;
-    }
-
     [[nodiscard]] int32_t ScaleBitmap(const device::BitmapView&, const device::BitmapView&) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
@@ -85,7 +47,7 @@ class UnavailableGraphics final : public device::Graphics {
     }
 
     void DismissLaunchBitmap() override {}
-    void ReleaseGuestResources() override { bitmap_update_frame_active_ = false; }
+    void ReleaseGuestResources() override {}
 
     [[nodiscard]] int32_t CreateDirectSurface(const device::DirectSurfaceConfig&,
                                               const device::DirectSurfaceReleaseSink&,
@@ -98,9 +60,6 @@ class UnavailableGraphics final : public device::Graphics {
     void SuspendDirectSurface() override {}
     void ResumeDirectSurface() override {}
     [[nodiscard]] int32_t DestroyDirectSurface() override { return MICROPIXEL_STATUS_NOT_FOUND; }
-
-   private:
-    bool bitmap_update_frame_active_{};
 };
 
 class UnavailableAudio final : public device::Audio {

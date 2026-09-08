@@ -86,7 +86,7 @@ internal memory。能力分配失败应明确降级，不静默挤占保留给�
 |---|---|---|
 | Panel transport | 整屏、不同高度 strip、多脏区、single/double buffer | bytes、DMA/等待、flush-ready、错色与撕裂 |
 | CPU compositor | fill、opaque copy、alpha、scale、text | 固定成本、ns/pixel、PSRAM 带宽 |
-| Guest Scene | Snake 小 damage、Blocks、粒子、滚屏、streaming update | submit、可见 refresh 和 panel flush 的不同速率 |
+| Guest Scene | Snake 小 damage、Blocks、粒子、滚屏、动态纹理更新 | submit、可见 refresh 和 panel flush 的不同速率 |
 | 并发 | 音频、Wi-Fi、解码、截图、暂停恢复 | P95/P99、触控延迟、underrun、heap、watchdog |
 
 能力测量不以 60Hz Timer 限制提交速度，也不把高提交率当作屏幕 FPS。可持续验收至少运行 10 分钟，

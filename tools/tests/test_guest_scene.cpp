@@ -2,10 +2,12 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "abi/micropixel_abi.h"
+#include "device/contracts/graphics.hpp"
 #include "platform/graphics/guest_scene.hpp"
 #include "runtime/scene_delta.hpp"
 
@@ -14,33 +16,34 @@ namespace graphics = micropixel::platform::graphics;
 namespace {
 
 constexpr uint32_t kCommonMask = MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE |
-                                 MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY | MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER;
+                                 MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY;
 constexpr uint32_t kContentMask = kCommonMask | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT;
 constexpr uint32_t kKind = MICROPIXEL_GRAPHICS_SCENE_NODE_KIND;
 constexpr uint32_t kBatchMask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY |
-                                MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER | MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT | kKind;
+                                MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT | kKind;
 constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY;
-constexpr uint32_t kLayerMask = MICROPIXEL_GRAPHICS_SCENE_LAYER_CLIP | MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION |
-                                MICROPIXEL_GRAPHICS_SCENE_LAYER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_LAYER_Z_ORDER;
+constexpr uint32_t kViewportMask =
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
 constexpr uint32_t kContainerMask =
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_Z_ORDER |
-    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE;
+    MICROPIXEL_GRAPHICS_SCENE_CONTAINER_STRUCTURE | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
 
 class Message final {
    public:
     Message(uint16_t kind, uint32_t generation, uint32_t base_revision, uint32_t revision, uint16_t nodes,
-            uint16_t layers, uint16_t batch_instances = 0U, uint16_t interface_minor = 1U)
+            uint16_t containers, uint16_t batch_instances = 0U)
         : kind_(kind),
           generation_(generation),
           base_revision_(base_revision),
           revision_(revision),
           nodes_(nodes),
-          layers_(layers),
-          batch_instances_(batch_instances),
-          interface_minor_(interface_minor) {
+          containers_(containers),
+          batch_instances_(batch_instances) {
         bytes_.resize(sizeof(micropixel_graphics_scene_header_t));
     }
 
@@ -59,14 +62,14 @@ class Message final {
                 {
                     .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_TEXT, .size = static_cast<uint16_t>(size)},
                     .node_id = node_id,
-                    .layer_id = 0U,
+                    .reserved0 = 0U,
                     .flags = MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE,
                     .property_mask = mask,
                 },
             .x = 4,
             .y = 1,
             .rgb888 = 0xffffffU,
-            .font = 1U,
+            .font_handle = 1U,
             .text_length = static_cast<uint16_t>(text.size()),
         };
         const size_t offset = bytes_.size();
@@ -96,10 +99,30 @@ class Message final {
     }
 
     const std::vector<uint8_t>& Finish() {
+        if (kind_ == MICROPIXEL_GRAPHICS_SCENE_KEYFRAME) {
+            std::vector<bool> linked(nodes_, false);
+            for (size_t offset = sizeof(micropixel_graphics_scene_header_t); offset < bytes_.size();) {
+                micropixel_graphics_scene_record_header_t record{};
+                std::memcpy(&record, bytes_.data() + offset, sizeof(record));
+                if (record.opcode == MICROPIXEL_GRAPHICS_SCENE_OP_NODE_LINK) {
+                    micropixel_graphics_scene_node_link_record_t link{};
+                    std::memcpy(&link, bytes_.data() + offset, sizeof(link));
+                    if (link.node_id < nodes_) linked[link.node_id] = true;
+                }
+                offset += record.size;
+            }
+            for (uint16_t node = 0; node < nodes_; ++node) {
+                if (linked[node]) continue;
+                Add(micropixel_graphics_scene_node_link_record_t{
+                    .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_NODE_LINK,
+                               .size = sizeof(micropixel_graphics_scene_node_link_record_t)},
+                    .node_id = node,
+                    .parent_container_id = 0U,
+                    .sibling_order = static_cast<uint16_t>(node + 10U)});
+            }
+        }
         const micropixel_graphics_scene_header_t header{
             .magic = MICROPIXEL_GRAPHICS_SCENE_MAGIC,
-            .interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-            .interface_minor = interface_minor_,
             .kind = kind_,
             .flags = 0U,
             .total_size = static_cast<uint32_t>(bytes_.size()),
@@ -108,7 +131,7 @@ class Message final {
             .revision = revision_,
             .record_count = records_,
             .node_count = nodes_,
-            .layer_count = layers_,
+            .container_count = containers_,
             .batch_instance_count = batch_instances_,
         };
         std::memcpy(bytes_.data(), &header, sizeof(header));
@@ -122,10 +145,9 @@ class Message final {
     uint32_t base_revision_{};
     uint32_t revision_{};
     uint16_t nodes_{};
-    uint16_t layers_{};
+    uint16_t containers_{};
     uint16_t batch_instances_{};
     uint16_t records_{};
-    uint16_t interface_minor_{};
 };
 
 micropixel_graphics_scene_background_record_t Background(uint32_t color) {
@@ -137,33 +159,35 @@ micropixel_graphics_scene_background_record_t Background(uint32_t color) {
     };
 }
 
-micropixel_graphics_scene_layer_record_t Layer(int32_t translate_x, uint32_t mask = kLayerMask) {
+micropixel_graphics_scene_container_record_t ViewportContainer(int32_t translate_x, uint32_t mask = kViewportMask) {
     return {
-        .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_LAYER,
-                   .size = sizeof(micropixel_graphics_scene_layer_record_t)},
-        .layer_id = 1U,
-        .reserved0 = 0U,
+        .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_CONTAINER,
+                   .size = sizeof(micropixel_graphics_scene_container_record_t)},
+        .container_id = 1U,
+        .parent_container_id = 0U,
         .property_mask = mask,
         .clip_x = 1,
         .clip_y = 0,
-        .width = 6,
-        .height = 4,
+        .clip_width = 6,
+        .clip_height = 4,
         .translate_x = translate_x,
         .translate_y = 0,
         .z_order = 0,
         .opacity = 255U,
         .visible = 1U,
+        .sibling_order = 0U,
+        .flags = 0U,
     };
 }
 
-micropixel_graphics_scene_rect_record_t Rect(int32_t x, uint32_t mask = kCommonMask | kKind, uint8_t layer_id = 1U) {
+micropixel_graphics_scene_rect_record_t Rect(int32_t x, uint32_t mask = kCommonMask | kKind) {
     return {
         .node =
             {
                 .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_RECT,
                            .size = sizeof(micropixel_graphics_scene_rect_record_t)},
                 .node_id = 0U,
-                .layer_id = layer_id,
+                .reserved0 = 0U,
                 .flags = MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE,
                 .property_mask = mask,
             },
@@ -187,8 +211,8 @@ micropixel_graphics_scene_container_record_t Container(uint16_t id, uint16_t par
         .property_mask = mask,
         .clip_x = id == 1U ? 0 : 0,
         .clip_y = 0,
-        .width = id == 1U ? 8 : 0,
-        .height = id == 1U ? 4 : 0,
+        .clip_width = id == 1U ? 8 : 0,
+        .clip_height = id == 1U ? 4 : 0,
         .translate_x = translate_x,
         .translate_y = 0,
         .z_order = 0,
@@ -210,9 +234,9 @@ micropixel_graphics_scene_node_link_record_t Link(uint16_t node, uint16_t parent
     };
 }
 
-bool ResolveBitmap(void*, micropixel_texture_handle_t texture, micropixel::device::BitmapView& view) {
+bool ResolveBitmap(void*, micropixel_texture_handle_t texture_handle, micropixel::device::BitmapView& view) {
     static const std::array<uint8_t, 12U> pixels{};
-    if (texture == 8U) {
+    if (texture_handle == 8U) {
         view = {.data = pixels.data(),
                 .size = 128U * 43U * 3U,
                 .width = 128U,
@@ -222,7 +246,7 @@ bool ResolveBitmap(void*, micropixel_texture_handle_t texture, micropixel::devic
                 .flags = 0U};
         return true;
     }
-    if (texture != 7U) {
+    if (texture_handle != 7U) {
         return false;
     }
     view = {.data = pixels.data(),
@@ -235,17 +259,23 @@ bool ResolveBitmap(void*, micropixel_texture_handle_t texture, micropixel::devic
     return true;
 }
 
-bool ValidateFont(void*, micropixel_font_handle_t font) { return font == 1U; }
+bool ValidateFont(void*, micropixel_font_handle_t font_handle) { return font_handle == 1U; }
 
-template <size_t NodeCapacity, size_t InstanceCapacity>
+template <size_t NodeCapacity, size_t InstanceCapacity, size_t ContainerCapacity = 64U, size_t TextCapacity = 512U>
 struct SceneStorage final {
     std::array<graphics::GuestSceneNode, 2U * NodeCapacity> nodes{};
     std::array<graphics::GuestSceneSpriteInstance, 2U * InstanceCapacity> instances{};
-    std::array<graphics::GuestSceneContainer, 2U * (MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U)> containers{};
+    std::array<graphics::GuestSceneContainer, 2U * (ContainerCapacity + 1U)> containers{};
     std::array<uint16_t, 2U * NodeCapacity> order{};
     std::array<uint8_t, NodeCapacity> node_changes{};
     std::array<uint8_t, InstanceCapacity> instance_changes{};
-    graphics::GuestScene scene{{nodes, instances, containers, order, node_changes, instance_changes}};
+    std::array<uint8_t, ContainerCapacity + 1U> container_changes{};
+    std::array<uint8_t, NodeCapacity> node_marks{};
+    std::array<uint8_t, InstanceCapacity> instance_marks{};
+    std::array<uint8_t, ContainerCapacity + 1U> container_marks{};
+    std::array<char, 2U * TextCapacity> text{};
+    graphics::GuestScene scene{{nodes, instances, containers, order, node_changes, instance_changes, container_changes,
+                                node_marks, instance_marks, container_marks, text}};
 };
 
 void KeyframeAndPatchesAreAtomicAndRevisioned() {
@@ -254,8 +284,9 @@ void KeyframeAndPatchesAreAtomicAndRevisioned() {
 
     Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 11U, 0U, 1U, 2U, 1U);
     keyframe.Add(Background(0x010203U));
-    keyframe.Add(Layer(0));
+    keyframe.Add(ViewportContainer(0));
     keyframe.Add(Rect(2));
+    keyframe.Add(Link(0U, 1U, 10U));
     keyframe.AddText(1U, kContentMask | kKind, "GO");
     const auto& keyframe_bytes = keyframe.Finish();
     const int32_t keyframe_status = scene.Apply(keyframe_bytes.data(), static_cast<uint32_t>(keyframe_bytes.size()), 8,
@@ -266,7 +297,7 @@ void KeyframeAndPatchesAreAtomicAndRevisioned() {
     assert(scene.Nodes()[0].x == 2 && scene.Nodes()[1].text_length == 2U);
 
     Message patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 11U, 1U, 2U, 2U, 1U);
-    patch.Add(Layer(1, MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION));
+    patch.Add(ViewportContainer(1, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
     patch.Add(Rect(5, MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY));
     const auto& patch_bytes = patch.Finish();
     assert(scene.Apply(patch_bytes.data(), static_cast<uint32_t>(patch_bytes.size()), 8, 4, ResolveBitmap, nullptr,
@@ -298,15 +329,18 @@ void WideViewportTranslationIsAcceptedButRemainsCanvasBounded() {
 
     Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 21U, 0U, 1U, 1U, 1U);
     keyframe.Add(Background(0U));
-    keyframe.Add(Layer(120));
+    keyframe.Add(ViewportContainer(120));
     keyframe.Add(Rect(2));
+    keyframe.Add(Link(0U, 1U, 10U));
     const auto& keyframe_bytes = keyframe.Finish();
     assert(scene.Apply(keyframe_bytes.data(), static_cast<uint32_t>(keyframe_bytes.size()), 960, 4, ResolveBitmap,
                        nullptr, ValidateFont, nullptr) == MICROPIXEL_STATUS_OK);
     assert(scene.Containers()[1].translate_x == 120);
 
     Message invalid(MICROPIXEL_GRAPHICS_SCENE_PATCH, 21U, 1U, 2U, 1U, 1U);
-    invalid.Add(Layer(954, MICROPIXEL_GRAPHICS_SCENE_LAYER_TRANSLATION));
+    auto bad_container = ViewportContainer(954, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP);
+    bad_container.clip_width = -1;
+    invalid.Add(bad_container);
     const auto& invalid_bytes = invalid.Finish();
     assert(scene.Apply(invalid_bytes.data(), static_cast<uint32_t>(invalid_bytes.size()), 960, 4, ResolveBitmap,
                        nullptr, ValidateFont, nullptr) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -319,9 +353,9 @@ void SmallerKeyframeRemovesOldNodes() {
 
     Message initial(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 31U, 0U, 1U, 3U, 0U);
     initial.Add(Background(0U));
-    auto first_rect = Rect(1, kCommonMask | kKind, 0U);
-    auto second_rect = Rect(2, kCommonMask | kKind, 0U);
-    auto third_rect = Rect(3, kCommonMask | kKind, 0U);
+    auto first_rect = Rect(1, kCommonMask | kKind);
+    auto second_rect = Rect(2, kCommonMask | kKind);
+    auto third_rect = Rect(3, kCommonMask | kKind);
     second_rect.node.node_id = 1U;
     third_rect.node.node_id = 2U;
     initial.Add(first_rect);
@@ -334,7 +368,7 @@ void SmallerKeyframeRemovesOldNodes() {
 
     Message smaller(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 32U, 0U, 1U, 1U, 0U);
     smaller.Add(Background(0U));
-    smaller.Add(Rect(4, kCommonMask | kKind, 0U));
+    smaller.Add(Rect(4, kCommonMask | kKind));
     const auto& smaller_bytes = smaller.Finish();
     assert(scene.Apply(smaller_bytes.data(), static_cast<uint32_t>(smaller_bytes.size()), 8, 4, ResolveBitmap, nullptr,
                        ValidateFont, nullptr) == MICROPIXEL_STATUS_OK);
@@ -346,7 +380,7 @@ void TextureReplacementRequiresACompleteKindChange() {
     graphics::GuestScene& scene = storage.scene;
     Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 1U, 0U, 1U, 1U, 0U);
     keyframe.Add(Background(0U));
-    keyframe.Add(Rect(1, kCommonMask | kKind, 0U));
+    keyframe.Add(Rect(1, kCommonMask | kKind));
     const auto& keyframe_bytes = keyframe.Finish();
     const int32_t replacement_keyframe_status =
         scene.Apply(keyframe_bytes.data(), static_cast<uint32_t>(keyframe_bytes.size()), 8, 4, ResolveBitmap, nullptr,
@@ -359,7 +393,7 @@ void TextureReplacementRequiresACompleteKindChange() {
                 .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_TEXTURE,
                            .size = sizeof(micropixel_graphics_scene_texture_record_t)},
                 .node_id = 0U,
-                .layer_id = 0U,
+                .reserved0 = 0U,
                 .flags = MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE,
                 .property_mask = kContentMask | kKind,
             },
@@ -367,7 +401,7 @@ void TextureReplacementRequiresACompleteKindChange() {
         .y = 1,
         .width = 2,
         .height = 2,
-        .texture = 7U,
+        .texture_handle = 7U,
         .source_x = 0,
         .source_y = 0,
         .source_width = 2,
@@ -380,7 +414,7 @@ void TextureReplacementRequiresACompleteKindChange() {
     const auto& patch_bytes = patch.Finish();
     assert(scene.Apply(patch_bytes.data(), static_cast<uint32_t>(patch_bytes.size()), 8, 4, ResolveBitmap, nullptr,
                        ValidateFont, nullptr) == MICROPIXEL_STATUS_OK);
-    assert(scene.Nodes()[0].kind == graphics::GuestSceneNodeKind::kTexture && scene.Nodes()[0].texture == 7U);
+    assert(scene.Nodes()[0].kind == graphics::GuestSceneNodeKind::kTexture && scene.Nodes()[0].texture_handle == 7U);
 }
 
 void SpriteBatchInstancesPatchIndependently() {
@@ -391,10 +425,10 @@ void SpriteBatchInstancesPatchIndependently() {
         .node = {.record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_SPRITE_BATCH,
                             .size = sizeof(micropixel_graphics_scene_sprite_batch_record_t)},
                  .node_id = 0U,
-                 .layer_id = 0U,
+                 .reserved0 = 0U,
                  .flags = MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE,
                  .property_mask = kBatchMask},
-        .texture = 7U,
+        .texture_handle = 7U,
         .capacity = 2U,
         .opacity = 255U,
         .reserved0 = 0U,
@@ -440,10 +474,10 @@ void AdaptiveAtlasFarEdgeRoundingIsNormalized() {
         .node = {.record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_SPRITE_BATCH,
                             .size = sizeof(micropixel_graphics_scene_sprite_batch_record_t)},
                  .node_id = 0U,
-                 .layer_id = 0U,
+                 .reserved0 = 0U,
                  .flags = MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE,
                  .property_mask = kBatchMask},
-        .texture = 8U,
+        .texture_handle = 8U,
         .capacity = 1U,
         .opacity = 255U,
         .reserved0 = 0U,
@@ -485,10 +519,10 @@ void ContainerTreeIsValidatedAndPatchedAtomically() {
     SceneStorage<4U, 1U> storage;
     graphics::GuestScene& scene = storage.scene;
 
-    auto child = Rect(0, kCommonMask | kKind, 0U);
-    auto root_child = Rect(4, kCommonMask | kKind, 0U);
+    auto child = Rect(0, kCommonMask | kKind);
+    auto root_child = Rect(4, kCommonMask | kKind);
     root_child.node.node_id = 1U;
-    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 7U, 0U, 1U, 2U, 2U, 0U, 2U);
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 7U, 0U, 1U, 2U, 2U, 0U);
     keyframe.Add(Background(0U));
     keyframe.Add(Container(1U, 0U, 0U, 1));
     keyframe.Add(Container(2U, 1U, 1U, 2));
@@ -502,7 +536,7 @@ void ContainerTreeIsValidatedAndPatchedAtomically() {
     assert(scene.ContainerCount() == 2U && scene.Nodes()[0].parent_container_id == 2U);
     assert(scene.DrawNodeId(0U) == 0U && scene.DrawNodeId(1U) == 1U);
 
-    Message patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 7U, 1U, 2U, 2U, 2U, 0U, 2U);
+    Message patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 7U, 1U, 2U, 2U, 2U, 0U);
     patch.Add(Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
     const auto& patch_bytes = patch.Finish();
     assert(scene.Apply(patch_bytes.data(), static_cast<uint32_t>(patch_bytes.size()), 8, 4, ResolveBitmap, nullptr,
@@ -510,7 +544,7 @@ void ContainerTreeIsValidatedAndPatchedAtomically() {
     assert((scene.AncestorChanges(2U) & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION) != 0U);
     assert(scene.AncestorChanges(0U) == 0U);
 
-    Message cycle(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 8U, 0U, 1U, 1U, 2U, 0U, 2U);
+    Message cycle(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 8U, 0U, 1U, 1U, 2U, 0U);
     cycle.Add(Background(0U));
     cycle.Add(Container(1U, 2U, 0U));
     cycle.Add(Container(2U, 1U, 1U));
@@ -522,46 +556,79 @@ void ContainerTreeIsValidatedAndPatchedAtomically() {
     assert(scene.Generation() == 7U && scene.Revision() == 2U);
 }
 
-void ContainerFlagsFollowInterfaceMinor() {
-    constexpr uint32_t kContainerMask14 = kContainerMask | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
+void RemovedProtocolsAreRejectedAtomically() {
+    SceneStorage<2U, 1U> storage;
+    auto& scene = storage.scene;
+    Message message(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 42U, 0U, 1U, 1U, 0U, 0U);
+    message.Add(Background(0U));
+    message.Add(Rect(0));
+    const auto original = message.Finish();
+    const auto apply = [&](const std::vector<uint8_t>& bytes) {
+        return scene.Apply(bytes.data(), static_cast<uint32_t>(bytes.size()), 8, 4, ResolveBitmap, nullptr,
+                           ValidateFont, nullptr);
+    };
+    assert(apply(original) == MICROPIXEL_STATUS_OK);
+    const auto reject = [&](const std::vector<uint8_t>& bytes) {
+        assert(apply(bytes) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        assert(scene.Generation() == 42U && scene.Revision() == 1U && scene.NodeCount() == 1U);
+    };
+    auto flagged = original;
+    micropixel_graphics_scene_header_t flagged_header{};
+    std::memcpy(&flagged_header, flagged.data(), sizeof(flagged_header));
+    flagged_header.flags = 1U;
+    std::memcpy(flagged.data(), &flagged_header, sizeof(flagged_header));
+    reject(flagged);
+    auto old_opcode = original;
+    micropixel_graphics_scene_record_header_t record{.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_BATCH_INSTANCES + 1U,
+                                                     .size = 40U};
+    std::memcpy(old_opcode.data() + sizeof(micropixel_graphics_scene_header_t), &record, sizeof(record));
+    reject(old_opcode);
+    const size_t node_offset =
+        sizeof(micropixel_graphics_scene_header_t) + sizeof(micropixel_graphics_scene_background_record_t);
+    for (bool old_parent : {false, true}) {
+        auto bytes = original;
+        micropixel_graphics_scene_node_header_t node{};
+        std::memcpy(&node, bytes.data() + node_offset, sizeof(node));
+        if (old_parent)
+            node.reserved0 = 1U;
+        else
+            node.property_mask |= 1U << 5U;  // Above the last defined node property bit.
+        std::memcpy(bytes.data() + node_offset, &node, sizeof(node));
+        reject(bytes);
+    }
+    auto missing_link = original;
+    missing_link.resize(missing_link.size() - sizeof(micropixel_graphics_scene_node_link_record_t));
+    micropixel_graphics_scene_header_t header{};
+    std::memcpy(&header, missing_link.data(), sizeof(header));
+    --header.record_count;
+    header.total_size = static_cast<uint32_t>(missing_link.size());
+    std::memcpy(missing_link.data(), &header, sizeof(header));
+    reject(missing_link);
+}
+
+void ContainerFlagsAreValidated() {
+    constexpr uint32_t kFullContainerMask = kContainerMask | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS;
     constexpr uint16_t kCached = MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAG_CACHED_CONTENT;
     SceneStorage<2U, 1U> storage;
     graphics::GuestScene& scene = storage.scene;
-    auto child = Rect(0, kCommonMask | kKind, 0U);
+    auto child = Rect(0, kCommonMask | kKind);
     const auto apply = [&](Message& message) {
         const auto& bytes = message.Finish();
         return scene.Apply(bytes.data(), static_cast<uint32_t>(bytes.size()), 8, 4, ResolveBitmap, nullptr,
                            ValidateFont, nullptr);
     };
 
-    // A 1.3 Guest may neither claim the FLAGS property nor set any flag bit.
-    Message old_property(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 3U);
-    old_property.Add(Background(0U));
-    old_property.Add(Container(1U, 0U, 0U, 0, kContainerMask14));
-    old_property.Add(child);
-    old_property.Add(Link(0U, 1U, 1U));
-    assert(apply(old_property) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-
-    Message old_flag(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 3U);
-    old_flag.Add(Background(0U));
-    auto stale = Container(1U, 0U, 0U);
-    stale.flags = kCached;
-    old_flag.Add(stale);
-    old_flag.Add(child);
-    old_flag.Add(Link(0U, 1U, 1U));
-    assert(apply(old_flag) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-
-    // A 1.4 keyframe must carry the full 1.4 mask and may set the known flag.
-    Message short_mask(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 4U);
+    // A keyframe must carry the full mask and may set the known flag.
+    Message short_mask(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U);
     short_mask.Add(Background(0U));
-    short_mask.Add(Container(1U, 0U, 0U, 0, kContainerMask));
+    short_mask.Add(Container(1U, 0U, 0U, 0, kContainerMask & ~MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS));
     short_mask.Add(child);
     short_mask.Add(Link(0U, 1U, 1U));
     assert(apply(short_mask) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
 
-    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U, 4U);
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 1U, 0U);
     keyframe.Add(Background(0U));
-    auto cached = Container(1U, 0U, 0U, 0, kContainerMask14);
+    auto cached = Container(1U, 0U, 0U, 0, kFullContainerMask);
     cached.flags = kCached;
     keyframe.Add(cached);
     keyframe.Add(child);
@@ -569,18 +636,18 @@ void ContainerFlagsFollowInterfaceMinor() {
     assert(apply(keyframe) == MICROPIXEL_STATUS_OK);
     assert(scene.Containers()[1].cached_content);
 
-    // Unknown flag bits are rejected even on 1.4.
-    Message unknown(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U, 4U);
+    // Unknown flag bits are rejected.
+    Message unknown(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U);
     auto bogus = Container(1U, 0U, 0U, 0, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS);
     bogus.flags = static_cast<uint16_t>(kCached | (1U << 7U));
     unknown.Add(bogus);
     assert(apply(unknown) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
 
     // A translation-only patch must echo the retained flag value...
-    Message mismatch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U, 4U);
+    Message mismatch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U);
     mismatch.Add(Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION));
     assert(apply(mismatch) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    Message translate(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U, 4U);
+    Message translate(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 1U, 2U, 1U, 1U, 0U);
     auto moved = Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION);
     moved.flags = kCached;
     translate.Add(moved);
@@ -589,7 +656,7 @@ void ContainerFlagsFollowInterfaceMinor() {
     assert((scene.ContainerChanges(1U) & MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS) == 0U);
 
     // ...and a FLAGS patch clears it.
-    Message clear(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 2U, 3U, 1U, 1U, 0U, 4U);
+    Message clear(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, 2U, 3U, 1U, 1U, 0U);
     auto plain = Container(1U, 0U, 0U, 3, MICROPIXEL_GRAPHICS_SCENE_CONTAINER_FLAGS);
     clear.Add(plain);
     assert(apply(clear) == MICROPIXEL_STATUS_OK);
@@ -601,8 +668,8 @@ void RootViewportAcceptsOffscreenLocalGeometry() {
     SceneStorage<2U, 1U> storage;
     graphics::GuestScene& scene = storage.scene;
 
-    auto prefetched = Rect(7, kCommonMask | kKind, 0U);
-    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 9U, 0U, 1U, 1U, 2U, 0U, 2U);
+    auto prefetched = Rect(7, kCommonMask | kKind);
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 9U, 0U, 1U, 1U, 2U, 0U);
     keyframe.Add(Background(0U));
     keyframe.Add(Container(1U, 0U, 0U));
     keyframe.Add(Container(2U, 1U, 1U, -1));
@@ -617,14 +684,14 @@ void RootViewportAcceptsOffscreenLocalGeometry() {
     graphics::GuestScene& root_scene = root_storage.scene;
     Message root_keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 10U, 0U, 1U, 1U, 0U);
     root_keyframe.Add(Background(0U));
-    root_keyframe.Add(Rect(7, kCommonMask | kKind, 0U));
+    root_keyframe.Add(Rect(7, kCommonMask | kKind));
     const auto& root_bytes = root_keyframe.Finish();
     assert(root_scene.Apply(root_bytes.data(), static_cast<uint32_t>(root_bytes.size()), 8, 4, ResolveBitmap, nullptr,
                             ValidateFont, nullptr) == MICROPIXEL_STATUS_OK);
 
     SceneStorage<2U, 1U> invalid_storage;
     graphics::GuestScene& invalid_scene = invalid_storage.scene;
-    auto empty = Rect(7, kCommonMask | kKind, 0U);
+    auto empty = Rect(7, kCommonMask | kKind);
     empty.width = 0;
     Message invalid(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 11U, 0U, 1U, 1U, 0U);
     invalid.Add(Background(0U));
@@ -658,15 +725,71 @@ void SceneTransactionsSerializeNetPropertyChanges() {
 
 }  // namespace
 
+void TextLivesInTheArenaAcrossPatches() {
+    // 16-byte arena halves: enough to see appends, exhaustion and compaction.
+    SceneStorage<2U, 1U, 1U, 16U> storage;
+    graphics::GuestScene& scene = storage.scene;
+    const auto apply = [&](Message& message) {
+        const auto& bytes = message.Finish();
+        return scene.Apply(bytes.data(), static_cast<uint32_t>(bytes.size()), 8, 4, ResolveBitmap, nullptr,
+                           ValidateFont, nullptr);
+    };
+    const auto text_patch = [&](uint32_t revision, std::string_view text) {
+        Message patch(MICROPIXEL_GRAPHICS_SCENE_PATCH, 3U, revision - 1U, revision, 1U, 0U);
+        patch.AddText(0U, MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT, text);
+        return apply(patch);
+    };
+
+    Message keyframe(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 3U, 0U, 1U, 1U, 0U);
+    keyframe.Add(Background(0U));
+    keyframe.AddText(0U, kContentMask | kKind, "hello");
+    keyframe.Add(Link(0U, 0U, 0U));
+    assert(apply(keyframe) == MICROPIXEL_STATUS_OK);
+    assert(std::string_view(scene.Text(scene.Nodes()[0])) == "hello");
+    assert(scene.TextUsed() == 6U && scene.TextLive() == 6U && scene.TextCapacity() == 16U);
+
+    // Replaced text is appended; the old bytes stay until a compaction.
+    const char* first = scene.Text(scene.Nodes()[0]);
+    assert(text_patch(2U, "world!") == MICROPIXEL_STATUS_OK);
+    assert(std::string_view(scene.Text(scene.Nodes()[0])) == "world!" && std::string_view(first) == "hello");
+    assert(scene.TextUsed() == 13U && scene.TextLive() == 7U);
+    assert(text_patch(3U, "x") == MICROPIXEL_STATUS_OK && scene.TextUsed() == 15U);
+
+    // The owner must size the arena; without room the patch fails atomically.
+    assert(text_patch(4U, "yy") == MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    assert(scene.Revision() == 3U && std::string_view(scene.Text(scene.Nodes()[0])) == "x");
+
+    // Compaction moves live text to the other half and keeps the old readable.
+    const char* before = scene.Text(scene.Nodes()[0]);
+    scene.CompactText();
+    assert(scene.TextUsed() == 2U && std::string_view(before) == "x");
+    assert(scene.Text(scene.Nodes()[0]) != before && std::string_view(scene.Text(scene.Nodes()[0])) == "x");
+    assert(text_patch(4U, "yy") == MICROPIXEL_STATUS_OK && scene.TextUsed() == 5U);
+    assert(std::string_view(scene.Text(scene.Nodes()[0])) == "yy");
+
+    // A single run is still bounded by the Host text policy.
+    SceneStorage<2U, 1U, 1U, 4096U> large;
+    const std::string long_text(micropixel::device::graphics_limits::kMaxTextBytes + 1U, 'a');
+    Message rejected(MICROPIXEL_GRAPHICS_SCENE_KEYFRAME, 4U, 0U, 1U, 1U, 0U);
+    rejected.Add(Background(0U));
+    rejected.AddText(0U, kContentMask | kKind, long_text);
+    rejected.Add(Link(0U, 0U, 0U));
+    const auto& rejected_bytes = rejected.Finish();
+    assert(large.scene.Apply(rejected_bytes.data(), static_cast<uint32_t>(rejected_bytes.size()), 8, 4, ResolveBitmap,
+                             nullptr, ValidateFont, nullptr) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+}
+
 int main() {
     KeyframeAndPatchesAreAtomicAndRevisioned();
+    TextLivesInTheArenaAcrossPatches();
     WideViewportTranslationIsAcceptedButRemainsCanvasBounded();
     SmallerKeyframeRemovesOldNodes();
     TextureReplacementRequiresACompleteKindChange();
     SpriteBatchInstancesPatchIndependently();
     AdaptiveAtlasFarEdgeRoundingIsNormalized();
     ContainerTreeIsValidatedAndPatchedAtomically();
-    ContainerFlagsFollowInterfaceMinor();
+    RemovedProtocolsAreRejectedAtomically();
+    ContainerFlagsAreValidated();
     RootViewportAcceptsOffscreenLocalGeometry();
     SceneTransactionsSerializeNetPropertyChanges();
     return 0;

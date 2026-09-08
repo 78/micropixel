@@ -20,21 +20,6 @@ ServiceCache sensors_service;
 ServiceCache gpio_service;
 ServiceCache haptics_service;
 ServiceCache power_info_service;
-struct SensorHandleState final {
-    uint32_t handle{};
-    micropixel::DeviceId device{};
-    micropixel::SensorKind kind{micropixel::SensorKind::kAcceleration};
-};
-
-SensorHandleState sensor_handles[MICROPIXEL_MAX_SENSOR_HANDLES]{};
-SensorHandleState* FindSensorHandle(uint32_t handle) {
-    const uint32_t encoded_index = handle & 0xffU;
-    if (encoded_index == 0U || encoded_index > MICROPIXEL_MAX_SENSOR_HANDLES) {
-        return nullptr;
-    }
-    SensorHandleState& state = sensor_handles[encoded_index - 1U];
-    return state.handle == handle ? &state : nullptr;
-}
 
 }  // namespace
 
@@ -46,35 +31,62 @@ Result<DeviceList> Devices::List(DeviceKind kind) const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    micropixel_devices_list_request_t request{};
-    request.size = sizeof(request);
-    request.kind = static_cast<uint16_t>(kind);
-    micropixel_devices_list_response_t response{};
-    uint32_t response_size = 0U;
-    status = CallService(devices_service, MICROPIXEL_DEVICES_METHOD_LIST, &request, sizeof(request), &response,
-                         sizeof(response), response_size);
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
-    }
-    if (response_size < sizeof(response) || response.size < sizeof(response) ||
-        response.count > MICROPIXEL_MAX_DEVICES) {
-        runtime::Panic("devices.list.response", MICROPIXEL_STATUS_INTERNAL);
-    }
-    DeviceList list{};
-    list.count_ = response.count;
-    list.generation_ = response.generation;
-    for (uint32_t index = 0U; index < response.count; ++index) {
-        if (response.devices[index] == 0U) {
-            runtime::Panic("devices.list.id", MICROPIXEL_STATUS_INTERNAL);
-        }
-        for (uint32_t previous = 0U; previous < index; ++previous) {
-            if (response.devices[previous] == response.devices[index]) {
-                runtime::Panic("devices.list.duplicate", MICROPIXEL_STATUS_INTERNAL);
+    // Walk the pages; a generation change mid-walk means the registry
+    // changed under us, so start over a bounded number of times.
+    for (uint32_t attempt = 0U; attempt < 4U; ++attempt) {
+        DeviceList list{};
+        uint32_t first_index = 0U;
+        bool restart = false;
+        do {
+            micropixel_devices_list_request_t request{};
+            request.size = sizeof(request);
+            request.kind = static_cast<uint16_t>(kind);
+            request.first_index = static_cast<uint16_t>(first_index);
+            micropixel_devices_list_response_t response{};
+            uint32_t response_size = 0U;
+            status = CallService(devices_service, MICROPIXEL_DEVICES_METHOD_LIST, &request, sizeof(request), &response,
+                                 sizeof(response), response_size);
+            if (status != MICROPIXEL_STATUS_OK) {
+                return unexpected(ErrorFromStatus(status));
             }
+            if (response_size != sizeof(response) || response.size != sizeof(response) ||
+                response.count > MICROPIXEL_DEVICES_LIST_PAGE_SIZE || response.reserved0 != 0U ||
+                first_index + response.count > response.total_count ||
+                (response.count == 0U && first_index < response.total_count)) {
+                runtime::Panic("devices.list.response", MICROPIXEL_STATUS_INTERNAL);
+            }
+            if (first_index == 0U) {
+                list.generation_ = response.generation;
+            } else if (response.generation != list.generation_) {
+                restart = true;
+                break;
+            }
+            if (response.total_count > DeviceList::kCapacity) {
+                return unexpected(Error{ErrorCode::kResourceExhausted});
+            }
+            for (uint32_t index = 0U; index < response.count; ++index) {
+                const uint32_t slot = first_index + index;
+                if (response.devices[index] == 0U) {
+                    runtime::Panic("devices.list.id", MICROPIXEL_STATUS_INTERNAL);
+                }
+                for (uint32_t previous = 0U; previous < slot; ++previous) {
+                    if (list.devices_[previous].value() == response.devices[index]) {
+                        runtime::Panic("devices.list.duplicate", MICROPIXEL_STATUS_INTERNAL);
+                    }
+                }
+                list.devices_[slot] = DeviceId{response.devices[index]};
+            }
+            first_index += response.count;
+            list.count_ = first_index;
+            if (first_index >= response.total_count) {
+                return list;
+            }
+        } while (true);
+        if (!restart) {
+            break;
         }
-        list.devices_[index] = DeviceId{response.devices[index]};
     }
-    return list;
+    return unexpected(Error{ErrorCode::kInvalidState});
 }
 
 Result<DeviceInfo> Devices::GetInfo(DeviceId device) const {
@@ -131,9 +143,9 @@ Result<SensorInfo> Sensors::GetInfo(DeviceId device) const {
     if (response_size < sizeof(response) || response.size < sizeof(response) || response.device != device.value() ||
         response.kind < MICROPIXEL_SENSOR_ACCELERATION || response.kind > MICROPIXEL_SENSOR_ORIENTATION ||
         response.placement > MICROPIXEL_SENSOR_PLACEMENT_RIGHT || response.value_count == 0U ||
-        response.value_count > 4U || response.minimum_interval_us == 0U ||
-        response.maximum_interval_us < response.minimum_interval_us || response.reserved[0] != 0U ||
-        response.reserved[1] != 0U) {
+        response.value_count > 4U || response.min_interval_us == 0U ||
+        response.max_interval_us < response.min_interval_us || response.reserved0[0] != 0U ||
+        response.reserved0[1] != 0U) {
         runtime::Panic("sensors.info.response", MICROPIXEL_STATUS_INTERNAL);
     }
     return SensorInfo{device,
@@ -141,8 +153,8 @@ Result<SensorInfo> Sensors::GetInfo(DeviceId device) const {
                       static_cast<SensorKind>(response.kind),
                       static_cast<SensorPlacement>(response.placement),
                       response.value_count,
-                      Duration::Microseconds(response.minimum_interval_us),
-                      Duration::Microseconds(response.maximum_interval_us)};
+                      Duration::Microseconds(response.min_interval_us),
+                      Duration::Microseconds(response.max_interval_us)};
 }
 
 namespace detail {
@@ -167,22 +179,18 @@ Result<SensorOpenResult> OpenSensor(DeviceId device, SensorKind expected_kind) {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.sensor == 0U ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.sensor_handle == 0U ||
         response.device != device.value() || response.kind != static_cast<uint16_t>(expected_kind) ||
         response.reserved0 != 0U) {
         runtime::Panic("sensors.open.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    const uint32_t encoded_index = response.sensor & 0xffU;
-    if (encoded_index == 0U || encoded_index > MICROPIXEL_MAX_SENSOR_HANDLES) {
-        runtime::Panic("sensors.open.handle", MICROPIXEL_STATUS_INTERNAL);
-    }
-    sensor_handles[encoded_index - 1U] = SensorHandleState{response.sensor, device, expected_kind};
-    return SensorOpenResult{response.sensor, device, expected_kind};
+    return SensorOpenResult{response.sensor_handle, device, expected_kind};
 }
 
-Result<SensorReadResult> ReadSensor(uint32_t handle, SensorKind expected_kind) {
-    SensorHandleState* state = FindSensorHandle(handle);
-    if (state == nullptr || state->kind != expected_kind) {
+Result<SensorReadResult> ReadSensor(uint32_t handle, DeviceId device, SensorKind expected_kind) {
+    // Sensor<Reading> owns the handle, device and kind; the Host validates
+    // handle ownership and generation, so no Guest-side mirror is kept.
+    if (handle == 0U) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
     micropixel_handle_request_t request{sizeof(request), 0U, handle};
@@ -193,8 +201,8 @@ Result<SensorReadResult> ReadSensor(uint32_t handle, SensorKind expected_kind) {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.sensor != handle ||
-        response.device != state->device.value() || response.kind != static_cast<uint16_t>(expected_kind) ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.sensor_handle != handle ||
+        response.device != device.value() || response.kind != static_cast<uint16_t>(expected_kind) ||
         response.reserved0 != 0U) {
         runtime::Panic("sensors.read.response", MICROPIXEL_STATUS_INTERNAL);
     }
@@ -205,12 +213,12 @@ Result<SensorReadResult> ReadSensor(uint32_t handle, SensorKind expected_kind) {
 }
 
 Result<Duration> SetSensorSampleInterval(uint32_t handle, Duration interval) {
-    if (FindSensorHandle(handle) == nullptr || interval.count_microseconds() == 0U) {
+    if (handle == 0U || interval.count_microseconds() == 0U) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
     micropixel_sensor_sample_interval_request_t request{};
     request.size = sizeof(request);
-    request.sensor = handle;
+    request.sensor_handle = handle;
     request.interval_us = interval.count_microseconds();
     const int32_t status =
         CallVoid(sensors_service, MICROPIXEL_SENSORS_METHOD_SET_SAMPLE_INTERVAL, &request, sizeof(request));
@@ -218,16 +226,14 @@ Result<Duration> SetSensorSampleInterval(uint32_t handle, Duration interval) {
 }
 
 void ReleaseSensor(uint32_t handle) {
-    SensorHandleState* state = FindSensorHandle(handle);
-    if (state == nullptr) {
+    if (handle == 0U) {
         return;
     }
     micropixel_handle_request_t request{sizeof(request), 0U, handle};
     if (OpenService(sensors_service, MICROPIXEL_SERVICE_SENSORS, MICROPIXEL_SENSORS_INTERFACE_MAJOR,
                     MICROPIXEL_SENSORS_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
-        (void)CallVoid(sensors_service, MICROPIXEL_SENSORS_METHOD_RELEASE, &request, sizeof(request));
+        (void)CallVoid(sensors_service, MICROPIXEL_SENSORS_METHOD_CLOSE, &request, sizeof(request));
     }
-    *state = {};
 }
 
 Result<GpioOpenResult> OpenGpio(DeviceId device, uint16_t mode, uint16_t pull, uint16_t edge, uint32_t initial_value,
@@ -255,11 +261,11 @@ Result<GpioOpenResult> OpenGpio(DeviceId device, uint16_t mode, uint16_t pull, u
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.gpio == 0U ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.gpio_handle == 0U ||
         response.device != device.value() || response.mode != mode || response.reserved0 != 0U) {
         runtime::Panic("gpio.open.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return GpioOpenResult{response.gpio, device};
+    return GpioOpenResult{response.gpio_handle, device};
 }
 
 Result<bool> ReadGpio(uint32_t handle) {
@@ -274,7 +280,7 @@ Result<bool> ReadGpio(uint32_t handle) {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.gpio != handle ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.gpio_handle != handle ||
         response.reserved0 != 0U || response.value > 1U) {
         runtime::Panic("gpio.read.response", MICROPIXEL_STATUS_INTERNAL);
     }
@@ -300,7 +306,7 @@ void ReleaseGpio(uint32_t handle) {
     micropixel_handle_request_t request{sizeof(request), 0U, handle};
     if (OpenService(gpio_service, MICROPIXEL_SERVICE_GPIO, MICROPIXEL_GPIO_INTERFACE_MAJOR,
                     MICROPIXEL_GPIO_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
-        (void)CallVoid(gpio_service, MICROPIXEL_GPIO_METHOD_RELEASE, &request, sizeof(request));
+        (void)CallVoid(gpio_service, MICROPIXEL_GPIO_METHOD_CLOSE, &request, sizeof(request));
     }
 }
 
@@ -337,7 +343,7 @@ Result<void> PlayHaptic(uint32_t handle, Duration duration, uint16_t strength_pe
     micropixel_haptics_play_request_t request{};
     request.size = sizeof(request);
     request.strength_per_mille = strength_per_mille;
-    request.haptic = handle;
+    request.haptics_handle = handle;
     request.duration_ms = static_cast<uint32_t>((duration_us + 999U) / 1000U);
     const int32_t status = CallVoid(haptics_service, MICROPIXEL_HAPTICS_METHOD_PLAY, &request, sizeof(request));
     return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
@@ -356,7 +362,7 @@ void ReleaseHaptic(uint32_t handle) {
     micropixel_handle_request_t request{sizeof(request), 0U, handle};
     if (OpenService(haptics_service, MICROPIXEL_SERVICE_HAPTICS, MICROPIXEL_HAPTICS_INTERFACE_MAJOR,
                     MICROPIXEL_HAPTICS_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
-        (void)CallVoid(haptics_service, MICROPIXEL_HAPTICS_METHOD_RELEASE, &request, sizeof(request));
+        (void)CallVoid(haptics_service, MICROPIXEL_HAPTICS_METHOD_CLOSE, &request, sizeof(request));
     }
 }
 
@@ -380,11 +386,11 @@ Result<GpioInfo> Gpio::GetInfo(DeviceId device) const {
         return unexpected(ErrorFromStatus(status));
     }
     if (response_size < sizeof(response) || response.size < sizeof(response) || response.device != device.value() ||
-        response.line_number == 0U || response.reserved[0] != 0U || response.reserved[1] != 0U ||
-        response.reserved[2] != 0U) {
+        response.line_number == 0U || response.reserved0[0] != 0U || response.reserved0[1] != 0U ||
+        response.reserved0[2] != 0U) {
         runtime::Panic("gpio.info.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return GpioInfo{device, response.line_number, response.capabilities, response.maximum_pwm_frequency_hz};
+    return GpioInfo{device, response.line_number, response.capabilities, response.max_pwm_frequency_hz};
 }
 
 Result<GpioInput> Gpio::OpenInput(DeviceId device, GpioInputOptions options) const {
@@ -426,10 +432,10 @@ Result<HapticsInfo> Haptics::GetInfo(DeviceId device) const {
         return unexpected(ErrorFromStatus(status));
     }
     if (response_size < sizeof(response) || response.size < sizeof(response) || response.device != device.value() ||
-        response.maximum_duration_ms == 0U || response.reserved[0] != 0U || response.reserved[1] != 0U) {
+        response.max_duration_ms == 0U || response.reserved0 != 0U || response.reserved1 != 0U) {
         runtime::Panic("haptics.info.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return HapticsInfo{device, Duration::Milliseconds(response.maximum_duration_ms),
+    return HapticsInfo{device, Duration::Milliseconds(response.max_duration_ms),
                        (response.capabilities & MICROPIXEL_HAPTICS_CAP_VARIABLE_STRENGTH) != 0U};
 }
 
@@ -442,15 +448,15 @@ Result<PowerState> PowerInfo::Get(DeviceId device) const {
     if (!device.valid()) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
-    int32_t status = OpenService(power_info_service, MICROPIXEL_SERVICE_POWER_INFO,
-                                 MICROPIXEL_POWER_INFO_INTERFACE_MAJOR, MICROPIXEL_POWER_INFO_INTERFACE_MINOR);
+    int32_t status = OpenService(power_info_service, MICROPIXEL_SERVICE_POWER, MICROPIXEL_POWER_INTERFACE_MAJOR,
+                                 MICROPIXEL_POWER_INTERFACE_MINOR);
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
     micropixel_device_request_t request{sizeof(request), 0U, device.value()};
-    micropixel_power_info_response_t response{};
+    micropixel_power_info_t response{};
     uint32_t response_size = 0U;
-    status = CallService(power_info_service, MICROPIXEL_POWER_INFO_METHOD_GET, &request, sizeof(request), &response,
+    status = CallService(power_info_service, MICROPIXEL_POWER_METHOD_GET_INFO, &request, sizeof(request), &response,
                          sizeof(response), response_size);
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));

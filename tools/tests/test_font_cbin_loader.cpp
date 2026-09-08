@@ -138,8 +138,8 @@ int main() {
     micropixel::platform::lvgl::FontRegistry registry;
     micropixel_font_info_t info{};
     assert(registry.LoadFont(package, info) == MICROPIXEL_STATUS_OK);
-    assert(info.font != 0U && info.font_size == 16U && info.line_height == 16U);
-    const micropixel_font_handle_t first_handle = info.font;
+    assert(info.font_handle != 0U && info.font_size == 16U && info.line_height == 16U);
+    const micropixel_font_handle_t first_handle = info.font_handle;
     assert(registry.ResolveGuestHandle(first_handle) != nullptr);
     assert(registry.RetainSceneFont(first_handle));
     assert(registry.ReleaseFont(first_handle) == MICROPIXEL_STATUS_OK);
@@ -149,9 +149,9 @@ int main() {
     assert(registry.ResolveRetainedHandle(first_handle) == nullptr);
     assert(registry.ReleaseFont(first_handle) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
     assert(registry.LoadFont(package, info) == MICROPIXEL_STATUS_OK);
-    assert(info.font != first_handle);
+    assert(info.font_handle != first_handle);
     registry.ReleaseGuestFonts();
-    assert(registry.ResolveRetainedHandle(info.font) == nullptr);
+    assert(registry.ResolveRetainedHandle(info.font_handle) == nullptr);
 
     auto truncated = package;
     truncated.resize(MICROPIXEL_FONT_CBIN_HEADER_SIZE - 1U);

@@ -21,7 +21,7 @@ class Qmi8658 final {
         [[nodiscard]] esp_err_t Suspend() override;
         [[nodiscard]] esp_err_t Read(float (&values)[3]) override;
         [[nodiscard]] bool available() const override { return sensor_.available(); }
-        [[nodiscard]] uint32_t minimum_interval_us() const override { return 2500U; }
+        [[nodiscard]] uint32_t min_interval_us() const override { return 2500U; }
 
        private:
         Qmi8658& sensor_;

@@ -59,7 +59,7 @@ class Gt911Input final : public device::Input {
     device::TouchSink sink_{};
     void* sink_context_{};
     uint32_t sink_inflight_{};
-    ActiveTouch active_touches_[MICROPIXEL_MAX_TOUCH_POINTS]{};
+    ActiveTouch active_touches_[micropixel::device::kMaxTouchPoints]{};
     lv_obj_t* smoke_root_{};
     lv_obj_t* smoke_marker_{};
     lv_obj_t* smoke_status_{};

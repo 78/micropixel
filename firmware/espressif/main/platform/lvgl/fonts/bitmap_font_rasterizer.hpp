@@ -12,10 +12,11 @@ class BitmapFontRasterizer final : public graphics::TextRasterizer {
    public:
     explicit BitmapFontRasterizer(FontRegistry& fonts) : fonts_(fonts) {}
 
-    [[nodiscard]] bool Measure(micropixel_font_handle_t font, const char* text, uint16_t text_length,
+    [[nodiscard]] bool Measure(micropixel_font_handle_t font_handle, const char* text, uint16_t text_length,
                                graphics::RasterTextMetrics& metrics) const override;
     [[nodiscard]] bool Draw(graphics::PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
-                            micropixel_font_handle_t font, const char* text, uint16_t text_length) const override;
+                            micropixel_font_handle_t font_handle, const char* text,
+                            uint16_t text_length) const override;
 
    private:
     FontRegistry& fonts_;

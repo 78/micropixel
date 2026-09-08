@@ -25,9 +25,9 @@ class SensorService final {
     }
     [[nodiscard]] ServiceResult<micropixel_sensor_open_response_t> Open(micropixel_device_id_t device,
                                                                         uint16_t expected_kind);
-    [[nodiscard]] ServiceResult<micropixel_sensor_reading_t> Read(micropixel_sensor_handle_t sensor);
-    [[nodiscard]] ServiceResult<void> SetSampleInterval(micropixel_sensor_handle_t sensor, uint64_t interval_us);
-    [[nodiscard]] ServiceResult<void> Release(micropixel_sensor_handle_t sensor);
+    [[nodiscard]] ServiceResult<micropixel_sensor_reading_t> Read(micropixel_sensor_handle_t sensor_handle);
+    [[nodiscard]] ServiceResult<void> SetSampleInterval(micropixel_sensor_handle_t sensor_handle, uint64_t interval_us);
+    [[nodiscard]] ServiceResult<void> Release(micropixel_sensor_handle_t sensor_handle);
     void Suspend();
     [[nodiscard]] bool Resume();
     void Shutdown();
@@ -38,8 +38,8 @@ class SensorService final {
         micropixel_sensor_handle_t handle{};
         uint32_t generation{};
         uint32_t interval_us{};
-        uint32_t minimum_interval_us{};
-        uint32_t maximum_interval_us{};
+        uint32_t min_interval_us{};
+        uint32_t max_interval_us{};
         uint16_t kind{};
     };
 

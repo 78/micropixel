@@ -151,7 +151,10 @@ class PcmStream final {
 
    private:
     constexpr PcmStream(uint32_t handle, uint32_t sample_rate, uint16_t channels, uint32_t capacity_frames)
-        : handle_(handle), sample_rate_(sample_rate), channels_(channels), capacity_frames_(capacity_frames),
+        : handle_(handle),
+          sample_rate_(sample_rate),
+          channels_(channels),
+          capacity_frames_(capacity_frames),
           free_frames_(capacity_frames) {}
     [[nodiscard]] constexpr bool Matches(const PcmStreamEvent& event) const {
         return handle_ != 0U && event.source_ == handle_;

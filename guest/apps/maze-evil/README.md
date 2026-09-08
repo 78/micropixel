@@ -2,7 +2,7 @@
 
 Maze Evil 是一个本地 ESP-IDF 原生 raycaster demo（不在仓库内）的 Guest 移植版，也是 Graphics 1.5 Direct Surface 和
 Graphics 1.6 Host 光栅 kernel 的验收载体。Guest 只做几何，所有像素由 Host 光栅 kernel 写进 Host 持有的
-`DirectSurface` 双缓冲并直接扫描输出；Guest 从不映射帧缓冲，Bundle 不需要 `pinned_memory`。
+`HostSurface` 双缓冲并直接扫描输出；Guest 从不映射帧缓冲，Bundle 不需要 `pinned_memory`。
 关卡与 AI 以 demo 为基础。场景、怪物、道具和特效使用 ImageGen 原画离线量化为现有 256 色索引素材，
 编入 Guest 的只读数据；枪采用右手持枪布局。运行时只构建光照调色板，不解码 PNG 或生成材质噪声。
 Bundle 的资源包仍只携带 Opus BGM 和启动图标。

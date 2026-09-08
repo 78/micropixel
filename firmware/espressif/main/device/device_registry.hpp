@@ -17,7 +17,7 @@ namespace micropixel::device {
 // construct the Guest-visible catalog.
 class DeviceRegistry final : public DeviceCatalog, public Sensors, public Gpio, public Haptics {
    public:
-    static constexpr uint32_t kMaximumDeviceCount = MICROPIXEL_MAX_DEVICES;
+    static constexpr uint32_t kMaximumDeviceCount = 64U;  // Host policy, not an ABI limit
 
     [[nodiscard]] bool InitializeStorage();
     void Reset();

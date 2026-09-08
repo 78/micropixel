@@ -86,6 +86,73 @@ def api_token(device_id: str) -> str:
 
 
 class MicroPixelCliTest(unittest.TestCase):
+    def test_init_scaffolds_a_versioned_project_without_device_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "hello-world"
+            with patch.object(sys, "argv", ["micropixel", "init", str(root)]), redirect_stdout(io.StringIO()):
+                self.assertEqual(CLI.main(), 0)
+            project = CLI.load_project_manifest(root / "app.json")
+            self.assertEqual(project.package_id, "local.hello-world")
+            self.assertEqual(project.value["version"], "1.0.0")
+            self.assertEqual(project.value["title"], "Hello World")
+            self.assertEqual(project.sources, ((root / "src/main.cpp").resolve(),))
+            self.assertIn("app.Run", project.sources[0].read_text())
+
+    def test_init_discovers_sources_and_preserves_existing_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ["main.cpp", "src/game.cc", "build/generated.cpp", "tests/main.cpp", "game_test.cpp"]:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("// original\n")
+            (root / "alias.cpp").symlink_to(root / "main.cpp")
+            args = CLI.parse_command_line([
+                "init", str(root), "--app-id", "vendor.game", "--title", "游戏", "--version", "1.10.2",
+            ])
+            with redirect_stdout(io.StringIO()):
+                CLI.run_init(args)
+            project = CLI.load_project_manifest(root / "app.json")
+            self.assertEqual(project.value["sources"], ["main.cpp", "src/game.cc"])
+            self.assertEqual(project.value["title"], "游戏")
+            self.assertEqual(project.value["version"], "1.10.2")
+            self.assertEqual((root / "main.cpp").read_text(), "// original\n")
+            previous = (root / "app.json").read_bytes()
+            with self.assertRaisesRegex(CLI.CliError, "already exists"):
+                CLI.run_init(args)
+            self.assertEqual((root / "app.json").read_bytes(), previous)
+
+    def test_init_explicit_sources_override_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ["main.cpp", "other.cpp"]:
+                (root / name).write_text("// source\n")
+            args = CLI.parse_command_line(["init", str(root), "--source", "main.cpp"])
+            with redirect_stdout(io.StringIO()):
+                CLI.run_init(args)
+            self.assertEqual(CLI.load_project_manifest(root / "app.json").value["sources"], ["main.cpp"])
+
+    def test_init_rejects_invalid_input_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "game"
+            for options in [["--version", "1.2"], ["--title", " bad "], ["--app-id", "bad/id"],
+                            ["--source", "../outside.cpp"], ["--source", "missing.cpp"]]:
+                with self.subTest(options=options), self.assertRaises(CLI.CliError):
+                    CLI.run_init(CLI.parse_command_line(["init", str(root), *options]))
+                self.assertFalse(root.exists())
+
+    def test_app_version_rejects_noncanonical_values_in_project_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.cpp").write_text("int main() { return 0; }")
+            manifest = {"schema_version": 1, "app_id": "test.app", "title": "Test", "sources": ["main.cpp"]}
+            path = root / "app.json"
+            path.write_text(json.dumps(manifest))
+            CLI.load_project_manifest(path)  # Older projects remain unversioned.
+            for value in [None, 1, "", "1.2", "01.2.3", "1.2.3.", "1.2.3-beta", "1.2.3+build", "1" * 28 + ".0.0"]:
+                path.write_text(json.dumps({**manifest, "version": value}))
+                with self.subTest(value=value), self.assertRaisesRegex(CLI.CliError, "major.minor.patch"):
+                    CLI.load_project_manifest(path)
+
     def test_run_and_app_start_accept_bounded_launch_arguments_after_separator(self) -> None:
         run = CLI.parse_command_line(
             ["run", "guest/apps/blocks", "--profile", "development", "--", "--level", "100"]
@@ -362,11 +429,40 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertTrue(fake.closed)
 
     def test_usb_transport_options_are_explicit(self) -> None:
-        args = CLI.parser().parse_args(
+        args = CLI.parse_command_line(
             ["--transport", "usb", "--port", "/dev/cu.usbmodem1101", "app", "list"]
         )
         self.assertEqual(args.transport, "usb")
         self.assertEqual(args.port, "/dev/cu.usbmodem1101")
+
+    def test_port_implies_usb_transport(self) -> None:
+        args = CLI.parse_command_line(["--port", "/dev/cu.usbmodem1101", "app", "list"])
+        self.assertEqual(args.transport, "usb")
+        self.assertEqual(args.port, "/dev/cu.usbmodem1101")
+
+    def test_port_overrides_remote_transport_env(self) -> None:
+        with patch.dict(os.environ, {"MICROPIXEL_TRANSPORT": "remote"}):
+            args = CLI.parse_command_line(["--port", "/dev/cu.usbmodem1101", "app", "list"])
+        self.assertEqual(args.transport, "usb")
+
+    def test_transport_env_selects_usb_without_port(self) -> None:
+        with patch.dict(os.environ, {"MICROPIXEL_TRANSPORT": "usb"}):
+            args = CLI.parse_command_line(["app", "list"])
+        self.assertEqual(args.transport, "usb")
+        self.assertIsNone(args.port)
+
+    def test_default_transport_is_remote_without_port(self) -> None:
+        environ = {key: value for key, value in os.environ.items() if key != "MICROPIXEL_TRANSPORT"}
+        with patch.dict(os.environ, environ, clear=True):
+            args = CLI.parse_command_line(["app", "list"])
+        self.assertEqual(args.transport, "remote")
+        self.assertIsNone(args.port)
+
+    def test_explicit_remote_transport_rejects_port(self) -> None:
+        with self.assertRaisesRegex(CLI.CliError, "--port implies USB"):
+            CLI.parse_command_line(
+                ["--transport", "remote", "--port", "/dev/cu.usbmodem1101", "app", "list"]
+            )
 
     def test_usb_discovery_accepts_micropixel_tinyusb_cdc_product(self) -> None:
         port = argparse.Namespace(

@@ -5,10 +5,10 @@
 
 namespace micropixel::detail {
 
-// Scene transactions serialize net changes relative to BeginUpdate(), not the
-// sequence of intermediate setter calls. This lets callers freely rebuild a
+// Scene frames serialize net changes relative to the last accepted frame,
+// not the sequence of intermediate setter calls. This lets callers freely rebuild a
 // retained batch without emitting properties that were restored before
-// Present(). original_dirty preserves an unsent pre-transaction change.
+// Present(). original_dirty preserves an unsent pending change.
 constexpr void UpdateScenePropertyDirty(uint32_t& dirty, uint32_t original_dirty, uint32_t property, bool changed) {
     if (changed) {
         dirty |= property;

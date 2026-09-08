@@ -1,5 +1,7 @@
 #include "apps/maze-evil/game/renderer.hpp"
 
+#include <span>
+
 #include "apps/maze-evil/gfx/font.hpp"
 #include "apps/maze-evil/gfx/palette.hpp"
 #include "apps/maze-evil/gfx/textures.hpp"
@@ -7,9 +9,6 @@
 
 namespace maze_break::game {
 namespace {
-
-constexpr int kMaxDdaSteps = 96;
-constexpr float kMinDepth = 0.02F;
 
 using math::Clamp;
 using micropixel::Color;
@@ -61,8 +60,8 @@ class TextBuilder final {
 
 void Renderer::Initialize(const gfx::ViewConfig& view) {
     view_ = view;
-    if (view_.width > gfx::kMaxViewWidth) {
-        view_.width = gfx::kMaxViewWidth;
+    if (view_.width > micropixel::Raycaster::kMaxColumns) {
+        view_.width = micropixel::Raycaster::kMaxColumns;
     }
     if (view_.height > gfx::kMaxViewHeight) {
         view_.height = gfx::kMaxViewHeight;
@@ -72,20 +71,24 @@ void Renderer::Initialize(const gfx::ViewConfig& view) {
     }
     half_height_ = view_.height / 2;
     hud_height_ = 26 * view_.hud_scale;
-    // Light falls off with distance; entries are indexed by distance * 16.
-    // The curve is tuned on a 32-level scale and clamped to the palette's 16
-    // levels, so everything closer than ~2.6 tiles reads at full brightness.
-    constexpr float kCurveLevels = 31.0F;
-    for (int i = 0; i < 512; ++i) {
-        const float distance = i / 16.0F;
-        const int light = static_cast<int>(kCurveLevels * 2.6F / (2.6F + distance * 1.05F) + 0.5F);
-        light_lut_[i] = static_cast<uint8_t>(Clamp(light, 2, gfx::kLightLevels - 1));
-    }
-}
-
-int Renderer::LightFor(float distance) const {
-    const int index = static_cast<int>(distance * 16.0F);
-    return light_lut_[Clamp(index, 0, 511)];
+    // Light falls off with distance. The 2.6 / 1.05 curve is unchanged; it is
+    // clamped three steps below the HUD row so the near-field plateau is not
+    // full-white (the old "flashlight" disc). Mid and far levels match the
+    // original table once the raw curve drops below that cap. Y-facing walls
+    // drop four levels.
+    micropixel::RaycastConfig config{};
+    config.width = view_.width;
+    config.height = view_.height;
+    config.texture_shift = gfx::kTextureShift;
+    config.floor_slot = gfx::kTexFloor;
+    config.ceiling_slot = gfx::kTexCeiling;
+    config.lighting.levels = gfx::kLightLevels - 3;
+    config.lighting.minimum = 2;
+    config.lighting.side_shade = 4;
+    config.lighting.curve_levels = 31.0F;
+    config.lighting.full_distance = 2.6F;
+    config.lighting.falloff = 1.05F;
+    (void)caster_.Initialize(config);
 }
 
 namespace {
@@ -105,11 +108,7 @@ static_assert(gfx::kGlyphAtlasBytes <= kMaxSpriteTexels, "glyph atlas must fit t
 
 }  // namespace
 
-bool Renderer::UploadResources(const micropixel::SurfaceRaster& raster) {
-    if (raster.max_textures() < static_cast<uint32_t>(kSlotCount) ||
-        raster.max_light_levels() < static_cast<uint32_t>(gfx::kLightLevels)) {
-        return false;
-    }
+bool Renderer::UploadResources(const micropixel::RasterResources& raster) {
     // Wall textures are already column-major, floor and ceiling row-major.
     for (int id = 0; id < gfx::kTexCount; ++id) {
         const auto texture = static_cast<gfx::TextureId>(id);
@@ -141,7 +140,8 @@ bool Renderer::UploadResources(const micropixel::SurfaceRaster& raster) {
         }
         if (!raster
                  .UploadTexture(static_cast<uint8_t>(kSpriteSlotBase + id), static_cast<uint32_t>(padded_width),
-                                static_cast<uint32_t>(padded_height), micropixel::RasterLayout::kColumnMajor, scratch)
+                                static_cast<uint32_t>(padded_height), micropixel::RasterLayout::kColumnMajor,
+                                std::span<const uint8_t>(scratch, static_cast<size_t>(padded_width * padded_height)))
                  .has_value()) {
             return false;
         }
@@ -149,393 +149,49 @@ bool Renderer::UploadResources(const micropixel::SurfaceRaster& raster) {
     gfx::BuildGlyphAtlas(scratch);
     if (!raster
              .UploadTexture(kGlyphSlot, gfx::kGlyphAtlasWidth, gfx::kGlyphAtlasHeight,
-                            micropixel::RasterLayout::kColumnMajor, scratch)
+                            micropixel::RasterLayout::kColumnMajor,
+                            std::span<const uint8_t>(scratch, gfx::kGlyphAtlasWidth * gfx::kGlyphAtlasHeight))
              .has_value()) {
         return false;
     }
     // The colormaps are exactly a lit palette: kLightLevels x 256 canonical
     // RGB565, contiguous from light 0.
-    return raster.UploadLitPalette(gfx::kLightLevels, gfx::ColormapFor(0)).has_value();
+    return raster
+        .UploadLitPalette(0U, gfx::kLightLevels,
+                          std::span<const uint16_t>(gfx::ColormapFor(0),
+                                                    gfx::kLightLevels * micropixel::RasterResources::kPaletteEntries))
+        .has_value();
 }
 
 bool Renderer::Render(micropixel::RasterDrawList& list, const World& world, const HudStats& hud) {
     // Cast first so the floor pass knows which rows the walls will cover;
     // records are executed in order: floor -> walls -> things -> overlays.
-    CastWalls(world);
-    return DrawFloorAndCeiling(list, world.player()) && DrawWalls(list) && DrawThings(list, world) &&
-           DrawWeapon(list, world) && DrawDamageTint(list, world) && (!hud.visible || DrawHud(list, world, hud));
-}
-
-namespace {
-
-bool SpanPair(micropixel::RasterDrawList& list, int y_floor, int y_ceiling, int x0, int x1, int32_t fx, int32_t fy,
-              int32_t sx, int32_t sy, int light) {
-    return list.SpanPair(static_cast<uint16_t>(y_floor), static_cast<uint16_t>(y_ceiling), static_cast<uint16_t>(x0),
-                         static_cast<uint16_t>(x1), gfx::kTexFloor, gfx::kTexCeiling, static_cast<uint8_t>(light), fx,
-                         fy, sx, sy);
-}
-
-}  // namespace
-
-bool Renderer::DrawFloorAndCeiling(micropixel::RasterDrawList& list, const Player& p) {
-    const int width = view_.width;
-    const int height = view_.height;
-    const int half = half_height_;
-    // Leftmost and rightmost rays.
-    const float ray0_x = p.dir_x - p.plane_x;
-    const float ray0_y = p.dir_y - p.plane_y;
-    const float ray1_x = p.dir_x + p.plane_x;
-    const float ray1_y = p.dir_y + p.plane_y;
-    const float pos_z = 0.5F * static_cast<float>(height);
-    const float inv_width = 1.0F / static_cast<float>(width);
-
-    const int blocks = (width + kCoverBlock - 1) / kCoverBlock;
-
-    // The centre row (y == half) belongs to the walls at infinity; the loop
-    // fills the floor row y and mirrors the ceiling to height-1-y. Pixels
-    // where both rows are hidden by the far wall are skipped: that is the
-    // bulk of the frame's overdraw, and the walls are painted afterwards so
-    // painting a covered pixel is only wasted work, never a visible error.
-    for (int y = half + 1; y < height; ++y) {
-        const int p_row = y - half;
-        const float row_distance = pos_z / static_cast<float>(p_row);
-        const float step_x = row_distance * (ray1_x - ray0_x) * inv_width;
-        const float step_y = row_distance * (ray1_y - ray0_y) * inv_width;
-        const float floor_x = p.x + row_distance * ray0_x;
-        const float floor_y = p.y + row_distance * ray0_y;
-        // 16.16 world coordinates: the integer part is the tile, the fraction
-        // selects the texel.
-        const int32_t fx = static_cast<int32_t>(floor_x * 65536.0F);
-        const int32_t fy = static_cast<int32_t>(floor_y * 65536.0F);
-        const int32_t sx = static_cast<int32_t>(step_x * 65536.0F);
-        const int32_t sy = static_cast<int32_t>(step_y * 65536.0F);
-        const int y_ceiling = height - 1 - y;
-        const int light = LightFor(row_distance);
-        // Walk the row in kCoverBlock-wide blocks; only blocks the wall edge
-        // passes through are tested per column.
-        int run_start = -1;
-        bool ok = true;
-        for (int block = 0; block < blocks; ++block) {
-            const int x0 = block * kCoverBlock;
-            const int x1 = x0 + kCoverBlock > width ? width : x0 + kCoverBlock;
-            if (y > block_bottom_max_[block]) {
-                // Every column shows floor here.
-                if (run_start < 0) {
-                    run_start = x0;
-                }
-                continue;
-            }
-            if (y <= block_bottom_min_[block] && y_ceiling >= block_top_max_[block]) {
-                // Every column is behind the wall.
-                if (run_start >= 0) {
-                    ok = SpanPair(list, y, y_ceiling, run_start, x0 - 1, fx + sx * run_start, fy + sy * run_start, sx,
-                                  sy, light) &&
-                         ok;
-                    run_start = -1;
-                }
-                continue;
-            }
-            for (int x = x0; x < x1; ++x) {
-                const bool hidden = y <= cover_bottom_[x] && y_ceiling >= cover_top_[x];
-                if (hidden) {
-                    if (run_start >= 0) {
-                        ok = SpanPair(list, y, y_ceiling, run_start, x - 1, fx + sx * run_start, fy + sy * run_start,
-                                      sx, sy, light) &&
-                             ok;
-                        run_start = -1;
-                    }
-                } else if (run_start < 0) {
-                    run_start = x;
-                }
-            }
-        }
-        if (run_start >= 0) {
-            ok = SpanPair(list, y, y_ceiling, run_start, width - 1, fx + sx * run_start, fy + sy * run_start, sx, sy,
-                          light) &&
-                 ok;
-        }
-        if (!ok) {
-            return false;
-        }
-    }
-    if ((height & 1) == 0) {
-        // Even heights leave row half-1 unmirrored; treat it as the far ceiling.
-        const uint16_t color = gfx::ColormapFor(LightFor(pos_z))[gfx::TextureFor(gfx::kTexCeiling)[0]];
-        return list.FillRect(Rect{0, half - 1, width, 1}, Color::FromRgb565(color));
-    }
-    return true;
-}
-
-bool Renderer::DrawWalls(micropixel::RasterDrawList& list) {
-    const int width = view_.width;
-    bool ok = true;
-    for (int x = 0; x < width; ++x) {
-        const WallSlice& wall = walls_[x];
-        if (wall.y1 >= wall.y0) {
-            ok = list.Column(static_cast<uint16_t>(x), wall.y0, wall.y1, wall.texture, wall.light, wall.tex_x,
-                             wall.v_start, wall.v_step) &&
-                 ok;
-        }
-        const WallSlice& door = doors_[x];
-        if (door.y1 >= door.y0) {
-            ok = list.Column(static_cast<uint16_t>(x), door.y0, door.y1, door.texture, door.light, door.tex_x,
-                             door.v_start, door.v_step) &&
-                 ok;
-        }
-    }
-    return ok;
-}
-
-void Renderer::CastWalls(const World& world) {
-    const int width = view_.width;
-    const int height = view_.height;
-    const int half = half_height_;
-    const float height_f = static_cast<float>(height);
     const Player& p = world.player();
-    for (int x = 0; x < width; ++x) {
-        walls_[x] = WallSlice{};
-        doors_[x] = WallSlice{};
-        // Nothing covered until a wall column says otherwise.
-        cover_top_[x] = static_cast<int16_t>(height);
-        cover_bottom_[x] = -1;
-        const float camera_x = 2.0F * x / static_cast<float>(width) - 1.0F;
-        const float ray_x = p.dir_x + p.plane_x * camera_x;
-        const float ray_y = p.dir_y + p.plane_y * camera_x;
-        int map_x = math::FloorInt(p.x);
-        int map_y = math::FloorInt(p.y);
-        const float delta_x = ray_x == 0.0F ? 1e30F : math::Fabs(1.0F / ray_x);
-        const float delta_y = ray_y == 0.0F ? 1e30F : math::Fabs(1.0F / ray_y);
-        const int step_x = ray_x < 0.0F ? -1 : 1;
-        const int step_y = ray_y < 0.0F ? -1 : 1;
-        float side_x = ray_x < 0.0F ? (p.x - map_x) * delta_x : (map_x + 1.0F - p.x) * delta_x;
-        float side_y = ray_y < 0.0F ? (p.y - map_y) * delta_y : (map_y + 1.0F - p.y) * delta_y;
-
-        int side = 0;
-        Tile hit_tile = Tile::kBrick;
-        float hit_dist = 1e30F;
-        bool door_seen = false;
-        float door_dist = 0.0F;
-        float door_open = 0.0F;
-        int door_side = 0;
-
-        for (int step = 0; step < kMaxDdaSteps; ++step) {
-            if (side_x < side_y) {
-                side_x += delta_x;
-                map_x += step_x;
-                side = 0;
-            } else {
-                side_y += delta_y;
-                map_y += step_y;
-                side = 1;
-            }
-            const Tile tile = world.TileAt(map_x, map_y);
-            if (tile == Tile::kDoor) {
-                const float open = world.DoorOpen(map_x, map_y);
-                if (open >= 1.0F) {
-                    continue;
-                }
-                if (open <= 0.0F) {
-                    hit_tile = tile;
-                    hit_dist = side == 0 ? side_x - delta_x : side_y - delta_y;
-                    break;
-                }
-                if (!door_seen) {
-                    door_seen = true;
-                    door_dist = side == 0 ? side_x - delta_x : side_y - delta_y;
-                    door_open = open;
-                    door_side = side;
-                }
-                continue;
-            }
-            if (IsWall(tile)) {
-                hit_tile = tile;
-                hit_dist = side == 0 ? side_x - delta_x : side_y - delta_y;
-                break;
-            }
-        }
-        if (hit_dist < kMinDepth) {
-            hit_dist = kMinDepth;
-        }
-
-        // Far wall (or closed door).
-        {
-            float wall_x = side == 0 ? p.y + hit_dist * ray_y : p.x + hit_dist * ray_x;
-            wall_x -= math::Floor(wall_x);
-            int tex_x = static_cast<int>(wall_x * gfx::kTextureSize) & gfx::kTextureMask;
-            if ((side == 0 && ray_x > 0.0F) || (side == 1 && ray_y < 0.0F)) {
-                tex_x = gfx::kTextureMask - tex_x;
-            }
-            const int line_height = static_cast<int>(height_f / hit_dist);
-            if (line_height > 0) {
-                const int draw_start = Clamp(-line_height / 2 + half, 0, height - 1);
-                const int draw_end = Clamp(line_height / 2 + half, 0, height - 1);
-                const int32_t step = (gfx::kTextureSize << 16) / line_height;
-                const int32_t tex_pos = (draw_start - half + line_height / 2) * step;
-                const int light = Clamp(LightFor(hit_dist) - (side == 1 ? 4 : 0), 0, gfx::kLightLevels - 1);
-                walls_[x] = WallSlice{
-                    .y0 = static_cast<int16_t>(draw_start),
-                    .y1 = static_cast<int16_t>(draw_end),
-                    .tex_x = static_cast<uint16_t>(tex_x),
-                    .v_start = tex_pos,
-                    .v_step = step,
-                    .texture = WallTexture(hit_tile),
-                    .light = static_cast<uint8_t>(light),
-                };
-                cover_top_[x] = static_cast<int16_t>(draw_start);
-                cover_bottom_[x] = static_cast<int16_t>(draw_end);
-            }
-            zbuffer_[x] = hit_dist;
-        }
-
-        // Partially raised door slab in front of the far wall. The slab slides
-        // up into the ceiling, so the visible part is the bottom (1-open) of
-        // the texture pinned to the top of the doorway.
-        if (door_seen) {
-            if (door_dist < kMinDepth) {
-                door_dist = kMinDepth;
-            }
-            float wall_x = door_side == 0 ? p.y + door_dist * ray_y : p.x + door_dist * ray_x;
-            wall_x -= math::Floor(wall_x);
-            int tex_x = static_cast<int>(wall_x * gfx::kTextureSize) & gfx::kTextureMask;
-            if ((door_side == 0 && ray_x > 0.0F) || (door_side == 1 && ray_y < 0.0F)) {
-                tex_x = gfx::kTextureMask - tex_x;
-            }
-            const int line_height = static_cast<int>(height_f / door_dist);
-            if (line_height > 0) {
-                const int top = -line_height / 2 + half;
-                const int visible = static_cast<int>((1.0F - door_open) * line_height);
-                const int draw_start = Clamp(top, 0, height - 1);
-                int draw_end = Clamp(top + visible - 1, -1, height - 1);
-                const int32_t step = (gfx::kTextureSize << 16) / line_height;
-                const int32_t tex_pos =
-                    static_cast<int32_t>(door_open * gfx::kTextureSize * 65536.0F) + (draw_start - top) * step;
-                // The texture must not wrap past its last row at the slab's
-                // bottom edge; the column kernel wraps, so clip the run instead.
-                const int32_t last_row = (gfx::kTextureSize << 16) - 1;
-                if (step > 0 && tex_pos <= last_row) {
-                    const int rows_in_texture = (last_row - tex_pos) / step + 1;
-                    if (draw_end - draw_start + 1 > rows_in_texture) {
-                        draw_end = draw_start + rows_in_texture - 1;
-                    }
-                } else {
-                    draw_end = draw_start - 1;
-                }
-                if (draw_end >= draw_start) {
-                    const int light = Clamp(LightFor(door_dist) - (door_side == 1 ? 4 : 0), 0, gfx::kLightLevels - 1);
-                    doors_[x] = WallSlice{
-                        .y0 = static_cast<int16_t>(draw_start),
-                        .y1 = static_cast<int16_t>(draw_end),
-                        .tex_x = static_cast<uint16_t>(tex_x),
-                        .v_start = tex_pos,
-                        .v_step = step,
-                        .texture = gfx::kTexDoor,
-                        .light = static_cast<uint8_t>(light),
-                    };
-                    if (door_open < 0.5F) {
-                        zbuffer_[x] = door_dist;
-                    }
-                }
-            }
-        }
-    }
-    // Block summaries let the floor pass classify most blocks without
-    // touching individual columns.
-    const int blocks = (width + kCoverBlock - 1) / kCoverBlock;
-    for (int block = 0; block < blocks; ++block) {
-        const int x0 = block * kCoverBlock;
-        const int x1 = x0 + kCoverBlock > width ? width : x0 + kCoverBlock;
-        int bottom_min = cover_bottom_[x0];
-        int bottom_max = cover_bottom_[x0];
-        int top_max = cover_top_[x0];
-        for (int x = x0 + 1; x < x1; ++x) {
-            bottom_min = cover_bottom_[x] < bottom_min ? cover_bottom_[x] : bottom_min;
-            bottom_max = cover_bottom_[x] > bottom_max ? cover_bottom_[x] : bottom_max;
-            top_max = cover_top_[x] > top_max ? cover_top_[x] : top_max;
-        }
-        block_bottom_min_[block] = static_cast<int16_t>(bottom_min);
-        block_bottom_max_[block] = static_cast<int16_t>(bottom_max);
-        block_top_max_[block] = static_cast<int16_t>(top_max);
-    }
+    const micropixel::RaycastCamera camera{p.x, p.y, p.dir_x, p.dir_y, p.plane_x, p.plane_y};
+    caster_.Cast(camera, world.grid());
+    return caster_.DrawWorld(list) && DrawThings(list, world) && DrawWeapon(list, world) &&
+           DrawDamageTint(list, world) && (!hud.visible || DrawHud(list, world, hud));
 }
 
 bool Renderer::DrawThings(micropixel::RasterDrawList& list, const World& world) {
-    const int width = view_.width;
-    const int height = view_.height;
-    const int half = half_height_;
-    const Player& p = world.player();
     const int count = world.CollectThings(things_, World::kMaxThings);
-    const float inv_det = 1.0F / (p.plane_x * p.dir_y - p.dir_x * p.plane_y);
-
-    // Sort far to near so nearer billboards paint over farther ones.
-    int visible = 0;
     for (int i = 0; i < count; ++i) {
-        const float sx = things_[i].x - p.x;
-        const float sy = things_[i].y - p.y;
-        const float depth = inv_det * (-p.plane_y * sx + p.plane_x * sy);
-        if (depth <= 0.08F) {
-            continue;
-        }
-        thing_depth_[i] = depth;
-        order_[visible++] = static_cast<uint8_t>(i);
-    }
-    for (int i = 1; i < visible; ++i) {
-        const uint8_t key = order_[i];
-        int j = i - 1;
-        while (j >= 0 && thing_depth_[order_[j]] < thing_depth_[key]) {
-            order_[j + 1] = order_[j];
-            --j;
-        }
-        order_[j + 1] = key;
-    }
-
-    bool ok = true;
-    for (int n = 0; n < visible; ++n) {
-        const Thing& thing = things_[order_[n]];
+        const Thing& thing = things_[i];
         const gfx::Sprite& sprite = gfx::SpriteFor(thing.sprite);
-        const float sx = thing.x - p.x;
-        const float sy = thing.y - p.y;
-        const float transform_x = inv_det * (p.dir_y * sx - p.dir_x * sy);
-        const float transform_y = thing_depth_[order_[n]];
-        const int screen_x = static_cast<int>((width / 2) * (1.0F + transform_x / transform_y));
-        const float wall_height = static_cast<float>(height) / transform_y;
-        const int sprite_height = static_cast<int>(wall_height * thing.height);
-        if (sprite_height <= 0) {
-            continue;
-        }
-        const int bottom = static_cast<int>(half + wall_height * 0.5F - wall_height * thing.lift);
-        const int top = bottom - sprite_height;
-        const int sprite_width = sprite_height * sprite.width / sprite.height;
-        if (sprite_width <= 0) {
-            continue;
-        }
-        const int left = screen_x - sprite_width / 2;
-        const int right = left + sprite_width;
-        if (bottom <= 0 || top >= height || right <= 0 || left >= width) {
-            continue;
-        }
-        const bool self_lit = thing.sprite == gfx::kSprFireballA || thing.sprite == gfx::kSprFireballB ||
-                              gfx::IsTorchSprite(thing.sprite);
-        const int light = self_lit ? gfx::kLightLevels - 1 : LightFor(transform_y);
-
-        const int32_t u_step = (sprite.width << 16) / sprite_width;
-        const int32_t v_step = (sprite.height << 16) / sprite_height;
-        const int y0 = Clamp(top, 0, height - 1);
-        const int y1 = Clamp(bottom - 1, 0, height - 1);
-        const int32_t v_start = (y0 - top) * v_step;
-        const int x0 = Clamp(left, 0, width - 1);
-        const int x1 = Clamp(right - 1, 0, width - 1);
-        const auto slot = static_cast<uint8_t>(kSpriteSlotBase + thing.sprite);
-        for (int stripe = x0; stripe <= x1; ++stripe) {
-            if (transform_y >= zbuffer_[stripe]) {
-                continue;
-            }
-            const int u = ((stripe - left) * u_step) >> 16;
-            ok = list.Column(static_cast<uint16_t>(stripe), static_cast<int16_t>(y0), static_cast<int16_t>(y1), slot,
-                             static_cast<uint8_t>(light), static_cast<uint16_t>(u), v_start, v_step, true) &&
-                 ok;
-        }
+        billboards_[i] = micropixel::Billboard{
+            .x = thing.x,
+            .y = thing.y,
+            .height = thing.height,
+            .lift = thing.lift,
+            .texture_slot = static_cast<uint8_t>(kSpriteSlotBase + thing.sprite),
+            .texture_width = static_cast<uint16_t>(sprite.width),
+            .texture_height = static_cast<uint16_t>(sprite.height),
+            .self_lit = thing.sprite == gfx::kSprFireballA || thing.sprite == gfx::kSprFireballB ||
+                        gfx::IsTorchSprite(thing.sprite),
+        };
     }
-    return ok;
+    return caster_.DrawBillboards(list,
+                                  std::span<const micropixel::Billboard>(billboards_, static_cast<size_t>(count)));
 }
 
 bool Renderer::BlitSprite(micropixel::RasterDrawList& list, gfx::SpriteId id, int x, int y, int scale) const {

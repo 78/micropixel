@@ -36,8 +36,10 @@ class Label final {
         auto measured = renderer.MeasureText(copied.c_str(), style.font);
         Assert(measured.has_value(), "label measurement failed");
         Label result;
-        result.node_ = parent.CreateLabel({0, 0}, copied.c_str(), style.color, style.font,
-                                          style.horizontal == HorizontalAlignment::kCenter);
+        result.node_ = parent
+                           .CreateLabel({0, 0}, copied.c_str(), style.color, style.font,
+                                        style.horizontal == HorizontalAlignment::kCenter)
+                           .value();
         result.text_ = copied;
         result.metrics_ = measured.value();
         result.style_ = style;
@@ -70,7 +72,7 @@ class Label final {
         return description;
     }
 
-    [[nodiscard]] Result<void> SetBounds(SceneUpdate& update, Rect bounds) {
+    [[nodiscard]] Result<void> SetBounds(Rect bounds) {
         if (bounds == bounds_) {
             return {};
         }
@@ -79,12 +81,12 @@ class Label final {
             return unexpected(position.error());
         }
         bounds_ = bounds;
-        node_.SetCentered(update, style_.horizontal == HorizontalAlignment::kCenter);
-        node_.SetPosition(update, position.value());
+        node_.SetCentered(style_.horizontal == HorizontalAlignment::kCenter);
+        node_.SetPosition(position.value());
         return {};
     }
 
-    [[nodiscard]] Result<void> SetText(SceneUpdate& update, const char* text) {
+    [[nodiscard]] Result<void> SetText(const char* text) {
         FixedString<kMaxTextBytes + 1U> copied;
         if (!CopyText(text, copied)) {
             return unexpected(Error{ErrorCode::kInvalidArgument});
@@ -100,30 +102,30 @@ class Label final {
         if (!bounds_.empty()) {
             auto position = Position(bounds_, measured.value(), style_);
             if (position.has_value()) {
-                node_.SetPosition(update, position.value());
+                node_.SetPosition(position.value());
             } else {
                 // Auto-layout containers may need to grow this Label after its
                 // content changes. Mark the previous allocation stale and let
                 // the containing Flex/Grid provide the new bounds below in the
-                // same SceneUpdate.
+                // same pending frame.
                 bounds_ = {};
             }
         }
         text_ = copied;
         metrics_ = measured.value();
-        node_.SetText(update, text_.c_str());
+        node_.SetText(text_.c_str());
         return {};
     }
 
-    void SetColor(SceneUpdate& update, Color color) {
+    void SetColor(Color color) {
         if (color == style_.color) {
             return;
         }
         style_.color = color;
-        node_.SetColor(update, color);
+        node_.SetColor(color);
     }
 
-    void SetVisible(SceneUpdate& update, bool visible) { node_.SetVisible(update, visible); }
+    void SetVisible(bool visible) { node_.SetVisible(visible); }
 
    private:
     [[nodiscard]] static constexpr const char* HorizontalAlignmentName(HorizontalAlignment alignment) {

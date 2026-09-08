@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "abi/micropixel_abi.h"
+#include "device/contracts/graphics.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
@@ -191,7 +192,8 @@ int32_t DirectSurfacePresenter::Create(const device::DirectSurfaceConfig& config
     const bool divides = config.width != 0U && config.height != 0U && width_ % config.width == 0U &&
                          height_ % config.height == 0U && width_ / config.width == height_ / config.height;
     if (sink.release == nullptr || config.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565 || !divides ||
-        config.buffer_count == 0U || config.buffer_count > MICROPIXEL_SURFACE_MAX_BUFFERS || config.flags != 0U) {
+        config.buffer_count == 0U || config.buffer_count > micropixel::device::graphics_limits::kMaxSurfaceBuffers ||
+        config.flags != 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     if (created_.load(std::memory_order_acquire)) {
@@ -219,15 +221,15 @@ int32_t DirectSurfacePresenter::Present(const device::DirectSurfacePresentation&
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     const bool scale = ScaleRequested(frame);
-    if (frame.pixels == nullptr || frame.buffer_index >= config_.buffer_count || frame.src_width == 0U ||
-        frame.src_height == 0U || frame.src_width > width_ || frame.src_height > height_ ||
-        frame.pitch < frame.src_width * kBytesPerRgb565 || (frame.pitch % kBytesPerRgb565) != 0U ||
-        static_cast<uint64_t>(frame.pitch) * frame.src_height > frame.length ||
+    if (frame.pixels == nullptr || frame.buffer_index >= config_.buffer_count || frame.source_width == 0U ||
+        frame.source_height == 0U || frame.source_width > width_ || frame.source_height > height_ ||
+        frame.pitch < frame.source_width * kBytesPerRgb565 || (frame.pitch % kBytesPerRgb565) != 0U ||
+        static_cast<uint64_t>(frame.pitch) * frame.source_height > frame.length ||
         (frame.flags & ~MICROPIXEL_SURFACE_PRESENT_SCALE_NEAREST) != 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (scale ? (width_ % frame.src_width != 0U || height_ % frame.src_height != 0U)
-              : (frame.src_width != width_ || frame.src_height != height_)) {
+    if (scale ? (width_ % frame.source_width != 0U || height_ % frame.source_height != 0U)
+              : (frame.source_width != width_ || frame.source_height != height_)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     const uint8_t bit = static_cast<uint8_t>(1U << frame.buffer_index);
@@ -478,6 +480,7 @@ void DirectSurfacePresenter::HandlePresent(const Job& job) {
                                  : ScanoutFramebuffer(frame, job.frame.byte_swapped);
         if (scanned) {
             ++frames_scanned_out_;
+            RecordCompletedScanout();
             front_ = frame;
             front_byte_swapped_ = job.frame.byte_swapped;
             has_front_ = true;
@@ -492,7 +495,28 @@ void DirectSurfacePresenter::HandlePresent(const Job& job) {
     ReleaseBuffer(frame.buffer_index);
 }
 
+void DirectSurfacePresenter::RecordCompletedScanout() {
+#if CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+    // The blit path waits for transfer completion. A framebuffer flip or
+    // composited submission is not a completion timestamp and is excluded.
+    if (profile_.mode != DirectScanoutProfile::Mode::kBlitRgb565) return;
+    const auto now = static_cast<uint64_t>(esp_timer_get_time());
+    frame_timing_.Record(now);
+    if (frame_timing_.elapsed_us() < 60000000U) return;
+    ESP_LOGI(kTag,
+             "scanout-timing: intervals=%" PRIu32 " elapsed-us=%" PRIu64 " fps-milli=%" PRIu32 " p95-upper-us=%" PRIu32
+             " bin-us=%" PRIu32,
+             frame_timing_.intervals(), frame_timing_.elapsed_us(), frame_timing_.fps_milli(),
+             frame_timing_.p95_upper_us(), FrameTiming::kBinWidthUs);
+    frame_timing_.Reset();
+    frame_timing_.Record(now);
+#endif
+}
+
 bool DirectSurfacePresenter::EnterExclusive() {
+#if CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG
+    frame_timing_.Reset();
+#endif
     ScanoutArbiter& arbiter = ScanoutArbiter::Instance();
     if (!arbiter.TryEnterPresenterScanout()) {
         return false;
@@ -563,6 +587,7 @@ void DirectSurfacePresenter::HandleAppSurfaceFrame() {
     if (ScanoutAppSurfaceFrame(frame, app_surface_frame_whole_next_)) {
         app_surface_frame_whole_next_ = false;
         ++frames_scanned_out_;
+        RecordCompletedScanout();
         return;
     }
     ESP_LOGW(kTag, "App Surface scanout failed; falling back to LVGL");
@@ -625,6 +650,7 @@ void DirectSurfacePresenter::HandleOverlayRefresh() {
         app_surface_frame_whole_next_ = false;
         if (pending) {
             ++frames_scanned_out_;
+            RecordCompletedScanout();
         }
         return;
     }
@@ -644,6 +670,7 @@ void DirectSurfacePresenter::HandleOverlayRefresh() {
             return;
         }
         ++frames_scanned_out_;
+        RecordCompletedScanout();
         if (frame.whole) {
             // Everything, overlays included, has just been sent.
             return;
@@ -1414,8 +1441,8 @@ bool DirectSurfacePresenter::ScanoutBlit(const device::DirectSurfacePresentation
                 const PpaSrmBlit request{
                     .source = frame.pixels,
                     .source_width = frame.pitch / kBytesPerRgb565,
-                    .source_height = frame.src_height,
-                    .source_region = {.x = 0U, .y = 0U, .width = frame.src_width, .height = frame.src_height},
+                    .source_height = frame.source_height,
+                    .source_region = {.x = 0U, .y = 0U, .width = frame.source_width, .height = frame.source_height},
                     .source_mode = PPA_SRM_COLOR_MODE_RGB565,
                     .destination = canonical,
                     .destination_width = width_,
@@ -1424,8 +1451,8 @@ bool DirectSurfacePresenter::ScanoutBlit(const device::DirectSurfacePresentation
                     .destination_x = 0U,
                     .destination_y = 0U,
                     .destination_mode = PPA_SRM_COLOR_MODE_RGB565,
-                    .scale_x = static_cast<float>(width_) / static_cast<float>(frame.src_width),
-                    .scale_y = static_cast<float>(height_) / static_cast<float>(frame.src_height),
+                    .scale_x = static_cast<float>(width_) / static_cast<float>(frame.source_width),
+                    .scale_y = static_cast<float>(height_) / static_cast<float>(frame.source_height),
                     .input_byte_swap = source_byte_swapped,
                 };
                 staged = blitter_.Blit(request) == ESP_OK;
@@ -1435,7 +1462,7 @@ bool DirectSurfacePresenter::ScanoutBlit(const device::DirectSurfacePresentation
             }
         }
         if (!staged) {
-            ConvertRgb565(frame.pixels, frame.pitch, frame.src_width, frame.src_height, source_byte_swapped,
+            ConvertRgb565(frame.pixels, frame.pitch, frame.source_width, frame.source_height, source_byte_swapped,
                           wire_stage_, width_ * kBytesPerRgb565, width_, height_, false, profile_.rgb565_byte_swapped);
             if (!WriteBackForDma(wire_stage_, width_ * height_ * kBytesPerRgb565)) {
                 return false;
@@ -1557,8 +1584,8 @@ bool DirectSurfacePresenter::ScanoutFramebuffer(const device::DirectSurfacePrese
         const PpaSrmBlit request{
             .source = frame.pixels,
             .source_width = frame.pitch / kBytesPerRgb565,
-            .source_height = frame.src_height,
-            .source_region = {.x = 0U, .y = 0U, .width = frame.src_width, .height = frame.src_height},
+            .source_height = frame.source_height,
+            .source_region = {.x = 0U, .y = 0U, .width = frame.source_width, .height = frame.source_height},
             .source_mode = PPA_SRM_COLOR_MODE_RGB565,
             .destination = target,
             .destination_width = width_,
@@ -1567,15 +1594,15 @@ bool DirectSurfacePresenter::ScanoutFramebuffer(const device::DirectSurfacePrese
             .destination_x = 0U,
             .destination_y = 0U,
             .destination_mode = PPA_SRM_COLOR_MODE_RGB888,
-            .scale_x = static_cast<float>(width_) / static_cast<float>(frame.src_width),
-            .scale_y = static_cast<float>(height_) / static_cast<float>(frame.src_height),
+            .scale_x = static_cast<float>(width_) / static_cast<float>(frame.source_width),
+            .scale_y = static_cast<float>(height_) / static_cast<float>(frame.source_height),
             .input_byte_swap = source_byte_swapped,
         };
         converted = blitter_.Blit(request) == ESP_OK;
     }
     if (!converted) {
-        ConvertRgb565(frame.pixels, frame.pitch, frame.src_width, frame.src_height, source_byte_swapped, target, stride,
-                      width_, height_, true, false);
+        ConvertRgb565(frame.pixels, frame.pitch, frame.source_width, frame.source_height, source_byte_swapped, target,
+                      stride, width_, height_, true, false);
         if (!WriteBackForDma(target, frame_bytes)) {
             return false;
         }

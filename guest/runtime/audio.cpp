@@ -30,10 +30,8 @@ Result<AudioInfo> Audio::info() const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(raw) || raw.size < sizeof(raw) ||
-        raw.interface_major != MICROPIXEL_AUDIO_INTERFACE_MAJOR ||
-        raw.interface_minor < MICROPIXEL_AUDIO_INTERFACE_MINOR) {
-        return unexpected(Error{ErrorCode::kUnsupported});
+    if (response_size != sizeof(raw) || raw.size != sizeof(raw)) {
+        runtime::Panic("audio.get_info.response", MICROPIXEL_STATUS_INTERNAL);
     }
     const bool pcm_streams = (raw.capabilities & MICROPIXEL_AUDIO_CAPABILITY_PCM_STREAM) != 0U;
     return AudioInfo{
@@ -54,15 +52,19 @@ Result<void> Audio::Play(const Tone& tone) const {
     const uint64_t attack_us = tone.attack.count_microseconds();
     const uint64_t release_us = tone.release.count_microseconds();
     const uint32_t waveform = static_cast<uint32_t>(tone.waveform);
-    if (duration_us == 0U || duration_us > static_cast<uint64_t>(MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS) * 1000U ||
-        attack_us > duration_us || release_us > duration_us || tone.volume_per_mille > 1000U ||
+    // Only wire-format range is checked here; the maximum duration is Host
+    // policy (AudioInfo::max_tone_duration_ms) and the Host rejects longer
+    // tones with INVALID_ARGUMENT.
+    constexpr uint64_t kMaxDurationUs = static_cast<uint64_t>(UINT32_MAX) * 1000U;
+    constexpr uint64_t kMaxEnvelopeUs = static_cast<uint64_t>(UINT16_MAX) * 1000U;
+    if (duration_us == 0U || duration_us > kMaxDurationUs || attack_us > duration_us || release_us > duration_us ||
+        attack_us > kMaxEnvelopeUs || release_us > kMaxEnvelopeUs || tone.volume_per_mille > 1000U ||
         waveform < MICROPIXEL_AUDIO_WAVE_SINE || waveform > MICROPIXEL_AUDIO_WAVE_NOISE ||
         (tone.waveform != Waveform::kNoise && (tone.frequency_hz < 20U || tone.frequency_hz > 20000U))) {
         return unexpected(Error{ErrorCode::kInvalidArgument});
     }
     micropixel_audio_tone_t raw{};
     raw.size = sizeof(raw);
-    raw.interface_major = MICROPIXEL_AUDIO_INTERFACE_MAJOR;
     raw.waveform = static_cast<uint16_t>(tone.waveform);
     raw.volume_per_mille = tone.volume_per_mille;
     raw.frequency_millihz = tone.frequency_hz * 1000U;
@@ -72,7 +74,7 @@ Result<void> Audio::Play(const Tone& tone) const {
     int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
                                  MICROPIXEL_AUDIO_INTERFACE_MINOR);
     if (status == MICROPIXEL_STATUS_OK) {
-        status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_PLAY_TONE, &raw, sizeof(raw));
+        status = CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_TONE_PLAY, &raw, sizeof(raw));
     }
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
@@ -112,7 +114,7 @@ void AudioClip::Reset() {
     micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
     if (OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
                     MICROPIXEL_AUDIO_INTERFACE_MINOR) == MICROPIXEL_STATUS_OK) {
-        (void)CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_CLIP_RELEASE, &request, sizeof(request));
+        (void)CallVoid(audio_service, MICROPIXEL_AUDIO_METHOD_CLIP_UNLOAD, &request, sizeof(request));
     }
     handle_ = 0U;
 }
@@ -162,7 +164,7 @@ Result<void> Playback::SetVolume(uint16_t volume_per_mille) {
     }
     micropixel_audio_playback_volume_request_t request{};
     request.size = sizeof(request);
-    request.playback = handle_;
+    request.playback_handle = handle_;
     request.volume_per_mille = volume_per_mille;
     int32_t status = OpenService(audio_service, MICROPIXEL_SERVICE_AUDIO, MICROPIXEL_AUDIO_INTERFACE_MAJOR,
                                  MICROPIXEL_AUDIO_INTERFACE_MINOR);
@@ -188,7 +190,7 @@ Result<PlaybackState> Playback::state() const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.playback != handle_ ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.playback_handle != handle_ ||
         response.state < MICROPIXEL_AUDIO_PLAYBACK_STATE_PLAYING ||
         response.state > MICROPIXEL_AUDIO_PLAYBACK_STATE_FAILED) {
         runtime::Panic("audio.playback.state", MICROPIXEL_STATUS_INTERNAL);
@@ -233,12 +235,11 @@ Result<AudioClip> Audio::Load(AssetId asset) const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) ||
-        response.interface_major != MICROPIXEL_AUDIO_INTERFACE_MAJOR || response.clip == 0U ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.clip_handle == 0U ||
         response.reserved0 != 0U || response.format != MICROPIXEL_AUDIO_FORMAT_OGG_OPUS) {
         runtime::Panic("audio.clip.load", MICROPIXEL_STATUS_INTERNAL);
     }
-    return AudioClip{response.clip};
+    return AudioClip{response.clip_handle};
 }
 
 Result<Playback> Audio::Play(const AudioClip& clip, PlaybackOptions options) const {
@@ -248,7 +249,7 @@ Result<Playback> Audio::Play(const AudioClip& clip, PlaybackOptions options) con
     micropixel_audio_playback_start_request_t request{};
     request.size = sizeof(request);
     request.flags = options.loop ? MICROPIXEL_AUDIO_PLAYBACK_LOOP : 0U;
-    request.clip = clip.handle_;
+    request.clip_handle = clip.handle_;
     request.volume_per_mille = options.volume_per_mille;
     micropixel_handle_response_t response{};
     uint32_t response_size = 0U;
@@ -277,8 +278,8 @@ Result<Playback> Audio::Play(AssetId asset, PlaybackOptions options) const {
 
 Result<PcmStream> Audio::OpenPcmStream(const PcmStreamOptions& options) const {
     if (options.sample_rate == 0U || options.channels == 0U || options.channels > MICROPIXEL_AUDIO_PCM_MAX_CHANNELS ||
-        options.capacity_frames == 0U || options.capacity_frames > MICROPIXEL_AUDIO_PCM_MAX_CAPACITY_FRAMES ||
-        options.low_water_frames >= options.capacity_frames || options.volume_per_mille > 1000U) {
+        options.capacity_frames == 0U || options.low_water_frames >= options.capacity_frames ||
+        options.volume_per_mille > 1000U) {
         return unexpected(Error{ErrorCode::kInvalidArgument});
     }
     micropixel_audio_pcm_stream_open_request_t request{};
@@ -300,11 +301,11 @@ Result<PcmStream> Audio::OpenPcmStream(const PcmStreamOptions& options) const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) || response.stream == 0U ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.stream_handle == 0U ||
         response.capacity_frames < options.capacity_frames) {
         runtime::Panic("audio.pcm_stream.open", MICROPIXEL_STATUS_INTERNAL);
     }
-    return PcmStream{response.stream, options.sample_rate, options.channels, response.capacity_frames};
+    return PcmStream{response.stream_handle, options.sample_rate, options.channels, response.capacity_frames};
 }
 
 PcmStream::PcmStream(PcmStream&& other) noexcept
@@ -356,7 +357,7 @@ Result<uint32_t> PcmStream::Write(const int16_t* frames, uint32_t frame_count) {
         const uint32_t request_size = kHeaderBytes + payload_bytes;
         micropixel_audio_pcm_stream_write_request_t header{};
         header.size = static_cast<uint16_t>(request_size);
-        header.stream = handle_;
+        header.stream_handle = handle_;
         header.frame_count = chunk;
         CopyBytes(request, &header, sizeof(header));
         CopyBytes(request + kHeaderBytes, frames + static_cast<size_t>(written) * channels_, payload_bytes);

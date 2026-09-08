@@ -16,6 +16,11 @@ namespace {
 
 constexpr char kTag[] = "micropixel_bitmap";
 constexpr uint32_t kBitmapPsramCapabilities = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+#if CONFIG_IDF_TARGET_ESP32P4
+constexpr uint64_t kBitmapAlignment = CONFIG_CACHE_L2_CACHE_LINE_SIZE;
+#else
+constexpr uint64_t kBitmapAlignment = 128U;
+#endif
 
 struct PngMemoryReader final {
     const uint8_t* data{};
@@ -278,12 +283,13 @@ bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, Deco
     const uint32_t storage_width = (width + stride_alignment_pixels - 1U) & ~(stride_alignment_pixels - 1U);
     const uint64_t stride = static_cast<uint64_t>(storage_width) * bytes_per_pixel;
     const uint64_t pixel_bytes = stride * height;
-    const uint64_t allocation_bytes = stride_alignment_pixels == 1U ? pixel_bytes : (pixel_bytes + 127U) & ~127ULL;
+    const uint64_t allocation_bytes =
+        stride_alignment_pixels == 1U ? pixel_bytes : (pixel_bytes + kBitmapAlignment - 1U) & ~(kBitmapAlignment - 1U);
     if (stride > UINT16_MAX || allocation_bytes > UINT32_MAX) {
         return false;
     }
     auto* pixels = static_cast<uint8_t*>(
-        heap_caps_aligned_alloc(128U, static_cast<size_t>(allocation_bytes), kBitmapPsramCapabilities));
+        heap_caps_aligned_alloc(kBitmapAlignment, static_cast<size_t>(allocation_bytes), kBitmapPsramCapabilities));
     if (pixels == nullptr) {
         return false;
     }

@@ -2,6 +2,7 @@
 
 #include "runtime/display_context.hpp"
 #include "runtime/service_binding.hpp"
+#include "runtime/texture_state.hpp"
 #include "sdk/input.hpp"
 #include "sdk/resources.hpp"
 
@@ -49,28 +50,24 @@ RendererInfo Renderer::info() const {
                         display.physical_width,
                         display.physical_height,
                         {safe.top, safe.right, safe.bottom, safe.left},
-                        raw.max_scene_nodes,
-                        raw.max_batch_instances,
-                        raw.max_containers,
-                        raw.max_sprite_batches,
-                        raw.max_scene_bytes,
                         (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_DIRECT_SCANOUT) != 0U,
                         (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED) != 0U,
                         raw.max_full_frame_fps,
-                        raw.raster_pool_bytes};
+                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER) != 0U};
 }
 
 namespace {
 
-Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle) {
+Result<TextMetrics> MeasureTextWithHandle(const char* text, uint32_t font_handle) {
     if (text == nullptr || font_handle == 0U) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
+    const uint32_t max_text_bytes = runtime::LoadGraphicsLimits().max_text_bytes;
     uint32_t text_length = 0U;
-    while (text_length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[text_length] != '\0') {
+    while (text_length <= max_text_bytes && text[text_length] != '\0') {
         ++text_length;
     }
-    if (text_length == 0U || text_length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES) {
+    if (text_length == 0U || text_length > max_text_bytes) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
 
@@ -79,12 +76,13 @@ Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    alignas(4)
-        uint8_t request[sizeof(micropixel_graphics_measure_text_request_t) + MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES]{};
+    // Single-threaded Guest: one static staging buffer instead of 1 KiB of stack.
+    alignas(
+        4) static uint8_t request[sizeof(micropixel_graphics_measure_text_request_t) + runtime::limits::kMaxTextBytes];
     const uint32_t request_size = sizeof(micropixel_graphics_measure_text_request_t) + text_length;
     micropixel_graphics_measure_text_request_t header{};
     header.size = static_cast<uint16_t>(request_size);
-    header.font = font_handle;
+    header.font_handle = font_handle;
     header.text_length = static_cast<uint16_t>(text_length);
     CopyBytes(request, &header, sizeof(header));
     CopyBytes(request + sizeof(header), text, text_length);
@@ -109,7 +107,7 @@ Result<TextMetrics> MeasureTextWithHandle(const char* text, uint16_t font_handle
 }  // namespace
 
 Result<TextMetrics> Renderer::MeasureText(const char* text, SystemFont font) const {
-    const uint16_t font_handle = static_cast<uint16_t>(font);
+    const uint32_t font_handle = static_cast<uint32_t>(font);
     if (font_handle < MICROPIXEL_SYSTEM_FONT_SMALL || font_handle > MICROPIXEL_SYSTEM_FONT_TITLE) {
         return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
     }
@@ -155,10 +153,12 @@ Texture::~Texture() { Reset(); }
 
 void Texture::Reset() {
     if (handle_ != 0U) {
-        micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
+        micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U,
+                                            runtime::TextureSnapshot(handle_)};
         if (OpenResourceService() == MICROPIXEL_STATUS_OK) {
-            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_RELEASE, &request, sizeof(request));
+            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_UNLOAD, &request, sizeof(request));
         }
+        runtime::ForgetDynamicTexture(handle_);
         handle_ = 0U;
         width_ = 0U;
         height_ = 0U;
@@ -196,7 +196,7 @@ void Font::Reset() {
     if (handle_ != 0U) {
         micropixel_handle_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, handle_};
         if (OpenResourceService() == MICROPIXEL_STATUS_OK) {
-            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_FONT_RELEASE, &request, sizeof(request));
+            (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_FONT_UNLOAD, &request, sizeof(request));
         }
         handle_ = 0U;
         size_ = 0U;
@@ -206,140 +206,142 @@ void Font::Reset() {
     }
 }
 
-Result<void> StreamingTexture::Update(Rect dirty, const uint8_t* pixels, uint32_t byte_length, uint32_t pitch) {
-    const uint32_t bytes_per_pixel =
-        pixel_format_ == PixelFormat::kBgr888
-            ? 3U
-            : (pixel_format_ == PixelFormat::kBgra8888 ? 4U : (pixel_format_ == PixelFormat::kRgb565 ? 2U : 0U));
-    if (!valid() || dirty.x < 0 || dirty.y < 0 || dirty.width <= 0 || dirty.height <= 0 || pixels == nullptr ||
-        bytes_per_pixel == 0U || static_cast<int64_t>(dirty.x) + dirty.width > static_cast<int64_t>(width()) ||
-        static_cast<int64_t>(dirty.y) + dirty.height > static_cast<int64_t>(height())) {
-        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
+namespace {
+uint32_t TexturePixelBytes(uint32_t format) {
+    switch (format) {
+        case MICROPIXEL_PIXEL_FORMAT_RGB565:
+            return 2;
+        case MICROPIXEL_PIXEL_FORMAT_BGR888:
+            return 3;
+        case MICROPIXEL_PIXEL_FORMAT_BGRA8888:
+            return 4;
+        default:
+            return 0;
     }
-    const uint32_t row_bytes = static_cast<uint32_t>(dirty.width) * bytes_per_pixel;
-    const uint64_t required_bytes = static_cast<uint64_t>(dirty.height - 1) * pitch + row_bytes;
-    if (pitch < row_bytes || required_bytes > byte_length) {
-        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
-    }
-    constexpr uint32_t kHeaderBytes = sizeof(micropixel_streaming_texture_update_request_t);
-    static_assert(kHeaderBytes < MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES,
-                  "streaming texture update header exceeds ABI request");
-    const uint32_t rows_per_request = (MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES - kHeaderBytes) / row_bytes;
-    if (rows_per_request == 0U) {
-        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
-    }
+}
+bool ValidTexturePixels(uint32_t width, uint32_t height, uint32_t format, std::span<const uint8_t> pixels,
+                        uint32_t pitch) {
+    const uint32_t bytes = TexturePixelBytes(format);
+    const uint64_t row = static_cast<uint64_t>(width) * bytes;
+    return width && height && bytes && pixels.data() && pixels.size() <= UINT32_MAX && pitch >= row &&
+           static_cast<uint64_t>(height - 1) * pitch + row <= pixels.size();
+}
+void ReleaseTextureSnapshot(uint32_t handle) {
+    micropixel_handle_request_t request{sizeof(request), 0, handle};
+    (void)CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_UNLOAD, &request, sizeof(request));
+}
+}  // namespace
 
+Result<Texture> Resources::CreateDynamicTexture(Size size, PixelFormat format, std::span<const uint8_t> pixels,
+                                                uint32_t pitch) const {
+    const uint32_t wire_format = static_cast<uint32_t>(format);
+    const bool empty = pixels.empty() && pitch == 0;
+    if (!size.width || !size.height || size.width > UINT16_MAX || size.height > UINT16_MAX ||
+        !TexturePixelBytes(wire_format) ||
+        static_cast<uint64_t>(size.width) * TexturePixelBytes(wire_format) > UINT16_MAX ||
+        (!empty && !ValidTexturePixels(size.width, size.height, wire_format, pixels, pitch)))
+        return unexpected(Error{ErrorCode::kInvalidArgument});
     int32_t status = OpenResourceService();
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
+    if (status != MICROPIXEL_STATUS_OK) return unexpected(ErrorFromStatus(status));
+    micropixel_dynamic_texture_create_request_t request{};
+    request.size = sizeof(request);
+    request.width = size.width;
+    request.height = size.height;
+    request.pixel_format = wire_format;
+    request.pixels = empty ? 0 : static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pixels.data()));
+    request.length = empty ? 0 : static_cast<uint32_t>(pixels.size());
+    request.pitch = pitch;
+    micropixel_texture_info_t response{};
+    uint32_t response_size = 0;
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_DYNAMIC_TEXTURE_CREATE, &request, sizeof(request),
+                         &response, sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) return unexpected(ErrorFromStatus(status));
+    if (response_size != sizeof(response) || response.size != sizeof(response) || !response.texture_handle ||
+        response.width != size.width || response.height != size.height || response.physical_width != size.width ||
+        response.physical_height != size.height || response.pixel_format != wire_format ||
+        response.flags != MICROPIXEL_TEXTURE_FLAG_DYNAMIC)
+        return unexpected(Error{ErrorCode::kInternal});
+    if (!runtime::RegisterDynamicTexture(response.texture_handle, wire_format)) {
+        ReleaseTextureSnapshot(response.texture_handle);
+        return unexpected(Error{ErrorCode::kResourceExhausted});
     }
-    alignas(4) uint8_t request[MICROPIXEL_STREAMING_TEXTURE_MAX_UPDATE_BYTES]{};
-    uint32_t row = 0U;
-    while (row < static_cast<uint32_t>(dirty.height)) {
-        uint32_t row_count = static_cast<uint32_t>(dirty.height) - row;
-        if (row_count > rows_per_request) {
-            row_count = rows_per_request;
-        }
-        const uint32_t pixel_bytes = row_count * row_bytes;
-        const uint32_t request_size = kHeaderBytes + pixel_bytes;
-        micropixel_streaming_texture_update_request_t header{};
-        header.size = static_cast<uint16_t>(request_size);
-        header.texture = texture_.handle_;
-        header.x = static_cast<uint32_t>(dirty.x);
-        header.y = static_cast<uint32_t>(dirty.y) + row;
-        header.width = static_cast<uint32_t>(dirty.width);
-        header.height = row_count;
-        header.pitch = row_bytes;
-        CopyBytes(request, &header, sizeof(header));
-        for (uint32_t source_row = 0U; source_row < row_count; ++source_row) {
-            CopyBytes(request + kHeaderBytes + source_row * row_bytes, pixels + (row + source_row) * pitch, row_bytes);
-        }
-        status = CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_UPDATE, request, request_size);
-        if (status != MICROPIXEL_STATUS_OK) {
-            return unexpected(ErrorFromStatus(status));
-        }
-        row += row_count;
-    }
+    return Texture{response.texture_handle, size.width, size.height, size.width, size.height, false};
+}
+
+Result<void> Texture::Update(Rect dirty, std::span<const uint8_t> pixels, uint32_t pitch) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
+    auto* dynamic = runtime::FindDynamicTexture(handle_);
+    if (!dynamic) return unexpected(Error{ErrorCode::kUnsupported});
+    if (dirty.x < 0 || dirty.y < 0 || dirty.width <= 0 || dirty.height <= 0 ||
+        static_cast<uint64_t>(dirty.x) + dirty.width > width_ ||
+        static_cast<uint64_t>(dirty.y) + dirty.height > height_ ||
+        !ValidTexturePixels(dirty.width, dirty.height, dynamic->format, pixels, pitch))
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) return unexpected(ErrorFromStatus(status));
+    micropixel_dynamic_texture_update_request_t request{};
+    request.size = sizeof(request);
+    request.texture_handle = dynamic->snapshot;
+    request.x = dirty.x;
+    request.y = dirty.y;
+    request.width = dirty.width;
+    request.height = dirty.height;
+    request.pixels = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pixels.data()));
+    request.length = static_cast<uint32_t>(pixels.size());
+    request.pitch = pitch;
+    micropixel_texture_info_t response{};
+    uint32_t response_size = 0;
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_DYNAMIC_TEXTURE_UPDATE, &request, sizeof(request),
+                         &response, sizeof(response), response_size);
+    if (status != MICROPIXEL_STATUS_OK) return unexpected(ErrorFromStatus(status));
+    if (response_size != sizeof(response) || response.size != sizeof(response) || !response.texture_handle ||
+        response.texture_handle == dynamic->snapshot || response.width != width_ || response.height != height_ ||
+        response.pixel_format != dynamic->format || response.flags != MICROPIXEL_TEXTURE_FLAG_DYNAMIC)
+        return unexpected(Error{ErrorCode::kInternal});
+    const uint32_t old = dynamic->snapshot;
+    dynamic->snapshot = response.texture_handle;
+    ++runtime::texture_revision;
+    ReleaseTextureSnapshot(old);
     return {};
 }
 
-TextureUpdateBatch::TextureUpdateBatch(TextureUpdateBatch&& other) noexcept : active_(other.active_) {
-    other.active_ = false;
-}
-
-TextureUpdateBatch::~TextureUpdateBatch() {
-    if (active_) {
-        (void)Finish();
+Result<Texture> Resources::LoadTexture(AssetId asset, TextureScale scale) const {
+    if (scale != TextureScale::kNative && scale != TextureScale::kDisplay) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
     }
-}
-
-Result<void> TextureUpdateBatch::Finish() {
-    if (!active_) {
-        return {};
-    }
-    active_ = false;
-    int32_t status = OpenResourceService();
-    if (status == MICROPIXEL_STATUS_OK) {
-        status = CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_FINISH, nullptr, 0U);
-    }
-    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(ErrorFromStatus(status))};
-}
-
-Result<Texture> Resources::LoadTexture(AssetId asset) const {
     int32_t status = OpenResourceService();
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
-    micropixel_resource_load_adaptive_texture_request_t request{};
+    const bool display_scaled = scale == TextureScale::kDisplay;
+    micropixel_texture_load_request_t request{};
     request.size = sizeof(request);
     request.asset_id = asset.value();
-    request.scale_numerator = display.scale_numerator;
-    request.scale_denominator = display.scale_denominator;
-    micropixel_adaptive_texture_info_t response{};
+    request.scale_numerator = 1U;
+    request.scale_denominator = 1U;
+    if (display_scaled) {
+        const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
+        request.scale_numerator = display.scale_numerator;
+        request.scale_denominator = display.scale_denominator;
+    }
+    micropixel_texture_info_t response{};
     uint32_t response_size = 0U;
-    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_ADAPTIVE_TEXTURE, &request, sizeof(request),
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_LOAD, &request, sizeof(request),
                          &response, sizeof(response), response_size);
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) ||
-        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
-        response.logical_width == 0U || response.logical_height == 0U || response.physical_width == 0U ||
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.texture_handle == 0U ||
+        response.width == 0U || response.height == 0U || response.physical_width == 0U ||
         response.physical_height == 0U ||
         (response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
          response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 &&
          response.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) ||
-        (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) != 0U) {
+        response.flags != 0U) {
         runtime::Panic("resources.load_texture.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return Texture{response.texture,        response.logical_width,   response.logical_height,
-                   response.physical_width, response.physical_height, true};
-}
-
-Result<Texture> Resources::LoadNativeTexture(AssetId asset) const {
-    int32_t status = OpenResourceService();
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
-    }
-    micropixel_resource_load_texture_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
-    micropixel_texture_info_t response{};
-    uint32_t response_size = 0U;
-    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_TEXTURE, &request, sizeof(request),
-                         &response, sizeof(response), response_size);
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
-    }
-    if (response_size < sizeof(response) || response.size < sizeof(response) ||
-        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
-        response.width == 0U || response.height == 0U ||
-        (response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
-         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 &&
-         response.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565) ||
-        (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) != 0U) {
-        runtime::Panic("resources.load_native_texture.response", MICROPIXEL_STATUS_INTERNAL);
-    }
-    return Texture{response.texture, response.width, response.height, response.width, response.height, false};
+    return Texture{response.texture_handle, response.width,           response.height,
+                   response.physical_width, response.physical_height, display_scaled};
 }
 
 Result<Font> Resources::LoadFont(AssetId asset) const {
@@ -347,62 +349,19 @@ Result<Font> Resources::LoadFont(AssetId asset) const {
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    micropixel_resource_load_font_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
+    micropixel_font_load_request_t request{static_cast<uint16_t>(sizeof(request)), 0U, asset.value()};
     micropixel_font_info_t response{};
     uint32_t response_size = 0U;
-    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_LOAD_FONT, &request, sizeof(request), &response,
+    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_FONT_LOAD, &request, sizeof(request), &response,
                          sizeof(response), response_size);
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    if (response_size < sizeof(response) || response.size < sizeof(response) ||
-        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.font == 0U ||
-        response.font_size == 0U || response.line_height == 0U || response.ascent <= 0 || response.descent < 0 ||
-        response.reserved[0] != 0U || response.reserved[1] != 0U) {
+    if (response_size < sizeof(response) || response.size < sizeof(response) || response.font_handle == 0U ||
+        response.font_size == 0U || response.line_height == 0U || response.ascent <= 0 || response.descent < 0) {
         runtime::Panic("resources.load_font.response", MICROPIXEL_STATUS_INTERNAL);
     }
-    return Font{response.font, response.font_size, response.line_height, response.ascent, response.descent};
-}
-
-Result<StreamingTexture> Renderer::CreateStreamingTexture(Size size, PixelFormat pixel_format) const {
-    int32_t status = OpenResourceService();
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
-    }
-    if (size.width == 0U || size.height == 0U ||
-        (pixel_format != PixelFormat::kBgr888 && pixel_format != PixelFormat::kBgra8888 &&
-         pixel_format != PixelFormat::kRgb565)) {
-        return unexpected(ErrorFromStatus(MICROPIXEL_STATUS_INVALID_ARGUMENT));
-    }
-    micropixel_streaming_texture_create_request_t request{};
-    request.size = sizeof(request);
-    request.width = size.width;
-    request.height = size.height;
-    request.pixel_format = static_cast<uint32_t>(pixel_format);
-    micropixel_texture_info_t response{};
-    uint32_t response_size = 0U;
-    status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_STREAMING_TEXTURE_CREATE, &request,
-                         sizeof(request), &response, sizeof(response), response_size);
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
-    }
-    if (response_size < sizeof(response) || response.size < sizeof(response) ||
-        response.interface_major != MICROPIXEL_RESOURCE_INTERFACE_MAJOR || response.texture == 0U ||
-        response.width != size.width || response.height != size.height ||
-        response.pixel_format != static_cast<uint32_t>(pixel_format) ||
-        (response.flags & MICROPIXEL_TEXTURE_FLAG_STREAMING) == 0U) {
-        runtime::Panic("texture.create.response", MICROPIXEL_STATUS_INTERNAL);
-    }
-    return StreamingTexture{
-        Texture{response.texture, response.width, response.height, response.width, response.height, false},
-        pixel_format};
-}
-
-TextureUpdateBatch Renderer::BeginTextureUpdateBatch() const {
-    RequireOk(OpenResourceService(), "texture.batch.begin.open");
-    RequireOk(CallVoid(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_UPDATE_BATCH_BEGIN, nullptr, 0U),
-              "texture.batch.begin");
-    return TextureUpdateBatch{TextureUpdateBatch::CapabilityToken{}};
+    return Font{response.font_handle, response.font_size, response.line_height, response.ascent, response.descent};
 }
 
 }  // namespace micropixel

@@ -55,18 +55,17 @@ bool ResourceService::valid() const {
     return work_done_ != nullptr && background_executor_.valid() && bitmaps_.valid();
 }
 
-micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle_t texture,
+micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle_t texture_handle,
                                                        const device::BitmapView& view) const {
     micropixel_texture_info_t info{};
     info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR;
     info.width = view.width;
     info.height = view.height;
-    info.stride = view.stride;
+    info.physical_width = view.width;
+    info.physical_height = view.height;
     info.pixel_format = view.pixel_format;
     info.flags = view.flags;
-    info.texture = texture;
+    info.texture_handle = texture_handle;
     return info;
 }
 
@@ -102,22 +101,25 @@ ServiceResult<micropixel_texture_info_t> ResourceService::AddAsset(const micropi
     return TextureInfo(texture, view);
 }
 
-ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t asset_id) {
-    if (asset_id == 0U || stopping_.load(std::memory_order_acquire)) {
+ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t asset_id, uint32_t scale_numerator,
+                                                                      uint32_t scale_denominator) {
+    if (asset_id == 0U || scale_numerator == 0U || scale_denominator == 0U || scale_numerator > 4096U ||
+        scale_denominator > 4096U || stopping_.load(std::memory_order_acquire)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     micropixel_bundle_asset_view_t asset{};
     if (!micropixel_bundle_find_asset(&package_, asset_id, &asset)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
     }
+    const bool scaled = scale_numerator != scale_denominator;
 
-    if (IsRawBitmapFormat(asset.format)) {
+    if (!scaled && IsRawBitmapFormat(asset.format)) {
         const int64_t started_us = esp_timer_get_time();
         auto result = AddAsset(asset);
         device::BitmapView view{};
-        const bool resolved = result && bitmaps_.Resolve(result->texture, view);
+        const bool resolved = result && bitmaps_.Resolve(result->texture_handle, view);
         ESP_LOGI(kTag, "loaded raw asset=%" PRIu32 " texture=%" PRIu32 " bytes=%" PRIu32 " %s elapsed=%" PRId64 " us",
-                 asset_id, result ? result->texture : 0U, asset.size,
+                 asset_id, result ? result->texture_handle : 0U, asset.size,
                  resolved ? (esp_ptr_in_drom(view.data) ? "flash-mapped" : "psram-staged") : "failed",
                  esp_timer_get_time() - started_us);
         return result;
@@ -125,7 +127,7 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
 
     // Guest service calls are serialized. This stack context remains valid
     // because the call waits for Process() to signal completion below.
-    Work work{this, asset, false, 1U, 1U};
+    Work work{this, asset, scale_numerator, scale_denominator};
     completed_texture_ = 0U;
     completed_status_ = MICROPIXEL_STATUS_INTERNAL;
     while (xSemaphoreTake(work_done_, 0U) == pdTRUE) {
@@ -133,8 +135,8 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
     if (!background_executor_.Submit(ProcessEntry, &work)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
-    ESP_LOGI(kTag, "loading compressed asset=%" PRIu32 " format=%" PRIu32 " bytes=%" PRIu32, asset_id, asset.format,
-             asset.size);
+    ESP_LOGI(kTag, "loading asset=%" PRIu32 " format=%" PRIu32 " bytes=%" PRIu32 " scale=%" PRIu32 "/%" PRIu32,
+             asset_id, asset.format, asset.size, scale_numerator, scale_denominator);
     if (xSemaphoreTake(work_done_, portMAX_DELAY) != pdTRUE) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
@@ -145,78 +147,18 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
     if (!bitmaps_.Resolve(completed_texture_, view)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    return TextureInfo(completed_texture_, view);
-}
-
-ServiceResult<micropixel_adaptive_texture_info_t> ResourceService::LoadAdaptiveTexture(uint32_t asset_id,
-                                                                                       uint32_t scale_numerator,
-                                                                                       uint32_t scale_denominator) {
-    if (asset_id == 0U || scale_numerator == 0U || scale_denominator == 0U || scale_numerator > 4096U ||
-        scale_denominator > 4096U || stopping_.load(std::memory_order_acquire)) {
-        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    micropixel_bundle_asset_view_t asset{};
-    if (!micropixel_bundle_find_asset(&package_, asset_id, &asset)) {
-        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
-    }
-
-    const bool raw = IsRawBitmapFormat(asset.format);
-    if (scale_numerator == scale_denominator && raw) {
-        auto loaded = AddAsset(asset);
-        if (!loaded) {
-            return FailService<micropixel_adaptive_texture_info_t>(loaded.error().status);
-        }
-        micropixel_adaptive_texture_info_t info{};
-        info.size = sizeof(info);
-        info.interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR;
-        info.interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR;
-        info.logical_width = asset.width;
-        info.logical_height = asset.height;
-        info.physical_width = loaded->width;
-        info.physical_height = loaded->height;
-        info.stride = loaded->stride;
-        info.pixel_format = loaded->pixel_format;
-        info.flags = loaded->flags;
-        info.texture = loaded->texture;
-        return info;
-    }
-
-    completed_texture_ = 0U;
-    completed_status_ = MICROPIXEL_STATUS_INTERNAL;
-    while (xSemaphoreTake(work_done_, 0U) == pdTRUE) {
-    }
-    Work work{this, asset, true, scale_numerator, scale_denominator};
-    if (!background_executor_.Submit(ProcessEntry, &work)) {
-        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-    }
-    if (xSemaphoreTake(work_done_, portMAX_DELAY) != pdTRUE || completed_status_ != MICROPIXEL_STATUS_OK ||
-        completed_texture_ == 0U) {
-        return FailService<micropixel_adaptive_texture_info_t>(completed_status_);
-    }
-    device::BitmapView view{};
-    if (!bitmaps_.Resolve(completed_texture_, view)) {
-        return FailService<micropixel_adaptive_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
-    }
-    micropixel_adaptive_texture_info_t info{};
-    info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR;
-    info.logical_width = asset.width;
-    info.logical_height = asset.height;
-    info.physical_width = view.width;
-    info.physical_height = view.height;
-    info.stride = view.stride;
-    info.pixel_format = view.pixel_format;
-    info.flags = view.flags;
-    info.texture = completed_texture_;
+    micropixel_texture_info_t info = TextureInfo(completed_texture_, view);
+    // The Guest addresses the authored size; only the stored bitmap is scaled.
+    info.width = asset.width;
+    info.height = asset.height;
     return info;
 }
 
-ServiceResult<void> ResourceService::ReleaseTexture(micropixel_texture_handle_t texture) {
-    if (texture == 0U) {
+ServiceResult<void> ResourceService::ReleaseTexture(micropixel_texture_handle_t texture_handle) {
+    if (texture_handle == 0U) {
         return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    bitmaps_.Release(texture);
+    bitmaps_.Release(texture_handle);
     return {};
 }
 
@@ -231,50 +173,56 @@ ServiceResult<device::FontResourceView> ResourceService::FindFont(uint32_t resou
     return device::FontResourceView{font.data, font.size};
 }
 
-ServiceResult<micropixel_texture_info_t> ResourceService::CreateStreamingTexture(uint32_t width, uint32_t height,
-                                                                                 uint32_t pixel_format) {
-    if (stopping_.load(std::memory_order_acquire) || width == 0U || height == 0U ||
-        (pixel_format != MICROPIXEL_PIXEL_FORMAT_BGR888 && pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 &&
-         pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565)) {
+ServiceResult<micropixel_texture_info_t> ResourceService::CreateDynamicTexture(
+    const micropixel_dynamic_texture_create_request_t& request) {
+    if (stopping_.load(std::memory_order_acquire) || request.size != sizeof(request) || request.reserved0)
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    uint8_t* pixels = nullptr;
+    if (request.pixels || request.length || request.pitch) {
+        if (!request.pixels || !request.length || !memory_.resolve ||
+            !memory_.resolve(memory_.context, request.pixels, request.length, &pixels) || !pixels)
+            return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_MEMORY);
     }
-    const micropixel_texture_handle_t texture = bitmaps_.CreateOffscreenSurface(width, height, pixel_format);
-    if (texture == 0U) {
-        return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-    }
+    auto created = bitmaps_.CreateDynamic(request.width, request.height, request.pixel_format, pixels, request.length,
+                                          request.pitch);
+    if (!created) return FailService<micropixel_texture_info_t>(created.error().status);
     device::BitmapView view{};
-    if (!bitmaps_.Resolve(texture, view)) {
-        bitmaps_.Release(texture);
+    if (!bitmaps_.Resolve(*created, view)) {
+        bitmaps_.Release(*created);
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    ESP_LOGI(kTag, "created streaming texture=%" PRIu32 " %" PRIu32 "x%" PRIu32 " format=%" PRIu32, texture, width,
-             height, pixel_format);
-    return TextureInfo(texture, view);
+    return TextureInfo(*created, view);
 }
 
-ServiceResult<device::BitmapView> ResourceService::MutableTexture(micropixel_texture_handle_t texture) const {
-    if (texture == 0U) {
-        return FailService<device::BitmapView>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
+ServiceResult<micropixel_texture_info_t> ResourceService::UpdateDynamicTexture(
+    const micropixel_dynamic_texture_update_request_t& request) {
+    if (stopping_.load(std::memory_order_acquire) || request.size != sizeof(request) || request.reserved0)
+        return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    uint8_t* pixels = nullptr;
+    if (!request.pixels || !request.length || !memory_.resolve ||
+        !memory_.resolve(memory_.context, request.pixels, request.length, &pixels) || !pixels)
+        return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_MEMORY);
+    auto created = bitmaps_.UpdateDynamic(request.texture_handle, request.x, request.y, request.width, request.height,
+                                          pixels, request.length, request.pitch);
+    if (!created) return FailService<micropixel_texture_info_t>(created.error().status);
     device::BitmapView view{};
-    if (!bitmaps_.ResolveMutable(texture, view)) {
-        /* An immutable or stale Texture is an invalid method argument. Keep
-         * PermissionDenied reserved for App authorization policy. */
-        return FailService<device::BitmapView>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    if (!bitmaps_.Resolve(*created, view)) {
+        bitmaps_.Release(*created);
+        return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    return view;
+    return TextureInfo(*created, view);
 }
 
-bool ResourceService::ResolveTexture(micropixel_texture_handle_t texture, device::BitmapView& view_out) const {
-    return bitmaps_.Resolve(texture, view_out);
+bool ResourceService::ResolveTexture(micropixel_texture_handle_t texture_handle, device::BitmapView& view_out) const {
+    return bitmaps_.Resolve(texture_handle, view_out);
 }
 
-bool ResourceService::RetainSceneTexture(micropixel_texture_handle_t texture) {
-    return bitmaps_.RetainSceneReference(texture);
+bool ResourceService::RetainSceneTexture(micropixel_texture_handle_t texture_handle) {
+    return bitmaps_.RetainSceneReference(texture_handle);
 }
 
-void ResourceService::ReleaseSceneTexture(micropixel_texture_handle_t texture) {
-    bitmaps_.ReleaseSceneReference(texture);
+void ResourceService::ReleaseSceneTexture(micropixel_texture_handle_t texture_handle) {
+    bitmaps_.ReleaseSceneReference(texture_handle);
 }
 
 void ResourceService::ProcessEntry(void* argument) {
@@ -293,10 +241,10 @@ void ResourceService::Process(const Work& work) {
     device::BitmapView loaded{};
     (void)bitmaps_.Resolve(texture, loaded);
     ESP_LOGI(kTag,
-             "loaded format=%" PRIu32 " adaptive=%d texture=%" PRIu32 " %" PRIu32 "x%" PRIu32 " bytes=%" PRIu32
-             " elapsed=%" PRId64 " us status=%" PRId32,
-             work.asset.format, work.adaptive, texture, loaded.width, loaded.height, loaded.size,
-             esp_timer_get_time() - started, completed_status_);
+             "loaded format=%" PRIu32 " scale=%" PRIu32 "/%" PRIu32 " texture=%" PRIu32 " %" PRIu32 "x%" PRIu32
+             " bytes=%" PRIu32 " elapsed=%" PRId64 " us status=%" PRId32,
+             work.asset.format, work.scale_numerator, work.scale_denominator, texture, loaded.width, loaded.height,
+             loaded.size, esp_timer_get_time() - started, completed_status_);
     xSemaphoreGive(work_done_);
 }
 
@@ -322,7 +270,7 @@ int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_han
 
     DecodedBitmap scaled{};
     DecodedBitmap* output = &source;
-    if (work.adaptive && work.scale_numerator != work.scale_denominator) {
+    if (work.scale_numerator != work.scale_denominator) {
         const auto scaled_dimension = [&work](uint32_t value) {
             return static_cast<uint32_t>(
                 (static_cast<uint64_t>(value) * work.scale_numerator + work.scale_denominator / 2U) /

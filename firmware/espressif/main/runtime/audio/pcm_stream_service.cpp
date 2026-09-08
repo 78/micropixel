@@ -51,7 +51,7 @@ ServiceResult<micropixel_audio_pcm_stream_open_response_t> PcmStreamService::Ope
     if (request.size != sizeof(request) || request.flags != MICROPIXEL_AUDIO_PCM_STREAM_NONE ||
         request.volume_per_mille > 1000U || request.channels == 0U ||
         request.channels > MICROPIXEL_AUDIO_PCM_MAX_CHANNELS || request.sample_rate == 0U ||
-        request.capacity_frames == 0U || request.capacity_frames > MICROPIXEL_AUDIO_PCM_MAX_CAPACITY_FRAMES ||
+        request.capacity_frames == 0U || request.capacity_frames > kMaxCapacityFrames ||
         request.low_water_frames >= request.capacity_frames) {
         return FailService<Response>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
@@ -113,7 +113,7 @@ ServiceResult<micropixel_audio_pcm_stream_open_response_t> PcmStreamService::Ope
     selected->device_stream = *device_stream;
     Response response{};
     response.size = sizeof(response);
-    response.stream = selected->handle;
+    response.stream_handle = selected->handle;
     response.capacity_frames = capacity;
     ESP_LOGI(kTag, "stream %" PRIu32 " open: %" PRIu32 " Hz x%" PRIu32 " ch=%u capacity=%" PRIu32 " low_water=%" PRIu32,
              selected->handle, request.sample_rate, selected->upsample_factor, request.channels, capacity,
@@ -125,7 +125,7 @@ ServiceResult<micropixel_audio_pcm_stream_open_response_t> PcmStreamService::Ope
 ServiceResult<micropixel_audio_pcm_stream_write_response_t> PcmStreamService::Write(
     const micropixel_audio_pcm_stream_write_request_t& request, const int16_t* samples, uint32_t payload_bytes) {
     using Response = micropixel_audio_pcm_stream_write_response_t;
-    if (request.size != sizeof(request) + payload_bytes || request.reserved0 != 0U || request.stream == 0U ||
+    if (request.size != sizeof(request) + payload_bytes || request.reserved0 != 0U || request.stream_handle == 0U ||
         request.size > MICROPIXEL_AUDIO_PCM_MAX_WRITE_BYTES || (payload_bytes != 0U && samples == nullptr) ||
         (payload_bytes % sizeof(int16_t)) != 0U) {
         return FailService<Response>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -136,7 +136,7 @@ ServiceResult<micropixel_audio_pcm_stream_write_response_t> PcmStreamService::Wr
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<Response>(MICROPIXEL_STATUS_INTERNAL);
     }
-    Stream* stream = FindLocked(request.stream);
+    Stream* stream = FindLocked(request.stream_handle);
     if (stream == nullptr) {
         (void)xSemaphoreGive(mutex_);
         return FailService<Response>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -229,7 +229,7 @@ void PcmStreamService::PostLowWater(Stream& stream, uint32_t free_frames) {
     event.sequence = event_sequence_.fetch_add(1U, std::memory_order_relaxed) + 1U;
     event.status = MICROPIXEL_STATUS_OK;
     micropixel_audio_pcm_event_payload_t payload{};
-    payload.stream = stream.handle;
+    payload.stream_handle = stream.handle;
     payload.free_frames = free_frames;
     std::memcpy(event.payload, &payload, sizeof(payload));
     // Advisory: when the queue is full the stream stays armed and the next

@@ -25,7 +25,7 @@ class ResourceAtlasPage final {
    public:
     void Enter(DemoContext& context) {
         animation_running_ = AtlasTexturesValid(context);
-        page_container_ = context.root_container.CreateContainer();
+        page_container_ = context.root_container.CreateContainer().value();
         CreateButtons(context);
         context.app.log().Info(animation_running_ ? "demo.resource: atlas textures ready"
                                                   : "demo.resource: atlas textures unavailable");
@@ -72,8 +72,8 @@ class ResourceAtlasPage final {
                               MutedColor(), micropixel::SystemFont::kMedium);
         const bool textures_valid = AtlasTexturesValid(context);
         for (micropixel::ui::TextButton& button : buttons_) {
-            button.SetEnabled(commands.scene_update(), textures_valid);
-            button.SetVisible(commands.scene_update(), textures_valid);
+            button.SetEnabled(textures_valid);
+            button.SetVisible(textures_valid);
         }
         if (!textures_valid) {
             commands.CenteredText(center_x, PageY(context, 130, 220), "Atlas texture failed to load", DangerColor(),
@@ -111,7 +111,7 @@ class ResourceAtlasPage final {
                               animation_running_ ? "ANIMATING / ALPHA 224" : "PAUSED / ALPHA 224",
                               animation_running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
-        auto text = buttons_[0].SetText(commands.scene_update(), animation_running_ ? "PAUSE" : "PLAY");
+        auto text = buttons_[0].SetText(animation_running_ ? "PAUSE" : "PLAY");
         micropixel::Assert(text.has_value(), "demo.resource: update text button failed");
     }
 
@@ -141,14 +141,14 @@ ResourceAtlasPage resource_atlas_page;
 }  // namespace
 
 micropixel::Timer CreateResourceAtlasTicker(micropixel::Application& app) {
-    return app.timers().Every(micropixel::Duration::Microseconds(kAtlasFramePeriodUs));
+    return app.timers().Every(micropixel::Duration::Microseconds(kAtlasFramePeriodUs)).value();
 }
 
 DemoAtlasTextures LoadDemoAtlases(micropixel::Application& app) {
     DemoAtlasTextures textures{};
     for (uint32_t index = 0U; index < kDemoAtlasSheetCount; ++index) {
         const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[index];
-        auto result = app.resources().LoadTexture(atlas.asset);
+        auto result = app.resources().LoadTexture(atlas.asset, micropixel::TextureScale::kDisplay);
         if (!result.has_value()) {
             return DemoAtlasTextures{};
         }

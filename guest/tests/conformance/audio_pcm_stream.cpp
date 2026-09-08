@@ -153,7 +153,7 @@ int main() {
         return 64;
     }
     // Let it play out before destruction closes the stream.
-    micropixel::Timer timer = app.timers().After(micropixel::Duration::Milliseconds(120U));
+    micropixel::Timer timer = app.timers().After(micropixel::Duration::Milliseconds(120U)).value();
     for (;;) {
         micropixel::Event event = app.WaitEvent();
         if (event.TimerFrom(timer) != nullptr) {

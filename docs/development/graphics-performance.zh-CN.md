@@ -4,13 +4,20 @@
 不同问题。本文保留测量方法、当前机制和回归标准；接口用法见 [Guest SDK](../../guest/sdk/README.md)，
 wire 规则见 [ABI](../../guest/abi/README.md)。
 
+启用 `CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG` 后，同步 blit 扫描路径每 60 秒输出
+`scanout-timing`：`intervals` 为完成传输间隔数，`elapsed-us` 为窗口时间，`fps-milli`
+为间隔数除以时间，`p95-upper-us` 为 1 ms 直方图的 P95 上界（0 表示无法给出有限上界）。
+统计在 presenter 任务完成传输后更新，不在 ISR 或 Guest 逐帧输出。切换到独占扫描时重置窗口；
+丢弃第一窗口作为预热，再记录连续三窗口。该指标是面板传输完成节奏，不是面板光学响应测量，
+也不代表 P4 framebuffer flip 或 LVGL 合成路径；没有该日志的路径须另行测量。
+
 ## 1. 先确定正在走哪条路径
 
 | 应用模型 | 像素如何产生 | 如何呈现 |
 |---|---|---|
 | Scene | SDK 提交净差量，Host 合成到 App Surface | 支持的板型可直接扫描输出，否则经 LVGL 合成 |
-| DirectSurface + SurfaceRaster | Guest 提交绘制记录，Host kernel 写 Host buffer | Presenter 扫描输出，系统 UI 可见时退回合成 |
-| DirectSurface Guest buffer | Guest 写线性内存中的整帧像素 | 同一 Presenter；需 pinned memory 保证地址稳定 |
+| HostSurface + RasterDrawList | Guest 提交绘制记录，Host kernel 写 Host buffer | Presenter 扫描输出，系统 UI 可见时退回合成 |
+| GuestSurface | Guest 写线性内存中的整帧像素 | 同一 Presenter；需 pinned memory 保证地址稳定 |
 
 Scene 路径可分为：
 
@@ -121,8 +128,13 @@ Guest buffer 的 pinned memory 会提前占用连续空间，默认 Host buffer 
 Claw4 的 DPI 像素时钟设为 40 MHz，由默认 240 MHz 时钟源精确 6 分频产生；
 按 720×720 和现有消隐时序估算约 65.5 Hz。
 相对原来的 48 MHz，扫描像素带宽需求降低约 16.7%；RGB888、DSI lane 速率保持不变。
-P4 L2 Cache 配置为 256 KB、cache line 为 128 B；相对 128 KB Cache 额外占用 128 KB 内部 SRAM。
-板级 LVGL 图像和全屏转场缓冲区按 128 B 对齐，分配长度也覆盖完整 cache line。
+P4 L2 Cache 配置为 256 KiB、cache line 为 64 B；相对 128 KiB Cache 额外占用 128 KiB 内部 SRAM。
+ESP-Hosted transport 缓冲池优先放在 PSRAM，以保留内部 SRAM。当前发送池的 1600 B 块间距能满足
+64 B 对齐，但不能保证每块都满足 128 B 对齐；不要在该配置下单独将 cache line 改回 128 B，否则
+SDIO DMA 参数检查可能返回 `ESP_ERR_INVALID_ARG`（258），继而触发 Host 重启。
+P4 的 LVGL 图像、App Surface、转场、扫描暂存池及对齐 bitmap 分配跟随生成配置中的 cache line
+大小，当前为 64 B；DMA 目标分配长度仍覆盖完整 cache line。PPA/DMA 的 128 B burst 长度独立于
+分配对齐，不随本次 cache-line 配置调整。
 调整后需真机检查内部 heap 最低余量及转场、应用运行时的 underrun，编译通过不能证明运行余量充足。
 
 保留截图作为卡片图片时，不要把 LVGL 绘制缓冲区的行对齐要求套在图片源上。P4 的 202×202 PPA
@@ -132,7 +144,7 @@ P4 L2 Cache 配置为 256 KB、cache line 为 128 B；相对 128 KB Cache 额外
 
 ## 6. 全屏光栅：降低跨边界与像素成本
 
-SurfaceRaster 把 Column、SpanPair、Sprite 和 Rect 等批量记录交给 Host 执行。Guest 保留光线投射、
+HostSurface 的 RasterDrawList 把 Column、SpanPair、Sprite 和 Rect 等批量记录交给 Host 执行。Guest 保留光线投射、
 遮挡判断和绘制顺序，Host 校验记录后写入空闲的 Host buffer。这样既摊薄跨 ABI 成本，也避免 Guest
 逐像素循环的地址计算和边界检查开销；Host kernel 仍可能受 PSRAM 带宽限制。
 

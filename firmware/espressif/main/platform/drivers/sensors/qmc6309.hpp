@@ -11,7 +11,7 @@ class Qmc6309 final : public VectorSensor {
     [[nodiscard]] esp_err_t Suspend() override;
     [[nodiscard]] esp_err_t Read(float (&values)[3]) override;
     [[nodiscard]] bool available() const override { return device_ != nullptr; }
-    [[nodiscard]] uint32_t minimum_interval_us() const override { return 5000U; }
+    [[nodiscard]] uint32_t min_interval_us() const override { return 5000U; }
 
    private:
     i2c_master_dev_handle_t device_{};

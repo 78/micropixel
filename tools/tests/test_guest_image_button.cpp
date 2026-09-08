@@ -30,8 +30,8 @@ void DescribesObjectStateWithoutAllocation() {
 
 void DescribesTheSpecificOverflowingButton() {
     const auto diagnostic = micropixel::ui::FormatTextOverflowDiagnostic(
-        "ImageButton", "clipped", micropixel::Rect{12, 24, 80, 40}, micropixel::TextMetrics{96U, 44U, 35},
-        "PLAY", micropixel::ui::TextOverflow::kClip, true);
+        "ImageButton", "clipped", micropixel::Rect{12, 24, 80, 40}, micropixel::TextMetrics{96U, 44U, 35}, "PLAY",
+        micropixel::ui::TextOverflow::kClip, true);
     Check(std::strcmp(diagnostic.c_str(),
                       "ImageButton overflow: action=clipped bounds=(x=12,y=24,w=80,h=40) "
                       "measured=(w=96,h=44) overflow=clip clipped=true text=[PLAY]") == 0,

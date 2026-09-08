@@ -6,8 +6,8 @@ extern "C" __attribute__((export_name("__micropixel_test_run_handler"))) void __
 
 int main() {
     micropixel::Application app;
-    micropixel::Timer repeating = app.timers().Every(10_ms);
-    micropixel::Timer once = app.timers().After(20_ms);
+    micropixel::Timer repeating = app.timers().Every(10_ms).value();
+    micropixel::Timer once = app.timers().After(20_ms).value();
     uint32_t repeating_count = 0U;
     bool once_fired = false;
     bool saw_stop = false;

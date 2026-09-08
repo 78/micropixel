@@ -371,13 +371,11 @@ int32_t AudioEngine::GetInfo(micropixel_audio_info_t& info) {
     }
     info = {};
     info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_AUDIO_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_AUDIO_INTERFACE_MINOR;
     info.max_voices = kMaxVoices;
     info.sample_rate = State().sample_rate;
     info.supported_waveforms = (1U << MICROPIXEL_AUDIO_WAVE_SINE) | (1U << MICROPIXEL_AUDIO_WAVE_SQUARE) |
                                (1U << MICROPIXEL_AUDIO_WAVE_TRIANGLE) | (1U << MICROPIXEL_AUDIO_WAVE_NOISE);
-    info.max_tone_duration_ms = MICROPIXEL_AUDIO_MAX_TONE_DURATION_MS;
+    info.max_tone_duration_ms = kMaxToneDurationMs;
     info.capabilities = MICROPIXEL_AUDIO_CAPABILITY_OGG_OPUS | MICROPIXEL_AUDIO_CAPABILITY_PCM_STREAM;
     info.max_clips = 16U;
     info.max_playbacks = kMaxCompressedPlaybacks;

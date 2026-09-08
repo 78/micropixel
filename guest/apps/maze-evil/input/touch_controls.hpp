@@ -35,6 +35,7 @@ class TouchControls final {
     }
 
     // Virtual stick geometry for the on-screen overlay, in panel pixels.
+    // The App maps SDK logical touch coordinates into this space first.
     struct Overlay {
         bool stick_active{};
         int stick_origin_x{}, stick_origin_y{};

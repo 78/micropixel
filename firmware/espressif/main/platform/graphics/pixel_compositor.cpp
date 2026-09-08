@@ -20,6 +20,7 @@ uint32_t BytesPerPixel(SurfacePixelFormat format) {
         case SurfacePixelFormat::kBgra8888:
             return 4U;
         case SurfacePixelFormat::kRgb565:
+        case SurfacePixelFormat::kRgb565Swapped:
             return 2U;
     }
     return 0U;
@@ -86,9 +87,10 @@ uint16_t Compress5(uint8_t value) { return static_cast<uint16_t>((value * 31U + 
 uint16_t Compress6(uint8_t value) { return static_cast<uint16_t>((value * 63U + 127U) / 255U); }
 
 Rgb ReadRgb(const uint8_t* pixel, SurfacePixelFormat format) {
-    if (format == SurfacePixelFormat::kRgb565) {
+    if (format == SurfacePixelFormat::kRgb565 || format == SurfacePixelFormat::kRgb565Swapped) {
         uint16_t packed = 0U;
         std::memcpy(&packed, pixel, sizeof(packed));
+        if (format == SurfacePixelFormat::kRgb565Swapped) packed = static_cast<uint16_t>((packed << 8) | (packed >> 8));
         return {
             .red = Expand5(static_cast<uint16_t>((packed >> 11U) & 0x1fU)),
             .green = Expand6(static_cast<uint16_t>((packed >> 5U) & 0x3fU)),
@@ -103,9 +105,10 @@ uint8_t ReadAlpha(const uint8_t* pixel, SurfacePixelFormat format) {
 }
 
 void WriteRgb(uint8_t* pixel, SurfacePixelFormat format, Rgb color) {
-    if (format == SurfacePixelFormat::kRgb565) {
-        const uint16_t packed = static_cast<uint16_t>((Compress5(color.red) << 11U) | (Compress6(color.green) << 5U) |
-                                                      Compress5(color.blue));
+    if (format == SurfacePixelFormat::kRgb565 || format == SurfacePixelFormat::kRgb565Swapped) {
+        uint16_t packed = static_cast<uint16_t>((Compress5(color.red) << 11U) | (Compress6(color.green) << 5U) |
+                                                Compress5(color.blue));
+        if (format == SurfacePixelFormat::kRgb565Swapped) packed = static_cast<uint16_t>((packed << 8) | (packed >> 8));
         std::memcpy(pixel, &packed, sizeof(packed));
         return;
     }
@@ -429,19 +432,40 @@ bool SoftwarePixelCompositor::Blit(ConstPixelSurface source, SurfaceRect source_
     if (clipped.width == 0 || clipped.height == 0) {
         return true;
     }
+    const uint64_t source_begin = reinterpret_cast<uintptr_t>(source.pixels);
+    const uint64_t destination_begin = reinterpret_cast<uintptr_t>(destination.pixels);
+    const bool separate =
+        source_begin + source.size <= destination_begin || destination_begin + destination.size <= source_begin;
+    if (source_rect.width == 1 && source_rect.height == 1 && separate) {
+        const uint8_t* pixel = PixelAt(source, source_rect.x, source_rect.y);
+        const Rgb color = ReadRgb(pixel, source.format);
+        const uint8_t alpha = static_cast<uint8_t>((uint32_t(ReadAlpha(pixel, source.format)) * opacity + 127) / 255);
+        return Fill(destination, destination_rect,
+                    (uint32_t(color.red) << 16) | (uint32_t(color.green) << 8) | color.blue, alpha);
+    }
     if (source_rect.width == destination_rect.width && source_rect.height == destination_rect.height) {
         BlitSameSize(source, source_rect, destination, destination_rect, clipped, opacity);
         return true;
     }
+    const uint64_t first_numerator = (static_cast<int64_t>(clipped.x) - destination_rect.x) * source_rect.width;
+    const uint32_t denominator = destination_rect.width;
+    const uint32_t first_source_x = source_rect.x + first_numerator / denominator;
+    const uint32_t first_remainder = first_numerator % denominator;
+    const uint32_t step = source_rect.width / denominator;
+    const uint32_t step_remainder = source_rect.width % denominator;
     for (int32_t y = clipped.y; y < clipped.y + clipped.height; ++y) {
         const int64_t relative_y = static_cast<int64_t>(y) - destination_rect.y;
         const uint32_t source_y = static_cast<uint32_t>(
             source_rect.y + relative_y * source_rect.height / static_cast<int64_t>(destination_rect.height));
+        uint32_t source_x = first_source_x, remainder = first_remainder;
         for (int32_t x = clipped.x; x < clipped.x + clipped.width; ++x) {
-            const int64_t relative_x = static_cast<int64_t>(x) - destination_rect.x;
-            const uint32_t source_x = static_cast<uint32_t>(
-                source_rect.x + relative_x * source_rect.width / static_cast<int64_t>(destination_rect.width));
             const uint8_t* source_pixel = PixelAt(source, source_x, source_y);
+            source_x += step;
+            remainder += step_remainder;
+            if (remainder >= denominator) {
+                remainder -= denominator;
+                ++source_x;
+            }
             uint8_t* destination_pixel =
                 MutablePixelAt(destination, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
             const uint8_t source_alpha = ReadAlpha(source_pixel, source.format);

@@ -132,9 +132,6 @@ bool SemanticKeyReachesGuest() {
     };
     const bool injected = router.InjectKey(sample);
     return Check(router.GetInfo(info) == MICROPIXEL_STATUS_OK, "logical input info must remain available") &&
-           Check(info.interface_major == MICROPIXEL_INPUT_INTERFACE_MAJOR &&
-                     info.interface_minor == MICROPIXEL_INPUT_INTERFACE_MINOR,
-                 "logical input must advertise the current Input interface") &&
            Check((info.capabilities & MICROPIXEL_INPUT_CAP_KEY_EVENTS) != 0U,
                  "logical input must advertise semantic key events") &&
            Check(injected, "semantic key must be accepted while a Guest sink is bound") &&

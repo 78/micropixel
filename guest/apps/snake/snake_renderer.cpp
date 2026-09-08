@@ -26,13 +26,13 @@ constexpr uint16_t kSnakeFirstEyeInstance = kMaxLength + 1U;
 constexpr uint16_t kSnakeSecondEyeInstance = kMaxLength + 2U;
 constexpr uint16_t kSnakeBatchCapacity = kMaxLength + 3U;
 
-void SetLabel(micropixel::LabelNode& label, micropixel::SceneUpdate& update, micropixel::Point position,
-              const char* text, micropixel::Color color, micropixel::SystemFont font, bool visible = true) {
-    label.SetPosition(update, position);
-    label.SetText(update, text);
-    label.SetColor(update, color);
-    label.SetFont(update, font);
-    label.SetVisible(update, visible);
+void SetLabel(micropixel::LabelNode& label, micropixel::Point position, const char* text, micropixel::Color color,
+              micropixel::SystemFont font, bool visible = true) {
+    label.SetPosition(position);
+    label.SetText(text);
+    label.SetColor(color);
+    label.SetFont(font);
+    label.SetVisible(visible);
 }
 
 }  // namespace
@@ -51,27 +51,36 @@ void SnakeGame::InitializeScene() {
     // The board is the container the shake effect translates as a whole, so
     // it is flagged cache_content: the Host keeps its pixels as a Layer
     // snapshot and moves them instead of replaying every node per frame.
-    game_container_ = scene_.CreateContainer(
-        {.clip = kBoardClip, .translation = content_offset, .z_order = 0, .cache_content = true});
-    hud_container_ = scene_.CreateContainer({.clip = kDisplayClip, .translation = content_offset, .z_order = 10});
+    game_container_ =
+        scene_.CreateContainer({.clip = kBoardClip, .translation = content_offset, .z_order = 0, .cache_content = true})
+            .value();
+    hud_container_ =
+        scene_.CreateContainer({.clip = kDisplayClip, .translation = content_offset, .z_order = 10}).value();
 
-    board_node_ = game_container_.CreateRoundedRect(
-        {kBoardX, kBoardY, 625, 625},
-        {.fill = AsColor(kThemes[0].board), .stroke = AsColor(kThemes[0].border), .radius = 14, .stroke_width = 3});
-    scenery_batch_ = game_container_.CreateSpriteBatch(kSceneryCapacity);
-    food_node_ = game_container_.CreateSprite(
-        food_sheets_[0],
-        {kBoardX, kBoardY, static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)},
-        {0, 0, static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)});
-    snake_batch_ = game_container_.CreateSpriteBatch(kSnakeBatchCapacity);
+    board_node_ = game_container_
+                      .CreateRoundedRect({kBoardX, kBoardY, 625, 625}, {.fill = AsColor(kThemes[0].board),
+                                                                        .stroke = AsColor(kThemes[0].border),
+                                                                        .radius = 14,
+                                                                        .stroke_width = 3})
+                      .value();
+    scenery_batch_ = game_container_.CreateSpriteBatch(kSceneryCapacity).value();
+    food_node_ =
+        game_container_
+            .CreateSprite(food_sheets_[0],
+                          {kBoardX, kBoardY, static_cast<int32_t>(kFoodSpriteCellSize),
+                           static_cast<int32_t>(kFoodSpriteCellSize)},
+                          {0, 0, static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)})
+            .value();
+    snake_batch_ = game_container_.CreateSpriteBatch(kSnakeBatchCapacity).value();
     const snake_assets::AtlasFrame& first_burst = snake_assets::burst_atlases[0].frames[0];
-    burst_node_ =
-        game_container_.CreateSprite(burst_sheets_[0], {kBoardX, kBoardY, first_burst.width, first_burst.height},
-                                     {first_burst.x, first_burst.y, first_burst.width, first_burst.height});
-    particle_batch_ = game_container_.CreateSpriteBatch(kParticlePoolSize);
+    burst_node_ = game_container_
+                      .CreateSprite(burst_sheets_[0], {kBoardX, kBoardY, first_burst.width, first_burst.height},
+                                    {first_burst.x, first_burst.y, first_burst.width, first_burst.height})
+                      .value();
+    particle_batch_ = game_container_.CreateSpriteBatch(kParticlePoolSize).value();
     overlay_node_ =
-        game_container_.CreateShape({kBoardX, kBoardY, 625, 625}, micropixel::Color::Black(), kOverlayOpacity);
-    flash_batch_ = game_container_.CreateSpriteBatch(4U);
+        game_container_.CreateShape({kBoardX, kBoardY, 625, 625}, micropixel::Color::Black(), kOverlayOpacity).value();
+    flash_batch_ = game_container_.CreateSpriteBatch(4U).value();
     action_button_ = game_container_.CreateTextButton({.bounds = kStartButtonRect,
                                                        .text = strings_.Get(snake_strings::Id::kActionStart),
                                                        .style = {.background = micropixel::Color::Rgb(52U, 211U, 153U),
@@ -108,15 +117,17 @@ void SnakeGame::InitializeScene() {
                                                  .corner_radius = kActionButtonCornerRadius},
                                        .hit_padding = kActionButtonHitPadding});
     for (micropixel::LabelNode& label : popup_labels_) {
-        label = game_container_.CreateLabel({kBoardX, kBoardY}, " ", micropixel::Color::White(),
-                                            micropixel::SystemFont::kLarge);
+        label = game_container_
+                    .CreateLabel({kBoardX, kBoardY}, " ", micropixel::Color::White(), micropixel::SystemFont::kLarge)
+                    .value();
     }
     for (micropixel::LabelNode& label : overlay_labels_) {
-        label = game_container_.CreateLabel({360, 300}, " ", micropixel::Color::White(), micropixel::SystemFont::kLarge,
-                                            true);
+        label = game_container_
+                    .CreateLabel({360, 300}, " ", micropixel::Color::White(), micropixel::SystemFont::kLarge, true)
+                    .value();
     }
 
-    combo_batch_ = hud_container_.CreateSpriteBatch(2U);
+    combo_batch_ = hud_container_.CreateSpriteBatch(2U).value();
     const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
     const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
     const int32_t hud_width = kScreenWidth - safe_left - safe_right;
@@ -149,25 +160,25 @@ void SnakeGame::Render() {
     const micropixel::Point translation{ContentOffsetX(renderer_info_.width()) + (shake_active ? ShakeX() : 0),
                                         ContentOffsetY(renderer_info_.height()) + (shake_active ? ShakeY() : 0)};
 
-    auto presented = scene_.Update([&](micropixel::SceneUpdate& update) {
-        game_container_.SetTranslation(update, translation);
-        board_node_.SetFillColor(update, AsColor(theme.board));
-        board_node_.SetStrokeColor(update, AsColor(theme.border));
-        // A translated Game Container is a frozen visual snapshot. Keeping every
-        // child property unchanged lets the Host capture it once and move that
-        // cache for the remaining shake frames. Effects continue aging in the
-        // Guest model and are reconciled when translation returns to zero.
-        if (!shake_active) {
-            RenderScenery(update, theme);
-            RenderFood(update);
-            RenderSnake(update, theme);
-            RenderFoodBurst(update);
-            RenderParticles(update, theme);
-            RenderFlash(update, theme);
-            RenderOverlay(update, theme);
-        }
-        RenderHud(update, theme);
-    });
+    game_container_.SetTranslation(translation);
+    board_node_.SetFillColor(AsColor(theme.board));
+    board_node_.SetStrokeColor(AsColor(theme.border));
+    // A translated Game Container is a frozen visual snapshot. Keeping every
+    // child property unchanged lets the Host capture it once and move that
+    // cache for the remaining shake frames. Effects continue aging in the
+    // Guest model and are reconciled when translation returns to zero.
+    if (!shake_active) {
+        RenderScenery(theme);
+        RenderFood();
+        RenderSnake(theme);
+        RenderFoodBurst();
+        RenderParticles(theme);
+        RenderFlash(theme);
+        RenderOverlay(theme);
+    }
+    RenderHud(theme);
+
+    auto presented = renderer_.Present(scene_);
     if (!presented.has_value()) {
         Line failure;
         failure.Append("snake: scene update failed: ");
@@ -235,26 +246,25 @@ micropixel::Rect SnakeGame::InterpolatedSlotRect(uint32_t slot, uint32_t index, 
             kCellPitch - inset * 2, kCellPitch - inset * 2};
 }
 
-void SnakeGame::SetSolidInstance(micropixel::SpriteBatch& batch, micropixel::SceneUpdate& update, uint16_t id,
-                                 micropixel::Rect rect, micropixel::Color color, bool visible) {
-    batch.SetInstance(update, id,
-                      {.destination = rect, .source = {}, .color = color, .opacity = 255U, .visible = visible});
+void SnakeGame::SetSolidInstance(micropixel::SpriteBatch& batch, uint16_t id, micropixel::Rect rect,
+                                 micropixel::Color color, bool visible) {
+    batch.SetInstance(id, {.destination = rect, .source = {}, .color = color, .opacity = 255U, .visible = visible});
 }
 
-void SnakeGame::RenderScenery(micropixel::SceneUpdate& update, const Theme& theme) {
+void SnakeGame::RenderScenery(const Theme& theme) {
     if (model_.combo() >= 5U) {
         const uint32_t pulse = static_cast<uint32_t>((animation_time_us_ / 100000U) % 6U);
         const uint32_t opacity = 105U + (pulse <= 3U ? pulse : 6U - pulse) * 25U;
         const Rgb flame{251U, 191U, 36U};
         const micropixel::Color edge = AsColor(MixRgb(flame, theme.board, opacity));
         constexpr int32_t size = static_cast<int32_t>(kColumns) * kCellPitch;
-        SetSolidInstance(scenery_batch_, update, kFlameOffset + 0U, {kBoardX - 3, kBoardY - 3, size + 6, 3}, edge);
-        SetSolidInstance(scenery_batch_, update, kFlameOffset + 1U, {kBoardX - 3, kBoardY + size, size + 6, 3}, edge);
-        SetSolidInstance(scenery_batch_, update, kFlameOffset + 2U, {kBoardX - 3, kBoardY, 3, size}, edge);
-        SetSolidInstance(scenery_batch_, update, kFlameOffset + 3U, {kBoardX + size, kBoardY, 3, size}, edge);
+        SetSolidInstance(scenery_batch_, kFlameOffset + 0U, {kBoardX - 3, kBoardY - 3, size + 6, 3}, edge);
+        SetSolidInstance(scenery_batch_, kFlameOffset + 1U, {kBoardX - 3, kBoardY + size, size + 6, 3}, edge);
+        SetSolidInstance(scenery_batch_, kFlameOffset + 2U, {kBoardX - 3, kBoardY, 3, size}, edge);
+        SetSolidInstance(scenery_batch_, kFlameOffset + 3U, {kBoardX + size, kBoardY, 3, size}, edge);
     } else {
         for (uint16_t index = 0U; index < 4U; ++index) {
-            scenery_batch_.SetInstanceVisible(update, kFlameOffset + index, false);
+            scenery_batch_.SetInstanceVisible(kFlameOffset + index, false);
         }
     }
     uint16_t trail_output = 0U;
@@ -264,70 +274,67 @@ void SnakeGame::RenderScenery(micropixel::SceneUpdate& update, const Theme& them
             continue;
         }
         const uint32_t opacity = 102U * (400000U - trail.age_us) / 400000U;
-        SetSolidInstance(scenery_batch_, update, kTrailOffset + trail_output++,
-                         CellRect(trail.cell, 5, kBoardX, kBoardY),
+        SetSolidInstance(scenery_batch_, kTrailOffset + trail_output++, CellRect(trail.cell, 5, kBoardX, kBoardY),
                          AsColor(MixRgb(theme.accent, theme.board, opacity)));
     }
     for (uint16_t index = trail_output; index < kTrailPoolSize; ++index) {
-        scenery_batch_.SetInstanceVisible(update, kTrailOffset + index, false);
+        scenery_batch_.SetInstanceVisible(kTrailOffset + index, false);
     }
     const uint16_t obstacle_count = model_.obstacle_count() < 5U ? model_.obstacle_count() : 5U;
     for (uint16_t index = 0U; index < obstacle_count; ++index) {
         const micropixel::Rect rock = CellRect(model_.obstacles()[index], 2, kBoardX, kBoardY);
-        SetSolidInstance(scenery_batch_, update, kObstacleOffset + index, rock, micropixel::Color::Rgb(82U, 82U, 82U));
-        SetSolidInstance(scenery_batch_, update, kObstacleDetailOffset + index, {rock.x + 4, rock.y + 3, 8, 3},
+        SetSolidInstance(scenery_batch_, kObstacleOffset + index, rock, micropixel::Color::Rgb(82U, 82U, 82U));
+        SetSolidInstance(scenery_batch_, kObstacleDetailOffset + index, {rock.x + 4, rock.y + 3, 8, 3},
                          micropixel::Color::Rgb(126U, 126U, 126U));
     }
     for (uint16_t index = obstacle_count; index < 5U; ++index) {
-        scenery_batch_.SetInstanceVisible(update, kObstacleOffset + index, false);
-        scenery_batch_.SetInstanceVisible(update, kObstacleDetailOffset + index, false);
+        scenery_batch_.SetInstanceVisible(kObstacleOffset + index, false);
+        scenery_batch_.SetInstanceVisible(kObstacleDetailOffset + index, false);
     }
 }
 
-void SnakeGame::RenderFood(micropixel::SceneUpdate& update) {
+void SnakeGame::RenderFood() {
     const Food& food = model_.food();
     if (food.cell.x < 0) {
-        food_node_.SetVisible(update, false);
+        food_node_.SetVisible(false);
         return;
     }
     const uint32_t phase = static_cast<uint32_t>(((animation_time_us_ % kFoodAnimationDurationUs) * kFoodFrameCount) /
                                                  kFoodAnimationDurationUs);
     const int32_t center_x = kBoardX + static_cast<int32_t>(food.cell.x) * kCellPitch + kCellPitch / 2;
     const int32_t center_y = kBoardY + static_cast<int32_t>(food.cell.y) * kCellPitch + kCellPitch / 2;
-    food_node_.SetTexture(update, food_sheets_[static_cast<uint32_t>(food.type)]);
-    food_node_.SetSource(update,
-                         {static_cast<int32_t>((phase % kSpriteSheetColumns) * kFoodSpriteCellSize),
+    food_node_.SetTexture(food_sheets_[static_cast<uint32_t>(food.type)]);
+    food_node_.SetSource({static_cast<int32_t>((phase % kSpriteSheetColumns) * kFoodSpriteCellSize),
                           static_cast<int32_t>((phase / kSpriteSheetColumns) * kFoodSpriteCellSize),
                           static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)});
-    food_node_.SetDestination(
-        update, {center_x - static_cast<int32_t>(kFoodSpriteCellSize / 2U),
-                 center_y - static_cast<int32_t>(kFoodSpriteCellSize / 2U), static_cast<int32_t>(kFoodSpriteCellSize),
-                 static_cast<int32_t>(kFoodSpriteCellSize)});
-    food_node_.SetVisible(update, true);
+    food_node_.SetDestination({center_x - static_cast<int32_t>(kFoodSpriteCellSize / 2U),
+                               center_y - static_cast<int32_t>(kFoodSpriteCellSize / 2U),
+                               static_cast<int32_t>(kFoodSpriteCellSize), static_cast<int32_t>(kFoodSpriteCellSize)});
+    food_node_.SetVisible(true);
 }
 
-void SnakeGame::RenderSnake(micropixel::SceneUpdate& update, const Theme& theme) {
+void SnakeGame::RenderSnake(const Theme& theme) {
     const uint32_t length = model_.length();
     const Rgb accent = model_.invincible() ? Rgb{34U, 211U, 238U} : theme.accent;
     micropixel::Assert(body_slot_length_ == length, "snake: body ring length drifted");
     for (uint32_t slot = 0U; slot < length; ++slot) {
         const uint32_t index = (slot + length - body_slot_head_) % length;
         if (index == 0U) {
-            snake_batch_.SetInstanceVisible(update, static_cast<uint16_t>(slot), false);
+            snake_batch_.SetInstanceVisible(static_cast<uint16_t>(slot), false);
             continue;
         }
         const uint32_t band = (index * 8U) / length;
         const int32_t inset = band < 3U ? 1 : (band < 7U ? 2 : 3);
         const uint32_t opacity = 255U - (band * 190U) / 8U;
-        SetSolidInstance(snake_batch_, update, static_cast<uint16_t>(slot),
+        SetSolidInstance(snake_batch_, static_cast<uint16_t>(slot),
                          InterpolatedSlotRect(slot, index, inset, kBoardX, kBoardY),
                          AsColor(MixRgb(accent, theme.board, opacity)));
     }
     for (uint16_t slot = static_cast<uint16_t>(length); slot < kMaxLength; ++slot) {
-        snake_batch_.SetInstanceVisible(update, slot, false);
+        snake_batch_.SetInstanceVisible(slot, false);
     }
     const micropixel::Rect head = InterpolatedSlotRect(body_slot_head_, 0U, -2, kBoardX, kBoardY);
-    SetSolidInstance(snake_batch_, update, kSnakeHeadInstance, head, AsColor(accent));
+    SetSolidInstance(snake_batch_, kSnakeHeadInstance, head, AsColor(accent));
     int32_t first_x = head.x + 6;
     int32_t first_y = head.y + 4;
     int32_t second_x = head.x + 19;
@@ -345,15 +352,13 @@ void SnakeGame::RenderSnake(micropixel::SceneUpdate& update, const Theme& theme)
         first_y = head.y + 6;
         second_y = head.y + 19;
     }
-    SetSolidInstance(snake_batch_, update, kSnakeFirstEyeInstance, {first_x, first_y, 4, 5},
-                     micropixel::Color::Black());
-    SetSolidInstance(snake_batch_, update, kSnakeSecondEyeInstance, {second_x, second_y, 4, 5},
-                     micropixel::Color::Black());
+    SetSolidInstance(snake_batch_, kSnakeFirstEyeInstance, {first_x, first_y, 4, 5}, micropixel::Color::Black());
+    SetSolidInstance(snake_batch_, kSnakeSecondEyeInstance, {second_x, second_y, 4, 5}, micropixel::Color::Black());
 }
 
-void SnakeGame::RenderFoodBurst(micropixel::SceneUpdate& update) {
+void SnakeGame::RenderFoodBurst() {
     if (burst_remaining_us_ == 0U) {
-        burst_node_.SetVisible(update, false);
+        burst_node_.SetVisible(false);
         return;
     }
     const uint64_t elapsed = kBurstDurationUs - burst_remaining_us_;
@@ -370,18 +375,17 @@ void SnakeGame::RenderFoodBurst(micropixel::SceneUpdate& update) {
                                                  kScreenWidth);
     canvas_y = snake::gamekit::ClampCanvasOrigin(canvas_y, static_cast<int32_t>(snake_assets::burst_canvas_height),
                                                  kScreenHeight);
-    burst_node_.SetTexture(update, burst_sheets_[type_index]);
-    burst_node_.SetSource(update, {frame.x, frame.y, frame.width, frame.height});
-    burst_node_.SetDestination(update,
-                               {canvas_x + frame.canvas_x, canvas_y + frame.canvas_y, frame.width, frame.height});
-    burst_node_.SetVisible(update, true);
+    burst_node_.SetTexture(burst_sheets_[type_index]);
+    burst_node_.SetSource({frame.x, frame.y, frame.width, frame.height});
+    burst_node_.SetDestination({canvas_x + frame.canvas_x, canvas_y + frame.canvas_y, frame.width, frame.height});
+    burst_node_.SetVisible(true);
 }
 
-void SnakeGame::RenderParticles(micropixel::SceneUpdate& update, const Theme& theme) {
+void SnakeGame::RenderParticles(const Theme& theme) {
     for (uint16_t index = 0U; index < kParticlePoolSize; ++index) {
         const Particle& particle = particles_[index];
         if (!particle.active) {
-            particle_batch_.SetInstanceVisible(update, index, false);
+            particle_batch_.SetInstanceVisible(index, false);
             continue;
         }
         const uint32_t progress = particle.age_us * 256U / particle.duration_us;
@@ -394,18 +398,17 @@ void SnakeGame::RenderParticles(micropixel::SceneUpdate& update, const Theme& th
         size = size < 2 ? 2 : size;
         const micropixel::Rect rect = micropixel::Rect{x - size / 2, y - size / 2, size, size}.intersection(kBoardClip);
         if (rect.empty()) {
-            particle_batch_.SetInstanceVisible(update, index, false);
+            particle_batch_.SetInstanceVisible(index, false);
         } else {
-            SetSolidInstance(particle_batch_, update, index, rect,
-                             AsColor(MixRgb(particle.color, theme.board, opacity)));
+            SetSolidInstance(particle_batch_, index, rect, AsColor(MixRgb(particle.color, theme.board, opacity)));
         }
     }
 }
 
-void SnakeGame::RenderFlash(micropixel::SceneUpdate& update, const Theme& theme) {
+void SnakeGame::RenderFlash(const Theme& theme) {
     if (screen_ == Screen::kGameOver || flash_remaining_us_ == 0U || flash_duration_us_ == 0U) {
         for (uint16_t index = 0U; index < 4U; ++index) {
-            flash_batch_.SetInstanceVisible(update, index, false);
+            flash_batch_.SetInstanceVisible(index, false);
         }
         return;
     }
@@ -414,64 +417,62 @@ void SnakeGame::RenderFlash(micropixel::SceneUpdate& update, const Theme& theme)
     const int32_t dy = ShakeY();
     const auto directional = [opacity](bool active) { return active ? opacity : opacity * 2U / 5U; };
     constexpr int32_t size = static_cast<int32_t>(kColumns) * kCellPitch;
-    SetSolidInstance(flash_batch_, update, 0U, {kBoardX, kBoardY, size, 6},
+    SetSolidInstance(flash_batch_, 0U, {kBoardX, kBoardY, size, 6},
                      AsColor(MixRgb(flash_color_, theme.board, directional(dy <= 0))));
-    SetSolidInstance(flash_batch_, update, 1U, {kBoardX, kBoardY + size - 6, size, 6},
+    SetSolidInstance(flash_batch_, 1U, {kBoardX, kBoardY + size - 6, size, 6},
                      AsColor(MixRgb(flash_color_, theme.board, directional(dy >= 0))));
-    SetSolidInstance(flash_batch_, update, 2U, {kBoardX, kBoardY + 6, 6, size - 12},
+    SetSolidInstance(flash_batch_, 2U, {kBoardX, kBoardY + 6, 6, size - 12},
                      AsColor(MixRgb(flash_color_, theme.board, directional(dx <= 0))));
-    SetSolidInstance(flash_batch_, update, 3U, {kBoardX + size - 6, kBoardY + 6, 6, size - 12},
+    SetSolidInstance(flash_batch_, 3U, {kBoardX + size - 6, kBoardY + 6, 6, size - 12},
                      AsColor(MixRgb(flash_color_, theme.board, directional(dx >= 0))));
 }
 
-void SnakeGame::RenderOverlay(micropixel::SceneUpdate& update, const Theme& theme) {
+void SnakeGame::RenderOverlay(const Theme& theme) {
     const bool overlay_visible = screen_ != Screen::kPlaying;
-    overlay_node_.SetVisible(update, overlay_visible);
-    overlay_node_.SetColor(
-        update, screen_ == Screen::kGameOver ? micropixel::Color::Rgb(69U, 10U, 10U) : micropixel::Color::Black());
-    overlay_node_.SetOpacity(update, screen_ == Screen::kGameOver ? 255U : kOverlayOpacity);
+    overlay_node_.SetVisible(overlay_visible);
+    overlay_node_.SetColor(screen_ == Screen::kGameOver ? micropixel::Color::Rgb(69U, 10U, 10U)
+                                                        : micropixel::Color::Black());
+    overlay_node_.SetOpacity(screen_ == Screen::kGameOver ? 255U : kOverlayOpacity);
 
     const bool game_over = screen_ == Screen::kGameOver;
-    game_over_panel_.SetVisible(update, game_over);
+    game_over_panel_.SetVisible(game_over);
     const bool button_visible = screen_ == Screen::kMenu || screen_ == Screen::kPaused;
-    action_button_.SetVisible(update, button_visible);
+    action_button_.SetVisible(button_visible);
     if (button_visible) {
-        micropixel::Assert(action_button_.SetBounds(update, kStartButtonRect).has_value(),
-                           "snake: text button bounds invalid");
-        micropixel::Assert(
-            action_button_
-                .SetText(update, strings_.Get(screen_ == Screen::kMenu ? snake_strings::Id::kActionStart
-                                                                       : snake_strings::Id::kActionContinue))
-                .has_value(),
-            "snake: text button text invalid");
+        micropixel::Assert(action_button_.SetBounds(kStartButtonRect).has_value(), "snake: text button bounds invalid");
+        micropixel::Assert(action_button_
+                               .SetText(strings_.Get(screen_ == Screen::kMenu ? snake_strings::Id::kActionStart
+                                                                              : snake_strings::Id::kActionContinue))
+                               .has_value(),
+                           "snake: text button text invalid");
     }
     if (game_over) {
         Line score;
         score.AppendPadded4(model_.score());
-        micropixel::Assert(game_over_panel_.label(1U).SetText(update, score.c_str()).has_value(),
+        micropixel::Assert(game_over_panel_.label(1U).SetText(score.c_str()).has_value(),
                            "snake: game over score invalid");
         Line food;
         food.AppendUint(model_.food_eaten());
-        micropixel::Assert(game_over_panel_.grid(0U).SetText(update, 1U, 0U, food.c_str()).has_value(),
+        micropixel::Assert(game_over_panel_.grid(0U).SetText(1U, 0U, food.c_str()).has_value(),
                            "snake: game over food invalid");
         Line combo;
         combo.Append("x");
         combo.AppendUint(model_.max_combo());
-        micropixel::Assert(game_over_panel_.grid(0U).SetText(update, 1U, 1U, combo.c_str()).has_value(),
+        micropixel::Assert(game_over_panel_.grid(0U).SetText(1U, 1U, combo.c_str()).has_value(),
                            "snake: game over combo invalid");
         Line level;
         level.AppendUint(model_.level());
-        micropixel::Assert(game_over_panel_.grid(0U).SetText(update, 1U, 2U, level.c_str()).has_value(),
+        micropixel::Assert(game_over_panel_.grid(0U).SetText(1U, 2U, level.c_str()).has_value(),
                            "snake: game over level invalid");
-        micropixel::Assert(game_over_panel_.Layout(update).has_value(), "snake: game over layout failed");
-        game_over_panel_.text_button(0U).Sync(update);
+        micropixel::Assert(game_over_panel_.Layout().has_value(), "snake: game over layout failed");
+        game_over_panel_.text_button(0U).Sync();
     }
 
     const bool popups_visible = screen_ == Screen::kPlaying && level_banner_us_ == 0U;
     for (uint16_t index = 0U; index < kPopupPoolSize; ++index) {
         const Popup& popup = popups_[index];
         if (!popups_visible || !popup.active) {
-            popup_labels_[index].SetVisible(update, false);
+            popup_labels_[index].SetVisible(false);
             continue;
         }
         const uint32_t progress = popup.age_us * 256U / 800000U;
@@ -480,7 +481,7 @@ void SnakeGame::RenderOverlay(micropixel::SceneUpdate& update, const Theme& them
         text.Append("+");
         text.AppendUint(popup.points);
         SetLabel(
-            popup_labels_[index], update,
+            popup_labels_[index],
             {kBoardX + static_cast<int32_t>(popup.cell.x) * kCellPitch,
              kBoardY + static_cast<int32_t>(popup.cell.y) * kCellPitch - static_cast<int32_t>(progress * 50U / 256U)},
             text.c_str(), AsColor(MixRgb(popup.color, theme.board, opacity)), popup.font);
@@ -488,7 +489,7 @@ void SnakeGame::RenderOverlay(micropixel::SceneUpdate& update, const Theme& them
     uint16_t slot = 0U;
     const auto centered = [&](int32_t x, int32_t y, const char* text, micropixel::Color color,
                               micropixel::SystemFont font) {
-        SetLabel(overlay_labels_[slot++], update, {x, y}, text, color, font);
+        SetLabel(overlay_labels_[slot++], {x, y}, text, color, font);
     };
     if (level_banner_us_ != 0U && !game_over) {
         centered(360, 315, strings_.Get(snake_strings::Id::kUpgradeTitle), AsColor(theme.text),
@@ -500,23 +501,23 @@ void SnakeGame::RenderOverlay(micropixel::SceneUpdate& update, const Theme& them
         centered(360, 370, reached.c_str(), micropixel::Color::White(), micropixel::SystemFont::kMedium);
     }
     while (slot < 2U) {
-        overlay_labels_[slot++].SetVisible(update, false);
+        overlay_labels_[slot++].SetVisible(false);
     }
 }
 
-void SnakeGame::RenderHud(micropixel::SceneUpdate& update, const Theme& theme) {
+void SnakeGame::RenderHud(const Theme& theme) {
     const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
-    hud_.label(0U).SetColor(update, AsColor(theme.text));
+    hud_.label(0U).SetColor(AsColor(theme.text));
     Line level;
     level.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
     level.AppendUint(model_.level());
     Line score;
     score.AppendPadded4(model_.score());
-    micropixel::Assert(hud_.grid(0U).SetText(update, 1U, 0U, score.c_str()).has_value(), "snake: HUD score invalid");
+    micropixel::Assert(hud_.grid(0U).SetText(1U, 0U, score.c_str()).has_value(), "snake: HUD score invalid");
     Line best;
     best.AppendPadded4(best_score_);
-    micropixel::Assert(hud_.grid(0U).SetText(update, 1U, 1U, best.c_str()).has_value(), "snake: HUD best invalid");
-    micropixel::Assert(hud_.grid(0U).SetColor(update, 1U, 1U, AsColor(theme.text)).has_value(),
+    micropixel::Assert(hud_.grid(0U).SetText(1U, 1U, best.c_str()).has_value(), "snake: HUD best invalid");
+    micropixel::Assert(hud_.grid(0U).SetColor(1U, 1U, AsColor(theme.text)).has_value(),
                        "snake: HUD best color invalid");
     Line status;
     if (screen_ == Screen::kPlaying && model_.invincible()) {
@@ -534,12 +535,12 @@ void SnakeGame::RenderHud(micropixel::SceneUpdate& update, const Theme& theme) {
         status.Append(" ");
     }
     const bool status_active = screen_ == Screen::kPlaying && (model_.invincible() || model_.combo() > 1U);
-    micropixel::Assert(hud_.label(1U).SetText(update, status_active ? status.c_str() : level.c_str()).has_value(),
+    micropixel::Assert(hud_.label(1U).SetText(status_active ? status.c_str() : level.c_str()).has_value(),
                        "snake: HUD level/status invalid");
-    hud_.label(1U).SetColor(update, model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
-                                    : model_.combo() > 1U ? micropixel::Color::Rgb(251U, 191U, 36U)
-                                                          : AsColor(theme.text));
-    auto hud_layout = hud_.Layout(update);
+    hud_.label(1U).SetColor(model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
+                            : model_.combo() > 1U ? micropixel::Color::Rgb(251U, 191U, 36U)
+                                                  : AsColor(theme.text));
+    auto hud_layout = hud_.Layout();
     if (!hud_layout.has_value()) {
         Line diagnostic;
         diagnostic.Append("snake: HUD layout failed: ");
@@ -555,8 +556,8 @@ void SnakeGame::RenderHud(micropixel::SceneUpdate& update, const Theme& theme) {
     micropixel::Assert(hud_layout.has_value(), "snake: HUD layout failed");
 
     if (!status_active) {
-        combo_batch_.SetInstanceVisible(update, 0U, false);
-        combo_batch_.SetInstanceVisible(update, 1U, false);
+        combo_batch_.SetInstanceVisible(0U, false);
+        combo_batch_.SetInstanceVisible(1U, false);
         return;
     }
     const uint64_t duration_us =
@@ -568,9 +569,8 @@ void SnakeGame::RenderHud(micropixel::SceneUpdate& update, const Theme& theme) {
     fill_width = fill_width == 0U ? 1U : (fill_width > full_width ? full_width : fill_width);
     const int32_t bar_x = safe_left + status_bounds.x;
     const int32_t bar_y = status_bounds.y + status_bounds.height - kStatusProgressBarTextInset;
-    SetSolidInstance(combo_batch_, update, 0U, {bar_x, bar_y, status_bounds.width, 4},
-                     micropixel::Color::Rgb(38U, 38U, 38U));
-    SetSolidInstance(combo_batch_, update, 1U, {bar_x, bar_y, static_cast<int32_t>(fill_width), 4},
+    SetSolidInstance(combo_batch_, 0U, {bar_x, bar_y, status_bounds.width, 4}, micropixel::Color::Rgb(38U, 38U, 38U));
+    SetSolidInstance(combo_batch_, 1U, {bar_x, bar_y, static_cast<int32_t>(fill_width), 4},
                      model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
                      : model_.combo() > 3U ? micropixel::Color::Rgb(251U, 191U, 36U)
                                            : micropixel::Color::White());

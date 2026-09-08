@@ -58,24 +58,24 @@ class SnakeGame final {
 
     void InitializeScene();
 
-    static void SetSolidInstance(micropixel::SpriteBatch& batch, micropixel::SceneUpdate& update, uint16_t id,
-                                 micropixel::Rect rect, micropixel::Color color, bool visible = true);
+    static void SetSolidInstance(micropixel::SpriteBatch& batch, uint16_t id, micropixel::Rect rect,
+                                 micropixel::Color color, bool visible = true);
 
-    void RenderScenery(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderScenery(const Theme& theme);
 
-    void RenderFood(micropixel::SceneUpdate& update);
+    void RenderFood();
 
-    void RenderSnake(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderSnake(const Theme& theme);
 
-    void RenderFoodBurst(micropixel::SceneUpdate& update);
+    void RenderFoodBurst();
 
-    void RenderParticles(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderParticles(const Theme& theme);
 
-    void RenderFlash(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderFlash(const Theme& theme);
 
-    void RenderOverlay(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderOverlay(const Theme& theme);
 
-    void RenderHud(micropixel::SceneUpdate& update, const Theme& theme);
+    void RenderHud(const Theme& theme);
 
     void ResetBodySlotMapping();
 

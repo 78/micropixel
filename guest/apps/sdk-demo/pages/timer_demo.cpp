@@ -14,7 +14,7 @@ class TimerPage final {
         elapsed_us_ = 0U;
         tick_count_ = 0U;
         running_ = true;
-        page_container_ = context.root_container.CreateContainer();
+        page_container_ = context.root_container.CreateContainer().value();
         CreateButtons(context);
         context.app.log().Info("demo.timer: entered; shared 100 ms Timer is running");
     }
@@ -82,7 +82,7 @@ class TimerPage final {
                               running_ ? AccentColor() : DangerColor(), micropixel::SystemFont::kLarge);
 
         for (micropixel::ui::TextButton& button : buttons_) {
-            button.Sync(commands.scene_update());
+            button.Sync();
         }
     }
 
@@ -111,7 +111,7 @@ TimerPage timer_page;
 
 }  // namespace
 
-micropixel::Timer CreateDemoTicker(micropixel::Application& app) { return app.timers().Every(100_ms); }
+micropixel::Timer CreateDemoTicker(micropixel::Application& app) { return app.timers().Every(100_ms).value(); }
 
 void TimerDemoEnter(DemoContext& context) { timer_page.Enter(context); }
 

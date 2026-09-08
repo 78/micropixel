@@ -44,16 +44,18 @@ struct GuestSceneNode final {
     uint32_t radius{};
     uint32_t stroke_width{};
     uint8_t opacity{};
-    micropixel_texture_handle_t texture{};
+    micropixel_texture_handle_t texture_handle{};
     int32_t source_x{};
     int32_t source_y{};
     int32_t source_width{};
     int32_t source_height{};
-    micropixel_font_handle_t font{};
+    micropixel_font_handle_t font_handle{};
     uint16_t text_length{};
     uint16_t batch_capacity{};
     uint16_t batch_instance_offset{};
-    char text[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+    // Offset of text_length bytes plus a terminating NUL in the scene text
+    // arena (GuestScene::Text). Stable until the owner compacts the arena.
+    uint32_t text_offset{};
 };
 
 struct GuestSceneContainer final {
@@ -72,13 +74,21 @@ struct GuestSceneContainer final {
     bool cached_content{};
 };
 
+// All spans hold two halves (current + scratch) except node_marks,
+// instance_marks and container_marks, which are per-Apply validation scratch,
+// and text, which is a single persistent arena.
 struct GuestSceneStorageView final {
     std::span<GuestSceneNode> nodes;
     std::span<GuestSceneSpriteInstance> instances;
-    std::span<GuestSceneContainer> containers;
+    std::span<GuestSceneContainer> containers;  // 2 * (container capacity + 1)
     std::span<uint16_t> draw_order;
     std::span<uint8_t> node_changes;
     std::span<uint8_t> instance_changes;
+    std::span<uint8_t> container_changes;  // container capacity + 1
+    std::span<uint8_t> node_marks;         // node capacity
+    std::span<uint8_t> instance_marks;     // instance capacity
+    std::span<uint8_t> container_marks;    // container capacity + 1
+    std::span<char> text;
 };
 
 // Authoritative scene: Apply never allocates and commits only a valid message.
@@ -86,8 +96,12 @@ class GuestScene final {
    public:
     explicit GuestScene(GuestSceneStorageView storage) { RebindStorage(storage); }
     // Called only between submissions with equal or larger, disjoint storage.
-    // Copies the committed state before the owner releases the old allocation.
+    // Copies the committed state before the owner releases the old allocation
+    // and compacts the text arena, so retained text pointers become invalid.
     void RebindStorage(GuestSceneStorageView storage);
+    // Moves live node text to the other arena half. Text pointers taken from
+    // the committed scene stay readable until the following compaction.
+    void CompactText();
 
     GuestScene(const GuestScene&) = delete;
     GuestScene& operator=(const GuestScene&) = delete;
@@ -103,6 +117,19 @@ class GuestScene final {
     [[nodiscard]] uint16_t NodeCount() const { return node_count_; }
     [[nodiscard]] uint16_t ContainerCount() const { return container_count_; }
     [[nodiscard]] uint16_t BatchInstanceCount() const { return batch_instance_count_; }
+    [[nodiscard]] uint16_t NodeCapacity() const { return capacity_; }
+    [[nodiscard]] uint16_t ContainerCapacity() const { return container_capacity_; }
+    [[nodiscard]] uint16_t InstanceCapacity() const { return instance_capacity_; }
+    // NUL-terminated text of a text node.
+    [[nodiscard]] const char* Text(const GuestSceneNode& node) const { return text_ + node.text_offset; }
+    // Bytes consumed in the active arena half (including garbage from replaced
+    // text), bytes still referenced by committed nodes, and the half's
+    // capacity. Apply appends at most the message's text bytes plus one NUL per
+    // TEXT record, so the owner guarantees TextUsed() + that <= TextCapacity()
+    // beforehand (compacting or growing as needed).
+    [[nodiscard]] uint32_t TextUsed() const { return text_used_; }
+    [[nodiscard]] uint32_t TextLive() const;
+    [[nodiscard]] uint32_t TextCapacity() const { return text_capacity_; }
     [[nodiscard]] uint32_t Background() const { return background_rgb888_; }
     [[nodiscard]] uint32_t Generation() const { return generation_; }
     [[nodiscard]] uint32_t Revision() const { return revision_; }
@@ -135,6 +162,7 @@ class GuestScene final {
     uint16_t instance_capacity_{};
     GuestSceneContainer* containers_{};
     GuestSceneContainer* scratch_containers_{};
+    uint16_t container_capacity_{};
     uint16_t node_count_{};
     uint16_t container_count_{};
     uint16_t batch_instance_count_{};
@@ -142,10 +170,17 @@ class GuestScene final {
     uint32_t generation_{};
     uint32_t revision_{};
     uint8_t* node_changes_{};
-    uint8_t container_changes_[MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U]{};
+    uint8_t* container_changes_{};
+    uint8_t* node_marks_{};
+    uint8_t* instance_marks_{};
+    uint8_t* container_marks_{};
     uint16_t* draw_node_order_{};
     uint16_t* scratch_draw_node_order_{};
     uint8_t* instance_changes_{};
+    char* text_arena_{};  // Two halves of text_capacity_ bytes; text_ is the active one.
+    char* text_{};
+    uint32_t text_used_{};
+    uint32_t text_capacity_{};
     bool last_apply_was_keyframe_{};
     bool background_changed_{};
     bool tree_order_changed_{};

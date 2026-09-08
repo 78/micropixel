@@ -53,16 +53,16 @@ class ServiceRegistry final {
 
     [[nodiscard]] int32_t Open(uint32_t service_id, uint32_t required_interface_version,
                                micropixel_service_info_t& info_out, uint32_t info_capacity) const;
-    [[nodiscard]] int32_t Call(micropixel_service_handle_t service, uint32_t method_id, const uint8_t* request,
+    [[nodiscard]] int32_t Call(micropixel_service_handle_t service_handle, uint32_t method_id, const uint8_t* request,
                                uint32_t request_size, uint8_t* response, uint32_t response_capacity,
                                uint32_t& response_size_out) const;
-    [[nodiscard]] int32_t Submit(micropixel_service_handle_t service, uint32_t channel_id, const uint8_t* bytes,
+    [[nodiscard]] int32_t Submit(micropixel_service_handle_t service_handle, uint32_t channel_id, const uint8_t* bytes,
                                  uint32_t length) const;
 
    private:
     static constexpr uint32_t kMaxServiceCount = 16U;
 
-    [[nodiscard]] bool Resolve(micropixel_service_handle_t service, ServiceHandler*& handler_out,
+    [[nodiscard]] bool Resolve(micropixel_service_handle_t service_handle, ServiceHandler*& handler_out,
                                const ServiceDescriptor*& descriptor_out) const;
 
     ServiceHandler* handlers_[kMaxServiceCount]{};

@@ -133,6 +133,21 @@ class PackageMetadataTests(unittest.TestCase):
             self.assertEqual(titles.default_locale, "en")
             self.assertEqual(titles.values, {"en": "Test"})
 
+    def test_app_version_round_trip_and_unversioned_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self.write_manifest(root, "Test")
+            self.assertNotIn("version", json.loads(bundle.serialize_package_metadata(bundle.load_package_manifest(path))))
+            for version in ["0.0.0", "1.10.2", "123456789.123456789.123456789"]:
+                path = self.write_manifest(root, "Test", version=version)
+                manifest = bundle.load_package_manifest(path)
+                self.assertEqual(manifest.version, version)
+                self.assertEqual(json.loads(bundle.serialize_package_metadata(manifest))["version"], version)
+            for version in [None, 1, "", "1.2", "01.2.3", "1.2.3.", "1.2.3-beta", "1.2.3+build", "1" * 28 + ".0.0"]:
+                path = self.write_manifest(root, "Test", version=version)
+                with self.subTest(version=version), self.assertRaisesRegex(ValueError, "major.minor.patch"):
+                    bundle.load_package_manifest(path)
+
     def test_app_threading_defaults_to_none_and_validates_shared_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

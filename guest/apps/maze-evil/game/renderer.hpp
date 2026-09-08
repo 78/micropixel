@@ -8,6 +8,7 @@
 #include "apps/maze-evil/gfx/textures.hpp"
 #include "apps/maze-evil/gfx/view_config.hpp"
 #include "sdk/graphics.hpp"
+#include "sdk/raycast.hpp"
 
 namespace maze_break::game {
 
@@ -22,12 +23,11 @@ struct HudStats {
     bool visible{true};  // Hide gameplay labels beneath the start-screen diagrams.
 };
 
-// Raycaster front end for the Graphics 1.6 Host raster kernels. The geometry
-// (ray DDA, floor row setup, billboard sort and z-test) runs here; every pixel
-// is written by the Host from the records this class appends to a
-// RasterDrawList: SPAN_PAIR rows for floor and ceiling, COLUMN runs for walls
-// and things, SPRITE records for the weapon and HUD glyphs and RECT fills for
-// bars, the crosshair and the damage tint. The App never maps the frame.
+// Frame front end over the SDK Raycaster and the Graphics 1.6 Host raster
+// kernels. The Raycaster casts the level (SPAN_PAIR rows for floor and
+// ceiling, COLUMN runs for walls, doors and things); this class owns the
+// resource upload, the weapon, the damage tint and the HUD (SPRITE records for
+// glyphs, RECT fills for bars and the crosshair). The App never maps the frame.
 class Renderer {
    public:
     // `view` must describe a buffer no larger than kMaxViewWidth x kMaxViewHeight.
@@ -35,7 +35,7 @@ class Renderer {
     // Uploads textures, sprites, the glyph atlas and the lit palette to the
     // Host raster kernels. The lighting palette must already be built; art
     // pixels are immutable. Returns false when any upload is refused.
-    [[nodiscard]] bool UploadResources(const micropixel::SurfaceRaster& raster);
+    [[nodiscard]] bool UploadResources(const micropixel::RasterResources& raster);
     // Appends the frame's records to `list` (open on the target buffer). The
     // list is left open for the caller's overlays and Finish(). Returns false
     // when a record could not be encoded.
@@ -57,52 +57,26 @@ class Renderer {
     static constexpr uint8_t kGlyphSlot = kSpriteSlotBase + gfx::kSprCount;
     static constexpr int kSlotCount = kGlyphSlot + 1;
 
-    // One textured wall (or door slab) column produced by the ray cast and
-    // painted after the floor, so the floor pass can skip what it covers.
-    struct WallSlice {
-        int16_t y0{};
-        int16_t y1{-1};  // y1 < y0: nothing to paint
-        uint16_t tex_x{};
-        int32_t v_start{};
-        int32_t v_step{};
-        gfx::TextureId texture{};
-        uint8_t light{};
-    };
-
-    // Ray cast: fills walls_/doors_/zbuffer_ and the per-column wall coverage
-    // used by DrawFloorAndCeiling. Paints nothing.
-    void CastWalls(const World& world);
-    [[nodiscard]] bool DrawFloorAndCeiling(micropixel::RasterDrawList& list, const Player& player);
-    [[nodiscard]] bool DrawWalls(micropixel::RasterDrawList& list);
+    // Things become camera-facing billboards clipped by the Raycaster's
+    // per-column depth.
     [[nodiscard]] bool DrawThings(micropixel::RasterDrawList& list, const World& world);
     [[nodiscard]] bool DrawWeapon(micropixel::RasterDrawList& list, const World& world);
     [[nodiscard]] bool DrawDamageTint(micropixel::RasterDrawList& list, const World& world);
     [[nodiscard]] bool DrawHud(micropixel::RasterDrawList& list, const World& world, const HudStats& hud);
     // Weapon-class sprite scaled by an integer factor at full brightness.
     [[nodiscard]] bool BlitSprite(micropixel::RasterDrawList& list, gfx::SpriteId id, int x, int y, int scale) const;
-    [[nodiscard]] int LightFor(float distance) const;
 
     gfx::ViewConfig view_{};
     int half_height_{};
     int hud_height_{};
-    float zbuffer_[gfx::kMaxViewWidth]{};
-    WallSlice walls_[gfx::kMaxViewWidth]{};
-    WallSlice doors_[gfx::kMaxViewWidth]{};
-    // Rows [cover_top_, cover_bottom_] of each column are hidden by the far
-    // wall; floor and ceiling pixels inside that range are never painted.
-    int16_t cover_top_[gfx::kMaxViewWidth]{};
-    int16_t cover_bottom_[gfx::kMaxViewWidth]{};
-    // Per kCoverBlock columns: min/max of cover_bottom_ and max of cover_top_.
-    static constexpr int kCoverBlock = 16;
-    static constexpr int kCoverBlocks = (gfx::kMaxViewWidth + kCoverBlock - 1) / kCoverBlock;
-    int16_t block_bottom_min_[kCoverBlocks]{};
-    int16_t block_bottom_max_[kCoverBlocks]{};
-    int16_t block_top_max_[kCoverBlocks]{};
-    uint8_t light_lut_[512]{};
+    micropixel::Raycaster caster_{};
     Thing things_[World::kMaxThings]{};
-    float thing_depth_[World::kMaxThings]{};
-    uint8_t order_[World::kMaxThings]{};
+    micropixel::Billboard billboards_[World::kMaxThings]{};
 };
+static_assert(World::kMaxThings <= micropixel::Raycaster::kMaxBillboards,
+              "every World thing must fit one Raycaster billboard pass");
+static_assert(gfx::kMaxViewWidth <= micropixel::Raycaster::kMaxColumns,
+              "the App's view bound must not exceed the Raycaster column capacity");
 
 }  // namespace maze_break::game
 

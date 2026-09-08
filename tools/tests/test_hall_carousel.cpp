@@ -181,8 +181,7 @@ void NativeScreenshotCover() {
     Check(HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U),
           "the P4 packed screenshot must not fall back to a placeholder and asynchronous conversion");
     cover.stride = 624U;
-    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U),
-          "padded rows must have enough backing storage");
+    Check(!HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U), "padded rows must have enough backing storage");
     cover.size = pixels.size();
     Check(HallCoverCachePolicy::CanUseSourceDirectly(cover, 202U),
           "LVGL-aligned decoded covers must remain directly usable");

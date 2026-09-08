@@ -54,7 +54,7 @@ void BitmapStore::ClearSlot(Slot& slot) {
     slot.generation = generation;
 }
 
-micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, bool owned, bool mutable_pixels) {
+micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, bool owned) {
     const uint64_t required_size = static_cast<uint64_t>(view.stride) * view.height;
     if (slots_ == nullptr || view.data == nullptr || view.width == 0U || view.height == 0U || view.stride == 0U ||
         view.width > UINT16_MAX || view.height > UINT16_MAX || view.stride > UINT16_MAX || required_size == 0U ||
@@ -64,13 +64,10 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
     portENTER_CRITICAL(&lock_);
     for (uint32_t index = 0U; index < limits::kMaxBitmaps; ++index) {
         Slot& slot = slots_[index];
-        if (slot.data != nullptr) {
+        if (slot.data != nullptr || slot.generation == kHandleGenerationMask) {
             continue;
         }
-        uint32_t generation = (slot.generation + 1U) & kHandleGenerationMask;
-        if (generation == 0U) {
-            generation = 1U;
-        }
+        const uint32_t generation = slot.generation + 1U;
         slot = {
             .data = view.data,
             .generation = generation,
@@ -78,8 +75,7 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
             .height = static_cast<uint16_t>(view.height),
             .stride = static_cast<uint16_t>(view.stride),
             .pixel_format = static_cast<uint8_t>(view.pixel_format),
-            .flags = static_cast<uint8_t>(view.flags | kGuestReference | (owned ? static_cast<uint32_t>(kOwned) : 0U) |
-                                          (mutable_pixels ? static_cast<uint32_t>(kMutablePixels) : 0U)),
+            .flags = static_cast<uint8_t>(view.flags | kGuestReference | (owned ? static_cast<uint32_t>(kOwned) : 0U)),
         };
         ++live_count_;
         high_water_mark_ = std::max(high_water_mark_, live_count_);
@@ -91,31 +87,75 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
     return 0U;
 }
 
-micropixel_texture_handle_t BitmapStore::CreateOffscreenSurface(uint32_t width, uint32_t height,
-                                                                uint32_t pixel_format) {
-    const uint32_t bytes_per_pixel = pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-                                         ? 3U
-                                         : (pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
-                                                ? 4U
-                                                : (pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
-    const uint64_t stride = static_cast<uint64_t>(width) * bytes_per_pixel;
+namespace {
+uint32_t PixelBytes(uint32_t format) {
+    switch (format) {
+        case MICROPIXEL_PIXEL_FORMAT_RGB565:
+            return 2;
+        case MICROPIXEL_PIXEL_FORMAT_BGR888:
+            return 3;
+        case MICROPIXEL_PIXEL_FORMAT_BGRA8888:
+            return 4;
+        default:
+            return 0;
+    }
+}
+bool ValidPixels(uint32_t width, uint32_t height, uint32_t bytes, const uint8_t* pixels, uint32_t length,
+                 uint32_t pitch) {
+    const uint64_t row = static_cast<uint64_t>(width) * bytes;
+    return width && height && bytes && pixels && pitch >= row &&
+           static_cast<uint64_t>(height - 1) * pitch + row <= length;
+}
+}  // namespace
+
+ServiceResult<micropixel_texture_handle_t> BitmapStore::CreateDynamic(uint32_t width, uint32_t height, uint32_t format,
+                                                                      const uint8_t* pixels, uint32_t length,
+                                                                      uint32_t pitch) {
+    const uint32_t bytes = PixelBytes(format);
+    const uint64_t stride = static_cast<uint64_t>(width) * bytes;
     const uint64_t size = stride * height;
-    if (width == 0U || height == 0U || width > UINT16_MAX || height > UINT16_MAX || bytes_per_pixel == 0U ||
-        stride > UINT16_MAX || size > UINT32_MAX) {
-        return 0U;
+    const bool empty = pixels == nullptr && length == 0 && pitch == 0;
+    if (!width || !height || width > UINT16_MAX || height > UINT16_MAX || !bytes || stride > UINT16_MAX ||
+        size > UINT32_MAX || (!empty && !ValidPixels(width, height, bytes, pixels, length, pitch)))
+        return FailService<micropixel_texture_handle_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    auto* data = static_cast<uint8_t*>(heap_caps_aligned_alloc(64, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!data) return FailService<micropixel_texture_handle_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    if (empty)
+        std::memset(data, 0, size);
+    else
+        for (uint32_t row = 0; row < height; ++row)
+            std::memcpy(data + row * stride, pixels + static_cast<size_t>(row) * pitch, stride);
+    const device::BitmapView view{data,   static_cast<uint32_t>(size),    width, height, static_cast<uint32_t>(stride),
+                                  format, MICROPIXEL_TEXTURE_FLAG_DYNAMIC};
+    const auto handle = Add(view, true);
+    if (!handle) {
+        heap_caps_free(data);
+        return FailService<micropixel_texture_handle_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
-    auto* pixels = static_cast<uint8_t*>(
-        heap_caps_aligned_alloc(64U, static_cast<size_t>(size), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (pixels == nullptr) {
-        return 0U;
-    }
-    std::memset(pixels, 0, static_cast<size_t>(size));
-    device::BitmapView view{
-        pixels,       static_cast<uint32_t>(size),      width, height, static_cast<uint32_t>(stride),
-        pixel_format, MICROPIXEL_TEXTURE_FLAG_STREAMING};
-    const micropixel_texture_handle_t handle = Add(view, true, true);
-    if (handle == 0U) {
-        heap_caps_free(pixels);
+    return handle;
+}
+
+ServiceResult<micropixel_texture_handle_t> BitmapStore::UpdateDynamic(micropixel_texture_handle_t source, uint32_t x,
+                                                                      uint32_t y, uint32_t width, uint32_t height,
+                                                                      const uint8_t* pixels, uint32_t length,
+                                                                      uint32_t pitch) {
+    device::BitmapView old{};
+    if (!Resolve(source, old) || (old.flags & MICROPIXEL_TEXTURE_FLAG_DYNAMIC) == 0 ||
+        static_cast<uint64_t>(x) + width > old.width || static_cast<uint64_t>(y) + height > old.height ||
+        !ValidPixels(width, height, PixelBytes(old.pixel_format), pixels, length, pitch))
+        return FailService<micropixel_texture_handle_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    auto* data = static_cast<uint8_t*>(heap_caps_aligned_alloc(64, old.size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!data) return FailService<micropixel_texture_handle_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    std::memcpy(data, old.data, old.size);
+    const uint32_t bytes = PixelBytes(old.pixel_format);
+    for (uint32_t row = 0; row < height; ++row)
+        std::memcpy(data + static_cast<size_t>(y + row) * old.stride + x * bytes,
+                    pixels + static_cast<size_t>(row) * pitch, width * bytes);
+    old.data = data;
+    const auto handle = Add(old, true);
+    if (!handle) {
+        heap_caps_free(data);
+        return FailService<micropixel_texture_handle_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     return handle;
 }
@@ -125,18 +165,6 @@ bool BitmapStore::Resolve(micropixel_texture_handle_t bitmap, device::BitmapView
     portENTER_CRITICAL(&lock_);
     const Slot* slot = ResolveSlotLocked(bitmap);
     if (slot != nullptr && (slot->flags & kGuestReference) != 0U) {
-        view_out = View(*slot);
-        found = true;
-    }
-    portEXIT_CRITICAL(&lock_);
-    return found;
-}
-
-bool BitmapStore::ResolveMutable(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const {
-    bool found = false;
-    portENTER_CRITICAL(&lock_);
-    const Slot* slot = ResolveSlotLocked(bitmap);
-    if (slot != nullptr && (slot->flags & (kGuestReference | kMutablePixels)) == (kGuestReference | kMutablePixels)) {
         view_out = View(*slot);
         found = true;
     }
@@ -201,7 +229,7 @@ void BitmapStore::ReleaseAll() {
         if (slot.data != nullptr && (slot.flags & kOwned) != 0U) {
             owned_data[owned_count++] = slot.data;
         }
-        slot = {};
+        ClearSlot(slot);
     }
     live_count_ = 0U;
     portEXIT_CRITICAL(&lock_);

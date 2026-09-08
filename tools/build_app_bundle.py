@@ -746,6 +746,8 @@ def serialize_package_metadata(manifest: PackageManifest) -> bytes:
             "values": manifest.titles.values,
         },
     }
+    if manifest.version:
+        payload["version"] = manifest.version
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
@@ -783,12 +785,20 @@ def load_package_manifest(path: Path) -> PackageManifest:
             pinned_memory = value.get("pinned_memory", False)
             if not isinstance(pinned_memory, bool):
                 raise ValueError("app manifest pinned_memory must be true or false")
+            version = value.get("version", "")
+            if "version" in value and (
+                not isinstance(version, str)
+                or len(version) > 31
+                or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version)
+            ):
+                raise ValueError("app version must be canonical major.minor.patch, at most 31 ASCII bytes")
             return PackageManifest(
                 app_id,
                 titles,
                 launch_asset,
                 threading=threading,
                 pinned_memory=pinned_memory,
+                version=version,
             )
         except (KeyError, TypeError) as error:
             raise ValueError(

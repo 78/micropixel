@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "runtime/bundle/bundle_reader.h"
+#include "runtime/guest_memory.hpp"
 #include "runtime/resources/bitmap_store.hpp"
 #include "runtime/services/service_result.hpp"
 
@@ -26,26 +27,25 @@ class ResourceService final {
     ResourceService& operator=(const ResourceService&) = delete;
     ~ResourceService();
 
+    void BindGuestMemory(const GuestMemoryAccess& access) { memory_ = access; }
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateDynamicTexture(
+        const micropixel_dynamic_texture_create_request_t& request);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> UpdateDynamicTexture(
+        const micropixel_dynamic_texture_update_request_t& request);
     [[nodiscard]] bool valid() const;  // NOLINT(readability-identifier-naming)
-    [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id);
-    [[nodiscard]] ServiceResult<micropixel_adaptive_texture_info_t> LoadAdaptiveTexture(uint32_t asset_id,
-                                                                                        uint32_t scale_numerator,
-                                                                                        uint32_t scale_denominator);
-    [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture);
+    [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id, uint32_t scale_numerator,
+                                                                       uint32_t scale_denominator);
+    [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture_handle);
     [[nodiscard]] ServiceResult<device::FontResourceView> FindFont(uint32_t resource_id) const;
-    [[nodiscard]] ServiceResult<micropixel_texture_info_t> CreateStreamingTexture(uint32_t width, uint32_t height,
-                                                                                  uint32_t pixel_format);
-    [[nodiscard]] ServiceResult<device::BitmapView> MutableTexture(micropixel_texture_handle_t texture) const;
-    [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture, device::BitmapView& view_out) const;
-    [[nodiscard]] bool RetainSceneTexture(micropixel_texture_handle_t texture);
-    void ReleaseSceneTexture(micropixel_texture_handle_t texture);
+    [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture_handle, device::BitmapView& view_out) const;
+    [[nodiscard]] bool RetainSceneTexture(micropixel_texture_handle_t texture_handle);
+    void ReleaseSceneTexture(micropixel_texture_handle_t texture_handle);
     void Shutdown();
 
    private:
     struct Work final {
         ResourceService* service{};
         micropixel_bundle_asset_view_t asset{};
-        bool adaptive{};
         uint32_t scale_numerator{1U};
         uint32_t scale_denominator{1U};
     };
@@ -54,7 +54,7 @@ class ResourceService final {
     void Process(const Work& work);
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> AddAsset(const micropixel_bundle_asset_view_t& asset);
     [[nodiscard]] int32_t LoadOwnedAsset(const Work& work, micropixel_texture_handle_t& texture_out);
-    [[nodiscard]] micropixel_texture_info_t TextureInfo(micropixel_texture_handle_t texture,
+    [[nodiscard]] micropixel_texture_info_t TextureInfo(micropixel_texture_handle_t texture_handle,
                                                         const device::BitmapView& view) const;
 
     // AotPackage owns the mapping for the complete AppSession.
@@ -66,6 +66,7 @@ class ResourceService final {
     int32_t completed_status_{MICROPIXEL_STATUS_INTERNAL};
     uint32_t preferred_opaque_format_{MICROPIXEL_PIXEL_FORMAT_BGR888};
     BitmapStore bitmaps_;
+    GuestMemoryAccess memory_{};
     std::atomic<bool> stopping_{};
     bool shutdown_complete_{};
 };

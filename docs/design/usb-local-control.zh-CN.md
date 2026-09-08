@@ -88,10 +88,10 @@ Host 工具不会扫描 JPEG 内容寻找结束符，因此压缩数据中即使
 典型命令：
 
 ```sh
-python3 tools/micropixel --transport usb --port "$PORT" screenshot --output screenshot.jpg
+python3 tools/micropixel --port "$PORT" screenshot --output screenshot.jpg
 ```
 
-同一时刻只允许一个进程占用该 CDC 端口。截图暂时持有 LVGL/日志输出锁，完成原始帧复制后立即释放 LVGL
+指定 `--port` 即选择 USB transport，可省略 `--transport usb`。同一时刻只允许一个进程占用该 CDC 端口。截图暂时持有 LVGL/日志输出锁，完成原始帧复制后立即释放 LVGL
 锁；JPEG 编码与 USB 输出不在 LVGL 锁内执行。
 
 ## 5. 串口复用与安全

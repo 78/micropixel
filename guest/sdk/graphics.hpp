@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#include <span>
+#include <type_traits>
+
 #include "sdk/event.hpp"
 #include "sdk/geometry.hpp"
 #include "sdk/result.hpp"
@@ -20,9 +23,12 @@ class LabelNode;
 class SpriteBatch;
 struct SceneDescriptor;
 class Texture;
-class StreamingTexture;
-class TextureUpdateBatch;
 class DirectSurface;
+class HostSurface;
+class GuestSurface;
+// Runtime-internal result of SURFACE_CREATE; defined in the Guest Runtime.
+struct DirectSurfaceCreation;
+class RasterDrawList;
 class Font;
 
 namespace ui {
@@ -122,119 +128,81 @@ class RendererInfo final {
                 static_cast<int32_t>(width_ - safe_area_insets_.left - safe_area_insets_.right),
                 static_cast<int32_t>(height_ - safe_area_insets_.top - safe_area_insets_.bottom)};
     }
-    [[nodiscard]] constexpr uint16_t max_scene_nodes() const { return max_scene_nodes_; }
-    [[nodiscard]] constexpr uint16_t max_batch_instances() const { return max_batch_instances_; }
-    [[nodiscard]] constexpr uint16_t max_containers() const { return max_containers_; }
-    [[nodiscard]] constexpr uint16_t max_sprite_batches() const { return max_sprite_batches_; }
-    [[nodiscard]] constexpr uint32_t max_scene_bytes() const { return max_scene_bytes_; }
     // True when a DirectSurface frame reaches the panel without an App Surface
     // copy. False Hosts still accept DirectSurface but composite every frame.
     [[nodiscard]] constexpr bool direct_scanout() const { return direct_scanout_; }
-    // The panel consumes RGB565 with both bytes of every pixel swapped. A Guest
-    // that writes DirectSurface buffers itself must write that order.
+    // The panel consumes RGB565 with both bytes of every pixel swapped. A
+    // GuestSurface App writes its buffers in that order.
     [[nodiscard]] constexpr bool rgb565_byte_swapped() const { return rgb565_byte_swapped_; }
     // Panel transfer bound for one full frame; 0 when the Host does not know.
     [[nodiscard]] constexpr uint16_t max_full_frame_fps() const { return max_full_frame_fps_; }
-    // Host raster kernels (SurfaceRaster) are available; raster_pool_bytes() is
-    // the byte quota for uploaded textures plus palette.
-    [[nodiscard]] constexpr bool raster_supported() const { return raster_pool_bytes_ != 0U; }
-    [[nodiscard]] constexpr uint32_t raster_pool_bytes() const { return raster_pool_bytes_; }
+    // Whether Host raster kernels (RasterResources, HostSurface::Update) are available.
+    [[nodiscard]] constexpr bool raster_supported() const { return raster_supported_; }
 
    private:
     constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t physical_width, uint32_t physical_height,
-                           DisplayInsets safe_area_insets, uint16_t max_scene_nodes, uint16_t max_batch_instances,
-                           uint16_t max_containers, uint16_t max_sprite_batches, uint32_t max_scene_bytes,
-                           bool direct_scanout, bool rgb565_byte_swapped, uint16_t max_full_frame_fps,
-                           uint32_t raster_pool_bytes)
+                           DisplayInsets safe_area_insets, bool direct_scanout, bool rgb565_byte_swapped,
+                           uint16_t max_full_frame_fps, bool raster_supported)
         : width_(width),
           height_(height),
           physical_width_(physical_width),
           physical_height_(physical_height),
           safe_area_insets_(safe_area_insets),
-          max_scene_bytes_(max_scene_bytes),
-          max_scene_nodes_(max_scene_nodes),
-          max_batch_instances_(max_batch_instances),
-          max_containers_(max_containers),
-          max_sprite_batches_(max_sprite_batches),
           max_full_frame_fps_(max_full_frame_fps),
           direct_scanout_(direct_scanout),
           rgb565_byte_swapped_(rgb565_byte_swapped),
-          raster_pool_bytes_(raster_pool_bytes) {}
+          raster_supported_(raster_supported) {}
 
     uint32_t width_{};
     uint32_t height_{};
     uint32_t physical_width_{};
     uint32_t physical_height_{};
     DisplayInsets safe_area_insets_{};
-    uint32_t max_scene_bytes_{};
-    uint16_t max_scene_nodes_{};
-    uint16_t max_batch_instances_{};
-    uint16_t max_containers_{};
-    uint16_t max_sprite_batches_{};
     uint16_t max_full_frame_fps_{};
     bool direct_scanout_{};
     bool rgb565_byte_swapped_{};
-    uint32_t raster_pool_bytes_{};
+    bool raster_supported_{};
 
     friend class Renderer;
 };
 
-// Who owns the pixels of a DirectSurface.
-enum class DirectSurfaceBuffers : uint8_t {
-    // The Host allocates the buffers in its own memory and the Guest never
-    // maps them: it draws through SurfaceRaster draw lists and presents by
-    // index. Needs no pinned Guest memory. Buffer() returns nullptr.
-    kHost = 0,
-    // The SDK allocates the buffers in Guest memory and the App writes pixels
-    // itself, in the panel's byte order (rgb565_byte_swapped()). The Bundle
-    // must declare pinned_memory.
-    kGuest = 1,
-};
-
 // Full-screen RGB565 frames scanned out by the Host (Graphics 1.5). The App
-// fills one buffer (itself or through SurfaceRaster), Presents it and moves on
-// to a free one. A presented buffer belongs to the Host until Application
-// delivers the matching EventType::kSurfaceReleased, which also updates
-// AcquireFree()/Busy().
+// fills one buffer, Presents it and moves on to a free one. A presented buffer
+// belongs to the Host until Application delivers the matching
+// EventType::kSurfaceReleased, which also updates AcquireFree()/Busy().
 //
 // A DirectSurface replaces the Scene for as long as it exists: Scene submits
 // are rejected while one is created. The Host draws system UI above the frame
 // and may composite instead of scanning out while that UI is visible.
-class DirectSurface final {
+//
+// This is the frame-pacing part shared by the two concrete surfaces, which
+// differ in who owns the pixels:
+//   HostSurface   the Host allocates the buffers and the Guest never maps
+//                 them; every pixel comes from raster records (Update()).
+//   GuestSurface  the SDK allocates the buffers in Guest memory and the App
+//                 writes pixels itself (Buffer()).
+// Apps hold one of those; a DirectSurface reference only names a surface, for
+// example in Event::ReleasedFrom().
+class DirectSurface {
    public:
-    DirectSurface() = default;
     DirectSurface(const DirectSurface&) = delete;
     DirectSurface& operator=(const DirectSurface&) = delete;
-    DirectSurface(DirectSurface&& other) noexcept;
-    DirectSurface& operator=(DirectSurface&& other) noexcept;
-    ~DirectSurface();
 
     [[nodiscard]] constexpr bool valid() const { return handle_ != 0U; }
     // Panel size in physical pixels; every presented frame covers it.
     [[nodiscard]] constexpr uint32_t width() const { return width_; }
     [[nodiscard]] constexpr uint32_t height() const { return height_; }
-    // Size of one Guest buffer. Smaller than the panel only when the surface
-    // was created with an integer upscale; the Host then enlarges the frame.
+    // Size of one buffer. Smaller than the panel only when the surface was
+    // created with an integer upscale; the Host then enlarges the frame.
     [[nodiscard]] constexpr uint32_t buffer_width() const { return buffer_width_; }
     [[nodiscard]] constexpr uint32_t buffer_height() const { return buffer_height_; }
-    [[nodiscard]] constexpr uint32_t pitch() const { return buffer_width_ * 2U; }
-    [[nodiscard]] constexpr uint32_t buffer_bytes() const { return pitch() * buffer_height_; }
     [[nodiscard]] constexpr uint32_t buffer_count() const { return buffer_count_; }
-    [[nodiscard]] constexpr DirectSurfaceBuffers buffers() const {
-        return storage_ == nullptr ? DirectSurfaceBuffers::kHost : DirectSurfaceBuffers::kGuest;
-    }
-    [[nodiscard]] constexpr bool host_buffers() const { return buffers() == DirectSurfaceBuffers::kHost; }
-    // Byte order of every presented pixel; Host buffers are kept in it and a
-    // kGuest App writes it (swap the two bytes of each RGB565 value when true).
+    // Byte order of every presented pixel. Host buffers are kept in it; a
+    // GuestSurface App writes it (swap the two bytes of each RGB565 value when true).
     [[nodiscard]] constexpr bool rgb565_byte_swapped() const { return rgb565_byte_swapped_; }
     [[nodiscard]] constexpr bool direct_scanout() const { return direct_scanout_; }
     [[nodiscard]] constexpr uint16_t max_full_frame_fps() const { return max_full_frame_fps_; }
 
-    // kGuest only: row-major RGB565, `pitch()` bytes per row; nullptr for a
-    // Host-buffer surface, an invalid surface or index. Writing a buffer the
-    // Host holds is a data race with the panel transfer, so check Busy() first.
-    [[nodiscard]] uint16_t* Buffer(uint32_t index);
-    [[nodiscard]] const uint16_t* Buffer(uint32_t index) const;
     [[nodiscard]] bool Busy(uint32_t index) const;
     // Lowest-numbered buffer the Host does not hold. False when every buffer is
     // in flight; wait for kSurfaceReleased before rendering again.
@@ -243,11 +211,25 @@ class DirectSurface final {
     // still held by the Host.
     [[nodiscard]] Result<void> Present(uint32_t index);
     // Returns every buffer and destroys the surface; Scene submits work again.
+    // The concrete surfaces extend it to release what they own.
     void Reset();
 
-   private:
-    DirectSurface(uint32_t handle, uint32_t width, uint32_t height, uint32_t buffer_width, uint32_t buffer_height,
-                  uint32_t buffer_count, uint8_t* storage, uint32_t native_flags, uint16_t max_full_frame_fps);
+   protected:
+    constexpr DirectSurface() = default;
+    explicit DirectSurface(const DirectSurfaceCreation& creation);
+    DirectSurface(DirectSurface&& other) noexcept;
+    DirectSurface& operator=(DirectSurface&& other) noexcept;
+    // Not deletable through the base: HostSurface/GuestSurface own the lifetime.
+    ~DirectSurface();
+
+    // Guest pixel range a present names: buffer `index` starts at
+    // `base + index * stride` and spans `length` bytes. All zero for Host
+    // buffers, which are named by index alone.
+    void SetGuestPixels(uint32_t base, uint32_t stride, uint32_t length) {
+        guest_pixels_base_ = base;
+        guest_pixels_stride_ = stride;
+        guest_pixels_length_ = length;
+    }
 
     uint32_t handle_{};
     uint32_t width_{};
@@ -255,128 +237,253 @@ class DirectSurface final {
     uint32_t buffer_width_{};
     uint32_t buffer_height_{};
     uint32_t buffer_count_{};
-    uint8_t* storage_{};
+
+   private:
+    uint32_t guest_pixels_base_{};
+    uint32_t guest_pixels_stride_{};
+    uint32_t guest_pixels_length_{};
     uint16_t max_full_frame_fps_{};
     bool rgb565_byte_swapped_{};
     bool direct_scanout_{};
 
-    friend class Renderer;
     friend class Event;
+    friend class Renderer;
+};
+
+// DirectSurface whose buffers live in Host memory. The Guest never maps them:
+// it uploads INDEX8 resources once through RasterResources and draws each frame
+// by handing the Host a RasterDrawList (Graphics 1.6). Needs no pinned Guest
+// memory. Requires RendererInfo::raster_supported() to draw anything.
+class HostSurface final : public DirectSurface {
+   public:
+    constexpr HostSurface() = default;
+    HostSurface(HostSurface&& other) noexcept = default;
+    HostSurface& operator=(HostSurface&& other) noexcept = default;
+    ~HostSurface() = default;
+
+    // Draw synchronously into a free Host buffer. The callback takes
+    // RasterDrawList& and returns void. Automatically submits pending records;
+    // already submitted batches are not rolled back on failure.
+    template <typename Function>
+    [[nodiscard]] Result<void> Update(uint32_t buffer_index, Function&& function) const;
+
+   private:
+    explicit HostSurface(const DirectSurfaceCreation& creation) : DirectSurface(creation) {}
+    [[nodiscard]] RasterDrawList BeginUpdate(uint32_t buffer_index) const;
+
+    friend class Renderer;
+};
+
+// DirectSurface whose buffers live in Guest linear memory and are written by
+// the App, row-major RGB565 in the panel's byte order (rgb565_byte_swapped()).
+// The Host holds a pointer into Guest memory while a buffer is in flight, so
+// the Bundle must declare pinned_memory; otherwise creation returns kUnsupported.
+class GuestSurface final : public DirectSurface {
+   public:
+    constexpr GuestSurface() = default;
+    GuestSurface(GuestSurface&& other) noexcept;
+    GuestSurface& operator=(GuestSurface&& other) noexcept;
+    ~GuestSurface();
+
+    [[nodiscard]] constexpr uint32_t pitch() const { return buffer_width_ * 2U; }
+    [[nodiscard]] constexpr uint32_t buffer_bytes() const { return pitch() * buffer_height_; }
+    // Pixels of buffer `index`, `pitch()` bytes per row; nullptr for an invalid
+    // surface or index. Writing a buffer the Host holds is a data race with
+    // the panel transfer, so check Busy() first.
+    [[nodiscard]] uint16_t* Buffer(uint32_t index);
+    [[nodiscard]] const uint16_t* Buffer(uint32_t index) const;
+    // Destroys the surface and frees the buffers.
+    void Reset();
+
+   private:
+    GuestSurface(const DirectSurfaceCreation& creation, uint8_t* storage);
+    // Distance between consecutive buffers; each starts aligned for DMA.
+    [[nodiscard]] uint32_t buffer_stride() const;
+
+    uint8_t* storage_{};
+
+    friend class Renderer;
 };
 
 // Storage order of an INDEX8 texture uploaded to the Host raster kernels.
 enum class RasterLayout : uint8_t {
     // texel(u, v) = texels[u * height + v]; required by RasterDrawList::Column.
     kColumnMajor = 1,
-    // texel(u, v) = texels[v * width + u]; required by RasterDrawList::SpanPair.
+    // texel(u, v) = texels[v * width + u]; required by RasterDrawList::SpanPair
+    // and RasterDrawList::Warp.
     kRowMajor = 2,
 };
 
-// Draw list for one Host-buffer DirectSurface buffer (Graphics 1.6). Records
-// are encoded into a fixed wire buffer and handed to the Host, which
-// rasterizes them synchronously into the buffer; a full wire buffer is flushed
-// automatically, so a list may hold any number of records. Only one list is
-// open at a time; Begin() a new one after Finish(). Coordinates are in buffer
+// One entry of a warp map (RasterResources::UploadWarpMap): the texel and light
+// level a target pixel takes. Front ends such as SphereView fill maps with
+// these; Apps only need them to add their own decoration (halos, vignettes).
+struct WarpEntry final {
+    // The pixel is left alone (or takes the record's fill color).
+    static constexpr uint32_t kSkip = 0x80000000U;
+    static constexpr uint32_t kSolid = 0x40000000U;
+    static constexpr uint32_t kMaxLight = 31U;
+    static constexpr uint32_t kMaxCoordinate = 4095U;
+    // Texel (u, v) of the record's texture, lit at `light`; u and v wrap on
+    // the texture size after the record's offsets are added.
+    static constexpr uint32_t Texel(uint32_t u, uint32_t v, uint32_t light) {
+        return ((light & kMaxLight) << 24U) | ((v & kMaxCoordinate) << 12U) | (u & kMaxCoordinate);
+    }
+    // Palette entry `index` at `light`, without sampling the texture.
+    static constexpr uint32_t Solid(uint8_t index, uint32_t light) {
+        return kSolid | ((light & kMaxLight) << 24U) | index;
+    }
+};
+
+// Draw list for one HostSurface buffer (Graphics 1.6). Records are encoded
+// into a fixed wire buffer and handed to the Host, which rasterizes them
+// synchronously into the buffer; a full wire buffer is flushed automatically,
+// so a list may hold any number of records. Only one list is open at a time,
+// scoped to HostSurface::Update(). Coordinates are in buffer
 // pixels. Column/SpanPair must lie inside the buffer (the Host rejects the
-// list otherwise); Sprite/Rect are clipped by the Host. Colors are canonical
-// RGB565 whatever the panel's byte order.
+// list otherwise); Sprite/Rect/Warp are clipped by the Host. Colors are
+// canonical RGB565 whatever the panel's byte order. Textured records name the
+// palette slot they are lit from; SetPalette() changes the default (slot 0)
+// for the records that follow.
 class RasterDrawList final {
    public:
-    RasterDrawList() = default;
     RasterDrawList(const RasterDrawList&) = delete;
     RasterDrawList& operator=(const RasterDrawList&) = delete;
-    RasterDrawList(RasterDrawList&& other) noexcept;
-    RasterDrawList& operator=(RasterDrawList&& other) noexcept;
-    // An open list dropped without Finish() discards its pending records.
+    RasterDrawList(RasterDrawList&&) = delete;
+    RasterDrawList& operator=(RasterDrawList&&) = delete;
     ~RasterDrawList();
 
+    // Palette slot used by Column/SpanPair/Sprite/Warp records appended after
+    // this call. Lists start at slot 0.
+    void SetPalette(uint8_t palette_slot) { palette_slot_ = palette_slot; }
+    [[nodiscard]] constexpr uint8_t palette() const { return palette_slot_; }
+
     // Vertical run x, y0..y1 inclusive from column `u` of a kColumnMajor
-    // texture at palette light `light`. `v` is 16.16 texture rows starting at
+    // texture at palette level `light_level`. `v` is 16.16 texture rows starting at
     // v_start and advancing v_step per pixel, wrapped on the texture height.
     // `transparent` skips texels with index 0.
-    [[nodiscard]] bool Column(uint16_t x, int16_t y0, int16_t y1, uint8_t texture, uint8_t light, uint16_t u,
+    [[nodiscard]] bool Column(uint16_t x, int16_t y0, int16_t y1, uint8_t texture_slot, uint8_t light_level, uint16_t u,
                               int32_t v_start, int32_t v_step, bool transparent = false);
-    // Row y_floor from floor_texture and row y_ceiling from ceiling_texture
+    // Row y_floor from floor_texture_slot and row y_ceiling from ceiling_texture_slot
     // (both kRowMajor) over x0..x1 inclusive, sampled at the same 16.16 (s, t)
     // walk: the integer part is the tile and the fraction selects the texel.
-    [[nodiscard]] bool SpanPair(uint16_t y_floor, uint16_t y_ceiling, uint16_t x0, uint16_t x1, uint8_t floor_texture,
-                                uint8_t ceiling_texture, uint8_t light, int32_t s, int32_t t, int32_t ds, int32_t dt);
+    [[nodiscard]] bool SpanPair(uint16_t y_floor, uint16_t y_ceiling, uint16_t x0, uint16_t x1,
+                                uint8_t floor_texture_slot, uint8_t ceiling_texture_slot, uint8_t light_level,
+                                int32_t s, int32_t t, int32_t ds, int32_t dt);
     // Texels (u0.., v0..) of size src of a kColumnMajor texture, scaled with
     // nearest-neighbour sampling onto `destination` (clipped to the buffer),
-    // lit at `light`. `transparent` skips texel index 0. Weapons, HUD icons.
-    [[nodiscard]] bool Sprite(Rect destination, uint8_t texture, uint8_t light, uint16_t u0, uint16_t v0,
-                              uint16_t src_width, uint16_t src_height, bool transparent = true);
+    // lit at `light_level`. `transparent` skips texel index 0. Weapons, HUD icons.
+    [[nodiscard]] bool Sprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0, uint16_t v0,
+                              uint16_t source_width, uint16_t source_height, bool transparent = true);
+    // Every entry of warp map `warp_slot` (RasterResources::UploadWarpMap) with
+    // entry (0, 0) at `origin`, sampling kRowMajor `texture_slot` (power-of-two
+    // size) at the entry's ((u + u_offset) >> u_fraction_bits, v + v_offset),
+    // wrapped: with u_fraction_bits (0..4) the low bits of the map's u and of
+    // u_offset are a texel fraction, so the texture can scroll in sub-texel
+    // steps (texture width << u_fraction_bits must stay within 4096). Skipped
+    // entries leave the pixel alone, or take `fill` when it is given. One
+    // record draws a whole sphere or planar ground; per frame only the offsets
+    // change.
+    [[nodiscard]] bool Warp(Point origin, uint8_t warp_slot, uint8_t texture_slot, uint16_t u_offset = 0U,
+                            uint16_t v_offset = 0U, uint8_t u_fraction_bits = 0U);
+    [[nodiscard]] bool Warp(Point origin, uint8_t warp_slot, uint8_t texture_slot, Color fill, uint16_t u_offset = 0U,
+                            uint16_t v_offset = 0U, uint8_t u_fraction_bits = 0U);
+    // Draw a shared Texture directly. Source uses Texture coordinates;
+    // destination uses physical buffer pixels, like the other Raster methods.
+    [[nodiscard]] bool Image(const Texture& texture, Rect destination, Rect source, uint8_t opacity = 255);
     // Like Sprite but every drawn texel writes `color` (glyph atlases,
     // monochrome overlays); the palette is not consulted.
-    [[nodiscard]] bool SolidSprite(Rect destination, uint8_t texture, Color color, uint16_t u0, uint16_t v0,
-                                   uint16_t src_width, uint16_t src_height, bool transparent = true);
+    [[nodiscard]] bool SolidSprite(Rect destination, uint8_t texture_slot, Color color, uint16_t u0, uint16_t v0,
+                                   uint16_t source_width, uint16_t source_height, bool transparent = true);
     // Fills `area` (clipped) with `color`; alpha 255 writes, less blends over
     // the existing pixels. alpha 0 is rejected.
     [[nodiscard]] bool FillRect(Rect area, Color color, uint8_t alpha = 255U);
-    // Submits the pending records. Returns the first error of any flush; the
-    // list is closed either way.
-    [[nodiscard]] Result<void> Finish();
-    [[nodiscard]] constexpr bool open() const { return open_; }
 
    private:
-    RasterDrawList(uint32_t target_buffer, uint16_t width, uint16_t height, uint16_t pitch);
+    explicit RasterDrawList(int32_t status) : status_(status) {}
+    [[nodiscard]] Result<void> Finish();
+    [[nodiscard]] constexpr bool open() const { return open_; }
+    RasterDrawList(uint32_t surface_handle, uint32_t buffer_index);
     [[nodiscard]] bool Append(const void* record, uint32_t size);
     void Flush();
     void Close();
 
+    uint32_t surface_handle_{};
     uint32_t target_buffer_{};
     bool open_{};
-    uint16_t width_{};
-    uint16_t height_{};
-    uint16_t pitch_{};
+    uint8_t palette_slot_{};
     uint16_t record_count_{};
     uint32_t wire_size_{};
     int32_t status_{};
 
-    friend class SurfaceRaster;
+    friend class HostSurface;
 };
 
-// Host-side raster kernels for 2.5D software renderers (Graphics 1.6): the
-// Guest uploads INDEX8 textures and a lit palette once, then per frame casts
-// its geometry and emits Column/SpanPair/Sprite/Rect records instead of
-// writing pixels. The per-pixel loops run natively on the Host, on the Guest
-// task, into a Host-buffer DirectSurface. Resources live until the App exits.
-class SurfaceRaster final {
+template <typename Function>
+Result<void> HostSurface::Update(uint32_t buffer_index, Function&& function) const {
+    static_assert(std::is_invocable_r_v<void, Function, RasterDrawList&>,
+                  "Surface Update callback must accept RasterDrawList&");
+    static_assert(std::is_same_v<std::invoke_result_t<Function, RasterDrawList&>, void>,
+                  "Surface Update callback must return void");
+    auto list = BeginUpdate(buffer_index);
+    if (!list.open()) return list.Finish();
+    static_cast<Function&&>(function)(list);
+    return list.Finish();
+}
+
+// Upload entry for the Host raster kernels' resources (Graphics 1.6): INDEX8
+// textures, lit palettes and warp maps that HostSurface draw lists sample.
+// The Guest uploads them once, then per frame casts its geometry and emits
+// Column/SpanPair/Sprite/Rect/Warp records instead of writing pixels. The
+// per-pixel loops run natively on the Host, on the Guest task.
+//
+// Resources belong to the App session, not to a surface: they survive
+// destroying and recreating a HostSurface (for example to show a Scene in
+// between) and are released when the App exits. Every slot kind is an
+// independent uint8 ID space.
+class RasterResources final {
    public:
     // A default-constructed value has no kernels: valid() is false and every
     // operation fails with kUnsupported. Obtain a usable one from
-    // Renderer::CreateSurfaceRaster().
-    constexpr SurfaceRaster() noexcept = default;
-    constexpr SurfaceRaster(const SurfaceRaster&) noexcept = default;
-    constexpr SurfaceRaster& operator=(const SurfaceRaster&) noexcept = default;
+    // Renderer::CreateRasterResources().
+    constexpr RasterResources() noexcept = default;
+    constexpr RasterResources(const RasterResources&) noexcept = default;
+    constexpr RasterResources& operator=(const RasterResources&) noexcept = default;
 
-    [[nodiscard]] constexpr bool valid() const { return pool_bytes_ != 0U; }
-    // Host quota shared by every texture and the palette, in bytes.
-    [[nodiscard]] constexpr uint32_t pool_bytes() const { return pool_bytes_; }
-    [[nodiscard]] constexpr uint32_t max_textures() const { return max_textures_; }
-    [[nodiscard]] constexpr uint32_t max_light_levels() const { return max_light_levels_; }
+    [[nodiscard]] constexpr bool valid() const { return enabled_; }
+
+    // Entries per light level of a lit palette; fixed by the INDEX8 texel format.
+    static constexpr uint32_t kPaletteEntries = 256U;
+
+    // Every upload takes exactly the buffer its dimensions describe; a span of
+    // any other size fails with kInvalidArgument before reaching the Host.
+    // Slots are reusable uint8 IDs. OOM leaves an occupied slot unchanged.
 
     // `texels` holds width * height INDEX8 values in `layout`; width and height
-    // are powers of two from 8 to 128. Uploading to a used slot replaces it.
-    [[nodiscard]] Result<void> UploadTexture(uint8_t slot, uint32_t width, uint32_t height, RasterLayout layout,
-                                             const uint8_t* texels) const;
-    // `entries` holds light_levels x 256 canonical RGB565 pixels, entry
-    // [light][index] being the pixel written for texel `index`. The Host
-    // converts to the panel byte order.
-    [[nodiscard]] Result<void> UploadLitPalette(uint32_t light_levels, const uint16_t* entries) const;
-    // Opens a draw list on buffer `buffer_index` of a Host-buffer surface; the
-    // buffer must not be held by the Host (Busy()). Records go to the Host on
-    // Finish() or when the wire buffer fills. Returns a closed list for a
-    // kGuest surface.
-    [[nodiscard]] RasterDrawList Begin(DirectSurface& surface, uint32_t buffer_index) const;
+    // must be in 1..65535.
+    [[nodiscard]] Result<void> UploadTexture(uint8_t texture_slot, uint32_t width, uint32_t height, RasterLayout layout,
+                                             std::span<const uint8_t> texels) const;
+    // `entries` holds light_levels x kPaletteEntries canonical RGB565 pixels,
+    // entry [light_level][index] being the pixel written for texel `index`.
+    // The Host converts to the panel byte order. A world palette with many
+    // light levels can sit in one slot and a flat sprite palette in another.
+    [[nodiscard]] Result<void> UploadLitPalette(uint8_t palette_slot, uint32_t light_levels,
+                                                std::span<const uint16_t> entries) const;
+    // `entries` holds width * height WarpEntry values, one per target pixel of
+    // a RasterDrawList::Warp record. Replaces whatever the slot held.
+    [[nodiscard]] Result<void> UploadWarpMap(uint8_t warp_slot, uint32_t width, uint32_t height,
+                                             std::span<const uint32_t> entries) const;
+    // Writes rows first_row..first_row+row_count-1 (`entries` holds
+    // row_count * width values) of a width x height map. A slot already
+    // holding a map of that size is updated in place; otherwise a new map is
+    // allocated whose other rows are WarpEntry::kSkip, so a large map can be
+    // streamed in over several frames without a full-size Guest buffer.
+    [[nodiscard]] Result<void> UpdateWarpRows(uint8_t warp_slot, uint32_t width, uint32_t height, uint32_t first_row,
+                                              uint32_t row_count, std::span<const uint32_t> entries) const;
 
    private:
-    constexpr SurfaceRaster(uint32_t pool_bytes, uint32_t max_textures, uint32_t max_light_levels) noexcept
-        : pool_bytes_(pool_bytes), max_textures_(max_textures), max_light_levels_(max_light_levels) {}
+    explicit constexpr RasterResources(bool enabled) noexcept : enabled_(enabled) {}
 
-    uint32_t pool_bytes_{};
-    uint32_t max_textures_{};
-    uint32_t max_light_levels_{};
+    bool enabled_{};
 
     friend class Renderer;
 };
@@ -387,26 +494,23 @@ class Renderer final {
     constexpr Renderer& operator=(const Renderer&) noexcept = default;
 
     [[nodiscard]] RendererInfo info() const;
-    [[nodiscard]] Scene CreateScene(Color background = Color::Black()) const;
-    [[nodiscard]] Scene CreateScene(const SceneDescriptor& descriptor) const;
-    // Compatibility only. Prefer retained Scene objects or DirectSurface for full-frame rendering.
-    [[deprecated(
-        "Use Scene/SpriteBatch for retained graphics or CreateDirectSurface for full-frame "
-        "rendering.")]] [[nodiscard]] Result<StreamingTexture>
-    CreateStreamingTexture(Size size, PixelFormat pixel_format) const;
-    [[deprecated("Use Scene updates or DirectSurface presentation.")]] [[nodiscard]] TextureUpdateBatch
-    BeginTextureUpdateBatch() const;
-    // One DirectSurface per App at a time. `upscale` shrinks the buffers to
-    // physical size / upscale in both axes (must divide both exactly) and the
-    // Host enlarges each presented frame (PPA where available, nearest
-    // neighbour otherwise). Host raster kernels then write 1/upscale^2 of
-    // the pixels, which is what a 720x720 panel needs to stay above 30 fps.
-    [[nodiscard]] Result<DirectSurface> CreateDirectSurface(uint32_t buffer_count = 2U,
-                                                            DirectSurfaceBuffers buffers = DirectSurfaceBuffers::kHost,
-                                                            uint32_t upscale = 1U) const;
+    [[nodiscard]] Result<Scene> CreateScene(Color background = Color::Black()) const;
+    // Publishes pending Scene changes. Failure preserves both the displayed
+    // frame and pending Guest state for retry.
+    [[nodiscard]] Result<void> Present(const Scene& scene) const;
+    [[nodiscard]] Result<Scene> CreateScene(const SceneDescriptor& descriptor) const;
+    // One DirectSurface (of either kind) per App at a time. `upscale` shrinks
+    // the buffers to physical size / upscale in both axes (must divide both
+    // exactly) and the Host enlarges each presented frame (PPA where
+    // available, nearest neighbour otherwise). Host raster kernels then write
+    // 1/upscale^2 of the pixels, which is what a 720x720 panel needs to stay
+    // above 30 fps.
+    [[nodiscard]] Result<HostSurface> CreateHostSurface(uint32_t buffer_count = 2U, uint32_t upscale = 1U) const;
+    // Guest-written buffers; kUnsupported unless the Bundle declares pinned_memory.
+    [[nodiscard]] Result<GuestSurface> CreateGuestSurface(uint32_t buffer_count = 2U, uint32_t upscale = 1U) const;
     // Host raster kernels; kUnsupported when RendererInfo::raster_supported()
     // is false (older Host or the pool is configured to 0).
-    [[nodiscard]] Result<SurfaceRaster> CreateSurfaceRaster() const;
+    [[nodiscard]] Result<RasterResources> CreateRasterResources() const;
     [[nodiscard]] Result<TextMetrics> MeasureText(const char* text, SystemFont font = SystemFont::kMedium) const;
     [[nodiscard]] Result<TextMetrics> MeasureText(const char* text, const Font& font) const;
 

@@ -44,34 +44,36 @@ using DemoAtlasTextures = std::array<micropixel::Texture, kDemoAtlasSheetCount>;
 
 class DemoView final {
    public:
-    DemoView(micropixel::Scene& scene, micropixel::ContainerNode root_container)
-        : scene_(scene),
-          shape_container_(root_container.CreateContainer({.z_order = 0})),
-          sprite_container_(root_container.CreateContainer({.z_order = 1})),
-          label_container_(root_container.CreateContainer({.z_order = 2})) {}
+    DemoView(micropixel::Renderer renderer, micropixel::Scene& scene, micropixel::ContainerNode root_container)
+        : renderer_(renderer),
+          scene_(scene),
+          shape_container_(root_container.CreateContainer({.z_order = 0}).value()),
+          sprite_container_(root_container.CreateContainer({.z_order = 1}).value()),
+          label_container_(root_container.CreateContainer({.z_order = 2}).value()) {}
 
     template <typename RenderFunction>
     void Update(RenderFunction&& render) {
-        auto presented = scene_.Update([&](micropixel::SceneUpdate& update) {
-            update_ = &update;
+        {
+            updating_ = true;
             shape_count_ = 0U;
             label_count_ = 0U;
             sprite_count_ = 0U;
             for (micropixel::ShapeNode& shape : shapes_) {
-                shape.SetVisible(update, false);
+                shape.SetVisible(false);
             }
             for (micropixel::LabelNode& label : labels_) {
-                label.SetVisible(update, false);
+                label.SetVisible(false);
             }
             for (micropixel::SpriteNode& sprite : sprites_) {
-                sprite.SetVisible(update, false);
+                sprite.SetVisible(false);
             }
             render(*this);
-            DestroyUnused(update, shapes_, shape_count_);
-            DestroyUnused(update, labels_, label_count_);
-            DestroyUnused(update, sprites_, sprite_count_);
-            update_ = nullptr;
-        });
+            DestroyUnused(shapes_, shape_count_);
+            DestroyUnused(labels_, label_count_);
+            DestroyUnused(sprites_, sprite_count_);
+            updating_ = false;
+        }
+        auto presented = renderer_.Present(scene_);
         micropixel::Assert(presented.has_value(), "demo: scene update failed");
         shapes_.resize(shape_count_);
         labels_.resize(label_count_);
@@ -79,15 +81,15 @@ class DemoView final {
     }
 
     void Panel(micropixel::Rect rect, micropixel::Color color, uint8_t opacity = 255U) {
-        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        micropixel::Assert(updating_, "demo: no active scene update");
         if (shape_count_ == shapes_.size()) {
-            shapes_.push_back(shape_container_.CreateShape(rect, color, opacity));
+            shapes_.push_back(shape_container_.CreateShape(rect, color, opacity).value());
         }
         micropixel::ShapeNode& shape = shapes_[shape_count_++];
-        shape.SetRect(*update_, rect);
-        shape.SetColor(*update_, color);
-        shape.SetOpacity(*update_, opacity);
-        shape.SetVisible(*update_, opacity != 0U);
+        shape.SetRect(rect);
+        shape.SetColor(color);
+        shape.SetOpacity(opacity);
+        shape.SetVisible(opacity != 0U);
     }
 
     void Text(micropixel::Point position, const char* text, micropixel::Color color,
@@ -102,47 +104,45 @@ class DemoView final {
 
     void Sprite(micropixel::Point position, const micropixel::Texture& texture, micropixel::Rect source,
                 uint8_t opacity = 255U) {
-        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        micropixel::Assert(updating_, "demo: no active scene update");
         if (sprite_count_ == sprites_.size()) {
-            sprites_.push_back(sprite_container_.CreateSprite(
-                texture, {position.x, position.y, source.width, source.height}, source, opacity));
+            sprites_.push_back(
+                sprite_container_
+                    .CreateSprite(texture, {position.x, position.y, source.width, source.height}, source, opacity)
+                    .value());
         }
         micropixel::SpriteNode& sprite = sprites_[sprite_count_++];
-        sprite.SetTexture(*update_, texture);
-        sprite.SetSource(*update_, source);
-        sprite.SetDestination(*update_, {position.x, position.y, source.width, source.height});
-        sprite.SetOpacity(*update_, opacity);
-        sprite.SetVisible(*update_, opacity != 0U);
-    }
-
-    [[nodiscard]] micropixel::SceneUpdate& scene_update() {
-        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
-        return *update_;
+        sprite.SetTexture(texture);
+        sprite.SetSource(source);
+        sprite.SetDestination({position.x, position.y, source.width, source.height});
+        sprite.SetOpacity(opacity);
+        sprite.SetVisible(opacity != 0U);
     }
 
    private:
     template <typename Node>
-    static void DestroyUnused(micropixel::SceneUpdate& update, std::vector<Node>& nodes, uint32_t used) {
+    static void DestroyUnused(std::vector<Node>& nodes, uint32_t used) {
         for (uint32_t index = used; index < nodes.size(); ++index) {
-            nodes[index].Destroy(update);
+            nodes[index].Destroy();
         }
     }
 
     void SetText(micropixel::Point position, const char* text, micropixel::Color color, micropixel::SystemFont font,
                  bool centered) {
-        micropixel::Assert(update_ != nullptr, "demo: no active scene update");
+        micropixel::Assert(updating_, "demo: no active scene update");
         if (label_count_ == labels_.size()) {
-            labels_.push_back(label_container_.CreateLabel(position, text, color, font, centered));
+            labels_.push_back(label_container_.CreateLabel(position, text, color, font, centered).value());
         }
         micropixel::LabelNode& label = labels_[label_count_++];
-        label.SetPosition(*update_, position);
-        label.SetText(*update_, text);
-        label.SetColor(*update_, color);
-        label.SetFont(*update_, font);
-        label.SetCentered(*update_, centered);
-        label.SetVisible(*update_, true);
+        label.SetPosition(position);
+        label.SetText(text);
+        label.SetColor(color);
+        label.SetFont(font);
+        label.SetCentered(centered);
+        label.SetVisible(true);
     }
 
+    micropixel::Renderer renderer_;
     micropixel::Scene& scene_;
     micropixel::ContainerNode shape_container_{};
     micropixel::ContainerNode sprite_container_{};
@@ -150,7 +150,7 @@ class DemoView final {
     std::vector<micropixel::ShapeNode> shapes_{};
     std::vector<micropixel::LabelNode> labels_{};
     std::vector<micropixel::SpriteNode> sprites_{};
-    micropixel::SceneUpdate* update_{};
+    bool updating_{};
     uint32_t shape_count_{};
     uint32_t label_count_{};
     uint32_t sprite_count_{};

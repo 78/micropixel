@@ -10,66 +10,57 @@
 
 namespace micropixel::runtime {
 
-// Graphics 1.6 raster kernels for one Session: owns the INDEX8 texture slots
-// and the lit palette a Guest uploads, validates RASTER channel draw lists and
-// runs them synchronously on the Guest task into a Host-owned Direct Surface
-// buffer (in the panel's byte order; canonical colors are converted). Resource
-// bytes are capped by `pool_bytes`; the Host passes kAbiPoolBytes, the most the
-// ABI limits let one session upload, or 0 to withhold the kernels
-// (CONFIG_MICROPIXEL_RASTER_KERNELS). Slots live in PSRAM unless
-// CONFIG_MICROPIXEL_RASTER_POOL_INTERNAL_SRAM; everything is released at
-// Shutdown().
+// Per-session INDEX8 resources: texture, palette and warp-map slots, each a
+// directly indexed uint8 ID whose metadata table grows only during upload.
+// Rendering never allocates. Failed replacements preserve the previous
+// resource. Shutdown releases all pixels and metadata.
 class RasterService final {
    public:
-    // MAX_TEXTURES full-size textures plus a palette with every light level.
-    static constexpr uint32_t kAbiPoolBytes =
-        MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES * MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURE_SIZE *
-            MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURE_SIZE +
-        MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS * MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES * 2U;
-
-    explicit RasterService(uint32_t pool_bytes);
+    explicit RasterService(bool enabled);
     RasterService(const RasterService&) = delete;
     RasterService& operator=(const RasterService&) = delete;
     ~RasterService();
 
     void BindGuestMemory(const GuestMemoryAccess& access) { memory_ = access; }
 
-    [[nodiscard]] bool available() const { return pool_bytes_ > 0U; }  // NOLINT(readability-identifier-naming)
-    [[nodiscard]] uint32_t pool_bytes() const { return pool_bytes_; }  // NOLINT(readability-identifier-naming)
+    [[nodiscard]] bool available() const { return enabled_; }  // NOLINT(readability-identifier-naming)
 
     [[nodiscard]] ServiceResult<void> UploadTexture(const micropixel_raster_texture_upload_request_t& request);
     [[nodiscard]] ServiceResult<void> UploadPalette(const micropixel_raster_palette_upload_request_t& request);
+    [[nodiscard]] ServiceResult<void> UploadWarp(const micropixel_raster_warp_upload_request_t& request);
     // `surfaces` owns the target buffer and vetoes one the display still reads.
     [[nodiscard]] ServiceResult<void> Submit(const uint8_t* bytes, uint32_t length,
-                                             const DirectSurfaceService& surfaces);
+                                             const DirectSurfaceService& surfaces,
+                                             raster::TextureResolver resolve = nullptr, void* context = nullptr);
 
     void Shutdown();
 
    private:
-    struct Slot final {
-        uint8_t* pixels{};
-        uint32_t bytes{};
+    // Slot metadata array that grows to cover the highest slot ever uploaded.
+    template <typename Entry>
+    struct SlotTable final {
+        Entry* entries{};
+        uint32_t capacity{};
     };
-
-    [[nodiscard]] uint8_t* Allocate(uint32_t bytes);
-    void Release(Slot& slot);
+    [[nodiscard]] static uint8_t* Allocate(uint32_t bytes);
     // Validated Host pointer for a Guest range, or nullptr.
     [[nodiscard]] const uint8_t* ResolveGuest(uint32_t offset, uint32_t length) const;
-    // Points `slot` at a fresh `bytes` allocation, freeing what it held; the
-    // old resource survives when the new one cannot be allocated.
-    [[nodiscard]] uint8_t* Replace(Slot& slot, uint32_t bytes);
-    [[nodiscard]] raster::Resources ResourcesView() const;
-    // Stores the palette in the byte order of the buffers it is copied into.
+    // Grows `table` so `index` is addressable, or returns false without
+    // touching it when the larger table cannot be allocated.
+    template <typename Entry>
+    [[nodiscard]] static bool Reserve(SlotTable<Entry>& table, uint32_t index);
+    // Palette entries are stored in the byte order of the buffers they are
+    // copied into; converts every slot that is not in `byte_swapped` order.
     void MatchPaletteByteOrder(bool byte_swapped);
+    // Recomputes the non-skip spans of rows row0..row0+row_count-1.
+    static void RefreshWarpSpans(raster::WarpMap& map, uint32_t row0, uint32_t row_count);
+    [[nodiscard]] raster::Resources ResourcesView() const;
 
-    uint32_t pool_bytes_{};
-    uint32_t used_bytes_{};
+    bool enabled_{};
     GuestMemoryAccess memory_{};
-    Slot slots_[MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES]{};
-    raster::Texture textures_[MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES]{};
-    Slot palette_slot_{};
-    uint16_t palette_levels_{};
-    bool palette_swapped_{};
+    SlotTable<raster::Texture> textures_{};
+    SlotTable<raster::Palette> palettes_{};
+    SlotTable<raster::WarpMap> warps_{};
 
     // Periodic kernel telemetry (CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG).
     static constexpr uint32_t kTelemetrySubmits = 240U;
@@ -77,6 +68,7 @@ class RasterService final {
     uint32_t telemetry_records_{};
     uint32_t telemetry_bytes_{};
     uint64_t telemetry_execute_us_{};
+    raster::ExecuteProfile telemetry_profile_{};
 };
 
 }  // namespace micropixel::runtime

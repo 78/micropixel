@@ -1,5 +1,6 @@
 #include "apps/maze-evil/game/world.hpp"
 
+#include "apps/maze-evil/gfx/textures.hpp"
 #include "apps/maze-evil/rc_math.hpp"
 
 namespace maze_break::game {
@@ -97,6 +98,14 @@ void World::Reset() {
     player_.dir_y = math::Sin(player_.angle);
     player_.plane_x = -player_.dir_y * 0.66F;
     player_.plane_y = player_.dir_x * 0.66F;
+    for (int y = 0; y < kMapHeight; ++y) {
+        for (int x = 0; x < kMapWidth; ++x) {
+            const Tile tile = tiles_[y][x];
+            cells_[y][x] = tile == Tile::kDoor ? micropixel::RaycastCell::Slab(gfx::kTexDoor, 0.0F)
+                           : IsWall(tile)      ? micropixel::RaycastCell::Wall(static_cast<uint8_t>(WallTexture(tile)))
+                                               : micropixel::RaycastCell::Empty();
+        }
+    }
     ShowMessage("FIND THE EXIT. KILL EVERY IMP.", 4.0F);
 }
 
@@ -554,6 +563,7 @@ void World::UpdateDoors(float dt) {
                 }
                 break;
         }
+        cells_[door.y][door.x] = micropixel::RaycastCell::Slab(gfx::kTexDoor, door.open);
     }
 }
 

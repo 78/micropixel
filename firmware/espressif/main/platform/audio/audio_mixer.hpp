@@ -7,6 +7,8 @@
 namespace micropixel::platform::audio {
 
 constexpr uint32_t kSynthSineTableSize = 256U;
+// Longest single synth tone; reported to the Guest through Audio GET_INFO.
+constexpr uint32_t kMaxToneDurationMs = 5000U;
 
 struct SynthVoice final {
     uint32_t waveform{};

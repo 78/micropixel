@@ -151,19 +151,17 @@ ServiceResult<micropixel_audio_clip_info_t> AudioPlaybackService::LoadClip(uint3
     selected->guest_owned = true;
     micropixel_audio_clip_info_t info{};
     info.size = sizeof(info);
-    info.interface_major = MICROPIXEL_AUDIO_INTERFACE_MAJOR;
-    info.interface_minor = MICROPIXEL_AUDIO_INTERFACE_MINOR;
-    info.clip = ClipHandle(*selected);
+    info.clip_handle = ClipHandle(*selected);
     info.format = MICROPIXEL_AUDIO_FORMAT_OGG_OPUS;
     (void)xSemaphoreGive(mutex_);
     return info;
 }
 
-ServiceResult<void> AudioPlaybackService::ReleaseClip(micropixel_audio_clip_handle_t clip) {
+ServiceResult<void> AudioPlaybackService::ReleaseClip(micropixel_audio_clip_handle_t clip_handle) {
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    ClipSlot* slot = FindClip(clip);
+    ClipSlot* slot = FindClip(clip_handle);
     if (slot == nullptr || !slot->guest_owned) {
         (void)xSemaphoreGive(mutex_);
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -234,7 +232,7 @@ ServiceResult<micropixel_audio_playback_handle_t> AudioPlaybackService::Start(
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<micropixel_audio_playback_handle_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    ClipSlot* clip = FindClip(request.clip);
+    ClipSlot* clip = FindClip(request.clip_handle);
     PlaybackSlot* selected = nullptr;
     for (PlaybackSlot& slot : playbacks_) {
         if (!slot.active) {
@@ -288,11 +286,11 @@ ServiceResult<micropixel_audio_playback_handle_t> AudioPlaybackService::Start(
     return handle;
 }
 
-ServiceResult<void> AudioPlaybackService::Pause(micropixel_audio_playback_handle_t playback) {
+ServiceResult<void> AudioPlaybackService::Pause(micropixel_audio_playback_handle_t playback_handle) {
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    PlaybackSlot* slot = FindPlayback(playback);
+    PlaybackSlot* slot = FindPlayback(playback_handle);
     if (slot == nullptr) {
         (void)xSemaphoreGive(mutex_);
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -314,11 +312,11 @@ ServiceResult<void> AudioPlaybackService::Pause(micropixel_audio_playback_handle
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> AudioPlaybackService::Resume(micropixel_audio_playback_handle_t playback) {
+ServiceResult<void> AudioPlaybackService::Resume(micropixel_audio_playback_handle_t playback_handle) {
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    PlaybackSlot* slot = FindPlayback(playback);
+    PlaybackSlot* slot = FindPlayback(playback_handle);
     if (slot == nullptr) {
         (void)xSemaphoreGive(mutex_);
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -340,7 +338,7 @@ ServiceResult<void> AudioPlaybackService::Resume(micropixel_audio_playback_handl
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<void> AudioPlaybackService::SetVolume(micropixel_audio_playback_handle_t playback,
+ServiceResult<void> AudioPlaybackService::SetVolume(micropixel_audio_playback_handle_t playback_handle,
                                                     uint16_t volume_per_mille) {
     if (volume_per_mille > 1000U) {
         return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -348,7 +346,7 @@ ServiceResult<void> AudioPlaybackService::SetVolume(micropixel_audio_playback_ha
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    PlaybackSlot* slot = FindPlayback(playback);
+    PlaybackSlot* slot = FindPlayback(playback_handle);
     if (slot == nullptr || slot->state == MICROPIXEL_AUDIO_PLAYBACK_STATE_FINISHED ||
         slot->state == MICROPIXEL_AUDIO_PLAYBACK_STATE_FAILED) {
         (void)xSemaphoreGive(mutex_);
@@ -384,11 +382,11 @@ void AudioPlaybackService::ClearPlayback(PlaybackSlot& slot) {
     slot.eof.store(true, std::memory_order_release);
 }
 
-ServiceResult<void> AudioPlaybackService::Stop(micropixel_audio_playback_handle_t playback) {
+ServiceResult<void> AudioPlaybackService::Stop(micropixel_audio_playback_handle_t playback_handle) {
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<void>(MICROPIXEL_STATUS_INTERNAL);
     }
-    PlaybackSlot* slot = FindPlayback(playback);
+    PlaybackSlot* slot = FindPlayback(playback_handle);
     if (slot == nullptr) {
         (void)xSemaphoreGive(mutex_);
         return FailService<void>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -403,11 +401,11 @@ ServiceResult<void> AudioPlaybackService::Stop(micropixel_audio_playback_handle_
 }
 
 ServiceResult<micropixel_audio_playback_state_response_t> AudioPlaybackService::State(
-    micropixel_audio_playback_handle_t playback) {
+    micropixel_audio_playback_handle_t playback_handle) {
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
         return FailService<micropixel_audio_playback_state_response_t>(MICROPIXEL_STATUS_INTERNAL);
     }
-    PlaybackSlot* slot = FindPlayback(playback);
+    PlaybackSlot* slot = FindPlayback(playback_handle);
     if (slot == nullptr) {
         (void)xSemaphoreGive(mutex_);
         return FailService<micropixel_audio_playback_state_response_t>(MICROPIXEL_STATUS_NOT_FOUND);
@@ -415,7 +413,7 @@ ServiceResult<micropixel_audio_playback_state_response_t> AudioPlaybackService::
     micropixel_audio_playback_state_response_t response{
         .size = sizeof(response),
         .state = slot->state,
-        .playback = playback,
+        .playback_handle = playback_handle,
     };
     (void)xSemaphoreGive(mutex_);
     return response;
@@ -513,7 +511,7 @@ void AudioPlaybackService::FinishPlayback(uint32_t token, int32_t status) {
     event.sequence = ++event_sequence_;
     event.status = status;
     micropixel_audio_event_payload_t payload{};
-    payload.playback = token;
+    payload.playback_handle = token;
     std::memcpy(event.payload, &payload, sizeof(payload));
     (void)xSemaphoreGive(mutex_);
     (void)events_.PushRequired(event);

@@ -28,6 +28,8 @@ namespace micropixel::runtime {
 class PcmStreamService final {
    public:
     static constexpr uint32_t kMaxStreams = 1U;
+    // Largest ring a Guest may request; the response reports the clamped size.
+    static constexpr uint32_t kMaxCapacityFrames = 65536U;
 
     PcmStreamService(device::AudioService& audio, EventQueue& events, int64_t clock_origin_us);
     PcmStreamService(const PcmStreamService&) = delete;
@@ -42,7 +44,7 @@ class PcmStreamService final {
     // frame_count * channels interleaved int16 values.
     [[nodiscard]] ServiceResult<micropixel_audio_pcm_stream_write_response_t> Write(
         const micropixel_audio_pcm_stream_write_request_t& request, const int16_t* samples, uint32_t payload_bytes);
-    [[nodiscard]] ServiceResult<void> Close(micropixel_audio_pcm_stream_handle_t stream);
+    [[nodiscard]] ServiceResult<void> Close(micropixel_audio_pcm_stream_handle_t stream_handle);
 
     // STOP_ALL and session teardown close every stream (streams survive App
     // suspend; only the mixer voice pauses).

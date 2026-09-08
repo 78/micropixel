@@ -54,6 +54,25 @@ constexpr uint32_t kUpscaleThresholdWidth = 480U;
     return panel_width > kUpscaleThresholdWidth && panel_width % 2U == 0U && panel_height % 2U == 0U ? 2U : 1U;
 }
 
+// SDK touch events are in the 720-short-edge logical space. DirectSurface
+// raster and the stick overlay are panel / buffer pixels.
+[[nodiscard]] int MapCoord(int value, uint32_t dst_extent, uint32_t src_extent) {
+    if (src_extent == 0U) {
+        return 0;
+    }
+    const int64_t product = static_cast<int64_t>(value) * static_cast<int64_t>(dst_extent);
+    const int64_t rounding = static_cast<int64_t>(src_extent / 2U);
+    return static_cast<int>((product >= 0 ? product + rounding : product - rounding) /
+                            static_cast<int64_t>(src_extent));
+}
+
+[[nodiscard]] micropixel::TouchEvent ToPanelTouch(const micropixel::TouchEvent& touch, uint32_t panel_width,
+                                                  uint32_t panel_height, uint32_t logical_width,
+                                                  uint32_t logical_height) {
+    return touch.WithPosition(
+        {MapCoord(touch.x(), panel_width, logical_width), MapCoord(touch.y(), panel_height, logical_height)});
+}
+
 // Virtual stick ring and knob. Touch coordinates are panel pixels; the view
 // may be `upscale` times smaller.
 bool DrawStickOverlay(micropixel::RasterDrawList& list, const game::Renderer& renderer,
@@ -145,10 +164,12 @@ class MazeBreakApp final {
 
     micropixel::Application app_{};
     Options options_{};
-    micropixel::DirectSurface surface_{};
-    micropixel::SurfaceRaster raster_{};
+    micropixel::HostSurface surface_{};
+    micropixel::RasterResources raster_{};
     gfx::ViewConfig view_{};
     uint32_t upscale_{1U};
+    uint32_t logical_width_{};
+    uint32_t logical_height_{};
     game::Renderer& renderer_{gRenderer};
     game::World& world_{gWorld};
     input::TouchControls touch_{};
@@ -194,7 +215,8 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
                 }
                 return true;
             }
-            touch_.OnTouch(*event.touch());
+            touch_.OnTouch(
+                ToPanelTouch(*event.touch(), surface_.width(), surface_.height(), logical_width_, logical_height_));
             return true;
         case micropixel::EventType::kKey:
             if (!started_) {
@@ -443,19 +465,21 @@ int MazeBreakApp::Run() {
     // linear memory; every pixel comes from the Host raster kernels (Graphics 1.6). 480 px panels render 1:1; larger
     // ones at half resolution, enlarged by the Host on present.
     const micropixel::RendererInfo display = app_.renderer().info();
+    logical_width_ = display.width();
+    logical_height_ = display.height();
     upscale_ = UpscaleFor(display.physical_width(), display.physical_height());
-    auto created = app_.renderer().CreateDirectSurface(kBufferCount, micropixel::DirectSurfaceBuffers::kHost, upscale_);
+    auto created = app_.renderer().CreateHostSurface(kBufferCount, upscale_);
     if (!created.has_value()) {
-        app_.log().Error("maze-break: Host-buffer DirectSurface unavailable; Graphics 1.6 required");
+        app_.log().Error("maze-break: HostSurface unavailable; Graphics 1.6 required");
         return 1;
     }
-    micropixel::Result<micropixel::SurfaceRaster> raster = app_.renderer().CreateSurfaceRaster();
+    micropixel::Result<micropixel::RasterResources> raster = app_.renderer().CreateRasterResources();
     if (!raster.has_value()) {
         app_.log().Error("maze-break: Host raster kernels unavailable; Graphics 1.6 required");
         return 1;
     }
     raster_ = raster.value();
-    surface_ = static_cast<micropixel::DirectSurface&&>(created.value());
+    surface_ = static_cast<micropixel::HostSurface&&>(created.value());
     if (surface_.buffer_width() > static_cast<uint32_t>(gfx::kMaxViewWidth) ||
         surface_.buffer_height() > static_cast<uint32_t>(gfx::kMaxViewHeight)) {
         app_.log().Error("maze-break: panel larger than the renderer's 800x800 limit");
@@ -569,13 +593,14 @@ int MazeBreakApp::Run() {
         }
 
         const uint64_t render_started_us = app_.clock().Now().microseconds();
-        micropixel::RasterDrawList list = raster_.Begin(surface_, index);
-        bool drawn = started_ ? renderer_.Render(list, world_, hud_) : DrawInstructions(list);
-        if (drawn && started_ && !options_.benchmark) {
-            drawn = DrawStickOverlay(list, renderer_, touch_.overlay(), static_cast<int>(upscale_));
-        }
-        // The Host rasterizes the records synchronously here.
-        if (!drawn || !list.Finish().has_value()) {
+        bool drawn = false;
+        auto rendered = surface_.Update(index, [&](micropixel::RasterDrawList& list) {
+            drawn = started_ ? renderer_.Render(list, world_, hud_) : DrawInstructions(list);
+            if (drawn && started_ && !options_.benchmark) {
+                drawn = DrawStickOverlay(list, renderer_, touch_.overlay(), static_cast<int>(upscale_));
+            }
+        });
+        if (!drawn || !rendered) {
             app_.log().Error("maze-break: Host raster rejected the frame's records");
             return 4;
         }

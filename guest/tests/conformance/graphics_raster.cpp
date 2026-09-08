@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "abi/micropixel_abi.h"
+#include "sdk/micropixel.hpp"
 
 namespace {
 
@@ -47,7 +48,7 @@ void Copy(uint8_t* destination, const void* source, uint32_t bytes) {
 micropixel_raster_texture_upload_request_t TextureUpload(uint16_t slot, uint16_t layout, const uint8_t* pixels) {
     micropixel_raster_texture_upload_request_t request{};
     request.size = sizeof(request);
-    request.slot = slot;
+    request.texture_slot = slot;
     request.width = kTexSize;
     request.height = kTexSize;
     request.layout = layout;
@@ -60,7 +61,7 @@ micropixel_raster_palette_upload_request_t PaletteUpload() {
     micropixel_raster_palette_upload_request_t request{};
     request.size = sizeof(request);
     request.light_levels = kLightLevels;
-    request.pixels = GuestAddress(g_palette);
+    request.entries = GuestAddress(g_palette);
     request.length = kLightLevels * MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES * 2U;
     return request;
 }
@@ -68,13 +69,9 @@ micropixel_raster_palette_upload_request_t PaletteUpload() {
 micropixel_raster_header_t Header(uint16_t record_count, uint32_t total_size) {
     micropixel_raster_header_t header{};
     header.magic = MICROPIXEL_GRAPHICS_RASTER_MAGIC;
-    header.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    header.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
     header.total_size = total_size;
-    header.target_buffer = g_target_buffer;
-    header.target_width = static_cast<uint16_t>(g_width);
-    header.target_height = static_cast<uint16_t>(g_height);
-    header.target_pitch = static_cast<uint16_t>(g_width * 2U);
+    header.surface_handle = g_surface;
+    header.buffer_index = g_target_buffer;
     header.record_count = record_count;
     return header;
 }
@@ -82,8 +79,8 @@ micropixel_raster_header_t Header(uint16_t record_count, uint32_t total_size) {
 micropixel_raster_column_t Column() {
     micropixel_raster_column_t column{};
     column.type = MICROPIXEL_RASTER_RECORD_COLUMN;
-    column.texture = 0U;
-    column.light = 1U;
+    column.texture_slot = 0U;
+    column.light_level = 1U;
     column.x = 5U;
     column.y0 = 2U;
     column.y1 = 17U;  // 16 pixels: one texel per pixel
@@ -96,13 +93,13 @@ micropixel_raster_column_t Column() {
 micropixel_raster_span_pair_t SpanPair() {
     micropixel_raster_span_pair_t span{};
     span.type = MICROPIXEL_RASTER_RECORD_SPAN_PAIR;
-    span.floor_texture = 1U;
-    span.ceiling_texture = 1U;
+    span.floor_texture_slot = 1U;
+    span.ceiling_texture_slot = 1U;
     span.y_floor = 20U;
     span.y_ceiling = 1U;
     span.x0 = 8U;
     span.x1 = 23U;  // 16 pixels: one texel per pixel along u
-    span.light = 0U;
+    span.light_level = 0U;
     span.s = 0;
     span.t = 2 << 12;  // texel row 2 (16-texel texture: fraction bits 12..15)
     span.ds = 1 << 12;
@@ -114,23 +111,23 @@ micropixel_raster_sprite_t Sprite() {
     micropixel_raster_sprite_t sprite{};
     sprite.type = MICROPIXEL_RASTER_RECORD_SPRITE;
     sprite.flags = MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0;
-    sprite.texture = 0U;
-    sprite.light = 1U;
+    sprite.texture_slot = 0U;
+    sprite.light_level = 1U;
     sprite.x = -4;  // partly off the left edge: the Host clips
     sprite.y = 24;
     sprite.width = 32U;
     sprite.height = 32U;
-    sprite.u0 = 0U;
-    sprite.v0 = 0U;
-    sprite.src_width = kTexSize;
-    sprite.src_height = kTexSize;
+    sprite.source_x = 0U;
+    sprite.source_y = 0U;
+    sprite.source_width = kTexSize;
+    sprite.source_height = kTexSize;
     return sprite;
 }
 
 micropixel_raster_rect_t Rect() {
     micropixel_raster_rect_t rect{};
     rect.type = MICROPIXEL_RASTER_RECORD_RECT;
-    rect.alpha = 128U;
+    rect.opacity = 128U;
     rect.x = 0;
     rect.y = 0;
     rect.width = 0xFFFFU;  // wider than any panel: clipped
@@ -181,6 +178,9 @@ int32_t SubmitWithHeader(const micropixel_raster_header_t& header, uint32_t leng
 }  // namespace
 
 int main() {
+    // Must work as the first SDK graphics operation, before Info or Surface creation.
+    micropixel::Application app;
+    auto initial_raster = app.renderer().CreateRasterResources();
     micropixel_service_info_t service{};
     if (micropixel_service_open(
             MICROPIXEL_SERVICE_GRAPHICS,
@@ -188,7 +188,7 @@ int main() {
             &service, sizeof(service)) != MICROPIXEL_STATUS_OK) {
         return 50;
     }
-    g_service_handle = service.handle;
+    g_service_handle = service.service_handle;
 
     micropixel_graphics_info_t info{};
     uint32_t info_size = 0U;
@@ -198,7 +198,8 @@ int main() {
         return 51;
     }
     const bool advertised = (service.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER) != 0U;
-    if (advertised != (info.raster_pool_bytes != 0U)) {
+    if (initial_raster.has_value() != advertised ||
+        (!initial_raster && initial_raster.error().code() != micropixel::ErrorCode::kUnsupported)) {
         return 52;
     }
     if (!advertised) {
@@ -209,10 +210,6 @@ int main() {
             return 53;
         }
         return 0;
-    }
-    if (info.raster_max_textures != MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES ||
-        info.raster_max_light_levels != MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS) {
-        return 54;
     }
     g_width = info.width;
     g_height = info.height;
@@ -257,26 +254,26 @@ int main() {
     micropixel_surface_create_response_t created{};
     if (Call(MICROPIXEL_GRAPHICS_METHOD_SURFACE_CREATE, &create, sizeof(create), &created, sizeof(created)) !=
             MICROPIXEL_STATUS_OK ||
-        created.surface == 0U) {
+        created.surface_handle == 0U) {
         return 83;
     }
-    g_surface = created.surface;
+    g_surface = created.surface_handle;
     if (Submit(BuildList(nullptr, nullptr, nullptr, &rect)) != MICROPIXEL_STATUS_OK) {
         return 84;
     }
 
     // Texture upload negatives.
     micropixel_raster_texture_upload_request_t bad = wall;
-    bad.slot = MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES;
+    bad.width = 0U;
     if (Call(MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD, &bad, sizeof(bad)) !=
         MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 57;
     }
     bad = wall;
-    bad.width = 12U;  // not a power of two
+    bad.texture_slot = 255U;
+    bad.width = 12U;  // arbitrary positive dimensions are valid
     bad.length = 12U * kTexSize;
-    if (Call(MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD, &bad, sizeof(bad)) !=
-        MICROPIXEL_STATUS_INVALID_ARGUMENT) {
+    if (Call(MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD, &bad, sizeof(bad)) != MICROPIXEL_STATUS_OK) {
         return 58;
     }
     bad = wall;
@@ -326,11 +323,11 @@ int main() {
     }
     micropixel_surface_present_request_t present{};
     present.size = sizeof(present);
-    present.surface = g_surface;
+    present.surface_handle = g_surface;
     present.buffer_index = 0U;
     present.pitch = g_width * 2U;
-    present.src_width = g_width;
-    present.src_height = g_height;
+    present.source_width = g_width;
+    present.source_height = g_height;
     if (Call(MICROPIXEL_GRAPHICS_METHOD_SURFACE_PRESENT, &present, sizeof(present)) != MICROPIXEL_STATUS_OK) {
         return 67;
     }
@@ -339,11 +336,11 @@ int main() {
         return 68;
     }
     micropixel_raster_header_t header = Header(2U, BuildList(&column, &span));
-    header.target_buffer = 1U;
+    header.buffer_index = 1U;
     if (SubmitWithHeader(header, header.total_size) != MICROPIXEL_STATUS_OK) {
         return 69;
     }
-    header.target_buffer = 2U;  // no such buffer
+    header.buffer_index = 2U;  // no such buffer
     if (SubmitWithHeader(header, header.total_size) != MICROPIXEL_STATUS_NOT_FOUND) {
         return 70;
     }
@@ -351,32 +348,32 @@ int main() {
     // Draw list negatives.
     const uint32_t length = BuildList(&column, &span);
     header = Header(2U, length);
-    header.target_buffer = 1U;
+    header.buffer_index = 1U;
     header.magic ^= 1U;
     if (SubmitWithHeader(header, length) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 71;
     }
     header = Header(2U, length);
-    header.target_buffer = 1U;
+    header.buffer_index = 1U;
     header.total_size = length - 4U;
     if (SubmitWithHeader(header, length) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 72;
     }
     header = Header(2U, length);
-    header.target_buffer = 1U;
+    header.buffer_index = 1U;
     header.reserved0 = 1U;
     if (SubmitWithHeader(header, length) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 73;
     }
     header = Header(2U, length);
-    header.target_buffer = 1U;
-    header.target_pitch = static_cast<uint16_t>(g_width * 2U - 2U);  // narrower than the width
+    header.buffer_index = 1U;
+    header.record_count = 0U;
     if (SubmitWithHeader(header, length) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 74;
     }
     header = Header(2U, length);
-    header.target_buffer = 1U;
-    header.target_height = static_cast<uint16_t>(g_height / 2U);  // not the buffer's geometry
+    header.buffer_index = 1U;
+    header.flags = 1U;
     if (SubmitWithHeader(header, length) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 75;
     }
@@ -389,12 +386,12 @@ int main() {
         return 76;
     }
     bad_column = column;
-    bad_column.texture = 1U;  // row-major slot used as a column texture
+    bad_column.texture_slot = 1U;  // row-major slot used as a column texture
     if (Submit(BuildList(&bad_column, nullptr)) != MICROPIXEL_STATUS_NOT_FOUND) {
         return 77;
     }
     bad_column = column;
-    bad_column.light = kLightLevels;
+    bad_column.light_level = kLightLevels;
     if (Submit(BuildList(&bad_column, nullptr)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 78;
     }
@@ -404,17 +401,17 @@ int main() {
         return 79;
     }
     bad_span = span;
-    bad_span.floor_texture = 7U;  // empty slot
+    bad_span.floor_texture_slot = 7U;  // empty slot
     if (Submit(BuildList(nullptr, &bad_span)) != MICROPIXEL_STATUS_NOT_FOUND) {
         return 80;
     }
     micropixel_raster_sprite_t bad_sprite = sprite;
-    bad_sprite.u0 = kTexSize;  // source rectangle past the texture
+    bad_sprite.source_x = kTexSize;  // source rectangle past the texture
     if (Submit(BuildList(nullptr, nullptr, &bad_sprite)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 81;
     }
     bad_sprite = sprite;
-    bad_sprite.texture = 1U;  // row-major slot in a sprite
+    bad_sprite.texture_slot = 1U;  // row-major slot in a sprite
     if (Submit(BuildList(nullptr, nullptr, &bad_sprite)) != MICROPIXEL_STATUS_NOT_FOUND) {
         return 85;
     }
@@ -424,7 +421,7 @@ int main() {
         return 86;
     }
     bad_sprite = sprite;
-    bad_sprite.light = kLightLevels;
+    bad_sprite.light_level = kLightLevels;
     if (Submit(BuildList(nullptr, nullptr, &bad_sprite)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 87;
     }
@@ -434,7 +431,7 @@ int main() {
         return 88;
     }
     micropixel_raster_rect_t bad_rect = rect;
-    bad_rect.alpha = 0U;
+    bad_rect.opacity = 0U;
     if (Submit(BuildList(nullptr, nullptr, nullptr, &bad_rect)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 89;
     }
@@ -464,5 +461,49 @@ int main() {
     if (Submit(BuildList(nullptr, nullptr, nullptr, &rect)) != MICROPIXEL_STATUS_NOT_FOUND) {
         return 94;
     }
+    // Exercise the public SDK with one whole 512x256 texture, arbitrary-size
+    // textures, reusable uint8 slots and every texture-backed draw record.
+    auto renderer = app.renderer();
+    auto raster_result = renderer.CreateRasterResources();
+    auto surface_result = renderer.CreateHostSurface(1U);
+    if (!raster_result || !surface_result) return 95;
+    auto& raster = *raster_result;
+    auto& surface = *surface_result;
+    static uint8_t large[512U * 256U]{};
+    const std::span<const uint8_t> all(large);
+    // Dimension out of range, and a span that does not match its dimensions,
+    // are both rejected by the SDK before any Host call.
+    if (raster.UploadTexture(0U, 65536U, 1U, micropixel::RasterLayout::kColumnMajor, all.first(65536U))) return 99;
+    if (raster.UploadTexture(0U, 512U, 256U, micropixel::RasterLayout::kColumnMajor, all.first(all.size() - 1U)))
+        return 98;
+    if (!raster.UploadTexture(254U, 512U, 256U, micropixel::RasterLayout::kColumnMajor, all) ||
+        !raster.UploadTexture(253U, 300U, 200U, micropixel::RasterLayout::kRowMajor, all.first(300U * 200U)))
+        return 96;
+    for (uint32_t id = 2U; id < 253U; ++id) {
+        if (!raster.UploadTexture(static_cast<uint8_t>(id), 1U, 1U, micropixel::RasterLayout::kColumnMajor,
+                                  all.first(1U)))
+            return 97;
+    }
+    bool nested_called = false;
+    if (!surface.Update(0U,
+                        [&](micropixel::RasterDrawList& draw) {
+                            if (surface.Update(0U, [&](micropixel::RasterDrawList&) { nested_called = true; }))
+                                __builtin_trap();
+                            (void)draw.Column(0U, 0, 1, 254U, 0U, 511U, 0, 65536);
+                            (void)draw.SpanPair(2U, 3U, 0U, 3U, 253U, 253U, 0U, -1000, 0, 6553, 6553);
+                            (void)draw.Sprite({0, 4, 16, 16}, 254U, 0U, 0U, 0U, 512U, 256U);
+                        }) ||
+        nested_called)
+        return 98;
+    if (surface.Update(0U, [](micropixel::RasterDrawList& draw) {
+            (void)draw.FillRect({0, 0, 0, 1}, micropixel::Color::Black());
+        }))
+        return 100;
+    // A failed callback scope must release the shared draw buffer.
+    if (!surface.Update(0U, [](micropixel::RasterDrawList& draw) {
+            (void)draw.FillRect({0, 0, 1, 1}, micropixel::Color::Black());
+        }))
+        return 101;
+    app.log().Info("graphics_raster: large textures, arbitrary dimensions and 8-bit slots accepted");
     return 0;
 }

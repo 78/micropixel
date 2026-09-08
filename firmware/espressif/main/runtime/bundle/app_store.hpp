@@ -48,6 +48,10 @@ struct AppInstallResult final {
 // storage so production paths can keep it in PSRAM.
 [[nodiscard]] std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& catalog_out,
                                                                      std::string_view effective_locale = "en");
+// Installing a package whose AppId is already present first removes the
+// installed version, then stages the new one. The caller must make sure the
+// package is not running. A reinstall that fails after the removal leaves the
+// package uninstalled; only an identical digest is a no-op.
 [[nodiscard]] std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallRequest& request,
                                                                         std::string_view effective_locale = "en");
 [[nodiscard]] std::expected<void, AppStoreError> UninstallApp(const char* app_id);

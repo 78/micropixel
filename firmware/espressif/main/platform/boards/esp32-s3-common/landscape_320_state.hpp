@@ -1,5 +1,6 @@
 #pragma once
 
+#include "device/contracts/input.hpp"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
@@ -23,7 +24,7 @@ inline constexpr int32_t kWidth = 320;
 inline constexpr int32_t kHeight = 240;
 static_assert(kWidth == ui_profile::Layout::kWidth);
 static_assert(kHeight == ui_profile::Layout::kHeight);
-inline constexpr uint8_t kMaxTouchPoints = MICROPIXEL_MAX_TOUCH_POINTS;
+inline constexpr uint8_t kMaxTouchPoints = micropixel::device::kMaxTouchPoints;
 inline constexpr int kLvglTaskCore = task_policy::kSystemCore;
 inline constexpr graphics::SurfacePixelFormat kGuestSurfaceFormat = graphics::SurfacePixelFormat::kRgb565;
 

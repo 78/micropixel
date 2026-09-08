@@ -145,7 +145,7 @@ class Haptics final : public micropixel::device::Haptics {
         info = {};
         info.size = sizeof(info);
         info.device = device;
-        info.maximum_duration_ms = 5000U;
+        info.max_duration_ms = 5000U;
         return MICROPIXEL_STATUS_OK;
     }
     [[nodiscard]] int32_t Play(micropixel_device_id_t device, uint16_t strength, uint32_t duration) override {
@@ -187,11 +187,17 @@ int main() {
     Battery battery;
 
     micropixel::device::DevicesService devices_service{catalog};
-    auto all = devices_service.List(MICROPIXEL_DEVICE_KIND_ANY);
-    Require(all && all->count == 4U && all->generation == 7U && all->devices[1] == kGpio);
-    auto filtered = devices_service.List(MICROPIXEL_DEVICE_KIND_SENSOR);
-    Require(filtered && filtered->count == 1U && filtered->devices[0] == kSensor);
-    Require(!devices_service.List(UINT16_MAX));
+    auto all = devices_service.List(MICROPIXEL_DEVICE_KIND_ANY, 0U);
+    Require(all && all->count == 4U && all->total_count == 4U && all->generation == 7U && all->devices[1] == kGpio);
+    // Paging: a page starting mid-list returns the remainder, one past the end
+    // returns an empty page with the same total.
+    auto tail = devices_service.List(MICROPIXEL_DEVICE_KIND_ANY, 3U);
+    Require(tail && tail->count == 1U && tail->total_count == 4U && tail->devices[0] == all->devices[3]);
+    auto past = devices_service.List(MICROPIXEL_DEVICE_KIND_ANY, 4U);
+    Require(past && past->count == 0U && past->total_count == 4U);
+    auto filtered = devices_service.List(MICROPIXEL_DEVICE_KIND_SENSOR, 0U);
+    Require(filtered && filtered->count == 1U && filtered->total_count == 1U && filtered->devices[0] == kSensor);
+    Require(!devices_service.List(UINT16_MAX, 0U));
     Require(devices_service.GetInfo(kPower)->kind == MICROPIXEL_DEVICE_KIND_POWER);
 
     micropixel::device::SensorsService sensors_service{sensors};
@@ -216,7 +222,7 @@ int main() {
     Require(!gpio.open);
 
     micropixel::device::HapticsService haptics_service{haptics};
-    Require(haptics_service.GetInfo(kHaptics)->maximum_duration_ms == 5000U);
+    Require(haptics_service.GetInfo(kHaptics)->max_duration_ms == 5000U);
     Require(haptics_service.Play(kHaptics, 500U, 200U).has_value());
     Require(haptics.playing);
     Require(haptics_service.Stop(kHaptics).has_value());

@@ -385,7 +385,7 @@ static bool valid_semver(const char* value) {
         if (offset == length) {
             break;
         }
-        if (value[offset++] != '.') {
+        if (value[offset++] != '.' || offset == length) {
             return false;
         }
     }
@@ -522,6 +522,13 @@ static bool parse_package_metadata_json(const uint8_t* bytes, uint32_t length, c
         const cJSON* package_type = cJSON_GetObjectItemCaseSensitive(root, "package_type");
         if (cJSON_IsString(package_type) && strcmp(package_type->valuestring, "app") == 0) {
             metadata_out->package_type = MICROPIXEL_BUNDLE_PACKAGE_APP;
+            const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+            if (version != NULL) {
+                valid = cJSON_IsString(version) && valid_semver(version->valuestring);
+                if (valid) {
+                    memcpy(metadata_out->package_version, version->valuestring, strlen(version->valuestring) + 1U);
+                }
+            }
             const cJSON* display = cJSON_GetObjectItemCaseSensitive(root, "display");
             if (display == NULL || (cJSON_IsString(display) && strcmp(display->valuestring, "square") == 0)) {
                 /* Bundles created before this field used square implicitly. */

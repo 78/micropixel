@@ -129,8 +129,8 @@ int32_t SensorPeripheral::GetInfo(device::PeripheralChannelId channel, micropixe
     } else {
         info_out.kind = MICROPIXEL_SENSOR_MAGNETIC_FIELD;
     }
-    info_out.minimum_interval_us = driver->minimum_interval_us();
-    info_out.maximum_interval_us = 60000000U;
+    info_out.min_interval_us = driver->min_interval_us();
+    info_out.max_interval_us = 60000000U;
     return MICROPIXEL_STATUS_OK;
 }
 

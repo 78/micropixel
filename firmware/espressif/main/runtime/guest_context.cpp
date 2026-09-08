@@ -35,9 +35,9 @@ GuestContext::GuestContext(const micropixel_aot_package_t& package, device::Devi
       pcm_stream_(devices_.audio(), events_, clock_origin_us_),
       direct_surface_(devices_.graphics(), events_, clock_origin_us_),
 #if CONFIG_MICROPIXEL_RASTER_KERNELS
-      raster_(RasterService::kAbiPoolBytes),
+      raster_(true),
 #else
-      raster_(0U),
+      raster_(false),
 #endif
       storage_(package),
       touch_events_(events_, devices_.input(), clock_origin_us_),
@@ -213,18 +213,18 @@ void GuestContext::ForceStop() {
     events_.Close();
 }
 
-bool GuestContext::ResolveTextureForGraphics(void* context, micropixel_texture_handle_t texture,
+bool GuestContext::ResolveTextureForGraphics(void* context, micropixel_texture_handle_t texture_handle,
                                              device::BitmapView& view_out) {
-    return context != nullptr && static_cast<GuestContext*>(context)->ResolveTexture(texture, view_out);
+    return context != nullptr && static_cast<GuestContext*>(context)->ResolveTexture(texture_handle, view_out);
 }
 
-bool GuestContext::RetainTextureForGraphics(void* context, micropixel_texture_handle_t texture) {
-    return context != nullptr && static_cast<GuestContext*>(context)->resources_.RetainSceneTexture(texture);
+bool GuestContext::RetainTextureForGraphics(void* context, micropixel_texture_handle_t texture_handle) {
+    return context != nullptr && static_cast<GuestContext*>(context)->resources_.RetainSceneTexture(texture_handle);
 }
 
-void GuestContext::ReleaseTextureForGraphics(void* context, micropixel_texture_handle_t texture) {
+void GuestContext::ReleaseTextureForGraphics(void* context, micropixel_texture_handle_t texture_handle) {
     if (context != nullptr) {
-        static_cast<GuestContext*>(context)->resources_.ReleaseSceneTexture(texture);
+        static_cast<GuestContext*>(context)->resources_.ReleaseSceneTexture(texture_handle);
     }
 }
 
@@ -240,9 +240,7 @@ device::TextureAccess GuestContext::GraphicsTextureAccess() {
 device::DeviceResult<micropixel_graphics_info_t> GuestContext::GraphicsInfo() const {
     auto info = devices_.graphics().GetInfo();
     if (info) {
-        info->raster_pool_bytes = raster_.pool_bytes();
-        info->raster_max_textures = raster_.available() ? MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURES : 0U;
-        info->raster_max_light_levels = raster_.available() ? MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS : 0U;
+        info->max_raster_bytes = RasterAvailable() ? device::graphics_limits::kMaxRasterBytes : 0U;
     }
     return info;
 }
@@ -267,48 +265,16 @@ ServiceResult<micropixel_font_info_t> GuestContext::LoadFont(uint32_t resource_i
                   : FailService<micropixel_font_info_t>(result.error().status);
 }
 
-ServiceResult<void> GuestContext::ReleaseFont(micropixel_font_handle_t font) {
-    auto result = devices_.graphics().ReleaseFont(font);
+ServiceResult<void> GuestContext::ReleaseFont(micropixel_font_handle_t font_handle) {
+    auto result = devices_.graphics().ReleaseFont(font_handle);
     return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
-ServiceResult<micropixel_text_metrics_t> GuestContext::MeasureText(micropixel_font_handle_t font, const char* text,
-                                                                   uint32_t text_length) {
-    auto result = devices_.graphics().MeasureText(font, text, text_length);
+ServiceResult<micropixel_text_metrics_t> GuestContext::MeasureText(micropixel_font_handle_t font_handle,
+                                                                   const char* text, uint32_t text_length) {
+    auto result = devices_.graphics().MeasureText(font_handle, text, text_length);
     return result ? ServiceResult<micropixel_text_metrics_t>{*result}
                   : FailService<micropixel_text_metrics_t>(result.error().status);
-}
-
-ServiceResult<void> GuestContext::UpdateStreamingTexture(const micropixel_streaming_texture_update_request_t& update,
-                                                         const uint8_t* pixels) {
-    auto texture = resources_.MutableTexture(update.texture);
-    if (!texture) {
-        return FailService<void>(texture.error().status);
-    }
-    const uint32_t bytes_per_pixel = texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-                                         ? 3U
-                                         : (texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
-                                                ? 4U
-                                                : (texture->pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
-    if (pixels == nullptr || update.width == 0U || update.height == 0U || bytes_per_pixel == 0U ||
-        static_cast<uint64_t>(update.x) + update.width > texture->width ||
-        static_cast<uint64_t>(update.y) + update.height > texture->height ||
-        update.pitch != update.width * bytes_per_pixel) {
-        return FailService<void>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    auto result = devices_.graphics().UpdateBitmap(*texture, update.x, update.y, update.width, update.height, pixels,
-                                                   update.pitch);
-    return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
-}
-
-ServiceResult<void> GuestContext::BeginTextureUpdateBatch() {
-    auto result = devices_.graphics().BeginBitmapUpdateFrame();
-    return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
-}
-
-ServiceResult<void> GuestContext::FinishTextureUpdateBatch() {
-    auto result = devices_.graphics().CommitBitmapUpdateFrame();
-    return result ? ServiceResult<void>{} : FailService<void>(result.error().status);
 }
 
 }  // namespace micropixel::runtime

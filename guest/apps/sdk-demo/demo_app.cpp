@@ -143,10 +143,10 @@ void RenderPageContent(PageId page, DemoContext& context, DemoView& view) {
 void RenderHome(DemoContext& context, micropixel::ContainerNode& home_container,
                 std::span<micropixel::ui::TextButton> menu_buttons, micropixel::ui::TextButton& back_button) {
     context.view.Update([&](DemoView& view) {
-        home_container.SetVisible(view.scene_update(), true);
-        back_button.SetVisible(view.scene_update(), false);
+        home_container.SetVisible(true);
+        back_button.SetVisible(false);
         for (micropixel::ui::TextButton& button : menu_buttons) {
-            button.Sync(view.scene_update());
+            button.Sync();
         }
         view.CenteredText(context.layout.home_header.center_x(), context.layout.home_header.y + 8,
                           "MICROPIXEL SDK DEMO", micropixel::Color::White(),
@@ -160,8 +160,8 @@ void RenderHome(DemoContext& context, micropixel::ContainerNode& home_container,
 void RenderPage(DemoContext& context, PageId page, micropixel::ContainerNode& home_container,
                 micropixel::ui::TextButton& back_button) {
     context.view.Update([&](DemoView& view) {
-        home_container.SetVisible(view.scene_update(), false);
-        back_button.SetVisible(view.scene_update(), true);
+        home_container.SetVisible(false);
+        back_button.SetVisible(true);
         const int32_t title_left =
             back_button.bounds().x + back_button.bounds().width + (context.layout.compact() ? 12 : 20);
         const int32_t title_right =
@@ -254,16 +254,16 @@ int DemoAppMain() {
 
     DemoAtlasTextures atlas_textures = LoadDemoAtlases(app);
     DemoLayout layout = BuildDemoLayout(display);
-    micropixel::Scene scene = renderer.CreateScene(BackgroundColor());
-    micropixel::ContainerNode view_container = scene.CreateContainer({.z_order = 0});
-    micropixel::ContainerNode controls_container = scene.CreateContainer({.z_order = 1});
-    DemoView view(scene, view_container);
+    micropixel::Scene scene = renderer.CreateScene(BackgroundColor()).value();
+    micropixel::ContainerNode view_container = scene.CreateContainer({.z_order = 0}).value();
+    micropixel::ContainerNode controls_container = scene.CreateContainer({.z_order = 1}).value();
+    DemoView view(renderer, scene, view_container);
     DemoContext context{app, input, layout, atlas_textures, scene, controls_container, view};
     micropixel::Timer ticker = CreateDemoTicker(app);
     micropixel::Timer atlas_ticker = CreateResourceAtlasTicker(app);
     std::optional<micropixel::Timer> device_ticker{};
     PageId active_page = PageId::kHome;
-    micropixel::ContainerNode home_container = controls_container.CreateContainer();
+    micropixel::ContainerNode home_container = controls_container.CreateContainer().value();
     std::array<micropixel::ui::TextButton, kPageCount> menu_buttons{};
     for (uint32_t index = 0U; index < kPageCount; ++index) {
         menu_buttons[index] = home_container.CreateTextButton(

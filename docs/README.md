@@ -20,6 +20,7 @@
 与代码一起演进的组件级说明放在源码附近：
 
 - [Guest C++ SDK](../guest/sdk/README.md)；
+- [正式版 SDK API 重构](design/sdk-api.zh-CN.md)：Scene、2.5D 整数 Raster 前端、统一帧提交与迁移验收目标；
 - [Guest–Host ABI](../guest/abi/README.md)；
 - [Guest 构建、Bundle 与应用](../guest/README.md)；
 - [Firmware 构建与烧录](../firmware/espressif/README.md)；

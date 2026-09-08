@@ -149,7 +149,7 @@ Public 类型的名称、复制能力和所有权必须共同表达其类别：
 | 类别 | 规则 | 示例 |
 | --- | --- | --- |
 | Service View | 由 `app.xxx()` 按值返回，轻量且 copyable，没有独立资源身份 | `Log`、`Clock`、`Timers` |
-| Resource | 工厂创建，默认 move-only，拥有 typed Host handle | `Timer`、`Texture`、`StreamingTexture` |
+| Resource | 工厂创建，默认 move-only，拥有 typed Host handle | `Timer`、`Texture`、`Font` |
 | Value | copyable，只包含自有数据，不在析构时调用 Host | `Duration`、`TimePoint`、typed event |
 
 Module 是编译、链接或部署概念，不作为运行时对象类别。Service View 的 class 名不添加机械的

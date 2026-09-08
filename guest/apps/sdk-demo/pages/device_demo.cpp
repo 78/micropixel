@@ -63,7 +63,7 @@ class DevicePage final {
    public:
     void Enter(DemoContext& context) {
         status_.Clear();
-        page_container_ = context.root_container.CreateContainer();
+        page_container_ = context.root_container.CreateContainer().value();
         CreateButtons(context);
         RefreshCatalog(context);
         LayoutButtons(context);
@@ -192,28 +192,28 @@ class DevicePage final {
                                   status_.c_str(), MutedColor(), micropixel::SystemFont::kMedium);
         }
 
-        auto previous_bounds = buttons_[0].SetBounds(commands.scene_update(), button_bounds_[0]);
-        auto next_bounds = buttons_[2].SetBounds(commands.scene_update(), button_bounds_[2]);
+        auto previous_bounds = buttons_[0].SetBounds(button_bounds_[0]);
+        auto next_bounds = buttons_[2].SetBounds(button_bounds_[2]);
         micropixel::Assert(previous_bounds.has_value() && next_bounds.has_value(),
                            "demo.device: navigation button layout failed");
-        buttons_[0].SetEnabled(commands.scene_update(), true);
-        buttons_[0].SetVisible(commands.scene_update(), true);
-        buttons_[2].SetEnabled(commands.scene_update(), true);
-        buttons_[2].SetVisible(commands.scene_update(), true);
+        buttons_[0].SetEnabled(true);
+        buttons_[0].SetVisible(true);
+        buttons_[2].SetEnabled(true);
+        buttons_[2].SetVisible(true);
         if (HasAction()) {
             const char* action = "ACTION";
             if (selected_.kind == micropixel::DeviceKind::kGpioLine) {
                 action = gpio_output_.valid() ? "TOGGLE" : "READ";
             }
-            auto action_bounds = buttons_[1].SetBounds(commands.scene_update(), button_bounds_[1]);
-            auto action_text = buttons_[1].SetText(commands.scene_update(), action);
+            auto action_bounds = buttons_[1].SetBounds(button_bounds_[1]);
+            auto action_text = buttons_[1].SetText(action);
             micropixel::Assert(action_bounds.has_value() && action_text.has_value(),
                                "demo.device: action button update failed");
-            buttons_[1].SetEnabled(commands.scene_update(), ActionEnabled());
-            buttons_[1].SetVisible(commands.scene_update(), true);
+            buttons_[1].SetEnabled(ActionEnabled());
+            buttons_[1].SetVisible(true);
         } else {
-            buttons_[1].SetEnabled(commands.scene_update(), false);
-            buttons_[1].SetVisible(commands.scene_update(), false);
+            buttons_[1].SetEnabled(false);
+            buttons_[1].SetVisible(false);
         }
     }
 
@@ -593,7 +593,7 @@ class DevicePage final {
 
 }  // namespace
 
-micropixel::Timer CreateDeviceTicker(micropixel::Application& app) { return app.timers().Every(20_ms); }
+micropixel::Timer CreateDeviceTicker(micropixel::Application& app) { return app.timers().Every(20_ms).value(); }
 
 void DeviceDemoEnter(DemoContext& context) { device_page.Enter(context); }
 void DeviceDemoExit(DemoContext&) { device_page.Exit(); }

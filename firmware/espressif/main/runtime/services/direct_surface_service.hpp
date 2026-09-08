@@ -5,23 +5,13 @@
 #include <cstdint>
 
 #include "abi/micropixel_abi.h"
+#include "device/contracts/graphics.hpp"
 #include "device/device_services.hpp"
 #include "runtime/event_queue.hpp"
+#include "runtime/guest_memory.hpp"
 #include "runtime/services/service_result.hpp"
 
 namespace micropixel::runtime {
-
-// Resolves a Guest linear-memory range to a Host pointer. Bound by the session
-// once the WAMR instance exists; the Host never trusts a Guest offset without it.
-struct GuestMemoryAccess final {
-    void* context{};
-    bool (*resolve)(void* context, uint32_t offset, uint32_t length, uint8_t** host_out){};
-    // The linear-memory base cannot move for the instance lifetime (the
-    // Bundle declared PINNED_MEMORY). Without it a resolved pointer is only
-    // good until the Guest's next memory.grow, so no GUEST_BUFFERS Direct
-    // Surface may be created: its buffers stay in flight across calls.
-    bool stable_base{};
-};
 
 // One Host-owned Direct Surface buffer handed to raster kernels.
 struct HostBufferView final {
@@ -49,7 +39,7 @@ class DirectSurfaceService final {
     [[nodiscard]] ServiceResult<micropixel_surface_create_response_t> Create(
         const micropixel_surface_create_request_t& request);
     [[nodiscard]] ServiceResult<void> Present(const micropixel_surface_present_request_t& request);
-    [[nodiscard]] ServiceResult<void> Destroy(micropixel_surface_handle_t surface);
+    [[nodiscard]] ServiceResult<void> Destroy(micropixel_surface_handle_t surface_handle);
 
     // Host pause: stop scanning out and return every in-flight buffer.
     void Suspend();
@@ -61,7 +51,8 @@ class DirectSurfaceService final {
     // MICROPIXEL_STATUS_OK and `view_out`; NOT_FOUND when no Host-buffer
     // surface exists or the index is out of range; STALE_STATE while the
     // display may still be reading that buffer.
-    [[nodiscard]] int32_t HostBuffer(uint32_t index, HostBufferView& view_out) const;
+    [[nodiscard]] int32_t HostBuffer(micropixel_surface_handle_t surface_handle, uint32_t index,
+                                     HostBufferView& view_out) const;
     // Panel byte order the Host buffers are kept in (from the created surface).
     [[nodiscard]] bool native_byte_swapped() const {  // NOLINT(readability-identifier-naming)
         return native_byte_swapped_;
@@ -91,7 +82,7 @@ class DirectSurfaceService final {
     // has returned every buffer (Destroy/Shutdown).
     bool host_buffers_{};
     bool native_byte_swapped_{};
-    uint8_t* host_pixels_[MICROPIXEL_SURFACE_MAX_BUFFERS]{};
+    uint8_t* host_pixels_[micropixel::device::graphics_limits::kMaxSurfaceBuffers]{};
     uint32_t host_width_{};
     uint32_t host_height_{};
     uint32_t host_pitch_{};

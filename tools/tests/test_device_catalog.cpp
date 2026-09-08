@@ -23,8 +23,7 @@ class SensorPeripheral final : public micropixel::device::SensorPeripheral {
     [[nodiscard]] int32_t Start(micropixel::device::PeripheralChannelId, uint32_t) override {
         return MICROPIXEL_STATUS_OK;
     }
-    [[nodiscard]] int32_t Read(micropixel::device::PeripheralChannelId,
-                               micropixel::device::SensorValues&) override {
+    [[nodiscard]] int32_t Read(micropixel::device::PeripheralChannelId, micropixel::device::SensorValues&) override {
         return MICROPIXEL_STATUS_OK;
     }
     void Stop(micropixel::device::PeripheralChannelId) override {}
@@ -46,9 +45,7 @@ class GpioPeripheral final : public micropixel::device::GpioPeripheral {
     [[nodiscard]] int32_t Read(micropixel::device::PeripheralChannelId, bool&) const override {
         return MICROPIXEL_STATUS_OK;
     }
-    [[nodiscard]] int32_t Write(micropixel::device::PeripheralChannelId, bool) override {
-        return MICROPIXEL_STATUS_OK;
-    }
+    [[nodiscard]] int32_t Write(micropixel::device::PeripheralChannelId, bool) override { return MICROPIXEL_STATUS_OK; }
     [[nodiscard]] int32_t SetPwmDuty(micropixel::device::PeripheralChannelId, uint16_t) override {
         return MICROPIXEL_STATUS_OK;
     }

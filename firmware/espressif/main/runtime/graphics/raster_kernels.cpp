@@ -1,6 +1,10 @@
 #include "runtime/graphics/raster_kernels.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <cstring>
+
+#include "device/contracts/graphics.hpp"
 
 namespace micropixel::runtime::raster {
 namespace {
@@ -16,8 +20,12 @@ constexpr uint32_t kFixedShift = 16U;
             return sizeof(micropixel_raster_span_pair_t);
         case MICROPIXEL_RASTER_RECORD_SPRITE:
             return sizeof(micropixel_raster_sprite_t);
+        case MICROPIXEL_RASTER_RECORD_IMAGE:
+            return sizeof(micropixel_raster_image_t);
         case MICROPIXEL_RASTER_RECORD_RECT:
             return sizeof(micropixel_raster_rect_t);
+        case MICROPIXEL_RASTER_RECORD_WARP:
+            return sizeof(micropixel_raster_warp_t);
         default:
             return 0U;
     }
@@ -62,77 +70,122 @@ struct ClippedRect final {
     return static_cast<uint16_t>((r << 11U) | (g << 5U) | b);
 }
 
-[[nodiscard]] const Texture* SlotWithLayout(const Resources& resources, uint32_t slot, uint8_t layout) {
-    if (slot >= resources.texture_count) {
-        return nullptr;
-    }
-    const Texture& texture = resources.textures[slot];
-    if (texture.pixels == nullptr || texture.layout != layout) {
-        return nullptr;
-    }
-    return &texture;
+[[nodiscard]] const Texture* SlotWithLayout(const Resources& resources, uint8_t slot, uint8_t layout) {
+    const Texture* texture = resources.TextureAt(slot);
+    return texture != nullptr && texture->pixels != nullptr && texture->layout == layout ? texture : nullptr;
 }
 
-[[nodiscard]] int32_t ValidateColumn(const micropixel_raster_column_t& column, const micropixel_raster_header_t& header,
+// A missing palette slot is STALE_STATE (the App has not uploaded it yet); a
+// light level the slot does not have is INVALID_ARGUMENT.
+[[nodiscard]] int32_t CheckLight(const Resources& resources, uint8_t palette_slot, uint32_t light_level) {
+    const Palette* palette = resources.PaletteAt(palette_slot);
+    if (palette == nullptr) return MICROPIXEL_STATUS_STALE_STATE;
+    return light_level < palette->light_levels ? MICROPIXEL_STATUS_OK : MICROPIXEL_STATUS_INVALID_ARGUMENT;
+}
+
+[[nodiscard]] int32_t ValidateColumn(const micropixel_raster_column_t& column, const Target& target,
                                      const Resources& resources) {
-    if ((column.flags & ~MICROPIXEL_RASTER_COLUMN_TRANSPARENT_INDEX0) != 0U || column.reserved0 != 0U) {
+    if ((column.flags & ~MICROPIXEL_RASTER_COLUMN_TRANSPARENT_INDEX0) != 0U || column.reserved0[0] != 0U ||
+        column.reserved0[1] != 0U || column.reserved0[2] != 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (column.x >= header.target_width || column.y0 < 0 || column.y1 < column.y0 ||
-        column.y1 >= static_cast<int32_t>(header.target_height)) {
+    if (column.x >= target.width || column.y0 < 0 || column.y1 < column.y0 ||
+        column.y1 >= static_cast<int32_t>(target.height)) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    const Texture* texture = SlotWithLayout(resources, column.texture, MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR);
+    const int32_t light = CheckLight(resources, column.palette_slot, column.light_level);
+    if (light != MICROPIXEL_STATUS_OK) return light;
+    const Texture* texture = SlotWithLayout(resources, column.texture_slot, MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR);
     if (texture == nullptr || column.u >= texture->width) {
         return MICROPIXEL_STATUS_NOT_FOUND;
-    }
-    if (column.light >= resources.palette.light_levels) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     return MICROPIXEL_STATUS_OK;
 }
 
-[[nodiscard]] int32_t ValidateSpanPair(const micropixel_raster_span_pair_t& span,
-                                       const micropixel_raster_header_t& header, const Resources& resources) {
-    if (span.flags != 0U || span.reserved0[0] != 0U || span.reserved0[1] != 0U || span.reserved0[2] != 0U) {
+[[nodiscard]] int32_t ValidateSpanPair(const micropixel_raster_span_pair_t& span, const Target& target,
+                                       const Resources& resources) {
+    if (span.flags != 0U || span.reserved0[0] != 0U || span.reserved0[1] != 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (span.y_floor >= header.target_height || span.y_ceiling >= header.target_height || span.x1 < span.x0 ||
-        span.x1 >= header.target_width) {
+    if (span.y_floor >= target.height || span.y_ceiling >= target.height || span.x1 < span.x0 ||
+        span.x1 >= target.width) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (SlotWithLayout(resources, span.floor_texture, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR) == nullptr ||
-        SlotWithLayout(resources, span.ceiling_texture, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR) == nullptr) {
+    const int32_t light = CheckLight(resources, span.palette_slot, span.light_level);
+    if (light != MICROPIXEL_STATUS_OK) return light;
+    if (SlotWithLayout(resources, span.floor_texture_slot, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR) == nullptr ||
+        SlotWithLayout(resources, span.ceiling_texture_slot, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR) == nullptr) {
         return MICROPIXEL_STATUS_NOT_FOUND;
-    }
-    if (span.light >= resources.palette.light_levels) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     return MICROPIXEL_STATUS_OK;
 }
 
 [[nodiscard]] int32_t ValidateSprite(const micropixel_raster_sprite_t& sprite, const Resources& resources) {
     if ((sprite.flags & ~(MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 | MICROPIXEL_RASTER_SPRITE_SOLID_COLOR)) != 0U ||
-        sprite.reserved0 != 0U || sprite.width == 0U || sprite.height == 0U || sprite.src_width == 0U ||
-        sprite.src_height == 0U) {
+        sprite.reserved0 != 0U || sprite.width == 0U || sprite.height == 0U || sprite.source_width == 0U ||
+        sprite.source_height == 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    const Texture* texture = SlotWithLayout(resources, sprite.texture, MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR);
+    if ((sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) == 0U) {
+        const int32_t light = CheckLight(resources, sprite.palette_slot, sprite.light_level);
+        if (light != MICROPIXEL_STATUS_OK) return light;
+    }
+    const Texture* texture = SlotWithLayout(resources, sprite.texture_slot, MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR);
     if (texture == nullptr) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
-    if (static_cast<uint32_t>(sprite.u0) + sprite.src_width > texture->width ||
-        static_cast<uint32_t>(sprite.v0) + sprite.src_height > texture->height) {
-        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
-    }
-    if ((sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) == 0U && sprite.light >= resources.palette.light_levels) {
+    if (static_cast<uint32_t>(sprite.source_x) + sprite.source_width > texture->width ||
+        static_cast<uint32_t>(sprite.source_y) + sprite.source_height > texture->height) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     return MICROPIXEL_STATUS_OK;
 }
 
+[[nodiscard]] int32_t ValidateWarp(const micropixel_raster_warp_t& warp, const Resources& resources) {
+    if ((warp.flags & ~MICROPIXEL_RASTER_WARP_FILL_SKIPPED) != 0U ||
+        warp.u_fraction_bits > MICROPIXEL_RASTER_WARP_MAX_U_FRACTION_BITS) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    const WarpMap* map = resources.WarpAt(warp.warp_slot);
+    if (map == nullptr) return MICROPIXEL_STATUS_STALE_STATE;
+    const int32_t light = CheckLight(resources, warp.palette_slot, map->max_light);
+    if (light != MICROPIXEL_STATUS_OK) return light;
+    const Texture* texture = SlotWithLayout(resources, warp.texture_slot, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR);
+    if (texture == nullptr) return MICROPIXEL_STATUS_NOT_FOUND;
+    // The kernel wraps u/v with masks, so any texture that is not a power of
+    // two (or is wider than the 12-bit entry fields, fraction bits included)
+    // cannot be sampled safely.
+    if (texture->log2_width == UINT8_MAX || texture->log2_height == UINT8_MAX ||
+        (static_cast<uint32_t>(texture->width) << warp.u_fraction_bits) > MICROPIXEL_RASTER_WARP_MAX_TEXTURE_SIZE ||
+        texture->height > MICROPIXEL_RASTER_WARP_MAX_TEXTURE_SIZE) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    return MICROPIXEL_STATUS_OK;
+}
+
+[[nodiscard]] int32_t ValidateImage(const micropixel_raster_image_t& image, const Resources& resources) {
+    if (image.reserved0 || !image.width || !image.height || !image.source_width || !image.source_height)
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    device::BitmapView texture{};
+    if (!image.texture_handle || !resources.resolve_texture ||
+        !resources.resolve_texture(resources.texture_context, image.texture_handle, texture))
+        return MICROPIXEL_STATUS_NOT_FOUND;
+    const uint32_t bytes = texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565     ? 2
+                           : texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888   ? 3
+                           : texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? 4
+                                                                                      : 0;
+    if (!bytes) return MICROPIXEL_STATUS_UNSUPPORTED;
+    if (!texture.data || !texture.width || !texture.height ||
+        static_cast<uint64_t>(texture.width) * bytes > texture.stride ||
+        static_cast<uint64_t>(texture.stride) * texture.height > texture.size ||
+        static_cast<uint32_t>(image.source_x) + image.source_width > texture.width ||
+        static_cast<uint32_t>(image.source_y) + image.source_height > texture.height)
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    return MICROPIXEL_STATUS_OK;
+}
+
 [[nodiscard]] int32_t ValidateRect(const micropixel_raster_rect_t& rect) {
-    if (rect.flags != 0U || rect.reserved0 != 0U || rect.reserved1 != 0U || rect.alpha == 0U || rect.width == 0U ||
+    if (rect.flags != 0U || rect.reserved0 != 0U || rect.reserved1 != 0U || rect.opacity == 0U || rect.width == 0U ||
         rect.height == 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
@@ -145,12 +198,8 @@ struct ClippedRect final {
 
 }  // namespace
 
-bool ValidTextureDimension(uint32_t value) {
-    return value >= MICROPIXEL_GRAPHICS_RASTER_MIN_TEXTURE_SIZE &&
-           value <= MICROPIXEL_GRAPHICS_RASTER_MAX_TEXTURE_SIZE && (value & (value - 1U)) == 0U;
-}
-
 uint8_t Log2Exact(uint32_t power_of_two) {
+    if (power_of_two == 0U || (power_of_two & (power_of_two - 1U)) != 0U) return UINT8_MAX;
     uint8_t result = 0U;
     while (power_of_two > 1U) {
         power_of_two >>= 1U;
@@ -159,28 +208,25 @@ uint8_t Log2Exact(uint32_t power_of_two) {
     return result;
 }
 
-int32_t ValidateDrawList(const uint8_t* bytes, uint32_t length, const Resources& resources,
+int32_t ValidateDrawList(const uint8_t* bytes, uint32_t length, const Target& target, const Resources& resources,
                          micropixel_raster_header_t& header_out) {
     if (bytes == nullptr || length < sizeof(micropixel_raster_header_t) ||
-        length > MICROPIXEL_GRAPHICS_MAX_RASTER_BYTES) {
+        length > micropixel::device::graphics_limits::kMaxRasterBytes) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
     micropixel_raster_header_t header{};
     std::memcpy(&header, bytes, sizeof(header));
-    if (header.magic != MICROPIXEL_GRAPHICS_RASTER_MAGIC ||
-        header.interface_major != MICROPIXEL_GRAPHICS_INTERFACE_MAJOR ||
-        header.interface_minor > MICROPIXEL_GRAPHICS_INTERFACE_MINOR || header.total_size != length ||
-        header.flags != 0U || header.reserved0 != 0U || header.record_count == 0U) {
+    if (header.magic != MICROPIXEL_GRAPHICS_RASTER_MAGIC || header.total_size != length || header.flags != 0U ||
+        header.reserved0 != 0U || header.record_count == 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    if (header.target_width == 0U || header.target_height == 0U || (header.target_pitch % kBytesPerRgb565) != 0U ||
-        header.target_pitch < static_cast<uint32_t>(header.target_width) * kBytesPerRgb565) {
+    if (target.width == 0U || target.height == 0U || (target.pitch % kBytesPerRgb565) != 0U ||
+        target.pitch < static_cast<uint32_t>(target.width) * kBytesPerRgb565) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
     }
-    // RECT and SOLID_COLOR sprites need no palette; every other record does,
-    // and a missing palette is reported before the record is looked at.
-    const bool palette_ready = resources.palette.entries != nullptr && resources.palette.light_levels != 0U;
-
+    // RECT, IMAGE and SOLID_COLOR sprites need no palette; every other record
+    // names a palette slot, and a missing slot is STALE_STATE (not uploaded
+    // yet) rather than a malformed record.
     uint32_t offset = sizeof(header);
     for (uint32_t index = 0U; index < header.record_count; ++index) {
         if (offset >= length) {
@@ -193,26 +239,25 @@ int32_t ValidateDrawList(const uint8_t* bytes, uint32_t length, const Resources&
         }
         int32_t status = MICROPIXEL_STATUS_INVALID_ARGUMENT;
         if (type == MICROPIXEL_RASTER_RECORD_COLUMN) {
-            if (!palette_ready) {
-                return MICROPIXEL_STATUS_STALE_STATE;
-            }
             micropixel_raster_column_t column{};
             std::memcpy(&column, bytes + offset, sizeof(column));
-            status = ValidateColumn(column, header, resources);
+            status = ValidateColumn(column, target, resources);
         } else if (type == MICROPIXEL_RASTER_RECORD_SPAN_PAIR) {
-            if (!palette_ready) {
-                return MICROPIXEL_STATUS_STALE_STATE;
-            }
             micropixel_raster_span_pair_t span{};
             std::memcpy(&span, bytes + offset, sizeof(span));
-            status = ValidateSpanPair(span, header, resources);
+            status = ValidateSpanPair(span, target, resources);
         } else if (type == MICROPIXEL_RASTER_RECORD_SPRITE) {
             micropixel_raster_sprite_t sprite{};
             std::memcpy(&sprite, bytes + offset, sizeof(sprite));
-            if (!palette_ready && (sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) == 0U) {
-                return MICROPIXEL_STATUS_STALE_STATE;
-            }
             status = ValidateSprite(sprite, resources);
+        } else if (type == MICROPIXEL_RASTER_RECORD_IMAGE) {
+            micropixel_raster_image_t image{};
+            std::memcpy(&image, bytes + offset, sizeof(image));
+            status = ValidateImage(image, resources);
+        } else if (type == MICROPIXEL_RASTER_RECORD_WARP) {
+            micropixel_raster_warp_t warp{};
+            std::memcpy(&warp, bytes + offset, sizeof(warp));
+            status = ValidateWarp(warp, resources);
         } else {
             micropixel_raster_rect_t rect{};
             std::memcpy(&rect, bytes + offset, sizeof(rect));
@@ -241,17 +286,18 @@ void DrawSprite(const Target& target, const Texture& texture, const uint16_t* li
     const uint16_t solid_color = target.byte_swapped ? ByteSwap(sprite.color) : sprite.color;
     // 16.16 texel steps per destination pixel; sampling starts at the centre
     // of the first visible pixel so a clipped sprite keeps its phase.
-    const uint32_t u_step = (static_cast<uint32_t>(sprite.src_width) << kFixedShift) / sprite.width;
-    const uint32_t v_step = (static_cast<uint32_t>(sprite.src_height) << kFixedShift) / sprite.height;
+    const uint32_t u_step = (static_cast<uint32_t>(sprite.source_width) << kFixedShift) / sprite.width;
+    const uint32_t v_step = (static_cast<uint32_t>(sprite.source_height) << kFixedShift) / sprite.height;
     uint32_t v = clip.skip_y * v_step + (v_step >> 1U);
     const uint32_t u_start = clip.skip_x * u_step + (u_step >> 1U);
     const uint32_t texture_height = texture.height;
     for (uint32_t y = clip.y0; y < clip.y1; ++y, v += v_step) {
-        const uint8_t* texels = texture.pixels + (static_cast<uint32_t>(sprite.v0) + (v >> kFixedShift));
+        const uint8_t* texels = texture.pixels + (static_cast<uint32_t>(sprite.source_y) + (v >> kFixedShift));
         uint16_t* row = Row(target, y) + clip.x0;
         uint32_t u = u_start;
         for (uint32_t x = clip.x0; x < clip.x1; ++x, u += u_step) {
-            const uint8_t texel = texels[(static_cast<uint32_t>(sprite.u0) + (u >> kFixedShift)) * texture_height];
+            const uint8_t texel =
+                texels[(static_cast<uint32_t>(sprite.source_x) + (u >> kFixedShift)) * texture_height];
             if (transparent && texel == 0U) {
                 continue;
             }
@@ -266,7 +312,7 @@ void DrawRect(const Target& target, const micropixel_raster_rect_t& rect) {
         return;
     }
     const uint32_t count = clip.x1 - clip.x0;
-    if (rect.alpha == 0xFFU) {
+    if (rect.opacity == 0xFFU) {
         const uint16_t color = target.byte_swapped ? ByteSwap(rect.color) : rect.color;
         for (uint32_t y = clip.y0; y < clip.y1; ++y) {
             uint16_t* row = Row(target, y) + clip.x0;
@@ -277,7 +323,7 @@ void DrawRect(const Target& target, const micropixel_raster_rect_t& rect) {
         return;
     }
     // Blend in canonical order; swapped targets are converted per pixel.
-    const uint32_t alpha = static_cast<uint32_t>(rect.alpha) + 1U;  // 1..254 -> 2..255 (255 handled above)
+    const uint32_t alpha = static_cast<uint32_t>(rect.opacity) + 1U;  // 1..254 -> 2..255 (255 handled above)
     for (uint32_t y = clip.y0; y < clip.y1; ++y) {
         uint16_t* row = Row(target, y) + clip.x0;
         if (target.byte_swapped) {
@@ -295,6 +341,19 @@ void DrawRect(const Target& target, const micropixel_raster_rect_t& rect) {
 void DrawColumn(const Target& target, const Texture& texture, const uint16_t* lit,
                 const micropixel_raster_column_t& column) {
     const uint8_t* texels = texture.pixels + static_cast<uint32_t>(column.u) * texture.height;
+    if (texture.log2_height == UINT8_MAX) {
+        uint32_t v = static_cast<uint32_t>(column.v_start);
+        for (int32_t y = column.y0; y <= column.y1; ++y, v += static_cast<uint32_t>(column.v_step)) {
+            const int32_t row = std::bit_cast<int32_t>(v) >> kFixedShift;
+            int32_t wrapped = row % static_cast<int32_t>(texture.height);
+            if (wrapped < 0) wrapped += texture.height;
+            const uint8_t texel = texels[wrapped];
+            if (texel != 0U || (column.flags & MICROPIXEL_RASTER_COLUMN_TRANSPARENT_INDEX0) == 0U) {
+                Row(target, static_cast<uint32_t>(y))[column.x] = lit[texel];
+            }
+        }
+        return;
+    }
     const uint32_t mask = static_cast<uint32_t>(texture.height) - 1U;
     uint8_t* row = target.pixels + static_cast<uint32_t>(column.y0) * target.pitch +
                    static_cast<uint32_t>(column.x) * kBytesPerRgb565;
@@ -313,14 +372,33 @@ void DrawColumn(const Target& target, const Texture& texture, const uint16_t* li
         }
         return;
     }
-    for (int32_t index = 0; index < count; ++index) {
+    // Four independent texel chains per iteration: the in-order core would
+    // otherwise stall on every load-use pair (texel byte, then palette entry).
+    int32_t index = 0;
+    for (; index + 4 <= count; index += 4) {
+        const uint8_t t0 = texels[(v >> kFixedShift) & mask];
+        const uint8_t t1 = texels[((v + step) >> kFixedShift) & mask];
+        const uint8_t t2 = texels[((v + 2U * step) >> kFixedShift) & mask];
+        const uint8_t t3 = texels[((v + 3U * step) >> kFixedShift) & mask];
+        const uint16_t c0 = lit[t0];
+        const uint16_t c1 = lit[t1];
+        const uint16_t c2 = lit[t2];
+        const uint16_t c3 = lit[t3];
+        *reinterpret_cast<uint16_t*>(row) = c0;
+        *reinterpret_cast<uint16_t*>(row + pitch) = c1;
+        *reinterpret_cast<uint16_t*>(row + 2U * pitch) = c2;
+        *reinterpret_cast<uint16_t*>(row + 3U * pitch) = c3;
+        row += 4U * pitch;
+        v += 4U * step;
+    }
+    for (; index < count; ++index) {
         *reinterpret_cast<uint16_t*>(row) = lit[texels[(v >> kFixedShift) & mask]];
         row += pitch;
         v += step;
     }
 }
 
-void DrawSpanPair(const Target& target, const Texture& floor_texture, const Texture& ceiling_texture,
+void DrawSpanPair(const Target& target, const Texture& floor_texture_slot, const Texture& ceiling_texture_slot,
                   const uint16_t* lit, const micropixel_raster_span_pair_t& span) {
     uint16_t* floor = Row(target, span.y_floor) + span.x0;
     uint16_t* ceiling = Row(target, span.y_ceiling) + span.x0;
@@ -329,15 +407,31 @@ void DrawSpanPair(const Target& target, const Texture& floor_texture, const Text
     uint32_t t = static_cast<uint32_t>(span.t);
     const uint32_t ds = static_cast<uint32_t>(span.ds);
     const uint32_t dt = static_cast<uint32_t>(span.dt);
-    if (floor_texture.width == ceiling_texture.width && floor_texture.height == ceiling_texture.height) {
+    if (floor_texture_slot.log2_width == UINT8_MAX || floor_texture_slot.log2_height == UINT8_MAX ||
+        ceiling_texture_slot.log2_width == UINT8_MAX || ceiling_texture_slot.log2_height == UINT8_MAX) {
+        const auto offset = [](const Texture& texture, uint32_t u, uint32_t v) {
+            const uint32_t x = ((u & 0xffffU) * texture.width) >> kFixedShift;
+            const uint32_t y = ((v & 0xffffU) * texture.height) >> kFixedShift;
+            return y * texture.width + x;
+        };
+        for (uint32_t index = 0U; index < count; ++index) {
+            floor[index] = lit[floor_texture_slot.pixels[offset(floor_texture_slot, s, t)]];
+            ceiling[index] = lit[ceiling_texture_slot.pixels[offset(ceiling_texture_slot, s, t)]];
+            s += ds;
+            t += dt;
+        }
+        return;
+    }
+    if (floor_texture_slot.width == ceiling_texture_slot.width &&
+        floor_texture_slot.height == ceiling_texture_slot.height) {
         // Common case: one texel index serves both rows.
-        const uint32_t shift_s = kFixedShift - floor_texture.log2_width;
-        const uint32_t shift_t = kFixedShift - floor_texture.log2_height;
-        const uint32_t mask_x = static_cast<uint32_t>(floor_texture.width) - 1U;
-        const uint32_t mask_y = static_cast<uint32_t>(floor_texture.height) - 1U;
-        const uint32_t log2_width = floor_texture.log2_width;
-        const uint8_t* floor_texels = floor_texture.pixels;
-        const uint8_t* ceiling_texels = ceiling_texture.pixels;
+        const uint32_t shift_s = kFixedShift - floor_texture_slot.log2_width;
+        const uint32_t shift_t = kFixedShift - floor_texture_slot.log2_height;
+        const uint32_t mask_x = static_cast<uint32_t>(floor_texture_slot.width) - 1U;
+        const uint32_t mask_y = static_cast<uint32_t>(floor_texture_slot.height) - 1U;
+        const uint32_t log2_width = floor_texture_slot.log2_width;
+        const uint8_t* floor_texels = floor_texture_slot.pixels;
+        const uint8_t* ceiling_texels = ceiling_texture_slot.pixels;
         for (uint32_t index = 0U; index < count; ++index) {
             const uint32_t texel = (((t >> shift_t) & mask_y) << log2_width) | ((s >> shift_s) & mask_x);
             floor[index] = lit[floor_texels[texel]];
@@ -347,65 +441,241 @@ void DrawSpanPair(const Target& target, const Texture& floor_texture, const Text
         }
         return;
     }
-    const uint32_t floor_shift_s = kFixedShift - floor_texture.log2_width;
-    const uint32_t floor_shift_t = kFixedShift - floor_texture.log2_height;
-    const uint32_t ceiling_shift_s = kFixedShift - ceiling_texture.log2_width;
-    const uint32_t ceiling_shift_t = kFixedShift - ceiling_texture.log2_height;
+    const uint32_t floor_shift_s = kFixedShift - floor_texture_slot.log2_width;
+    const uint32_t floor_shift_t = kFixedShift - floor_texture_slot.log2_height;
+    const uint32_t ceiling_shift_s = kFixedShift - ceiling_texture_slot.log2_width;
+    const uint32_t ceiling_shift_t = kFixedShift - ceiling_texture_slot.log2_height;
     for (uint32_t index = 0U; index < count; ++index) {
         const uint32_t floor_texel =
-            (((t >> floor_shift_t) & (floor_texture.height - 1U)) << floor_texture.log2_width) |
-            ((s >> floor_shift_s) & (floor_texture.width - 1U));
+            (((t >> floor_shift_t) & (floor_texture_slot.height - 1U)) << floor_texture_slot.log2_width) |
+            ((s >> floor_shift_s) & (floor_texture_slot.width - 1U));
         const uint32_t ceiling_texel =
-            (((t >> ceiling_shift_t) & (ceiling_texture.height - 1U)) << ceiling_texture.log2_width) |
-            ((s >> ceiling_shift_s) & (ceiling_texture.width - 1U));
-        floor[index] = lit[floor_texture.pixels[floor_texel]];
-        ceiling[index] = lit[ceiling_texture.pixels[ceiling_texel]];
+            (((t >> ceiling_shift_t) & (ceiling_texture_slot.height - 1U)) << ceiling_texture_slot.log2_width) |
+            ((s >> ceiling_shift_s) & (ceiling_texture_slot.width - 1U));
+        floor[index] = lit[floor_texture_slot.pixels[floor_texel]];
+        ceiling[index] = lit[ceiling_texture_slot.pixels[ceiling_texel]];
         s += ds;
         t += dt;
     }
 }
 
+void DrawImage(const Target& target, const device::BitmapView& texture, const micropixel_raster_image_t& image) {
+    ClippedRect clipped{};
+    if (!image.opacity || !ClipRect(target, image.x, image.y, image.width, image.height, clipped)) return;
+    const uint32_t bytes = texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565   ? 2
+                           : texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888 ? 3
+                                                                                    : 4;
+    for (uint32_t y = clipped.y0; y < clipped.y1; ++y) {
+        const uint32_t sy = image.source_y + (clipped.skip_y + y - clipped.y0) * image.source_height / image.height;
+        auto* destination = Row(target, y);
+        for (uint32_t x = clipped.x0; x < clipped.x1; ++x) {
+            const uint32_t sx = image.source_x + (clipped.skip_x + x - clipped.x0) * image.source_width / image.width;
+            const uint8_t* pixel = texture.data + sy * texture.stride + sx * bytes;
+            uint16_t color{};
+            uint32_t alpha = image.opacity;
+            if (bytes == 2)
+                std::memcpy(&color, pixel, 2);
+            else {
+                color = static_cast<uint16_t>(((pixel[2] >> 3) << 11) | ((pixel[1] >> 2) << 5) | (pixel[0] >> 3));
+                if (bytes == 4) alpha = (alpha * pixel[3] + 127) / 255;
+            }
+            if (alpha == 0) continue;
+            if (alpha != 255) {
+                const uint16_t old = target.byte_swapped ? ByteSwap(destination[x]) : destination[x];
+                const uint32_t inverse = 255 - alpha;
+                color = static_cast<uint16_t>(
+                    ((((old >> 11) * inverse + (color >> 11) * alpha + 127) / 255) << 11) |
+                    (((((old >> 5) & 63) * inverse + ((color >> 5) & 63) * alpha + 127) / 255) << 5) |
+                    (((old & 31) * inverse + (color & 31) * alpha + 127) / 255));
+            }
+            destination[x] = target.byte_swapped ? ByteSwap(color) : color;
+        }
+    }
+}
+
+uint8_t WarpMaxLight(const uint32_t* entries, uint32_t count) {
+    uint32_t max_light = 0U;
+    for (uint32_t index = 0U; index < count; ++index) {
+        const uint32_t entry = entries[index];
+        if ((entry & MICROPIXEL_RASTER_WARP_ENTRY_SKIP) != 0U) continue;
+        if ((entry & MICROPIXEL_RASTER_WARP_ENTRY_RESERVED) != 0U) return UINT8_MAX;
+        const uint32_t light = (entry >> MICROPIXEL_RASTER_WARP_LIGHT_SHIFT) & MICROPIXEL_RASTER_WARP_LIGHT_MASK;
+        if (light > max_light) max_light = light;
+    }
+    return static_cast<uint8_t>(max_light);
+}
+
+bool WarpScanRows(const uint32_t* rows, uint32_t width, uint32_t row_count, uint16_t* spans, uint8_t& max_light) {
+    uint32_t light_max = 0U;
+    for (uint32_t row = 0U; row < row_count; ++row, rows += width, spans += 2U) {
+        uint32_t begin = width;
+        uint32_t end = 0U;
+        for (uint32_t x = 0U; x < width; ++x) {
+            const uint32_t entry = rows[x];
+            if ((entry & MICROPIXEL_RASTER_WARP_ENTRY_SKIP) != 0U) continue;
+            if ((entry & MICROPIXEL_RASTER_WARP_ENTRY_RESERVED) != 0U) return false;
+            const uint32_t light = (entry >> MICROPIXEL_RASTER_WARP_LIGHT_SHIFT) & MICROPIXEL_RASTER_WARP_LIGHT_MASK;
+            if (light > light_max) light_max = light;
+            if (x < begin) begin = x;
+            end = x + 1U;
+        }
+        spans[0] = static_cast<uint16_t>(begin < end ? begin : width);
+        spans[1] = static_cast<uint16_t>(begin < end ? end : width);
+    }
+    max_light = static_cast<uint8_t>(light_max);
+    return true;
+}
+
+void WarpRowSpan(const uint32_t* row, uint32_t width, uint16_t& first, uint16_t& last) {
+    uint32_t begin = 0U;
+    while (begin < width && (row[begin] & MICROPIXEL_RASTER_WARP_ENTRY_SKIP) != 0U) ++begin;
+    uint32_t end = width;
+    while (end > begin && (row[end - 1U] & MICROPIXEL_RASTER_WARP_ENTRY_SKIP) != 0U) --end;
+    first = static_cast<uint16_t>(begin);
+    last = static_cast<uint16_t>(end);
+}
+
+void DrawWarp(const Target& target, const WarpMap& warp, const Texture& texture, const Palette& palette,
+              const micropixel_raster_warp_t& record) {
+    ClippedRect clip{};
+    if (!ClipRect(target, record.x, record.y, warp.width, warp.height, clip)) {
+        return;
+    }
+    const bool fill = (record.flags & MICROPIXEL_RASTER_WARP_FILL_SKIPPED) != 0U;
+    const uint16_t fill_color = target.byte_swapped ? ByteSwap(record.fill_color) : record.fill_color;
+    const uint32_t u_mask = static_cast<uint32_t>(texture.width) - 1U;
+    const uint32_t v_mask = static_cast<uint32_t>(texture.height) - 1U;
+    const uint32_t log2_width = texture.log2_width;
+    // u sits in the low bits, so the offset can be added to the whole entry,
+    // shifted past its fraction bits and masked: the carry out of the u field
+    // lands in bits the v/light extraction never reads, and the mask never
+    // reaches them (width << u_fraction_bits fits the field). v needs its own
+    // add after the shift.
+    const uint32_t u_offset = record.u_offset;
+    const uint32_t u_shift = record.u_fraction_bits;
+    const uint32_t v_offset = record.v_offset;
+    const uint8_t* texels = texture.pixels;
+    const uint16_t* lit = palette.entries;
+    constexpr uint32_t kSpecial = MICROPIXEL_RASTER_WARP_ENTRY_SKIP | MICROPIXEL_RASTER_WARP_ENTRY_SOLID;
+    auto textured = [&](uint32_t w) -> uint16_t {
+        const uint32_t light_row = ((w >> MICROPIXEL_RASTER_WARP_LIGHT_SHIFT) & MICROPIXEL_RASTER_WARP_LIGHT_MASK)
+                                   << 8U;
+        const uint32_t u = ((w + u_offset) >> u_shift) & u_mask;
+        const uint32_t v = ((w >> MICROPIXEL_RASTER_WARP_V_SHIFT) + v_offset) & v_mask;
+        return lit[light_row | texels[(v << log2_width) | u]];
+    };
+    for (uint32_t y = clip.y0; y < clip.y1; ++y) {
+        const uint32_t map_row = clip.skip_y + (y - clip.y0);
+        // Walk only the row's non-skipped span (intersected with the clip);
+        // the skipped remainder is filled or left alone without a read.
+        uint32_t begin = clip.skip_x;
+        uint32_t end = clip.skip_x + (clip.x1 - clip.x0);
+        if (warp.row_spans != nullptr) {
+            begin = std::max<uint32_t>(begin, warp.row_spans[map_row * 2U]);
+            end = std::min<uint32_t>(end, warp.row_spans[map_row * 2U + 1U]);
+            if (end < begin) end = begin;
+        }
+        uint16_t* row = Row(target, y) + clip.x0 - clip.skip_x;  // indexed by map x
+        if (fill) {
+            for (uint32_t x = clip.skip_x; x < begin; ++x) row[x] = fill_color;
+            for (uint32_t x = end; x < clip.skip_x + (clip.x1 - clip.x0); ++x) row[x] = fill_color;
+        }
+        const uint32_t* entry = warp.entries + map_row * warp.width;
+        uint32_t x = begin;
+        while (x < end) {
+            // Two textured entries per step keep two gathers in flight on the
+            // in-order core; a skip/solid entry is handled singly below.
+            if (x + 2U <= end) {
+                const uint32_t w0 = entry[x];
+                const uint32_t w1 = entry[x + 1U];
+                if (((w0 | w1) & kSpecial) == 0U) {
+                    const uint16_t c0 = textured(w0);
+                    const uint16_t c1 = textured(w1);
+                    row[x] = c0;
+                    row[x + 1U] = c1;
+                    x += 2U;
+                    continue;
+                }
+            }
+            const uint32_t w = entry[x];
+            if (static_cast<int32_t>(w) < 0) {  // ENTRY_SKIP
+                if (fill) row[x] = fill_color;
+            } else if ((w & MICROPIXEL_RASTER_WARP_ENTRY_SOLID) != 0U) {
+                const uint32_t light_row =
+                    ((w >> MICROPIXEL_RASTER_WARP_LIGHT_SHIFT) & MICROPIXEL_RASTER_WARP_LIGHT_MASK) << 8U;
+                row[x] = lit[light_row | (w & 0xFFU)];
+            } else {
+                row[x] = textured(w);
+            }
+            ++x;
+        }
+    }
+}
+
 void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& header, const Target& target,
-                     const Resources& resources) {
-    const uint16_t* palette = resources.palette.entries;
+                     const Resources& resources, ExecuteProfile* profile) {
     uint32_t offset = sizeof(micropixel_raster_header_t);
     for (uint32_t index = 0U; index < header.record_count; ++index) {
         const uint8_t type = bytes[offset];
+        uint64_t pixels = 0U;
+        const uint64_t started_us = profile != nullptr && profile->now_us != nullptr ? profile->now_us() : 0U;
         if (type == MICROPIXEL_RASTER_RECORD_COLUMN) {
             micropixel_raster_column_t column{};
             std::memcpy(&column, bytes + offset, sizeof(column));
             offset += sizeof(column);
-            DrawColumn(target, resources.textures[column.texture],
-                       palette + static_cast<uint32_t>(column.light) * MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES,
-                       column);
-            continue;
-        }
-        if (type == MICROPIXEL_RASTER_RECORD_SPAN_PAIR) {
+            DrawColumn(target, *resources.TextureAt(column.texture_slot),
+                       resources.PaletteAt(column.palette_slot)->Row(column.light_level), column);
+            pixels = column.y1 >= column.y0 ? static_cast<uint64_t>(column.y1 - column.y0 + 1) : 0U;
+        } else if (type == MICROPIXEL_RASTER_RECORD_SPAN_PAIR) {
             micropixel_raster_span_pair_t span{};
             std::memcpy(&span, bytes + offset, sizeof(span));
             offset += sizeof(span);
-            DrawSpanPair(target, resources.textures[span.floor_texture], resources.textures[span.ceiling_texture],
-                         palette + static_cast<uint32_t>(span.light) * MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES,
-                         span);
-            continue;
-        }
-        if (type == MICROPIXEL_RASTER_RECORD_SPRITE) {
+            DrawSpanPair(target, *resources.TextureAt(span.floor_texture_slot),
+                         *resources.TextureAt(span.ceiling_texture_slot),
+                         resources.PaletteAt(span.palette_slot)->Row(span.light_level), span);
+            pixels = span.x1 >= span.x0 ? static_cast<uint64_t>(span.x1 - span.x0 + 1) * 2U : 0U;
+        } else if (type == MICROPIXEL_RASTER_RECORD_SPRITE) {
             micropixel_raster_sprite_t sprite{};
             std::memcpy(&sprite, bytes + offset, sizeof(sprite));
             offset += sizeof(sprite);
             // SOLID_COLOR sprites validated without a palette; hand them a
             // null row they never read.
-            const uint16_t* lit =
-                (sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) != 0U
-                    ? nullptr
-                    : palette + static_cast<uint32_t>(sprite.light) * MICROPIXEL_GRAPHICS_RASTER_PALETTE_ENTRIES;
-            DrawSprite(target, resources.textures[sprite.texture], lit, sprite);
-            continue;
+            const uint16_t* lit = (sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) != 0U
+                                      ? nullptr
+                                      : resources.PaletteAt(sprite.palette_slot)->Row(sprite.light_level);
+            DrawSprite(target, *resources.TextureAt(sprite.texture_slot), lit, sprite);
+            pixels = static_cast<uint64_t>(sprite.width) * sprite.height;
+        } else if (type == MICROPIXEL_RASTER_RECORD_WARP) {
+            micropixel_raster_warp_t warp{};
+            std::memcpy(&warp, bytes + offset, sizeof(warp));
+            offset += sizeof(warp);
+            const WarpMap& map = *resources.WarpAt(warp.warp_slot);
+            DrawWarp(target, map, *resources.TextureAt(warp.texture_slot), *resources.PaletteAt(warp.palette_slot),
+                     warp);
+            pixels = static_cast<uint64_t>(map.width) * map.height;
+        } else if (type == MICROPIXEL_RASTER_RECORD_IMAGE) {
+            micropixel_raster_image_t image{};
+            std::memcpy(&image, bytes + offset, sizeof(image));
+            offset += sizeof(image);
+            device::BitmapView texture{};
+            if (resources.resolve_texture(resources.texture_context, image.texture_handle, texture))
+                DrawImage(target, texture, image);
+            pixels = static_cast<uint64_t>(image.width) * image.height;
+        } else {
+            micropixel_raster_rect_t rect{};
+            std::memcpy(&rect, bytes + offset, sizeof(rect));
+            offset += sizeof(rect);
+            DrawRect(target, rect);
+            pixels = static_cast<uint64_t>(rect.width) * rect.height;
         }
-        micropixel_raster_rect_t rect{};
-        std::memcpy(&rect, bytes + offset, sizeof(rect));
-        offset += sizeof(rect);
-        DrawRect(target, rect);
+        if (profile != nullptr) {
+            const uint32_t kind = type < ExecuteProfile::kKinds ? type : MICROPIXEL_RASTER_RECORD_RECT;
+            ++profile->records[kind];
+            profile->pixels[kind] += pixels;
+            if (profile->now_us != nullptr) {
+                profile->time_us[kind] += profile->now_us() - started_us;
+            }
+        }
     }
 }
 

@@ -19,7 +19,7 @@ uint32_t ReadU32OrDefault(micropixel::KVStore storage, const char* key, uint32_t
 }
 
 micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
-    auto result = app.resources().LoadTexture(asset);
+    auto result = app.resources().LoadTexture(asset, micropixel::TextureScale::kDisplay);
     micropixel::Assert(result.has_value(), "snake: critical texture resource failed");
     return static_cast<micropixel::Texture&&>(result.value());
 }
@@ -106,7 +106,7 @@ int SnakeAppMain() {
         // `--no-bgm` isolates rendering from the tone sequencer's Host cost.
         game.EnableBenchmark(!HasLaunchFlag(launch_arguments, "--no-bgm"));
     }
-    micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs));
+    micropixel::Timer ticker = app.timers().Every(micropixel::Duration::Microseconds(kRenderTargetPeriodUs)).value();
     game.Render();
     app.log().Info("snake: M18 ready; themes/interpolation/fixed effects/overlays");
 

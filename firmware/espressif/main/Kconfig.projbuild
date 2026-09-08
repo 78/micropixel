@@ -37,9 +37,9 @@ menu "WAMR application quotas"
             Offer RASTER_TEXTURE_UPLOAD / RASTER_PALETTE_UPLOAD and the RASTER
             channel. Uploaded INDEX8 textures and the lit palette are
             allocated from PSRAM per upload and freed when the session ends;
-            the ABI limits (32 textures of at most 128x128 plus a 32-level
-            palette) already bound a session to 528 KiB, so there is no
-            separate byte quota. Disabling drops CAP_RASTER from the Graphics
+            reusable 8-bit slots and 16-bit dimensions have no smaller quota. Allocation
+            failure is reported to the Guest and preserves the old resource.
+            Power-of-two dimensions use faster sampling. Disabling drops CAP_RASTER from the Graphics
             descriptor and the RASTER channel reports UNSUPPORTED.
 
     config MICROPIXEL_RASTER_POOL_INTERNAL_SRAM

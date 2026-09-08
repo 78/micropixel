@@ -5,7 +5,7 @@
 
 namespace maze_break::gfx {
 
-// The render target is whatever DirectSurface buffer the Host hands out, so
+// The render target is whatever HostSurface buffer the Host hands out, so
 // the view size is a runtime value. These bounds size the per-column scratch
 // arrays; any board up to 800 px wide works with one binary.
 inline constexpr int kMaxViewWidth = 800;

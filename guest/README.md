@@ -29,7 +29,7 @@ Runtime binding 按能力拆分，新增实现应放入对应模块：
 | `audio.cpp`、`devices.cpp` | 音频资源与播放、设备枚举及 Sensor/GPIO/Haptics/Power |
 | `display_context.cpp` | Graphics/Input 信息缓存与共享坐标契约 |
 | `graphics.cpp` | Renderer 信息、字体、纹理和更新批次 |
-| `direct_surface.cpp`、`surface_raster.cpp` | Surface 缓冲区所有权与光栅命令 |
+| `direct_surface.cpp`、`raster_resources.cpp` | HostSurface/GuestSurface 缓冲区所有权、Raster 资源上传与绘制记录 |
 | `application.cpp` | 事件循环与 wire 事件解码 |
 | `scene_graph.cpp` | Scene 状态与增量提交 |
 
@@ -45,8 +45,8 @@ Sensor 句柄表保留在设备模块内。内部头只服务于 Runtime，不�
 `tests/conformance/` 保留 Event、Timer/Clock、Renderer、退出语义、watchdog 和 Service 边界
 验收。历史 S3 Guest、独立 benchmark 和编译失败样例已经移除；需要这类测试时按当前接口重写。
 完整产品应用 [`apps/snake/`](apps/snake/)、[`apps/blocks/`](apps/blocks/) 和
-[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。[`apps/maze-evil/`](apps/maze-evil/) 不走 Scene，而是向 Host buffer 的
-`DirectSurface` 提交 Graphics 1.6 `SurfaceRaster` draw list（墙/地板/精灵/文字都由 Host kernel 光栅化），
+[`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。[`apps/maze-evil/`](apps/maze-evil/) 不走 Scene，而是向
+`HostSurface` 提交 `RasterDrawList`（墙/地板/精灵/文字都由 Host kernel 光栅化），
 是全屏渲染路径与 `--benchmark` 分段统计的验收载体。
 
 所有游戏音效使用 `apps/<game>/audio/sfx.json` 作为唯一参数源，并在正式 Bundle 构建中执行感知分析门禁。

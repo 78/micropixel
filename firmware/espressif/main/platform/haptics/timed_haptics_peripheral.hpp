@@ -29,7 +29,7 @@ class TimedHapticsPeripheral final : public device::HapticsPeripheral {
    public:
     static constexpr device::PeripheralChannelId kChannel = 1U;
 
-    TimedHapticsPeripheral(HapticActuator& actuator, uint32_t capabilities, uint32_t maximum_duration_ms = 5000U);
+    TimedHapticsPeripheral(HapticActuator& actuator, uint32_t capabilities, uint32_t max_duration_ms = 5000U);
     ~TimedHapticsPeripheral() override;
 
     [[nodiscard]] esp_err_t Initialize();

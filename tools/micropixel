@@ -1614,7 +1614,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             root / "guest/runtime/display_context.cpp",
             root / "guest/runtime/graphics.cpp",
             root / "guest/runtime/direct_surface.cpp",
-            root / "guest/runtime/surface_raster.cpp",
+            root / "guest/runtime/raster_resources.cpp",
+            root / "guest/runtime/raycast.cpp",
+            root / "guest/runtime/sphere_view.cpp",
             root / "guest/runtime/application.cpp",
             root / "guest/runtime/scene_graph.cpp",
             *sources,
@@ -1719,6 +1721,109 @@ def resolve_project_manifest(target: str | Path) -> Path | None:
     return None
 
 
+def validate_app_version(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 31
+        or re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", value) is None
+    ):
+        raise CliError("App version must be canonical major.minor.patch, at most 31 ASCII bytes")
+    return value
+
+
+APP_STARTER_SOURCE = '''// SPDX-License-Identifier: Apache-2.0
+#include "sdk/micropixel.hpp"
+
+int main() {
+    micropixel::Application app;
+    micropixel::Renderer renderer = app.renderer();
+    auto scene = renderer.CreateScene(micropixel::Color::Black()).value();
+    auto greeting = scene.CreateLabel({24, 24}, "Hello, MicroPixel!", micropixel::Color::White()).value();
+    renderer.Present(scene).value();
+    app.log().Info("App ready");
+    app.Run([](const micropixel::Event&) { return micropixel::EventResult::kContinue; });
+    return 0;
+}
+'''
+
+
+def run_init(args: argparse.Namespace) -> None:
+    root = Path(args.directory).expanduser().resolve()
+    if root.exists() and not root.is_dir():
+        raise CliError(f"Project path is not a directory: {root}")
+    manifest_path = root / "app.json"
+    if manifest_path.exists() or manifest_path.is_symlink():
+        raise CliError(f"app.json already exists; edit it directly: {manifest_path}")
+    app_id = args.app_id or f"local.{root.name}"
+    if (
+        re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", app_id) is None
+        or re.fullmatch(r"[A-Za-z0-9_-]+", app_id.rsplit(".", 1)[-1]) is None
+    ):
+        raise CliError("Invalid App ID; pass --app-id with 1..64 ASCII letters, digits, dots, hyphens or underscores")
+    version = validate_app_version(args.app_version)
+    title = args.title if args.title is not None else root.name.replace("-", " ").replace("_", " ").title()
+    if (
+        not title or title.startswith(" ") or title.endswith(" ") or len(title.encode("utf-8")) > 64
+        or any(ord(char) < 32 or ord(char) == 127 for char in title)
+    ):
+        raise CliError("Title must contain 1..64 UTF-8 bytes without control characters or surrounding spaces")
+
+    sources: list[str] = []
+    if args.sources:
+        for raw in args.sources:
+            source = _manifest_child(root, raw, "--source")
+            if not source.is_file():
+                raise CliError(f"Guest source not found: {source}")
+            sources.append(source.relative_to(root).as_posix())
+    elif root.exists():
+        excluded = {"build", "artifacts", "generated", "managed_components", "node_modules", "test", "tests"}
+        for directory, children, files in os.walk(root):
+            children[:] = sorted(
+                name for name in children
+                if not name.startswith(".") and name not in excluded and not name.startswith("cmake-build-")
+                and not (Path(directory) / name).is_symlink()
+            )
+            for name in sorted(files):
+                source = Path(directory) / name
+                if source.suffix not in {".cpp", ".cc", ".cxx"} or source.is_symlink():
+                    continue
+                if source.stem.startswith("test_") or source.stem.endswith("_test"):
+                    continue
+                sources.append(source.relative_to(root).as_posix())
+    sources = sorted(set(sources))
+    starter = not sources
+    if starter:
+        sources = ["src/main.cpp"]
+        source_path = _manifest_child(root, sources[0], "starter source")
+        if source_path.exists() or (root / sources[0]).is_symlink():
+            raise CliError(f"Starter source already exists: {source_path}")
+
+    manifest = {
+        "schema_version": 1,
+        "app_id": app_id,
+        "version": version,
+        "title": title,
+        "threading": "none",
+        "sources": sources,
+    }
+    if (root / "assets/manifest.json").is_file():
+        _manifest_child(root, "assets/manifest.json", "asset_manifest")
+        manifest["asset_manifest"] = "assets/manifest.json"
+    root.mkdir(parents=True, exist_ok=True)
+    if starter:
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        with source_path.open("x", encoding="utf-8") as output:
+            output.write(APP_STARTER_SOURCE)
+    with manifest_path.open("x", encoding="utf-8") as output:
+        output.write(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    print(f"Created {manifest_path}\nApp ID: {app_id}\nVersion: {version}\nSources:")
+    for source in sources:
+        print(f"  {source}")
+    print(f"\nNext: cd {shlex.quote(str(root))}\n  micropixel build\n  micropixel --transport usb run")
+    if not starter:
+        print("Review sources in app.json before building; use --source when initializing projects with multiple entry points.")
+
+
 def load_project_manifest(path: Path) -> ProjectManifest:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -1741,6 +1846,8 @@ def load_project_manifest(path: Path) -> ProjectManifest:
     sources: list[Path] = []
     raw_sources = value.get("sources")
     if package_type == "app":
+        if "version" in value:
+            validate_app_version(value["version"])
         if "display" in value or "display_profile" in value:
             raise CliError("app.json no longer declares a display profile; inspect RendererInfo in Guest code")
         if "display_name" in value:
@@ -3009,11 +3116,21 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--transport",
         choices=["remote", "usb"],
-        default=os.environ.get("MICROPIXEL_TRANSPORT", "remote"),
-        help="Device transport for control commands (default: remote)",
+        default=None,
+        help="Device transport for control commands (default: usb when --port is set, otherwise remote)",
     )
-    result.add_argument("--port", help="USB Serial/JTAG port; auto-detected when one ESP32 device is connected")
+    result.add_argument(
+        "--port",
+        help="USB Serial/JTAG port; implies --transport usb. Auto-detected when one ESP32 device is connected",
+    )
     commands = result.add_subparsers(dest="command", required=True)
+
+    init = commands.add_parser("init", help="Create app.json from existing sources or scaffold a new Guest App")
+    init.add_argument("directory", nargs="?", default=".", help="Project directory (default: .)")
+    init.add_argument("--app-id", help="Stable App ID (default: local.<directory-name>)")
+    init.add_argument("--title", help="App Hall display name (default: directory name)")
+    init.add_argument("--version", dest="app_version", default="1.0.0", help="App major.minor.patch (default: 1.0.0)")
+    init.add_argument("--source", dest="sources", action="append", help="Source relative to the project; repeat to replace auto-discovery")
 
     build = commands.add_parser("build", help="Build an app.json project into Wasm and AOT")
     build.add_argument("source", nargs="?", default=".", help="Project directory, app.json, or legacy C++ source")
@@ -3226,22 +3343,34 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def resolve_transport(args: argparse.Namespace) -> argparse.Namespace:
+    if args.transport is None:
+        if args.port:
+            args.transport = "usb"
+        else:
+            args.transport = os.environ.get("MICROPIXEL_TRANSPORT", "remote")
+        return args
+    if args.transport == "remote" and args.port:
+        raise CliError("--port implies USB transport; omit --transport remote or pass --transport usb")
+    return args
+
+
 def parse_command_line(arguments: list[str] | None = None) -> argparse.Namespace:
     raw = list(sys.argv[1:] if arguments is None else arguments)
     if "--" not in raw:
-        return parser().parse_args(raw)
+        return resolve_transport(parser().parse_args(raw))
     separator = raw.index("--")
     try:
         parsed = parser().parse_args(raw[:separator])
     except SystemExit:
-        return parser().parse_args(raw)
+        return resolve_transport(parser().parse_args(raw))
     supports_launch_arguments = parsed.command == "run" or (
         parsed.command == "app" and getattr(parsed, "app_command", None) == "start"
     )
     if not supports_launch_arguments:
-        return parser().parse_args(raw)
+        return resolve_transport(parser().parse_args(raw))
     parsed.launch_arguments = validate_launch_arguments(raw[separator + 1 :])
-    return parsed
+    return resolve_transport(parsed)
 
 
 def main() -> int:
@@ -3254,7 +3383,9 @@ def main() -> int:
         if args.command == "app" and args.app_command == "upload":
             print("micropixel: 'app upload' is deprecated; use 'artifact upload'", file=sys.stderr)
 
-        if args.command == "build":
+        if args.command == "init":
+            run_init(args)
+        elif args.command == "build":
             run_build(args)
         elif args.command == "package":
             run_package(args)

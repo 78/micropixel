@@ -4,6 +4,7 @@
 #include <atomic>
 
 #include "abi/micropixel_abi.h"
+#include "device/contracts/input.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -75,7 +76,6 @@ class EventQueue final {
         uint64_t timestamp_us{};
         uint32_t source{};
         uint32_t sequence{};
-        micropixel_device_id_t device{};
         uint8_t value{};
         uint8_t edge{};
     };
@@ -96,9 +96,9 @@ class EventQueue final {
     micropixel_event_t periodic_carry_[limits::kMaxTimers]{};
     bool periodic_carry_valid_[limits::kMaxTimers]{};
     portMUX_TYPE touch_lock_ = portMUX_INITIALIZER_UNLOCKED;
-    micropixel_event_t touch_latest_[MICROPIXEL_MAX_TOUCH_POINTS]{};
+    micropixel_event_t touch_latest_[micropixel::device::kMaxTouchPoints]{};
     micropixel_event_t stop_event_{};
-    uint32_t touch_pending_id_[MICROPIXEL_MAX_TOUCH_POINTS]{};
+    uint32_t touch_pending_id_[micropixel::device::kMaxTouchPoints]{};
     portMUX_TYPE gpio_lock_ = portMUX_INITIALIZER_UNLOCKED;
     GpioEventSnapshot gpio_latest_[limits::kMaxGpioHandles]{};
 };

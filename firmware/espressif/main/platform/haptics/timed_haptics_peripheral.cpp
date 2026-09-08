@@ -10,8 +10,8 @@ constexpr char kTag[] = "timed_haptics";
 }  // namespace
 
 TimedHapticsPeripheral::TimedHapticsPeripheral(HapticActuator& actuator, uint32_t capabilities,
-                                               uint32_t maximum_duration_ms)
-    : actuator_(actuator), capabilities_(capabilities), maximum_duration_ms_(maximum_duration_ms) {}
+                                               uint32_t max_duration_ms)
+    : actuator_(actuator), capabilities_(capabilities), maximum_duration_ms_(max_duration_ms) {}
 
 TimedHapticsPeripheral::~TimedHapticsPeripheral() {
     (void)Stop(kChannel);
@@ -68,7 +68,7 @@ int32_t TimedHapticsPeripheral::GetInfo(device::PeripheralChannelId channel,
     info_out = {};
     info_out.size = sizeof(info_out);
     info_out.capabilities = capabilities_;
-    info_out.maximum_duration_ms = maximum_duration_ms_;
+    info_out.max_duration_ms = maximum_duration_ms_;
     return MICROPIXEL_STATUS_OK;
 }
 

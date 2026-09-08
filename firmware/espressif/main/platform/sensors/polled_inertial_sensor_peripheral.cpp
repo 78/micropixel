@@ -84,8 +84,8 @@ int32_t PolledInertialSensorPeripheral::GetInfo(device::PeripheralChannelId chan
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     info_out.kind = channel == kAcceleration ? MICROPIXEL_SENSOR_ACCELERATION : MICROPIXEL_SENSOR_ANGULAR_VELOCITY;
-    info_out.minimum_interval_us = driver->minimum_interval_us();
-    info_out.maximum_interval_us = 60000000U;
+    info_out.min_interval_us = driver->min_interval_us();
+    info_out.max_interval_us = 60000000U;
     return MICROPIXEL_STATUS_OK;
 }
 

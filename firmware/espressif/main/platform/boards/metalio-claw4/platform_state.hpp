@@ -22,6 +22,7 @@
 #include "platform/lvgl/display/system_transition_compositor.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/guest_graphics_engine.hpp"
+#include "platform/memory/graphics_buffer_alignment.hpp"
 #include "soc/soc_caps.h"
 #include "work/task_policy.hpp"
 
@@ -42,7 +43,7 @@ inline constexpr uint32_t kLightSleepEntryAttempts = 3U;
 inline constexpr uint32_t kLvglTaskMinDelayMs = portTICK_PERIOD_MS;
 inline constexpr uint32_t kGuestTransitionStride = static_cast<uint32_t>(kWidth) * 3U;
 inline constexpr uint32_t kGuestTransitionBytes = kGuestTransitionStride * static_cast<uint32_t>(kHeight);
-inline constexpr uint32_t kPpaBufferAlignment = 128U;
+inline constexpr uint32_t kPpaBufferAlignment = memory::kGraphicsBufferAlignment;
 static_assert(SOC_PPA_SUPPORTED);
 inline constexpr bool kEnablePpaAccel = true;
 inline constexpr esp_lv_adapter_tear_avoid_mode_t kTearAvoidMode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_DIRECT;

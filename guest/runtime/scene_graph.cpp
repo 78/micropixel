@@ -1,19 +1,22 @@
 #include <stdint.h>
 
-#include <vector>
+#include <new>
 
 #include "abi/micropixel_abi.h"
+#include "runtime/display_context.hpp"
 #include "runtime/display_transform.hpp"
 #include "runtime/panic.hpp"
+#include "runtime/scene_array.hpp"
 #include "runtime/scene_delta.hpp"
+#include "runtime/service_binding.hpp"
+#include "runtime/texture_state.hpp"
 #include "sdk/graphics.hpp"
 #include "sdk/resources.hpp"
 
 namespace micropixel {
 namespace {
 
-constexpr uint32_t kBaseMask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY |
-                               MICROPIXEL_GRAPHICS_SCENE_NODE_LAYER;
+constexpr uint32_t kBaseMask = MICROPIXEL_GRAPHICS_SCENE_NODE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBILITY;
 constexpr uint32_t kCommonMask = kBaseMask | MICROPIXEL_GRAPHICS_SCENE_NODE_GEOMETRY;
 constexpr uint32_t kContainerMask =
     MICROPIXEL_GRAPHICS_SCENE_CONTAINER_CLIP | MICROPIXEL_GRAPHICS_SCENE_CONTAINER_TRANSLATION |
@@ -23,6 +26,13 @@ constexpr uint32_t kInstanceMask =
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_GEOMETRY | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_CONTENT |
     MICROPIXEL_GRAPHICS_SCENE_INSTANCE_APPEARANCE | MICROPIXEL_GRAPHICS_SCENE_INSTANCE_VISIBILITY;
 constexpr uint16_t kNoUndoSlot = UINT16_MAX;
+uint32_t next_handle_identity = 1U;
+uint32_t NextIdentity() {
+    if (next_handle_identity == UINT32_MAX) {
+        runtime::Panic("scene.identity.exhausted", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    }
+    return next_handle_identity++;
+}
 
 enum class SceneNodeKind : uint16_t {
     kShape = MICROPIXEL_GRAPHICS_SCENE_OP_RECT,
@@ -44,17 +54,19 @@ struct SceneNodeData final {
     uint32_t radius{};
     uint32_t stroke_width{};
     uint8_t opacity{255U};
-    uint32_t texture{};
+    uint32_t texture_handle{};
     uint32_t texture_logical_width{};
     uint32_t texture_logical_height{};
     uint32_t texture_physical_width{};
     uint32_t texture_physical_height{};
     Rect source{};
-    uint16_t font{};
+    micropixel_font_handle_t font_handle{};
     uint16_t text_length{};
     uint16_t batch_capacity{};
     uint16_t batch_instance_offset{};
-    char text[MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES + 1U]{};
+    // Offset of text_length bytes plus NUL in SceneState::text_arena. Stable
+    // for as long as the node or an undo copy of it refers to the text.
+    uint32_t text_offset{};
     uint32_t order{};
     uint32_t generation{1U};
     uint16_t wire_id{UINT16_MAX};
@@ -115,34 +127,27 @@ uint16_t TextLength(const char* text) {
     if (text == nullptr) {
         runtime::Panic("scene.text.null", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
+    const uint32_t max_text_bytes = runtime::LoadGraphicsLimits().max_text_bytes;
     uint16_t length = 0U;
-    while (length <= MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES && text[length] != '\0') {
+    while (length <= max_text_bytes && text[length] != '\0') {
         ++length;
     }
-    if (length == 0U || length > MICROPIXEL_GRAPHICS_MAX_TEXT_BYTES) {
+    if (length == 0U || length > max_text_bytes) {
         runtime::Panic("scene.text.length", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     return length;
 }
 
-Error StatusError(int32_t status) {
-    if (status == MICROPIXEL_STATUS_INVALID_ARGUMENT || status == MICROPIXEL_STATUS_INVALID_MEMORY) {
-        return Error{ErrorCode::kInvalidArgument};
-    }
-    if (status == MICROPIXEL_STATUS_RESOURCE_EXHAUSTED) {
-        return Error{ErrorCode::kResourceExhausted};
-    }
-    if (status == MICROPIXEL_STATUS_UNSUPPORTED) {
-        return Error{ErrorCode::kUnsupported};
-    }
-    return Error{ErrorCode::kInternal};
-}
+Error StatusError(int32_t status) { return runtime::ErrorFromStatus(status); }
 
 class SceneWriter final {
    public:
+    // Effective message capacity: the static buffer clamped to Host policy.
+    [[nodiscard]] static uint32_t Capacity() { return runtime::LoadGraphicsLimits().max_scene_bytes; }
+
     template <typename Value>
     bool Add(const Value& value) {
-        if (size_ > sizeof(scene_wire) || sizeof(Value) > sizeof(scene_wire) - size_) {
+        if (size_ > Capacity() || sizeof(Value) > Capacity() - size_) {
             return false;
         }
         Copy(scene_wire + size_, &value, sizeof(Value));
@@ -153,7 +158,7 @@ class SceneWriter final {
 
     bool AddText(micropixel_graphics_scene_text_record_t value, const char* text) {
         const uint32_t size = (sizeof(value) + value.text_length + 3U) & ~3U;
-        if (size_ > sizeof(scene_wire) || size > sizeof(scene_wire) - size_) {
+        if (size_ > Capacity() || size > Capacity() - size_) {
             return false;
         }
         value.node.record.size = static_cast<uint16_t>(size);
@@ -169,7 +174,7 @@ class SceneWriter final {
                       const SceneNodeData& batch, const detail::DisplayTransform& display) {
         const uint32_t size = sizeof(value) + static_cast<uint32_t>(value.instance_count) *
                                                   sizeof(micropixel_graphics_scene_sprite_instance_t);
-        if (size_ > sizeof(scene_wire) || size > sizeof(scene_wire) - size_ || size > UINT16_MAX) {
+        if (size_ > Capacity() || size > Capacity() - size_ || size > UINT16_MAX) {
             return false;
         }
         value.record.size = static_cast<uint16_t>(size);
@@ -178,13 +183,13 @@ class SceneWriter final {
         for (uint16_t index = 0U; index < value.instance_count; ++index) {
             const SpriteInstance& instance = instances[index].value;
             const detail::PhysicalRect destination =
-                batch.texture == 0U
+                batch.texture_handle == 0U
                     ? detail::MapSceneRect(display, instance.destination.x, instance.destination.y,
                                            instance.destination.width, instance.destination.height)
                     : detail::MapSceneSizedRect(display, instance.destination.x, instance.destination.y,
                                                 instance.destination.width, instance.destination.height);
             const detail::PhysicalRect source =
-                batch.texture == 0U
+                batch.texture_handle == 0U
                     ? detail::PhysicalRect{}
                     : detail::MapTextureRect(instance.source.x, instance.source.y, instance.source.width,
                                              instance.source.height, batch.texture_logical_width,
@@ -214,10 +219,10 @@ class SceneWriter final {
 
     uint32_t size_{sizeof(micropixel_graphics_scene_header_t)};
     uint16_t records_{};
-    alignas(4) static uint8_t scene_wire[MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES];
+    alignas(4) static uint8_t scene_wire[runtime::limits::kMaxSceneBytes];
 };
 
-alignas(4) uint8_t SceneWriter::scene_wire[MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES]{};
+alignas(4) uint8_t SceneWriter::scene_wire[runtime::limits::kMaxSceneBytes]{};
 micropixel_service_info_t graphics_scene_service{};
 bool graphics_scene_service_open{};
 
@@ -225,7 +230,10 @@ bool graphics_scene_service_open{};
 
 class SceneState final {
    public:
-    void Reset(const SceneDescriptor& descriptor) {
+    bool Reset(const SceneDescriptor& descriptor) {
+        if (!containers.Reserve(1) || !container_undo_slot.Reserve(1) || !container_undo.Reserve(1) ||
+            !container_scratch.Reserve(1) || !container_wire_ids.Reserve(1) || !container_subtree.Reserve(1))
+            return false;
         for (uint16_t index = 0U; index < nodes.size(); ++index) {
             const uint32_t next_generation = nodes[index].generation == 0U || nodes[index].generation == UINT32_MAX
                                                  ? 1U
@@ -245,6 +253,7 @@ class SceneState final {
             containers[index].generation = next_generation;
         }
         instances.clear();
+        text_arena.clear();
         node_undo.clear();
         instance_undo.clear();
         container_undo.clear();
@@ -263,13 +272,13 @@ class SceneState final {
         revision = 0U;
         valid = false;
         update_active = false;
+        pending_changes = false;
         undo_node_count = 0U;
         undo_instance_count = 0U;
         undo_container_count = 0U;
         background_saved = false;
         next_order = 0U;
-        next_order_undo = 0U;
-        valid_undo = false;
+        return true;
     }
 
     [[nodiscard]] bool NodeValid(uint16_t id, uint32_t handle_generation) const {
@@ -293,33 +302,42 @@ class SceneState final {
         if (parent.state_ == nullptr) {
             return 0U;
         }
-        if (parent.state_ != this ||
-            (parent.id_ == 0U ? parent.generation_ != 0U : !ContainerValid(parent.id_, parent.generation_))) {
+        if (parent.state_ != this || (parent.id_ == 0U ? parent.generation_ != root_identity
+                                                       : !ContainerValid(parent.id_, parent.generation_))) {
             runtime::Panic("scene.container.invalid", MICROPIXEL_STATUS_INVALID_ARGUMENT);
         }
         return parent.id_;
     }
 
-    uint16_t AllocateNode(const Container& parent) {
-        if (node_count >= MICROPIXEL_GRAPHICS_MAX_SCENE_NODES) {
-            runtime::Panic("scene.nodes.full", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    // Nodes and batch instances share the Host's uint16 draw-operation space.
+    [[nodiscard]] bool ItemsAvailable(uint32_t additional) const {
+        return static_cast<uint32_t>(node_count) + batch_instance_count + additional <= runtime::limits::kMaxSceneItems;
+    }
+
+    Result<uint16_t> AllocateNode(const Container& parent) {
+        if (!ItemsAvailable(1U) || next_handle_identity == UINT32_MAX) {
+            return unexpected(Error{ErrorCode::kResourceExhausted});
         }
         const uint16_t parent_id = ParentId(parent);
         uint16_t id = 0U;
         while (id < nodes.size() && nodes[id].occupied) {
             ++id;
         }
-        if (id == MICROPIXEL_GRAPHICS_MAX_SCENE_NODES || next_order == UINT32_MAX) {
-            runtime::Panic("scene.nodes.full", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        if (id >= runtime::limits::kMaxSceneItems || next_order == UINT32_MAX) {
+            return unexpected(Error{ErrorCode::kResourceExhausted});
         }
         if (id == nodes.size()) {
+            const size_t count = nodes.size() + 1;
+            if (!nodes.Reserve(count) || !node_undo_slot.Reserve(count) || !node_undo.Reserve(count) ||
+                !node_scratch.Reserve(count))
+                return unexpected(Error{ErrorCode::kResourceExhausted});
             nodes.emplace_back();
             node_undo_slot.push_back(kNoUndoSlot);
         }
         if (update_active) {
             RememberNode(id);
         }
-        const uint32_t generation = nodes[id].generation == 0U ? 1U : nodes[id].generation;
+        const uint32_t generation = NextIdentity();
         nodes[id] = {};
         nodes[id].generation = generation;
         nodes[id].wire_id = UINT16_MAX;
@@ -331,26 +349,33 @@ class SceneState final {
         return id;
     }
 
-    uint16_t AllocateContainer(const Container& parent, const ContainerProperties& properties) {
-        if (container_count >= MICROPIXEL_GRAPHICS_MAX_CONTAINERS || next_order == UINT32_MAX) {
-            runtime::Panic("scene.containers.full", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    Result<uint16_t> AllocateContainer(const Container& parent, const ContainerProperties& properties) {
+        // Container ids are uint16 with 0 reserved for the root.
+        if (container_count >= runtime::limits::kMaxSceneItems - 1U || next_order == UINT32_MAX ||
+            next_handle_identity == UINT32_MAX) {
+            return unexpected(Error{ErrorCode::kResourceExhausted});
         }
         const uint16_t parent_id = ParentId(parent);
         uint16_t id = 1U;
         while (id < containers.size() && containers[id].occupied) {
             ++id;
         }
-        if (id > MICROPIXEL_GRAPHICS_MAX_CONTAINERS) {
-            runtime::Panic("scene.containers.full", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        if (id >= runtime::limits::kMaxSceneItems) {
+            return unexpected(Error{ErrorCode::kResourceExhausted});
         }
         if (id == containers.size()) {
+            const size_t count = containers.size() + 1;
+            if (!containers.Reserve(count) || !container_undo_slot.Reserve(count) || !container_undo.Reserve(count) ||
+                !container_scratch.Reserve(count) || !container_wire_ids.Reserve(count) ||
+                !container_subtree.Reserve(count))
+                return unexpected(Error{ErrorCode::kResourceExhausted});
             containers.emplace_back();
             container_undo_slot.push_back(kNoUndoSlot);
         }
         if (update_active) {
             RememberContainer(id);
         }
-        const uint32_t generation = containers[id].generation == 0U ? 1U : containers[id].generation;
+        const uint32_t generation = NextIdentity();
         containers[id] = {.dirty = kContainerMask,
                           .clip = properties.clip,
                           .translation = properties.translation,
@@ -375,7 +400,7 @@ class SceneState final {
         return containers[id];
     }
 
-    void BeginTransaction() {
+    void BeginFrame() {
         for (uint16_t index = 0U; index < undo_node_count; ++index) {
             node_undo_slot[node_undo[index].id] = kNoUndoSlot;
         }
@@ -392,11 +417,6 @@ class SceneState final {
         undo_instance_count = 0U;
         undo_container_count = 0U;
         background_saved = false;
-        node_count_undo = node_count;
-        batch_instance_count_undo = batch_instance_count;
-        container_count_undo = container_count;
-        next_order_undo = next_order;
-        valid_undo = valid;
         update_active = true;
     }
 
@@ -471,14 +491,16 @@ class SceneState final {
         if (!ContainerValid(id, handle_generation)) {
             return;
         }
-        bool subtree[MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U]{};
-        subtree[id] = true;
+        // Reserved alongside containers, so this never allocates.
+        container_subtree.assign(containers.size(), 0U);
+        uint8_t* subtree = container_subtree.data();
+        subtree[id] = 1U;
         for (uint16_t pass = 0U; pass < container_count; ++pass) {
             bool changed = false;
             for (uint16_t container_id = 1U; container_id < containers.size(); ++container_id) {
                 if (containers[container_id].occupied && !subtree[container_id] &&
                     subtree[containers[container_id].parent_id]) {
-                    subtree[container_id] = true;
+                    subtree[container_id] = 1U;
                     changed = true;
                 }
             }
@@ -512,49 +534,112 @@ class SceneState final {
         }
     }
 
-    void RollbackTransaction() {
-        for (uint16_t index = 0U; index < undo_node_count; ++index) {
-            const uint16_t id = node_undo[index].id;
-            const uint32_t transaction_generation = nodes[id].generation;
-            nodes[id] = node_undo[index].value;
-            if (!nodes[id].occupied) {
-                nodes[id].generation = NextHandleGeneration(transaction_generation);
-            }
-        }
-        for (uint16_t index = 0U; index < undo_instance_count; ++index) {
-            instances[instance_undo[index].id] = instance_undo[index].value;
-        }
-        for (uint16_t index = 0U; index < undo_container_count; ++index) {
-            const uint16_t id = container_undo[index].id;
-            const uint32_t transaction_generation = containers[id].generation;
-            containers[id] = container_undo[index].value;
-            if (!containers[id].occupied) {
-                containers[id].generation = NextHandleGeneration(transaction_generation);
-            }
-        }
-        node_count = node_count_undo;
-        batch_instance_count = batch_instance_count_undo;
-        container_count = container_count_undo;
-        next_order = next_order_undo;
-        valid = valid_undo;
-        if (background_saved) {
-            background_color = background_undo;
-            background_dirty = background_dirty_undo;
-        }
+    void AcceptFrame() {
         update_active = false;
+        pending_changes = false;
     }
 
-    void CommitTransaction() { update_active = false; }
+    [[nodiscard]] const char* Text(const SceneNodeData& node) const { return text_arena.data() + node.text_offset; }
 
-    std::vector<SceneNodeData> nodes{};
-    std::vector<SceneContainerData> containers{};
-    std::vector<SceneInstanceData> instances{};
-    std::vector<SceneNodeUndo> node_undo{};
-    std::vector<SceneInstanceUndo> instance_undo{};
-    std::vector<SceneContainerUndo> container_undo{};
-    std::vector<uint16_t> node_undo_slot{};
-    std::vector<uint16_t> instance_undo_slot{};
-    std::vector<uint16_t> container_undo_slot{};
+    // Appends `length` bytes plus NUL and points `node` at them. Old text stays
+    // in place (undo copies may still refer to it); when the arena is full the
+    // garbage is squeezed out first and the arena only grows if live text plus
+    // the new run do not fit. False means out of memory; nothing changed.
+    [[nodiscard]] bool StoreText(SceneNodeData& node, const char* text, uint16_t length) {
+        const size_t needed = static_cast<size_t>(length) + 1U;
+        if (text_arena.size() + needed > text_arena.capacity()) {
+            CompactText();
+        }
+        const size_t offset = text_arena.size();
+        if (!text_arena.Reserve(offset + needed)) {
+            return false;
+        }
+        text_arena.resize(offset + needed);
+        Copy(text_arena.data() + offset, text, length);
+        text_arena[offset + length] = '\0';
+        node.text_offset = static_cast<uint32_t>(offset);
+        node.text_length = length;
+        return true;
+    }
+
+    // In-place compaction keeping every run referenced by a live label or by an
+    // undo copy. Runs are slid down in ascending offset order, so a run is never
+    // overwritten before it was moved. Quadratic in the number of label runs;
+    // only reached when the arena is full.
+    void CompactText() {
+        // A label whose run is not inside the arena yet (CreateLabel before
+        // its first StoreText) owns no bytes.
+        const size_t used = text_arena.size();
+        const auto label = [used](const SceneNodeData& node) {
+            return node.occupied && node.kind == SceneNodeKind::kLabel &&
+                   static_cast<size_t>(node.text_offset) + node.text_length < used;
+        };
+        uint32_t write = 0U;
+        uint32_t scan = 0U;
+        while (true) {
+            uint32_t best = UINT32_MAX;
+            uint16_t best_length = 0U;
+            for (size_t index = 0U; index < nodes.size(); ++index) {
+                const SceneNodeData& node = nodes[index];
+                if (label(node) && node.text_offset >= scan && node.text_offset < best) {
+                    best = node.text_offset;
+                    best_length = node.text_length;
+                }
+            }
+            for (uint16_t index = 0U; index < undo_node_count; ++index) {
+                const SceneNodeData& node = node_undo[index].value;
+                if (label(node) && node.text_offset >= scan && node.text_offset < best) {
+                    best = node.text_offset;
+                    best_length = node.text_length;
+                }
+            }
+            if (best == UINT32_MAX) {
+                break;
+            }
+            if (best != write) {
+                Copy(text_arena.data() + write, text_arena.data() + best, static_cast<uint32_t>(best_length) + 1U);
+            }
+            for (size_t index = 0U; index < nodes.size(); ++index) {
+                if (label(nodes[index]) && nodes[index].text_offset == best) {
+                    nodes[index].text_offset = write;
+                }
+            }
+            for (uint16_t index = 0U; index < undo_node_count; ++index) {
+                if (label(node_undo[index].value) && node_undo[index].value.text_offset == best) {
+                    node_undo[index].value.text_offset = write;
+                }
+            }
+            write += static_cast<uint32_t>(best_length) + 1U;
+            scan = best + 1U;
+        }
+        text_arena.resize(write);
+    }
+
+    void BeginPending() {
+        if (!update_active) {
+            BeginFrame();
+            pending_changes = true;
+        }
+    }
+
+    runtime::SceneArray<SceneNodeData> nodes{};
+    runtime::SceneArray<SceneContainerData> containers{};
+    runtime::SceneArray<SceneInstanceData> instances{};
+    runtime::SceneArray<SceneNodeUndo> node_undo{};
+    runtime::SceneArray<SceneInstanceUndo> instance_undo{};
+    runtime::SceneArray<SceneContainerUndo> container_undo{};
+    runtime::SceneArray<uint16_t> node_undo_slot{};
+    runtime::SceneArray<uint16_t> instance_undo_slot{};
+    runtime::SceneArray<uint16_t> container_undo_slot{};
+    runtime::SceneArray<char> text_arena{};
+    // Encoder scratch, reserved together with the arrays they index so that
+    // Submit never allocates.
+    runtime::SceneArray<uint16_t> node_scratch{};
+    runtime::SceneArray<uint16_t> container_scratch{};
+    runtime::SceneArray<uint16_t> container_wire_ids{};
+    runtime::SceneArray<uint8_t> container_subtree{};
+    runtime::SceneArray<uint16_t> instance_scratch{};
+    SceneState* next_live{};
     Color background_color{Color::Black()};
     Color background_undo{Color::Black()};
     uint16_t node_count{};
@@ -564,27 +649,37 @@ class SceneState final {
     uint32_t logical_height{};
     detail::DisplayTransform display{};
     uint32_t generation{};
+    uint32_t root_identity{};
     uint32_t revision{};
+    uint64_t texture_revision{};
     uint32_t next_order{};
     bool background_dirty{};
     bool background_dirty_undo{};
     uint16_t undo_node_count{};
     uint16_t undo_instance_count{};
     uint16_t undo_container_count{};
-    uint16_t node_count_undo{};
-    uint16_t batch_instance_count_undo{};
-    uint16_t container_count_undo{};
-    uint32_t next_order_undo{};
     bool background_saved{};
-    bool valid_undo{};
     bool valid{};
     bool update_active{};
+    bool pending_changes{};
 };
 
 namespace {
 
 SceneState scene_storage __attribute__((no_destroy));
 bool scene_active{};
+SceneState* live_scenes{};
+SceneState* displayed_scene{};
+uint32_t wire_generation{};
+
+bool StateAlive(const SceneState* state) {
+    if (state == nullptr) return false;
+    if (state == &scene_storage && scene_active) return true;
+    for (SceneState* candidate = live_scenes; candidate != nullptr; candidate = candidate->next_live) {
+        if (candidate == state) return true;
+    }
+    return false;
+}
 
 uint32_t FullMask(SceneNodeKind kind) {
     uint32_t mask =
@@ -595,12 +690,17 @@ uint32_t FullMask(SceneNodeKind kind) {
     return mask;
 }
 
-bool SameText(const SceneNodeData& left, const SceneNodeData& right) {
+bool SameText(const SceneState& state, const SceneNodeData& left, const SceneNodeData& right) {
     if (left.text_length != right.text_length) {
         return false;
     }
+    if (left.text_offset == right.text_offset) {
+        return true;
+    }
+    const char* left_text = state.Text(left);
+    const char* right_text = state.Text(right);
     for (uint16_t index = 0U; index < left.text_length; ++index) {
-        if (left.text[index] != right.text[index]) {
+        if (left_text[index] != right_text[index]) {
             return false;
         }
     }
@@ -608,7 +708,7 @@ bool SameText(const SceneNodeData& left, const SceneNodeData& right) {
 }
 
 bool SameTexture(const SceneNodeData& left, const SceneNodeData& right) {
-    return left.texture == right.texture && left.texture_logical_width == right.texture_logical_width &&
+    return left.texture_handle == right.texture_handle && left.texture_logical_width == right.texture_logical_width &&
            left.texture_logical_height == right.texture_logical_height &&
            left.texture_physical_width == right.texture_physical_width &&
            left.texture_physical_height == right.texture_physical_height;
@@ -626,26 +726,19 @@ void UpdateNodeAppearanceDirty(SceneNodeData& node, const SceneNodeData& origina
         node.color != original.color || node.stroke_color != original.stroke_color || node.opacity != original.opacity);
 }
 
-void UpdateNodeContentDirty(SceneNodeData& node, const SceneNodeData& original) {
+void UpdateNodeContentDirty(const SceneState& state, SceneNodeData& node, const SceneNodeData& original) {
     bool changed = !SameTexture(node, original);
     if (node.kind == SceneNodeKind::kSprite) {
         changed = changed || node.source != original.source;
     } else if (node.kind == SceneNodeKind::kLabel) {
-        changed = node.font != original.font || !SameText(node, original);
+        changed = node.font_handle != original.font_handle || !SameText(state, node, original);
     }
     detail::UpdateScenePropertyDirty(node.dirty, original.dirty, MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT, changed);
 }
 
 void ValidateHandle(SceneState* state) {
-    if (state != &scene_storage || !scene_active) {
+    if (!StateAlive(state)) {
         runtime::Panic("scene.handle.stale", MICROPIXEL_STATUS_CLOSED);
-    }
-}
-
-void ValidateUpdate(SceneState* state, SceneUpdate& update) {
-    ValidateHandle(state);
-    if (!update.active_for(state) || !state->update_active) {
-        runtime::Panic("scene.update.invalid", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
 }
 
@@ -663,7 +756,7 @@ int32_t OpenGraphicsSceneService() {
     return MICROPIXEL_STATUS_OK;
 }
 
-uint16_t BuildOrderedNodeSlots(const SceneState& state, uint16_t (&ordered)[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]) {
+uint16_t BuildOrderedNodeSlots(const SceneState& state, uint16_t* ordered) {
     uint16_t count = 0U;
     for (uint16_t slot = 0U; slot < state.nodes.size(); ++slot) {
         if (!state.nodes[slot].occupied) {
@@ -680,7 +773,7 @@ uint16_t BuildOrderedNodeSlots(const SceneState& state, uint16_t (&ordered)[MICR
     return count;
 }
 
-uint16_t BuildOrderedContainerSlots(const SceneState& state, uint16_t (&ordered)[MICROPIXEL_GRAPHICS_MAX_CONTAINERS]) {
+uint16_t BuildOrderedContainerSlots(const SceneState& state, uint16_t* ordered) {
     uint16_t count = 0U;
     for (uint16_t slot = 1U; slot < state.containers.size(); ++slot) {
         if (!state.containers[slot].occupied) {
@@ -709,10 +802,16 @@ uint16_t WireSiblingOrder(const SceneState& state, uint32_t child_order) {
 }
 
 int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
+    keyframe = keyframe || displayed_scene != &state || state.texture_revision != runtime::texture_revision;
     SceneWriter writer;
-    uint16_t ordered_node_slots[MICROPIXEL_GRAPHICS_MAX_SCENE_NODES]{};
-    uint16_t ordered_container_slots[MICROPIXEL_GRAPHICS_MAX_CONTAINERS]{};
-    uint16_t container_wire_ids[MICROPIXEL_GRAPHICS_MAX_CONTAINERS + 1U]{};
+    // Scratch was reserved when the arrays it indexes grew; assign() only traps
+    // if that contract is broken.
+    state.node_scratch.assign(state.nodes.size(), 0U);
+    state.container_scratch.assign(state.containers.size(), 0U);
+    state.container_wire_ids.assign(state.containers.size(), 0U);
+    uint16_t* ordered_node_slots = state.node_scratch.data();
+    uint16_t* ordered_container_slots = state.container_scratch.data();
+    uint16_t* container_wire_ids = state.container_wire_ids.data();
     const uint16_t ordered_node_count = keyframe ? BuildOrderedNodeSlots(state, ordered_node_slots) : 0U;
     const uint16_t ordered_container_count = keyframe ? BuildOrderedContainerSlots(state, ordered_container_slots) : 0U;
     if (keyframe && (ordered_node_count != state.node_count || ordered_container_count != state.container_count)) {
@@ -762,8 +861,8 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
                 .property_mask = mask,
                 .clip_x = clip.x,
                 .clip_y = clip.y,
-                .width = clip.width,
-                .height = clip.height,
+                .clip_width = clip.width,
+                .clip_height = clip.height,
                 .translate_x = detail::MapSceneVectorX(state.display, container.translation.x),
                 .translate_y = detail::MapSceneVectorY(state.display, container.translation.y),
                 .z_order = container.z_order,
@@ -790,9 +889,9 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         micropixel_graphics_scene_node_header_t header{
             .record = {.opcode = static_cast<uint16_t>(node.kind), .size = 0U},
             .node_id = keyframe ? record_index : node.wire_id,
-            .container_id = 0U,
             .flags = static_cast<uint8_t>((node.visible ? MICROPIXEL_GRAPHICS_SCENE_NODE_VISIBLE : 0U) |
                                           (node.centered ? MICROPIXEL_GRAPHICS_SCENE_TEXT_CENTERED : 0U)),
+            .reserved0 = 0U,
             .property_mask = mask,
         };
         bool added = false;
@@ -841,7 +940,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
                 .y = destination.y,
                 .width = destination.width,
                 .height = destination.height,
-                .texture = node.texture,
+                .texture_handle = runtime::TextureSnapshot(node.texture_handle),
                 .source_x = source.x,
                 .source_y = source.y,
                 .source_width = source.width,
@@ -854,7 +953,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         } else if (node.kind == SceneNodeKind::kSpriteBatch) {
             auto value = micropixel_graphics_scene_sprite_batch_record_t{
                 .node = header,
-                .texture = node.texture,
+                .texture_handle = runtime::TextureSnapshot(node.texture_handle),
                 .capacity = node.batch_capacity,
                 .opacity = node.opacity,
                 .reserved0 = 0U,
@@ -868,11 +967,12 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
                     .x = destination.x,
                     .y = destination.y,
                     .rgb888 = node.color.rgb888(),
-                    .font = node.font,
+                    .font_handle = node.font_handle,
                     .text_length = static_cast<uint16_t>(
                         (mask & MICROPIXEL_GRAPHICS_SCENE_NODE_CONTENT) != 0U ? node.text_length : 0U),
+                    .reserved0 = 0U,
                 },
-                node.text);
+                state.Text(node));
         }
         if (!added) {
             return MICROPIXEL_STATUS_BUFFER_TOO_SMALL;
@@ -892,7 +992,8 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
             }
         }
     }
-    uint16_t changed_instances[MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES]{};
+    state.instance_scratch.assign(state.instances.size(), 0U);
+    uint16_t* changed_instances = state.instance_scratch.data();
     uint16_t changed_instance_count = 0U;
     if (!keyframe) {
         for (uint16_t index = 0U; index < state.undo_instance_count; ++index) {
@@ -974,12 +1075,10 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         return MICROPIXEL_STATUS_OK;
     }
     const uint32_t next_generation =
-        keyframe ? (state.generation == UINT32_MAX ? 1U : state.generation + 1U) : state.generation;
+        keyframe ? (wire_generation == UINT32_MAX ? 1U : wire_generation + 1U) : state.generation;
     const uint32_t next_revision = keyframe ? 1U : state.revision + 1U;
     const micropixel_graphics_scene_header_t header{
         .magic = MICROPIXEL_GRAPHICS_SCENE_MAGIC,
-        .interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR,
-        .interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR,
         .kind = static_cast<uint16_t>(keyframe ? MICROPIXEL_GRAPHICS_SCENE_KEYFRAME : MICROPIXEL_GRAPHICS_SCENE_PATCH),
         .flags = 0U,
         .total_size = writer.size_,
@@ -994,13 +1093,16 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
     Copy(SceneWriter::scene_wire, &header, sizeof(header));
     int32_t status = OpenGraphicsSceneService();
     if (status == MICROPIXEL_STATUS_OK) {
-        status = micropixel_service_submit(graphics_scene_service.handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
+        status = micropixel_service_submit(graphics_scene_service.service_handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
                                            SceneWriter::scene_wire, writer.size_);
     }
     if (status == MICROPIXEL_STATUS_OK) {
+        displayed_scene = &state;
+        wire_generation = next_generation;
         state.generation = next_generation;
         state.revision = next_revision;
         state.valid = true;
+        state.texture_revision = runtime::texture_revision;
         state.background_dirty = false;
         if (keyframe) {
             for (uint16_t wire_index = 0U; wire_index < ordered_container_count; ++wire_index) {
@@ -1033,21 +1135,20 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
 
 }  // namespace
 
-bool NodeHandle::valid() const {
-    return state_ == &scene_storage && scene_active && state_->NodeValid(id_, generation_);
-}
+bool NodeHandle::valid() const { return StateAlive(state_) && state_->NodeValid(id_, generation_); }
 
-void NodeHandle::Destroy(SceneUpdate& update) {
-    if (state_ == nullptr) {
+void NodeHandle::Destroy() {
+    if (!valid()) {
         return;
     }
-    ValidateUpdate(state_, update);
+    ValidateHandle(state_);
+    state_->BeginPending();
     state_->DestroyNode(id_, generation_);
 }
 
 bool Container::valid() const {
-    return state_ == &scene_storage && scene_active &&
-           (id_ == 0U ? generation_ == 0U : state_->ContainerValid(id_, generation_));
+    return StateAlive(state_) &&
+           (id_ == 0U ? generation_ == state_->root_identity : state_->ContainerValid(id_, generation_));
 }
 
 Point Container::SceneTranslation() const {
@@ -1057,7 +1158,7 @@ Point Container::SceneTranslation() const {
     int64_t x = 0;
     int64_t y = 0;
     uint16_t container_id = id_;
-    for (uint16_t depth = 0U; container_id != 0U && depth < MICROPIXEL_GRAPHICS_MAX_CONTAINERS; ++depth) {
+    for (uint16_t depth = 0U; container_id != 0U && depth <= state_->container_count; ++depth) {
         const SceneContainerData& container = state_->containers[container_id];
         x += container.translation.x;
         y += container.translation.y;
@@ -1089,29 +1190,18 @@ Point Container::ToLocal(Point scene) const {
     return {static_cast<int32_t>(x), static_cast<int32_t>(y)};
 }
 
-void ContainerNode::Destroy(SceneUpdate& update) {
-    if (state_ == nullptr) {
-        return;
-    }
-    ValidateUpdate(state_, update);
-    state_->DestroyContainer(id_, generation_);
-}
-
 Result<void> ContainerNode::Destroy() {
     if (!valid()) {
         return {};
     }
-    if (state_->update_active) {
-        runtime::Panic("scene.update.concurrent", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    state_->BeginTransaction();
-    SceneUpdate update{state_};
-    Destroy(update);
-    return update.Present();
+    state_->BeginPending();
+    state_->DestroyContainer(id_, generation_);
+    return {};
 }
 
-void NodeHandle::SetVisible(SceneUpdate& update, bool visible) {
-    ValidateUpdate(state_, update);
+void NodeHandle::SetVisible(bool visible) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.visible == visible) {
         return;
@@ -1122,8 +1212,9 @@ void NodeHandle::SetVisible(SceneUpdate& update, bool visible) {
                                      node.visible != original.visible);
 }
 
-void ContainerNode::SetClip(SceneUpdate& update, Rect clip) {
-    ValidateUpdate(state_, update);
+void ContainerNode::SetClip(Rect clip) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneContainerData& container = state_->Container(id_, generation_);
     if (container.clip == clip) {
         return;
@@ -1134,8 +1225,9 @@ void ContainerNode::SetClip(SceneUpdate& update, Rect clip) {
                                      container.clip != original.clip);
 }
 
-void ContainerNode::SetTranslation(SceneUpdate& update, Point translation) {
-    ValidateUpdate(state_, update);
+void ContainerNode::SetTranslation(Point translation) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneContainerData& container = state_->Container(id_, generation_);
     if (container.translation == translation) {
         return;
@@ -1146,8 +1238,9 @@ void ContainerNode::SetTranslation(SceneUpdate& update, Point translation) {
                                      container.translation != original.translation);
 }
 
-void ContainerNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
-    ValidateUpdate(state_, update);
+void ContainerNode::SetOpacity(uint8_t opacity) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneContainerData& container = state_->Container(id_, generation_);
     if (container.opacity == opacity) {
         return;
@@ -1158,8 +1251,9 @@ void ContainerNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
                                      container.opacity != original.opacity || container.visible != original.visible);
 }
 
-void ContainerNode::SetVisible(SceneUpdate& update, bool visible) {
-    ValidateUpdate(state_, update);
+void ContainerNode::SetVisible(bool visible) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneContainerData& container = state_->Container(id_, generation_);
     if (container.visible == visible) {
         return;
@@ -1170,8 +1264,9 @@ void ContainerNode::SetVisible(SceneUpdate& update, bool visible) {
                                      container.opacity != original.opacity || container.visible != original.visible);
 }
 
-void ContainerNode::SetZOrder(SceneUpdate& update, int16_t z_order) {
-    ValidateUpdate(state_, update);
+void ContainerNode::SetZOrder(int16_t z_order) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneContainerData& container = state_->Container(id_, generation_);
     if (container.z_order == z_order) {
         return;
@@ -1182,8 +1277,9 @@ void ContainerNode::SetZOrder(SceneUpdate& update, int16_t z_order) {
                                      container.z_order != original.z_order);
 }
 
-void ContainerNode::SetCacheContent(SceneUpdate& update, bool cache_content) {
-    ValidateUpdate(state_, update);
+void ContainerNode::SetCacheContent(bool cache_content) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneContainerData& container = state_->Container(id_, generation_);
     if (container.cache_content == cache_content) {
         return;
@@ -1194,8 +1290,9 @@ void ContainerNode::SetCacheContent(SceneUpdate& update, bool cache_content) {
                                      container.cache_content != original.cache_content);
 }
 
-void ShapeNode::SetRect(SceneUpdate& update, Rect rect) {
-    ValidateUpdate(state_, update);
+void ShapeNode::SetRect(Rect rect) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.destination == rect) {
         return;
@@ -1205,8 +1302,9 @@ void ShapeNode::SetRect(SceneUpdate& update, Rect rect) {
     UpdateNodeGeometryDirty(node, original);
 }
 
-void ShapeNode::SetColor(SceneUpdate& update, Color color) {
-    ValidateUpdate(state_, update);
+void ShapeNode::SetColor(Color color) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.color == color) {
         return;
@@ -1216,8 +1314,9 @@ void ShapeNode::SetColor(SceneUpdate& update, Color color) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void ShapeNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
-    ValidateUpdate(state_, update);
+void ShapeNode::SetOpacity(uint8_t opacity) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.opacity == opacity) {
         return;
@@ -1227,8 +1326,9 @@ void ShapeNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void RoundedRectNode::SetRect(SceneUpdate& update, Rect rect) {
-    ValidateUpdate(state_, update);
+void RoundedRectNode::SetRect(Rect rect) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.destination == rect) {
         return;
@@ -1238,8 +1338,9 @@ void RoundedRectNode::SetRect(SceneUpdate& update, Rect rect) {
     UpdateNodeGeometryDirty(node, original);
 }
 
-void RoundedRectNode::SetFillColor(SceneUpdate& update, Color color) {
-    ValidateUpdate(state_, update);
+void RoundedRectNode::SetFillColor(Color color) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.color == color) {
         return;
@@ -1249,8 +1350,9 @@ void RoundedRectNode::SetFillColor(SceneUpdate& update, Color color) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void RoundedRectNode::SetStrokeColor(SceneUpdate& update, Color color) {
-    ValidateUpdate(state_, update);
+void RoundedRectNode::SetStrokeColor(Color color) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.stroke_color == color) {
         return;
@@ -1260,8 +1362,9 @@ void RoundedRectNode::SetStrokeColor(SceneUpdate& update, Color color) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void RoundedRectNode::SetRadius(SceneUpdate& update, uint32_t radius) {
-    ValidateUpdate(state_, update);
+void RoundedRectNode::SetRadius(uint32_t radius) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.radius == radius) {
         return;
@@ -1271,8 +1374,9 @@ void RoundedRectNode::SetRadius(SceneUpdate& update, uint32_t radius) {
     UpdateNodeGeometryDirty(node, original);
 }
 
-void RoundedRectNode::SetStrokeWidth(SceneUpdate& update, uint32_t stroke_width) {
-    ValidateUpdate(state_, update);
+void RoundedRectNode::SetStrokeWidth(uint32_t stroke_width) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.stroke_width == stroke_width) {
         return;
@@ -1282,8 +1386,9 @@ void RoundedRectNode::SetStrokeWidth(SceneUpdate& update, uint32_t stroke_width)
     UpdateNodeGeometryDirty(node, original);
 }
 
-void RoundedRectNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
-    ValidateUpdate(state_, update);
+void RoundedRectNode::SetOpacity(uint8_t opacity) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.opacity == opacity) {
         return;
@@ -1293,8 +1398,9 @@ void RoundedRectNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void SpriteNode::SetDestination(SceneUpdate& update, Rect destination) {
-    ValidateUpdate(state_, update);
+void SpriteNode::SetDestination(Rect destination) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.destination == destination) {
         return;
@@ -1304,37 +1410,40 @@ void SpriteNode::SetDestination(SceneUpdate& update, Rect destination) {
     UpdateNodeGeometryDirty(node, original);
 }
 
-void SpriteNode::SetSource(SceneUpdate& update, Rect source) {
-    ValidateUpdate(state_, update);
+void SpriteNode::SetSource(Rect source) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.source == source) {
         return;
     }
     const SceneNodeData& original = state_->RememberNode(id_);
     node.source = source;
-    UpdateNodeContentDirty(node, original);
+    UpdateNodeContentDirty(*state_, node, original);
 }
 
-void SpriteNode::SetTexture(SceneUpdate& update, const Texture& texture) {
-    ValidateUpdate(state_, update);
+void SpriteNode::SetTexture(const Texture& texture) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     if (!texture.valid()) {
         runtime::Panic("scene.sprite.texture", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     SceneNodeData& node = state_->Node(id_, generation_);
-    if (node.texture == texture.handle_) {
+    if (node.texture_handle == texture.handle_) {
         return;
     }
     const SceneNodeData& original = state_->RememberNode(id_);
-    node.texture = texture.handle_;
+    node.texture_handle = texture.handle_;
     node.texture_logical_width = texture.width_;
     node.texture_logical_height = texture.height_;
     node.texture_physical_width = texture.physical_width_;
     node.texture_physical_height = texture.physical_height_;
-    UpdateNodeContentDirty(node, original);
+    UpdateNodeContentDirty(*state_, node, original);
 }
 
-void SpriteNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
-    ValidateUpdate(state_, update);
+void SpriteNode::SetOpacity(uint8_t opacity) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.opacity == opacity) {
         return;
@@ -1344,8 +1453,9 @@ void SpriteNode::SetOpacity(SceneUpdate& update, uint8_t opacity) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void LabelNode::SetPosition(SceneUpdate& update, Point position) {
-    ValidateUpdate(state_, update);
+void LabelNode::SetPosition(Point position) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.destination.x == position.x && node.destination.y == position.y) {
         return;
@@ -1356,26 +1466,29 @@ void LabelNode::SetPosition(SceneUpdate& update, Point position) {
     UpdateNodeGeometryDirty(node, original);
 }
 
-void LabelNode::SetText(SceneUpdate& update, const char* text) {
-    ValidateUpdate(state_, update);
+void LabelNode::SetText(const char* text) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     const uint16_t length = TextLength(text);
     bool changed = length != node.text_length;
+    const char* current = state_->Text(node);
     for (uint16_t index = 0U; !changed && index < length; ++index) {
-        changed = node.text[index] != text[index];
+        changed = current[index] != text[index];
     }
     if (!changed) {
         return;
     }
     const SceneNodeData& original = state_->RememberNode(id_);
-    Copy(node.text, text, length);
-    node.text[length] = '\0';
-    node.text_length = length;
-    UpdateNodeContentDirty(node, original);
+    if (!state_->StoreText(node, text, length)) {
+        runtime::Panic("scene.text.memory", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+    }
+    UpdateNodeContentDirty(*state_, node, original);
 }
 
-void LabelNode::SetColor(SceneUpdate& update, Color color) {
-    ValidateUpdate(state_, update);
+void LabelNode::SetColor(Color color) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.color == color) {
         return;
@@ -1385,23 +1498,25 @@ void LabelNode::SetColor(SceneUpdate& update, Color color) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void LabelNode::SetFont(SceneUpdate& update, SystemFont font) {
-    ValidateUpdate(state_, update);
+void LabelNode::SetFont(SystemFont font) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
-    const uint16_t handle = static_cast<uint16_t>(font);
+    const micropixel_font_handle_t handle = static_cast<micropixel_font_handle_t>(font);
     if (handle == 0U) {
         runtime::Panic("scene.label.font", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    if (node.font == handle) {
+    if (node.font_handle == handle) {
         return;
     }
     const SceneNodeData& original = state_->RememberNode(id_);
-    node.font = handle;
-    UpdateNodeContentDirty(node, original);
+    node.font_handle = handle;
+    UpdateNodeContentDirty(*state_, node, original);
 }
 
-void LabelNode::SetCentered(SceneUpdate& update, bool centered) {
-    ValidateUpdate(state_, update);
+void LabelNode::SetCentered(bool centered) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.centered == centered) {
         return;
@@ -1411,26 +1526,28 @@ void LabelNode::SetCentered(SceneUpdate& update, bool centered) {
     UpdateNodeGeometryDirty(node, original);
 }
 
-void SpriteBatch::SetTexture(SceneUpdate& update, const Texture& texture) {
-    ValidateUpdate(state_, update);
+void SpriteBatch::SetTexture(const Texture& texture) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     if (!texture.valid()) {
         runtime::Panic("scene.batch.texture", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
     SceneNodeData& node = state_->Node(id_, generation_);
-    if (node.texture == texture.handle_) {
+    if (node.texture_handle == texture.handle_) {
         return;
     }
     const SceneNodeData& original = state_->RememberNode(id_);
-    node.texture = texture.handle_;
+    node.texture_handle = texture.handle_;
     node.texture_logical_width = texture.width_;
     node.texture_logical_height = texture.height_;
     node.texture_physical_width = texture.physical_width_;
     node.texture_physical_height = texture.physical_height_;
-    UpdateNodeContentDirty(node, original);
+    UpdateNodeContentDirty(*state_, node, original);
 }
 
-void SpriteBatch::SetOpacity(SceneUpdate& update, uint8_t opacity) {
-    ValidateUpdate(state_, update);
+void SpriteBatch::SetOpacity(uint8_t opacity) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     SceneNodeData& node = state_->Node(id_, generation_);
     if (node.opacity == opacity) {
         return;
@@ -1440,8 +1557,9 @@ void SpriteBatch::SetOpacity(SceneUpdate& update, uint8_t opacity) {
     UpdateNodeAppearanceDirty(node, original);
 }
 
-void SpriteBatch::SetInstance(SceneUpdate& update, uint16_t instance_id, const SpriteInstance& instance) {
-    ValidateUpdate(state_, update);
+void SpriteBatch::SetInstance(uint16_t instance_id, const SpriteInstance& instance) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     const SceneNodeData& batch = state_->Node(id_, generation_);
     if (batch.kind != SceneNodeKind::kSpriteBatch || instance_id >= batch.batch_capacity) {
         runtime::Panic("scene.batch.instance", MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -1478,8 +1596,9 @@ void SpriteBatch::SetInstance(SceneUpdate& update, uint16_t instance_id, const S
     }
 }
 
-void SpriteBatch::SetInstanceVisible(SceneUpdate& update, uint16_t instance_id, bool visible) {
-    ValidateUpdate(state_, update);
+void SpriteBatch::SetInstanceVisible(uint16_t instance_id, bool visible) {
+    ValidateHandle(state_);
+    state_->BeginPending();
     const SceneNodeData& batch = state_->Node(id_, generation_);
     if (batch.kind != SceneNodeKind::kSpriteBatch || instance_id >= batch.batch_capacity) {
         runtime::Panic("scene.batch.instance", MICROPIXEL_STATUS_INVALID_ARGUMENT);
@@ -1495,38 +1614,46 @@ void SpriteBatch::SetInstanceVisible(SceneUpdate& update, uint16_t instance_id, 
                                      target.value.visible != original.value.visible);
 }
 
-Scene::Scene(CapabilityToken, const SceneDescriptor& descriptor) : Container(&scene_storage, 0U, 0U) {
-    if (scene_active) {
-        runtime::Panic("scene.concurrent", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-    }
-    scene_active = true;
+Scene::Scene(CapabilityToken, const SceneDescriptor& descriptor)
+    : Container(nullptr, 0U, 0U), owned_state_(new (std::nothrow) SceneState) {
+    if (!owned_state_ || next_handle_identity == UINT32_MAX) return;
     const detail::DisplayTransform& display = detail::CurrentDisplayTransform();
     if (descriptor.logical_width == 0U || descriptor.logical_height == 0U ||
         descriptor.logical_width != display.logical_width || descriptor.logical_height != display.logical_height) {
         runtime::Panic("scene.size", MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    state_->Reset(descriptor);
+    state_ = owned_state_.get();
+    if (!state_->Reset(descriptor)) {
+        state_ = nullptr;
+        owned_state_.reset();
+        return;
+    }
+    generation_ = NextIdentity();
+    state_->root_identity = generation_;
+    state_->next_live = live_scenes;
+    live_scenes = state_;
 }
 
-Scene::Scene(Scene&& other) noexcept : Container(other.state_, 0U, 0U) { other.state_ = nullptr; }
+Scene::Scene(Scene&& other) noexcept
+    : Container(other.state_, 0U, other.generation_), owned_state_(std::move(other.owned_state_)) {
+    other.state_ = nullptr;
+}
 
 Scene::~Scene() {
     if (state_ != nullptr) {
-        scene_active = false;
+        if (displayed_scene == state_) displayed_scene = nullptr;
+        for (SceneState** link = &live_scenes; *link != nullptr; link = &(*link)->next_live) {
+            if (*link == state_) {
+                *link = state_->next_live;
+                break;
+            }
+        }
     }
 }
 
-SceneUpdate Scene::BeginUpdate() {
+void Scene::SetBackground(Color color) {
     ValidateHandle(state_);
-    if (state_->update_active) {
-        runtime::Panic("scene.update.concurrent", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    state_->BeginTransaction();
-    return SceneUpdate{state_};
-}
-
-void Scene::SetBackground(SceneUpdate& update, Color color) {
-    ValidateUpdate(state_, update);
+    state_->BeginPending();
     if (state_->background_color == color) {
         return;
     }
@@ -1535,15 +1662,19 @@ void Scene::SetBackground(SceneUpdate& update, Color color) {
     state_->background_dirty = state_->background_color != state_->background_undo || state_->background_dirty_undo;
 }
 
-ContainerNode Container::CreateContainer(const ContainerProperties& properties) {
-    ValidateHandle(state_);
-    const uint16_t id = state_->AllocateContainer(*this, properties);
+Result<ContainerNode> Container::CreateContainer(const ContainerProperties& properties) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
+    auto allocated = state_->AllocateContainer(*this, properties);
+    if (!allocated) return unexpected(allocated.error());
+    const uint16_t id = allocated.value();
     return ContainerNode{state_, id, state_->containers[id].generation};
 }
 
-ShapeNode Container::CreateShape(Rect rect, Color color, uint8_t opacity) {
-    ValidateHandle(state_);
-    const uint16_t id = state_->AllocateNode(*this);
+Result<ShapeNode> Container::CreateShape(Rect rect, Color color, uint8_t opacity) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
+    auto allocated = state_->AllocateNode(*this);
+    if (!allocated) return unexpected(allocated.error());
+    const uint16_t id = allocated.value();
     SceneNodeData& node = state_->nodes[id];
     node.kind = SceneNodeKind::kShape;
     node.dirty = FullMask(SceneNodeKind::kShape);
@@ -1554,9 +1685,11 @@ ShapeNode Container::CreateShape(Rect rect, Color color, uint8_t opacity) {
     return ShapeNode{state_, id, node.generation};
 }
 
-RoundedRectNode Container::CreateRoundedRect(Rect rect, const RoundedRectStyle& style) {
-    ValidateHandle(state_);
-    const uint16_t id = state_->AllocateNode(*this);
+Result<RoundedRectNode> Container::CreateRoundedRect(Rect rect, const RoundedRectStyle& style) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
+    auto allocated = state_->AllocateNode(*this);
+    if (!allocated) return unexpected(allocated.error());
+    const uint16_t id = allocated.value();
     SceneNodeData& node = state_->nodes[id];
     node.kind = SceneNodeKind::kRoundedRect;
     node.dirty = FullMask(SceneNodeKind::kRoundedRect);
@@ -1570,12 +1703,14 @@ RoundedRectNode Container::CreateRoundedRect(Rect rect, const RoundedRectStyle& 
     return RoundedRectNode{state_, id, node.generation};
 }
 
-SpriteNode Container::CreateSprite(const Texture& texture, Rect destination, Rect source, uint8_t opacity) {
-    ValidateHandle(state_);
+Result<SpriteNode> Container::CreateSprite(const Texture& texture, Rect destination, Rect source, uint8_t opacity) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
     if (!texture.valid()) {
-        runtime::Panic("scene.sprite.create", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        return unexpected(Error{ErrorCode::kInvalidArgument});
     }
-    const uint16_t id = state_->AllocateNode(*this);
+    auto allocated = state_->AllocateNode(*this);
+    if (!allocated) return unexpected(allocated.error());
+    const uint16_t id = allocated.value();
     SceneNodeData& node = state_->nodes[id];
     node.kind = SceneNodeKind::kSprite;
     node.dirty = FullMask(SceneNodeKind::kSprite);
@@ -1583,7 +1718,7 @@ SpriteNode Container::CreateSprite(const Texture& texture, Rect destination, Rec
     node.destination = destination;
     node.color = Color::Black();
     node.opacity = opacity;
-    node.texture = texture.handle_;
+    node.texture_handle = texture.handle_;
     node.texture_logical_width = texture.width_;
     node.texture_logical_height = texture.height_;
     node.texture_physical_width = texture.physical_width_;
@@ -1592,11 +1727,13 @@ SpriteNode Container::CreateSprite(const Texture& texture, Rect destination, Rec
     return SpriteNode{state_, id, node.generation};
 }
 
-SpriteBatch Container::CreateSpriteBatch(const Texture& texture, uint16_t capacity, uint8_t opacity) {
+Result<SpriteBatch> Container::CreateSpriteBatch(const Texture& texture, uint16_t capacity, uint8_t opacity) {
     if (!texture.valid()) {
-        runtime::Panic("scene.batch.texture", MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        return unexpected(Error{ErrorCode::kInvalidArgument});
     }
-    SpriteBatch batch = CreateSpriteBatchInternal(texture.handle_, capacity, opacity);
+    auto created = CreateSpriteBatchInternal(texture.handle_, capacity, opacity);
+    if (!created) return unexpected(created.error());
+    auto batch = created.value();
     SceneNodeData& node = state_->Node(batch.id_, batch.generation_);
     node.texture_logical_width = texture.width_;
     node.texture_logical_height = texture.height_;
@@ -1605,25 +1742,24 @@ SpriteBatch Container::CreateSpriteBatch(const Texture& texture, uint16_t capaci
     return batch;
 }
 
-SpriteBatch Container::CreateSpriteBatch(uint16_t capacity, uint8_t opacity) {
+Result<SpriteBatch> Container::CreateSpriteBatch(uint16_t capacity, uint8_t opacity) {
     return CreateSpriteBatchInternal(0U, capacity, opacity);
 }
 
-SpriteBatch Container::CreateSpriteBatchInternal(uint32_t texture, uint16_t capacity, uint8_t opacity) {
-    ValidateHandle(state_);
-    if (capacity == 0U || capacity > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES ||
-        static_cast<uint32_t>(state_->batch_instance_count) + capacity > MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES) {
-        runtime::Panic("scene.batch.create", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+Result<SpriteBatch> Container::CreateSpriteBatchInternal(uint32_t texture_handle, uint16_t capacity, uint8_t opacity) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
+    if (capacity == 0U) return unexpected(Error{ErrorCode::kInvalidArgument});
+    // One node plus `capacity` instances in the shared uint16 item space.
+    if (!state_->ItemsAvailable(static_cast<uint32_t>(capacity) + 1U)) {
+        return unexpected(Error{ErrorCode::kResourceExhausted});
     }
-    uint8_t batch_count = 0U;
-    for (uint16_t index = 0U; index < state_->nodes.size(); ++index) {
-        batch_count +=
-            state_->nodes[index].occupied && state_->nodes[index].kind == SceneNodeKind::kSpriteBatch ? 1U : 0U;
-    }
-    if (batch_count >= MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES) {
-        runtime::Panic("scene.batches.full", MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
-    }
-    const uint16_t id = state_->AllocateNode(*this);
+    const size_t required = static_cast<size_t>(state_->batch_instance_count) + capacity;
+    if (!state_->instances.Reserve(required) || !state_->instance_undo_slot.Reserve(required) ||
+        !state_->instance_undo.Reserve(required) || !state_->instance_scratch.Reserve(required))
+        return unexpected(Error{ErrorCode::kResourceExhausted});
+    auto allocated = state_->AllocateNode(*this);
+    if (!allocated) return unexpected(allocated.error());
+    const uint16_t id = allocated.value();
     const uint16_t instance_offset = state_->batch_instance_count;
     state_->batch_instance_count += capacity;
     if (state_->instances.size() < state_->batch_instance_count) {
@@ -1635,7 +1771,7 @@ SpriteBatch Container::CreateSpriteBatchInternal(uint32_t texture, uint16_t capa
     node.visible = true;
     node.color = Color::Black();
     node.opacity = opacity;
-    node.texture = texture;
+    node.texture_handle = texture_handle;
     node.batch_capacity = capacity;
     node.batch_instance_offset = instance_offset;
     for (uint16_t instance = 0U; instance < capacity; ++instance) {
@@ -1647,9 +1783,18 @@ SpriteBatch Container::CreateSpriteBatchInternal(uint32_t texture, uint16_t capa
     return SpriteBatch{state_, id, node.generation, capacity};
 }
 
-LabelNode Container::CreateLabel(Point position, const char* text, Color color, SystemFont font, bool centered) {
-    ValidateHandle(state_);
-    const uint16_t id = state_->AllocateNode(*this);
+Result<LabelNode> Container::CreateLabel(Point position, const char* text, Color color, SystemFont font,
+                                         bool centered) {
+    if (!valid()) return unexpected(Error{ErrorCode::kInvalidState});
+    if (text == nullptr || font < SystemFont::kSmall || font > SystemFont::kTitle)
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    const uint32_t max_text_bytes = runtime::LoadGraphicsLimits().max_text_bytes;
+    uint16_t length = 0;
+    while (length <= max_text_bytes && text[length] != '\0') ++length;
+    if (length > max_text_bytes) return unexpected(Error{ErrorCode::kInvalidArgument});
+    auto allocated = state_->AllocateNode(*this);
+    if (!allocated) return unexpected(allocated.error());
+    const uint16_t id = allocated.value();
     SceneNodeData& node = state_->nodes[id];
     node.kind = SceneNodeKind::kLabel;
     node.dirty = FullMask(SceneNodeKind::kLabel);
@@ -1658,46 +1803,12 @@ LabelNode Container::CreateLabel(Point position, const char* text, Color color, 
     node.destination = {.x = position.x, .y = position.y};
     node.color = color;
     node.opacity = 255U;
-    node.font = static_cast<uint16_t>(font);
-    const uint16_t length = TextLength(text);
-    Copy(node.text, text, length);
-    node.text[length] = '\0';
-    node.text_length = length;
+    node.font_handle = static_cast<micropixel_font_handle_t>(font);
+    if (!state_->StoreText(node, text, length)) {
+        state_->DestroyNode(id, node.generation);
+        return unexpected(Error{ErrorCode::kResourceExhausted});
+    }
     return LabelNode{state_, id, node.generation};
-}
-
-SceneUpdate::SceneUpdate(SceneUpdate&& other) noexcept : state_(other.state_), active_(other.active_) {
-    other.state_ = nullptr;
-    other.active_ = false;
-}
-
-SceneUpdate::~SceneUpdate() {
-    if (active_ && state_ != nullptr) {
-        state_->RollbackTransaction();
-    }
-}
-
-Result<void> SceneUpdate::Present() {
-    if (!active_ || state_ == nullptr || !state_->update_active) {
-        runtime::Panic("scene.update.present", MICROPIXEL_STATUS_INVALID_ARGUMENT);
-    }
-    int32_t status = EncodeAndSubmit(*state_, !state_->valid || state_->revision == UINT32_MAX);
-    bool stale_state = false;
-    if (status == MICROPIXEL_STATUS_STALE_STATE) {
-        stale_state = true;
-        state_->valid = false;
-        status = EncodeAndSubmit(*state_, true);
-    }
-    if (status == MICROPIXEL_STATUS_OK) {
-        state_->CommitTransaction();
-    } else {
-        state_->RollbackTransaction();
-        if (stale_state) {
-            state_->valid = false;
-        }
-    }
-    active_ = false;
-    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(StatusError(status))};
 }
 
 uint16_t Scene::node_count() const {
@@ -1705,14 +1816,36 @@ uint16_t Scene::node_count() const {
     return state_->node_count;
 }
 
-Scene Renderer::CreateScene(Color background) const {
+Result<void> Renderer::Present(const Scene& scene) const {
+    ValidateHandle(scene.state_);
+    auto& state = *scene.state_;
+    state.BeginPending();
+    int32_t status = EncodeAndSubmit(state, !state.valid || state.revision == UINT32_MAX);
+    if (status == MICROPIXEL_STATUS_STALE_STATE) {
+        state.valid = false;
+        status = EncodeAndSubmit(state, true);
+    }
+    if (status == MICROPIXEL_STATUS_OK) state.AcceptFrame();
+    return status == MICROPIXEL_STATUS_OK ? Result<void>{} : Result<void>{unexpected(StatusError(status))};
+}
+
+Result<Scene> Renderer::CreateScene(Color background) const {
     const detail::DisplayTransform& display = detail::CurrentDisplayTransform();
     return CreateScene(
         {.logical_width = display.logical_width, .logical_height = display.logical_height, .background = background});
 }
 
-Scene Renderer::CreateScene(const SceneDescriptor& descriptor) const {
-    return Scene{Scene::CapabilityToken{}, descriptor};
+Result<Scene> Renderer::CreateScene(const SceneDescriptor& descriptor) const {
+    const auto& display = detail::CurrentDisplayTransform();
+    auto resolved = descriptor;
+    if (resolved.logical_width == 0) resolved.logical_width = display.logical_width;
+    if (resolved.logical_height == 0) resolved.logical_height = display.logical_height;
+    if (resolved.logical_width != display.logical_width || resolved.logical_height != display.logical_height) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    Scene scene{Scene::CapabilityToken{}, resolved};
+    if (!scene.valid()) return unexpected(Error{ErrorCode::kResourceExhausted});
+    return scene;
 }
 
 }  // namespace micropixel

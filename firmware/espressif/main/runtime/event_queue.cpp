@@ -4,6 +4,7 @@
 #include <cstring>
 #include <limits>
 
+#include "device/contracts/input.hpp"
 #include "esp_log.h"
 
 namespace micropixel::runtime {
@@ -55,7 +56,7 @@ bool DecodeGpioEdge(const micropixel_event_t& event, micropixel_gpio_event_paylo
     std::memcpy(&payload_out, event.payload, sizeof(payload_out));
     return payload_out.value <= 1U &&
            (payload_out.edge == MICROPIXEL_GPIO_EDGE_RISING || payload_out.edge == MICROPIXEL_GPIO_EDGE_FALLING) &&
-           payload_out.reserved0 == 0U;
+           payload_out.reserved0[0] == 0U && payload_out.reserved0[1] == 0U;
 }
 
 uint64_t SaturatingAdd(uint64_t left, uint64_t right) { return right > UINT64_MAX - left ? UINT64_MAX : left + right; }
@@ -143,7 +144,7 @@ EventWaitResult EventQueue::Wait(micropixel_event_t& event, uint64_t timeout_us)
         }
     } else if (IsTouchMove(event)) {
         portENTER_CRITICAL(&touch_lock_);
-        for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+        for (uint32_t index = 0U; index < micropixel::device::kMaxTouchPoints; ++index) {
             if (touch_pending_id_[index] == event.source + 1U) {
                 event = touch_latest_[index];
                 touch_pending_id_[index] = 0U;
@@ -159,7 +160,6 @@ EventWaitResult EventQueue::Wait(micropixel_event_t& event, uint64_t timeout_us)
             const GpioEventSnapshot snapshot = gpio_latest_[slot];
             if (snapshot.source == event.source) {
                 micropixel_gpio_event_payload_t payload{};
-                payload.device = snapshot.device;
                 payload.value = snapshot.value;
                 payload.edge = snapshot.edge;
                 event.timestamp_us = snapshot.timestamp_us;
@@ -300,7 +300,7 @@ TouchPushResult EventQueue::PushTouchMove(const micropixel_event_t& event) {
 
     int32_t free_slot = -1;
     portENTER_CRITICAL(&touch_lock_);
-    for (uint32_t index = 0U; index < MICROPIXEL_MAX_TOUCH_POINTS; ++index) {
+    for (uint32_t index = 0U; index < micropixel::device::kMaxTouchPoints; ++index) {
         if (touch_pending_id_[index] == event.source + 1U) {
             touch_latest_[index] = event;
             portEXIT_CRITICAL(&touch_lock_);
@@ -341,12 +341,8 @@ GpioPushResult EventQueue::PushGpioCoalesced(const micropixel_event_t& event) {
     const uint32_t slot = encoded_index - 1U;
     portENTER_CRITICAL(&gpio_lock_);
     if (gpio_latest_[slot].source == event.source) {
-        gpio_latest_[slot] = GpioEventSnapshot{event.timestamp_us,
-                                               event.source,
-                                               event.sequence,
-                                               payload.device,
-                                               static_cast<uint8_t>(payload.value),
-                                               static_cast<uint8_t>(payload.edge)};
+        gpio_latest_[slot] = GpioEventSnapshot{event.timestamp_us, event.source, event.sequence,
+                                               static_cast<uint8_t>(payload.value), static_cast<uint8_t>(payload.edge)};
         portEXIT_CRITICAL(&gpio_lock_);
         return GpioPushResult::kCoalesced;
     }
@@ -354,12 +350,8 @@ GpioPushResult EventQueue::PushGpioCoalesced(const micropixel_event_t& event) {
         portEXIT_CRITICAL(&gpio_lock_);
         return GpioPushResult::kFailed;
     }
-    gpio_latest_[slot] = GpioEventSnapshot{event.timestamp_us,
-                                           event.source,
-                                           event.sequence,
-                                           payload.device,
-                                           static_cast<uint8_t>(payload.value),
-                                           static_cast<uint8_t>(payload.edge)};
+    gpio_latest_[slot] = GpioEventSnapshot{event.timestamp_us, event.source, event.sequence,
+                                           static_cast<uint8_t>(payload.value), static_cast<uint8_t>(payload.edge)};
     portEXIT_CRITICAL(&gpio_lock_);
 
     if (xQueueSend(queue_, &event, 0U) == pdTRUE) {

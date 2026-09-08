@@ -33,8 +33,7 @@ void SwipeThresholdsPreservePhysicalTravel() {
 
     Check(ScalePhysicalThreshold(50U, 720U, 720U) == 50, "720 display must use a 50-logical-pixel swipe");
     Check(ScalePhysicalThreshold(50U, 720U, 480U) == 75, "480 display must use a 75-logical-pixel swipe");
-    Check(ScalePhysicalThreshold(50U, 720U, 600U) == 60,
-          "intermediate displays must preserve physical travel");
+    Check(ScalePhysicalThreshold(50U, 720U, 600U) == 60, "intermediate displays must preserve physical travel");
     Check(ScalePhysicalThreshold(50U, 720U, 0U) == 50, "invalid physical extent must use a safe fallback");
 }
 

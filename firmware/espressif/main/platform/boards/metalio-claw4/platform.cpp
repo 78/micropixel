@@ -53,6 +53,7 @@
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/lvgl/host_pointer_router.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "platform/memory/graphics_buffer_alignment.hpp"
 #include "platform/platform.hpp"
 #include "platform/random/system_random.hpp"
 #include "platform/wifi/esp_hosted_radio.hpp"
@@ -71,7 +72,7 @@ namespace board_detail = metalio_claw4::detail;
 
 void* AllocateImageBuffer(size_t size, lv_color_format_t) {
     // DMA cache invalidation must not overlap a neighbouring allocation.
-    constexpr size_t kAlignment = 128U;
+    constexpr size_t kAlignment = memory::kGraphicsBufferAlignment;
     if (size > SIZE_MAX - (kAlignment - 1U)) {
         return nullptr;
     }

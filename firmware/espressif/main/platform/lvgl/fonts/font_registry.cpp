@@ -165,9 +165,7 @@ int32_t FontRegistry::LoadFont(std::span<const uint8_t> package, micropixel_font
     const int32_t ascent = font->line_height - font->base_line;
     info_out = {};
     info_out.size = sizeof(info_out);
-    info_out.interface_major = MICROPIXEL_RESOURCE_INTERFACE_MAJOR;
-    info_out.interface_minor = MICROPIXEL_RESOURCE_INTERFACE_MINOR;
-    info_out.font = DynamicHandle(index, slot.generation);
+    info_out.font_handle = DynamicHandle(index, slot.generation);
     info_out.font_size = slot.loaded->size();
     info_out.line_height = static_cast<uint16_t>(font->line_height);
     info_out.ascent = static_cast<int16_t>(ascent);

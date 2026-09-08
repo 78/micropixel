@@ -12,38 +12,31 @@ int main() {
 
     micropixel_graphics_info_t info{};
     uint32_t response_size = 0U;
-    if (micropixel_service_call(service.handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U,
-                                reinterpret_cast<uint8_t*>(&info), MICROPIXEL_GRAPHICS_INFO_MIN_SIZE - 1U,
+    if (micropixel_service_call(service.service_handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U,
+                                reinterpret_cast<uint8_t*>(&info), sizeof(info) - 1U,
                                 &response_size) != MICROPIXEL_STATUS_BUFFER_TOO_SMALL) {
         return 70;
     }
-    if (micropixel_service_call(service.handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U,
+    if (micropixel_service_call(service.service_handle, MICROPIXEL_GRAPHICS_METHOD_GET_INFO, nullptr, 0U,
                                 reinterpret_cast<uint8_t*>(&info), sizeof(info),
                                 &response_size) != MICROPIXEL_STATUS_OK ||
         response_size != sizeof(info) || info.size != sizeof(info)) {
         return 71;
     }
-    if (service.interface_minor != MICROPIXEL_GRAPHICS_INTERFACE_MINOR ||
-        info.max_scene_bytes != MICROPIXEL_GRAPHICS_MAX_SCENE_BYTES ||
-        info.max_scene_nodes != MICROPIXEL_GRAPHICS_MAX_SCENE_NODES ||
-        info.max_batch_instances != MICROPIXEL_GRAPHICS_MAX_BATCH_INSTANCES ||
-        info.max_containers != MICROPIXEL_GRAPHICS_MAX_CONTAINERS ||
-        info.max_sprite_batches != MICROPIXEL_GRAPHICS_MAX_SPRITE_BATCHES || info.reserved0 != 0U) {
+    if (service.interface_minor != MICROPIXEL_GRAPHICS_INTERFACE_MINOR || info.reserved0 != 0U) {
         return 72;
     }
 
     micropixel_graphics_scene_header_t invalid{};
     invalid.magic = 0x12345678U;
-    invalid.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    invalid.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
     invalid.kind = MICROPIXEL_GRAPHICS_SCENE_KEYFRAME;
     invalid.total_size = sizeof(invalid);
     invalid.generation = 1U;
     invalid.revision = 1U;
-    if (micropixel_service_submit(service.handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
+    if (micropixel_service_submit(service.service_handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
                                   reinterpret_cast<const uint8_t*>(&invalid),
                                   sizeof(invalid) - 1U) != MICROPIXEL_STATUS_INVALID_ARGUMENT ||
-        micropixel_service_submit(service.handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
+        micropixel_service_submit(service.service_handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
                                   reinterpret_cast<const uint8_t*>(&invalid),
                                   sizeof(invalid)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 73;
@@ -54,8 +47,6 @@ int main() {
         micropixel_graphics_scene_record_header_t record;
     } unknown{};
     unknown.header.magic = MICROPIXEL_GRAPHICS_SCENE_MAGIC;
-    unknown.header.interface_major = MICROPIXEL_GRAPHICS_INTERFACE_MAJOR;
-    unknown.header.interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR;
     unknown.header.kind = MICROPIXEL_GRAPHICS_SCENE_KEYFRAME;
     unknown.header.total_size = sizeof(unknown);
     unknown.header.generation = 1U;
@@ -63,7 +54,7 @@ int main() {
     unknown.header.record_count = 1U;
     unknown.record.opcode = 0xffffU;
     unknown.record.size = sizeof(unknown.record);
-    if (micropixel_service_submit(service.handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
+    if (micropixel_service_submit(service.service_handle, MICROPIXEL_GRAPHICS_CHANNEL_SCENE,
                                   reinterpret_cast<const uint8_t*>(&unknown),
                                   sizeof(unknown)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 74;
@@ -76,12 +67,7 @@ int main() {
     const auto scale_inset = [](uint32_t value, uint32_t logical_extent, uint32_t physical_extent) {
         return (static_cast<uint64_t>(value) * logical_extent + physical_extent - 1U) / physical_extent;
     };
-    if (renderer_info.max_scene_nodes() != info.max_scene_nodes ||
-        renderer_info.max_batch_instances() != info.max_batch_instances ||
-        renderer_info.max_containers() != info.max_containers ||
-        renderer_info.max_sprite_batches() != info.max_sprite_batches ||
-        renderer_info.max_scene_bytes() != info.max_scene_bytes ||
-        safe_insets.top != scale_inset(info.safe_inset_top, renderer_info.height(), info.height) ||
+    if (safe_insets.top != scale_inset(info.safe_inset_top, renderer_info.height(), info.height) ||
         safe_insets.right != scale_inset(info.safe_inset_right, renderer_info.width(), info.width) ||
         safe_insets.bottom != scale_inset(info.safe_inset_bottom, renderer_info.height(), info.height) ||
         safe_insets.left != scale_inset(info.safe_inset_left, renderer_info.width(), info.width) ||
@@ -89,81 +75,72 @@ int main() {
         return 75;
     }
 
-    auto scene = renderer.CreateScene({.logical_width = renderer_info.width(),
-                                       .logical_height = renderer_info.height(),
-                                       .background = micropixel::Color::Black()});
-    auto game = scene.CreateContainer(
-        {.clip = {0, 0, static_cast<int32_t>(renderer_info.width()), static_cast<int32_t>(renderer_info.height())}});
+    auto scene = renderer
+                     .CreateScene({.logical_width = renderer_info.width(),
+                                   .logical_height = renderer_info.height(),
+                                   .background = micropixel::Color::Black()})
+                     .value();
+    auto game = scene
+                    .CreateContainer({.clip = {0, 0, static_cast<int32_t>(renderer_info.width()),
+                                               static_cast<int32_t>(renderer_info.height())}})
+                    .value();
     // Graphics 1.4: a cached-content container travels its flag in the
     // keyframe and keeps echoing it in later patches that only move it.
-    auto terrain = game.CreateContainer({.clip = {0, 100, 200, 60}, .cache_content = true});
-    auto ground = terrain.CreateShape({0, 40, 400, 20}, micropixel::Color::Green());
-    auto snake = game.CreateSpriteBatch(4U);
+    auto terrain = game.CreateContainer({.clip = {0, 100, 200, 60}, .cache_content = true}).value();
+    auto ground = terrain.CreateShape({0, 40, 400, 20}, micropixel::Color::Green()).value();
+    auto snake = game.CreateSpriteBatch(4U).value();
     auto label = game.CreateLabel({52, 56}, "graphics_protocol: scene keyframe", micropixel::Color::White(),
-                                  micropixel::SystemFont::kMedium);
-    {
-        auto update = scene.BeginUpdate();
-        snake.SetInstanceVisible(update, 2U, false);
-        snake.SetInstanceVisible(update, 3U, false);
-        snake.SetInstance(update, 0U,
-                          {.destination = {40, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
-        snake.SetInstance(update, 1U,
-                          {.destination = {64, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
-        if (!update.Present()) {
-            return 78;
-        }
+                                  micropixel::SystemFont::kMedium)
+                     .value();
+
+    snake.SetInstanceVisible(2U, false);
+    snake.SetInstanceVisible(3U, false);
+    snake.SetInstance(0U, {.destination = {40, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
+    snake.SetInstance(1U, {.destination = {64, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
+
+    if (!renderer.Present(scene)) {
+        return 78;
     }
 
-    {
-        auto update = scene.BeginUpdate();
-        snake.SetInstance(update, 0U,
-                          {.destination = {88, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
-        game.SetTranslation(update, {2, 0});
-        // Translation-only patch of the cached container: FLAGS is not in the
-        // property mask, the flag value is echoed unchanged.
-        terrain.SetTranslation(update, {-8, 0});
-        label.SetText(update, "graphics_protocol: retained patch");
-        if (!update.Present()) {
-            return 79;
-        }
+    snake.SetInstance(0U, {.destination = {88, 140, 20, 20}, .color = micropixel::Color::Green(), .visible = true});
+    game.SetTranslation({2, 0});
+    // Translation-only patch of the cached container: FLAGS is not in the
+    // property mask, the flag value is echoed unchanged.
+    terrain.SetTranslation({-8, 0});
+    label.SetText("graphics_protocol: retained patch");
+
+    if (!renderer.Present(scene)) {
+        return 79;
     }
 
-    {
-        // Toggling the hint is a FLAGS-only patch; content and geometry stay.
-        auto update = scene.BeginUpdate();
-        terrain.SetCacheContent(update, false);
-        ground.SetColor(update, micropixel::Color::Rgb(200U, 40U, 40U));
-        if (!update.Present()) {
-            return 82;
-        }
+    // Toggling the hint is a FLAGS-only patch; content and geometry stay.
+
+    terrain.SetCacheContent(false);
+    ground.SetColor(micropixel::Color::Rgb(200U, 40U, 40U));
+
+    if (!renderer.Present(scene)) {
+        return 82;
     }
-    {
-        auto update = scene.BeginUpdate();
-        terrain.SetCacheContent(update, true);
-        if (!update.Present()) {
-            return 83;
-        }
+    terrain.SetCacheContent(true);
+    if (!renderer.Present(scene)) {
+        return 83;
     }
 
     // Graphics 1.7: grow an existing scene to 1024 total instances, then
     // patch its final slot. Node count no longer consumes instance capacity.
-    auto expanded = game.CreateSpriteBatch(1020U);
-    {
-        auto update = scene.BeginUpdate();
-        for (uint16_t index = 0U; index < 1019U; ++index) {
-            expanded.SetInstanceVisible(update, index, false);
-        }
-        expanded.SetInstance(update, 1019U, {.destination = {100, 200, 12, 12}, .color = micropixel::Color::Green()});
-        if (!update.Present()) {
-            return 84;
-        }
+    auto expanded = game.CreateSpriteBatch(1020U).value();
+
+    for (uint16_t index = 0U; index < 1019U; ++index) {
+        expanded.SetInstanceVisible(index, false);
     }
-    {
-        auto update = scene.BeginUpdate();
-        expanded.SetInstanceVisible(update, 1019U, false);
-        if (!update.Present()) {
-            return 85;
-        }
+    expanded.SetInstance(1019U, {.destination = {100, 200, 12, 12}, .color = micropixel::Color::Green()});
+
+    if (!renderer.Present(scene)) {
+        return 84;
+    }
+    expanded.SetInstanceVisible(1019U, false);
+    if (!renderer.Present(scene)) {
+        return 85;
     }
 
     app.log().Info("graphics_protocol: 1024 instances and growth/patch accepted");

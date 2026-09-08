@@ -70,21 +70,13 @@ void BlocksGame::ClearAudioQueue() {
     }
 }
 
-void BlocksGame::PlayStartSound() {
-    QueueProfile(blocks_sfx::kStart, blocks_sfx::kStartCount);
-}
+void BlocksGame::PlayStartSound() { QueueProfile(blocks_sfx::kStart, blocks_sfx::kStartCount); }
 
-void BlocksGame::PlayMoveSound() {
-    QueueProfile(blocks_sfx::kMove, blocks_sfx::kMoveCount);
-}
+void BlocksGame::PlayMoveSound() { QueueProfile(blocks_sfx::kMove, blocks_sfx::kMoveCount); }
 
-void BlocksGame::PlayRotateSound() {
-    QueueProfile(blocks_sfx::kRotate, blocks_sfx::kRotateCount);
-}
+void BlocksGame::PlayRotateSound() { QueueProfile(blocks_sfx::kRotate, blocks_sfx::kRotateCount); }
 
-void BlocksGame::PlayHoldSound() {
-    QueueProfile(blocks_sfx::kHold, blocks_sfx::kHoldCount);
-}
+void BlocksGame::PlayHoldSound() { QueueProfile(blocks_sfx::kHold, blocks_sfx::kHoldCount); }
 
 void BlocksGame::PlayLockSound(uint8_t drop_distance) {
     if (drop_distance != 0U) {

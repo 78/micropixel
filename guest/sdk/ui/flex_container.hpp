@@ -29,8 +29,10 @@ class FlexContainer final {
     [[nodiscard]] static FlexContainer CreateIn(Container& parent, FlexContainerProperties properties) {
         Assert(!properties.bounds.empty(), "flex container bounds invalid");
         FlexContainer result;
-        result.node_ = parent.CreateContainer(
-            {.translation = {properties.bounds.x, properties.bounds.y}, .visible = properties.visible});
+        result.node_ = parent
+                           .CreateContainer({.translation = {properties.bounds.x, properties.bounds.y},
+                                             .visible = properties.visible})
+                           .value();
         result.properties_ = properties;
         return result;
     }
@@ -90,7 +92,7 @@ class FlexContainer final {
         return *text_buttons_[index];
     }
 
-    [[nodiscard]] Result<void> Layout(SceneUpdate& update) {
+    [[nodiscard]] Result<void> Layout() {
         std::vector<FlexItem> items(children_.size());
         std::vector<Rect> rects(children_.size());
         const bool horizontal = properties_.layout.direction == FlexDirection::kHorizontal;
@@ -107,7 +109,7 @@ class FlexContainer final {
             return unexpected(laid_out.error());
         }
         for (size_t index = 0U; index < children_.size(); ++index) {
-            auto positioned = SetBounds(children_[index], update, rects[index]);
+            auto positioned = SetBounds(children_[index], rects[index]);
             if (!positioned.has_value()) {
                 return unexpected(positioned.error());
             }
@@ -115,7 +117,7 @@ class FlexContainer final {
         return {};
     }
 
-    void SetVisible(SceneUpdate& update, bool visible) { node_.SetVisible(update, visible); }
+    void SetVisible(bool visible) { node_.SetVisible(visible); }
 
     [[nodiscard]] FixedString<kDiagnosticBytes> ToString() const {
         FixedString<kDiagnosticBytes> description;
@@ -184,16 +186,16 @@ class FlexContainer final {
         return {};
     }
 
-    [[nodiscard]] Result<void> SetBounds(const Child& child, SceneUpdate& update, Rect bounds) {
+    [[nodiscard]] Result<void> SetBounds(const Child& child, Rect bounds) {
         switch (child.kind) {
             case ChildKind::kLabel:
-                return labels_[child.index]->SetBounds(update, bounds);
+                return labels_[child.index]->SetBounds(bounds);
             case ChildKind::kGrid:
-                return grids_[child.index]->SetBounds(update, bounds);
+                return grids_[child.index]->SetBounds(bounds);
             case ChildKind::kImageButton:
-                return image_buttons_[child.index]->SetBounds(update, bounds);
+                return image_buttons_[child.index]->SetBounds(bounds);
             case ChildKind::kTextButton:
-                return text_buttons_[child.index]->SetBounds(update, bounds);
+                return text_buttons_[child.index]->SetBounds(bounds);
         }
         return unexpected(Error{ErrorCode::kInvalidState});
     }

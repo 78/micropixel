@@ -41,7 +41,7 @@ class SystemGestureRouter final : public device::Input {
     struct Candidate final {
         device::TouchSample initial{};
         device::TouchSample latest_move{};
-        uint32_t replacement_ids[MICROPIXEL_MAX_TOUCH_POINTS]{};
+        uint32_t replacement_ids[micropixel::device::kMaxTouchPoints]{};
         Edge edge{Edge::kNone};
         uint8_t replacement_count{};
         bool active{};

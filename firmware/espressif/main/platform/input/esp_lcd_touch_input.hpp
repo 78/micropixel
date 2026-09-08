@@ -59,7 +59,7 @@ class EspLcdTouchInput final : public device::Input {
     device::TouchSink sink_{};
     void* sink_context_{};
     uint32_t sink_inflight_{};
-    ActiveTouch active_touches_[MICROPIXEL_MAX_TOUCH_POINTS]{};
+    ActiveTouch active_touches_[micropixel::device::kMaxTouchPoints]{};
 };
 
 }  // namespace micropixel::platform::input

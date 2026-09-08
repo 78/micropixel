@@ -49,7 +49,7 @@ class Bmi270Vector final : public VectorSensor {
     [[nodiscard]] esp_err_t Suspend() override { return device_.Suspend(kind_); }
     [[nodiscard]] esp_err_t Read(float (&values)[3]) override { return device_.Read(kind_, values); }
     [[nodiscard]] bool available() const override { return device_.available(); }
-    [[nodiscard]] uint32_t minimum_interval_us() const override { return 2500U; }
+    [[nodiscard]] uint32_t min_interval_us() const override { return 2500U; }
 
    private:
     Bmi270& device_;
