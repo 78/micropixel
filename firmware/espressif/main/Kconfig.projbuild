@@ -35,9 +35,8 @@ menu "WAMR application quotas"
         default y
         help
             Offer RASTER_TEXTURE_UPLOAD / RASTER_PALETTE_UPLOAD and the RASTER
-            channel. Uploaded INDEX8 textures and warp maps allocate from
-            PSRAM; lit palettes try internal SRAM first (a few tens of KiB,
-            one gather per output pixel) and fall back to PSRAM. Resources are
+            channel. Uploaded INDEX8 textures, lit palettes and warp maps
+            allocate from PSRAM by default. Resources are
             freed when the session ends; reusable 8-bit slots and 16-bit
             dimensions have no smaller quota. Allocation failure is reported
             to the Guest and preserves the old resource. Power-of-two
@@ -45,12 +44,12 @@ menu "WAMR application quotas"
             the Graphics descriptor and the RASTER channel reports UNSUPPORTED.
 
     config MICROPIXEL_RASTER_POOL_INTERNAL_SRAM
-        bool "Place raster kernel textures in internal SRAM"
+        bool "Place raster kernel resources in internal SRAM"
         depends on MICROPIXEL_RASTER_KERNELS
         default n
         help
-            Also try internal SRAM for textures and warp maps (palettes already
-            do). Fall back to PSRAM when the internal heap cannot take the
+            Try internal SRAM for textures, palettes and warp maps.
+            Fall back to PSRAM when the internal heap cannot take the
             allocation. The kernels read one texel per output pixel, so the L1
             cache already hides most of the PSRAM latency; on ESP-Mosaico the
             SRAM placement measured within noise of PSRAM while pinning the

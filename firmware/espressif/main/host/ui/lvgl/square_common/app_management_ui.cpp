@@ -81,10 +81,9 @@ void SystemDetailUi::RenderAppManagementLocked() {
     std::snprintf(storage, sizeof(storage), "Storage %" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB",
                   used_tenths / 10U, used_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
     (void)Label(scroll, storage, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
-    if (app_management_model_.store_check_state != 0U) {
+    if (app_management_model_.store_check_state != 0U && app_management_model_.store_check_state != 2U) {
         const char* status = app_management_model_.store_check_state == 1U ? "Update check pending; keep device online"
-                             : app_management_model_.store_check_state == 2U ? "Checked; tap an app to view updates"
-                                                                             : "Update check failed; reopen to retry";
+                                                                           : "Update check failed; reopen to retry";
         (void)Label(scroll, status, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
     }
     app_bindings_ = {};

@@ -21,8 +21,8 @@ size_t fail_at{};
 }  // namespace
 void* micropixel_test_psram_allocate(size_t bytes) {
     ++allocation_attempts;
-    // Threshold, not a single shot: palette upload tries internal SRAM then
-    // PSRAM, and "heap exhausted" must reject both.
+    // Keep the heap exhausted for every allocation after the threshold,
+    // including fallback attempts when internal SRAM is enabled.
     if (fail_at != 0U && allocation_attempts >= fail_at) return nullptr;
     void* p = std::malloc(bytes);
     if (p != nullptr) allocations.emplace(p, bytes);

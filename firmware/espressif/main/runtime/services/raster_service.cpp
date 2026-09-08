@@ -32,21 +32,15 @@ RasterService::RasterService(bool enabled) : enabled_(enabled) {}
 
 RasterService::~RasterService() { Shutdown(); }
 
-uint8_t* RasterService::Allocate(uint32_t bytes, bool prefer_internal) {
+uint8_t* RasterService::Allocate(uint32_t bytes) {
     if (bytes == 0U) {
         return nullptr;
     }
-    // Palettes are a few tens of KiB and every Warp/Sprite pixel gathers one
-    // entry; keeping them in internal SRAM drops one random PSRAM stream
-    // while DPI scanout is already reading the framebuffer. Textures and
-    // warp maps stay in PSRAM unless the board opt-in is on: they do not
-    // fit the leftover internal heap.
     uint8_t* pixels = nullptr;
 #if CONFIG_MICROPIXEL_RASTER_POOL_INTERNAL_SRAM
-    (void)prefer_internal;
     const bool try_internal = true;
 #else
-    const bool try_internal = prefer_internal;
+    const bool try_internal = false;
 #endif
     if (try_internal) {
         pixels = static_cast<uint8_t*>(heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -127,7 +121,7 @@ ServiceResult<void> RasterService::UploadPalette(const micropixel_raster_palette
     if (source == nullptr) {
         return FailService<void>(MICROPIXEL_STATUS_INVALID_MEMORY);
     }
-    uint8_t* entries = Allocate(bytes, true);
+    uint8_t* entries = Allocate(bytes);
     if (entries == nullptr) return FailService<void>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     if (!Reserve(palettes_, request.palette_slot)) {
         heap_caps_free(entries);
