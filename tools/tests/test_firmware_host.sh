@@ -81,8 +81,8 @@ build_and_run background_executor \
     "$workspace_root/tools/tests/test_background_executor.cpp" \
     "$workspace_root/firmware/espressif/main/work/background_executor.cpp"
 
-build_and_run remote_control_defaults \
-    "$workspace_root/tools/tests/test_remote_control_defaults.cpp"
+build_and_run remote_control_policy \
+    "$workspace_root/tools/tests/test_remote_control_policy.cpp"
 
 build_and_run i2c_executor \
     -pthread \
@@ -103,12 +103,9 @@ build_and_run host_pointer_event_queue \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_host_pointer_event_queue.cpp"
 
-build_and_run hall_cover_mask \
-    "$workspace_root/tools/tests/test_hall_cover_mask.cpp" \
+build_and_run hall_ui \
+    "$workspace_root/tools/tests/test_hall_ui.cpp" \
     "$workspace_root/firmware/espressif/main/host/ui/lvgl/square_common/hall_cover_mask.cpp"
-
-build_and_run hall_carousel \
-    "$workspace_root/tools/tests/test_hall_carousel.cpp"
 
 build_and_run guest_display_transform \
     -I "$workspace_root/guest" \
@@ -117,13 +114,6 @@ build_and_run guest_display_transform \
 build_and_run snake_gamekit \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_snake_gamekit.cpp"
-
-build_and_run guest_layout \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_layout.cpp"
-
-build_and_run guest_psram \
-    "$workspace_root/tools/tests/test_guest_psram.cpp"
 
 build_and_run bitmap_store \
     -DMICROPIXEL_TEST_TRACK_HEAP -fsanitize=address,undefined -g \
@@ -161,34 +151,12 @@ build_and_run guest_scene_lifecycle \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_guest_scene_lifecycle.cpp"
 
-build_and_run guest_button \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_button.cpp"
+build_and_run guest_ui \
+    "$workspace_root/tools/tests/test_guest_ui.cpp" \
+    -I "$workspace_root/guest"
 
-build_and_run guest_text_button \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_text_button.cpp"
-
-build_and_run guest_image_button \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_image_button.cpp"
-
-build_and_run guest_label \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_label.cpp"
-
-build_and_run guest_ui_descriptions \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_guest_ui_descriptions.cpp"
-
-build_and_run ascii_line_framer \
-    "$workspace_root/tools/tests/test_ascii_line_framer.cpp"
-
-build_and_run usb_download_reset_detector \
-    "$workspace_root/tools/tests/test_usb_download_reset_detector.cpp"
-
-build_and_run usb_cdc_early_log_buffer \
-    "$workspace_root/tools/tests/test_usb_cdc_early_log_buffer.cpp"
+build_and_run serial_transport \
+    "$workspace_root/tools/tests/test_serial_transport.cpp"
 
 build_and_run control_curves \
     "$workspace_root/tools/tests/test_control_curves.cpp"
@@ -198,26 +166,21 @@ build_and_run synth_mixer \
     "$workspace_root/tools/tests/test_synth_mixer.cpp" \
     "$workspace_root/firmware/espressif/main/platform/audio/audio_mixer.cpp"
 
-build_and_run mosaico_battery_power_policy \
-    "$workspace_root/tools/tests/test_mosaico_battery_power_policy.cpp"
-
-build_and_run hall_battery_policy \
-    "$workspace_root/tools/tests/test_hall_battery_policy.cpp"
-
 build_and_run system_shell \
     -pthread \
     "$workspace_root/tools/tests/test_system_shell.cpp" \
     "$workspace_root/firmware/espressif/main/host/ui/system_shell.cpp"
 
 build_and_run system_locale \
-    -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_system_locale.cpp" \
-    "$workspace_root/firmware/espressif/main/host/ui/system_locale.cpp"
+    -I "$workspace_root/guest" \
+    "$workspace_root/firmware/espressif/main/host/ui/system_locale.cpp" \
+    "$workspace_root/firmware/espressif/main/host/time/system_time.cpp"
 
 build_and_run font_registry \
+    "$workspace_root/tools/tests/test_font_registry.cpp" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
-    "$workspace_root/tools/tests/test_font_registry.cpp" \
     "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp" \
     "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp"
 
@@ -237,34 +200,21 @@ build_and_run font_registry_mosaico \
     "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp" \
     "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp"
 
-build_and_run font_cbin_loader \
-    -I "$workspace_root/guest" \
-    -I "$workspace_root/tools/tests/font_cbin_stubs" \
-    "$workspace_root/tools/tests/test_font_cbin_loader.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_cbin_loader.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/font_registry.cpp"
-
-build_and_run host_power_state \
-    "$workspace_root/tools/tests/test_host_power_state.cpp"
+build_and_run power_policy \
+    "$workspace_root/tools/tests/test_power_policy.cpp"
 
 build_and_run device_services \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_device_services.cpp" \
     "$workspace_root/firmware/espressif/main/device/device_services.cpp"
 
-build_and_run sensor_service \
+build_and_run peripheral_lifecycle \
+    "$workspace_root/tools/tests/test_peripheral_lifecycle.cpp" \
     -pthread \
     -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_sensor_service.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/services/sensor_service.cpp" \
-    "$workspace_root/firmware/espressif/main/device/device_services.cpp"
-
-build_and_run gpio_service \
-    -pthread \
-    -I "$workspace_root/guest" \
-    "$workspace_root/tools/tests/test_gpio_service.cpp" \
-    "$workspace_root/firmware/espressif/main/runtime/services/gpio_service.cpp" \
-    "$workspace_root/firmware/espressif/main/device/device_services.cpp"
+    "$workspace_root/firmware/espressif/main/device/device_services.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/gpio_service.cpp"
 
 # Uses the real EventQueue (FreeRTOS shims), so the firmware include path must
 # precede the stub directory like event_queue_test below.
@@ -349,13 +299,6 @@ build_and_run http3_tls_parser \
     -I "$http3_component_dir/include" \
     "$workspace_root/tools/tests/test_http3_tls_parser.cpp" \
     "$http3_component_dir/src/tls/tls_handshake.cc"
-
-build_and_run remote_control_reconnect_policy \
-    "$workspace_root/tools/tests/test_remote_control_reconnect_policy.cpp"
-
-build_and_run system_time \
-    "$workspace_root/tools/tests/test_system_time.cpp" \
-    "$workspace_root/firmware/espressif/main/host/time/system_time.cpp"
 
 metadata_output_dir="$test_output_dir/package-metadata"
 mkdir -p "$metadata_output_dir"

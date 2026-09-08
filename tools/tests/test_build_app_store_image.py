@@ -96,28 +96,7 @@ class BundleFsImageTest(unittest.TestCase):
     def test_seeded_image_contains_bundle_catalog_and_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "demo.bundle.bin"
-            data = bytearray(STORE.DATA_BLOCK_SIZE)
-            STORE.BUNDLE_HEADER.pack_into(
-                data,
-                0,
-                STORE.BUNDLE_MAGIC,
-                STORE.BUNDLE_VERSION,
-                STORE.BUNDLE_HEADER_SIZE,
-                len(data),
-                STORE.BUNDLE_HEADER_SIZE,
-                b"demo" + bytes(60),
-                4,
-                1,
-                1,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
-            path.write_bytes(data)
+            data = self.write_bundle(path, "demo")
 
             image = STORE.build_bundlefs([path])
             fields = STORE.CATALOG_HEADER.unpack_from(image)
@@ -133,12 +112,7 @@ class BundleFsImageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             paths = [Path(directory) / "first.bundle.bin", Path(directory) / "second.bundle.bin"]
             for path in paths:
-                data = bytearray(STORE.DATA_BLOCK_SIZE)
-                STORE.BUNDLE_HEADER.pack_into(
-                    data, 0, STORE.BUNDLE_MAGIC, STORE.BUNDLE_VERSION, STORE.BUNDLE_HEADER_SIZE, len(data),
-                    STORE.BUNDLE_HEADER_SIZE, b"same" + bytes(60), 4, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-                )
-                path.write_bytes(data)
+                self.write_bundle(path, "same")
             with self.assertRaisesRegex(ValueError, "Duplicate AppId"):
                 STORE.build_bundlefs(paths)
 

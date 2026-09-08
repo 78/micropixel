@@ -649,9 +649,8 @@ run_tests() {
     bash "$workspace_root/tools/tests/test_firmware_host.sh"
     PYTHONPATH="$workspace_root${PYTHONPATH:+:$PYTHONPATH}" \
         python3 -m unittest tools.tests.test_build_app_store_image tools.tests.test_analyze_sfx \
-            tools.tests.test_build_app_bundle_metadata tools.tests.test_build_font_cbin \
+            tools.tests.test_build_app_bundle_metadata tools.tests.test_font_tools \
             tools.tests.test_build_host_test \
-            tools.tests.test_generate_builtin_fonts \
             tools.tests.test_generate_localization tools.tests.test_firmware \
             tools.tests.test_tilt_level_generator -v
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" \

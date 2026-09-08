@@ -18,6 +18,13 @@ bash -n tools/*.sh
 修改这些输入后自动重编译。Bundle reader 的多组集成测试也共用该缓存。需要强制重编译时使用
 `HOST_TEST_REBUILD=1 bash tools/tests/test_firmware_host.sh`，或删除 `build/host-tests/`。
 
+小型 Host 测试按行为域组织：UI 控件集中在 `test_guest_ui.cpp`，大厅策略在 `test_hall_ui.cpp`，
+电源在 `test_power_policy.cpp`，串口在 `test_serial_transport.cpp`，远程连接在
+`test_remote_control_policy.cpp`，传感器/GPIO 生命周期在 `test_peripheral_lifecycle.cpp`。
+字体加载、句柄生命周期和板型默认字体共用 `test_font_registry.cpp`；工具侧字体测试在
+`test_font_tools.py`。相关回归优先加入现有套件，独立的编译条件、替身或故障注入环境才拆分目标。
+不要新增只验证自造数据、重复常量或文件读写本身的测试。
+
 涉及固件行为时，还应完成 ESP32-P4 Host 构建和相应真机回归。PR 中请写明测试环境、执行命令和结果；
 不要提交串口日志、性能采样、构建目录、固件镜像或设备标识。
 
