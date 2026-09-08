@@ -1,5 +1,8 @@
 # Guest C++ SDK
 
+首次开发请从[快速入门](QUICKSTART.md)的 `init → run → publish` 开始。商店截图、介绍和玩法资料要求见[发布应用](PUBLISHING.md)。本页用于查询 SDK 契约与接口。
+
+
 正式版前的 Scene、2.5D 前端与统一帧 API 迁移设计见
 [SDK API 重构](../../docs/design/sdk-api.zh-CN.md)。该文描述目标接口；本文仍说明当前已实现行为。
 

@@ -68,7 +68,7 @@ micropixel init . --app-id com.example.my-game
 micropixel init . --app-id com.example.my-game --source src/main.cpp --source src/game.cpp
 ```
 
-新项目生成 `app.json` 和 `src/main.cpp`，示例显示问候文字并进入事件循环，可直接 `micropixel build`
+新项目生成 `app.json` 和 `src/main.cpp`，示例在屏幕显示 Hello, World!并进入事件循环，可直接 `micropixel build`
 或 `micropixel --transport usb run`。默认 App ID 为 `local.<目录名>`，发布前应指定自己的稳定 ID。
 已有项目递归发现 `.cpp`、`.cc`、`.cxx`，跳过隐藏目录、符号链接、`build`、`artifacts`、`generated`、
 `managed_components`、`node_modules`、`test`、`tests`、`cmake-build-*` 目录及 `test_*` / `*_test` 源文件。
@@ -87,9 +87,7 @@ micropixel init . --app-id com.example.my-game --source src/main.cpp --source sr
 它描述清单格式，与应用版本无关。旧清单不填 `version` 仍可构建，旧包读取为空版本，不推定其版本号。
 旧的二进制 metadata 模式（`--legacy-metadata-v1`）不携带应用版本。
 
-联网自动升级尚未实现。约定的后续策略是只接受同一 major 下更高的 minor/patch，按数字分段比较：
-`0.1.0 → 0.2.0` 可自动升级，`0.1.0 → 1.0.0` 不自动升级；相同或更低版本不升级。
-无版本的旧包需要先明确版本，不能仅用 digest 推断升级方向。
+新版本由用户在设备或 Console 确认安装和运行；当前不进行自动安装调度。发布流程见[发布应用](sdk/PUBLISHING.md)。
 
 日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。Manifest 用 `title` 表达 App Hall 中的用户可见名称，
 用唯一的 `sources` 数组列出所有 C++ translation unit，并用 `threading` 声明 `none`（默认）或
@@ -186,3 +184,5 @@ namespace、ABI 前缀和内部入口统一使用 `micropixel`。
 `publish --dry-run` 在本地执行正式构建与校验，不上传。公开清单需要 `version` 和完整的能力需求声明，
 实测设备通过 `--tested-device metalio-claw4` / `--tested-device esp-mosaico` 声明。
 详见[应用商店契约](../docs/design/app-store.zh-CN.md)。
+
+开发者入门见[SDK 快速入门](sdk/QUICKSTART.md)，截图、应用介绍与玩法说明见[发布应用](sdk/PUBLISHING.md)。

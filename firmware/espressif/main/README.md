@@ -90,3 +90,9 @@ App Hall 封面仅顶部保留圆角，底部以直角衔接标题区；启动�
 
 App 操作面板顶部左侧显示 App 名称，右侧显示 Bundle 占用大小。App Management 列表在名称下方
 同一行显示 App ID 和占用大小；长名称与 App ID 以省略号截断，保留大小可见。
+
+App Management 的固定容量模型由菜单调用持有的 RAII 对象优先分配在 PSRAM，退出菜单时释放；
+首次进入和卸载后原地填充、复用同一份存储。不要在菜单循环中
+按值返回再赋值整个模型：50 个 App 的临时副本会长期占用调用者栈帧，叠加 System Settings
+调用层和控制命令后可能耗尽主任务栈。回归需覆盖菜单进入、卸载确认/取消、确认卸载后的列表刷新，
+并通过 `micropixel device diagnostics` 检查 `main` 的栈余量。

@@ -654,11 +654,14 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
     return model;
 }
 
-host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCatalog& catalog, bool launch_available,
-                                                   bool uninstall_available) {
-    host_ui::AppManagementModel model{.app_count = std::min(catalog.count, host_ui::kMaxHallApps),
-                                      .launch_available = launch_available,
-                                      .uninstall_available = uninstall_available};
+void FillAppManagementModel(host_ui::AppManagementModel& model, const runtime::InstalledAppCatalog& catalog,
+                            bool launch_available, bool uninstall_available) {
+    // Refresh in place: returning a second 50-App model reserves another large
+    // temporary in RunAppManagement's stack frame, including while it polls.
+    model = {};
+    model.app_count = std::min(catalog.count, host_ui::kMaxHallApps);
+    model.launch_available = launch_available;
+    model.uninstall_available = uninstall_available;
     model.storage_total_kib = catalog.store_total_bytes / 1024U;
     model.storage_used_kib = catalog.store_used_bytes / 1024U;
     for (uint32_t index = 0U; index < model.app_count; ++index) {
@@ -670,7 +673,6 @@ host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCa
             .bundle_size_kib = source.bundle_size / 1024U,
         };
     }
-    return model;
 }
 
 void FillControlCatalog(const runtime::InstalledAppCatalog& catalog, control::CatalogSnapshot& snapshot) {
@@ -1370,7 +1372,15 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
     if (command_pump != nullptr && command_pump->check_store != nullptr)
         command_pump->check_store(command_pump->context);
     const bool uninstall_available = uninstall_handler != nullptr && uninstall_handler->available;
-    auto model = MakeAppManagementModel(catalog, launch_available, uninstall_available);
+    // The menu stays on the supervisor call stack throughout uninstall/catalog
+    // refresh. Keep its fixed-capacity model in PSRAM for that whole lifetime.
+    auto model_storage = MakePsramObject<host_ui::AppManagementModel>();
+    if (model_storage == nullptr) {
+        ESP_LOGE(kTag, "failed to allocate App Management model");
+        return false;
+    }
+    auto& model = *model_storage;
+    FillAppManagementModel(model, catalog, launch_available, uninstall_available);
     model.action_app_index = action_app_index;
     if (command_pump != nullptr && command_pump->store_check_state != nullptr)
         model.store_check_state = command_pump->store_check_state(command_pump->context);
@@ -1434,7 +1444,7 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             if (action_app_index < host_ui::kMaxHallApps) {
                 return true;
             }
-            model = MakeAppManagementModel(catalog, launch_available, uninstall_available);
+            FillAppManagementModel(model, catalog, launch_available, uninstall_available);
             if (command_pump != nullptr && command_pump->fill_store != nullptr)
                 command_pump->fill_store(command_pump->context, model);
             show_result = shell.ShowAppManagement(model);
