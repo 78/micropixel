@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 
-VERSION = "0.14.0"
+VERSION = "0.15.1"
 MINIMUM_FIRMWARE_VERSION = "0.4.0"
 BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
@@ -509,7 +509,7 @@ class UsbControlClient:
             expected_count = count
             for entry in entries:
                 parts = entry.split(",")
-                if len(parts) not in {5, 6}:
+                if len(parts) not in {5, 6, 7}:
                     raise CliError("Device returned a malformed App descriptor")
                 app_id, size_text, encoded_name, active_text, lifecycle = parts[:5]
                 try:
@@ -524,11 +524,13 @@ class UsbControlClient:
                     "active": active_text == "1",
                     "lifecycle": lifecycle,
                 }
-                if len(parts) == 6:
+                if len(parts) >= 6:
                     sha256 = normalize_sha256_hex(parts[5])
                     if sha256 is None:
                         raise CliError("Device returned an invalid App descriptor")
                     app["sha256"] = sha256
+                if len(parts) == 7:
+                    app["version"] = validate_app_version(parts[6]) if parts[6] else None
                 apps.append(app)
             offset = next_offset
             if offset == count:
@@ -1261,6 +1263,157 @@ def save_dotenv_token(path: Path, token: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def publisher_origin() -> str:
+    origin = os.environ.get("MICROPIXEL_STORE_URL", "https://micropixel.ai").rstrip("/")
+    parsed = urllib.parse.urlparse(origin)
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}):
+        raise CliError("Store URL must use HTTPS (HTTP is allowed for localhost development)")
+    if not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+        raise CliError("Store URL must be an origin without credentials, path, query or fragment")
+    return origin
+
+
+def publisher_credentials_path() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "micropixel" / "publisher.json"
+
+
+def publisher_token() -> str:
+    token = os.environ.get("MICROPIXEL_PUBLISH_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        saved = json.loads(publisher_credentials_path().read_text())
+        if saved.get("origin") == publisher_origin():
+            return saved["token"]
+    except (OSError, ValueError, KeyError):
+        pass
+    raise CliError("Developer login required: micropixel auth github")
+
+
+def store_request(path: str, method: str = "GET", body: object = None, token: str | None = None) -> dict:
+    headers = {"Accept": "application/json", "User-Agent": f"MicroPixel/{VERSION}"}
+    data = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if body is not None:
+        if isinstance(body, bytes):
+            data = body
+            headers["Content-Type"] = "application/vnd.micropixel.app"
+        else:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(publisher_origin() + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=300 if isinstance(body, bytes) else 30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.loads(error.read()).get("error", str(error.code))
+        except (ValueError, UnicodeError):
+            detail = str(error.code)
+        raise CliError(f"Store request failed: {detail}") from error
+    except urllib.error.URLError as error:
+        raise CliError(f"Cannot reach App Store: {error.reason}") from error
+
+
+def run_developer_auth(args: argparse.Namespace) -> None:
+    if args.auth_command == "status":
+        print_json(store_request("/api/v1/developer/me", token=publisher_token()))
+        return
+    if args.auth_command == "logout":
+        token = publisher_token()
+        try:
+            store_request("/api/v1/developer/logout", "POST", {}, token)
+        finally:
+            try:
+                saved = json.loads(publisher_credentials_path().read_text())
+                if saved.get("origin") == publisher_origin() and saved.get("token") == token:
+                    publisher_credentials_path().unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
+        print("Developer credentials revoked. Device pairing is unchanged.")
+        return
+    import webbrowser
+    authorization = store_request("/api/v1/developer/cli", "POST", {})
+    url = authorization["authorizationUrl"]
+    if not url.startswith(publisher_origin() + "/"):
+        raise CliError("Unexpected developer authorization URL")
+    print(f"Authorize this CLI in your browser:\n{url}")
+    if not args.no_browser:
+        webbrowser.open(url)
+    deadline = time.monotonic() + min(600, int(authorization["expiresIn"]))
+    while time.monotonic() < deadline:
+        result = store_request(f'/api/v1/developer/cli/{authorization["id"]}/poll', "POST", {"pollingSecret": authorization["pollingSecret"]})
+        if "token" in result:
+            destination = publisher_credentials_path()
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            temporary = destination.with_name(f".publisher-{uuid.uuid4().hex}.json")
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                json.dump({"origin": publisher_origin(), **result}, output)
+            os.replace(temporary, destination)
+            print(f'Developer signed in: {result["developer"]["login"]}')
+            return
+        time.sleep(max(3, min(10, int(authorization["interval"]))))
+    raise CliError("Developer authorization expired; run micropixel auth github again")
+
+
+def validate_publication_aot(data: bytes, flags: int, target: int) -> None:
+    if not flags & AOT_FLAG_THREADING_DECLARED or flags & ~9 or target != 1:
+        raise CliError("Publishing requires checked, single-threaded riscv32-ilp32f AOT")
+    if len(data) < 64 or data[:8] != b"\x00aot\x06\x00\x00\x00":
+        raise CliError("Publishing requires WAMR AOT format v6")
+    # WAMR v6 target-info: ELF32 little endian, relocatable RISC-V, single-float ABI.
+    if (struct.unpack_from("<II", data, 8) != (0, 48)
+            or struct.unpack_from("<H", data, 16)[0] != 0
+            or struct.unpack_from("<HHI", data, 20) != (1, 243, 1)
+            or struct.unpack_from("<I", data, 28)[0] & 6 != 2
+            or struct.unpack_from("<Q", data, 32)[0] & 4
+            or data[48:64].rstrip(b"\x00") != b"riscv32"):
+        raise CliError("Actual AOT target or threading features do not match the publication contract")
+
+
+def run_publish(args: argparse.Namespace) -> None:
+    manifest = resolve_project_manifest(args.project)
+    if manifest is None:
+        raise CliError("publish requires a project containing app.json")
+    project = load_project_manifest(manifest)
+    if project.package_type != "app" or "requirements" not in project.value:
+        raise CliError("Publishing requires an App with explicit requirements in app.json")
+    app_version = validate_app_version(project.value.get("version"))
+    notes = Path(args.notes_file).read_text(encoding="utf-8") if args.notes_file else ""
+    if len(notes.encode("utf-8")) > 3000:
+        raise CliError("Release notes must not exceed 3000 UTF-8 bytes; put the full description on the App page")
+    _run_bundle_builder(["--app-manifest", str(manifest), "--validate-publication"])
+    token = None if args.dry_run else publisher_token()
+    if token:
+        store_request("/api/v1/store/apps/preflight", "POST", {"appId": project.package_id, "version": app_version, "requirements": project.value["requirements"]}, token)
+    bundle = package_project(project, "release", project_output_directory(project, args.output_dir), None, "riscv32-ilp32f", False, args.force)
+    info = validate_bundle(bundle)
+    data = bundle.read_bytes()
+    header = BUNDLE_HEADER.unpack_from(data)
+    metadata = None
+    aot_count = 0
+    for index in range(header[7]):
+        section = BUNDLE_SECTION.unpack_from(data, header[4] + index * BUNDLE_SECTION.size)
+        if section[0] == 1:
+            aot_count += 1
+            validate_publication_aot(data[section[2]:section[2] + section[3]], section[9], section[10])
+        if section[0] == 3 and section[5] == 7:
+            metadata = json.loads(data[section[2]:section[2] + section[3]])
+    if aot_count != 1 or metadata is None or metadata.get("version") != app_version or metadata.get("requirements") != project.value["requirements"]:
+        raise CliError("Bundle publication metadata does not match app.json; rebuild with --force")
+    if len(data) > 8 * 1024 * 1024:
+        raise CliError("Public App Bundles must not exceed 8 MiB")
+    summary = {"appId": info["appId"], "version": app_version, "sha256": hashlib.sha256(data).hexdigest(), "sizeBytes": len(data), "requirements": metadata["requirements"], "testedDevices": args.tested_device, "releaseNotes": notes}
+    if args.dry_run:
+        print_json(summary)
+        return
+    query = urllib.parse.urlencode({"tested": ",".join(args.tested_device), "notes": notes})
+    result = store_request("/api/v1/store/apps/publish?" + query, "POST", data, token)
+    print_json({**result, "url": f"{publisher_origin()}/apps/{project.package_id}/", "editUrl": f"{publisher_origin()}/apps/{project.package_id}/?edit=1"})
+
+
 def run_auth_pair(args: argparse.Namespace) -> None:
     environment = project_environment(Path.cwd())
     base_url = args.control_url.rstrip("/") if args.control_url else control_url(environment)
@@ -1683,10 +1836,11 @@ def _run_build_sources(args: argparse.Namespace) -> None:
 
 
 def _tool_path(name: str) -> Path:
-    path = sdk_root() / "tools" / name
-    if not path.is_file():
-        raise CliError(f"This development copy does not contain {name}")
-    return path
+    for directory in ("libexec", "tools"):
+        path = sdk_root() / directory / name
+        if path.is_file():
+            return path
+    raise CliError(f"This SDK does not contain {name}")
 
 
 def _bundle_builder_command(arguments: list[str]) -> list[str]:
@@ -1738,7 +1892,7 @@ int main() {
     micropixel::Application app;
     micropixel::Renderer renderer = app.renderer();
     auto scene = renderer.CreateScene(micropixel::Color::Black()).value();
-    auto greeting = scene.CreateLabel({24, 24}, "Hello, MicroPixel!", micropixel::Color::White()).value();
+    (void)scene.CreateLabel({24, 24}, "Hello, MicroPixel!", micropixel::Color::White()).value();
     renderer.Present(scene).value();
     app.log().Info("App ready");
     app.Run([](const micropixel::Event&) { return micropixel::EventResult::kContinue; });
@@ -1809,6 +1963,8 @@ def run_init(args: argparse.Namespace) -> None:
     if (root / "assets/manifest.json").is_file():
         _manifest_child(root, "assets/manifest.json", "asset_manifest")
         manifest["asset_manifest"] = "assets/manifest.json"
+    if starter:
+        manifest["requirements"] = {"schema_version": 1, "display": {"layouts": ["square", "portrait", "landscape"], "min_width": 320, "min_height": 320}, "required": [], "optional": [], "any_of": [], "services": {}}
     root.mkdir(parents=True, exist_ok=True)
     if starter:
         source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3129,8 +3285,16 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("directory", nargs="?", default=".", help="Project directory (default: .)")
     init.add_argument("--app-id", help="Stable App ID (default: local.<directory-name>)")
     init.add_argument("--title", help="App Hall display name (default: directory name)")
-    init.add_argument("--version", dest="app_version", default="1.0.0", help="App major.minor.patch (default: 1.0.0)")
+    init.add_argument("--version", dest="app_version", default="0.1.0", help="App major.minor.patch (default: 0.1.0)")
     init.add_argument("--source", dest="sources", action="append", help="Source relative to the project; repeat to replace auto-discovery")
+
+    publish = commands.add_parser("publish", help="Build and publish an App to the MicroPixel App Store")
+    publish.add_argument("project", nargs="?", default=".")
+    publish.add_argument("--dry-run", action="store_true")
+    publish.add_argument("--force", action="store_true")
+    publish.add_argument("--output-dir")
+    publish.add_argument("--notes-file")
+    publish.add_argument("--tested-device", action="append", choices=["metalio-claw4", "esp-mosaico"], default=[])
 
     build = commands.add_parser("build", help="Build an app.json project into Wasm and AOT")
     build.add_argument("source", nargs="?", default=".", help="Project directory, app.json, or legacy C++ source")
@@ -3190,6 +3354,10 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--env-file", default=".env", help="Local environment file to update (default: .env)")
         command.add_argument("--control-url", help="Control API origin (default: MICROPIXEL_CONTROL_URL or production)")
 
+    github = auth_modes.add_parser("github", help="Sign in as a GitHub developer for publishing")
+    github.add_argument("--no-browser", action="store_true")
+    auth_modes.add_parser("status", help="Show the developer account")
+    auth_modes.add_parser("logout", help="Revoke developer credentials; keep device pairing")
     pair = auth_modes.add_parser("pair", help="Exchange a device connection code for a permanent API token")
     add_pair_options(pair)
     login = auth_modes.add_parser("login", help="Deprecated alias for 'auth pair'")
@@ -3383,7 +3551,11 @@ def main() -> int:
         if args.command == "app" and args.app_command == "upload":
             print("micropixel: 'app upload' is deprecated; use 'artifact upload'", file=sys.stderr)
 
-        if args.command == "init":
+        if args.command == "publish":
+            run_publish(args)
+        elif args.command == "auth" and args.auth_command in {"github", "status", "logout"}:
+            run_developer_auth(args)
+        elif args.command == "init":
             run_init(args)
         elif args.command == "build":
             run_build(args)

@@ -12,8 +12,9 @@ namespace micropixel::runtime {
 
 // Per-session INDEX8 resources: texture, palette and warp-map slots, each a
 // directly indexed uint8 ID whose metadata table grows only during upload.
-// Rendering never allocates. Failed replacements preserve the previous
-// resource. Shutdown releases all pixels and metadata.
+// Palettes prefer internal SRAM; textures and warp maps stay in PSRAM unless
+// the board opt-in is on. Rendering never allocates. Failed replacements
+// preserve the previous resource. Shutdown releases all pixels and metadata.
 class RasterService final {
    public:
     explicit RasterService(bool enabled);
@@ -42,7 +43,11 @@ class RasterService final {
         Entry* entries{};
         uint32_t capacity{};
     };
-    [[nodiscard]] static uint8_t* Allocate(uint32_t bytes);
+    // `prefer_internal` tries internal SRAM first (palettes: one random lookup
+    // per output pixel). Textures and warp maps stay on the PSRAM path unless
+    // CONFIG_MICROPIXEL_RASTER_POOL_INTERNAL_SRAM is on. Either way, failure
+    // falls back to PSRAM.
+    [[nodiscard]] static uint8_t* Allocate(uint32_t bytes, bool prefer_internal = false);
     // Validated Host pointer for a Guest range, or nullptr.
     [[nodiscard]] const uint8_t* ResolveGuest(uint32_t offset, uint32_t length) const;
     // Grows `table` so `index` is addressable, or returns false without

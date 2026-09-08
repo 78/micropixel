@@ -23,6 +23,7 @@ APP_ID_MAX_LENGTH = 64
 DISPLAY_NAME_MAX_LENGTH = 64
 LOCALE_MAX_LENGTH = 31
 PACKAGE_METADATA_VERSION = 1
+CORE_ABI_VERSION = 2 << 16
 FORMAT_PACKAGE_METADATA_JSON = 7
 HEADER = struct.Struct("<8sIIII64sIIIIIIIIII")
 SECTION = struct.Struct("<IIIIIIIIIIII")
@@ -137,6 +138,7 @@ class PackageManifest:
     package_type: str = "app"
     component_type: str = ""
     version: str = ""
+    requirements: dict | None = None
     languages: tuple[str, ...] = ()
     font_bundle: str = ""
     charset: str = ""
@@ -735,6 +737,41 @@ def parse_titles(value: object, fallback_default: object = "en") -> LocalizedTit
     return LocalizedTitles(default_locale, values)
 
 
+CAPABILITY_NAMES = {"input.touch", "input.keys", "audio.output", "sensor.acceleration", "sensor.gyroscope", "sensor.magnetometer", "haptics", "gpio"}
+SERVICE_NAMES = {"system", "input", "graphics", "audio", "storage", "timer", "resource", "device", "sensor", "gpio", "haptics"}
+
+
+def validate_requirements(value: object) -> dict:
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            raise ValueError(f"requirements: {message}")
+
+    def names(items: object, allowed: set[str], maximum: int = 16) -> list[str]:
+        require(isinstance(items, list), "expected name list")
+        require(len(items) <= maximum and all(isinstance(item, str) and item in allowed for item in items), "invalid name list")
+        require(len(set(items)) == len(items), "duplicate names")
+        return items
+
+    require(isinstance(value, dict), "expected object")
+    require(set(value) == {"schema_version", "display", "required", "optional", "any_of", "services"}, "invalid fields")
+    require(type(value["schema_version"]) is int and value["schema_version"] == 1, "unsupported schema")
+    display = value["display"]
+    require(isinstance(display, dict) and set(display) == {"layouts", "min_width", "min_height"}, "invalid display")
+    require(bool(names(display["layouts"], {"square", "portrait", "landscape"}, 3)), "empty layouts")
+    for key in ("min_width", "min_height"):
+        require(type(display[key]) is int and 1 <= display[key] <= 4096, "invalid logical dimensions")
+    required = names(value["required"], CAPABILITY_NAMES)
+    optional = names(value["optional"], CAPABILITY_NAMES)
+    require(not set(required) & set(optional), "overlapping capabilities")
+    require(isinstance(value["any_of"], list) and len(value["any_of"]) <= 8, "invalid alternatives")
+    for group in value["any_of"]:
+        require(bool(names(group, CAPABILITY_NAMES, 8)), "empty alternative")
+    require(isinstance(value["services"], dict), "invalid services")
+    for name, minimum in value["services"].items():
+        require(name in SERVICE_NAMES and type(minimum) is int and 65536 <= minimum <= 0xffffffff, "invalid service version")
+    return value
+
+
 def serialize_package_metadata(manifest: PackageManifest) -> bytes:
     # Bundle metadata v1 keeps its published display_name wire key. app.json
     # uses title; this serializer is the compatibility boundary.
@@ -746,6 +783,9 @@ def serialize_package_metadata(manifest: PackageManifest) -> bytes:
             "values": manifest.titles.values,
         },
     }
+    payload["core_abi"] = CORE_ABI_VERSION
+    if manifest.requirements is not None:
+        payload["requirements"] = manifest.requirements
     if manifest.version:
         payload["version"] = manifest.version
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -799,6 +839,7 @@ def load_package_manifest(path: Path) -> PackageManifest:
                 threading=threading,
                 pinned_memory=pinned_memory,
                 version=version,
+                requirements=validate_requirements(value["requirements"]) if "requirements" in value else None,
             )
         except (KeyError, TypeError) as error:
             raise ValueError(
@@ -1226,6 +1267,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=f"Prepare a resource pack or finalize a MicroPixel App Bundle v{VERSION}."
     )
+    parser.add_argument("--validate-publication", action="store_true", help="Validate public App metadata without building")
     parser.add_argument("--aot", type=Path, help="AOT input for final Bundle mode")
     parser.add_argument(
         "--aot-target",
@@ -1268,6 +1310,11 @@ def main() -> None:
         titles = parse_titles(app_id_text)
         manifest_launch_asset = ""
         package_manifest = PackageManifest(app_id_text, titles, "")
+    if args.validate_publication:
+        if package_manifest.package_type != "app" or not package_manifest.version or package_manifest.requirements is None:
+            raise SystemExit("Public Apps require version and requirements")
+        print("Publication manifest valid")
+        return
     launch_asset = (
         args.launch_asset if args.launch_asset is not None else manifest_launch_asset
     )

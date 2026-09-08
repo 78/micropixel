@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    "input.touch",
+    "input.keys",
+    "audio.output",
+    "sensor.acceleration",
+    "sensor.gyroscope",
+    "sensor.magnetometer",
+    "haptics",
+    "gpio"
+  ],
+  "services": [
+    "system",
+    "input",
+    "graphics",
+    "audio",
+    "storage",
+    "timer",
+    "resource",
+    "device",
+    "sensor",
+    "gpio",
+    "haptics"
+  ],
+  "layouts": [
+    "square",
+    "portrait",
+    "landscape"
+  ],
+  "max_logical_dimension": 4096,
+  "max_any_of_groups": 8,
+  "max_version_length": 31,
+  "versions": [
+    [
+      "0.9.0",
+      "0.10.0",
+      true
+    ],
+    [
+      "0.1.0",
+      "0.2.0",
+      true
+    ],
+    [
+      "1.3.0",
+      "1.2.0",
+      false
+    ],
+    [
+      "0.9.0",
+      "1.0.0",
+      false
+    ],
+    [
+      "1.0.0",
+      "1.0.0",
+      false
+    ]
+  ]
+}

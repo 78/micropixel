@@ -433,9 +433,9 @@ void LocalControlAgent::HandleAppList(uint32_t request_id, std::string_view argu
         std::array<char, 65U> sha256{};
         control::FormatSha256Hex(app.sha256, sha256);
         const int entry_length =
-            std::snprintf(detail.data() + used, detail.size() - used, " %s,%" PRIu32 ",%.*s,%u,%s,%s",
+            std::snprintf(detail.data() + used, detail.size() - used, " %s,%" PRIu32 ",%.*s,%u,%s,%s,%s",
                           app.app_id.data(), app.bundle_size, static_cast<int>(encoded_size), encoded_name.data(),
-                          active ? 1U : 0U, lifecycle, sha256.data());
+                          active ? 1U : 0U, lifecycle, sha256.data(), app.version.data());
         if (entry_length <= 0 || static_cast<size_t>(entry_length) >= detail.size() - used) {
             (void)QueueResponse(request_id, "ERROR", "response_too_large");
             return;

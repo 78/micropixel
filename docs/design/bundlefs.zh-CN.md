@@ -145,3 +145,9 @@ App Store 重装（安装 AppId 已存在但 digest 不同的包）不使用"新
 BundleFS Catalog 完全位于 `app_store`，不使用 `sys_store` 或其他 NVS。擦除系统 NVS 不会卸载 App，
 也不会重建或回退 BundleFS Catalog。只有显式格式化 `app_store` 才会清除所有 Bundle 和 Catalog；该操作
 必须被视为独立的破坏性恢复操作。
+
+### 商店版本替换
+
+App Store 更新保留旧文件，以 `begin_replace` 写入新副本，校验完成后提交 Catalog；不得为了腾出
+空间先卸载旧应用。空间不足或提交前失败保留旧版本，成功替换保留原 Catalog 顺序与应用存档。
+发布身份、能力要求与远程队列见[应用商店契约](app-store.zh-CN.md)。

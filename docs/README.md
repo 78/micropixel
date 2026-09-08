@@ -4,6 +4,7 @@
 
 - [架构与发布基线](design/architecture.zh-CN.md)：产品边界、Host 分层、Guest–Host 数据路径、
   生命周期、设计取舍和尚未完成的发布门槛；
+- [应用商店与自动更新](design/app-store.zh-CN.md)：开发者发布、能力契约、签名与安装事务；
 - [BundleFS 持久化格式](design/bundlefs.zh-CN.md)：v2 Catalog、离散数据块、写时复制和 v1 迁移；
 - [Firmware 硬件分层与命名](design/firmware-terminology.zh-CN.md)：Board、Driver、Peripheral、Device、
   Service 和 ABI Endpoint 的固定词义；

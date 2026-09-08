@@ -100,11 +100,19 @@ static bool validate_bundle(void) {
     const bool metadata_valid = test_locale == NULL
                                     ? micropixel_read_bundle_metadata(&file, &metadata)
                                     : micropixel_read_bundle_metadata_for_locale(&file, test_locale, &metadata);
+    if (getenv("MICROPIXEL_EXPECT_INVALID_METADATA") != NULL) {
+        return check(!metadata_valid, "invalid App version must be rejected") &&
+               check(active_mappings == 0U, "invalid metadata must release mappings");
+    }
     const char* expected_name = getenv("MICROPIXEL_EXPECT_DISPLAY_NAME");
     const char* expected_version = getenv("MICROPIXEL_EXPECT_METADATA_SCHEMA");
     const char* expected_type = getenv("MICROPIXEL_EXPECT_PACKAGE_TYPE");
+    const char* expected_package_version = getenv("MICROPIXEL_EXPECT_PACKAGE_VERSION");
     if (!check(metadata_valid, "Bundle metadata must validate") ||
         !check(metadata.bundle_size == test_bundle_size, "metadata must expose the Bundle logical size") ||
+        !check(expected_package_version == NULL ||
+                   strcmp((const char*)metadata.package_version, expected_package_version) == 0,
+               "metadata must expose the expected package version") ||
         !check(metadata.app_id[0] != 0U && metadata.display_name[0] != 0U, "metadata must contain App identity") ||
         !check(expected_name == NULL || strcmp((const char*)metadata.display_name, expected_name) == 0,
                "metadata must select the expected localized display name") ||

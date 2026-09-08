@@ -81,6 +81,12 @@ void SystemDetailUi::RenderAppManagementLocked() {
     std::snprintf(storage, sizeof(storage), "Storage %" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB",
                   used_tenths / 10U, used_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
     (void)Label(scroll, storage, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    if (app_management_model_.store_check_state != 0U) {
+        const char* status = app_management_model_.store_check_state == 1U ? "Update check pending; keep device online"
+                             : app_management_model_.store_check_state == 2U ? "Checked; tap an app to view updates"
+                                                                             : "Update check failed; reopen to retry";
+        (void)Label(scroll, status, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    }
     app_bindings_ = {};
 
     if (app_management_model_.app_count == 0U) {
@@ -106,6 +112,14 @@ void SystemDetailUi::RenderAppManagementLocked() {
         AppSizeRow(app_text, system_detail_internal::DisplayText(app.app_id, "Unknown"), app.bundle_size_kib,
                    platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
 
+        char version[112]{};
+        if (app.update_version[0] != '\0')
+            std::snprintf(version, sizeof(version), "%s -> %s available", app.version != nullptr ? app.version : "?",
+                          app.update_version.data());
+        else
+            std::snprintf(version, sizeof(version), "Version %s",
+                          app.version != nullptr && app.version[0] != '\0' ? app.version : "unknown");
+        (void)Label(app_text, version, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
         (void)square_common::CreateSystemMoreIndicator(row, 32, 52, 6, 5);
     }
     RenderAppManagementOverlayLocked();
@@ -242,6 +256,15 @@ void SystemDetailUi::AppManagementCancelEvent(lv_event_t* event) {
     }
 }
 
+void SystemDetailUi::AppManagementUpdateEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui != nullptr && ui->action_sink_ != nullptr &&
+        ui->app_management_selected_index_ < ui->app_management_model_.app_count)
+        ui->action_sink_(ui->action_context_,
+                         host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUpdateInstalledApp,
+                                                 .app_index = ui->app_management_selected_index_});
+}
+
 void SystemDetailUi::AppManagementOpenEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr && ui->action_sink_ != nullptr &&
@@ -279,6 +302,17 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
                                         &app_management_overlay_root_);
     AppSizeRow(sheet, app.display_name, app.bundle_size_kib, platform::lvgl::SystemFontRole::kLarge,
                theme::kPrimaryText);
+    if (app.update_version[0] != '\0' && app_management_model_.action_app_index < app_management_model_.app_count) {
+        char title[80]{};
+        std::snprintf(title, sizeof(title), "Install %s and run", app.update_version.data());
+        lv_obj_t* update = Button(layout_, sheet, title, theme::kPrimaryText);
+        lv_obj_add_event_cb(update, AppManagementUpdateEvent, LV_EVENT_SHORT_CLICKED, this);
+        lv_obj_t* current = Button(layout_, sheet, "Run current version", theme::kPrimaryText);
+        lv_obj_add_event_cb(current, AppManagementOpenEvent, LV_EVENT_SHORT_CLICKED, this);
+        lv_obj_t* cancel = Button(layout_, sheet, "Cancel", theme::kSecondaryText);
+        lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
+        return;
+    }
     lv_obj_t* open = Button(layout_, sheet, app_management_model_.launch_available ? "Open" : "Open unavailable",
                             app_management_model_.launch_available ? theme::kPrimaryText : theme::kDisabledText);
     if (app_management_model_.launch_available) {
@@ -286,6 +320,12 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
     } else {
         lv_obj_remove_flag(open, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_opa(open, LV_OPA_40, 0);
+    }
+    if (app.update_version[0] != '\0') {
+        char title[64]{};
+        std::snprintf(title, sizeof(title), "Update to %s", app.update_version.data());
+        lv_obj_t* update = Button(layout_, sheet, title, theme::kPrimaryText);
+        lv_obj_add_event_cb(update, AppManagementUpdateEvent, LV_EVENT_SHORT_CLICKED, this);
     }
     lv_obj_t* uninstall = Button(layout_, sheet, "Uninstall", theme::kDanger);
     lv_obj_add_event_cb(uninstall, AppManagementUninstallEvent, LV_EVENT_SHORT_CLICKED, this);

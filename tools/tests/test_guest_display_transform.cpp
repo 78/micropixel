@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 
+#include "runtime/bundle/app_requirements.h"
 #include "runtime/display_transform.hpp"
 
 namespace {
@@ -23,6 +25,22 @@ int main() {
     using micropixel::detail::MapSceneVectorX;
     using micropixel::detail::MapTextureRect;
     using micropixel::detail::ScaleCoordinate;
+
+    for (const auto size : {std::pair{480U, 480U}, std::pair{720U, 720U}, std::pair{320U, 240U}, std::pair{240U, 320U},
+                            std::pair{481U, 723U}, std::pair{0U, 480U}}) {
+        micropixel_app_environment_t environment{};
+        micropixel_app_set_logical_display(&environment, size.first, size.second);
+        const auto guest = MakeDisplayTransform(size.first, size.second);
+        Check(environment.width == guest.logical_width && environment.height == guest.logical_height,
+              "store compatibility must match the Guest logical display, including Mosaico");
+        micropixel_app_requirements_t requirement{};
+        requirement.declared = true;
+        requirement.min_width = 720U;
+        requirement.min_height = 720U;
+        requirement.layouts = 7U;
+        Check(micropixel_app_is_compatible(&requirement, &environment) == (size.first != 0U),
+              "720-unit apps must accept supported physical screens and reject an unknown display");
+    }
 
     const auto square_720 = MakeDisplayTransform(720U, 720U);
     Check(square_720.logical_width == 720U && square_720.logical_height == 720U,

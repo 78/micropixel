@@ -336,12 +336,16 @@ struct SystemInformationModel final {
 };
 
 struct InstalledAppModel final {
+    const char* version{};
+    std::array<char, 32U> update_version{};
+    std::array<char, 24U> update_state{};
     const char* app_id{};
     const char* display_name{};
     uint32_t bundle_size_kib{};
 };
 
 struct AppManagementModel final {
+    uint8_t store_check_state{};
     std::array<InstalledAppModel, kMaxHallApps> apps{};
     uint32_t app_count{};
     uint32_t storage_used_kib{};
@@ -414,6 +418,7 @@ enum class SystemUiActionType {
     kCloseAppManagement,
     kLaunchInstalledApp,
     kUninstallInstalledApp,
+    kUpdateInstalledApp,
     kCloseWifiSettings,
     kOpenWifiNetworkScan,
     kCloseWifiNetworkScan,

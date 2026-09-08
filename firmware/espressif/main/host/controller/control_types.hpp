@@ -8,6 +8,7 @@
 #include "abi/micropixel_abi.h"
 #include "device/contracts/input.hpp"
 #include "freertos/FreeRTOS.h"
+#include "runtime/bundle/app_requirements.h"
 
 namespace micropixel::firmware::control {
 
@@ -21,6 +22,7 @@ constexpr size_t kMaxResultArtifacts = 4U;
 struct AppDescriptor final {
     std::array<char, kAppIdCapacity> app_id{};
     std::array<char, kDisplayNameCapacity> display_name{};
+    std::array<char, 32U> version{};
     uint32_t bundle_size{};
     std::array<uint8_t, 32U> sha256{};
 };
@@ -39,6 +41,19 @@ struct AppDiagnostic final {
     std::array<char, 256U> detail{};
     int32_t exit_code{};
     bool has_exit_code{};
+};
+
+struct StoreAppUpdate final {
+    std::array<uint8_t, 32U> baseline_sha256{};
+    std::array<char, kAppIdCapacity> app_id{};
+    std::array<char, 32U> version{};
+    std::array<char, 24U> state{};
+};
+
+struct StoreSnapshot final {
+    micropixel_app_environment_t environment{};
+    uint32_t idle_ms{};
+    bool busy{true};
 };
 
 struct HostSnapshot final {
@@ -103,6 +118,10 @@ struct HostCommand final {
     uint8_t* package_data{};
     size_t package_size{};
     std::array<uint8_t, 32U> package_sha256{};
+    std::array<uint8_t, 32U> baseline_sha256{};
+    std::array<char, 32U> store_version{};
+    bool store_verified{};
+    bool automatic{};
 };
 
 using ArtifactRelease = void (*)(uint8_t*);

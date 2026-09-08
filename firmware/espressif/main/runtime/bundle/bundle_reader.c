@@ -496,6 +496,73 @@ static bool parse_component_metadata(const cJSON* root, micropixel_bundle_metada
     return true;
 }
 
+static bool requirement_number(const cJSON* object, const char* name, uint32_t maximum, uint32_t* result) {
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(object, name);
+    if (!cJSON_IsNumber(value) || value->valuedouble < 1 || value->valuedouble > maximum ||
+        value->valuedouble != (double)(uint32_t)value->valuedouble)
+        return false;
+    *result = (uint32_t)value->valuedouble;
+    return true;
+}
+
+static bool requirement_names(const cJSON* array, const char* const* names, uint32_t count, uint8_t* mask) {
+    if (!cJSON_IsArray(array) || cJSON_GetArraySize(array) > (int)count) return false;
+    for (const cJSON* item = array->child; item != NULL; item = item->next) {
+        if (!cJSON_IsString(item)) return false;
+        uint32_t index = 0;
+        while (index < count && strcmp(item->valuestring, names[index]) != 0) ++index;
+        if (index == count || (*mask & (1U << index)) != 0U) return false;
+        *mask |= (uint8_t)(1U << index);
+    }
+    return true;
+}
+
+static bool parse_app_requirements(const cJSON* root, micropixel_app_requirements_t* output) {
+    const cJSON* source = cJSON_GetObjectItemCaseSensitive(root, "requirements");
+    if (source == NULL) return true;
+    if (!unique_object_keys(source) || cJSON_GetArraySize(source) != 6 ||
+        !requirement_number(root, "core_abi", UINT32_MAX, &output->core_abi))
+        return false;
+    uint32_t schema = 0, width = 0, height = 0;
+    const cJSON* display = cJSON_GetObjectItemCaseSensitive(source, "display");
+    const cJSON* alternatives = cJSON_GetObjectItemCaseSensitive(source, "any_of");
+    const cJSON* services = cJSON_GetObjectItemCaseSensitive(source, "services");
+    static const char* const layouts[] = {"square", "portrait", "landscape"};
+    if (!requirement_number(source, "schema_version", 1, &schema) || !unique_object_keys(display) ||
+        cJSON_GetArraySize(display) != 3 || !requirement_number(display, "min_width", 4096, &width) ||
+        !requirement_number(display, "min_height", 4096, &height) ||
+        !requirement_names(cJSON_GetObjectItemCaseSensitive(display, "layouts"), layouts, 3, &output->layouts) ||
+        output->layouts == 0 ||
+        !requirement_names(cJSON_GetObjectItemCaseSensitive(source, "required"), kMicropixelAppCapabilities, 8,
+                           &output->required) ||
+        !requirement_names(cJSON_GetObjectItemCaseSensitive(source, "optional"), kMicropixelAppCapabilities, 8,
+                           &output->optional) ||
+        (output->required & output->optional) != 0 || !cJSON_IsArray(alternatives) ||
+        cJSON_GetArraySize(alternatives) > 8 || !unique_object_keys(services))
+        return false;
+    uint32_t index = 0;
+    for (const cJSON* group = alternatives->child; group != NULL; group = group->next) {
+        if (!requirement_names(group, kMicropixelAppCapabilities, 8, &output->any_of[index]) ||
+            output->any_of[index] == 0)
+            return false;
+        ++index;
+    }
+    for (const cJSON* service = services->child; service != NULL; service = service->next) {
+        index = 0;
+        while (index < MICROPIXEL_APP_SERVICE_COUNT && strcmp(service->string, kMicropixelAppServices[index]) != 0)
+            ++index;
+        uint32_t minimum = 0;
+        if (index == MICROPIXEL_APP_SERVICE_COUNT ||
+            !requirement_number(services, service->string, UINT32_MAX, &minimum) || minimum < 65536U)
+            return false;
+        output->services[index] = minimum;
+    }
+    output->min_width = (uint16_t)width;
+    output->min_height = (uint16_t)height;
+    output->declared = true;
+    return true;
+}
+
 static bool parse_package_metadata_json(const uint8_t* bytes, uint32_t length, const char* effective_locale,
                                         micropixel_bundle_metadata_t* metadata_out) {
     if (!safe_json_envelope(bytes, length) || contains_escaped_nul(bytes, length)) {
@@ -529,6 +596,7 @@ static bool parse_package_metadata_json(const uint8_t* bytes, uint32_t length, c
                     memcpy(metadata_out->package_version, version->valuestring, strlen(version->valuestring) + 1U);
                 }
             }
+            valid = valid && parse_app_requirements(root, &metadata_out->requirements);
             const cJSON* display = cJSON_GetObjectItemCaseSensitive(root, "display");
             if (display == NULL || (cJSON_IsString(display) && strcmp(display->valuestring, "square") == 0)) {
                 /* Bundles created before this field used square implicitly. */

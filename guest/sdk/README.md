@@ -9,7 +9,7 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 
 ## 工具链兼容性
 
-当前 SDK 版本为 0.14.0，使用受限 C++23 和固定 commit 的
+当前 SDK 版本为 0.15.1，使用受限 C++23 和固定 commit 的
 [MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime)
 `af07c787ac6f7d1d20555f97ddc184f5fc13731a`，生成 AOT format v6。
 wamrc 自报版本不足以判断兼容性。构建、打包和目标架构选择统一使用

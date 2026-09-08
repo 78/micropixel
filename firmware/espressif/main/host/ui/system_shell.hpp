@@ -80,6 +80,7 @@ class SystemShell final {
     void NotifyTimeStateChanged();
     void NotifyRemoteCommandReady();
     void NotifyUserActivity();
+    [[nodiscard]] uint32_t UserIdleMs() const;
     void ConfigureAutoSleep(uint8_t timeout_minutes, ExternalPowerStateQuery power_query, void* power_context,
                             device::IdlePowerAction action = device::IdlePowerAction::kSleep);
     void SetAutoSleepTimeout(uint8_t timeout_minutes);

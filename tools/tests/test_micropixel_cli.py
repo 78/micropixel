@@ -93,7 +93,7 @@ class MicroPixelCliTest(unittest.TestCase):
                 self.assertEqual(CLI.main(), 0)
             project = CLI.load_project_manifest(root / "app.json")
             self.assertEqual(project.package_id, "local.hello-world")
-            self.assertEqual(project.value["version"], "1.0.0")
+            self.assertEqual(project.value["version"], "0.1.0")
             self.assertEqual(project.value["title"], "Hello World")
             self.assertEqual(project.sources, ((root / "src/main.cpp").resolve(),))
             self.assertIn("app.Run", project.sources[0].read_text())
@@ -1567,7 +1567,7 @@ class MicroPixelCliTest(unittest.TestCase):
         self.assertEqual(client.request, ("GET", "/device/app-errors/latest", None))
         rendered = json.loads(output.getvalue())
         self.assertEqual(rendered["code"], "guest_trap")
-        self.assertIn("rebuild this App with SDK 0.14.0", rendered["recommendation"])
+        self.assertIn("rebuild this App with SDK 0.15.1", rendered["recommendation"])
 
     def test_firmware_preflight_requires_0_4_0_before_install_or_start(self) -> None:
         class Client:

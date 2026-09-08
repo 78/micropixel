@@ -152,6 +152,50 @@ void ControlDispatcher::UpdateLastAppDiagnostic(const AppDiagnostic& diagnostic)
     snapshot_->has_last_app_diagnostic = true;
 }
 
+void ControlDispatcher::ResetStoreUpdates() {
+    std::lock_guard lock(snapshot_mutex_);
+    store_update_count_ = 0U;
+}
+void ControlDispatcher::AddStoreUpdate(const char* app_id, const char* version, const char* state,
+                                       const std::array<uint8_t, 32U>& digest) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (app_id == nullptr || version == nullptr || store_update_count_ >= store_updates_.size()) return;
+    auto& update = store_updates_[store_update_count_++];
+    update.baseline_sha256 = digest;
+    std::snprintf(update.app_id.data(), update.app_id.size(), "%s", app_id);
+    std::snprintf(update.version.data(), update.version.size(), "%s", version);
+    std::snprintf(update.state.data(), update.state.size(), "%s", state != nullptr ? state : "available");
+}
+StoreAppUpdate ControlDispatcher::FindStoreUpdate(const char* app_id) const {
+    std::lock_guard lock(snapshot_mutex_);
+    for (uint32_t i = 0; i < store_update_count_; ++i)
+        if (app_id != nullptr && std::strcmp(store_updates_[i].app_id.data(), app_id) == 0) return store_updates_[i];
+    return {};
+}
+void ControlDispatcher::RequestStoreUpdate(const char* app_id) {
+    std::lock_guard lock(snapshot_mutex_);
+    std::snprintf(store_update_requested_.data(), store_update_requested_.size(), "%s",
+                  app_id != nullptr ? app_id : "");
+    store_check_state_.store(1U);
+}
+bool ControlDispatcher::ConsumeStoreUpdate(std::array<char, kAppIdCapacity>& app_id) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (store_update_requested_[0] == '\0') return false;
+    app_id = store_update_requested_;
+    store_update_requested_[0] = '\0';
+    return true;
+}
+
+void ControlDispatcher::UpdateStoreSnapshot(const StoreSnapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    store_snapshot_ = snapshot;
+}
+
+StoreSnapshot ControlDispatcher::CopyStoreSnapshot() const {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    return store_snapshot_;
+}
+
 void ControlDispatcher::CopySnapshot(HostSnapshot& snapshot) const {
     std::lock_guard lock(snapshot_mutex_);
     snapshot = *snapshot_;

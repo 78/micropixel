@@ -87,3 +87,7 @@ CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0
 # Keep every LVGL row 16-byte aligned without producing a fractional RGB888
 # physical width: lcm(16-byte SIMD alignment, 3-byte RGB888 pixel) = 48 bytes.
 CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=48
+
+# micropixel.ai App Store public trust anchor (private key stays on the server).
+CONFIG_MICROPIXEL_STORE_SIGNING_KID="store-v1"
+CONFIG_MICROPIXEL_STORE_PUBLIC_KEY_DER_BASE64="MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEU3KNgRmsWNq8fGTXSbwHEzQWmteYYpxe+EeP1ET+1/txQiK9oSIj63/9OS94wckI6OjHHQxYOKPsGPCfvj5ZIQ=="

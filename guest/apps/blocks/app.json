@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.blocks",
+  "version": "0.1.0",
   "threading": "none",
   "title": {
     "default": "en",
@@ -23,5 +24,25 @@
     "blocks_audio.cpp"
   ],
   "asset_manifest": "assets/manifest.json",
-  "launch_asset": "launch"
+  "launch_asset": "launch",
+  "requirements": {
+    "schema_version": 1,
+    "display": {
+      "layouts": [
+        "square",
+        "portrait",
+        "landscape"
+      ],
+      "min_width": 720,
+      "min_height": 720
+    },
+    "required": [
+      "input.touch"
+    ],
+    "optional": [
+      "audio.output"
+    ],
+    "any_of": [],
+    "services": {}
+  }
 }

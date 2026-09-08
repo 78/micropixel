@@ -38,6 +38,7 @@
 #include "host/ui/system_settings_store.hpp"
 #include "host/ui/system_shell.hpp"
 #include "runtime/app_runtime.hpp"
+#include "runtime/bundle/app_environment.hpp"
 #include "runtime/bundle/app_store.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "work/background_executor.hpp"
@@ -663,6 +664,7 @@ host_ui::AppManagementModel MakeAppManagementModel(const runtime::InstalledAppCa
     for (uint32_t index = 0U; index < model.app_count; ++index) {
         const runtime::InstalledApp& source = catalog.apps[index];
         model.apps[index] = host_ui::InstalledAppModel{
+            .version = source.version.data(),
             .app_id = source.app_id.data(),
             .display_name = source.display_name.data(),
             .bundle_size_kib = source.bundle_size / 1024U,
@@ -682,6 +684,7 @@ void FillControlCatalog(const runtime::InstalledAppCatalog& catalog, control::Ca
         std::snprintf(destination.app_id.data(), destination.app_id.size(), "%s", source.app_id.data());
         std::snprintf(destination.display_name.data(), destination.display_name.size(), "%s",
                       source.display_name.data());
+        destination.version = source.version;
         destination.bundle_size = source.bundle_size;
         destination.sha256 = source.sha256;
     }
@@ -795,6 +798,10 @@ void AddAppDiagnostic(control::HostResult& result, const runtime::AppRunOutcome&
 struct RemoteCommandPump final {
     bool (*poll)(void*){};
     bool (*requires_periodic_poll)(void*){};
+    void (*check_store)(void*){};
+    uint8_t (*store_check_state)(void*){};
+    void (*fill_store)(void*, host_ui::AppManagementModel&){};
+    void (*update_store_app)(void*, const char*){};
     void* context{};
     bool unwind_requested{};
 
@@ -1360,21 +1367,48 @@ bool RunAppearance(host_ui::SystemShell& shell, host_ui::StatusLayerModel& statu
 bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCatalog& catalog, bool launch_available,
                       const AppManagementUninstallHandler* uninstall_handler, std::optional<uint32_t>& launch_request,
                       RemoteCommandPump* command_pump, uint32_t action_app_index = host_ui::kMaxHallApps) {
+    if (command_pump != nullptr && command_pump->check_store != nullptr)
+        command_pump->check_store(command_pump->context);
     const bool uninstall_available = uninstall_handler != nullptr && uninstall_handler->available;
     auto model = MakeAppManagementModel(catalog, launch_available, uninstall_available);
     model.action_app_index = action_app_index;
+    if (command_pump != nullptr && command_pump->store_check_state != nullptr)
+        model.store_check_state = command_pump->store_check_state(command_pump->context);
+    if (command_pump != nullptr && command_pump->fill_store != nullptr)
+        command_pump->fill_store(command_pump->context, model);
+    TickType_t next_store_check = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
     auto show_result = shell.ShowAppManagement(model);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show App Management: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
     }
     for (;;) {
-        const auto action = shell.PollAction(RemoteAwareTimeout(portMAX_DELAY, command_pump));
+        const auto action = shell.PollAction(RemoteAwareTimeout(pdMS_TO_TICKS(1000), command_pump));
+        if (command_pump != nullptr && command_pump->check_store != nullptr &&
+            static_cast<int32_t>(xTaskGetTickCount() - next_store_check) >= 0) {
+            command_pump->check_store(command_pump->context);
+            next_store_check = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
+        }
+        if (command_pump != nullptr && command_pump->store_check_state != nullptr) {
+            const uint8_t state = command_pump->store_check_state(command_pump->context);
+            if (state != model.store_check_state) {
+                model.store_check_state = state;
+                if (command_pump->fill_store != nullptr) command_pump->fill_store(command_pump->context, model);
+                (void)shell.ShowAppManagement(model);
+            }
+        }
         if (command_pump != nullptr && command_pump->Process()) {
             shell.LeaveAppManagement();
             return true;
         }
         if (!action.has_value()) {
+            continue;
+        }
+        if (action->type == host_ui::SystemUiActionType::kUpdateInstalledApp && command_pump != nullptr &&
+            command_pump->update_store_app != nullptr && action->app_index < catalog.count) {
+            command_pump->update_store_app(command_pump->context, catalog.apps[action->app_index].app_id.data());
+            model.store_check_state = 1U;
+            (void)shell.ShowAppManagement(model);
             continue;
         }
         if (action->type == host_ui::SystemUiActionType::kCloseAppManagement ||
@@ -1400,8 +1434,10 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             if (action_app_index < host_ui::kMaxHallApps) {
                 return true;
             }
-            show_result =
-                shell.ShowAppManagement(MakeAppManagementModel(catalog, launch_available, uninstall_available));
+            model = MakeAppManagementModel(catalog, launch_available, uninstall_available);
+            if (command_pump != nullptr && command_pump->fill_store != nullptr)
+                command_pump->fill_store(command_pump->context, model);
+            show_result = shell.ShowAppManagement(model);
             if (!show_result) {
                 ESP_LOGE(kTag, "failed to refresh App Management after uninstall: error=%u",
                          static_cast<unsigned>(show_result.error()));
@@ -2122,11 +2158,14 @@ class ActiveHost final {
     // Returns true when the command changed the outer Hall/Foreground state
     // and the current loop must yield to the state machine.
     [[nodiscard]] const char* CommitInstallPackage(const control::HostCommand& command, bool& changed_out) {
+        const auto environment = runtime::AppEnvironment(devices_);
         const runtime::AppInstallRequest request{
             .data = command.package_data,
             .size = command.package_size,
             .expected_app_id = command.app_id.data(),
             .expected_sha256 = command.package_sha256,
+            .environment = &environment,
+            .expected_version = command.store_verified ? command.store_version.data() : nullptr,
         };
         auto install_result = runtime::InstallApp(request, effective_locale_.data());
         heap_caps_free(command.package_data);
@@ -2153,6 +2192,18 @@ class ActiveHost final {
             controls_.EndInstallActivity(command.source, command.command_id.data());
             SubmitRemoteResult(result, false, "stop_active_app_before_install");
             return false;
+        }
+        if (command.automatic) {
+            const auto current = FindApp(command.app_id.data());
+            if (!command.store_verified || shell_.UserIdleMs() < 30000U || !current ||
+                catalog_.apps[*current].sha256 != command.baseline_sha256 || controls_.CopyStoreSnapshot().busy ||
+                !micropixel_app_same_major_update(catalog_.apps[*current].version.data(),
+                                                  command.store_version.data())) {
+                heap_caps_free(command.package_data);
+                controls_.EndInstallActivity(command.source, command.command_id.data());
+                SubmitRemoteResult(result, false, "automatic_install_state_changed");
+                return false;
+            }
         }
         ReleaseHallCovers();
         bool changed = false;
@@ -2329,7 +2380,17 @@ class ActiveHost final {
         return false;
     }
 
+    void UpdateStoreState(bool system_ui = false) {
+        control::StoreSnapshot snapshot{};
+        snapshot.environment = runtime::AppEnvironment(devices_);
+        snapshot.idle_ms = shell_.UserIdleMs();
+        snapshot.busy = system_ui || app_controller_.state() != AppLifecycleState::kNotRunning ||
+                        ReadFirmwareUpdate(remote_control_).in_progress;
+        controls_.UpdateStoreSnapshot(snapshot);
+    }
+
     [[nodiscard]] bool ProcessRemoteCommands() {
+        UpdateStoreState();
         if (RemoteInputSequence().active) {
             ContinueRemoteInputSequence();
             return false;
@@ -2348,6 +2409,7 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool ProcessRemoteCommandsInSystemUi() {
+        UpdateStoreState(true);
         if (shell_.PowerTransitionRequested()) {
             return true;
         }
@@ -2405,6 +2467,27 @@ class ActiveHost final {
             .poll = [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(); },
             .requires_periodic_poll =
                 [](void* context) { return static_cast<ActiveHost*>(context)->RemoteInputSequence().active; },
+            .check_store =
+                [](void* context) { static_cast<ActiveHost*>(context)->remote_control_.RequestStoreCheck(); },
+            .store_check_state =
+                [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreCheckState(); },
+            .fill_store =
+                [](void* context, host_ui::AppManagementModel& model) {
+                    auto& host = *static_cast<ActiveHost*>(context);
+                    for (uint32_t i = 0; i < model.app_count; ++i) {
+                        const auto update = host.controls_.FindStoreUpdate(model.apps[i].app_id);
+                        model.apps[i].update_version = {};
+                        model.apps[i].update_state = {};
+                        if (i < host.catalog_.count && update.baseline_sha256 == host.catalog_.apps[i].sha256) {
+                            model.apps[i].update_version = update.version;
+                            model.apps[i].update_state = update.state;
+                        }
+                    }
+                },
+            .update_store_app =
+                [](void* context, const char* app_id) {
+                    static_cast<ActiveHost*>(context)->remote_control_.RequestStoreAppUpdate(app_id);
+                },
             .context = this,
         };
 
@@ -2443,7 +2526,12 @@ class ActiveHost final {
                 continue;
             }
 
-            const host_ui::SystemUiAction action = *pending_action;
+            host_ui::SystemUiAction action = *pending_action;
+            if (action.type == host_ui::SystemUiActionType::kLaunchApp && action.app_index < catalog_.count) {
+                const auto update = controls_.FindStoreUpdate(catalog_.apps[action.app_index].app_id.data());
+                if (update.version[0] != '\0' && update.baseline_sha256 == catalog_.apps[action.app_index].sha256)
+                    action.type = host_ui::SystemUiActionType::kOpenAppActions;
+            }
             if (action.type == host_ui::SystemUiActionType::kRemoteCommandReady) {
                 continue;
             }
@@ -2816,6 +2904,27 @@ class ActiveHost final {
             .poll = [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(); },
             .requires_periodic_poll =
                 [](void* context) { return static_cast<ActiveHost*>(context)->RemoteInputSequence().active; },
+            .check_store =
+                [](void* context) { static_cast<ActiveHost*>(context)->remote_control_.RequestStoreCheck(); },
+            .store_check_state =
+                [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreCheckState(); },
+            .fill_store =
+                [](void* context, host_ui::AppManagementModel& model) {
+                    auto& host = *static_cast<ActiveHost*>(context);
+                    for (uint32_t i = 0; i < model.app_count; ++i) {
+                        const auto update = host.controls_.FindStoreUpdate(model.apps[i].app_id);
+                        model.apps[i].update_version = {};
+                        model.apps[i].update_state = {};
+                        if (i < host.catalog_.count && update.baseline_sha256 == host.catalog_.apps[i].sha256) {
+                            model.apps[i].update_version = update.version;
+                            model.apps[i].update_state = update.state;
+                        }
+                    }
+                },
+            .update_store_app =
+                [](void* context, const char* app_id) {
+                    static_cast<ActiveHost*>(context)->remote_control_.RequestStoreAppUpdate(app_id);
+                },
             .context = this,
         };
         if (!RunStatusLayer(shell_, &app_controller_, battery_, wifi_, status_model_, catalog_, settings_store_,

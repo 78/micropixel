@@ -35,6 +35,8 @@ struct AppInstallRequest final {
     // Set only after a future trusted publisher signature verifier succeeds.
     // Current remote/local App install paths leave this false.
     bool trusted_component_signature{};
+    const micropixel_app_environment_t* environment{};
+    const char* expected_version{};
 };
 
 struct AppInstallResult final {
@@ -48,10 +50,9 @@ struct AppInstallResult final {
 // storage so production paths can keep it in PSRAM.
 [[nodiscard]] std::expected<void, AppStoreError> LoadAppStoreCatalog(InstalledAppCatalog& catalog_out,
                                                                      std::string_view effective_locale = "en");
-// Installing a package whose AppId is already present first removes the
-// installed version, then stages the new one. The caller must make sure the
-// package is not running. A reinstall that fails after the removal leaves the
-// package uninstalled; only an identical digest is a no-op.
+// Replacement retains the old Bundle until the new Catalog commits. Requires
+// enough free space for the new Bundle; failure leaves the old App installed.
+// The caller must ensure no AppSession is running.
 [[nodiscard]] std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallRequest& request,
                                                                         std::string_view effective_locale = "en");
 [[nodiscard]] std::expected<void, AppStoreError> UninstallApp(const char* app_id);

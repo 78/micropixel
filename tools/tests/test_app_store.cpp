@@ -143,7 +143,7 @@ void TestEmptyInstallUpdateAndRemove() {
     auto second_bundle = MakeBundle("demo", 0x72U);
     installed = micropixel::runtime::InstallApp(Request(second_bundle, "demo"));
     Check(installed.has_value() && installed->changed && file_count == 1U && files[0].data == second_bundle,
-          "same AppId must remove the old file and install the new one");
+          "same AppId must atomically replace the old file");
 
     auto invalid_request = Request(first_bundle, "demo");
     invalid_request.expected_sha256[0] ^= 0xffU;
@@ -155,23 +155,18 @@ void TestEmptyInstallUpdateAndRemove() {
     fail_next_write = true;
     Check(micropixel::runtime::InstallApp(Request(first_bundle, "demo")).error() ==
                   micropixel::runtime::AppStoreError::kFlashWrite &&
-              file_count == 0U && !writer_active,
-          "reinstall failing after removal must leave the App uninstalled without a lingering writer");
-    Check(micropixel::runtime::UninstallApp("demo").error() == micropixel::runtime::AppStoreError::kNotFound,
-          "App removed by a failed reinstall must be reported as missing");
-
+              file_count == 1U && files[0].data == second_bundle && !writer_active,
+          "failed replacement must retain the old Bundle without a lingering writer");
     installed = micropixel::runtime::InstallApp(Request(second_bundle, "demo"));
-    Check(installed.has_value() && installed->changed && file_count == 1U, "App must reinstall after a failure");
+    Check(installed.has_value() && !installed->changed && file_count == 1U, "old version survives failed replacement");
     Check(micropixel::runtime::UninstallApp("demo").has_value(), "installed App must uninstall");
     Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 0U,
           "uninstalled App must disappear");
 }
 
-void TestReinstallReclaimsOldVersionSpace() {
+void TestReplacementRetainsOldVersionWhenFull() {
     Reset();
-    // The fake store has 24 MiB; a first version that fills most of it must
-    // still be replaceable by another large version because the old blocks
-    // are released before the new file is staged.
+    // The fake store has 24 MiB. Replacement must have room for both versions.
     constexpr size_t kLargeSize = 20U * 1024U * 1024U;
     auto first = MakeBundle("large", 0x11U);
     first.resize(kLargeSize, 0x11U);
@@ -185,8 +180,8 @@ void TestReinstallReclaimsOldVersionSpace() {
     auto second = first;
     std::fill(second.begin() + sizeof(header) + sizeof(micropixel_bundle_section_t), second.end(), 0x22U);
     auto installed = micropixel::runtime::InstallApp(Request(second, "large"));
-    Check(installed.has_value() && installed->changed && file_count == 1U && files[0].data == second,
-          "reinstall must only require the space left after removing the old version");
+    Check(installed.error() == micropixel::runtime::AppStoreError::kNoSpace && file_count == 1U && files[0].data == first,
+          "replacement without spare space must preserve the old version");
 
     auto oversized = second;
     oversized.resize(30U * 1024U * 1024U, 0x33U);
@@ -196,8 +191,8 @@ void TestReinstallReclaimsOldVersionSpace() {
     std::memcpy(oversized.data(), &header, sizeof(header));
     Check(micropixel::runtime::InstallApp(Request(oversized, "large")).error() ==
                   micropixel::runtime::AppStoreError::kNoSpace &&
-              file_count == 1U && files[0].data == second,
-          "a version that cannot fit even after removal must be rejected before the old one is removed");
+              file_count == 1U && files[0].data == first,
+          "oversized replacement must preserve the old version");
 }
 
 void TestIdentityAndCapacityErrors() {
@@ -248,10 +243,10 @@ void TestNewestInstallIsListedFirst() {
     snake = MakeBundle("snake", 0x64U);
     Check(micropixel::runtime::InstallApp(Request(snake, "snake")).has_value(), "Snake update must install");
     Check(micropixel::runtime::LoadAppStoreCatalog(catalog).has_value() && catalog.count == 3U &&
-              std::strcmp(catalog.apps[0].app_id.data(), "snake") == 0 &&
-              std::strcmp(catalog.apps[1].app_id.data(), "demo") == 0 &&
+              std::strcmp(catalog.apps[0].app_id.data(), "demo") == 0 &&
+              std::strcmp(catalog.apps[1].app_id.data(), "snake") == 0 &&
               std::strcmp(catalog.apps[2].app_id.data(), "blocks") == 0,
-          "reinstalling an App removes it first, so it is listed as the newest install");
+          "atomic replacement preserves the existing catalog order");
 }
 
 void TestComponentTrustVisibilityAndProtection() {
@@ -497,7 +492,7 @@ void micropixel_close_aot_package(micropixel_aot_package_t* package) {
 
 int main() {
     TestEmptyInstallUpdateAndRemove();
-    TestReinstallReclaimsOldVersionSpace();
+    TestReplacementRetainsOldVersionWhenFull();
     TestIdentityAndCapacityErrors();
     TestNewestInstallIsListedFirst();
     TestComponentTrustVisibilityAndProtection();

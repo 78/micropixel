@@ -51,6 +51,8 @@ class RemoteControlAgent final {
     void UpdateInstalledApps(const control::CatalogSnapshot& catalog);
     void UpdateAppLifecycle(const char* app_id, const char* lifecycle);
     void NotifyNetworkChanged();
+    void RequestStoreCheck();
+    void RequestStoreAppUpdate(const char* app_id);
 
    private:
     static constexpr UBaseType_t kCommandQueueCapacity = 8U;
@@ -197,6 +199,7 @@ class RemoteControlAgent final {
     bool pairing_requested_{};
     bool pairing_cancel_requested_{};
     bool firmware_update_requested_{};
+    int64_t last_store_snapshot_us_{};
     std::array<char, 256U> firmware_download_path_{};
     std::array<uint8_t, 32U> firmware_sha256_{};
     size_t firmware_size_{};

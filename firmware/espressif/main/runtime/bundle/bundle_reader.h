@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "runtime/bundle/app_requirements.h"
 #include "runtime/bundle/bundle_format.h"
 #include "runtime/bundlefs/bundlefs.h"
 
@@ -27,6 +28,7 @@ typedef struct {
 typedef struct {
     uint32_t bundle_size;
     uint32_t metadata_schema_version;
+    micropixel_app_requirements_t requirements;
     uint32_t package_type;
     uint32_t display_profile;
     uint32_t component_type;

@@ -35,6 +35,16 @@ bool LocalResult(void* context, const HostResult&) {
 int main() {
     ControlDispatcher controls;
     assert(controls.valid());
+    controls.AddStoreUpdate("app", "0.2.0", "available", {});
+    assert(std::strcmp(controls.FindStoreUpdate("app").version.data(), "0.2.0") == 0);
+    assert(controls.FindStoreUpdate("sideload").version[0] == '\0');
+    controls.RequestStoreUpdate("app");
+    std::array<char, micropixel::firmware::control::kAppIdCapacity> update_app{};
+    assert(controls.ConsumeStoreUpdate(update_app));
+    assert(std::strcmp(update_app.data(), "app") == 0);
+    assert(!controls.ConsumeStoreUpdate(update_app));
+    controls.ResetStoreUpdates();
+    assert(controls.FindStoreUpdate("app").version[0] == '\0');
 
     Sinks sinks{};
     controls.SetCommandReadySink(CommandReady, &sinks);

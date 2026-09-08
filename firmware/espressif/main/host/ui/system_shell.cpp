@@ -330,6 +330,11 @@ void SystemShell::NotifyRemoteCommandReady() {
     QueuePendingRemoteCommand();
 }
 
+uint32_t SystemShell::UserIdleMs() const {
+    return static_cast<uint32_t>((xTaskGetTickCount() - last_user_activity_ticks_.load(std::memory_order_acquire)) *
+                                 portTICK_PERIOD_MS);
+}
+
 void SystemShell::NotifyUserActivity() {
     if (action_queue_ == nullptr) {
         return;

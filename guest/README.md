@@ -55,6 +55,42 @@ Sensor 句柄表保留在设备模块内。内部头只服务于 Runtime，不�
 录制的 BGM、对白和长音效使用 asset manifest 的 `ogg_opus` 格式；Host 内置 micro-opus 解码，App Bundle
 只携带压缩 Ogg，不需要打包 WAV 或 Guest codec。
 
+创建 App 时使用 `micropixel init`，无需手写初始清单：
+
+```sh
+# 仓库开发副本；已安装 CLI 时可直接使用 micropixel init
+python3 tools/micropixel init guest/apps/my-game --app-id com.example.my-game --title "My Game"
+
+# 已有源码目录：扫描 C++ 源文件并创建 app.json
+micropixel init . --app-id com.example.my-game
+
+# 多个入口或特殊目录结构：显式选择编译单元，可重复 --source
+micropixel init . --app-id com.example.my-game --source src/main.cpp --source src/game.cpp
+```
+
+新项目生成 `app.json` 和 `src/main.cpp`，示例显示问候文字并进入事件循环，可直接 `micropixel build`
+或 `micropixel --transport usb run`。默认 App ID 为 `local.<目录名>`，发布前应指定自己的稳定 ID。
+已有项目递归发现 `.cpp`、`.cc`、`.cxx`，跳过隐藏目录、符号链接、`build`、`artifacts`、`generated`、
+`managed_components`、`node_modules`、`test`、`tests`、`cmake-build-*` 目录及 `test_*` / `*_test` 源文件。
+发现 `assets/manifest.json` 时会关联资源清单；封面 `launch_asset`、翻译和其他配置按需补充。
+初始化后检查 `sources`，移除不属于 App 的工具或其他入口；后续新增源文件需更新这个数组。
+已有 `app.json` 时命令报错，不覆盖；正常版本迭代直接编辑该文件。
+
+脚手架默认应用版本为 `0.1.0`，可用 `micropixel init --version 0.2.0` 指定。在现有 `app.json` 的顶层添加：
+
+```json
+"version": "0.1.0"
+```
+
+`version` 必须是规范的 `major.minor.patch` 字符串（最多 31 ASCII 字节），不允许前导零、预发布或
+构建后缀。打包器将它写入 Bundle JSON 元数据，Host 读取为 `package_version`；`schema_version` 仍为 1，
+它描述清单格式，与应用版本无关。旧清单不填 `version` 仍可构建，旧包读取为空版本，不推定其版本号。
+旧的二进制 metadata 模式（`--legacy-metadata-v1`）不携带应用版本。
+
+联网自动升级尚未实现。约定的后续策略是只接受同一 major 下更高的 minor/patch，按数字分段比较：
+`0.1.0 → 0.2.0` 可自动升级，`0.1.0 → 1.0.0` 不自动升级；相同或更低版本不升级。
+无版本的旧包需要先明确版本，不能仅用 digest 推断升级方向。
+
 日常 App 开发由 `micropixel` 直接读取项目的 `app.json`。Manifest 用 `title` 表达 App Hall 中的用户可见名称，
 用唯一的 `sources` 数组列出所有 C++ translation unit，并用 `threading` 声明 `none`（默认）或
 `shared-memory`；不再声明屏幕 profile 或重复的单数 `source`。当前 SDK 与集成 App 均使用 `none`，
@@ -145,3 +181,8 @@ Guest AOT 的兼容性基线是 MicroPixel WAMR fork commit
 项目自有 C/C++ 代码遵循
 [Google-based C++23 代码风格](../docs/development/code-style.zh-CN.md)。项目正式名称为 MicroPixel，
 namespace、ABI 前缀和内部入口统一使用 `micropixel`。
+
+公开发布使用一级命令 `micropixel publish`；GitHub 开发者登录与设备 `auth pair` 分开管理。
+`publish --dry-run` 在本地执行正式构建与校验，不上传。公开清单需要 `version` 和完整的能力需求声明，
+实测设备通过 `--tested-device metalio-claw4` / `--tested-device esp-mosaico` 声明。
+详见[应用商店契约](../docs/design/app-store.zh-CN.md)。

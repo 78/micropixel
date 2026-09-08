@@ -37,6 +37,21 @@ class ControlDispatcher final {
     void UpdateAppLifecycle(const char* app_id, const char* lifecycle);
     void UpdateLastAppDiagnostic(const AppDiagnostic& diagnostic);
     void CopySnapshot(HostSnapshot& snapshot) const;
+    void RequestStoreCheck() {
+        store_check_state_.store(1U);
+        store_check_requested_.store(true);
+    }
+    [[nodiscard]] bool ConsumeStoreCheck() { return store_check_requested_.exchange(false); }
+    void SetStoreCheckState(uint8_t state) { store_check_state_.store(state); }
+    [[nodiscard]] uint8_t StoreCheckState() const { return store_check_state_.load(); }
+    void ResetStoreUpdates();
+    void AddStoreUpdate(const char* app_id, const char* version, const char* state,
+                        const std::array<uint8_t, 32U>& digest);
+    [[nodiscard]] StoreAppUpdate FindStoreUpdate(const char* app_id) const;
+    void RequestStoreUpdate(const char* app_id);
+    [[nodiscard]] bool ConsumeStoreUpdate(std::array<char, kAppIdCapacity>& app_id);
+    void UpdateStoreSnapshot(const StoreSnapshot& snapshot);
+    [[nodiscard]] StoreSnapshot CopyStoreSnapshot() const;
     [[nodiscard]] bool BeginInstallActivity(ControlSource source, const char* command_id, const char* app_id);
     void UpdateInstallProgress(ControlSource source, const char* command_id, uint8_t progress_percent);
     void EndInstallActivity(ControlSource source, const char* command_id);
@@ -57,6 +72,12 @@ class ControlDispatcher final {
     mutable std::mutex snapshot_mutex_;
     HostSnapshot* snapshot_{};
     InstallActivity install_activity_{};
+    StoreSnapshot store_snapshot_{};
+    std::array<StoreAppUpdate, kMaxApps> store_updates_{};
+    uint32_t store_update_count_{};
+    std::array<char, kAppIdCapacity> store_update_requested_{};
+    std::atomic<bool> store_check_requested_{};
+    std::atomic<uint8_t> store_check_state_{};
     StaticQueue_t host_command_queue_storage_{};
     uint8_t* host_command_queue_bytes_{};
     QueueHandle_t host_command_queue_{};

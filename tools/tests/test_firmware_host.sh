@@ -57,6 +57,18 @@ build_and_run_c() {
     "$test_binary"
 }
 
+python3 - "$workspace_root/tools/tests/fixtures/app-requirements-v1.json" "$test_output_dir/app_requirements_fixture.h" <<'PYFIXTURE'
+import json, sys
+from pathlib import Path
+fixture=json.loads(Path(sys.argv[1]).read_text())
+lines=[]
+for key in ('capabilities','services'):
+    lines.append('static const char* const fixture_'+key+'[] = {'+','.join(json.dumps(v) for v in fixture[key])+'};')
+lines.append('static const struct { const char* current; const char* candidate; bool update; } fixture_versions[] = {'+','.join('{'+json.dumps(a)+','+json.dumps(b)+','+str(c).lower()+'}' for a,b,c in fixture['versions'])+'};')
+Path(sys.argv[2]).write_text('\n'.join(lines)+'\n')
+PYFIXTURE
+build_and_run_c app_requirements -I "$test_output_dir" "$workspace_root/tools/tests/test_app_requirements.c"
+
 build_and_run frame_timing \
     "$workspace_root/tools/tests/test_frame_timing.cpp"
 
@@ -332,6 +344,7 @@ MICROPIXEL_TEST_LOCALE=zh-CN \
 MICROPIXEL_EXPECT_DISPLAY_NAME=元数据测试 \
 MICROPIXEL_EXPECT_METADATA_SCHEMA=1 \
 MICROPIXEL_EXPECT_PACKAGE_TYPE=app \
+MICROPIXEL_EXPECT_PACKAGE_VERSION= \
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/localized.bundle.bin"
 MICROPIXEL_TEST_LOCALE=fr-FR \
 MICROPIXEL_EXPECT_DISPLAY_NAME="Metadata Test" \
@@ -349,6 +362,39 @@ MICROPIXEL_EXPECT_DISPLAY_NAME="Metadata Test" \
 MICROPIXEL_EXPECT_METADATA_SCHEMA=0 \
 MICROPIXEL_EXPECT_PACKAGE_TYPE=app \
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/legacy.bundle.bin"
+
+# Generate version fixtures through the real serializer, bypassing manifest
+# validation for malformed values so the Host must validate them independently.
+python3 - "$workspace_root" "$metadata_output_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+workspace, root = map(Path, sys.argv[1:])
+sys.path.insert(0, str(workspace))
+from tools import build_app_bundle as builder
+
+serialize = builder.serialize_package_metadata
+for name, version in [("versioned", "0.1.0"), ("trailing-dot", "1.2.3."),
+                      ("leading-zero", "01.2.3"), ("prerelease", "1.2.3-beta"),
+                      ("empty", ""), ("numeric", 123), ("null", None),
+                      ("oversized", "1" * 28 + ".0.0")]:
+    def serialize_fixture(manifest):
+        payload = json.loads(serialize(manifest))
+        payload["version"] = version
+        return json.dumps(payload, separators=(",", ":")).encode()
+    builder.serialize_package_metadata = serialize_fixture
+    sys.argv = ["build_app_bundle.py", "--aot", str(root / "tiny.aot"),
+                "--aot-target", "riscv32-ilp32f", "--app-manifest", str(root / "app.json"),
+                "--output", str(root / f"{name}.bundle.bin")]
+    builder.main()
+PY
+MICROPIXEL_EXPECT_PACKAGE_VERSION=0.1.0 \
+    bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/versioned.bundle.bin"
+for invalid_version in trailing-dot leading-zero prerelease empty numeric null oversized; do
+    MICROPIXEL_EXPECT_INVALID_METADATA=1 \
+        bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/$invalid_version.bundle.bin"
+done
 
 component_output_dir="$test_output_dir/font-component"
 mkdir -p "$component_output_dir"

@@ -184,6 +184,7 @@ std::expected<InstalledApp, AppStoreError> InstalledFromFile(const bundlefs_file
     std::snprintf(app.display_name.data(), app.display_name.size(), "%s",
                   reinterpret_cast<const char*>(metadata.display_name));
     app.display_profile = metadata.display_profile;
+    std::memcpy(app.version.data(), metadata.package_version, app.version.size());
     app.bundle_size = metadata.bundle_size;
     app.content_id = file_info.content_id;
     std::copy_n(file_info.sha256, app.sha256.size(), app.sha256.begin());
@@ -336,37 +337,13 @@ std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallReques
     if (error != BUNDLEFS_OK && error != BUNDLEFS_ERR_NOT_FOUND) {
         return std::unexpected(MapBundleFsError(error));
     }
-    const bool replacing_installed = error == BUNDLEFS_OK;
-
     bundlefs_store_info_t store_info{};
     if (bundlefs_get_store_info(&store_info) != BUNDLEFS_OK || store_info.data_block_size == 0U) {
         return std::unexpected(AppStoreError::kUnavailable);
     }
-    // Reinstalling an existing package removes the old version first so the
-    // new one only has to fit into the space left after that removal. The
-    // caller guarantees the package is not running; a failed reinstall leaves
-    // the package uninstalled rather than rolling back to the old version.
-    uint64_t reclaimable_bytes = 0U;
-    if (replacing_installed) {
-        bundlefs_file_t installed_file{};
-        bundlefs_file_info_t installed_info{};
-        if (bundlefs_open(request.expected_app_id, &installed_file) != BUNDLEFS_OK ||
-            bundlefs_get_file_info(&installed_file, &installed_info) != BUNDLEFS_OK) {
-            return std::unexpected(AppStoreError::kUnavailable);
-        }
-        const uint64_t block_size = store_info.data_block_size;
-        reclaimable_bytes = (installed_info.size + block_size - 1U) / block_size * block_size;
-    }
-    const uint64_t install_peak = request.size + store_info.data_block_size;
-    if (install_peak > store_info.free_bytes + reclaimable_bytes) {
+    // Keep the committed file alive until the replacement transaction commits.
+    if (request.size + static_cast<uint64_t>(store_info.data_block_size) > store_info.free_bytes) {
         return std::unexpected(AppStoreError::kNoSpace);
-    }
-    if (replacing_installed) {
-        error = bundlefs_remove(request.expected_app_id);
-        if (error != BUNDLEFS_OK) {
-            return std::unexpected(MapBundleFsError(error));
-        }
-        ESP_LOGI(kTag, "removed previous version before reinstall: app=%s", request.expected_app_id);
     }
 
     bundlefs_writer_t writer{};
@@ -400,6 +377,12 @@ std::expected<AppInstallResult, AppStoreError> InstallApp(const AppInstallReques
     if (std::strcmp(reinterpret_cast<const char*>(metadata.app_id), request.expected_app_id) != 0) {
         abort_install();
         return std::unexpected(AppStoreError::kAppIdMismatch);
+    }
+    if (!micropixel_app_runtime_compatible(&metadata.requirements, request.environment) ||
+        (request.expected_version != nullptr &&
+         std::strcmp(reinterpret_cast<const char*>(metadata.package_version), request.expected_version) != 0)) {
+        abort_install();
+        return std::unexpected(AppStoreError::kInvalidPackage);
     }
     if (metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT) {
         micropixel_bundle_metadata_t validated{};

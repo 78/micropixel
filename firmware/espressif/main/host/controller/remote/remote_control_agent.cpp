@@ -34,6 +34,7 @@
 #include "freertos/task.h"
 #include "host/controller/remote/remote_control_defaults.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
+#include "host/controller/remote/store_release.hpp"
 #include "mbedtls/base64.h"
 #include "psa/crypto.h"
 #include "runtime/bundle/bundle_format.h"
@@ -88,7 +89,9 @@ const char* ProtocolErrorMessage(const char* code) {
 bool ProtocolErrorRetryable(const char* code) {
     return code != nullptr &&
            (std::strcmp(code, "host_command_queue_full") == 0 || std::strcmp(code, "artifact_upload_failed") == 0 ||
-            std::strcmp(code, "lifecycle_busy") == 0);
+            std::strcmp(code, "lifecycle_busy") == 0 || std::strcmp(code, "package_download_failed") == 0 ||
+            std::strcmp(code, "device_not_idle") == 0 || std::strcmp(code, "install_busy") == 0 ||
+            std::strcmp(code, "device_busy") == 0 || std::strcmp(code, "automatic_install_state_changed") == 0);
 }
 
 bool AddRuntimeSnapshotJson(cJSON* parent, const char* app_id, const char* app_session_id, const char* state) {
@@ -725,6 +728,15 @@ void RemoteControlAgent::TransportReady(void* context) {
     }
 }
 
+void RemoteControlAgent::RequestStoreCheck() {
+    controls_.RequestStoreCheck();
+    NotifyTask(kWorkCommand);
+}
+void RemoteControlAgent::RequestStoreAppUpdate(const char* app_id) {
+    controls_.RequestStoreUpdate(app_id);
+    NotifyTask(kWorkCommand);
+}
+
 void RemoteControlAgent::NotifyTask(uint32_t work_bits) {
     TaskHandle_t task = notification_task_.load(std::memory_order_acquire);
     if (task != nullptr) {
@@ -1061,6 +1073,31 @@ bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& 
         task_context_->control_snapshot = model_;
     }
     AddFirmwareUpdateJson(root, task_context_->control_snapshot);
+    const auto store_state = controls_.CopyStoreSnapshot();
+    cJSON* store = cJSON_AddObjectToObject(root, "store");
+    if (store != nullptr) {
+#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+        (void)cJSON_AddNumberToObject(store, "protocol", StoreTrustConfigured() ? 2U : 0U);
+        (void)cJSON_AddStringToObject(store, "target", "riscv32-ilp32f");
+#else
+        (void)cJSON_AddNumberToObject(store, "protocol", 0U);
+        (void)cJSON_AddStringToObject(store, "target", "xtensa");
+#endif
+        (void)cJSON_AddNumberToObject(store, "coreAbi", store_state.environment.core_abi);
+        (void)cJSON_AddNumberToObject(store, "width", store_state.environment.width);
+        (void)cJSON_AddNumberToObject(store, "height", store_state.environment.height);
+        (void)cJSON_AddNumberToObject(store, "idleMs", store_state.idle_ms);
+        (void)cJSON_AddBoolToObject(store, "busy", store_state.busy);
+        cJSON* capabilities = cJSON_AddArrayToObject(store, "capabilities");
+        for (uint32_t i = 0; i < MICROPIXEL_APP_CAPABILITY_COUNT; ++i) {
+            if ((store_state.environment.capabilities & (1U << i)) != 0U)
+                cJSON_AddItemToArray(capabilities, cJSON_CreateString(kMicropixelAppCapabilities[i]));
+        }
+        cJSON* services = cJSON_AddObjectToObject(store, "services");
+        for (uint32_t i = 0; i < MICROPIXEL_APP_SERVICE_COUNT; ++i)
+            (void)cJSON_AddNumberToObject(services, kMicropixelAppServices[i], store_state.environment.services[i]);
+    }
+
     return PostEvent(client, identity, root, "device.snapshot");
 }
 
@@ -1069,11 +1106,14 @@ void RemoteControlAgent::PublishRuntimeSnapshotIfChanged(void* client, const Ide
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
         generation = runtime_snapshot_generation_;
-        if (generation == published_runtime_snapshot_generation_) return;
+        if (generation == published_runtime_snapshot_generation_ &&
+            esp_timer_get_time() - last_store_snapshot_us_ < 5000000)
+            return;
     }
     if (!PostFirmwareUpdateStatus(client, identity)) return;
     std::lock_guard<std::mutex> lock(diagnostics_mutex_);
     published_runtime_snapshot_generation_ = generation;
+    last_store_snapshot_us_ = esp_timer_get_time();
 }
 
 bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& identity, const char* command_id) {
@@ -1334,12 +1374,17 @@ bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identit
         std::array<char, 65U> sha256{};
         control::FormatSha256Hex(app.sha256, sha256);
         (void)cJSON_AddStringToObject(item, "sha256", sha256.data());
+        (void)cJSON_AddStringToObject(item, "version", app.version.data());
         (void)cJSON_AddStringToObject(item, "source", "app_store");
         const bool active = active_app[0] != '\0' && active_app == app.app_id;
         (void)cJSON_AddBoolToObject(item, "active", active);
         (void)cJSON_AddStringToObject(item, "lifecycle", active ? lifecycle.data() : "stopped");
         cJSON_AddItemToArray(apps, item);
     }
+    (void)cJSON_AddNumberToObject(result, "freeBytes",
+                                  catalog.store_total_bytes >= catalog.store_used_bytes
+                                      ? catalog.store_total_bytes - catalog.store_used_bytes
+                                      : 0U);
     (void)cJSON_AddNumberToObject(result, "count", catalog.count);
     return PostCommandResult(client, identity, command_id, true, result);
 }
@@ -1361,6 +1406,18 @@ bool RemoteControlAgent::PostSystemLogs(void* client, const Identity& identity, 
 bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity, const cJSON* root, const char* name,
                                           const char* command_id, uint32_t timeout_ms) {
     bool install_activity_started = false;
+    auto publish_install_progress = [&](const char* phase, uint8_t percent) {
+        cJSON* event = cJSON_CreateObject();
+        cJSON* progress = event != nullptr ? cJSON_AddObjectToObject(event, "progress") : nullptr;
+        if (progress == nullptr) {
+            cJSON_Delete(event);
+            return;
+        }
+        (void)cJSON_AddStringToObject(event, "commandId", command_id);
+        (void)cJSON_AddStringToObject(progress, "phase", phase);
+        (void)cJSON_AddNumberToObject(progress, "percent", percent);
+        (void)PostEvent(client, identity, event, "command.progress");
+    };
     auto reject = [&](const char* error) {
         if (install_activity_started) {
             controls_.EndInstallActivity(control::ControlSource::kRemote, command_id);
@@ -1413,7 +1470,8 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         const char* sha256 = params != nullptr ? JsonString(params, "sha256") : nullptr;
         uint32_t package_size = 0U;
         const std::string expected_prefix =
-            std::string("/device/v1/devices/") + identity.device_id.data() + "/packages/";
+            std::string("/device/v1/devices/") + identity.device_id.data() +
+            (JsonString(params, "storeRelease") != nullptr ? "/store/releases/" : "/packages/");
         if (app_id == nullptr || app_id[0] == '\0' || std::strlen(app_id) >= command.app_id.size() || path == nullptr ||
             std::strncmp(path, expected_prefix.c_str(), expected_prefix.size()) != 0 ||
             std::strchr(path + expected_prefix.size(), '/') != nullptr ||
@@ -1424,18 +1482,44 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         command.type = control::HostCommandType::kInstallApp;
         CopyText(command.app_id, app_id);
         command.package_size = package_size;
+        const char* release = JsonString(params, "storeRelease");
+        if (release != nullptr && !VerifyStoreRelease(release, path + expected_prefix.size(), command)) {
+            return reject("invalid_store_signature");
+        }
+        command.automatic = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "automatic"));
+        if (command.automatic &&
+            (!command.store_verified || !ParseSha256(JsonString(params, "baselineSha256"), command.baseline_sha256))) {
+            return reject("invalid_automatic_install");
+        }
+        if (command.automatic) return reject("automatic_installation_disabled");
+
         install_activity_started =
             controls_.BeginInstallActivity(control::ControlSource::kRemote, command_id, command.app_id.data());
         if (!install_activity_started) {
             return reject("install_busy");
         }
-        if (!DownloadPackage(client, identity, path, command.package_size, command.package_data, false, {},
-                             [&](uint8_t percent) {
-                                 controls_.UpdateInstallProgress(control::ControlSource::kRemote, command_id,
-                                                                 static_cast<uint8_t>(percent * 99U / 100U));
-                             })) {
+        uint8_t last_progress = 0U;
+        publish_install_progress("downloading", 0U);
+        if (!DownloadPackage(
+                client, identity, path, command.package_size, command.package_data, false, {}, [&](uint8_t percent) {
+                    if (percent >= last_progress + 10U) {
+                        last_progress = percent;
+                        publish_install_progress("downloading", static_cast<uint8_t>(percent * 80U / 100U));
+                    }
+                    controls_.UpdateInstallProgress(control::ControlSource::kRemote, command_id,
+                                                    static_cast<uint8_t>(percent * 99U / 100U));
+                })) {
             return reject("package_download_failed");
         }
+        publish_install_progress("verifying", 85U);
+        std::array<uint8_t, 32U> digest{};
+        if (mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), command.package_data, command.package_size,
+                       digest.data()) != 0 ||
+            digest != command.package_sha256) {
+            control::ReleaseHostCommand(command);
+            return reject("package_hash_mismatch");
+        }
+        publish_install_progress("installing", 90U);
     } else if (std::strcmp(name, "app.uninstall") == 0) {
         const char* app_id = params != nullptr ? JsonString(params, "appId") : nullptr;
         if (app_id == nullptr || app_id[0] == '\0' || std::strlen(app_id) >= command.app_id.size()) {
@@ -1753,6 +1837,8 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
 
     {
         std::lock_guard<std::mutex> lock(model_mutex_);
+        CopyText(model_.latest_firmware_version, version);
+        model_.firmware_size_bytes = size;
         model_.firmware_update_state = host_ui::FirmwareUpdateState::kDownloading;
         model_.firmware_processed_bytes = 0U;
         model_.firmware_progress_percent = 0U;
@@ -2504,6 +2590,7 @@ void RemoteControlAgent::TaskMain() {
             const TickType_t now_ticks = xTaskGetTickCount();
             if (next_firmware_check_ticks == 0U || static_cast<int32_t>(now_ticks - next_firmware_check_ticks) >= 0) {
                 (void)RefreshFirmwareRelease(client.get());
+                controls_.RequestStoreCheck();
                 next_firmware_check_ticks = xTaskGetTickCount() + kFirmwareCheckIntervalTicks;
             }
             perform_requested_firmware_update();
@@ -2608,6 +2695,7 @@ void RemoteControlAgent::TaskMain() {
         const TickType_t now_ticks = xTaskGetTickCount();
         if (next_firmware_check_ticks == 0U || static_cast<int32_t>(now_ticks - next_firmware_check_ticks) >= 0) {
             (void)RefreshFirmwareRelease(client.get());
+            controls_.RequestStoreCheck();
             next_firmware_check_ticks = xTaskGetTickCount() + kFirmwareCheckIntervalTicks;
         }
         perform_requested_firmware_update();
@@ -2615,6 +2703,48 @@ void RemoteControlAgent::TaskMain() {
         FlushPendingResults(client.get(), identity);
         DrainHostResults(client.get(), identity);
         PublishRuntimeSnapshotIfChanged(client.get(), identity);
+        std::array<char, control::kAppIdCapacity> update_app{};
+        if (controls_.ConsumeStoreUpdate(update_app)) {
+            const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/store/install";
+            Http3Response response{};
+            cJSON* body = cJSON_CreateObject();
+            if (body != nullptr) cJSON_AddStringToObject(body, "appId", update_app.data());
+            char* encoded = body != nullptr ? cJSON_PrintUnformatted(body) : nullptr;
+            const bool queued =
+                encoded != nullptr &&
+                client->Post(path, JsonHeaders(identity.credential.data()), reinterpret_cast<const uint8_t*>(encoded),
+                             std::strlen(encoded), response, kRequestTimeoutMs) &&
+                response.status == 202;
+            cJSON_free(encoded);
+            cJSON_Delete(body);
+            controls_.SetStoreCheckState(queued ? 2U : 3U);
+            if (queued) controls_.RequestStoreCheck();
+        }
+        if (controls_.ConsumeStoreCheck()) {
+            const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/store/check";
+            Http3Response response{};
+            const char* body = "{}";
+            bool checked =
+                client->Post(path, JsonHeaders(identity.credential.data()), reinterpret_cast<const uint8_t*>(body),
+                             std::strlen(body), response, kRequestTimeoutMs) &&
+                response.status == 200;
+            cJSON* root = checked ? cJSON_ParseWithLength(response.body.data(), response.body.size()) : nullptr;
+            const cJSON* updates = root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "updates") : nullptr;
+            checked = checked && cJSON_IsArray(updates);
+            if (checked) {
+                controls_.ResetStoreUpdates();
+                const int count = std::min(cJSON_GetArraySize(updates), static_cast<int>(control::kMaxApps));
+                for (int i = 0; i < count; ++i) {
+                    const cJSON* item = cJSON_GetArrayItem(updates, i);
+                    std::array<uint8_t, 32U> baseline{};
+                    if (ParseSha256(JsonString(item, "sha256"), baseline))
+                        controls_.AddStoreUpdate(JsonString(item, "appId"), JsonString(item, "version"),
+                                                 JsonString(item, "state"), baseline);
+                }
+            }
+            cJSON_Delete(root);
+            controls_.SetStoreCheckState(checked ? 2U : 3U);
+        }
 
         bool control_stream_closed = false;
         while (true) {

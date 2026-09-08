@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "micropixel.demo",
+  "version": "0.1.0",
   "threading": "none",
   "title": "SDK Demo",
   "sources": [
@@ -14,5 +15,31 @@
     "pages/device_demo.cpp"
   ],
   "asset_manifest": "assets/manifest.json",
-  "launch_asset": "launch"
+  "launch_asset": "launch",
+  "requirements": {
+    "schema_version": 1,
+    "display": {
+      "layouts": [
+        "square",
+        "portrait",
+        "landscape"
+      ],
+      "min_width": 320,
+      "min_height": 480
+    },
+    "required": [
+      "input.touch"
+    ],
+    "optional": [
+      "audio.output",
+      "input.keys",
+      "sensor.acceleration",
+      "sensor.gyroscope",
+      "sensor.magnetometer",
+      "haptics",
+      "gpio"
+    ],
+    "any_of": [],
+    "services": {}
+  }
 }

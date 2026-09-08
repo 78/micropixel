@@ -35,26 +35,28 @@ menu "WAMR application quotas"
         default y
         help
             Offer RASTER_TEXTURE_UPLOAD / RASTER_PALETTE_UPLOAD and the RASTER
-            channel. Uploaded INDEX8 textures and the lit palette are
-            allocated from PSRAM per upload and freed when the session ends;
-            reusable 8-bit slots and 16-bit dimensions have no smaller quota. Allocation
-            failure is reported to the Guest and preserves the old resource.
-            Power-of-two dimensions use faster sampling. Disabling drops CAP_RASTER from the Graphics
-            descriptor and the RASTER channel reports UNSUPPORTED.
+            channel. Uploaded INDEX8 textures and warp maps allocate from
+            PSRAM; lit palettes try internal SRAM first (a few tens of KiB,
+            one gather per output pixel) and fall back to PSRAM. Resources are
+            freed when the session ends; reusable 8-bit slots and 16-bit
+            dimensions have no smaller quota. Allocation failure is reported
+            to the Guest and preserves the old resource. Power-of-two
+            dimensions use faster sampling. Disabling drops CAP_RASTER from
+            the Graphics descriptor and the RASTER channel reports UNSUPPORTED.
 
     config MICROPIXEL_RASTER_POOL_INTERNAL_SRAM
         bool "Place raster kernel textures in internal SRAM"
         depends on MICROPIXEL_RASTER_KERNELS
         default n
         help
-            Allocate raster resources from internal SRAM first and fall back to
-            PSRAM. The kernels read one texel per output pixel, so the L1 cache
-            already hides most of the PSRAM latency; on ESP-Mosaico the SRAM
-            placement measured within noise of PSRAM while pinning the whole
-            pool in the ~70 KiB of internal SRAM that stays
-            free during a Guest session (the default pool no longer fits
-            there). Leave disabled unless a board shows a measurable raster
-            win.
+            Also try internal SRAM for textures and warp maps (palettes already
+            do). Fall back to PSRAM when the internal heap cannot take the
+            allocation. The kernels read one texel per output pixel, so the L1
+            cache already hides most of the PSRAM latency; on ESP-Mosaico the
+            SRAM placement measured within noise of PSRAM while pinning the
+            whole pool in the ~70 KiB of internal SRAM that stays free during
+            a Guest session (textures and warp maps no longer fit there).
+            Leave disabled unless a board shows a measurable raster win.
 
     config MICROPIXEL_ALLOW_UNCHECKED_AOT
         bool "Load Bundles whose AOT was compiled without bounds checks"
@@ -441,4 +443,21 @@ menu "MicroPixel conformance testing"
             keep this disabled; the hooks remain outside the runtime directory
             and ABI namespace.
 
+endmenu
+
+menu "MicroPixel App Store trust"
+config MICROPIXEL_STORE_SIGNING_KID
+    string "Current App Store signing key ID"
+    default "store-v1"
+config MICROPIXEL_STORE_PUBLIC_KEY_DER_BASE64
+    string "Base64 DER SubjectPublicKeyInfo for the App Store ES256 key"
+    default ""
+    help
+        Public key only. An empty key disables signed App Store installation.
+config MICROPIXEL_STORE_PREVIOUS_SIGNING_KID
+    string "Previous App Store signing key ID during rotation"
+    default ""
+config MICROPIXEL_STORE_PREVIOUS_PUBLIC_KEY_DER_BASE64
+    string "Previous ES256 public key in base64 DER"
+    default ""
 endmenu

@@ -42,3 +42,7 @@ CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1
 # Keep hosted/native network payload allocations in PSRAM on the S31 preview;
 # only native ESP32-S3 profiles use the bounded dynamic Wi-Fi pool.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# micropixel.ai App Store public trust anchor (private key stays on the server).
+CONFIG_MICROPIXEL_STORE_SIGNING_KID="store-v1"
+CONFIG_MICROPIXEL_STORE_PUBLIC_KEY_DER_BASE64="MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEU3KNgRmsWNq8fGTXSbwHEzQWmteYYpxe+EeP1ET+1/txQiK9oSIj63/9OS94wckI6OjHHQxYOKPsGPCfvj5ZIQ=="

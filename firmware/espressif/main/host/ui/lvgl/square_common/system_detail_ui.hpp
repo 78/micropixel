@@ -100,6 +100,7 @@ class SystemDetailUi final {
     static void AppManagementBackEvent(lv_event_t* event);
     static void AppManagementRowEvent(lv_event_t* event);
     static void AppManagementCancelEvent(lv_event_t* event);
+    static void AppManagementUpdateEvent(lv_event_t* event);
     static void AppManagementOpenEvent(lv_event_t* event);
     static void AppManagementUninstallEvent(lv_event_t* event);
     static void AppManagementConfirmUninstallEvent(lv_event_t* event);

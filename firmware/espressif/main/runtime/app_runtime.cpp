@@ -7,6 +7,7 @@
 #include "device/device_services.hpp"
 #include "esp_log.h"
 #include "runtime/abi/abi_bridge.h"
+#include "runtime/bundle/app_environment.hpp"
 #include "runtime/guest_log_sink.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
@@ -113,6 +114,14 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app,
                                  AppSessionReadySink ready_sink, void* ready_context) {
     AppRunOutcome outcome;
     CopyAppId(app.app_id.data(), outcome.app_id);
+    micropixel_bundle_metadata_t metadata{};
+    const auto environment = AppEnvironment(devices_);
+    if (!micropixel_read_bundle_metadata(&app.file, &metadata) ||
+        !micropixel_app_runtime_compatible(&metadata.requirements, &environment)) {
+        outcome.error = AppSessionError::kPackageLoad;
+        (void)std::snprintf(outcome.detail.data(), outcome.detail.size(), "application requirements are not satisfied");
+        return outcome;
+    }
     if (!TakeSessionLock()) {
         outcome.error = AppSessionError::kRuntimeSynchronization;
         (void)std::snprintf(outcome.detail.data(), outcome.detail.size(), "%s", "unable to lock AppSession state");
