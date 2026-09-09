@@ -287,6 +287,12 @@ build_app_package() {
 }
 
 build_release() {
+    # Public images must carry the product Control endpoint; a snapshot without the
+    # root .env would otherwise ship devices that can never reach the server.
+    if [[ -z "${MICROPIXEL_REMOTE_CONTROL_HOST:-}" && "${MICROPIXEL_RELEASE_ALLOW_OFFLINE:-}" != "1" ]]; then
+        echo "build-release refused: MICROPIXEL_REMOTE_CONTROL_HOST is empty (load the root .env, or set MICROPIXEL_RELEASE_ALLOW_OFFLINE=1 for an intentionally offline image)." >&2
+        exit 2
+    fi
     echo "==> Building ESP-Mosaico release Apps: SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer"
     build_app_package sdk-demo
     build_app_package snake
