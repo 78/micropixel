@@ -140,8 +140,10 @@ bool Character::Submit(micropixel::MeshRenderer& renderer, Vec3 position, float 
 
     const Transform3 root = Transform3::Uniform(position, yaw);
     const Transform3 pelvis = root * Transform3::Translation({0.0F, hip_height, 0.0F});
-    const Transform3 torso = pelvis * Transform3::Translation({0.0F, 0.0F, 0.0F}) *
-                             Transform3::RotationX(pose.walk_weight * 0.08F + pose.crouch * 0.3F);
+    // RotationX(+a) swings a hanging limb tip towards +z (the facing direction) and
+    // tilts an upright part backwards, so forward lean and backward knee/elbow folds
+    // take the opposite signs below.
+    const Transform3 torso = pelvis * Transform3::RotationX(-(pose.walk_weight * 0.08F + pose.crouch * 0.3F));
     const Transform3 head = torso * Transform3::Translation({0.0F, 0.52F, 0.0F});
 
     const auto limb = [&](const Transform3& parent, float x, float y, float angle_upper, float angle_lower,
@@ -155,15 +157,17 @@ bool Character::Submit(micropixel::MeshRenderer& renderer, Vec3 position, float 
         };
         return Pair{upper, lower};
     };
-    // Arms swing opposite to the leg on the same side; elbows stay slightly bent.
-    const auto left_arm = limb(torso, -0.26F, 0.45F, -swing * 0.8F - arm_up, -0.35F - pose.airborne * 0.6F, 0.30F);
-    const auto right_arm = limb(torso, 0.26F, 0.45F, swing * 0.8F - arm_up, -0.35F - pose.airborne * 0.6F, 0.30F);
-    // Knees bend on the leg swinging forward and when crouching or airborne.
+    // Arms swing opposite to the leg on the same side and reach forward/up while
+    // airborne; elbows fold forward.
+    const auto left_arm = limb(torso, -0.26F, 0.45F, -swing * 0.8F + arm_up, 0.35F + pose.airborne * 0.6F, 0.30F);
+    const auto right_arm = limb(torso, 0.26F, 0.45F, swing * 0.8F + arm_up, 0.35F + pose.airborne * 0.6F, 0.30F);
+    // Knees fold backwards on the leg swinging forward and when crouching or
+    // airborne, while the thighs tuck forward.
     const float tuck = pose.crouch * 0.9F + pose.airborne * 0.7F;
     const auto left_leg =
-        limb(pelvis, -0.11F, -0.02F, swing - tuck * 0.5F, knee * (swing > 0.0F ? 1.0F : 0.2F) + tuck, 0.42F);
+        limb(pelvis, -0.11F, -0.02F, swing + tuck * 0.5F, -(knee * (swing > 0.0F ? 1.0F : 0.2F) + tuck), 0.42F);
     const auto right_leg =
-        limb(pelvis, 0.11F, -0.02F, -swing - tuck * 0.5F, knee * (swing < 0.0F ? 1.0F : 0.2F) + tuck, 0.42F);
+        limb(pelvis, 0.11F, -0.02F, -swing + tuck * 0.5F, -(knee * (swing < 0.0F ? 1.0F : 0.2F) + tuck), 0.42F);
 
     bool ok = SubmitPart(renderer, kPelvis, pelvis, options);
     ok = SubmitPart(renderer, kTorso, torso, options) && ok;
