@@ -10,7 +10,8 @@ wire struct 编解码、句柄所有权和错误转换，应用不直接依赖 C
 Core ABI 为 **2.0**，与 1.x 完全不兼容，不保留任何 1.x 方法编号、结构前缀或兼容 shim。
 所有 Service 接口在 2.0 下重新从 **1.0** 起算：Graphics、Input、Resource、Audio、System、Timer、
 Storage、Random、Devices、Sensors、GPIO、Haptics、Power 均为 1.0。绘制通道为 `SCENE`（1）与
-`RASTER`（2）；2.5D 游戏的几何前端（`sdk/raycast.hpp`）完全在 Guest SDK 内，不引入新的 wire。
+`RASTER`（2）；2.5D 与多边形游戏的几何前端（`sdk/raycast.hpp`、`sdk/mesh_renderer.hpp`）完全在
+Guest SDK 内，不引入新的 wire。
 协议尚处于正式版前迁移，冻结状态见 [SDK API 设计](../../docs/design/sdk-api.zh-CN.md)。
 
 ## 七个稳定入口
@@ -200,6 +201,8 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
 
 - Service descriptor 的 `capabilities` 含 `MICROPIXEL_GRAPHICS_CAP_RASTER` 时可用；
   光照档位上限由 `MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS` 定义，不另设查询字段；
+  含 `MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON`（`1U << 1U`）时额外接受 TRIANGLE/QUAD 记录，
+  旧 Host 对未知记录类型整批拒绝，Guest 须先检查该位；
 - `RASTER_TEXTURE_UPLOAD {texture_slot, width, height, layout, pixels, length}` 把 INDEX8 纹理复制进 Host 资源池
   （无固定资源池配额；关闭 `CONFIG_MICROPIXEL_RASTER_KERNELS` 时不提供 CAP_RASTER）。
   宽高为 1–65535；槽编号 0–255 可复用，不预分配全部槽，
@@ -228,9 +231,16 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
   v_offset, fill_color, u_fraction_bits}` 把整张映射表放到 `(x, y)`，每项取 ROW_MAJOR 纹理的
   `texel(((u + u_offset) >> u_fraction_bits) & mask, (v + v_offset) & mask)` 经该项 light 查调色板；
   `u_fraction_bits`（0..4）让表项 u 和 `u_offset` 的低位成为纹素小数，贴图可按亚纹素步进滚动，
-  `纹理宽 << u_fraction_bits` 不得超过 4096；`FILL_SKIPPED` 让 SKIP 项写 `fill_color`。COLUMN/SPAN_PAIR/SPRITE
+  `纹理宽 << u_fraction_bits` 不得超过 4096；`FILL_SKIPPED` 让 SKIP 项写 `fill_color`；
+  `TRIANGLE {flags, texture_slot, palette_slot, vertices[3]}` 与 `QUAD {…, vertices[4]}`（需要
+  `CAP_RASTER_POLYGON`）填充凸多边形，顶点为 `{int16 x, y（12.4 定点目标像素）, uint16 u, v（8.8 定点纹素）,
+  uint8 light}`，u/v/light 沿边和扫描线 affine 插值（无透视校正），取 ROW_MAJOR 2 的幂纹理的
+  `texel(floor(u) & mask_x, floor(v) & mask_y)` 经插值 light 所在调色板行；顶点可任意绕向，QUAD 须为凸；
+  `TRANSPARENT_INDEX0` 跳过纹素 0，`FLAT_COLOR` 忽略纹理、以 `vertices[0].u >> 8` 作调色板索引；像素中心
+  决定覆盖，Host 按目标裁剪，零面积多边形不画。COLUMN/SPAN_PAIR/SPRITE/TRIANGLE/QUAD
   各带 `palette_slot`。Host 先整体校验（COLUMN/SPAN_PAIR 坐标在目标内、SPRITE/RECT 尺寸非 0、slot 已占用且
-  layout 匹配、`light < light_levels`、WARP 纹理为 2 的幂且表中最大 light 在调色板范围内、reserved 为 0），
+  layout 匹配、`light < light_levels`、WARP 纹理为 2 的幂且表中最大 light 在调色板范围内、多边形纹理为
+  ROW_MAJOR 2 的幂且每个顶点 `light < light_levels`、reserved 为 0），
   任一记录非法则整批拒绝且不写任何像素；校验通过后同步执行，`service_submit` 返回时像素已在 Host buffer 中。
 
 ### 像素格式与文字

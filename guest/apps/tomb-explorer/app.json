@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.tomb-explorer",
+  "version": "0.1.0",
+  "threading": "none",
+  "title": {
+    "default": "en",
+    "values": {
+      "en": "Tomb Explorer",
+      "zh-CN": "Tomb Explorer"
+    }
+  },
+  "sources": [
+    "main.cpp",
+    "gfx/palette.cpp",
+    "gfx/textures.cpp",
+    "world/level_data.cpp",
+    "world/room_world.cpp",
+    "game/character.cpp",
+    "game/player.cpp",
+    "input/touch_controls.cpp"
+  ],
+  "asset_manifest": "assets/manifest.json",
+  "launch_asset": "launch",
+  "requirements": {
+    "schema_version": 1,
+    "display": {
+      "layouts": ["square", "portrait", "landscape"],
+      "min_width": 480,
+      "min_height": 480
+    },
+    "required": ["input.touch"],
+    "optional": [],
+    "any_of": [],
+    "services": {}
+  }
+}

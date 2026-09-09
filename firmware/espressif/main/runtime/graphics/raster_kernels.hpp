@@ -119,7 +119,7 @@ struct Target final {
 // kinds. `now_us` is read around every record; nullptr disables timing but
 // still counts records and pixels.
 struct ExecuteProfile final {
-    static constexpr uint32_t kKinds = MICROPIXEL_RASTER_RECORD_WARP + 1U;
+    static constexpr uint32_t kKinds = MICROPIXEL_RASTER_RECORD_QUAD + 1U;
     uint64_t (*now_us)(){};
     uint32_t records[kKinds]{};
     uint64_t pixels[kKinds]{};
@@ -145,6 +145,13 @@ void DrawImage(const Target& target, const device::BitmapView& texture, const mi
 // levels than `warp.max_light` (ValidateDrawList checks both).
 void DrawWarp(const Target& target, const WarpMap& warp, const Texture& texture, const Palette& palette,
               const micropixel_raster_warp_t& record);
+// Convex polygon of `vertex_count` (3 or 4) corners, edge-walked per scanline
+// with affine u/v/light interpolation. `texture` is ROW_MAJOR with power-of-two
+// dimensions (ignored with POLYGON_FLAT_COLOR, may then be nullptr) and every
+// corner light is below `palette.light_levels` (ValidateDrawList checks both).
+// Pixel centres decide coverage; the polygon is clipped to the target.
+void DrawPolygon(const Target& target, const Texture* texture, const Palette& palette, uint8_t flags,
+                 const micropixel_raster_vertex_t* vertices, uint32_t vertex_count);
 
 // Highest light level carried by `count` warp entries, or UINT8_MAX when an
 // entry sets a reserved bit. Skipped entries do not count.

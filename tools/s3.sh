@@ -92,7 +92,7 @@ Common ESP32-S3 preview commands:
   build-null          Compile the ESP32-S3 hardware-independent Null gate.
   build-host [BOARD]  Build one board Host.
   build-wamrc         Build locked WAMR 2.4.3 wamrc with the Xtensa LLVM backend.
-  build-apps          Build SDK Demo, Snake, Maze Evil, Blocks, and Tilt Xtensa AOT Bundles plus app_store.
+  build-apps          Build SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer Xtensa AOT Bundles plus app_store.
   build-release [BOARD]
                       Build one Host and release Apps, then create its
                       browser-flashable micropixel-full.bin image.
@@ -387,7 +387,7 @@ build_apps() {
     local app
     local bundles=()
     mkdir -p "$apps_output_dir"
-    for app in sdk-demo snake maze-evil blocks tilt; do
+    for app in sdk-demo snake maze-evil blocks tilt tomb-explorer; do
         mkdir -p "$apps_output_dir/$app"
         WAMRC="$xtensa_wamrc" python "$workspace_root/tools/micropixel" package \
             "$workspace_root/guest/apps/$app" \
@@ -405,10 +405,10 @@ build_apps() {
 
 build_release() {
     select_board "$1"
-    echo "==> Building shared ESP32-S3 preview Apps: SDK Demo, Snake, Maze Evil, Blocks, and Tilt"
+    echo "==> Building shared ESP32-S3 preview Apps: SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer"
     build_apps
     build_profile "$board_profile" "$board_build_dir" "${board_defaults[@]}"
-    echo "==> Creating $board_title browser image with SDK Demo, Snake, Maze Evil, Blocks, and Tilt"
+    echo "==> Creating $board_title browser image with SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer"
     python "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$board_build_dir" \
         --app-store-image "$apps_store" \

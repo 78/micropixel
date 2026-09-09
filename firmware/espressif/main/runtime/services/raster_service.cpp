@@ -289,7 +289,8 @@ ServiceResult<void> RasterService::Submit(const uint8_t* bytes, uint32_t length,
                  "raster kinds (records/submit us/submit ns/px): column %" PRIu32 " %" PRIu32 " %" PRIu32
                  " | span_pair %" PRIu32 " %" PRIu32 " %" PRIu32 " | sprite %" PRIu32 " %" PRIu32 " %" PRIu32
                  " | rect %" PRIu32 " %" PRIu32 " %" PRIu32 " | image %" PRIu32 " %" PRIu32 " %" PRIu32
-                 " | warp %" PRIu32 " %" PRIu32 " %" PRIu32,
+                 " | warp %" PRIu32 " %" PRIu32 " %" PRIu32 " | triangle %" PRIu32 " %" PRIu32 " %" PRIu32
+                 " | quad %" PRIu32 " %" PRIu32 " %" PRIu32,
                  per_submit(MICROPIXEL_RASTER_RECORD_COLUMN), per_submit_us(MICROPIXEL_RASTER_RECORD_COLUMN),
                  per_pixel_ns(MICROPIXEL_RASTER_RECORD_COLUMN), per_submit(MICROPIXEL_RASTER_RECORD_SPAN_PAIR),
                  per_submit_us(MICROPIXEL_RASTER_RECORD_SPAN_PAIR), per_pixel_ns(MICROPIXEL_RASTER_RECORD_SPAN_PAIR),
@@ -298,7 +299,10 @@ ServiceResult<void> RasterService::Submit(const uint8_t* bytes, uint32_t length,
                  per_submit_us(MICROPIXEL_RASTER_RECORD_RECT), per_pixel_ns(MICROPIXEL_RASTER_RECORD_RECT),
                  per_submit(MICROPIXEL_RASTER_RECORD_IMAGE), per_submit_us(MICROPIXEL_RASTER_RECORD_IMAGE),
                  per_pixel_ns(MICROPIXEL_RASTER_RECORD_IMAGE), per_submit(MICROPIXEL_RASTER_RECORD_WARP),
-                 per_submit_us(MICROPIXEL_RASTER_RECORD_WARP), per_pixel_ns(MICROPIXEL_RASTER_RECORD_WARP));
+                 per_submit_us(MICROPIXEL_RASTER_RECORD_WARP), per_pixel_ns(MICROPIXEL_RASTER_RECORD_WARP),
+                 per_submit(MICROPIXEL_RASTER_RECORD_TRIANGLE), per_submit_us(MICROPIXEL_RASTER_RECORD_TRIANGLE),
+                 per_pixel_ns(MICROPIXEL_RASTER_RECORD_TRIANGLE), per_submit(MICROPIXEL_RASTER_RECORD_QUAD),
+                 per_submit_us(MICROPIXEL_RASTER_RECORD_QUAD), per_pixel_ns(MICROPIXEL_RASTER_RECORD_QUAD));
         telemetry_submits_ = 0U;
         telemetry_records_ = 0U;
         telemetry_bytes_ = 0U;

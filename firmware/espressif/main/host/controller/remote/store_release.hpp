@@ -20,6 +20,15 @@
 #endif
 
 namespace micropixel::firmware::remote_control {
+inline constexpr const char* StoreAotTarget() {
+#if CONFIG_IDF_TARGET_ESP32S3
+    return "xtensa";
+#elif CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
+    return "riscv32-ilp32f";
+#else
+#error "MicroPixel App Store requires an explicit Host AOT target"
+#endif
+}
 inline bool StoreTrustConfigured() { return CONFIG_MICROPIXEL_STORE_PUBLIC_KEY_DER_BASE64[0] != '\0'; }
 inline bool DecodeStoreBase64(std::string_view input, uint8_t* output, size_t capacity, size_t& written) {
     std::array<uint8_t, 2048U> text{};
@@ -105,7 +114,7 @@ inline bool VerifyStoreRelease(const char* envelope, const char* release_id, con
                        std::strcmp(StoreString(payload, "releaseId"), release_id) == 0 &&
                        StoreString(payload, "publisherId")[0] != '\0' &&
                        std::strcmp(StoreString(payload, "sha256"), expected_digest.data()) == 0 &&
-                       std::strcmp(StoreString(payload, "target"), "riscv32-ilp32f") == 0 && cJSON_IsNumber(size) &&
+                       std::strcmp(StoreString(payload, "target"), StoreAotTarget()) == 0 && cJSON_IsNumber(size) &&
                        size->valuedouble == static_cast<double>(command.package_size) && std::strlen(version) > 0U &&
                        std::strlen(version) < command.store_version.size();
     if (valid) {

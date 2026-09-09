@@ -573,6 +573,9 @@ typedef enum micropixel_graphics_capability {
     /* RASTER_TEXTURE_UPLOAD / RASTER_PALETTE_UPLOAD / RASTER_WARP_UPLOAD and the
      * RASTER channel are available. */
     MICROPIXEL_GRAPHICS_CAP_RASTER = 1U << 0U,
+    /* TRIANGLE and QUAD records (affine textured, per-vertex lit polygons) are
+     * accepted by the RASTER channel. */
+    MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON = 1U << 1U,
 } micropixel_graphics_capability_t;
 
 typedef enum micropixel_graphics_event_id {
@@ -766,6 +769,10 @@ typedef enum micropixel_raster_record_type {
     MICROPIXEL_RASTER_RECORD_IMAGE = 5,
     /* micropixel_raster_warp_t: every pixel of a warp map sampled from one texture. */
     MICROPIXEL_RASTER_RECORD_WARP = 6,
+    /* micropixel_raster_triangle_t: affine textured, per-vertex lit triangle. */
+    MICROPIXEL_RASTER_RECORD_TRIANGLE = 7,
+    /* micropixel_raster_quad_t: convex quadrilateral with the same sampling. */
+    MICROPIXEL_RASTER_RECORD_QUAD = 8,
 } micropixel_raster_record_type_t;
 
 typedef enum micropixel_raster_column_flag {
@@ -785,6 +792,15 @@ typedef enum micropixel_raster_warp_flag {
     /* Skipped entries write `fill_color` instead of leaving the pixel alone. */
     MICROPIXEL_RASTER_WARP_FILL_SKIPPED = 1U << 0U,
 } micropixel_raster_warp_flag_t;
+
+typedef enum micropixel_raster_polygon_flag {
+    /* Texel index 0 is transparent (grates, foliage). */
+    MICROPIXEL_RASTER_POLYGON_TRANSPARENT_INDEX0 = 1U << 0U,
+    /* No texture is sampled: every pixel takes the palette entry named by the
+     * integer part of vertices[0].u (u >> 8) at the interpolated light level.
+     * texture_slot is ignored. */
+    MICROPIXEL_RASTER_POLYGON_FLAT_COLOR = 1U << 1U,
+} micropixel_raster_polygon_flag_t;
 
 /* Target is Host-owned buffer `buffer_index` of `surface_handle`,
  * which must not be in flight. The Host resolves its dimensions and pitch
@@ -926,6 +942,48 @@ typedef struct micropixel_raster_warp {
     uint8_t palette_slot;
     uint8_t u_fraction_bits;
 } micropixel_raster_warp_t;
+
+/* One polygon corner. x/y are target pixels in signed 12.4 fixed point (the
+ * sub-pixel bits keep slow-moving edges from jittering); u/v are texel
+ * coordinates in 8.8 fixed point whose integer part wraps on the texture size;
+ * light is the lit palette level at this corner. */
+typedef struct micropixel_raster_vertex {
+    int16_t x;
+    int16_t y;
+    uint16_t u;
+    uint16_t v;
+    uint8_t light;
+    uint8_t reserved0;
+} micropixel_raster_vertex_t;
+
+/* Affine textured polygons (TRIANGLE / QUAD). The Host fills every pixel whose
+ * centre lies inside the polygon, clipped to the target; a polygon may lie
+ * partly or wholly outside. Vertices are in either winding order; a QUAD must
+ * be convex (a concave one draws something bounded but unspecified). u, v and
+ * light are interpolated linearly along the left and right edges and then
+ * linearly across each scanline (no perspective correction; the Guest
+ * subdivides large near polygons), so a quad has no diagonal seam. The
+ * texture is ROW_MAJOR with power-of-two dimensions; the sampled texel is
+ * (floor(u) mod width, floor(v) mod height) and the pixel written is the
+ * `palette_slot` entry at the interpolated light level, which never leaves the
+ * range spanned by the corner lights. Every corner light must be below the
+ * palette's level count. Zero-area polygons draw nothing. */
+typedef struct micropixel_raster_triangle {
+    uint8_t type;
+    uint8_t flags; /* micropixel_raster_polygon_flag_t */
+    uint8_t texture_slot;
+    uint8_t palette_slot;
+    micropixel_raster_vertex_t vertices[3];
+    uint16_t reserved0;
+} micropixel_raster_triangle_t;
+
+typedef struct micropixel_raster_quad {
+    uint8_t type;
+    uint8_t flags; /* micropixel_raster_polygon_flag_t */
+    uint8_t texture_slot;
+    uint8_t palette_slot;
+    micropixel_raster_vertex_t vertices[4];
+} micropixel_raster_quad_t;
 
 typedef enum micropixel_graphics_scene_message_kind {
     MICROPIXEL_GRAPHICS_SCENE_KEYFRAME = 1,
@@ -1637,6 +1695,10 @@ MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_rect_t) == 16U, "micropixe
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_warp_upload_request_t) == 20U,
                              "micropixel_raster_warp_upload_request_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_warp_t) == 16U, "micropixel_raster_warp_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_vertex_t) == 10U, "micropixel_raster_vertex_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_triangle_t) == 36U,
+                             "micropixel_raster_triangle_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_quad_t) == 44U, "micropixel_raster_quad_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_surface_create_request_t) == 24U,
                              "micropixel_surface_create_request_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_surface_create_response_t) == 20U,

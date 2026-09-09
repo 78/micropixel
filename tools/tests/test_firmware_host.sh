@@ -127,6 +127,20 @@ build_and_run snake_gamekit \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_snake_gamekit.cpp"
 
+build_and_run mesh_renderer \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_mesh_renderer.cpp" \
+    "$workspace_root/guest/runtime/mesh_renderer.cpp"
+
+build_and_run tomb_room_world \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_tomb_room_world.cpp" \
+    "$workspace_root/guest/runtime/mesh_renderer.cpp" \
+    "$workspace_root/guest/apps/tomb-explorer/world/level_data.cpp" \
+    "$workspace_root/guest/apps/tomb-explorer/world/room_world.cpp" \
+    "$workspace_root/guest/apps/tomb-explorer/game/player.cpp" \
+    "$workspace_root/guest/apps/tomb-explorer/game/character.cpp"
+
 build_and_run bitmap_store \
     -DMICROPIXEL_TEST_TRACK_HEAP -fsanitize=address,undefined -g \
     -I "$workspace_root/guest" \
@@ -295,6 +309,11 @@ build_and_run device_catalog \
     "$workspace_root/firmware/espressif/main/device/device_registry.cpp"
 
 build_and_run app_store \
+    "$workspace_root/tools/tests/test_app_store.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
+
+build_and_run app_store_s3 \
+    -DCONFIG_IDF_TARGET_ESP32P4=0 -DCONFIG_IDF_TARGET_ESP32S3=1 \
     "$workspace_root/tools/tests/test_app_store.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
 

@@ -89,7 +89,7 @@ bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
 方向编译门禁，没有 flash 或 monitor 能力。
 
 `build-release` 生成 `build/host-esp32s31-mosaico/micropixel-full.bin`，供在线烧录页使用。完整镜像中的
-App Store 固定包含 SDK Demo、Snake、Maze Evil、Blocks 和 Tilt 五个集成 App；生成器从 ESP-IDF 的
+App Store 固定包含 SDK Demo、Snake、Maze Evil、Blocks、Tilt 和 Tomb Explorer 六个集成 App；生成器从 ESP-IDF 的
 `flasher_args.json` 读取 S31 的 16 MiB Flash 容量并拒绝任何越界区域。
 
 ESP-Mosaico 板载 Type-C 连接的是 USB 2.0 HS OTG，而不是左侧模块接口引出的 USB Serial/JTAG。Host
@@ -192,8 +192,8 @@ bash tools/p4.sh flash-all "$P4_PORT"
 
 该入口会：
 
-1. 构建 Host 固件和 SDK Demo、Snake、Maze Evil、Blocks 和 Tilt；
-2. 生成包含五个 App 的 BundleFS 镜像；
+1. 构建 Host 固件和 SDK Demo、Snake、Maze Evil、Blocks、Tilt 和 Tomb Explorer；
+2. 生成包含六个 App 的 BundleFS 镜像；
 3. 烧录 bootloader、分区表、OTA 初始数据和 Host 固件；
 4. 清空并烧录 App Store，随后读回校验。
 

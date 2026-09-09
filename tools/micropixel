@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 
-VERSION = "0.15.2"
+VERSION = "0.15.4"
 MINIMUM_FIRMWARE_VERSION = "0.4.0"
 BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
@@ -1359,17 +1359,17 @@ def run_developer_auth(args: argparse.Namespace) -> None:
 
 
 def validate_publication_aot(data: bytes, flags: int, target: int) -> None:
-    if not flags & AOT_FLAG_THREADING_DECLARED or flags & ~9 or target != 1:
-        raise CliError("Publishing requires checked, single-threaded riscv32-ilp32f AOT")
+    if not flags & AOT_FLAG_THREADING_DECLARED or flags & ~9 or target not in (1, 2):
+        raise CliError("Publishing requires checked, single-threaded RISC-V or ESP32-S3 Xtensa AOT")
     if len(data) < 64 or data[:8] != b"\x00aot\x06\x00\x00\x00":
         raise CliError("Publishing requires WAMR AOT format v6")
-    # WAMR v6 target-info: ELF32 little endian, relocatable RISC-V, single-float ABI.
+    # WAMR v6 target-info: ELF32 little endian, relocatable, target-specific ELF flags.
     if (struct.unpack_from("<II", data, 8) != (0, 48)
             or struct.unpack_from("<H", data, 16)[0] != 0
-            or struct.unpack_from("<HHI", data, 20) != (1, 243, 1)
-            or struct.unpack_from("<I", data, 28)[0] & 6 != 2
+            or struct.unpack_from("<HHI", data, 20) != (1, 243 if target == 1 else 94, 1)
+            or (struct.unpack_from("<I", data, 28)[0] & 6 != 2 if target == 1 else struct.unpack_from("<I", data, 28)[0] != 0)
             or struct.unpack_from("<Q", data, 32)[0] & 4
-            or data[48:64].rstrip(b"\x00") != b"riscv32"):
+            or data[48:64].rstrip(b"\x00") != (b"riscv32" if target == 1 else b"xtensa")):
         raise CliError("Actual AOT target or threading features do not match the publication contract")
 
 
@@ -1388,30 +1388,39 @@ def run_publish(args: argparse.Namespace) -> None:
     token = None if args.dry_run else publisher_token()
     if token:
         store_request("/api/v1/store/apps/preflight", "POST", {"appId": project.package_id, "version": app_version, "requirements": project.value["requirements"]}, token)
-    bundle = package_project(project, "release", project_output_directory(project, args.output_dir), None, "riscv32-ilp32f", False, args.force)
-    info = validate_bundle(bundle)
-    data = bundle.read_bytes()
-    header = BUNDLE_HEADER.unpack_from(data)
-    metadata = None
-    aot_count = 0
-    for index in range(header[7]):
-        section = BUNDLE_SECTION.unpack_from(data, header[4] + index * BUNDLE_SECTION.size)
-        if section[0] == 1:
-            aot_count += 1
-            validate_publication_aot(data[section[2]:section[2] + section[3]], section[9], section[10])
-        if section[0] == 3 and section[5] == 7:
-            metadata = json.loads(data[section[2]:section[2] + section[3]])
-    if aot_count != 1 or metadata is None or metadata.get("version") != app_version or metadata.get("requirements") != project.value["requirements"]:
-        raise CliError("Bundle publication metadata does not match app.json; rebuild with --force")
-    if len(data) > 8 * 1024 * 1024:
-        raise CliError("Public App Bundles must not exceed 8 MiB")
-    summary = {"appId": info["appId"], "version": app_version, "sha256": hashlib.sha256(data).hexdigest(), "sizeBytes": len(data), "requirements": metadata["requirements"], "testedDevices": args.tested_device, "releaseNotes": notes}
+    publications = []
+    # Build and validate every architecture before uploading any release.
+    for target in AOT_TARGET_FLAGS:
+        bundle = package_project(project, "release", project_output_directory(project, args.output_dir) / target, None, target, False, args.force)
+        info = validate_bundle(bundle)
+        data = bundle.read_bytes()
+        header = BUNDLE_HEADER.unpack_from(data)
+        metadata = None
+        aot_count = 0
+        for index in range(header[7]):
+            section = BUNDLE_SECTION.unpack_from(data, header[4] + index * BUNDLE_SECTION.size)
+            if section[0] == 1:
+                aot_count += 1
+                if section[10] != AOT_TARGET_MASKS[target]:
+                    raise CliError("Built Bundle target does not match the requested publication target")
+                validate_publication_aot(data[section[2]:section[2] + section[3]], section[9], section[10])
+            if section[0] == 3 and section[5] == 7:
+                metadata = json.loads(data[section[2]:section[2] + section[3]])
+        if aot_count != 1 or metadata is None or metadata.get("version") != app_version or metadata.get("requirements") != project.value["requirements"]:
+            raise CliError("Bundle publication metadata does not match app.json; rebuild with --force")
+        if len(data) > 8 * 1024 * 1024:
+            raise CliError("Public App Bundles must not exceed 8 MiB")
+        summary = {"target": target, "appId": info["appId"], "version": app_version, "sha256": hashlib.sha256(data).hexdigest(), "sizeBytes": len(data), "requirements": metadata["requirements"], "testedDevices": args.tested_device, "releaseNotes": notes}
+        publications.append((summary, data))
     if args.dry_run:
-        print_json(summary)
+        print_json({"appId": project.package_id, "version": app_version, "releases": [summary for summary, _ in publications]})
         return
     query = urllib.parse.urlencode({"tested": ",".join(args.tested_device), "notes": notes})
-    result = store_request("/api/v1/store/apps/publish?" + query, "POST", data, token)
-    print_json({**result, "url": f"{publisher_origin()}/apps/{project.package_id}/", "editUrl": f"{publisher_origin()}/apps/{project.package_id}/?edit=1"})
+    releases = []
+    for summary, data in publications:
+        result = store_request("/api/v1/store/apps/publish?" + query, "POST", data, token)
+        releases.append(result)
+    print_json({"appId": project.package_id, "version": app_version, "releases": releases, "url": f"{publisher_origin()}/apps/{project.package_id}/", "editUrl": f"{publisher_origin()}/apps/{project.package_id}/?edit=1"})
 
 
 def run_auth_pair(args: argparse.Namespace) -> None:
@@ -1681,7 +1690,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         raise CliError("Set WASI_CLANGXX or WASI_SDK_PATH to a C++23 compiler with the wasm32 backend")
     wasi_clangxx = str(Path(wasi_clangxx).expanduser())
 
-    wamrc = environment.get("WAMRC", "").strip()
+    wamrc = environment.get("XTENSA_WAMRC" if aot_target == "xtensa" else "WAMRC", "").strip()
+    if not wamrc:
+        wamrc = environment.get("WAMRC", "").strip()
     if not wamrc:
         candidates = (
             (
@@ -1769,6 +1780,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             root / "guest/runtime/direct_surface.cpp",
             root / "guest/runtime/raster_resources.cpp",
             root / "guest/runtime/raycast.cpp",
+            root / "guest/runtime/mesh_renderer.cpp",
             root / "guest/runtime/sphere_view.cpp",
             root / "guest/runtime/application.cpp",
             root / "guest/runtime/scene_graph.cpp",
@@ -2079,7 +2091,7 @@ BUILD_INPUT_GENERATOR_SCRIPTS = ("micropixel", "build_app_bundle.py", "generate_
 # Environment that selects the Guest toolchain; a change re-runs the build even
 # when no source moved (a wamrc that no longer matches the Host WAMR would
 # otherwise be reused silently).
-BUILD_TOOLCHAIN_ENVIRONMENT_KEYS = ("WASI_CLANGXX", "WASI_CLANG", "WASI_SDK_PATH", "WAMRC")
+BUILD_TOOLCHAIN_ENVIRONMENT_KEYS = ("WASI_CLANGXX", "WASI_CLANG", "WASI_SDK_PATH", "WAMRC", "XTENSA_WAMRC")
 BUILD_INPUT_SKIPPED_DIRECTORIES = frozenset({"build", ".git"})
 QUOTED_INCLUDE_PATTERN = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 
@@ -3294,7 +3306,7 @@ def parser() -> argparse.ArgumentParser:
     publish.add_argument("--force", action="store_true")
     publish.add_argument("--output-dir")
     publish.add_argument("--notes-file")
-    publish.add_argument("--tested-device", action="append", choices=["metalio-claw4", "esp-mosaico"], default=[])
+    publish.add_argument("--tested-device", action="append", choices=["metalio-claw4", "esp-mosaico", "esp-box-3", "szpi-esp32s3", "m5stack-cores3"], default=[])
 
     build = commands.add_parser("build", help="Build an app.json project into Wasm and AOT")
     build.add_argument("source", nargs="?", default=".", help="Project directory, app.json, or legacy C++ source")

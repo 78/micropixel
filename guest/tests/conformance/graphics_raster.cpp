@@ -175,6 +175,32 @@ int32_t SubmitWithHeader(const micropixel_raster_header_t& header, uint32_t leng
     return Submit(length);
 }
 
+// A list holding one polygon record (the largest record kind).
+alignas(4) uint8_t g_polygon_list[sizeof(micropixel_raster_header_t) + sizeof(micropixel_raster_quad_t)];
+
+int32_t SubmitQuad(const micropixel_raster_quad_t& quad) {
+    const micropixel_raster_header_t header = Header(1U, sizeof(header) + sizeof(quad));
+    Copy(g_polygon_list, &header, sizeof(header));
+    Copy(g_polygon_list + sizeof(header), &quad, sizeof(quad));
+    return micropixel_service_submit(g_service_handle, MICROPIXEL_GRAPHICS_CHANNEL_RASTER, g_polygon_list,
+                                     sizeof(header) + sizeof(quad));
+}
+
+micropixel_raster_quad_t Quad() {
+    micropixel_raster_quad_t quad{};
+    quad.type = MICROPIXEL_RASTER_RECORD_QUAD;
+    quad.texture_slot = 1U;  // row-major, power of two
+    const int16_t corners[4][2] = {{-8 * 16, 30 * 16}, {40 * 16, 28 * 16}, {44 * 16, 60 * 16}, {-4 * 16, 64 * 16}};
+    for (uint32_t index = 0U; index < 4U; ++index) {
+        quad.vertices[index].x = corners[index][0];  // partly off the left edge: the Host clips
+        quad.vertices[index].y = corners[index][1];
+        quad.vertices[index].u = static_cast<uint16_t>((index == 1U || index == 2U) ? kTexSize << 8U : 0U);
+        quad.vertices[index].v = static_cast<uint16_t>(index >= 2U ? kTexSize << 8U : 0U);
+        quad.vertices[index].light = static_cast<uint8_t>(index & 1U);
+    }
+    return quad;
+}
+
 }  // namespace
 
 int main() {
@@ -452,6 +478,43 @@ int main() {
     if (Submit(BuildList(nullptr, nullptr, nullptr, &unknown)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 92;
     }
+    // Polygons: a Gouraud-lit quad clipped by the left edge is accepted;
+    // stray flags, padding, over-range lights and the wrong texture layout are
+    // refused; FLAT_COLOR needs no texture; a zero-area quad draws nothing.
+    const bool polygons = (service.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON) != 0U;
+    if (polygons != app.renderer().info().polygon_supported()) return 102;
+    if (polygons) {
+        const micropixel_raster_quad_t quad = Quad();
+        if (SubmitQuad(quad) != MICROPIXEL_STATUS_OK) return 103;
+        micropixel_raster_quad_t bad_quad = quad;
+        bad_quad.flags = 0x80U;
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 104;
+        bad_quad = quad;
+        bad_quad.vertices[2].reserved0 = 1U;
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 105;
+        bad_quad = quad;
+        bad_quad.vertices[3].light = kLightLevels;
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 106;
+        bad_quad = quad;
+        bad_quad.texture_slot = 0U;  // column-major
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_NOT_FOUND) return 107;
+        bad_quad.flags = MICROPIXEL_RASTER_POLYGON_FLAT_COLOR;  // texture ignored
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_OK) return 108;
+        micropixel_raster_texture_upload_request_t narrow = TextureUpload(250U, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR, g_floor);
+        narrow.width = 12U;  // 12 x 16 row-major: not a power of two
+        narrow.length = 12U * kTexSize;
+        if (Call(MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD, &narrow, sizeof(narrow)) != MICROPIXEL_STATUS_OK) {
+            return 112;
+        }
+        bad_quad = quad;
+        bad_quad.texture_slot = 250U;
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 109;
+        bad_quad = quad;
+        for (auto& vertex : bad_quad.vertices) vertex.y = 100 * 16;  // zero area
+        if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_OK) return 110;
+    } else {
+        if (SubmitQuad(Quad()) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 111;
+    }
 
     micropixel_handle_request_t destroy{static_cast<uint16_t>(sizeof(destroy)), 0U, g_surface};
     if (Call(MICROPIXEL_GRAPHICS_METHOD_SURFACE_DESTROY, &destroy, sizeof(destroy)) != MICROPIXEL_STATUS_OK) {
@@ -492,6 +555,19 @@ int main() {
                             (void)draw.Column(0U, 0, 1, 254U, 0U, 511U, 0, 65536);
                             (void)draw.SpanPair(2U, 3U, 0U, 3U, 253U, 253U, 0U, -1000, 0, 6553, 6553);
                             (void)draw.Sprite({0, 4, 16, 16}, 254U, 0U, 0U, 0U, 512U, 256U);
+                            if (renderer.info().polygon_supported()) {
+                                using micropixel::RasterVertex;
+                                // Slot 1 (16 x 16 row-major) survives the surface recreation.
+                                const RasterVertex quad[4] = {RasterVertex::At(20.5F, 20.25F, 0.0F, 0.0F, 1U),
+                                                              RasterVertex::At(60.0F, 22.0F, 16.0F, 0.0F, 0U),
+                                                              RasterVertex::At(58.0F, 70.0F, 16.0F, 16.0F, 1U),
+                                                              RasterVertex::At(18.0F, 66.0F, 0.0F, 16.0F, 0U)};
+                                const RasterVertex triangle[3] = {quad[0], quad[1], quad[2]};
+                                (void)draw.Quad(quad, 1U);
+                                (void)draw.Triangle(triangle, 1U, true);
+                                (void)draw.FlatQuad(quad, 7U);
+                                (void)draw.FlatTriangle(triangle, 9U);
+                            }
                         }) ||
         nested_called)
         return 98;

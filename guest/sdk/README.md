@@ -12,7 +12,7 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 
 ## 工具链兼容性
 
-当前 SDK 版本为 0.15.1，使用受限 C++23 和固定 commit 的
+当前 SDK 版本为 0.15.4，使用受限 C++23 和固定 commit 的
 [MicroPixel WAMR fork](https://github.com/78/wasm-micro-runtime)
 `af07c787ac6f7d1d20555f97ddc184f5fc13731a`，生成 AOT format v6。
 wamrc 自报版本不足以判断兼容性。构建、打包和目标架构选择统一使用
@@ -148,6 +148,21 @@ AnimationClip/Track。资源清单、生成绑定与 Bundle 工作流见 [Guest 
 后续的 Mode-7 地面（赛车）与球面视图（earth）复用同一套光照与 billboard 约定。
 maze-evil 的 `game/renderer.cpp` 是当前的完整用法。
 
+### MeshRenderer（PS1 级多边形前端）
+
+`sdk/mesh_renderer.hpp` 的 `MeshRenderer` 面向房间/传送门型 3D（古墓类探索、固定视角冒险、赛道）：
+App 持有 `Mesh`（`MeshVertex` 顶点 + `MeshFace` 三角/四边形面，面自带纹素坐标、角光、纹理槽与
+`kMeshFaceTransparent / kMeshFaceFlatColor / kMeshFaceDoubleSided` 标志）和 `Transform3` 实例变换
+（可组合成刚体链）；每帧 `Begin(camera)`、若干次 `Submit(mesh, transform, {group, depth_bias, scissor})`、
+`Flush(list)`。MeshRenderer 完成视图变换、近平面裁剪、背面剔除、距离光照量化、近处大面细分、精确
+scissor 裁剪与排序表（512 桶 × 最多 8 组，远到近的画家算法，无 Z-buffer），输出 `RasterDrawList` 的
+`Triangle / Quad` 记录，需要 `RendererInfo::polygon_supported()`。坐标 x 右、y 上、z 前，面从正面看
+逆时针；纹理为行主序 2 的幂，单面纹素跨度小于 256。多边形池与桶由 App 提供
+（`MeshRendererPool<kPolygons, kGroups>` 放静态内存），`Initialize` 后不再分配；`Stats` 报告剔除、
+裁剪、细分、丢弃与屏幕面积估算，`ToView` / `Project` 供 App 做传送门矩形与瞄准。
+房间/传送门可见性放在 App 内（[Tomb Explorer](../apps/tomb-explorer/) 的 `world/room_world.*`），
+[Polygon Benchmark](../apps/polygon-benchmark/) 是真机填充率基准。
+
 ### DirectSurface：HostSurface 与 GuestSurface
 
 整帧路径有两种 surface，区别是像素归谁：`HostSurface` 的 buffer 由 Host 持有，Guest 只提交绘制记录；
@@ -181,8 +196,11 @@ Guest 决定几何、遮挡和顺序，Host 执行逐像素操作。
 像素按面板字节序写入，依据 rgb565_byte_swapped 查询；写之前先确认 `Busy(index)` 为假。
 这种模式会提前保留连续内存；`HostSurface` 无需此声明，Guest 内存按需增长。
 
-RasterDrawList 的 Column 使用列主序纹理，SpanPair 与 Warp 使用行主序；Sprite/SolidSprite 用于图像和字形，
-FillRect 用于填充或混合。Column/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect/Warp 的目标由 Host 裁剪。
+RasterDrawList 的 Column 使用列主序纹理，SpanPair、Warp 与 Triangle/Quad 使用行主序；Sprite/SolidSprite 用于
+图像和字形，FillRect 用于填充或混合。Column/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect/Warp/Triangle/Quad
+的目标由 Host 裁剪。Triangle/Quad 以 `RasterVertex::At(x, y, u, v, light)`（12.4 定点位置、8.8 定点纹素、
+调色板行）描述凸多边形并做 affine 插值，`FlatTriangle/FlatQuad` 用调色板索引代替纹理；能力位为
+`RendererInfo::polygon_supported()`。
 调色板按槽上传（`UploadLitPalette(slot, ...)`），`SetPalette(slot)` 之后的记录用该槽，一个 App 可以为地表、
 每种精灵和 UI 各留一套调色板。Warp 是 Host 持有的 screen→(u, v, light) 表（`UploadWarpMap` /
 `UpdateWarpRows` 分帧流式上传），每帧只提交一条记录和 `u_offset / v_offset`（`u_fraction_bits` 让 u 带纹素小数，

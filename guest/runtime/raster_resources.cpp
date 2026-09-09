@@ -361,6 +361,65 @@ bool RasterDrawList::FillRect(Rect area, Color color, uint8_t alpha) {
     return Append(&record, sizeof(record));
 }
 
+namespace {
+
+// Wire vertices are a plain copy of the public ones; keep the layouts in step.
+static_assert(sizeof(RasterVertex) == sizeof(micropixel_raster_vertex_t));
+static_assert(RasterVertex::kPositionScale == 16 && RasterVertex::kTexelScale == 256);
+
+void EncodeVertices(const RasterVertex* corners, uint32_t count, micropixel_raster_vertex_t* wire) {
+    for (uint32_t index = 0U; index < count; ++index) {
+        wire[index].x = corners[index].x;
+        wire[index].y = corners[index].y;
+        wire[index].u = corners[index].u;
+        wire[index].v = corners[index].v;
+        wire[index].light = corners[index].light;
+        wire[index].reserved0 = 0U;
+    }
+}
+
+}  // namespace
+
+bool RasterDrawList::Triangle(const RasterVertex (&corners)[3], uint8_t texture_slot, bool transparent) {
+    micropixel_raster_triangle_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_TRIANGLE;
+    record.flags = transparent ? MICROPIXEL_RASTER_POLYGON_TRANSPARENT_INDEX0 : 0U;
+    record.texture_slot = texture_slot;
+    record.palette_slot = palette_slot_;
+    EncodeVertices(corners, 3U, record.vertices);
+    return Append(&record, sizeof(record));
+}
+
+bool RasterDrawList::Quad(const RasterVertex (&corners)[4], uint8_t texture_slot, bool transparent) {
+    micropixel_raster_quad_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_QUAD;
+    record.flags = transparent ? MICROPIXEL_RASTER_POLYGON_TRANSPARENT_INDEX0 : 0U;
+    record.texture_slot = texture_slot;
+    record.palette_slot = palette_slot_;
+    EncodeVertices(corners, 4U, record.vertices);
+    return Append(&record, sizeof(record));
+}
+
+bool RasterDrawList::FlatTriangle(const RasterVertex (&corners)[3], uint8_t color_index) {
+    micropixel_raster_triangle_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_TRIANGLE;
+    record.flags = MICROPIXEL_RASTER_POLYGON_FLAT_COLOR;
+    record.palette_slot = palette_slot_;
+    EncodeVertices(corners, 3U, record.vertices);
+    record.vertices[0].u = static_cast<uint16_t>(color_index << 8U);
+    return Append(&record, sizeof(record));
+}
+
+bool RasterDrawList::FlatQuad(const RasterVertex (&corners)[4], uint8_t color_index) {
+    micropixel_raster_quad_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_QUAD;
+    record.flags = MICROPIXEL_RASTER_POLYGON_FLAT_COLOR;
+    record.palette_slot = palette_slot_;
+    EncodeVertices(corners, 4U, record.vertices);
+    record.vertices[0].u = static_cast<uint16_t>(color_index << 8U);
+    return Append(&record, sizeof(record));
+}
+
 Result<void> RasterDrawList::Finish() {
     if (!open()) {
         return unexpected(ErrorFromStatus(status_));

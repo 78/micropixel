@@ -88,6 +88,9 @@ python3 tools/micropixel --transport usb run guest/apps/sdk-demo
 连接设备时，`run` 和 `app install` 会根据设备芯片自动选择 AOT target，并在安装写入前拒绝不兼容 Bundle。
 只需本地 AOT 或正式 Bundle 时，再单独使用项目级 `micropixel build`；离线正式打包必须显式选择 target，
 例如 `micropixel package --aot-target riscv32-ilp32f` 或 `micropixel package --aot-target xtensa`。
+`micropixel publish` 会先构建并校验 `riscv32-ilp32f` 和 `xtensa` 两份 release Bundle，再逐份上传；
+`--dry-run` 只构建校验、不上传。商店按设备架构选择安装包，每个 Bundle 仍只包含一份 AOT。
+已有单架构发布可补齐同版本的另一架构，同架构同版本内容仍不可覆盖。
 仓库级 Host 与集成构建仍使用：
 
 ```sh

@@ -12,11 +12,14 @@
 |---|---|---|---|
 | `Scene` | 普通 UI、2D 游戏 | Host LVGL 合成，局部 damage | 已迁移完成 |
 | 2.5D 前端（`Raycaster`、后续 `Mode7Plane`、`SphereView`）+ `HostSurface` | maze、赛车、earth 等 2.5D/伪 3D | Host INDEX8 + 光照调色板整数内核 | Raycaster 已接入 maze，SphereView 已接入 earth |
+| PS1 级多边形前端（`MeshRenderer`）+ `HostSurface` | 房间/传送门型 3D（古墓类探索、固定视角冒险、赛道） | Host `TRIANGLE / QUAD` affine 扫描线整数内核 | 已接入 tomb-explorer demo（§3.1） |
 | `GuestSurface` | 内核无法表达的逐像素自绘 | Guest 自写像素 | 保留 |
 
-不提供通用浮点 3D（任意网格、透视矩阵、逐像素深度缓冲、Lambert）。MCU 没有值得依赖的浮点吞吐，
-把逐像素工作从整数内核换成浮点纹理寻址加 PSRAM 深度缓冲读写，会让全屏 3D 掉到个位数 FPS；
-2.5D 游戏的通用层必须建在既有整数内核之上。
+不提供通用浮点 3D（透视校正贴图、逐像素深度缓冲、Lambert）。MCU 没有值得依赖的浮点吞吐，
+把逐像素工作从整数内核换成浮点纹理寻址加 PSRAM 深度缓冲读写，会让全屏 3D 掉到个位数 FPS
+（早期 `Scene3D` 实验从 35 掉到 3.8 FPS，根因正是逐像素透视除法、Z-buffer 与浮点光照）；
+2.5D 与多边形游戏的通用层必须建在既有整数内核之上。多边形层因此是 PS1 式的：
+affine 贴图、无 Z-buffer（排序表画家算法）、顶点光查调色板、大面细分掩盖弯曲。
 
 因此 2.5D 的抽象放在 **Guest SDK**：几何（射线 DDA、投影、遮挡排序）每帧只有几百次运算，
 在 AOT 里足够快；每像素填充继续由 Host 的 `Column / SpanPair / Sprite / Rect / Warp` 内核完成。
@@ -40,6 +43,7 @@ App 不再手写 DDA、深度数组、覆盖统计或球面采样循环。
 | `Raycaster` | maze 类栅格世界 | 每列一次 DDA、门板、覆盖统计 | `SpanPair` + `Column` | 已接入 maze；同一 Host 上与迁移前手写渲染器连续 A/B，FPS 差异在 1% 以内，Host 记录数相同 |
 | `Mode7Plane` | 赛车、卡丁车、俯视伪 3D 地面 | 每行一次透视投影（相机高度、俯仰、曲率偏移） | 单行 `Span`（SpanPair 的单行形式）+ 路边 `Billboard` | 待做，需要 Host 增加单行 `Span` 记录或允许 SpanPair 两行相同 |
 | `SphereView` | earth 类球体 | 俯仰变化时按行重建 screen→(u,v,light) 表（双槽、分帧流式上传）；每帧只有 yaw 偏移 | `Warp` + 植物 `Sprite` + 背景 `Rect` | 已接入 earth；S31 原生 480、performance profile 约 33 FPS，迁移前 Guest 逐像素版约 16 FPS 且拖动时降到 240 |
+| `MeshRenderer` | 房间/传送门型 3D、固定视角冒险、赛道 | 每帧几百到一两千个顶点的视图变换、近平面裁剪、背面剔除、排序表 | `Triangle` + `Quad`（affine、顶点光） | 已接入 tomb-explorer；S31 480×480 Direct Surface 上 `quads-1.5x` ≈ 39 fps / 83 ns/px（见 polygon-benchmark README） |
 
 earth 迁移后 Guest 每帧只剩投影、拣选和排序（约 3 ms），Host `Warp` 内核约占帧时间 70%，
 是这条路径的下一个优化点。物种点在素材生成时烙进地球贴图，不再是逐点 `Rect` 记录；
@@ -54,8 +58,11 @@ earth 迁移后 Guest 每帧只剩投影、拣选和排序（约 3 ms），Host 
 `DirectSurface` 的 App 帧不能靠固定周期定时器驱动：一帧超过一个周期时，帧间隔会被凑整到
 周期的整数倍；应在 `kSurfaceReleased` 事件里开始下一帧。
 
-不进入这一层的东西：任意三角网格、真透视投影矩阵、逐像素深度缓冲、逐像素光照。
-需要它们的题材先证明整数内核无法表达，再另起方案。
+不进入这一层的东西：逐像素透视校正、逐像素深度缓冲、逐像素光照。任意三角/四边形网格由
+§3.1 的多边形层承担，但只在"可见性可控"的题材内（房间与传送门、固定视角、赛道）；
+开放大场景、大量半透明粒子、依赖 Z-buffer 的穿插几何不在预算内（480×480 @ 20 fps 的像素/秒
+约为 PS1 320×240 @ 30 fps 的 2 倍，overdraw 余量只有约 1.5×）。若未来需要 Z-buffer，候选是
+分块深度（如 480×32 条带放 SRAM）+ 多边形 binning，在真机数据之后另行评估。
 
 ## 1. 对象与模块清单
 
@@ -136,6 +143,60 @@ caster.DrawBillboards(list, billboards);   // 深度排序 + 逐列 z-test 的 C
 
 赛车等伪 3D 类型后续在同一层增加 `Mode7Plane`（透视地面 SPAN 生成）与路边 billboard 排序；
 球体渲染（earth）是否进入该层取决于能否用现有内核表达，否则维持 GuestSurface。
+
+### 3.1 MeshRenderer：SDK 内的 PS1 级多边形前端
+
+`sdk/mesh_renderer.hpp` 提供 `MeshRenderer`。App 持有网格（顶点 + 带纹素坐标和角光的三角/四边形面）
+与实例变换，MeshRenderer 每帧做视图变换、近平面裁剪、背面剔除、距离光照、大面细分、精确 scissor
+裁剪与排序表；`Flush(list)` 从远到近输出 `Triangle / Quad` 记录，每像素由 Host `DrawPolygon`
+内核完成（`texel = tex[(v>>8 & mask_y) << log2w | (u>>8 & mask_x)]; out = lit_row[texel]`，
+行内整数步进，每多边形一次浮点梯度）。
+
+```cpp
+struct MeshVertex { float x, y, z; };
+struct MeshFace   { uint16_t vertex[4]; uint16_t u[4], v[4]; uint8_t brightness[4];
+                    uint8_t texture_slot, flags; };            // vertex[3] == kNoVertex 为三角形
+struct Mesh       { std::span<const MeshVertex> vertices; std::span<const MeshFace> faces; };
+struct MeshCamera { Vec3 position; float yaw, pitch, focal_length, near; };
+
+MeshRendererPool<2048, 8> pool;         // App 静态内存：多边形槽 + 8 组 × 512 桶
+MeshRenderer mesh;
+mesh.Initialize(config, pool.storage(), pool.groups());
+mesh.Begin(camera);                     // 清空排序表
+mesh.Submit(room.mesh(), Transform3::Identity(), {.group = g, .scissor = portal_rect});
+mesh.Submit(part, root * joint, {.group = g, .depth_bias = -0.3F});
+mesh.Flush(list);                       // 组升序、桶远到近
+```
+
+约束与语义：
+
+- 坐标系 x 右、y 上、z 前；面按从正面看逆时针列出，屏幕空间有向面积为正即背面（`kMeshFaceDoubleSided`
+  例外）。纹理为 `kRowMajor` 2 的幂，单个面的纹素跨度必须小于 256（wire 为 8.8 定点，按 256 回绕）；
+  `kMeshFaceFlatColor` 用 `u[0]` 作调色板索引；`kMeshFaceTransparent` 跳过索引 0。
+- 无 Z-buffer：可见性由多边形平均深度分桶（`kBuckets = 512`，`far` 之外共用最后一桶）决定，
+  `depth_bias` 让站在大地面上的角色排到地面之后。跨房间顺序由 `group` 表达：更远的房间用更小的组。
+  穿插几何按多边形而非像素解析，题材需要自行避免。
+- affine 贴图：近处大面（最远/最近深度比超过 `subdivide_depth_ratio` 且屏幕跨度超过
+  `subdivide_min_pixels`）一分为四递归 `subdivide_levels` 层；裁剪过的面不再细分。
+- 光照 = 角光 × 距离衰减（`full_distance` 内为 1，到 `dark_distance` 线性降到 0），量化为调色板行；
+  `minimum` 保底。关卡把静态光烙进顶点，动态物体按所在房间的环境光整体调亮。
+- 固定容量：`Storage` 由 App 提供，池满时丢弃多边形并计入 `Stats::dropped`；单个 `Mesh` 顶点数上限
+  `kMaxMeshVertices = 1024`，`Initialize` 后不再分配，不依赖 libm。
+- 房间/传送门可见性（从相机房间沿传送门递归，屏幕包围矩形作 scissor，输出房间顺序）放在 App 内
+  （`guest/apps/tomb-explorer/world/room_world.*`），出现第二个同类游戏再抽入 SDK。
+
+验收：`tools/tests/test_mesh_renderer.cpp`（变换、投影、剔除、近平面/scissor 裁剪、细分、排序、
+Flush 记录顺序）与 `test_tomb_room_world.cpp`（关卡数据、传送门遍历可见集与顺序、扇区碰撞）在
+Host 上运行；`guest/apps/polygon-benchmark` 在真机上采 ns/像素与 1×/1.5×/2× overdraw 帧率。
+S31 480×480 Direct Surface（performance）实测：`fill` 60 ns/px / 40 fps，`quads-1.5x` 83 ns/px /
+≈39 fps，`quads-2x` ≈33 fps，封闭 `room`（MeshRenderer）≈28 fps / ~2× overdraw；门槛
+`quads-1.5x ≥ 20 fps` 已通过，第一版内容无需默认 `upscale=2`。详见
+[polygon-benchmark README](../../guest/apps/polygon-benchmark/README.md) 与
+[tomb-explorer README](../../guest/apps/tomb-explorer/README.md)。
+`tomb-explorer --benchmark` 按脚本路线每 120 帧输出 render/present/wait、面数、多边形数与
+估算 overdraw；同板实测全程 ≥20 fps（重负载段约 20–25，走廊约 23–30）。Host 微基准（开发机）
+上 `DrawPolygon` 中等尺寸多边形约为 `DrawSpanPair` 的 1.5–2 倍每像素成本，小多边形更高。
+若后续关卡 overdraw 明显高于 2×，再考虑 `--upscale=2`（S31 有 PPA）或收紧传送门 scissor。
 
 ## 4. Host 与协议
 

@@ -2,9 +2,11 @@
 // list validation, resource quota and the Host-owned target buffers (byte
 // order, in-flight veto) shared with DirectSurfaceService.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <random>
 #include <source_location>
 #include <unordered_map>
 #include <vector>
@@ -231,6 +233,36 @@ micropixel_raster_rect_t Rect(int16_t x, int16_t y, uint16_t width, uint16_t hei
     return rect;
 }
 
+// Polygon corner from pixel / texel / level coordinates (12.4 and 8.8 wire fixed point).
+micropixel_raster_vertex_t Vertex(double x, double y, double u, double v, uint8_t light) {
+    micropixel_raster_vertex_t vertex{};
+    vertex.x = static_cast<int16_t>(std::lround(x * 16.0));
+    vertex.y = static_cast<int16_t>(std::lround(y * 16.0));
+    vertex.u = static_cast<uint16_t>(std::lround(u * 256.0));
+    vertex.v = static_cast<uint16_t>(std::lround(v * 256.0));
+    vertex.light = light;
+    return vertex;
+}
+
+micropixel_raster_quad_t Quad(uint8_t texture, const micropixel_raster_vertex_t (&corners)[4], uint8_t flags = 0U) {
+    micropixel_raster_quad_t quad{};
+    quad.type = MICROPIXEL_RASTER_RECORD_QUAD;
+    quad.flags = flags;
+    quad.texture_slot = texture;
+    std::copy_n(corners, 4U, quad.vertices);
+    return quad;
+}
+
+micropixel_raster_triangle_t Triangle(uint8_t texture, const micropixel_raster_vertex_t (&corners)[3],
+                                      uint8_t flags = 0U) {
+    micropixel_raster_triangle_t triangle{};
+    triangle.type = MICROPIXEL_RASTER_RECORD_TRIANGLE;
+    triangle.flags = flags;
+    triangle.texture_slot = texture;
+    std::copy_n(corners, 3U, triangle.vertices);
+    return triangle;
+}
+
 uint16_t Lit(uint32_t light, uint8_t index) { return static_cast<uint16_t>(0x8000U | (light << 8U) | index); }
 
 uint16_t Swap(uint16_t value) { return static_cast<uint16_t>((value << 8U) | (value >> 8U)); }
@@ -451,6 +483,336 @@ void TestKernelsAgainstReference() {
     raster::DrawSprite(swapped, textures[0], nullptr,
                        Sprite(0, 31, 4U, 1U, 0U, 0U, 1U, 0U, 4U, 1U, MICROPIXEL_RASTER_SPRITE_SOLID_COLOR, 0x1234U));
     Require(PixelAt(frame.data(), kPitch, 0U, 31U) == Swap(0x1234U));
+}
+
+// Signed distance (pixels, positive inside) from a point to a convex polygon
+// given in either winding; the reference for coverage checks.
+double InsideMargin(const micropixel_raster_vertex_t* vertices, uint32_t count, double px, double py) {
+    double area = 0.0;
+    for (uint32_t i = 0U; i < count; ++i) {
+        const auto& a = vertices[i];
+        const auto& b = vertices[(i + 1U) % count];
+        area += a.x / 16.0 * (b.y / 16.0) - b.x / 16.0 * (a.y / 16.0);
+    }
+    const double sign = area > 0.0 ? 1.0 : -1.0;
+    double margin = 1e9;
+    for (uint32_t i = 0U; i < count; ++i) {
+        const double ax = vertices[i].x / 16.0, ay = vertices[i].y / 16.0;
+        const double bx = vertices[(i + 1U) % count].x / 16.0, by = vertices[(i + 1U) % count].y / 16.0;
+        const double length = std::hypot(bx - ax, by - ay);
+        if (length == 0.0) continue;
+        // With y down, a clockwise polygon (area > 0) has its inside on the right of every edge.
+        const double cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+        margin = std::min(margin, sign * cross / length);
+    }
+    return margin;
+}
+
+void TestPolygons() {
+    // 16x16 row-major texture whose index encodes its own coordinates, so a
+    // pixel tells which texel it sampled: index = v * 16 + u.
+    std::vector<uint8_t> coordinate_texture(kTexSize * kTexSize);
+    for (uint32_t v = 0U; v < kTexSize; ++v) {
+        for (uint32_t u = 0U; u < kTexSize; ++u)
+            coordinate_texture[v * kTexSize + u] = static_cast<uint8_t>(v * 16U + u);
+    }
+    const raster::Texture texture{.pixels = coordinate_texture.data(),
+                                  .width = kTexSize,
+                                  .height = kTexSize,
+                                  .log2_width = 4U,
+                                  .log2_height = 4U,
+                                  .layout = MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR};
+    const std::vector<uint16_t> lit = MakePalette();
+    const raster::Palette palette{.entries = lit.data(), .light_levels = kLightLevels};
+    std::vector<uint8_t> frame(kFrameBytes, 0U);
+    const raster::Target target{.pixels = frame.data(), .width = kWidth, .height = kHeight, .pitch = kPitch};
+    const auto pixel = [&](uint32_t x, uint32_t y) { return PixelAt(frame.data(), kPitch, x, y); };
+    const auto clear = [&] { std::fill(frame.begin(), frame.end(), 0U); };
+
+    // Axis-aligned quad: 16 texels across 16 pixels and 10 texels down 10
+    // rows, flat light 2. Every covered pixel samples the texel under its
+    // centre; the surrounding pixels stay untouched.
+    {
+        const micropixel_raster_vertex_t corners[4] = {Vertex(10, 10, 0, 0, 2), Vertex(26, 10, 16, 0, 2),
+                                                       Vertex(26, 20, 16, 10, 2), Vertex(10, 20, 0, 10, 2)};
+        raster::DrawPolygon(target, &texture, palette, 0U, corners, 4U);
+        for (uint32_t y = 10U; y < 20U; ++y) {
+            for (uint32_t x = 10U; x < 26U; ++x) {
+                Require(pixel(x, y) == Lit(2U, static_cast<uint8_t>((y - 10U) * 16U + (x - 10U))));
+            }
+        }
+        Require(pixel(9U, 10U) == 0U && pixel(26U, 10U) == 0U && pixel(10U, 9U) == 0U && pixel(10U, 20U) == 0U);
+        // The opposite winding draws exactly the same pixels.
+        std::vector<uint8_t> reference = frame;
+        clear();
+        const micropixel_raster_vertex_t reversed[4] = {corners[3], corners[2], corners[1], corners[0]};
+        raster::DrawPolygon(target, &texture, palette, 0U, reversed, 4U);
+        Require(frame == reference);
+        clear();
+    }
+
+    // Gouraud light 0 -> 3 across 16 pixels, textured and flat colour: each
+    // pixel takes the level under its centre and never leaves 0..3.
+    {
+        const micropixel_raster_vertex_t corners[4] = {Vertex(10, 10, 0, 0, 0), Vertex(26, 10, 16, 0, 3),
+                                                       Vertex(26, 14, 16, 4, 3), Vertex(10, 14, 0, 4, 0)};
+        raster::DrawPolygon(target, &texture, palette, 0U, corners, 4U);
+        for (uint32_t x = 10U; x < 26U; ++x) {
+            const auto level = static_cast<uint32_t>(std::floor((x - 10U + 0.5) * 3.0 / 16.0));
+            Require(pixel(x, 10U) == Lit(level, static_cast<uint8_t>(x - 10U)));
+        }
+        clear();
+        const micropixel_raster_vertex_t flat[4] = {Vertex(10, 10, 77, 0, 0), Vertex(26, 10, 0, 0, 3),
+                                                    Vertex(26, 14, 0, 0, 3), Vertex(10, 14, 0, 0, 0)};
+        raster::DrawPolygon(target, nullptr, palette, MICROPIXEL_RASTER_POLYGON_FLAT_COLOR, flat, 4U);
+        for (uint32_t x = 10U; x < 26U; ++x) {
+            const auto level = static_cast<uint32_t>(std::floor((x - 10U + 0.5) * 3.0 / 16.0));
+            Require(pixel(x, 12U) == Lit(level, 77U));
+        }
+        Require(pixel(26U, 12U) == 0U);
+        clear();
+    }
+
+    // Transparent index 0: the texel at (0, 0) is skipped, its neighbours drawn.
+    {
+        const micropixel_raster_vertex_t corners[3] = {Vertex(0, 0, 0, 0, 1), Vertex(4, 0, 4, 0, 1),
+                                                       Vertex(0, 4, 0, 4, 1)};
+        raster::DrawPolygon(target, &texture, palette, MICROPIXEL_RASTER_POLYGON_TRANSPARENT_INDEX0, corners, 3U);
+        Require(pixel(0U, 0U) == 0U && pixel(1U, 0U) == Lit(1U, 1U) && pixel(0U, 1U) == Lit(1U, 16U));
+        // Centre (3.5, 0.5) lies on the hypotenuse: the right edge is exclusive.
+        Require(pixel(2U, 0U) == Lit(1U, 2U) && pixel(3U, 0U) == 0U && pixel(2U, 1U) == 0U);
+        clear();
+    }
+
+    // Degenerate and out-of-range inputs draw nothing.
+    {
+        const micropixel_raster_vertex_t line[3] = {Vertex(0, 0, 0, 0, 0), Vertex(10, 10, 0, 0, 0),
+                                                    Vertex(20, 20, 0, 0, 0)};
+        raster::DrawPolygon(target, &texture, palette, 0U, line, 3U);
+        const micropixel_raster_vertex_t above[3] = {Vertex(0, -30, 0, 0, 0), Vertex(60, -30, 0, 0, 0),
+                                                     Vertex(30, -1, 0, 0, 0)};
+        raster::DrawPolygon(target, &texture, palette, 0U, above, 3U);
+        const micropixel_raster_vertex_t too_bright[3] = {Vertex(0, 0, 0, 0, 0), Vertex(10, 0, 0, 0, kLightLevels),
+                                                          Vertex(0, 10, 0, 0, 0)};
+        raster::DrawPolygon(target, &texture, palette, 0U, too_bright, 3U);
+        for (uint8_t byte : frame) Require(byte == 0U);
+    }
+
+    // Random convex polygons: coverage follows pixel centres (within one pixel
+    // of the exact edge), triangles sample the affine texel within one texel,
+    // the level stays inside the corner range, both windings agree and a
+    // polygon straddling the target edge matches its unclipped rendering.
+    std::mt19937 rng{1234U};
+    std::uniform_real_distribution<double> coordinate(-20.0, 80.0);
+    std::uniform_real_distribution<double> texel(0.0, 48.0);
+    std::uniform_int_distribution<int> level(0, kLightLevels - 1);
+    std::vector<uint8_t> big_frame(kFrameBytes * 4U, 0U);
+    const raster::Target big{
+        .pixels = big_frame.data(), .width = kWidth * 2U, .height = kHeight * 2U, .pitch = kPitch * 2U};
+    for (uint32_t iteration = 0U; iteration < 400U; ++iteration) {
+        const bool quad = (iteration & 1U) != 0U;
+        const uint32_t count = quad ? 4U : 3U;
+        micropixel_raster_vertex_t corners[4]{};
+        if (quad) {
+            // Four angles in order around a centre give a simple polygon;
+            // resample until every turn has the same sign (convex).
+            for (;;) {
+                const double cx = coordinate(rng), cy = coordinate(rng);
+                double angles[4];
+                for (double& angle : angles) angle = std::uniform_real_distribution<double>(0.0, 6.2831)(rng);
+                std::sort(angles, angles + 4);
+                for (uint32_t i = 0U; i < 4U; ++i) {
+                    const double radius = std::uniform_real_distribution<double>(2.0, 40.0)(rng);
+                    corners[i] = Vertex(cx + radius * std::cos(angles[i]), cy + radius * std::sin(angles[i]),
+                                        texel(rng), texel(rng), static_cast<uint8_t>(level(rng)));
+                }
+                bool positive = false, negative = false;
+                for (uint32_t i = 0U; i < 4U; ++i) {
+                    const auto& a = corners[i];
+                    const auto& b = corners[(i + 1U) % 4U];
+                    const auto& c = corners[(i + 2U) % 4U];
+                    const int64_t cross =
+                        static_cast<int64_t>(b.x - a.x) * (c.y - b.y) - static_cast<int64_t>(b.y - a.y) * (c.x - b.x);
+                    positive |= cross > 0;
+                    negative |= cross < 0;
+                }
+                if (positive != negative) break;
+            }
+        } else {
+            for (uint32_t i = 0U; i < 3U; ++i) {
+                corners[i] =
+                    Vertex(coordinate(rng), coordinate(rng), texel(rng), texel(rng), static_cast<uint8_t>(level(rng)));
+            }
+        }
+        uint8_t low = 255U, high = 0U;
+        for (uint32_t i = 0U; i < count; ++i) {
+            low = std::min(low, corners[i].light);
+            high = std::max(high, corners[i].light);
+        }
+        clear();
+        raster::DrawPolygon(target, &texture, palette, 0U, corners, count);
+        for (uint32_t y = 0U; y < kHeight; ++y) {
+            for (uint32_t x = 0U; x < kWidth; ++x) {
+                const double margin = InsideMargin(corners, count, x + 0.5, y + 0.5);
+                const uint16_t value = pixel(x, y);
+                if (margin > 1.0) {
+                    Require(value != 0U);
+                } else if (margin < -1.0) {
+                    Require(value == 0U);
+                }
+                if (value == 0U) continue;
+                const uint32_t light = (value >> 8U) & 0x7FU;
+                Require(light >= low && light <= high);
+                if (!quad && margin > 1.0) {
+                    // Barycentric reference for the affine mapping.
+                    const double x0 = corners[0].x / 16.0, y0 = corners[0].y / 16.0;
+                    const double x1 = corners[1].x / 16.0, y1 = corners[1].y / 16.0;
+                    const double x2 = corners[2].x / 16.0, y2 = corners[2].y / 16.0;
+                    const double det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                    const double px = x + 0.5, py = y + 0.5;
+                    const double w1 = ((px - x0) * (y2 - y0) - (x2 - x0) * (py - y0)) / det;
+                    const double w2 = ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)) / det;
+                    const double w0 = 1.0 - w1 - w2;
+                    const double u = (w0 * corners[0].u + w1 * corners[1].u + w2 * corners[2].u) / 256.0;
+                    const double v = (w0 * corners[0].v + w1 * corners[1].v + w2 * corners[2].v) / 256.0;
+                    const double l = w0 * corners[0].light + w1 * corners[1].light + w2 * corners[2].light;
+                    const auto wrapped_distance = [](int a, int b) {
+                        const int d = std::abs(a - b) & 15;
+                        return std::min(d, 16 - d);
+                    };
+                    const int sampled_u = value & 15, sampled_v = (value >> 4U) & 15;
+                    Require(wrapped_distance(sampled_u, static_cast<int>(std::floor(u))) <= 1);
+                    Require(wrapped_distance(sampled_v, static_cast<int>(std::floor(v))) <= 1);
+                    Require(std::abs(static_cast<int>(light) - static_cast<int>(std::floor(l))) <= 1);
+                }
+            }
+        }
+        // Reversed winding: identical pixels.
+        std::vector<uint8_t> reference = frame;
+        micropixel_raster_vertex_t reversed[4]{};
+        for (uint32_t i = 0U; i < count; ++i) reversed[i] = corners[count - 1U - i];
+        clear();
+        raster::DrawPolygon(target, &texture, palette, 0U, reversed, count);
+        Require(frame == reference);
+        // Shifted onto a target twice the size, the overlapping region matches.
+        micropixel_raster_vertex_t shifted[4]{};
+        for (uint32_t i = 0U; i < count; ++i) {
+            shifted[i] = corners[i];
+            shifted[i].x = static_cast<int16_t>(shifted[i].x + 32 * 16);
+            shifted[i].y = static_cast<int16_t>(shifted[i].y + 24 * 16);
+        }
+        std::fill(big_frame.begin(), big_frame.end(), 0U);
+        raster::DrawPolygon(big, &texture, palette, 0U, shifted, count);
+        for (uint32_t y = 0U; y < kHeight; ++y) {
+            for (uint32_t x = 0U; x < kWidth; ++x) {
+                Require(pixel(x, y) == PixelAt(big_frame.data(), kPitch * 2U, x + 32U, y + 24U));
+            }
+        }
+    }
+}
+
+// Polygon records through the service: validation of flags, padding, lights
+// and texture requirements, then a rendered quad.
+void TestPolygonRecords() {
+    FakeGraphics backend;
+    micropixel::device::GraphicsService graphics{backend, micropixel::device::DisplayInfo{}};
+    EventQueue events;
+    DirectSurfaceService surfaces{graphics, events, 0};
+    const micropixel::runtime::GuestMemoryAccess access{.resolve = ResolveGuestMemory, .stable_base = true};
+    surfaces.BindGuestMemory(access);
+    RasterService service{true};
+    service.BindGuestMemory(access);
+
+    const std::vector<uint8_t> column_major = MakeTexture(true);
+    const std::vector<uint8_t> row_major = MakeTexture(false);
+    const std::vector<uint16_t> lit = MakePalette();
+    std::memcpy(g_guest_memory + kStaging, column_major.data(), column_major.size());
+    std::memcpy(g_guest_memory + kStaging + 1024U, row_major.data(), row_major.size());
+    std::memcpy(g_guest_memory + kStaging + 2048U, lit.data(), lit.size() * sizeof(uint16_t));
+    micropixel_raster_texture_upload_request_t upload{};
+    upload.size = sizeof(upload);
+    upload.width = kTexSize;
+    upload.height = kTexSize;
+    upload.layout = MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR;
+    upload.pixels = kStaging;
+    upload.length = kTexSize * kTexSize;
+    Require(service.UploadTexture(upload).has_value());
+    upload.texture_slot = 1U;
+    upload.layout = MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR;
+    upload.pixels = kStaging + 1024U;
+    Require(service.UploadTexture(upload).has_value());
+    upload.texture_slot = 2U;  // 12 x 16 row-major: not a power of two
+    upload.width = 12U;
+    upload.length = 12U * kTexSize;
+    Require(service.UploadTexture(upload).has_value());
+    micropixel_raster_palette_upload_request_t palette{};
+    palette.size = sizeof(palette);
+    palette.light_levels = kLightLevels;
+    palette.entries = kStaging + 2048U;
+    palette.length = kLightLevels * 256U * 2U;
+    Require(service.UploadPalette(palette).has_value());
+
+    micropixel_surface_create_request_t create{};
+    create.size = sizeof(create);
+    create.width = kWidth;
+    create.height = kHeight;
+    create.pixel_format = MICROPIXEL_PIXEL_FORMAT_RGB565;
+    create.buffer_count = 1U;
+    Require(surfaces.Create(create).has_value());
+    micropixel::runtime::HostBufferView frame{};
+    Require(surfaces.HostBuffer(1U, 0U, frame) == MICROPIXEL_STATUS_OK);
+
+    const micropixel_raster_vertex_t corners[4] = {Vertex(4, 4, 0, 0, 1), Vertex(12, 4, 8, 0, 1),
+                                                   Vertex(12, 12, 8, 8, 1), Vertex(4, 12, 0, 8, 1)};
+    const micropixel_raster_vertex_t triangle_corners[3] = {corners[0], corners[1], corners[2]};
+    const auto submit = [&](auto record) {
+        DrawList list{0U};
+        list.Add(record);
+        list.Finish();
+        return service.Submit(list.bytes.data(), list.bytes.size(), surfaces);
+    };
+    std::memset(frame.pixels, 0, kFrameBytes);
+    Require(submit(Quad(1U, corners)).has_value());
+    Require(PixelAt(frame, 4U, 4U) == Lit(1U, Texel(0U, 0U)) && PixelAt(frame, 11U, 11U) == Lit(1U, Texel(7U, 7U)));
+    Require(PixelAt(frame, 12U, 4U) == 0U && PixelAt(frame, 4U, 12U) == 0U);
+    std::memset(frame.pixels, 0, kFrameBytes);
+    Require(submit(Triangle(1U, triangle_corners)).has_value());
+    Require(PixelAt(frame, 11U, 5U) == Lit(1U, Texel(7U, 1U)) && PixelAt(frame, 4U, 11U) == 0U);
+    // FLAT_COLOR needs no texture at all.
+    Require(submit(Quad(200U, corners, MICROPIXEL_RASTER_POLYGON_FLAT_COLOR)).has_value());
+    Require(PixelAt(frame, 5U, 5U) == Lit(1U, 0U));
+    // A zero-area polygon is valid and draws nothing.
+    const micropixel_raster_vertex_t line[3] = {Vertex(0, 0, 0, 0, 0), Vertex(5, 5, 0, 0, 0), Vertex(9, 9, 0, 0, 0)};
+    std::memset(frame.pixels, 0, kFrameBytes);
+    Require(submit(Triangle(1U, line)).has_value());
+    for (uint32_t index = 0U; index < kFrameBytes; ++index) Require(frame.pixels[index] == 0U);
+
+    const auto rejects = [&](auto record, int32_t status) {
+        Require(submit(record).error().status == status);
+        for (uint32_t index = 0U; index < kFrameBytes; ++index) Require(frame.pixels[index] == 0U);
+    };
+    rejects(Quad(0U, corners), MICROPIXEL_STATUS_NOT_FOUND);         // column-major slot
+    rejects(Quad(7U, corners), MICROPIXEL_STATUS_NOT_FOUND);         // empty slot
+    rejects(Quad(2U, corners), MICROPIXEL_STATUS_INVALID_ARGUMENT);  // non power-of-two
+    rejects(Quad(1U, corners, 0x80U), MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    {
+        micropixel_raster_vertex_t bright[4];
+        std::copy_n(corners, 4U, bright);
+        bright[2].light = kLightLevels;
+        rejects(Quad(1U, bright), MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        micropixel_raster_vertex_t padded[4];
+        std::copy_n(corners, 4U, padded);
+        padded[1].reserved0 = 1U;
+        rejects(Quad(1U, padded), MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        auto triangle = Triangle(1U, triangle_corners);
+        triangle.reserved0 = 1U;
+        rejects(triangle, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        auto stale = Quad(1U, corners);
+        stale.palette_slot = 5U;
+        rejects(stale, MICROPIXEL_STATUS_STALE_STATE);
+    }
+    service.Shutdown();
+    surfaces.Shutdown();
 }
 
 void TestServiceUploadsAndDraws() {
@@ -1268,12 +1630,14 @@ int main() {
     SharedTextureImageSamplingAndValidation();
     Require(raster::Log2Exact(64U) == 6U && raster::Log2Exact(8U) == 3U && raster::Log2Exact(300U) == UINT8_MAX);
     TestKernelsAgainstReference();
+    TestPolygons();
+    TestPolygonRecords();
     TestServiceUploadsAndDraws();
     TestSwappedPanel();
     TestDisabledPool();
     TestDynamicTextures();
     TestArbitraryDimensions();
     Require(allocations.empty());
-    std::puts("Raster: palette slots, warp maps, arbitrary sampling, OOM rollback and release passed");
+    std::puts("Raster: palette slots, warp maps, polygons, arbitrary sampling, OOM rollback and release passed");
     return 0;
 }

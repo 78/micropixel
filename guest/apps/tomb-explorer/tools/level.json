@@ -1,0 +1,120 @@
+{
+  "start": {"room": "entrance", "x": 3.5, "z": 1.5, "yaw": 0.0},
+  "textures": {"wall": "kTexWall", "floor": "kTexFloor", "ceiling": "kTexCeiling", "step": "kTexSteps", "water": "kTexWater", "frieze": "kTexCarved"},
+  "rooms": [
+    {
+      "name": "entrance",
+      "origin": [0, 0],
+      "floor": 0.0,
+      "ceiling": 3.0,
+      "ambient": 70,
+      "map": [
+        ".......",
+        ".......",
+        "..1.1..",
+        ".......",
+        "......."
+      ],
+      "lights": [
+        {"x": 3.5, "y": 2.4, "z": 1.0, "radius": 6.0, "intensity": 170},
+        {"x": 3.5, "y": 1.5, "z": 4.8, "radius": 4.0, "intensity": 90}
+      ],
+      "portals": [
+        {"to": "corridor", "side": "south", "range": [3, 3]}
+      ]
+    },
+    {
+      "name": "corridor",
+      "origin": [3, 5],
+      "floor": 0.0,
+      "ceiling": 2.5,
+      "ambient": 40,
+      "slope": {"axis": "z", "floor_to": -1.0, "ceiling_to": 1.8},
+      "map": [
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        "."
+      ],
+      "lights": [
+        {"x": 3.5, "y": 1.8, "z": 8.0, "radius": 4.0, "intensity": 110}
+      ],
+      "portals": [
+        {"to": "entrance", "side": "north", "range": [0, 0]},
+        {"to": "hall", "side": "south", "range": [0, 0]}
+      ]
+    },
+    {
+      "name": "hall",
+      "origin": [-2, 11],
+      "floor": -1.0,
+      "ceiling": 4.0,
+      "ambient": 55,
+      "frieze": 2.0,
+      "map": [
+        "...........",
+        "...........",
+        "..#.....#..",
+        "....111....",
+        "....122....",
+        "....111....",
+        "..#.....#..",
+        "...........",
+        "..........."
+      ],
+      "lights": [
+        {"x": 3.5, "y": 3.0, "z": 15.5, "radius": 8.0, "intensity": 190},
+        {"x": -1.0, "y": 1.0, "z": 12.0, "radius": 4.0, "intensity": 90},
+        {"x": 8.0, "y": 1.0, "z": 19.0, "radius": 4.0, "intensity": 90},
+        {"x": 8.8, "y": 0.8, "z": 15.5, "radius": 3.0, "intensity": 80}
+      ],
+      "portals": [
+        {"to": "corridor", "side": "north", "range": [5, 5]},
+        {"to": "crypt", "side": "east", "range": [3, 4]},
+        {"to": "pool", "side": "west", "range": [3, 4]}
+      ]
+    },
+    {
+      "name": "crypt",
+      "origin": [9, 14],
+      "floor": -1.0,
+      "ceiling": 2.0,
+      "ambient": 35,
+      "textures": {"wall": "kTexMossyWall"},
+      "map": [
+        "......",
+        ".4..4.",
+        ".4..4.",
+        "......"
+      ],
+      "lights": [
+        {"x": 14.0, "y": 1.2, "z": 16.0, "radius": 5.0, "intensity": 150}
+      ],
+      "portals": [
+        {"to": "hall", "side": "west", "range": [0, 1]}
+      ]
+    },
+    {
+      "name": "pool",
+      "origin": [-8, 13],
+      "floor": -1.0,
+      "ceiling": 2.5,
+      "ambient": 45,
+      "textures": {"wall": "kTexMossyWall"},
+      "map": [
+        "......",
+        ".~~~..",
+        ".~~~..",
+        "......"
+      ],
+      "lights": [
+        {"x": -5.0, "y": 1.5, "z": 15.0, "radius": 5.0, "intensity": 140}
+      ],
+      "portals": [
+        {"to": "hall", "side": "east", "range": [1, 2]}
+      ]
+    }
+  ]
+}

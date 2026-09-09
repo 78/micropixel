@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 #include <cstring>
 
 #include "device/contracts/graphics.hpp"
@@ -26,6 +27,10 @@ constexpr uint32_t kFixedShift = 16U;
             return sizeof(micropixel_raster_rect_t);
         case MICROPIXEL_RASTER_RECORD_WARP:
             return sizeof(micropixel_raster_warp_t);
+        case MICROPIXEL_RASTER_RECORD_TRIANGLE:
+            return sizeof(micropixel_raster_triangle_t);
+        case MICROPIXEL_RASTER_RECORD_QUAD:
+            return sizeof(micropixel_raster_quad_t);
         default:
             return 0U;
     }
@@ -184,6 +189,53 @@ struct ClippedRect final {
     return MICROPIXEL_STATUS_OK;
 }
 
+// Shared by TRIANGLE and QUAD: flags, padding, every corner light below the
+// palette's level count and (unless FLAT_COLOR) a ROW_MAJOR power-of-two
+// texture the span kernel can mask-wrap on. Coordinates are unconstrained; the
+// kernel clips.
+[[nodiscard]] int32_t ValidatePolygon(uint8_t flags, uint8_t texture_slot, uint8_t palette_slot,
+                                      const micropixel_raster_vertex_t* vertices, uint32_t vertex_count,
+                                      const Resources& resources) {
+    constexpr uint8_t kKnownFlags = MICROPIXEL_RASTER_POLYGON_TRANSPARENT_INDEX0 | MICROPIXEL_RASTER_POLYGON_FLAT_COLOR;
+    if ((flags & ~kKnownFlags) != 0U) return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    uint32_t max_light = 0U;
+    for (uint32_t index = 0U; index < vertex_count; ++index) {
+        if (vertices[index].reserved0 != 0U) return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        max_light = std::max<uint32_t>(max_light, vertices[index].light);
+    }
+    const int32_t light = CheckLight(resources, palette_slot, max_light);
+    if (light != MICROPIXEL_STATUS_OK) return light;
+    if ((flags & MICROPIXEL_RASTER_POLYGON_FLAT_COLOR) != 0U) return MICROPIXEL_STATUS_OK;
+    const Texture* texture = SlotWithLayout(resources, texture_slot, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR);
+    if (texture == nullptr) return MICROPIXEL_STATUS_NOT_FOUND;
+    if (texture->log2_width == UINT8_MAX || texture->log2_height == UINT8_MAX) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    return MICROPIXEL_STATUS_OK;
+}
+
+[[nodiscard]] int32_t ValidateTriangle(const micropixel_raster_triangle_t& triangle, const Resources& resources) {
+    if (triangle.reserved0 != 0U) return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    return ValidatePolygon(triangle.flags, triangle.texture_slot, triangle.palette_slot, triangle.vertices, 3U,
+                           resources);
+}
+
+[[nodiscard]] int32_t ValidateQuad(const micropixel_raster_quad_t& quad, const Resources& resources) {
+    return ValidatePolygon(quad.flags, quad.texture_slot, quad.palette_slot, quad.vertices, 4U, resources);
+}
+
+// Twice the signed area of a polygon in 12.4 units (exact in 64 bits), so a
+// polygon's pixel count is |area| / 512 and its winding is the sign.
+[[nodiscard]] int64_t PolygonArea2(const micropixel_raster_vertex_t* vertices, uint32_t vertex_count) {
+    int64_t area = 0;
+    for (uint32_t index = 0U; index < vertex_count; ++index) {
+        const micropixel_raster_vertex_t& a = vertices[index];
+        const micropixel_raster_vertex_t& b = vertices[index + 1U == vertex_count ? 0U : index + 1U];
+        area += static_cast<int64_t>(a.x) * b.y - static_cast<int64_t>(b.x) * a.y;
+    }
+    return area;
+}
+
 [[nodiscard]] int32_t ValidateRect(const micropixel_raster_rect_t& rect) {
     if (rect.flags != 0U || rect.reserved0 != 0U || rect.reserved1 != 0U || rect.opacity == 0U || rect.width == 0U ||
         rect.height == 0U) {
@@ -258,6 +310,14 @@ int32_t ValidateDrawList(const uint8_t* bytes, uint32_t length, const Target& ta
             micropixel_raster_warp_t warp{};
             std::memcpy(&warp, bytes + offset, sizeof(warp));
             status = ValidateWarp(warp, resources);
+        } else if (type == MICROPIXEL_RASTER_RECORD_TRIANGLE) {
+            micropixel_raster_triangle_t triangle{};
+            std::memcpy(&triangle, bytes + offset, sizeof(triangle));
+            status = ValidateTriangle(triangle, resources);
+        } else if (type == MICROPIXEL_RASTER_RECORD_QUAD) {
+            micropixel_raster_quad_t quad{};
+            std::memcpy(&quad, bytes + offset, sizeof(quad));
+            status = ValidateQuad(quad, resources);
         } else {
             micropixel_raster_rect_t rect{};
             std::memcpy(&rect, bytes + offset, sizeof(rect));
@@ -612,6 +672,277 @@ void DrawWarp(const Target& target, const WarpMap& warp, const Texture& texture,
     }
 }
 
+// ---- Polygons -------------------------------------------------------------
+// Edge-walking scanline rasterizer. Vertex x/y arrive in 12.4; the walker
+// keeps x and the attributes (u, v in texels; light in levels) in 16.16 and
+// samples at pixel centres: row r covers centre y = r + 0.5, pixel x covers
+// centre x + 0.5. Per-edge and per-span gradients are set up with one float
+// reciprocal each (the Host cores have an FPU; a 64-bit integer division per
+// attribute would cost more than the span it serves); the per-pixel loops are
+// integer only. Light is clamped per span to the range the corners span, so a
+// rounding drift can never index a palette row the record did not name.
+namespace {
+
+constexpr uint32_t kSubpixelShift = 4U;  // vertex x/y are 12.4
+constexpr uint32_t kTexelShift = 8U;     // vertex u/v are 8.8
+constexpr int32_t kHalfRow = 1 << (kSubpixelShift - 1U);
+
+// First pixel row whose centre lies at or below `y` (12.4): ceil((y - 8) / 16).
+[[nodiscard]] constexpr int32_t RowCeil(int32_t y) { return (y + kHalfRow - 1) >> kSubpixelShift; }
+// First pixel column whose centre lies at or right of `x` (16.16).
+[[nodiscard]] constexpr int32_t ColumnCeil(int32_t x) { return (x + 0x7FFF) >> kFixedShift; }
+
+struct EdgeWalker final {
+    int32_t x{};  // 16.16 pixels at the current row centre
+    int32_t u{};  // 16.16 texels
+    int32_t v{};
+    int32_t light{};  // 16.16 levels
+    int32_t dx{};     // per row
+    int32_t du{};
+    int32_t dv{};
+    int32_t dlight{};
+    int32_t end_row{};  // exclusive
+
+    void Step() {
+        x += dx;
+        u += du;
+        v += dv;
+        light += dlight;
+    }
+};
+
+// Prepares the walk down the edge a -> b (a above b) beginning at `start_row`.
+// False when the edge covers no row centre from start_row on.
+[[nodiscard]] bool SetupEdge(const micropixel_raster_vertex_t& a, const micropixel_raster_vertex_t& b,
+                             int32_t start_row, EdgeWalker& edge) {
+    const int32_t dy = static_cast<int32_t>(b.y) - a.y;
+    if (dy <= 0) return false;
+    const int32_t first_row = std::max(RowCeil(a.y), start_row);
+    edge.end_row = RowCeil(b.y);
+    if (edge.end_row <= first_row) return false;
+    // Per-row steps: dy is in 1/16 rows, so value / (dy / 16) per row.
+    const float per_row = 16.0F / static_cast<float>(dy);
+    edge.dx = static_cast<int32_t>(static_cast<float>(static_cast<int32_t>(b.x) - a.x) * per_row *
+                                   static_cast<float>(1 << (kFixedShift - kSubpixelShift)));
+    const int32_t u0 = static_cast<int32_t>(a.u) << (kFixedShift - kTexelShift);
+    const int32_t v0 = static_cast<int32_t>(a.v) << (kFixedShift - kTexelShift);
+    const int32_t l0 = static_cast<int32_t>(a.light) << kFixedShift;
+    edge.du = static_cast<int32_t>(static_cast<float>((static_cast<int32_t>(b.u) << (kFixedShift - kTexelShift)) - u0) *
+                                   per_row);
+    edge.dv = static_cast<int32_t>(static_cast<float>((static_cast<int32_t>(b.v) << (kFixedShift - kTexelShift)) - v0) *
+                                   per_row);
+    edge.dlight =
+        static_cast<int32_t>(static_cast<float>((static_cast<int32_t>(b.light) << kFixedShift) - l0) * per_row);
+    // Values at the first row centre: a + step * (rows from a), rows in 1/16.
+    const int64_t rows16 = (static_cast<int64_t>(first_row) << kSubpixelShift) + kHalfRow - a.y;
+    const auto at = [rows16](int32_t start, int32_t step) {
+        return start + static_cast<int32_t>((static_cast<int64_t>(step) * rows16) >> kSubpixelShift);
+    };
+    edge.x = at(static_cast<int32_t>(a.x) << (kFixedShift - kSubpixelShift), edge.dx);
+    edge.u = at(u0, edge.du);
+    edge.v = at(v0, edge.dv);
+    edge.light = at(l0, edge.dlight);
+    return true;
+}
+
+// One side of the polygon: walks its edges from the top vertex downwards.
+struct Chain final {
+    const micropixel_raster_vertex_t* vertices{};
+    uint32_t count{};
+    uint32_t index{};      // vertex the current edge starts at
+    uint32_t remaining{};  // edges not yet consumed
+    bool forward{};
+    EdgeWalker edge{};
+
+    // Loads the next edge that covers row `row` or below. False when the
+    // chain has no edge left.
+    [[nodiscard]] bool Advance(int32_t row) {
+        while (remaining > 0U) {
+            --remaining;
+            const uint32_t next =
+                forward ? (index + 1U == count ? 0U : index + 1U) : (index == 0U ? count - 1U : index - 1U);
+            const bool covers = SetupEdge(vertices[index], vertices[next], row, edge);
+            index = next;
+            if (covers) return true;
+        }
+        return false;
+    }
+};
+
+struct SpanSetup final {
+    uint16_t* row{};
+    uint32_t count{};
+    int32_t u{}, v{}, light{};
+    int32_t du{}, dv{}, dlight{};
+};
+
+template <bool kTransparent, bool kGouraud>
+void FillTexturedSpan(const SpanSetup& span, const Texture& texture, const uint16_t* palette) {
+    const uint8_t* texels = texture.pixels;
+    const uint32_t mask_u = static_cast<uint32_t>(texture.width) - 1U;
+    const uint32_t mask_v = static_cast<uint32_t>(texture.height) - 1U;
+    const uint32_t log2_width = texture.log2_width;
+    uint32_t u = static_cast<uint32_t>(span.u);
+    uint32_t v = static_cast<uint32_t>(span.v);
+    uint32_t light = static_cast<uint32_t>(span.light);
+    const uint32_t du = static_cast<uint32_t>(span.du);
+    const uint32_t dv = static_cast<uint32_t>(span.dv);
+    const uint32_t dlight = static_cast<uint32_t>(span.dlight);
+    uint16_t* out = span.row;
+    const auto index = [&](uint32_t uu, uint32_t vv) {
+        return (((vv >> kFixedShift) & mask_v) << log2_width) | ((uu >> kFixedShift) & mask_u);
+    };
+    uint32_t i = 0U;
+    if constexpr (!kTransparent && !kGouraud) {
+        // Four independent texel chains per iteration so the in-order core
+        // overlaps the texel load with the palette lookup (as DrawColumn).
+        for (; i + 4U <= span.count; i += 4U) {
+            const uint8_t t0 = texels[index(u, v)];
+            const uint8_t t1 = texels[index(u + du, v + dv)];
+            const uint8_t t2 = texels[index(u + 2U * du, v + 2U * dv)];
+            const uint8_t t3 = texels[index(u + 3U * du, v + 3U * dv)];
+            out[i] = palette[t0];
+            out[i + 1U] = palette[t1];
+            out[i + 2U] = palette[t2];
+            out[i + 3U] = palette[t3];
+            u += 4U * du;
+            v += 4U * dv;
+        }
+    }
+    for (; i < span.count; ++i) {
+        const uint8_t texel = texels[index(u, v)];
+        if (!kTransparent || texel != 0U) {
+            if constexpr (kGouraud) {
+                out[i] = palette[((light >> kFixedShift) << 8U) | texel];
+            } else {
+                out[i] = palette[texel];
+            }
+        }
+        u += du;
+        v += dv;
+        light += dlight;
+    }
+}
+
+void FillFlatSpan(const SpanSetup& span, const uint16_t* palette, uint32_t color_index, bool gouraud) {
+    uint16_t* out = span.row;
+    if (!gouraud) {
+        const uint16_t color = palette[color_index];
+        for (uint32_t i = 0U; i < span.count; ++i) out[i] = color;
+        return;
+    }
+    uint32_t light = static_cast<uint32_t>(span.light);
+    for (uint32_t i = 0U; i < span.count; ++i, light += static_cast<uint32_t>(span.dlight)) {
+        out[i] = palette[((light >> kFixedShift) << 8U) | color_index];
+    }
+}
+
+}  // namespace
+
+void DrawPolygon(const Target& target, const Texture* texture, const Palette& palette, uint8_t flags,
+                 const micropixel_raster_vertex_t* vertices, uint32_t vertex_count) {
+    if (vertex_count < 3U || vertex_count > 4U) return;
+    const int64_t area2 = PolygonArea2(vertices, vertex_count);
+    if (area2 == 0) return;
+    const bool flat = (flags & MICROPIXEL_RASTER_POLYGON_FLAT_COLOR) != 0U;
+    const bool transparent = (flags & MICROPIXEL_RASTER_POLYGON_TRANSPARENT_INDEX0) != 0U;
+    if (!flat && (texture == nullptr || texture->pixels == nullptr)) return;
+
+    uint32_t top = 0U;
+    int32_t min_y = vertices[0].y;
+    int32_t max_y = vertices[0].y;
+    uint32_t min_light = vertices[0].light;
+    uint32_t max_light = vertices[0].light;
+    for (uint32_t i = 1U; i < vertex_count; ++i) {
+        if (vertices[i].y < min_y) {
+            min_y = vertices[i].y;
+            top = i;
+        }
+        max_y = std::max<int32_t>(max_y, vertices[i].y);
+        min_light = std::min<uint32_t>(min_light, vertices[i].light);
+        max_light = std::max<uint32_t>(max_light, vertices[i].light);
+    }
+    if (max_light >= palette.light_levels) return;  // ValidateDrawList refuses this; keep the kernel safe anyway
+    int32_t row = std::max<int32_t>(RowCeil(min_y), 0);
+    const int32_t row_end = std::min<int32_t>(RowCeil(max_y), static_cast<int32_t>(target.height));
+    if (row >= row_end) return;
+
+    // With y down, positive area is clockwise on screen: walking forward from
+    // the top vertex descends the right side.
+    Chain left{vertices, vertex_count, top, vertex_count - 1U, area2 < 0, {}};
+    Chain right{vertices, vertex_count, top, vertex_count - 1U, area2 > 0, {}};
+    if (!left.Advance(row) || !right.Advance(row)) return;
+
+    const int32_t light_low = static_cast<int32_t>(min_light) << kFixedShift;
+    const int32_t light_high = static_cast<int32_t>((max_light << kFixedShift) | 0xFFFFU);
+    const uint32_t flat_index = flat ? (static_cast<uint32_t>(vertices[0].u) >> kTexelShift) : 0U;
+    const int32_t target_width = static_cast<int32_t>(target.width);
+
+    for (;;) {
+        const EdgeWalker* l = &left.edge;
+        const EdgeWalker* r = &right.edge;
+        if (l->x > r->x) std::swap(l, r);
+        const int32_t width = r->x - l->x;
+        int32_t x0 = ColumnCeil(l->x);
+        int32_t x1 = ColumnCeil(r->x);  // exclusive
+        x0 = std::max<int32_t>(x0, 0);
+        x1 = std::min(x1, target_width);
+        if (width > 0 && x1 > x0) {
+            SpanSetup span{};
+            span.row = Row(target, static_cast<uint32_t>(row)) + x0;
+            span.count = static_cast<uint32_t>(x1 - x0);
+            const float per_pixel = static_cast<float>(1 << kFixedShift) / static_cast<float>(width);
+            span.du = static_cast<int32_t>(static_cast<float>(r->u - l->u) * per_pixel);
+            span.dv = static_cast<int32_t>(static_cast<float>(r->v - l->v) * per_pixel);
+            span.dlight = static_cast<int32_t>(static_cast<float>(r->light - l->light) * per_pixel);
+            // Distance from the left edge to the first pixel centre, 16.16.
+            const int64_t prestep = ((static_cast<int64_t>(x0) << kFixedShift) + 0x8000) - l->x;
+            const auto at = [prestep](int32_t start, int32_t step) {
+                return start + static_cast<int32_t>((static_cast<int64_t>(step) * prestep) >> kFixedShift);
+            };
+            span.u = at(l->u, span.du);
+            span.v = at(l->v, span.dv);
+            span.light = std::clamp(at(l->light, span.dlight), light_low, light_high);
+            const int32_t last = static_cast<int32_t>(span.count) - 1;
+            int32_t light_end = span.light + static_cast<int32_t>(static_cast<int64_t>(span.dlight) * last);
+            if (light_end < light_low || light_end > light_high) {
+                light_end = std::clamp(light_end, light_low, light_high);
+                span.dlight = last > 0 ? (light_end - span.light) / last : 0;
+            }
+            const bool gouraud = (span.light >> kFixedShift) != (light_end >> kFixedShift);
+            if (flat) {
+                FillFlatSpan(span,
+                             gouraud ? palette.entries : palette.Row(static_cast<uint32_t>(span.light >> kFixedShift)),
+                             flat_index, gouraud);
+            } else if (gouraud) {
+                if (transparent) {
+                    FillTexturedSpan<true, true>(span, *texture, palette.entries);
+                } else {
+                    FillTexturedSpan<false, true>(span, *texture, palette.entries);
+                }
+            } else {
+                const uint16_t* lit = palette.Row(static_cast<uint32_t>(span.light >> kFixedShift));
+                if (transparent) {
+                    FillTexturedSpan<true, false>(span, *texture, lit);
+                } else {
+                    FillTexturedSpan<false, false>(span, *texture, lit);
+                }
+            }
+        }
+        if (++row >= row_end) break;
+        if (row == left.edge.end_row) {
+            if (!left.Advance(row)) break;
+        } else {
+            left.edge.Step();
+        }
+        if (row == right.edge.end_row) {
+            if (!right.Advance(row)) break;
+        } else {
+            right.edge.Step();
+        }
+    }
+}
+
 void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& header, const Target& target,
                      const Resources& resources, ExecuteProfile* profile) {
     uint32_t offset = sizeof(micropixel_raster_header_t);
@@ -661,6 +992,25 @@ void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& hea
             if (resources.resolve_texture(resources.texture_context, image.texture_handle, texture))
                 DrawImage(target, texture, image);
             pixels = static_cast<uint64_t>(image.width) * image.height;
+        } else if (type == MICROPIXEL_RASTER_RECORD_TRIANGLE) {
+            micropixel_raster_triangle_t triangle{};
+            std::memcpy(&triangle, bytes + offset, sizeof(triangle));
+            offset += sizeof(triangle);
+            const Texture* texture = (triangle.flags & MICROPIXEL_RASTER_POLYGON_FLAT_COLOR) != 0U
+                                         ? nullptr
+                                         : resources.TextureAt(triangle.texture_slot);
+            DrawPolygon(target, texture, *resources.PaletteAt(triangle.palette_slot), triangle.flags, triangle.vertices,
+                        3U);
+            pixels = static_cast<uint64_t>(std::abs(PolygonArea2(triangle.vertices, 3U))) / 512U;
+        } else if (type == MICROPIXEL_RASTER_RECORD_QUAD) {
+            micropixel_raster_quad_t quad{};
+            std::memcpy(&quad, bytes + offset, sizeof(quad));
+            offset += sizeof(quad);
+            const Texture* texture = (quad.flags & MICROPIXEL_RASTER_POLYGON_FLAT_COLOR) != 0U
+                                         ? nullptr
+                                         : resources.TextureAt(quad.texture_slot);
+            DrawPolygon(target, texture, *resources.PaletteAt(quad.palette_slot), quad.flags, quad.vertices, 4U);
+            pixels = static_cast<uint64_t>(std::abs(PolygonArea2(quad.vertices, 4U))) / 512U;
         } else {
             micropixel_raster_rect_t rect{};
             std::memcpy(&rect, bytes + offset, sizeof(rect));

@@ -12,6 +12,8 @@ guest/
 ├── apps/blocks/  # 触控俄罗斯方块产品应用
 ├── apps/tilt/    # 加速度计控制的 100 关滚球迷宫
 ├── apps/maze-evil/ # Direct Surface 全屏软渲染的 2.5D 射击游戏（体感 + 触摸）
+├── apps/tomb-explorer/ # MeshRenderer 多边形路径的第三人称探索 demo（房间/传送门、低模角色）
+├── apps/polygon-benchmark/ # 本地填充率基准，不进入发布镜像
 └── tests/        # P4 Runtime/SDK conformance
 ```
 
@@ -47,7 +49,12 @@ Sensor 句柄表保留在设备模块内。内部头只服务于 Runtime，不�
 完整产品应用 [`apps/snake/`](apps/snake/)、[`apps/blocks/`](apps/blocks/) 和
 [`apps/tilt/`](apps/tilt/) 与 Demo 独立构建。[`apps/maze-evil/`](apps/maze-evil/) 不走 Scene，而是向
 `HostSurface` 提交 `RasterDrawList`（墙/地板/精灵/文字都由 Host kernel 光栅化），
-是全屏渲染路径与 `--benchmark` 分段统计的验收载体。
+是全屏渲染路径与 `--benchmark` 分段统计的验收载体。[`apps/tomb-explorer/`](apps/tomb-explorer/) 是
+PS1 级多边形路径的参考实现：`sdk/mesh_renderer.hpp` 的 `MeshRenderer` 负责变换、裁剪、排序与
+`Triangle/Quad` 记录，App 内的 `world/room_world.*` 负责房间/传送门可见性与碰撞，`tools/` 里的
+Python 生成器把 `level.json` 与程序化纹理编译成只读 C++ 数据。要做新的 3D 游戏，从这个目录复制
+`gfx/`、`world/`、`game/` 的骨架，替换关卡描述与角色网格即可；渲染约束与真机数据见
+[SDK API 设计 §3.1](../docs/design/sdk-api.zh-CN.md)。
 
 所有游戏音效使用 `apps/<game>/audio/sfx.json` 作为唯一参数源，并在正式 Bundle 构建中执行感知分析门禁。
 事件层级、重复暴露、跨游戏对齐和真机 A/B 流程见
@@ -139,7 +146,7 @@ bash tools/p4.sh build-apps
 bash tools/p4.sh flash-apps /dev/cu.usbmodemPORT
 ```
 
-`flash-apps` 明确替换 App Store，并写入五个示例 App；不再提供会把任意 Bundle 直接写入
+`flash-apps` 明确替换 App Store，并写入六个示例 App；不再提供会把任意 Bundle 直接写入
 分区的独立公开脚本。单 App 开发安装走 USB Local Control 或 Remote Control 的正常安装事务。
 
 `micropixel build` 默认使用 `development` profile，保留 Wasm 调试信息和 AOT 调用栈；

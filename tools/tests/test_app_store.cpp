@@ -15,8 +15,14 @@
 #include "runtime/bundle/bundle_reader.h"
 #include "runtime/bundlefs/bundlefs.h"
 #include "runtime/bundlefs/bundlefs_format.h"
+#include "sdkconfig.h"
 
 namespace {
+
+constexpr uint32_t kMatchingTarget = CONFIG_IDF_TARGET_ESP32S3 ? MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3
+                                                               : MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F;
+constexpr uint32_t kOtherTarget = CONFIG_IDF_TARGET_ESP32S3 ? MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F
+                                                            : MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3;
 
 struct FakeFile final {
     std::string name;
@@ -80,8 +86,7 @@ uint32_t HeaderHash(const micropixel_bundle_header_t& input) {
     return value;
 }
 
-std::vector<uint8_t> MakeBundle(std::string_view app_id, uint8_t fill,
-                                uint32_t aot_target_mask = MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F) {
+std::vector<uint8_t> MakeBundle(std::string_view app_id, uint8_t fill, uint32_t aot_target_mask = kMatchingTarget) {
     std::vector<uint8_t> bundle(MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT, fill);
     const bool component = app_id.starts_with("fonts.");
     micropixel_bundle_header_t header{};
@@ -180,8 +185,9 @@ void TestReplacementRetainsOldVersionWhenFull() {
     auto second = first;
     std::fill(second.begin() + sizeof(header) + sizeof(micropixel_bundle_section_t), second.end(), 0x22U);
     auto installed = micropixel::runtime::InstallApp(Request(second, "large"));
-    Check(installed.error() == micropixel::runtime::AppStoreError::kNoSpace && file_count == 1U && files[0].data == first,
-          "replacement without spare space must preserve the old version");
+    Check(
+        installed.error() == micropixel::runtime::AppStoreError::kNoSpace && file_count == 1U && files[0].data == first,
+        "replacement without spare space must preserve the old version");
 
     auto oversized = second;
     oversized.resize(30U * 1024U * 1024U, 0x33U);
@@ -204,8 +210,8 @@ void TestIdentityAndCapacityErrors() {
     Check(micropixel::runtime::UninstallApp("missing").error() == micropixel::runtime::AppStoreError::kNotFound,
           "missing App uninstall must be reported");
 
-    auto incompatible = MakeBundle("xtensa", 0x61U, MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3);
-    Check(micropixel::runtime::InstallApp(Request(incompatible, "xtensa")).error() ==
+    auto incompatible = MakeBundle("other", 0x61U, kOtherTarget);
+    Check(micropixel::runtime::InstallApp(Request(incompatible, "other")).error() ==
                   micropixel::runtime::AppStoreError::kIncompatibleAotTarget &&
               !writer_active && staged.data.empty(),
           "wrong-architecture AOT must be rejected before BundleFS staging begins");

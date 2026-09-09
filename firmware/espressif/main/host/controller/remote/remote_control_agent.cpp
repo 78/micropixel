@@ -1076,13 +1076,8 @@ bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& 
     const auto store_state = controls_.CopyStoreSnapshot();
     cJSON* store = cJSON_AddObjectToObject(root, "store");
     if (store != nullptr) {
-#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
         (void)cJSON_AddNumberToObject(store, "protocol", StoreTrustConfigured() ? 2U : 0U);
-        (void)cJSON_AddStringToObject(store, "target", "riscv32-ilp32f");
-#else
-        (void)cJSON_AddNumberToObject(store, "protocol", 0U);
-        (void)cJSON_AddStringToObject(store, "target", "xtensa");
-#endif
+        (void)cJSON_AddStringToObject(store, "target", StoreAotTarget());
         (void)cJSON_AddNumberToObject(store, "coreAbi", store_state.environment.core_abi);
         (void)cJSON_AddNumberToObject(store, "width", store_state.environment.width);
         (void)cJSON_AddNumberToObject(store, "height", store_state.environment.height);

@@ -53,7 +53,8 @@ RendererInfo Renderer::info() const {
                         (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_DIRECT_SCANOUT) != 0U,
                         (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED) != 0U,
                         raw.max_full_frame_fps,
-                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER) != 0U};
+                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER) != 0U,
+                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON) != 0U};
 }
 
 namespace {

@@ -78,7 +78,7 @@ micropixel --transport usb screenshot --output store/02-playing.jpg
 显示尺寸使用 SDK 的逻辑坐标，不是物理屏幕像素。`required` 是必须具备的能力，`optional` 缺失时 App 应正常降级；`any_of` 的每组至少满足一种，例如 `[["input.touch", "input.keys"]]`。
 Service 版本以 `(major << 16) | minor` 编码。声明应以实际实现和测试为准。
 
-公开发布当前支持 P4/S31 的 `riscv32-ilp32f`，要求单线程、内存检查开启、AOT v6，Bundle 最大 8 MiB。
+发布会先构建并校验 P4/S31 的 `riscv32-ilp32f` 和 ESP32-S3 的 `xtensa` 两份独立 Bundle，再逐份上传。需要准备两种架构的 WAMRC（`WAMRC` 指定 RISC-V 编译器，`XTENSA_WAMRC` 指定 Xtensa 编译器）；要求单线程、内存检查开启、AOT v6，每份 Bundle 最大 8 MiB。
 
 ## 3. 校验、登录、发布
 
@@ -97,10 +97,10 @@ micropixel publish
 micropixel publish --notes-file CHANGELOG.txt --tested-device metalio-claw4
 ```
 
-`--tested-device` 可重复填写 `metalio-claw4`、`esp-mosaico`，只声明实际测试过的设备。
+`--tested-device` 可重复填写 `metalio-claw4`、`esp-mosaico`、`esp-box-3`、`szpi-esp32s3`、`m5stack-cores3`，只声明实际测试过的设备。
 `--notes-file` 最多 3000 UTF-8 字节，描述本次版本变化，不能代替应用介绍或玩法。
 
-首次成功发布绑定 App ID 的所有者。同版本、同 Bundle 可重试；同版本不能替换成不同内容。
+首次成功发布绑定 App ID 的所有者。同版本同架构、同 Bundle 可重试；同版本同架构不能替换成不同内容。已有单架构版本可补发另一架构。
 发布命令本身不会给用户设备自动安装或运行 App。
 
 ## 4. 完善商店页面

@@ -138,11 +138,13 @@ class RendererInfo final {
     [[nodiscard]] constexpr uint16_t max_full_frame_fps() const { return max_full_frame_fps_; }
     // Whether Host raster kernels (RasterResources, HostSurface::Update) are available.
     [[nodiscard]] constexpr bool raster_supported() const { return raster_supported_; }
+    // Whether the Host accepts RasterDrawList::Triangle / Quad records.
+    [[nodiscard]] constexpr bool polygon_supported() const { return polygon_supported_; }
 
    private:
     constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t physical_width, uint32_t physical_height,
                            DisplayInsets safe_area_insets, bool direct_scanout, bool rgb565_byte_swapped,
-                           uint16_t max_full_frame_fps, bool raster_supported)
+                           uint16_t max_full_frame_fps, bool raster_supported, bool polygon_supported)
         : width_(width),
           height_(height),
           physical_width_(physical_width),
@@ -151,7 +153,8 @@ class RendererInfo final {
           max_full_frame_fps_(max_full_frame_fps),
           direct_scanout_(direct_scanout),
           rgb565_byte_swapped_(rgb565_byte_swapped),
-          raster_supported_(raster_supported) {}
+          raster_supported_(raster_supported),
+          polygon_supported_(polygon_supported) {}
 
     uint32_t width_{};
     uint32_t height_{};
@@ -162,6 +165,7 @@ class RendererInfo final {
     bool direct_scanout_{};
     bool rgb565_byte_swapped_{};
     bool raster_supported_{};
+    bool polygon_supported_{};
 
     friend class Renderer;
 };
@@ -334,6 +338,50 @@ struct WarpEntry final {
     }
 };
 
+// One corner of a RasterDrawList::Triangle / Quad. Screen position in 12.4
+// fixed-point buffer pixels (sub-pixel bits keep slow edges from jittering),
+// texel coordinates in 8.8 fixed point (integer part wraps on the texture
+// size) and the lit palette level at this corner. Build with
+// RasterVertex::At() from float pixel / texel values.
+struct RasterVertex final {
+    static constexpr int32_t kPositionScale = 16;   // 12.4
+    static constexpr int32_t kTexelScale = 256;     // 8.8
+    static constexpr float kMaxPosition = 2047.0F;  // int16 range of 12.4
+
+    int16_t x{};
+    int16_t y{};
+    uint16_t u{};
+    uint16_t v{};
+    uint8_t light{};
+
+    // Positions are clamped to the representable range (the Host clips the
+    // polygon anyway); texel coordinates wrap on 256.
+    [[nodiscard]] static RasterVertex At(float x, float y, float u, float v, uint8_t light) {
+        RasterVertex vertex{};
+        vertex.x = Position(x);
+        vertex.y = Position(y);
+        vertex.u = Texel(u);
+        vertex.v = Texel(v);
+        vertex.light = light;
+        return vertex;
+    }
+
+   private:
+    // Rounds toward negative infinity without libm (the SDK links none).
+    [[nodiscard]] static int32_t FloorToInt(float value) {
+        const auto truncated = static_cast<int32_t>(value);
+        return static_cast<float>(truncated) > value ? truncated - 1 : truncated;
+    }
+    [[nodiscard]] static int16_t Position(float value) {
+        if (value > kMaxPosition) value = kMaxPosition;
+        if (value < -kMaxPosition) value = -kMaxPosition;
+        return static_cast<int16_t>(FloorToInt(value * static_cast<float>(kPositionScale) + 0.5F));
+    }
+    [[nodiscard]] static uint16_t Texel(float value) {
+        return static_cast<uint16_t>(FloorToInt(value * static_cast<float>(kTexelScale)) & 0xFFFF);
+    }
+};
+
 // Draw list for one HostSurface buffer (Graphics 1.6). Records are encoded
 // into a fixed wire buffer and handed to the Host, which rasterizes them
 // synchronously into the buffer; a full wire buffer is flushed automatically,
@@ -397,6 +445,20 @@ class RasterDrawList final {
     // Fills `area` (clipped) with `color`; alpha 255 writes, less blends over
     // the existing pixels. alpha 0 is rejected.
     [[nodiscard]] bool FillRect(Rect area, Color color, uint8_t alpha = 255U);
+
+    // Affine textured polygons (RendererInfo::polygon_supported()). Corners
+    // may be in either winding; a Quad must be convex. u/v and light are
+    // interpolated along the edges and across each scanline without
+    // perspective correction, sampling a kRowMajor power-of-two texture
+    // (floor(u) mod width, floor(v) mod height) at the interpolated level of
+    // the current palette. `transparent` skips texel index 0. The Host clips;
+    // zero-area polygons draw nothing.
+    [[nodiscard]] bool Triangle(const RasterVertex (&corners)[3], uint8_t texture_slot, bool transparent = false);
+    [[nodiscard]] bool Quad(const RasterVertex (&corners)[4], uint8_t texture_slot, bool transparent = false);
+    // Untextured variants: every pixel takes palette entry `color_index` at
+    // the interpolated light level (the corners' u/v are ignored).
+    [[nodiscard]] bool FlatTriangle(const RasterVertex (&corners)[3], uint8_t color_index);
+    [[nodiscard]] bool FlatQuad(const RasterVertex (&corners)[4], uint8_t color_index);
 
    private:
     explicit RasterDrawList(int32_t status) : status_(status) {}

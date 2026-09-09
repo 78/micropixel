@@ -30,16 +30,33 @@ class PublicationTests(unittest.TestCase):
             root=Path(directory)/'demo'
             with patch('sys.argv',['micropixel','init',str(root)]),redirect_stdout(io.StringIO()):self.assertEqual(CLI.main(),0)
             manifest=json.loads((root/'app.json').read_text())
-            aot=root/'demo.aot';payload=bytearray(64);payload[:8]=b'\0aot\x06\0\0\0';struct.pack_into('<I',payload,12,48);struct.pack_into('<HHII',payload,20,1,243,1,3);payload[48:55]=b'riscv32';aot.write_bytes(payload)
-            output=root/'demo.bundle.bin'
-            with patch('sys.argv',['builder','--app-manifest',str(root/'app.json'),'--aot',str(aot),'--aot-target','riscv32-ilp32f','--output',str(output)]),redirect_stdout(io.StringIO()):builder.main()
+            outputs = []
+            for target, machine, elf_flags, arch in [('riscv32-ilp32f', 243, 3, b'riscv32'), ('xtensa', 94, 0, b'xtensa')]:
+                aot = root / f'{target}.aot'
+                payload = bytearray(64)
+                payload[:8] = b'\0aot\x06\0\0\0'
+                struct.pack_into('<I', payload, 12, 48)
+                struct.pack_into('<HHII', payload, 20, 1, machine, 1, elf_flags)
+                payload[48:48 + len(arch)] = arch
+                aot.write_bytes(payload)
+                output = root / f'{target}.bundle.bin'
+                with patch('sys.argv', ['builder', '--app-manifest', str(root/'app.json'), '--aot', str(aot), '--aot-target', target, '--output', str(output)]), redirect_stdout(io.StringIO()):
+                    builder.main()
+                outputs.append(output)
             args=argparse.Namespace(project=str(root),dry_run=True,output_dir=None,force=False,notes_file=None,tested_device=[])
-            with patch.object(CLI,'package_project',return_value=output) as package,patch.object(CLI,'publisher_token') as token,patch.object(CLI,'store_request') as request,redirect_stdout(io.StringIO()) as stdout:
+            with patch.object(CLI,'package_project',side_effect=outputs) as package,patch.object(CLI,'publisher_token') as token,patch.object(CLI,'store_request') as request,redirect_stdout(io.StringIO()) as stdout:
                 CLI.run_publish(args)
                 token.assert_not_called();request.assert_not_called()
-                self.assertEqual(package.call_args.args[1],'release')
-                self.assertEqual(package.call_args.args[4:6],('riscv32-ilp32f',False))
-                self.assertIn('"version": "0.1.0"',stdout.getvalue())
+                self.assertEqual([call.args[4:6] for call in package.call_args_list], [('riscv32-ilp32f', False), ('xtensa', False)])
+                self.assertEqual([r['target'] for r in json.loads(stdout.getvalue())['releases']], ['riscv32-ilp32f', 'xtensa'])
+            args.dry_run = False
+            with patch.object(CLI, 'package_project', side_effect=outputs), patch.object(CLI, 'publisher_token', return_value='test'), patch.object(CLI, 'store_request', return_value={}) as request, redirect_stdout(io.StringIO()):
+                CLI.run_publish(args)
+                self.assertEqual([call.args[2] for call in request.call_args_list[1:]], [p.read_bytes() for p in outputs])
+            with patch.object(CLI, 'package_project', side_effect=[outputs[0], CLI.CliError('compile failed')]), patch.object(CLI, 'publisher_token', return_value='test'), patch.object(CLI, 'store_request') as request:
+                with self.assertRaisesRegex(CLI.CliError, 'compile failed'):
+                    CLI.run_publish(args)
+                self.assertEqual(request.call_count, 1)  # Preflight only; neither artifact uploaded.
             manifest.pop('requirements');(root/'app.json').write_text(json.dumps(manifest))
             with self.assertRaises(CLI.CliError):CLI.run_publish(args)
 
