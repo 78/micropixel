@@ -298,12 +298,47 @@ class Manager:
             os.replace(staging, location)
         return location / relative
 
+    def compose_wasi(self, wasi: Path, crt: Path, platform: dict, install: bool) -> Path:
+        identity = digest((platform['wasi']['sha256'] + platform['msvc_crt']['sha256']).encode())
+        destination = self.root / 'environments' / identity
+        receipt = destination / '.complete.json'
+        if receipt.is_file() and read_json(receipt).get('identity') == identity:
+            return destination / 'wasi'
+        if not install:
+            raise Failure('dependency_missing', 'Prepared WASI runtime is missing; rerun setup --yes', 4)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        def link_or_copy(source, target):
+            try:
+                os.link(source, target)
+            except OSError:
+                shutil.copy2(source, target)
+        with tempfile.TemporaryDirectory(prefix='.compose-', dir=destination.parent) as temporary:
+            staging = Path(temporary) / 'content'
+            shutil.copytree(wasi, staging / 'wasi', copy_function=link_or_copy)
+            required = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+            if not all((crt / name).is_file() for name in required):
+                raise Failure('dependency_corrupt', 'App-local MSVC runtime is incomplete', 4)
+            for source in crt.iterdir():
+                if source.is_file():
+                    target = staging / 'wasi/bin' / source.name
+                    # Unlink first: never modify the immutable cache through a hard link.
+                    target.unlink(missing_ok=True)
+                    shutil.copy2(source, target)
+            atomic_json(staging / '.complete.json', {'identity': identity})
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(staging, destination)
+        return destination / 'wasi'
+
     def prepare(self, manifest: dict, install: bool = False) -> dict[str, str]:
         platform = manifest.get('platforms', {}).get('windows-x64')
         if not platform:
             raise Failure('unsupported_platform', 'SDK has no Windows x64 toolchain', 4)
         sdk = self.asset(manifest['sdk'], install)
         wasi = self.asset(platform['wasi'], install)
+        if platform.get('msvc_crt'):
+            crt = self.asset(platform['msvc_crt'], install)
+            wasi = self.compose_wasi(wasi, crt, platform, install)
         riscv = self.asset(platform['wamrc_riscv'], install)
         xtensa = self.asset(platform['wamrc_xtensa'], install)
         paths = {'sdk': str(sdk), 'WASI_SDK_PATH': str(wasi),

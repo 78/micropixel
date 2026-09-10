@@ -182,6 +182,21 @@ class ManagerTests(unittest.TestCase):
             self.assertTrue((self.manager.asset(spec, install=True) / 'tool.exe').exists())
 
 
+    def test_app_local_crt_does_not_mutate_original_wasi_cache(self):
+        wasi, crt = self.root / 'wasi', self.root / 'crt'
+        (wasi / 'bin').mkdir(parents=True)
+        (wasi / 'bin/clang++.exe').write_bytes(b'compiler')
+        (wasi / 'bin/msvcp140.dll').write_bytes(b'original')
+        crt.mkdir()
+        for name in ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'):
+            (crt / name).write_bytes(b'redistributed')
+        platform = {'wasi': {'sha256': 'a' * 64}, 'msvc_crt': {'sha256': 'b' * 64}}
+        prepared = self.manager.compose_wasi(wasi, crt, platform, True)
+        self.assertEqual((prepared / 'bin/msvcp140.dll').read_bytes(), b'redistributed')
+        self.assertEqual((wasi / 'bin/msvcp140.dll').read_bytes(), b'original')
+        self.assertEqual(self.manager.compose_wasi(wasi, crt, platform, False), prepared)
+
+
 
 if __name__ == '__main__':
     unittest.main()
