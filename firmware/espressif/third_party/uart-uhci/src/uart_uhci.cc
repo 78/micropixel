@@ -7,7 +7,7 @@
 #include "uart_uhci.h"
 
 #include <cstring>
-#include <vector>
+#include <array>
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_attr.h"
@@ -58,8 +58,8 @@ esp_err_t UartUhci::Init(const Config& config) {
     esp_err_t ret = ESP_OK;
 
     // Validate buffer pool config
-    ESP_RETURN_ON_FALSE(config.rx_pool.buffer_count >= 2, ESP_ERR_INVALID_ARG, kTag,
-                        "buffer pool needs at least 2 buffers");
+    ESP_RETURN_ON_FALSE(config.rx_pool.buffer_count >= 2 && config.rx_pool.buffer_count <= 32, ESP_ERR_INVALID_ARG, kTag,
+                        "buffer pool needs 2 to 32 buffers");
     ESP_RETURN_ON_FALSE(config.rx_pool.buffer_size > 0, ESP_ERR_INVALID_ARG, kTag,
                         "buffer size must be > 0");
 
@@ -290,7 +290,7 @@ void UartUhci::RemountAndRestartDma(bool flush_uart_fifo) {
         uart_ll_rxfifo_rst(hw);
     }
 
-    std::vector<gdma_buffer_mount_config_t> mount_configs(rx_pool_size_);
+    std::array<gdma_buffer_mount_config_t, 32> mount_configs{};
     for (size_t i = 0; i < rx_pool_size_; i++) {
         RxBuffer* buf = &rx_buffer_pool_[i];
         buf->size = 0;

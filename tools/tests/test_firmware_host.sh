@@ -86,6 +86,10 @@ build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physic
 build_and_run frame_timing \
     "$workspace_root/tools/tests/test_frame_timing.cpp"
 
+build_and_run nt26_transport \
+    -I "$workspace_root/firmware/espressif/third_party/uart-eth-modem/include" \
+    "$workspace_root/tools/tests/test_nt26_transport.cpp"
+
 build_and_run guest_timers \
     "$workspace_root/tools/tests/test_guest_timers.cpp" \
     "$workspace_root/guest/runtime/timers.cpp"

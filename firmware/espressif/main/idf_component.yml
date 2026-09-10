@@ -76,6 +76,10 @@ dependencies:
     override_path: "../third_party/uart-uhci"
     rules:
       - if: "target == esp32p4"
+  uart-eth-modem:
+    path: "../third_party/uart-eth-modem"
+    rules:
+      - if: "target == esp32p4"
   espressif/iot_eth:
     version: "^0.1.0"
     rules:

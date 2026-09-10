@@ -12,6 +12,9 @@ its fixed RX buffer pool and UART FIFO transmit API. ESP-IDF 6.1 compatibility c
 - Allocate the RX channel with the new three-argument `gdma_new_ahb_channel` API;
   the removed `direction` field is replaced by a null TX output parameter.
 
+The RX pool is bounded to 32 buffers. DMA remount uses a fixed array instead of
+allocating a vector on every wakeup or overflow recovery.
+
 Trailing whitespace was removed for the repository diff check. The remaining upstream implementation is unchanged. Build compatibility does not
 verify the modem handshake, DMA reception, overflow recovery or power lifecycle;
 these still require integration and hardware acceptance.

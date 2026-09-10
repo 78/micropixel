@@ -1,0 +1,4 @@
+version: "0.4.2"
+license: Apache-2.0
+dependencies:
+  idf: ">=6.1"

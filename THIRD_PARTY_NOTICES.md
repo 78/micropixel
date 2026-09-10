@@ -186,6 +186,11 @@ in `firmware/espressif/third_party/uart-uhci` retains upstream documentation and
 Apache-2.0 license copy. Its `MICROPIXEL.md` records the ESP-IDF 6.1 compatibility changes. The managed iot_eth
 component retains its license file. These prerequisites alone do not enable cellular connectivity.
 
+`firmware/espressif/third_party/uart-eth-modem` ports the factory NT26 driver from
+MetalioClaw4 revision `ca3aa3fa027ff7dad2adf0c2d03c4f24aa838950`, whose header identifies
+`78/uart-eth-modem` 0.4.2 (Copyright 2025 Terrence, Apache-2.0). Its `MICROPIXEL.md`
+records the protocol-preserving lifecycle, bounded-buffer and ESP-IDF compatibility changes.
+
 ## Font Awesome glyphs
 
 MicroPixel's generated `builtin-latin-v1` semantic fonts include the public SDK symbol set from the Font Awesome 5
