@@ -70,6 +70,8 @@ Do not use the test index for production projects. See windows-acceptance.zh-CN.
             else:
                 run('git', '-C', directory, 'checkout', '--orphan', 'sdk-channel')
                 index = {'schema_version': 1, 'stable': None, 'preview': None, 'versions': {}}
+            if index.get('preview') and tuple(map(int, index['preview'].split('.'))) > tuple(map(int, version.split('.'))):
+                raise SystemExit('A newer Preview is already promoted; refusing to roll back the channel')
             if version in index['versions'] and index['versions'][version] != entry['entry']:
                 raise SystemExit('Channel version identity is immutable')
             index['versions'][version] = entry['entry']
@@ -78,10 +80,14 @@ Do not use the test index for production projects. See windows-acceptance.zh-CN.
             run('git', '-C', directory, 'config', 'user.name', 'MicroPixel release')
             run('git', '-C', directory, 'config', 'user.email', 'release@users.noreply.github.com')
             run('git', '-C', directory, 'add', 'index.json')
-            run('git', '-C', directory, 'commit', '-m', f'Promote verified SDK {version} Preview')
-            # A concurrent channel change fails normally; never force-push it.
-            run('git', '-C', directory, 'push', 'origin', 'HEAD:refs/heads/sdk-channel')
-        run('gh', 'release', 'upload', tag, out / 'public-verification.json')
+            changed = subprocess.run(['git', '-C', str(directory), 'diff', '--cached', '--quiet']).returncode
+            if changed:
+                run('git', '-C', directory, 'commit', '-m', f'Promote verified SDK {version} Preview')
+                # A concurrent channel change fails normally; never force-push it.
+                run('git', '-C', directory, 'push', 'origin', 'HEAD:refs/heads/sdk-channel')
+        release = json.loads(subprocess.check_output(['gh', 'release', 'view', tag, '--json', 'assets']))
+        if not any(asset['name'] == 'public-verification.json' for asset in release['assets']):
+            run('gh', 'release', 'upload', tag, out / 'public-verification.json')
 
 
 if __name__ == '__main__':
