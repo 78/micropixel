@@ -1,6 +1,7 @@
 """Windows path regressions, runnable on POSIX and Windows."""
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from tools.tests.test_micropixel_cli import CLI
@@ -16,6 +17,25 @@ class WindowsDependencies(unittest.TestCase):
                 Path(r'C:\Users\dev\game\main.cpp').absolute(),
                 Path('C:/中文/my game/header.hpp').absolute(),
             })
+
+    def test_wamrc_unicode_staging_preserves_output_on_failure(self):
+        with tempfile.TemporaryDirectory(prefix='中文 game ') as temporary:
+            root = Path(temporary)
+            wasm, aot = root / '游戏.wasm', root / '游戏.aot'
+            wasm.write_bytes(b'wasm input')
+            aot.write_bytes(b'previous output')
+            def compile(command, *, cwd, check):
+                self.assertEqual(command[-3:], ['-o', 'module.aot', 'module.wasm'])
+                self.assertEqual((cwd / 'module.wasm').read_bytes(), b'wasm input')
+                (cwd / 'module.aot').write_bytes(b'new output')
+            with patch.object(CLI.sys, 'platform', 'win32'), patch.object(CLI, '_run_process', side_effect=OSError('interrupted')):
+                with self.assertRaises(OSError):
+                    CLI._run_aot_compiler(['wamrc'], wasm, aot)
+            self.assertEqual(aot.read_bytes(), b'previous output')
+            with patch.object(CLI.sys, 'platform', 'win32'), patch.object(CLI, '_run_process', side_effect=compile):
+                CLI._run_aot_compiler(['wamrc'], wasm, aot)
+            self.assertEqual(aot.read_bytes(), b'new output')
+            self.assertEqual(list(root.glob('.wamrc-*')), [])
 
     def test_make_escapes_and_continuations_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:

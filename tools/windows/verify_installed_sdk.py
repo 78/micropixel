@@ -72,6 +72,10 @@ def main():
     project = root / '中文 游戏 & app'
     invoke('init', str(project), '--app-id', 'local.windows-verification', '--title', 'Windows Verification')
     lock_before = (project / 'micropixel.lock.json').read_bytes()
+    source = project / 'src/main.cpp'
+    source.write_text('#include \"cache_probe.hpp\"\n' + source.read_text(encoding='utf-8'), encoding='utf-8')
+    header = project / 'src/cache_probe.hpp'
+    header.write_text('#define CACHE_PROBE 1\n')
     for target in ('riscv32-ilp32f', 'xtensa'):
         invoke('build', str(project), '--aot-target', target, '--offline')
         invoke('package', str(project), '--aot-target', target, '--offline')
@@ -83,6 +87,11 @@ def main():
         invoke('package', str(project), '--aot-target', target, '--offline')
         if any(p.stat().st_mtime_ns != stamp for p, stamp in files.items()):
             raise RuntimeError('Incremental package rewrote build outputs')
+    previous_aot = {p: p.stat().st_mtime_ns for p in (project / 'build').glob('*.aot')}
+    header.write_text('#define CACHE_PROBE 2\n')
+    invoke('package', str(project), '--aot-target', 'xtensa', '--offline')
+    if not previous_aot or any(p.stat().st_mtime_ns == stamp for p, stamp in previous_aot.items()):
+        raise RuntimeError('Changed header did not invalidate cached AOT')
     invoke('publish', str(project), '--dry-run', '--offline')
     if (project / 'micropixel.lock.json').read_bytes() != lock_before:
         raise RuntimeError('Build/package/preflight modified the project lock')

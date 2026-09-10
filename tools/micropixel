@@ -16,6 +16,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -200,6 +201,20 @@ def tool_executable(path: str | Path) -> Path:
             return executable
     return candidate
 
+
+
+def _run_aot_compiler(command: list[str], wasm: Path, aot: Path) -> None:
+    if sys.platform != "win32" or (str(wasm).isascii() and str(aot).isascii()):
+        _run_process([*command, "-o", str(aot), str(wasm)], check=True)
+        return
+    # The pinned WAMR fork uses narrow argv/fopen on Windows. CreateProcessW
+    # handles a Unicode working directory, so keep only ASCII filenames in argv.
+    # Stage beside the output and replace it only after a successful compilation.
+    with tempfile.TemporaryDirectory(prefix=".wamrc-", dir=aot.parent) as temporary:
+        staging = Path(temporary)
+        shutil.copyfile(wasm, staging / "module.wasm")
+        _run_process([str(Path(command[0]).absolute()), *command[1:], "-o", "module.aot", "module.wasm"], cwd=staging, check=True)
+        os.replace(staging / "module.aot", aot)
 
 def sdk_root() -> Path:
     script_directory = Path(__file__).resolve().parent
@@ -1878,7 +1893,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         ],
         check=True,
     )
-    _run_process(
+    _run_aot_compiler(
         [
             wamrc,
             *AOT_TARGET_FLAGS[aot_target],
@@ -1891,11 +1906,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             "--enable-dump-call-stack",
             # Experiment hook: extra wamrc flags for codegen A/B. Not a release knob.
             *shlex.split(environment.get("MICROPIXEL_WAMRC_EXTRA_FLAGS", "")),
-            "-o",
-            str(aot_output),
-            str(wasm_output),
         ],
-        check=True,
+        wasm_output,
+        aot_output,
     )
     # Feed compiler-discovered headers and toolchain files into the outer
     # project/Bundle stamp too, so its fast path cannot hide a stale object.
