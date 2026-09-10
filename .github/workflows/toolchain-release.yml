@@ -1,0 +1,41 @@
+name: Publish verified Windows toolchain
+on:
+  workflow_dispatch:
+    inputs:
+      verification_run:
+        description: Successful Windows toolchain verification run ID
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-windows-toolchain
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: windows-2022
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERIFICATION_RUN: ${{ inputs.verification_run }}
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.12'
+      - name: Verify provenance and download successful artifacts
+        run: python tools/windows/collect_verified_toolchain.py --run $env:VERIFICATION_RUN --output build/verified
+      - name: Collect pinned app-local runtime
+        shell: pwsh
+        run: ./tools/windows/package_crt.ps1 -Output build/verified/msvc-crt
+      - name: Create immutable toolchain archives
+        shell: pwsh
+        run: |
+          $tag = python tools/windows/release_metadata.py toolchain --input build/verified --output build/release --repository $env:GH_REPO
+          if ($LASTEXITCODE -ne 0) { throw 'Toolchain packaging failed' }
+          "TOOLCHAIN_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Publish immutable toolchain release
+        run: python tools/windows/publish_toolchain.py --directory build/release --tag $env:TOOLCHAIN_TAG
