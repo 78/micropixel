@@ -38,6 +38,23 @@ indices, scroll state or UI objects. The bounded virtualized Hall-card policy li
 board must not define pages, Hall lifecycle, card events or product UI
 properties.
 
+## Metalio-Claw4 peripheral power
+
+`BoardIo::InitializeIoExpander()` establishes the factory TCA9555 startup
+directions and rail levels before display and peripheral initialization. NT26,
+the Bluetooth audio bridge and the active-low SD rail are powered; GPS, camera,
+PA and USB host power are disabled. The audio source selects the Bluetooth
+bridge. The power-key pulse stays low, while the power key, accelerometer
+interrupt, wired/wireless charge detectors and unused lines stay inputs.
+Output latches are written before enabling their output directions to avoid
+transient PA/USB host activation. Subsequent audio and power-key operations
+continue through the shared I2C executor.
+
+These power defaults do not by themselves implement cellular networking, SD
+mounting, camera capture or GPS. Hardware acceptance must check the rail levels
+after both cold boot and an MCU-only reset, verify charging/key inputs, and
+measure current with the NT26 powered but not yet managed by a network driver.
+
 ## Required files and registration
 
 1. Add `boards/<board>/CMakeLists.txt` and the implementation that provides the

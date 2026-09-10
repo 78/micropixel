@@ -41,7 +41,14 @@ wasi-sdk. Link-time garbage collection retains only objects referenced by each G
 The toolchain distributions contain the complete applicable license and attribution files. MicroPixel does not
 copy the libc++ source tree into this repository.
 
-## MetalioClaw4 display driver
+## MetalioClaw4 board initialization and display driver
+
+The TCA9555 startup pin directions and peripheral rail levels in
+`firmware/espressif/main/platform/boards/metalio-claw4/board_io.cpp` follow
+`IOExpander.hpp` and `metalio-claw-4.cc` from MetalioClaw4 revision
+`ca3aa3fa027ff7dad2adf0c2d03c4f24aa838950`. MicroPixel writes output latches
+before enabling output directions and retains its own peripheral lifecycle.
+The source project and MIT notice below apply.
 
 Portions of `firmware/espressif/main/platform/drivers/display/nv3051f/esp_lcd_nv3051f.c` and
 `firmware/espressif/main/platform/drivers/display/nv3051f/esp_lcd_nv3051f.h`, including the panel initialization sequence, are derived

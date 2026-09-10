@@ -155,7 +155,39 @@ esp_err_t BoardIo::InitializeIoExpander() {
     config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     config.device_address = board::kIoExpanderI2cAddress;
     config.scl_speed_hz = 400000U;
-    return i2c_master_bus_add_device(i2c_bus_, &config, &io_expander_);
+    esp_err_t status = i2c_master_bus_add_device(i2c_bus_, &config, &io_expander_);
+    if (status != ESP_OK) {
+        return status;
+    }
+
+    // Match the factory board's peripheral rails before display/driver startup:
+    // GPS off, audio routed to the BT bridge, camera off, SD on, power pulse
+    // low, BT and NT26 on; PA and USB host power off. The key, accelerometer
+    // interrupt, charge detectors and unused pins remain inputs.
+    // Program output latches before directions so reset-high TCA9555 latches
+    // cannot briefly enable the PA or USB host supply while becoming outputs.
+    constexpr uint8_t kOutputPort0 = 0x02U;
+    constexpr uint8_t kConfigurationPort0 = 0x06U;
+    constexpr uint16_t kOutputs = 0x11DFU;
+    constexpr uint16_t kInitialHigh = (1U << 1U) | (1U << 2U) | (1U << 6U) | (1U << 7U);
+    for (uint8_t port = 0U; port < 2U; ++port) {
+        const uint8_t address = kOutputPort0 + port;
+        uint8_t previous = 0U;
+        status = i2c_master_transmit_receive(io_expander_, &address, sizeof(address), &previous, sizeof(previous), 20);
+        if (status != ESP_OK) {
+            return status;
+        }
+        const uint8_t mask = static_cast<uint8_t>(kOutputs >> (port * 8U));
+        const uint8_t high = static_cast<uint8_t>(kInitialHigh >> (port * 8U));
+        const uint8_t output[] = {address, static_cast<uint8_t>((previous & ~mask) | high)};
+        status = i2c_master_transmit(io_expander_, output, sizeof(output), 20);
+        if (status != ESP_OK) {
+            return status;
+        }
+    }
+    const uint8_t directions[] = {kConfigurationPort0, static_cast<uint8_t>(~kOutputs),
+                                  static_cast<uint8_t>(~(kOutputs >> 8U))};
+    return i2c_master_transmit(io_expander_, directions, sizeof(directions), 20);
 }
 
 esp_err_t BoardIo::InitializeLcd() {
