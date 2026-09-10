@@ -90,7 +90,7 @@ def toolchain(verified: Path, output: Path, repository: str):
     wasi_archive = verified / 'wasi.tar.gz'
     if file_digest(wasi_archive) != wasi['sha256']:
         raise ValueError('WASI archive checksum mismatch')
-    packages['wasi'] = {'name': 'wasi-sdk-33', 'url': wasi['url'], 'sha256': wasi['sha256'],
+    packages['wasi'] = {'name': 'wasi-sdk-33', 'version': '33.0', 'url': wasi['url'], 'sha256': wasi['sha256'],
                         'size_bytes': wasi_archive.stat().st_size, 'root': wasi['directory']}
     write_json(output / 'toolchain.json', {'schema_version': 1, 'toolchain_id': toolchain_id,
                 'source_lock_sha256': source_sha, 'build_recipe_sha256': recipe_sha, 'packaging_recipe_sha256': packaging_sha, 'msvc_crt': crt_sources, 'sources': sources, 'platforms': {'windows-x64': packages}})
@@ -107,7 +107,7 @@ def sdk(sdk_directory: Path, toolchain_path: Path, output: Path, repository: str
     sdk_asset = asset(sdk_directory / metadata['archiveName'], base, 'micropixel-sdk-' + version)
     if sdk_asset['sha256'] != metadata['sha256']:
         raise ValueError('SDK archive checksum mismatch')
-    write_json(output / 'sdk-manifest.json', {'schema_version': 1, 'sdk_version': version,
+    write_json(output / 'sdk-manifest.json', {'schema_version': 1, 'sdk_version': version, 'minimum_manager_version': '0.1.0',
         'toolchain_id': toolchain['toolchain_id'], 'sdk': sdk_asset, 'platforms': toolchain['platforms'],
         'compatibility': {'lock_schema': 1, 'aot_version': 6, 'wamr_commit': toolchain['sources']['wamr_commit']},
         'release_notes_url': f'https://github.com/{repository}/releases/tag/sdk-v{version}'})

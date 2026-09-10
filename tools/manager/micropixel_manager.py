@@ -299,6 +299,9 @@ class Manager:
         if not isinstance(manifest, dict) or manifest.get('schema_version') != 1 or manifest.get('sdk_version') != version:
             raise Failure('incompatible_manifest', 'Unsupported or mismatched SDK manifest', 4)
         identifier(manifest['toolchain_id'])
+        minimum = manifest.get('minimum_manager_version', '0.1.0')
+        if newer(minimum, VERSION):
+            raise Failure('manager_upgrade_required', 'SDK requires a newer manager; run micropixel update --yes', 4)
         return manifest, checksum
 
     def asset(self, spec: dict, install: bool = False) -> Path:
@@ -417,6 +420,9 @@ class Manager:
         for path in (sdk / 'micropixel', wasi / 'bin/clang++.exe', Path(paths['WAMRC']), Path(paths['XTENSA_WAMRC'])):
             if not path.is_file():
                 raise Failure('dependency_corrupt', f'Required tool is missing: {path.name}', 4)
+        declared = re.search(r'^VERSION = "([^"]+)"$', (sdk / 'micropixel').read_text(encoding='utf-8'), re.M)
+        if not declared or declared[1] != manifest['sdk_version']:
+            raise Failure('sdk_identity_mismatch', 'Installed CLI version differs from the SDK manifest', 4)
         return paths
 
     def lock(self, project: Path) -> dict:
@@ -545,7 +551,7 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 if probe.returncode:
                     raise Failure('tool_unusable', f'{name} could not execute', 4)
                 probes[name] = (probe.stdout or probe.stderr).splitlines()[0]
-            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'pyserial': serial_version, 'manager_version': VERSION, 'manager_build_id': BUILD_ID}
+            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'python_version': sys.version.split()[0], 'pyserial_version': serial_version, 'wasi_sdk_version': manifest['platforms']['windows-x64']['wasi'].get('version', 'unknown'), 'manager_version': VERSION, 'manager_build_id': BUILD_ID}
         if command == 'update':
             index, state, checked = manager.index(force=True)
             candidate = index.get('manager')
@@ -574,6 +580,8 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     cli = load_cli(parser_path)
     parsed = cli.parser().parse_args(arguments)
     command = parsed.command
+    if json_mode and command == 'run' and parsed.follow:
+        raise Failure('invalid_arguments', 'run --json requires --no-follow', 2)
     value = getattr(parsed, 'project', getattr(parsed, 'directory', getattr(parsed, 'source', '.')))
     project = Path(value).resolve()
     if project.is_file():
