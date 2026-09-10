@@ -13,6 +13,9 @@ struct GraphicsOperations final {
     int32_t (*load_font)(void*, const device::FontResourceView&, micropixel_font_info_t&){};
     int32_t (*release_font)(void*, micropixel_font_handle_t){};
     int32_t (*measure_text)(void*, micropixel_font_handle_t, const char*, uint32_t, micropixel_text_metrics_t&){};
+    int32_t (*draw_text)(void*, const device::TextTarget&, int32_t, int32_t, uint32_t, micropixel_font_handle_t,
+                         const char*, uint32_t){};
+    int32_t (*copy_opaque_blocks)(void*, const device::PixelTarget&, const device::OpaqueCopyBlock*, uint32_t){};
     int32_t (*scale_bitmap)(void*, const device::BitmapView&, const device::BitmapView&){};
     int32_t (*show_launch_bitmap)(void*, const device::BitmapView&){};
     void (*dismiss_launch_bitmap)(void*){};
@@ -36,6 +39,11 @@ class GraphicsAdapter final : public device::Graphics {
     [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t font_handle) override;
     [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
                                       micropixel_text_metrics_t& metrics_out) override;
+    [[nodiscard]] int32_t DrawText(const device::TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                   micropixel_font_handle_t font_handle, const char* text,
+                                   uint32_t text_length) override;
+    [[nodiscard]] int32_t CopyOpaqueBlocks(const device::PixelTarget& target, const device::OpaqueCopyBlock* blocks,
+                                           uint32_t count) override;
     [[nodiscard]] int32_t ScaleBitmap(const device::BitmapView& source, const device::BitmapView& destination) override;
     [[nodiscard]] int32_t ShowLaunchBitmap(const device::BitmapView& bitmap) override;
     void DismissLaunchBitmap() override;

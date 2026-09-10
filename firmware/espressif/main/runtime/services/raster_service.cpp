@@ -236,7 +236,8 @@ raster::Resources RasterService::ResourcesView() const {
 }
 
 ServiceResult<void> RasterService::Submit(const uint8_t* bytes, uint32_t length, const DirectSurfaceService& surfaces,
-                                          raster::TextureResolver resolve, void* context) {
+                                          raster::TextureResolver resolve, void* context,
+                                          const raster::TextBinding& text, const raster::CopyBinding& copy) {
     if (!available()) {
         return FailService<void>(MICROPIXEL_STATUS_UNSUPPORTED);
     }
@@ -246,6 +247,12 @@ ServiceResult<void> RasterService::Submit(const uint8_t* bytes, uint32_t length,
     raster::Resources resources = ResourcesView();
     resources.resolve_texture = resolve;
     resources.texture_context = context;
+    resources.validate_text = text.validate;
+    resources.draw_text = text.draw;
+    resources.text_context = text.context;
+    resources.copy_blocks = copy.copy_blocks;
+    resources.copy_context = copy.context;
+    resources.copy_batch = &copy_batch_;
     micropixel_raster_header_t header{};
     std::memcpy(&header, bytes, sizeof(header));
     HostBufferView view{};
@@ -290,7 +297,8 @@ ServiceResult<void> RasterService::Submit(const uint8_t* bytes, uint32_t length,
                  " | span_pair %" PRIu32 " %" PRIu32 " %" PRIu32 " | sprite %" PRIu32 " %" PRIu32 " %" PRIu32
                  " | rect %" PRIu32 " %" PRIu32 " %" PRIu32 " | image %" PRIu32 " %" PRIu32 " %" PRIu32
                  " | warp %" PRIu32 " %" PRIu32 " %" PRIu32 " | triangle %" PRIu32 " %" PRIu32 " %" PRIu32
-                 " | quad %" PRIu32 " %" PRIu32 " %" PRIu32,
+                 " | quad %" PRIu32 " %" PRIu32 " %" PRIu32 " | span %" PRIu32 " %" PRIu32 " %" PRIu32
+                 " | text %" PRIu32 " %" PRIu32 " %" PRIu32,
                  per_submit(MICROPIXEL_RASTER_RECORD_COLUMN), per_submit_us(MICROPIXEL_RASTER_RECORD_COLUMN),
                  per_pixel_ns(MICROPIXEL_RASTER_RECORD_COLUMN), per_submit(MICROPIXEL_RASTER_RECORD_SPAN_PAIR),
                  per_submit_us(MICROPIXEL_RASTER_RECORD_SPAN_PAIR), per_pixel_ns(MICROPIXEL_RASTER_RECORD_SPAN_PAIR),
@@ -302,7 +310,19 @@ ServiceResult<void> RasterService::Submit(const uint8_t* bytes, uint32_t length,
                  per_submit_us(MICROPIXEL_RASTER_RECORD_WARP), per_pixel_ns(MICROPIXEL_RASTER_RECORD_WARP),
                  per_submit(MICROPIXEL_RASTER_RECORD_TRIANGLE), per_submit_us(MICROPIXEL_RASTER_RECORD_TRIANGLE),
                  per_pixel_ns(MICROPIXEL_RASTER_RECORD_TRIANGLE), per_submit(MICROPIXEL_RASTER_RECORD_QUAD),
-                 per_submit_us(MICROPIXEL_RASTER_RECORD_QUAD), per_pixel_ns(MICROPIXEL_RASTER_RECORD_QUAD));
+                 per_submit_us(MICROPIXEL_RASTER_RECORD_QUAD), per_pixel_ns(MICROPIXEL_RASTER_RECORD_QUAD),
+                 per_submit(MICROPIXEL_RASTER_RECORD_SPAN), per_submit_us(MICROPIXEL_RASTER_RECORD_SPAN),
+                 per_pixel_ns(MICROPIXEL_RASTER_RECORD_SPAN), per_submit(MICROPIXEL_RASTER_RECORD_TEXT),
+                 per_submit_us(MICROPIXEL_RASTER_RECORD_TEXT), per_pixel_ns(MICROPIXEL_RASTER_RECORD_TEXT));
+        if (p.copy_batches != 0U) {
+            ESP_LOGI(kTag,
+                     "raster copy engine: batches/submit %" PRIu32 " blocks/submit %" PRIu32 " us/submit %" PRIu32
+                     " ns/px %" PRIu32 " failed batches %" PRIu32,
+                     p.copy_batches / telemetry_submits_, p.copy_blocks / telemetry_submits_,
+                     static_cast<uint32_t>(p.copy_time_us / telemetry_submits_),
+                     p.copy_pixels == 0U ? 0U : static_cast<uint32_t>(p.copy_time_us * 1000U / p.copy_pixels),
+                     p.copy_failures);
+        }
         telemetry_submits_ = 0U;
         telemetry_records_ = 0U;
         telemetry_bytes_ = 0U;

@@ -122,7 +122,9 @@ Label 文本存放在按需增长的 text arena 中，单条文本上限由 Host
 ### Texture 与 atlas
 
 使用生成的 AssetId 加载资源，不手写 TOC 数字。`LoadTexture(asset)` 保留素材像素尺寸，
-`LoadTexture(asset, TextureScale::kDisplay)` 显式适配 2D 逻辑画布。
+`LoadTexture(asset, TextureScale::kDisplay)` 显式适配 2D 逻辑画布，`TextureScale::kSurface` 按当前
+DirectSurface 的 buffer 分辨率（面板比例再除以整数 upscale）解码，让不缩放的 `Image` 记录逐行原样拷贝；
+没有 surface 时返回 InvalidArgument。
 `resources.CreateDynamicTexture(size, format, pixels, pitch)` 返回同一种 `Result<Texture>`。
 `texture.Update(rect, pixels, pitch)` 准备完整的新像素版本，下一次 Present 生效；失败保留旧像素。
 已有节点和材质引用自动跟随更新，不需要每次重新绑定。普通素材 Texture 的 Update 返回 Unsupported。
@@ -196,9 +198,12 @@ Guest 决定几何、遮挡和顺序，Host 执行逐像素操作。
 像素按面板字节序写入，依据 rgb565_byte_swapped 查询；写之前先确认 `Busy(index)` 为假。
 这种模式会提前保留连续内存；`HostSurface` 无需此声明，Guest 内存按需增长。
 
-RasterDrawList 的 Column 使用列主序纹理，SpanPair、Warp 与 Triangle/Quad 使用行主序；Sprite/SolidSprite 用于
-图像和字形，FillRect 用于填充或混合。Column/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect/Warp/Triangle/Quad
-的目标由 Host 裁剪。Triangle/Quad 以 `RasterVertex::At(x, y, u, v, light)`（12.4 定点位置、8.8 定点纹素、
+RasterDrawList 的 Column 使用列主序纹理，Span/SpanPair、Warp 与 Triangle/Quad 使用行主序；Sprite/SolidSprite 用于
+图像和字形，FillRect 用于填充或混合。Column/Span/SpanPair 的坐标由调用方预先裁剪，Sprite/FillRect/Warp/Triangle/Quad
+的目标由 Host 裁剪。Span 是 SpanPair 的单行形式（`Span(y, x0, x1, slot, light, s, t, ds, dt)`），供 Mode7
+类逐行透视地面使用；`Text(origin, text, color, font)` 让 Host 用系统字体或 `Font` 句柄直接把 UTF-8 文字画进
+Host buffer，Guest 不再需要字形图集。`sdk/mode7_plane.hpp` 的 `Mode7Plane` 在初始化时按行求深度和缩放，
+每帧只填每行的中心、半宽、纹理行与 mip 槽位，`Draw(list)` 产出 Span 记录（coastline 使用）。Triangle/Quad 以 `RasterVertex::At(x, y, u, v, light)`（12.4 定点位置、8.8 定点纹素、
 调色板行）描述凸多边形并做 affine 插值，`FlatTriangle/FlatQuad` 用调色板索引代替纹理；能力位为
 `RendererInfo::polygon_supported()`。
 调色板按槽上传（`UploadLitPalette(slot, ...)`），`SetPalette(slot)` 之后的记录用该槽，一个 App 可以为地表、

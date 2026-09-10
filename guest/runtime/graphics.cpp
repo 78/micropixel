@@ -2,6 +2,7 @@
 
 #include "runtime/display_context.hpp"
 #include "runtime/service_binding.hpp"
+#include "runtime/direct_surface_state.hpp"
 #include "runtime/texture_state.hpp"
 #include "sdk/input.hpp"
 #include "sdk/resources.hpp"
@@ -307,14 +308,18 @@ Result<void> Texture::Update(Rect dirty, std::span<const uint8_t> pixels, uint32
 }
 
 Result<Texture> Resources::LoadTexture(AssetId asset, TextureScale scale) const {
-    if (scale != TextureScale::kNative && scale != TextureScale::kDisplay) {
+    if (scale != TextureScale::kNative && scale != TextureScale::kDisplay && scale != TextureScale::kSurface) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    const uint32_t surface_upscale = scale == TextureScale::kSurface ? runtime::ActiveSurfaceUpscale() : 1U;
+    if (surface_upscale == 0U) {
         return unexpected(Error{ErrorCode::kInvalidArgument});
     }
     int32_t status = OpenResourceService();
     if (status != MICROPIXEL_STATUS_OK) {
         return unexpected(ErrorFromStatus(status));
     }
-    const bool display_scaled = scale == TextureScale::kDisplay;
+    const bool display_scaled = scale != TextureScale::kNative;
     micropixel_texture_load_request_t request{};
     request.size = sizeof(request);
     request.asset_id = asset.value();
@@ -323,7 +328,7 @@ Result<Texture> Resources::LoadTexture(AssetId asset, TextureScale scale) const 
     if (display_scaled) {
         const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
         request.scale_numerator = display.scale_numerator;
-        request.scale_denominator = display.scale_denominator;
+        request.scale_denominator = display.scale_denominator * surface_upscale;
     }
     micropixel_texture_info_t response{};
     uint32_t response_size = 0U;

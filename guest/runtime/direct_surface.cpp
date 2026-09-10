@@ -22,6 +22,7 @@ namespace {
 struct DirectSurfaceState final {
     uint32_t handle{};
     uint32_t busy_mask{};
+    uint32_t upscale{};
 };
 
 DirectSurfaceState direct_surface_state{};
@@ -105,6 +106,7 @@ namespace {
     }
     direct_surface_state.handle = response.surface_handle;
     direct_surface_state.busy_mask = 0U;
+    direct_surface_state.upscale = upscale;
     DirectSurfaceCreation creation{};
     creation.handle = response.surface_handle;
     creation.width = raw.width;
@@ -213,6 +215,7 @@ void DirectSurface::Reset() {
         if (direct_surface_state.handle == handle_) {
             direct_surface_state.handle = 0U;
             direct_surface_state.busy_mask = 0U;
+            direct_surface_state.upscale = 0U;
         }
         handle_ = 0U;
     }
@@ -324,6 +327,10 @@ const uint16_t* GuestSurface::Buffer(uint32_t index) const {
 }  // namespace micropixel
 
 namespace micropixel::runtime {
+
+uint32_t ActiveSurfaceUpscale() {
+    return direct_surface_state.handle != 0U ? direct_surface_state.upscale : 0U;
+}
 
 void ReleaseSurfaceBuffer(uint32_t handle, uint32_t buffer_index) {
     if (handle == direct_surface_state.handle) {

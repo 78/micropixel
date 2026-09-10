@@ -163,6 +163,11 @@ esp_err_t GuestGraphicsEngine::Initialize(lv_display_t* display, DirectFramebuff
         ESP_LOGW(kTag, "hardware pixel compositor partially unavailable: %s; CPU fallback remains active",
                  esp_err_to_name(compositor_status));
     }
+    const esp_err_t raster_copy_status = raster_copy_engine_.Initialize();
+    if (raster_copy_status != ESP_OK) {
+        ESP_LOGW(kTag, "raster DMA2D copy engine unavailable: %s; IMAGE records stay on the CPU",
+                 esp_err_to_name(raster_copy_status));
+    }
 #endif
     const esp_err_t presenter_status = direct_surface_presenter_.Initialize(
         display_, static_cast<uint32_t>(width_), static_cast<uint32_t>(height_), scanout, framebuffers,
@@ -1144,6 +1149,94 @@ int32_t GuestGraphicsEngine::MeasureText(micropixel_font_handle_t font_handle, c
     metrics_out.baseline = font->line_height - font->base_line;
     esp_lv_adapter_unlock();
     return MICROPIXEL_STATUS_OK;
+}
+
+int32_t GuestGraphicsEngine::CopyOpaqueBlocks(const device::PixelTarget& target, const device::OpaqueCopyBlock* blocks,
+                                              uint32_t count) {
+#if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED && !CONFIG_MICROPIXEL_MOSAICO_SOFTWARE_RENDERING
+    if (!raster_copy_engine_.Ready()) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    if (blocks == nullptr || count == 0U || count > graphics::Dma2dCopyEngine::kMaxBlocks || target.pixels == nullptr ||
+        target.width == 0U || target.height == 0U || target.pitch < target.width * 2U) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    // Both sides are RGB565 in the target's byte order; the engine only moves
+    // bytes, so the format merely has to agree on both sides.
+    const graphics::SurfacePixelFormat format =
+        target.byte_swapped ? graphics::SurfacePixelFormat::kRgb565Swapped : graphics::SurfacePixelFormat::kRgb565;
+    const graphics::PixelSurface destination{
+        .pixels = target.pixels,
+        .size = target.pitch * target.height,
+        .width = target.width,
+        .height = target.height,
+        .stride = target.pitch,
+        .format = format,
+    };
+    std::array<graphics::Dma2dCopyBlock, graphics::Dma2dCopyEngine::kMaxBlocks> copies{};
+    for (uint32_t index = 0U; index < count; ++index) {
+        const device::OpaqueCopyBlock& block = blocks[index];
+        if (block.source_pixels == nullptr || block.width == 0U || block.height == 0U ||
+            block.source_stride < block.source_picture_width * 2U ||
+            block.source_x + block.width > block.source_picture_width ||
+            block.source_y + block.height > block.source_picture_height ||
+            block.destination_x + block.width > target.width || block.destination_y + block.height > target.height) {
+            return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+        }
+        copies[index] = graphics::Dma2dCopyBlock{
+            .source =
+                graphics::ConstPixelSurface{
+                    .pixels = block.source_pixels,
+                    .size = block.source_stride * block.source_picture_height,
+                    .width = block.source_picture_width,
+                    .height = block.source_picture_height,
+                    .stride = block.source_stride,
+                    .format = format,
+                },
+            .source_rect =
+                graphics::SurfaceRect{static_cast<int32_t>(block.source_x), static_cast<int32_t>(block.source_y),
+                                      static_cast<int32_t>(block.width), static_cast<int32_t>(block.height)},
+            .destination = destination,
+            .destination_rect =
+                graphics::SurfaceRect{static_cast<int32_t>(block.destination_x),
+                                      static_cast<int32_t>(block.destination_y), static_cast<int32_t>(block.width),
+                                      static_cast<int32_t>(block.height)},
+        };
+    }
+    return raster_copy_engine_.CopyBlocks(copies.data(), count) ? MICROPIXEL_STATUS_OK : MICROPIXEL_STATUS_INTERNAL;
+#else
+    (void)target;
+    (void)blocks;
+    (void)count;
+    return MICROPIXEL_STATUS_UNSUPPORTED;
+#endif
+}
+
+int32_t GuestGraphicsEngine::DrawText(const device::TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                      micropixel_font_handle_t font_handle, const char* text, uint32_t text_length) {
+    if (text == nullptr || text_length == 0U || text_length > micropixel::device::graphics_limits::kMaxTextBytes ||
+        target.pixels == nullptr || target.width == 0U || target.height == 0U || target.pitch < target.width * 2U) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    const graphics::PixelSurface destination{
+        .pixels = target.pixels,
+        .size = target.pitch * target.height,
+        .width = target.width,
+        .height = target.height,
+        .stride = target.pitch,
+        .format =
+            target.byte_swapped ? graphics::SurfacePixelFormat::kRgb565Swapped : graphics::SurfacePixelFormat::kRgb565,
+    };
+    // Glyph bitmaps come from LVGL's font descriptors (and their cache for
+    // loaded cbin fonts), so hold the adapter lock like MeasureText does.
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return MICROPIXEL_STATUS_INTERNAL;
+    }
+    const lv_font_t* font = fonts_.ResolveGuestHandle(font_handle);
+    const bool drawn = font != nullptr && bitmap_font_rasterizer_.DrawWithFont(destination, x, y, rgb888, font, text,
+                                                                               static_cast<uint16_t>(text_length));
+    esp_lv_adapter_unlock();
+    return drawn ? MICROPIXEL_STATUS_OK : MICROPIXEL_STATUS_INVALID_ARGUMENT;
 }
 
 bool GuestGraphicsEngine::ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination) {

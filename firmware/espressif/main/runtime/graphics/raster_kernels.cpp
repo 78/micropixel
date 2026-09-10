@@ -13,8 +13,23 @@ namespace {
 constexpr uint32_t kBytesPerRgb565 = 2U;
 constexpr uint32_t kFixedShift = 16U;
 
-[[nodiscard]] uint32_t RecordSize(uint8_t type) {
+// Text bytes follow the TEXT header padded to a multiple of 4.
+[[nodiscard]] uint32_t PaddedTextBytes(uint32_t text_length) { return (text_length + 3U) & ~3U; }
+
+// Wire size of the record starting at `bytes` (`remaining` bytes are left in
+// the list). Fixed for every kind but TEXT, whose header names its payload;
+// 0 for an unknown kind or a TEXT header that does not fit.
+[[nodiscard]] uint32_t RecordSize(const uint8_t* bytes, uint32_t remaining) {
+    const uint8_t type = bytes[0];
+    if (type == MICROPIXEL_RASTER_RECORD_TEXT) {
+        if (remaining < sizeof(micropixel_raster_text_t)) return 0U;
+        micropixel_raster_text_t text{};
+        std::memcpy(&text, bytes, sizeof(text));
+        return sizeof(text) + PaddedTextBytes(text.text_length);
+    }
     switch (type) {
+        case MICROPIXEL_RASTER_RECORD_SPAN:
+            return sizeof(micropixel_raster_span_t);
         case MICROPIXEL_RASTER_RECORD_COLUMN:
             return sizeof(micropixel_raster_column_t);
         case MICROPIXEL_RASTER_RECORD_SPAN_PAIR:
@@ -66,13 +81,65 @@ struct ClippedRect final {
 
 [[nodiscard]] inline uint16_t ByteSwap(uint16_t value) { return static_cast<uint16_t>((value << 8U) | (value >> 8U)); }
 
+[[nodiscard]] inline bool WordAligned(const void* pointer) { return (reinterpret_cast<uintptr_t>(pointer) & 3U) == 0U; }
+
+// Writes `count` copies of `color` starting at `row`; two pixels per store
+// once the destination is word aligned, since full-screen fills on a PSRAM
+// frame buffer are bound by the number of bus writes.
+inline void FillRow(uint16_t* row, uint32_t count, uint16_t color) {
+    if (count != 0U && !WordAligned(row)) {
+        *row++ = color;
+        --count;
+    }
+    const uint32_t pair = static_cast<uint32_t>(color) | (static_cast<uint32_t>(color) << 16U);
+    auto* words = reinterpret_cast<uint32_t*>(row);
+    for (; count >= 2U; count -= 2U) *words++ = pair;
+    if (count != 0U) *reinterpret_cast<uint16_t*>(words) = color;
+}
+
+// Copies `count` canonical RGB565 pixels from `source` to `row`, swapping the
+// bytes of each pixel for a swapped panel; two pixels per word once the
+// destination is aligned (a texture with an odd stride falls back to bytes).
+inline void CopyRowSwapped(uint16_t* row, const uint8_t* source, uint32_t count) {
+    if ((reinterpret_cast<uintptr_t>(source) & 1U) != 0U) {
+        for (uint32_t index = 0U; index < count; ++index, source += 2U) {
+            row[index] = static_cast<uint16_t>((source[0] << 8U) | source[1]);
+        }
+        return;
+    }
+    auto swapped = [](uint32_t pair) { return ((pair & 0xFF00FF00U) >> 8U) | ((pair & 0x00FF00FFU) << 8U); };
+    if (count != 0U && !WordAligned(row)) {
+        *row++ = static_cast<uint16_t>((source[0] << 8U) | source[1]);
+        source += 2U;
+        --count;
+    }
+    auto* words = reinterpret_cast<uint32_t*>(row);
+    if (WordAligned(source)) {
+        const auto* input = reinterpret_cast<const uint32_t*>(source);
+        for (; count >= 2U; count -= 2U) *words++ = swapped(*input++);
+        source = reinterpret_cast<const uint8_t*>(input);
+    } else {
+        const auto* input = reinterpret_cast<const uint16_t*>(source);
+        for (; count >= 2U; count -= 2U, input += 2U) {
+            *words++ = swapped(static_cast<uint32_t>(input[0]) | (static_cast<uint32_t>(input[1]) << 16U));
+        }
+        source = reinterpret_cast<const uint8_t*>(input);
+    }
+    if (count != 0U) *reinterpret_cast<uint16_t*>(words) = static_cast<uint16_t>((source[0] << 8U) | source[1]);
+}
+
 // Blends `color` over `dst` in canonical RGB565 with `alpha` in 0..256.
+// Red and blue share one multiply: with the coverage reduced to 1/64 steps
+// (the panel's 5/6-bit channels cannot show finer blends) the blue lane's
+// product stays below bit 11 and never carries into red. Two multiplies per
+// pixel instead of three matter on full-screen HUD cards.
 [[nodiscard]] inline uint16_t Blend565(uint16_t dst, uint16_t color, uint32_t alpha) {
-    const uint32_t inverse = 256U - alpha;
-    const uint32_t r = ((dst >> 11U) * inverse + (color >> 11U) * alpha) >> 8U;
-    const uint32_t g = (((dst >> 5U) & 0x3FU) * inverse + ((color >> 5U) & 0x3FU) * alpha) >> 8U;
-    const uint32_t b = ((dst & 0x1FU) * inverse + (color & 0x1FU) * alpha) >> 8U;
-    return static_cast<uint16_t>((r << 11U) | (g << 5U) | b);
+    const uint32_t coverage = (alpha + 2U) >> 2U;  // 0..64
+    const uint32_t inverse = 64U - coverage;
+    // Round to nearest: half a step added to each lane (blue's half fits under bit 11).
+    const uint32_t rb = ((dst & 0xF81FU) * inverse + (color & 0xF81FU) * coverage + 0x10020U) >> 6U;
+    const uint32_t g = ((dst & 0x07E0U) * inverse + (color & 0x07E0U) * coverage + 0x400U) >> 6U;
+    return static_cast<uint16_t>((rb & 0xF81FU) | (g & 0x07E0U));
 }
 
 [[nodiscard]] const Texture* SlotWithLayout(const Resources& resources, uint8_t slot, uint8_t layout) {
@@ -123,6 +190,84 @@ struct ClippedRect final {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     return MICROPIXEL_STATUS_OK;
+}
+
+[[nodiscard]] int32_t ValidateSpan(const micropixel_raster_span_t& span, const Target& target,
+                                   const Resources& resources) {
+    if (span.flags != 0U || span.reserved0 != 0U) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (span.y >= target.height || span.x1 < span.x0 || span.x1 >= target.width) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    const int32_t light = CheckLight(resources, span.palette_slot, span.light_level);
+    if (light != MICROPIXEL_STATUS_OK) return light;
+    if (SlotWithLayout(resources, span.texture_slot, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR) == nullptr) {
+        return MICROPIXEL_STATUS_NOT_FOUND;
+    }
+    return MICROPIXEL_STATUS_OK;
+}
+
+// Well-formed UTF-8 without NUL bytes: the text rasterizer refuses anything
+// else mid-list, which would leave a half-drawn frame.
+[[nodiscard]] bool ValidUtf8(const uint8_t* text, uint32_t length) {
+    uint32_t offset = 0U;
+    while (offset < length) {
+        const uint8_t first = text[offset++];
+        if (first == 0U) return false;
+        if (first < 0x80U) continue;
+        uint32_t remaining = 0U;
+        uint32_t codepoint = 0U;
+        uint32_t minimum = 0U;
+        if ((first & 0xE0U) == 0xC0U) {
+            remaining = 1U;
+            codepoint = first & 0x1FU;
+            minimum = 0x80U;
+        } else if ((first & 0xF0U) == 0xE0U) {
+            remaining = 2U;
+            codepoint = first & 0x0FU;
+            minimum = 0x800U;
+        } else if ((first & 0xF8U) == 0xF0U) {
+            remaining = 3U;
+            codepoint = first & 0x07U;
+            minimum = 0x10000U;
+        } else {
+            return false;
+        }
+        if (remaining > length - offset) return false;
+        for (uint32_t index = 0U; index < remaining; ++index) {
+            const uint8_t next = text[offset++];
+            if ((next & 0xC0U) != 0x80U) return false;
+            codepoint = (codepoint << 6U) | (next & 0x3FU);
+        }
+        if (codepoint < minimum || codepoint > 0x10FFFFU || (codepoint >= 0xD800U && codepoint <= 0xDFFFU)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// `bytes` points at the record header; RecordSize accepted it, so the padded
+// payload is known to fit in the list.
+[[nodiscard]] int32_t ValidateText(const uint8_t* bytes, const Resources& resources) {
+    micropixel_raster_text_t text{};
+    std::memcpy(&text, bytes, sizeof(text));
+    if (text.flags != 0U || text.reserved0 != 0U || text.text_length == 0U ||
+        text.text_length > micropixel::device::graphics_limits::kMaxTextBytes || text.font_handle == 0U) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    const uint8_t* payload = bytes + sizeof(text);
+    for (uint32_t index = text.text_length; index < PaddedTextBytes(text.text_length); ++index) {
+        if (payload[index] != 0U) return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    if (!ValidUtf8(payload, text.text_length)) return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    if (resources.validate_text == nullptr || resources.draw_text == nullptr) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    return resources.validate_text(resources.text_context, text.font_handle, reinterpret_cast<const char*>(payload),
+                                   text.text_length)
+               ? MICROPIXEL_STATUS_OK
+               : MICROPIXEL_STATUS_INVALID_ARGUMENT;
 }
 
 [[nodiscard]] int32_t ValidateSprite(const micropixel_raster_sprite_t& sprite, const Resources& resources) {
@@ -285,12 +430,18 @@ int32_t ValidateDrawList(const uint8_t* bytes, uint32_t length, const Target& ta
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         const uint8_t type = bytes[offset];  // every record starts with its type byte
-        const uint32_t record_size = RecordSize(type);
+        const uint32_t record_size = RecordSize(bytes + offset, length - offset);
         if (record_size == 0U || record_size > length - offset) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         int32_t status = MICROPIXEL_STATUS_INVALID_ARGUMENT;
-        if (type == MICROPIXEL_RASTER_RECORD_COLUMN) {
+        if (type == MICROPIXEL_RASTER_RECORD_SPAN) {
+            micropixel_raster_span_t span{};
+            std::memcpy(&span, bytes + offset, sizeof(span));
+            status = ValidateSpan(span, target, resources);
+        } else if (type == MICROPIXEL_RASTER_RECORD_TEXT) {
+            status = ValidateText(bytes + offset, resources);
+        } else if (type == MICROPIXEL_RASTER_RECORD_COLUMN) {
             micropixel_raster_column_t column{};
             std::memcpy(&column, bytes + offset, sizeof(column));
             status = ValidateColumn(column, target, resources);
@@ -374,12 +525,7 @@ void DrawRect(const Target& target, const micropixel_raster_rect_t& rect) {
     const uint32_t count = clip.x1 - clip.x0;
     if (rect.opacity == 0xFFU) {
         const uint16_t color = target.byte_swapped ? ByteSwap(rect.color) : rect.color;
-        for (uint32_t y = clip.y0; y < clip.y1; ++y) {
-            uint16_t* row = Row(target, y) + clip.x0;
-            for (uint32_t x = 0U; x < count; ++x) {
-                row[x] = color;
-            }
-        }
+        for (uint32_t y = clip.y0; y < clip.y1; ++y) FillRow(Row(target, y) + clip.x0, count, color);
         return;
     }
     // Blend in canonical order; swapped targets are converted per pixel.
@@ -519,34 +665,120 @@ void DrawSpanPair(const Target& target, const Texture& floor_texture_slot, const
     }
 }
 
+void DrawSpan(const Target& target, const Texture& texture, const uint16_t* lit, const micropixel_raster_span_t& span) {
+    uint16_t* row = Row(target, span.y) + span.x0;
+    const uint32_t count = static_cast<uint32_t>(span.x1) - span.x0 + 1U;
+    uint32_t s = static_cast<uint32_t>(span.s);
+    uint32_t t = static_cast<uint32_t>(span.t);
+    const uint32_t ds = static_cast<uint32_t>(span.ds);
+    const uint32_t dt = static_cast<uint32_t>(span.dt);
+    const uint8_t* texels = texture.pixels;
+    if (texture.log2_width == UINT8_MAX || texture.log2_height == UINT8_MAX) {
+        const uint32_t width = texture.width;
+        const uint32_t height = texture.height;
+        for (uint32_t index = 0U; index < count; ++index) {
+            const uint32_t x = ((s & 0xffffU) * width) >> kFixedShift;
+            const uint32_t y = ((t & 0xffffU) * height) >> kFixedShift;
+            row[index] = lit[texels[y * width + x]];
+            s += ds;
+            t += dt;
+        }
+        return;
+    }
+    const uint32_t shift_s = kFixedShift - texture.log2_width;
+    const uint32_t shift_t = kFixedShift - texture.log2_height;
+    const uint32_t mask_x = static_cast<uint32_t>(texture.width) - 1U;
+    const uint32_t mask_y = static_cast<uint32_t>(texture.height) - 1U;
+    const uint32_t log2_width = texture.log2_width;
+    if (dt == 0U) {
+        // A ground row samples one texture row: hoist it and run four texel
+        // chains per iteration so the in-order core overlaps the two dependent
+        // loads (texel byte, then palette entry) of neighbouring pixels.
+        const uint8_t* texel_row = texels + (((t >> shift_t) & mask_y) << log2_width);
+        uint32_t index = 0U;
+        for (; index + 4U <= count; index += 4U) {
+            const uint8_t t0 = texel_row[(s >> shift_s) & mask_x];
+            const uint8_t t1 = texel_row[((s + ds) >> shift_s) & mask_x];
+            const uint8_t t2 = texel_row[((s + 2U * ds) >> shift_s) & mask_x];
+            const uint8_t t3 = texel_row[((s + 3U * ds) >> shift_s) & mask_x];
+            row[index] = lit[t0];
+            row[index + 1U] = lit[t1];
+            row[index + 2U] = lit[t2];
+            row[index + 3U] = lit[t3];
+            s += 4U * ds;
+        }
+        for (; index < count; ++index) {
+            row[index] = lit[texel_row[(s >> shift_s) & mask_x]];
+            s += ds;
+        }
+        return;
+    }
+    for (uint32_t index = 0U; index < count; ++index) {
+        row[index] = lit[texels[(((t >> shift_t) & mask_y) << log2_width) | ((s >> shift_s) & mask_x)]];
+        s += ds;
+        t += dt;
+    }
+}
+
 void DrawImage(const Target& target, const device::BitmapView& texture, const micropixel_raster_image_t& image) {
     ClippedRect clipped{};
     if (!image.opacity || !ClipRect(target, image.x, image.y, image.width, image.height, clipped)) return;
     const uint32_t bytes = texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565   ? 2
                            : texture.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888 ? 3
                                                                                     : 4;
+    // Nearest sampling: source column floor(dx * source_width / width) for
+    // destination column dx, walked with an integer step and remainder so the
+    // inner loop divides nothing.
+    const uint32_t count = clipped.x1 - clipped.x0;
+    const uint64_t first_numerator = static_cast<uint64_t>(clipped.skip_x) * image.source_width;
+    const uint32_t first_sx = image.source_x + static_cast<uint32_t>(first_numerator / image.width);
+    const uint32_t first_remainder = static_cast<uint32_t>(first_numerator % image.width);
+    const uint32_t step = image.source_width / image.width;
+    const uint32_t step_remainder = image.source_width % image.width;
+    const bool opaque_copy = image.opacity == 255U && bytes == 2U && image.source_width == image.width;
+    // RGB565 textures may already be stored in the panel byte order
+    // (device::bitmap_flags::kRgb565ByteSwapped); then a copy is verbatim and
+    // blending has to swap the texel back to canonical first.
+    const bool texture_swapped = bytes == 2U && (texture.flags & device::bitmap_flags::kRgb565ByteSwapped) != 0U;
     for (uint32_t y = clipped.y0; y < clipped.y1; ++y) {
         const uint32_t sy = image.source_y + (clipped.skip_y + y - clipped.y0) * image.source_height / image.height;
         auto* destination = Row(target, y);
+        const uint8_t* source_row = texture.data + sy * texture.stride;
+        if (opaque_copy) {
+            // Unscaled RGB565 rows (backdrops, HUD cards) are a straight copy
+            // unless the texture and the panel disagree on byte order.
+            const uint8_t* source = source_row + first_sx * 2U;
+            if (target.byte_swapped == texture_swapped) {
+                std::memcpy(destination + clipped.x0, source, static_cast<size_t>(count) * 2U);
+            } else {
+                CopyRowSwapped(destination + clipped.x0, source, count);
+            }
+            continue;
+        }
+        uint32_t sx = first_sx;
+        uint32_t remainder = first_remainder;
         for (uint32_t x = clipped.x0; x < clipped.x1; ++x) {
-            const uint32_t sx = image.source_x + (clipped.skip_x + x - clipped.x0) * image.source_width / image.width;
-            const uint8_t* pixel = texture.data + sy * texture.stride + sx * bytes;
+            const uint8_t* pixel = source_row + sx * bytes;
+            sx += step;
+            remainder += step_remainder;
+            if (remainder >= image.width) {
+                remainder -= image.width;
+                ++sx;
+            }
             uint16_t color{};
             uint32_t alpha = image.opacity;
-            if (bytes == 2)
+            if (bytes == 2) {
                 std::memcpy(&color, pixel, 2);
-            else {
+                if (texture_swapped) color = ByteSwap(color);
+            } else {
                 color = static_cast<uint16_t>(((pixel[2] >> 3) << 11) | ((pixel[1] >> 2) << 5) | (pixel[0] >> 3));
                 if (bytes == 4) alpha = (alpha * pixel[3] + 127) / 255;
             }
             if (alpha == 0) continue;
             if (alpha != 255) {
+                // Same 1/64-step blend as RECT; alpha 1..254 -> 2..255.
                 const uint16_t old = target.byte_swapped ? ByteSwap(destination[x]) : destination[x];
-                const uint32_t inverse = 255 - alpha;
-                color = static_cast<uint16_t>(
-                    ((((old >> 11) * inverse + (color >> 11) * alpha + 127) / 255) << 11) |
-                    (((((old >> 5) & 63) * inverse + ((color >> 5) & 63) * alpha + 127) / 255) << 5) |
-                    (((old & 31) * inverse + (color & 31) * alpha + 127) / 255));
+                color = Blend565(old, color, alpha + 1U);
             }
             destination[x] = target.byte_swapped ? ByteSwap(color) : color;
         }
@@ -943,12 +1175,80 @@ void DrawPolygon(const Target& target, const Texture* texture, const Palette& pa
     }
 }
 
+namespace {
+
+// An IMAGE the engine can take: fully opaque, unscaled RGB565 whose texture is
+// stored in the target's byte order, with a clipped area worth the setup cost.
+[[nodiscard]] bool CopyEligible(const Target& target, const device::BitmapView& texture,
+                                const micropixel_raster_image_t& image, device::OpaqueCopyBlock& block_out) {
+    if (image.opacity != 255U || texture.pixel_format != MICROPIXEL_PIXEL_FORMAT_RGB565 ||
+        image.source_width != image.width || image.source_height != image.height ||
+        ((texture.flags & device::bitmap_flags::kRgb565ByteSwapped) != 0U) != target.byte_swapped) {
+        return false;
+    }
+    ClippedRect clipped{};
+    if (!ClipRect(target, image.x, image.y, image.width, image.height, clipped)) return false;
+    const uint32_t width = clipped.x1 - clipped.x0;
+    const uint32_t height = clipped.y1 - clipped.y0;
+    if (width < kMinCopyBlockWidth || static_cast<uint64_t>(width) * height < kMinCopyBlockPixels) return false;
+    block_out = device::OpaqueCopyBlock{
+        .source_pixels = texture.data,
+        .source_stride = texture.stride,
+        .source_picture_width = texture.width,
+        .source_picture_height = texture.height,
+        .source_x = image.source_x + clipped.skip_x,
+        .source_y = image.source_y + clipped.skip_y,
+        .destination_x = clipped.x0,
+        .destination_y = clipped.y0,
+        .width = width,
+        .height = height,
+    };
+    return true;
+}
+
+void FlushCopies(const Target& target, const Resources& resources, CopyBatch& pending, ExecuteProfile* profile) {
+    if (pending.count == 0U) return;
+    const uint64_t started_us = profile != nullptr && profile->now_us != nullptr ? profile->now_us() : 0U;
+    const bool copied = resources.copy_blocks(resources.copy_context, target, pending.blocks, pending.count);
+    if (!copied) {
+        // The engine may have written some blocks; redrawing all of them in
+        // order restores exactly what the records asked for.
+        for (uint32_t index = 0U; index < pending.count; ++index) {
+            DrawImage(target, pending.textures[index], pending.images[index]);
+        }
+    }
+    if (profile != nullptr) {
+        const uint64_t elapsed_us = profile->now_us != nullptr ? profile->now_us() - started_us : 0U;
+        profile->time_us[MICROPIXEL_RASTER_RECORD_IMAGE] += elapsed_us;
+        profile->copy_time_us += elapsed_us;
+        ++profile->copy_batches;
+        if (copied) {
+            profile->copy_blocks += pending.count;
+            for (uint32_t index = 0U; index < pending.count; ++index) {
+                profile->copy_pixels +=
+                    static_cast<uint64_t>(pending.blocks[index].width) * pending.blocks[index].height;
+            }
+        } else {
+            ++profile->copy_failures;
+        }
+    }
+    pending.count = 0U;
+}
+
+}  // namespace
+
 void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& header, const Target& target,
                      const Resources& resources, ExecuteProfile* profile) {
     uint32_t offset = sizeof(micropixel_raster_header_t);
+    const bool copy_engine = resources.copy_blocks != nullptr && resources.copy_batch != nullptr;
+    CopyBatch* pending = copy_engine ? resources.copy_batch : nullptr;
+    if (copy_engine) pending->count = 0U;
     for (uint32_t index = 0U; index < header.record_count; ++index) {
         const uint8_t type = bytes[offset];
         uint64_t pixels = 0U;
+        // Anything that is not another eligible IMAGE draws after the queued
+        // copies, so overlapping records keep their order.
+        if (copy_engine && type != MICROPIXEL_RASTER_RECORD_IMAGE) FlushCopies(target, resources, *pending, profile);
         const uint64_t started_us = profile != nullptr && profile->now_us != nullptr ? profile->now_us() : 0U;
         if (type == MICROPIXEL_RASTER_RECORD_COLUMN) {
             micropixel_raster_column_t column{};
@@ -965,6 +1265,23 @@ void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& hea
                          *resources.TextureAt(span.ceiling_texture_slot),
                          resources.PaletteAt(span.palette_slot)->Row(span.light_level), span);
             pixels = span.x1 >= span.x0 ? static_cast<uint64_t>(span.x1 - span.x0 + 1) * 2U : 0U;
+        } else if (type == MICROPIXEL_RASTER_RECORD_SPAN) {
+            micropixel_raster_span_t span{};
+            std::memcpy(&span, bytes + offset, sizeof(span));
+            offset += sizeof(span);
+            DrawSpan(target, *resources.TextureAt(span.texture_slot),
+                     resources.PaletteAt(span.palette_slot)->Row(span.light_level), span);
+            pixels = span.x1 >= span.x0 ? static_cast<uint64_t>(span.x1 - span.x0 + 1) : 0U;
+        } else if (type == MICROPIXEL_RASTER_RECORD_TEXT) {
+            micropixel_raster_text_t text{};
+            std::memcpy(&text, bytes + offset, sizeof(text));
+            const auto* payload = reinterpret_cast<const char*>(bytes + offset + sizeof(text));
+            offset += sizeof(text) + PaddedTextBytes(text.text_length);
+            // Validation confirmed the font and the text; a draw failure here
+            // (for example the font released mid-list) leaves the pixels alone.
+            (void)resources.draw_text(resources.text_context, target, text.x, text.y, text.color, text.font_handle,
+                                      payload, text.text_length);
+            pixels = text.text_length;
         } else if (type == MICROPIXEL_RASTER_RECORD_SPRITE) {
             micropixel_raster_sprite_t sprite{};
             std::memcpy(&sprite, bytes + offset, sizeof(sprite));
@@ -989,8 +1306,18 @@ void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& hea
             std::memcpy(&image, bytes + offset, sizeof(image));
             offset += sizeof(image);
             device::BitmapView texture{};
-            if (resources.resolve_texture(resources.texture_context, image.texture_handle, texture))
-                DrawImage(target, texture, image);
+            if (resources.resolve_texture(resources.texture_context, image.texture_handle, texture)) {
+                device::OpaqueCopyBlock block{};
+                if (copy_engine && CopyEligible(target, texture, image, block)) {
+                    pending->blocks[pending->count] = block;
+                    pending->images[pending->count] = image;
+                    pending->textures[pending->count] = texture;
+                    if (++pending->count == kMaxCopyBlocks) FlushCopies(target, resources, *pending, profile);
+                } else {
+                    if (copy_engine) FlushCopies(target, resources, *pending, profile);
+                    DrawImage(target, texture, image);
+                }
+            }
             pixels = static_cast<uint64_t>(image.width) * image.height;
         } else if (type == MICROPIXEL_RASTER_RECORD_TRIANGLE) {
             micropixel_raster_triangle_t triangle{};
@@ -1027,6 +1354,7 @@ void ExecuteDrawList(const uint8_t* bytes, const micropixel_raster_header_t& hea
             }
         }
     }
+    if (copy_engine) FlushCopies(target, resources, *pending, profile);
 }
 
 }  // namespace micropixel::runtime::raster

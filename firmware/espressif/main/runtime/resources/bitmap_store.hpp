@@ -33,6 +33,13 @@ class BitmapStore final {
                                                                            uint32_t height, const uint8_t* pixels,
                                                                            uint32_t length, uint32_t pitch);
     [[nodiscard]] bool Resolve(micropixel_texture_handle_t bitmap, device::BitmapView& view_out) const;
+    // Rewrites an owned, non-dynamic RGB565 bitmap in place into the requested
+    // byte order and records it in the view flags
+    // (device::bitmap_flags::kRgb565ByteSwapped). Returns true when the bitmap
+    // is already in that order or was converted; false for other formats,
+    // flash-mapped or dynamic bitmaps. The pixels are rewritten outside the
+    // lock, so only the Guest task may call this while it is the sole reader.
+    [[nodiscard]] bool SetRgb565ByteOrder(micropixel_texture_handle_t bitmap, bool swapped);
     [[nodiscard]] bool RetainSceneReference(micropixel_texture_handle_t bitmap);
     void ReleaseSceneReference(micropixel_texture_handle_t bitmap);
     void Release(micropixel_texture_handle_t bitmap);
@@ -61,6 +68,10 @@ class BitmapStore final {
     static constexpr uint32_t kHandleIndexMask = (1U << kHandleIndexBits) - 1U;
     static constexpr uint32_t kHandleGenerationMask = UINT32_MAX >> kHandleIndexBits;
     static constexpr uint8_t kPublicFlagMask = MICROPIXEL_TEXTURE_FLAG_DYNAMIC;
+    // Flags a BitmapView may carry in and out of the store: the public bits plus
+    // the Host-only byte-order bit.
+    static constexpr uint8_t kViewFlagMask = kPublicFlagMask | device::bitmap_flags::kRgb565ByteSwapped;
+    static_assert((kViewFlagMask & (kOwned | kGuestReference)) == 0U);
 
     [[nodiscard]] static micropixel_texture_handle_t MakeHandle(uint32_t index, uint32_t generation);
     [[nodiscard]] Slot* ResolveSlotLocked(micropixel_texture_handle_t bitmap);

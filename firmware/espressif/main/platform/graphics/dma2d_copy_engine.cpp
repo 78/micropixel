@@ -16,14 +16,17 @@ namespace {
 constexpr const char* kTag = "dma2d_copy";
 constexpr uint32_t kDataBurstLength = 128U;
 
-// Opaque formats the M2M path moves: 3 B/px BGR888 and 2 B/px RGB565. A
-// BGR888 source may land in an RGB565 destination through the transmit
-// channel's colour-space converter; every other pair must match exactly.
+// Opaque formats the M2M path moves: 3 B/px BGR888 and 2 B/px RGB565 in
+// either byte order. A BGR888 source may land in an RGB565 destination through
+// the transmit channel's colour-space converter; every other pair must match
+// exactly. The scrambler cannot exchange the two bytes of an RGB565 pixel (it
+// permutes 3-byte groups, measured on ESP32-S31), so byte order is never
+// converted here.
 uint32_t BytesPerPixel(SurfacePixelFormat format) {
     if (format == SurfacePixelFormat::kBgr888) {
         return 3U;
     }
-    return format == SurfacePixelFormat::kRgb565 ? 2U : 0U;
+    return format == SurfacePixelFormat::kRgb565 || format == SurfacePixelFormat::kRgb565Swapped ? 2U : 0U;
 }
 
 uint32_t DescriptorPixelBytes(SurfacePixelFormat format) {
@@ -32,7 +35,7 @@ uint32_t DescriptorPixelBytes(SurfacePixelFormat format) {
 }
 
 bool SupportedPair(SurfacePixelFormat source, SurfacePixelFormat destination) {
-    return source == destination ||
+    return (source == destination && BytesPerPixel(source) != 0U) ||
            (source == SurfacePixelFormat::kBgr888 && destination == SurfacePixelFormat::kRgb565);
 }
 

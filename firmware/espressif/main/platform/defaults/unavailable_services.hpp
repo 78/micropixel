@@ -37,6 +37,16 @@ class UnavailableGraphics final : public device::Graphics {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
 
+    [[nodiscard]] int32_t DrawText(const device::TextTarget&, int32_t, int32_t, uint32_t, micropixel_font_handle_t,
+                                   const char*, uint32_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+
+    [[nodiscard]] int32_t CopyOpaqueBlocks(const device::PixelTarget&, const device::OpaqueCopyBlock*,
+                                           uint32_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+
     [[nodiscard]] int32_t ScaleBitmap(const device::BitmapView&, const device::BitmapView&) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }

@@ -140,6 +140,15 @@ adapters::GraphicsOperations MakeGuestGraphicsOperations(GuestGraphicsOperations
                micropixel_text_metrics_t& metrics) {
                 return Binding(opaque).engine->MeasureText(font_handle, text, text_length, metrics);
             },
+        .draw_text =
+            [](void* opaque, const device::TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+               micropixel_font_handle_t font_handle, const char* text, uint32_t text_length) {
+                return Binding(opaque).engine->DrawText(target, x, y, rgb888, font_handle, text, text_length);
+            },
+        .copy_opaque_blocks =
+            [](void* opaque, const device::PixelTarget& target, const device::OpaqueCopyBlock* blocks, uint32_t count) {
+                return Binding(opaque).engine->CopyOpaqueBlocks(target, blocks, count);
+            },
         .scale_bitmap =
             [](void* opaque, const device::BitmapView& source, const device::BitmapView& destination) {
                 return ScaleBitmap(Binding(opaque), source, destination);

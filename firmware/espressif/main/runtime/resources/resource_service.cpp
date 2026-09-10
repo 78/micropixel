@@ -40,7 +40,7 @@ ResourceService::ResourceService(const micropixel_aot_package_t& package, work::
       work_done_(xSemaphoreCreateBinary()) {
     const auto graphics_info = graphics_.GetInfo();
     if (graphics_info && graphics_info->pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
-        preferred_opaque_format_ = MICROPIXEL_PIXEL_FORMAT_RGB565;
+        preferred_opaque_format_.store(MICROPIXEL_PIXEL_FORMAT_RGB565);
     }
 }
 
@@ -64,7 +64,8 @@ micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle
     info.physical_width = view.width;
     info.physical_height = view.height;
     info.pixel_format = view.pixel_format;
-    info.flags = view.flags;
+    // Host-only bits (byte order) never reach the Guest.
+    info.flags = view.flags & MICROPIXEL_TEXTURE_FLAG_DYNAMIC;
     info.texture_handle = texture_handle;
     return info;
 }
@@ -264,7 +265,7 @@ int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_han
         for (uint32_t row = 0U; row < work.asset.height; ++row) {
             std::memcpy(destination + row * row_bytes, work.asset.data + row * work.asset.stride, row_bytes);
         }
-    } else if (!DecodeBitmap(work.asset, preferred_opaque_format_, source)) {
+    } else if (!DecodeBitmap(work.asset, preferred_opaque_format_.load(), source)) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
 
@@ -290,12 +291,32 @@ int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_han
         output = &scaled;
     }
 
+    const bool rgb565 = output->view().pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565;
     texture_out = bitmaps_.Add(output->view(), true);
     if (texture_out == 0U) {
         return MICROPIXEL_STATUS_RESOURCE_EXHAUSTED;
     }
     output->ReleaseOwnership();
+    // Decoders and the scaler produce canonical RGB565; a raster target in
+    // panel order wants the texture the same way so IMAGE copies move bytes
+    // verbatim (and may run on a DMA engine).
+    if (rgb565 && preferred_rgb565_swapped_.load()) {
+        (void)bitmaps_.SetRgb565ByteOrder(texture_out, true);
+    }
     return MICROPIXEL_STATUS_OK;
+}
+
+bool ResourceService::ResolveTextureForRaster(micropixel_texture_handle_t texture_handle, bool target_byte_swapped,
+                                              device::BitmapView& view_out) {
+    if (!bitmaps_.Resolve(texture_handle, view_out)) {
+        return false;
+    }
+    const bool swapped = (view_out.flags & device::bitmap_flags::kRgb565ByteSwapped) != 0U;
+    if (view_out.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 && swapped != target_byte_swapped &&
+        bitmaps_.SetRgb565ByteOrder(texture_handle, target_byte_swapped)) {
+        return bitmaps_.Resolve(texture_handle, view_out);
+    }
+    return true;
 }
 
 void ResourceService::Shutdown() {

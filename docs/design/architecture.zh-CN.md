@@ -108,7 +108,9 @@ GPIO 只暴露板级白名单，打开形成独占租用，释放后恢复安全
 
 - **Scene** 保存对象树，适合页面、精灵和局部更新。Guest 提交属性变化，Host 验证后只重绘受影响区域。
 - **DirectSurface** 管理整帧缓冲，适合 raycaster 等全屏渲染。默认缓冲由 Host 持有，Guest 提交
-  RasterResources 绘制记录；算法和场景判断留在 Guest，逐像素循环在 Host 执行。
+  RasterResources 绘制记录；算法和场景判断留在 Guest，逐像素循环在 Host 执行。Runtime 内核把
+  连续的不透明整块 Image 拷贝攒批交给 Device contract `Graphics::CopyOpaqueBlocks`（Platform 用
+  DMA2D 实现，无引擎的板型返回 Unsupported），同步执行、顺序不变，失败由 CPU 内核重画。
 
 Scene 的 Container 表达子树生命周期、局部坐标和继承属性。新路径的 setter 只修改 Guest 状态，
 Renderer::Present 统一提交；失败保留待提交状态，删除的 handle 不会复活。可以保存多个场景，

@@ -387,8 +387,8 @@ struct RasterVertex final {
 // synchronously into the buffer; a full wire buffer is flushed automatically,
 // so a list may hold any number of records. Only one list is open at a time,
 // scoped to HostSurface::Update(). Coordinates are in buffer
-// pixels. Column/SpanPair must lie inside the buffer (the Host rejects the
-// list otherwise); Sprite/Rect/Warp are clipped by the Host. Colors are
+// pixels. Column/SpanPair/Span must lie inside the buffer (the Host rejects
+// the list otherwise); Sprite/Rect/Warp/Image/Text are clipped by the Host. Colors are
 // canonical RGB565 whatever the panel's byte order. Textured records name the
 // palette slot they are lit from; SetPalette() changes the default (slot 0)
 // for the records that follow.
@@ -400,7 +400,7 @@ class RasterDrawList final {
     RasterDrawList& operator=(RasterDrawList&&) = delete;
     ~RasterDrawList();
 
-    // Palette slot used by Column/SpanPair/Sprite/Warp records appended after
+    // Palette slot used by Column/SpanPair/Span/Sprite/Warp records appended after
     // this call. Lists start at slot 0.
     void SetPalette(uint8_t palette_slot) { palette_slot_ = palette_slot; }
     [[nodiscard]] constexpr uint8_t palette() const { return palette_slot_; }
@@ -417,6 +417,11 @@ class RasterDrawList final {
     [[nodiscard]] bool SpanPair(uint16_t y_floor, uint16_t y_ceiling, uint16_t x0, uint16_t x1,
                                 uint8_t floor_texture_slot, uint8_t ceiling_texture_slot, uint8_t light_level,
                                 int32_t s, int32_t t, int32_t ds, int32_t dt);
+    // One row y over x0..x1 inclusive from a kRowMajor texture with the same
+    // (s, t) walk as SpanPair. Perspective ground planes (Mode7Plane) emit one
+    // per screen row, since every row has its own depth and step.
+    [[nodiscard]] bool Span(uint16_t y, uint16_t x0, uint16_t x1, uint8_t texture_slot, uint8_t light_level, int32_t s,
+                            int32_t t, int32_t ds, int32_t dt);
     // Texels (u0.., v0..) of size src of a kColumnMajor texture, scaled with
     // nearest-neighbour sampling onto `destination` (clipped to the buffer),
     // lit at `light_level`. `transparent` skips texel index 0. Weapons, HUD icons.
@@ -445,6 +450,12 @@ class RasterDrawList final {
     // Fills `area` (clipped) with `color`; alpha 255 writes, less blends over
     // the existing pixels. alpha 0 is rejected.
     [[nodiscard]] bool FillRect(Rect area, Color color, uint8_t alpha = 255U);
+    // Draws `text` (UTF-8, 1..1024 bytes, no trailing NUL needed) with a
+    // system font or a loaded Font, top-left at `origin`, clipped; glyph
+    // coverage is blended over the existing pixels. Layout and metrics are
+    // those of Renderer::MeasureText, so an App can centre or right-align.
+    [[nodiscard]] bool Text(Point origin, const char* text, Color color, SystemFont font = SystemFont::kMedium);
+    [[nodiscard]] bool Text(Point origin, const char* text, Color color, const Font& font);
 
     // Affine textured polygons (RendererInfo::polygon_supported()). Corners
     // may be in either winding; a Quad must be convex. u/v and light are
@@ -466,6 +477,7 @@ class RasterDrawList final {
     [[nodiscard]] constexpr bool open() const { return open_; }
     RasterDrawList(uint32_t surface_handle, uint32_t buffer_index);
     [[nodiscard]] bool Append(const void* record, uint32_t size);
+    [[nodiscard]] bool AppendText(Point origin, const char* text, Color color, uint32_t font_handle);
     void Flush();
     void Close();
 

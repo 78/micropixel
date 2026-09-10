@@ -13,8 +13,8 @@
 namespace micropixel::platform::graphics {
 
 // One rectangular block copy between two opaque surfaces of the same size:
-// BGR888->BGR888, RGB565->RGB565 or BGR888->RGB565 (hardware colour-space
-// conversion on the transmit channel).
+// BGR888->BGR888, RGB565->RGB565 (both in the same byte order) or
+// BGR888->RGB565 (hardware colour-space conversion on the transmit channel).
 struct Dma2dCopyBlock final {
     ConstPixelSurface source{};
     SurfaceRect source_rect{};
@@ -53,11 +53,19 @@ class Dma2dCopyEngine final {
     // the blocks do not all share the first block's source/destination formats
     // (the colour-space conversion is programmed once per transaction).
     [[nodiscard]] bool CopyBlocks(const Dma2dCopyBlock* blocks, std::size_t count);
-    // True when the engine can move `source` pixels into `destination` pixels.
+    // True when the engine can move `source` pixels into `destination` pixels
+    // for the Scene compositor: same opaque format or BGR888->RGB565.
     [[nodiscard]] static bool SupportsFormats(SurfacePixelFormat source, SurfacePixelFormat destination) {
         return source == destination
                    ? (source == SurfacePixelFormat::kBgr888 || source == SurfacePixelFormat::kRgb565)
                    : (source == SurfacePixelFormat::kBgr888 && destination == SurfacePixelFormat::kRgb565);
+    }
+    // Plain RGB565 copy in either byte order, as long as both sides agree. Used
+    // by the Guest raster path whose Host buffers and textures follow the panel
+    // byte order; the hardware cannot swap bytes, so mixed orders are refused.
+    [[nodiscard]] static bool SupportsRgb565Copy(SurfacePixelFormat source, SurfacePixelFormat destination) {
+        return source == destination &&
+               (source == SurfacePixelFormat::kRgb565 || source == SurfacePixelFormat::kRgb565Swapped);
     }
     [[nodiscard]] bool Copy(const Dma2dCopyBlock& block) { return CopyBlocks(&block, 1U); }
 

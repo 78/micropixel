@@ -44,8 +44,8 @@ const BitmapStore::Slot* BitmapStore::ResolveSlotLocked(micropixel_texture_handl
 
 device::BitmapView BitmapStore::View(const Slot& slot) {
     return device::BitmapView{
-        slot.data,         static_cast<uint32_t>(slot.stride) * slot.height,   slot.width, slot.height, slot.stride,
-        slot.pixel_format, static_cast<uint32_t>(slot.flags & kPublicFlagMask)};
+        slot.data,         static_cast<uint32_t>(slot.stride) * slot.height, slot.width, slot.height, slot.stride,
+        slot.pixel_format, static_cast<uint32_t>(slot.flags & kViewFlagMask)};
 }
 
 void BitmapStore::ClearSlot(Slot& slot) {
@@ -58,7 +58,7 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
     const uint64_t required_size = static_cast<uint64_t>(view.stride) * view.height;
     if (slots_ == nullptr || view.data == nullptr || view.width == 0U || view.height == 0U || view.stride == 0U ||
         view.width > UINT16_MAX || view.height > UINT16_MAX || view.stride > UINT16_MAX || required_size == 0U ||
-        required_size > view.size || view.pixel_format > UINT8_MAX || (view.flags & ~kPublicFlagMask) != 0U) {
+        required_size > view.size || view.pixel_format > UINT8_MAX || (view.flags & ~kViewFlagMask) != 0U) {
         return 0U;
     }
     portENTER_CRITICAL(&lock_);
@@ -170,6 +170,50 @@ bool BitmapStore::Resolve(micropixel_texture_handle_t bitmap, device::BitmapView
     }
     portEXIT_CRITICAL(&lock_);
     return found;
+}
+
+bool BitmapStore::SetRgb565ByteOrder(micropixel_texture_handle_t bitmap, bool swapped) {
+    constexpr uint8_t kSwappedFlag = device::bitmap_flags::kRgb565ByteSwapped;
+    uint8_t* data = nullptr;
+    uint32_t width = 0U;
+    uint32_t height = 0U;
+    uint32_t stride = 0U;
+    bool convertible = false;
+    portENTER_CRITICAL(&lock_);
+    const Slot* slot = ResolveSlotLocked(bitmap);
+    if (slot != nullptr && slot->pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
+        if (((slot->flags & kSwappedFlag) != 0U) == swapped) {
+            portEXIT_CRITICAL(&lock_);
+            return true;
+        }
+        // Flash-mapped assets cannot be rewritten; dynamic bitmaps receive
+        // canonical rows from the Guest and stay canonical.
+        convertible = (slot->flags & kOwned) != 0U && (slot->flags & MICROPIXEL_TEXTURE_FLAG_DYNAMIC) == 0U;
+        data = const_cast<uint8_t*>(slot->data);
+        width = slot->width;
+        height = slot->height;
+        stride = slot->stride;
+    }
+    portEXIT_CRITICAL(&lock_);
+    if (!convertible) {
+        return false;
+    }
+    for (uint32_t row = 0U; row < height; ++row) {
+        auto* pixels = reinterpret_cast<uint16_t*>(data + static_cast<size_t>(row) * stride);
+        for (uint32_t x = 0U; x < width; ++x) {
+            pixels[x] = static_cast<uint16_t>((pixels[x] << 8U) | (pixels[x] >> 8U));
+        }
+    }
+    bool recorded = false;
+    portENTER_CRITICAL(&lock_);
+    Slot* mutable_slot = ResolveSlotLocked(bitmap);
+    if (mutable_slot != nullptr && mutable_slot->data == data) {
+        mutable_slot->flags = static_cast<uint8_t>(swapped ? (mutable_slot->flags | kSwappedFlag)
+                                                           : (mutable_slot->flags & ~kSwappedFlag));
+        recorded = true;
+    }
+    portEXIT_CRITICAL(&lock_);
+    return recorded;
 }
 
 bool BitmapStore::RetainSceneReference(micropixel_texture_handle_t bitmap) {

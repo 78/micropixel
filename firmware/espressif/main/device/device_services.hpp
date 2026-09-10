@@ -105,6 +105,11 @@ class GraphicsService final {
     [[nodiscard]] DeviceResult<void> ReleaseFont(micropixel_font_handle_t font_handle) const;
     [[nodiscard]] DeviceResult<micropixel_text_metrics_t> MeasureText(micropixel_font_handle_t font_handle,
                                                                       const char* text, uint32_t text_length) const;
+    [[nodiscard]] DeviceResult<void> DrawText(const TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                              micropixel_font_handle_t font_handle, const char* text,
+                                              uint32_t text_length) const;
+    [[nodiscard]] DeviceResult<void> CopyOpaqueBlocks(const PixelTarget& target, const OpaqueCopyBlock* blocks,
+                                                      uint32_t count) const;
     [[nodiscard]] DeviceResult<void> ScaleBitmap(const BitmapView& source, const BitmapView& destination) const;
     [[nodiscard]] DeviceResult<void> ShowLaunchBitmap(const BitmapView& bitmap) const;
     void DismissLaunchBitmap() const;

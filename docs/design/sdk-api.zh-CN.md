@@ -11,7 +11,7 @@
 | 层 | 面向 | 每像素执行位置 | 状态 |
 |---|---|---|---|
 | `Scene` | 普通 UI、2D 游戏 | Host LVGL 合成，局部 damage | 已迁移完成 |
-| 2.5D 前端（`Raycaster`、后续 `Mode7Plane`、`SphereView`）+ `HostSurface` | maze、赛车、earth 等 2.5D/伪 3D | Host INDEX8 + 光照调色板整数内核 | Raycaster 已接入 maze，SphereView 已接入 earth |
+| 2.5D 前端（`Raycaster`、`Mode7Plane`、`SphereView`）+ `HostSurface` | maze、赛车、earth 等 2.5D/伪 3D | Host INDEX8 + 光照调色板整数内核 | Raycaster 已接入 maze，SphereView 已接入 earth，Mode7Plane 已接入 coastline |
 | PS1 级多边形前端（`MeshRenderer`）+ `HostSurface` | 房间/传送门型 3D（古墓类探索、固定视角冒险、赛道） | Host `TRIANGLE / QUAD` affine 扫描线整数内核 | 已接入 tomb-explorer demo（§3.1） |
 | `GuestSurface` | 内核无法表达的逐像素自绘 | Guest 自写像素 | 保留 |
 
@@ -41,7 +41,7 @@ App 不再手写 DDA、深度数组、覆盖统计或球面采样循环。
 | 前端 | 题材 | 每帧几何 | 产出记录 | 状态 |
 |---|---|---|---|---|
 | `Raycaster` | maze 类栅格世界 | 每列一次 DDA、门板、覆盖统计 | `SpanPair` + `Column` | 已接入 maze；同一 Host 上与迁移前手写渲染器连续 A/B，FPS 差异在 1% 以内，Host 记录数相同 |
-| `Mode7Plane` | 赛车、卡丁车、俯视伪 3D 地面 | 每行一次透视投影（相机高度、俯仰、曲率偏移） | 单行 `Span`（SpanPair 的单行形式）+ 路边 `Billboard` | 待做，需要 Host 增加单行 `Span` 记录或允许 SpanPair 两行相同 |
+| `Mode7Plane` | 赛车、卡丁车、俯视伪 3D 地面 | 初始化时按行求深度/缩放，每帧 App 只填每行的中心、半宽、纹理行与 mip 槽位 | 单行 `Span`（type 9）；路边对象与赛车由 App 用 `Image`/`FillRect` 追加 | 已接入 coastline；S31 480×480 上 Host 每帧 330 个 Span 约 5 ms（≈50 ns/px），见 3.2 |
 | `SphereView` | earth 类球体 | 俯仰变化时按行重建 screen→(u,v,light) 表（双槽、分帧流式上传）；每帧只有 yaw 偏移 | `Warp` + 植物 `Sprite` + 背景 `Rect` | 已接入 earth；S31 原生 480、performance profile 约 33 FPS，迁移前 Guest 逐像素版约 16 FPS 且拖动时降到 240 |
 | `MeshRenderer` | 房间/传送门型 3D、固定视角冒险、赛道 | 每帧几百到一两千个顶点的视图变换、近平面裁剪、背面剔除、排序表 | `Triangle` + `Quad`（affine、顶点光） | 已接入 tomb-explorer；S31 480×480 Direct Surface 上 `quads-1.5x` ≈ 39 fps / 83 ns/px（见 polygon-benchmark README） |
 
@@ -141,7 +141,7 @@ caster.DrawBillboards(list, billboards);   // 深度排序 + 逐列 z-test 的 C
 - App 保留门的开关规则、敌人行为、武器、HUD、文本和自定义叠加；这些直接用 `RasterDrawList` 追加在
   `DrawBillboards` 之后。`Depth(column)`、`LightFor(distance)`、`Project(x, y)` 供 App 做自己的可见性与瞄准判断。
 
-赛车等伪 3D 类型后续在同一层增加 `Mode7Plane`（透视地面 SPAN 生成）与路边 billboard 排序；
+赛车等伪 3D 类型在同一层使用 `Mode7Plane`（透视地面 SPAN 生成，见 3.2）；路边对象排序仍由 App 完成。
 球体渲染（earth）是否进入该层取决于能否用现有内核表达，否则维持 GuestSurface。
 
 ### 3.1 MeshRenderer：SDK 内的 PS1 级多边形前端
@@ -198,6 +198,29 @@ S31 480×480 Direct Surface（performance）实测：`fill` 60 ns/px / 40 fps，
 上 `DrawPolygon` 中等尺寸多边形约为 `DrawSpanPair` 的 1.5–2 倍每像素成本，小多边形更高。
 若后续关卡 overdraw 明显高于 2×，再考虑 `--upscale=2`（S31 有 PPA）或收紧传送门 scissor。
 
+### 3.2 Mode7Plane：透视地面前端
+
+`sdk/mode7_plane.hpp` 提供 `Mode7Plane`。`Initialize(Mode7PlaneConfig)` 按视口、地平线、相机高度和焦距
+为地平线以下每一行求出 `depth = camera_height * focal_length / (y + 0.5 - horizon)` 与 `scale`，
+裁掉 `near_depth`/`far_depth` 之外的行，并按 `shade_near..shade_far` 分配光照等级。每帧 App 只写每行的
+`centre`、`half_width`、`style`（纹理行）、`texture_slot`（mip 槽位）和 `visible`，可用 `PlaceRows`
+或直接遍历 `rows()`；`Draw(list)` 为每个可见行产出一条单行 `Span` 记录（type 9，28 字节）：
+s 以 16.16 从条带左边到右边走完 0..1，t 取纹理行中心，`RowExtent` 给出该行落在视口内的像素范围，
+供 App 决定背景只画路面之外的部分。
+
+约束与语义：
+
+- 地面纹理为 `kRowMajor` INDEX8，每行一种路面样式（如沥青/虚线/终点），多级 mip 各占一个纹理槽，
+  App 按行像素宽度选最接近的一级，避免远行跳纹素。纹理和光照调色板通过 `RasterResources` 上传。
+- 行数上限 `kMaxRows`（768），状态为固定容量数组，`Initialize` 后不再分配。
+- App 保留赛道曲率采样、赛车/路边对象投影排序、HUD 与文字；这些用 `Image`、`FillRect`、`Text`
+  追加在 `Draw` 之后。
+
+coastline 是首个用户：路面 5 级 2048..128×8 INDEX8 + 256 色调色板由 `tools/generate-road-index8.py`
+生成；背景图只画路面两侧，HUD 文字用 `Text` 记录由 Host 系统字体绘制。HostSurface 帧由 Guest
+同步提交，超过 30 FPS 槽位的帧在下一 Tick 立刻续帧（`FrameSchedule::SetResumeAfterOverrun`），
+并使用三个 buffer 避免前一帧扫描未释放造成的整 Tick 空转。
+
 ## 4. Host 与协议
 
 Guest 保存节点树、业务状态、层级变换与待提交变化；Runtime 负责 Public SDK 到 C wire 转换。
@@ -208,10 +231,22 @@ Host 校验 pointer/length、乘法溢出、有限数值、索引、类型、gen
 能力不足明确返回 Unsupported；旧 Bundle 在协商时明确拒绝。暂停、恢复、Stop、Trap 和
 App 切换均覆盖所有资源与在飞帧的收尾。Raycaster 不引入新的 Host 校验面。
 
+不透明、不缩放的 RGB565 `Image` 记录是 Host 侧唯一可交给硬件的记录：`ExecuteDrawList` 把连续
+符合条件（不透明、源尺寸等于目标尺寸、裁剪后宽 ≥32 且面积 ≥4096 像素、纹理字节序与目标一致）的
+Image 攒成一批（最多 32 块），遇到其他记录、不合条件的 Image、满批或列表结束时通过
+`Graphics::CopyOpaqueBlocks` 同步提交给设备的 DMA2D 引擎（P4/S31；S3 返回 Unsupported），
+执行顺序与记录顺序一致，失败则整批由 CPU 内核重画。为了让拷贝不换格式、不换字节序，`ResourceService`
+在 Guest 建立 DirectSurface 后按 surface 的 RGB565 格式解码之后加载的不透明纹理（RGB888 面板上 2D UI
+纹理默认仍是 BGR888），并按面板字节序保存；先前已加载的 RGB565 纹理在首次被 Image 记录引用时原地转换
+一次，并以 Host 内部的 `bitmap_flags::kRgb565ByteSwapped` 标记（Guest 不可见；flash 映射和动态纹理保持
+规范序，由 CPU 内核逐像素换序）。Guest 侧用 `TextureScale::kSurface` 把纹理解码到 surface buffer 的
+分辨率（面板比例再除以整数 upscale），这样在 720 面板用 360×360 buffer 时全屏背景也保持 1:1；
+Guest 不感知硬件路径，也不提供异步提交。
+
 ## 5. 迁移与验收
 
 顺序：设计/基线 → 基础规则与 2D（已完成）→ Raycaster 与 maze 迁移（已完成）→ Host `Warp`
-记录与 `SphereView`、earth 迁移（已完成）→ `Mode7Plane` → 回归/冻结。
+记录与 `SphereView`、earth 迁移（已完成）→ Host `Span`/`Text` 记录与 `Mode7Plane`、coastline 迁移（已完成）→ 回归/冻结。
 
 主要设备为 S31/Mosaico。基线使用重构前工作区正式构建的 maze、earth 和本地 mario，固定场景、
 输入、profile、分辨率、音频/HUD 条件。mario 不作为仓库必需依赖，也不提交其素材。
@@ -227,5 +262,11 @@ Host test 统一脚本、格式检查、S31/P4/S3 BOX-3 构建。发布或推送
 [S31 烧录流程](../development/flashing.zh-CN.md#esp32-s31--esp-mosaico-预览版)。
 
 阶段状态：2D 已迁移；Raycaster 已接入 maze，S31 上与迁移前渲染器连续 A/B 的 benchmark FPS
-差异在 1% 以内、Host 记录流等价、画面一致，三轮正式采样待执行。API 在功能、内存安全
+差异在 1% 以内、Host 记录流等价、画面一致，三轮正式采样待执行。Mode7Plane 已接入 coastline：
+S31/Mosaico 上 `--demo` 从 Scene 版约 8.5 FPS（渲染 52–91 ms）提高到约 24 FPS（渲染约 34 ms，
+无 >50 ms 帧间隔）；每帧 Host 内核约 27 ms，受 PSRAM 读写带宽限制，关闭 AOT 边界检查只再省约 1.3 ms。
+背景整块交给 DMA2D 后 Host 内核降到约 21.5 ms（Image 从 10.8 ms 降到约 7 ms，其中背景块 3.9 ms、
+16 ns/px），渲染约 29.5 ms，约 28 FPS。P4/Claw4（720 面板、360×360 buffer、upscale 2）上纹理按
+`kSurface` 解码为 RGB565 后，Host 内核 36 → 13.3 ms（Image 26 → 4.4 ms，DMA 背景块 2.4 ms、18 ns/px），
+渲染 38 → 19 ms，22.5 → 29.6 FPS（受 30 FPS 节拍限制）。API 在功能、内存安全
 与真机回归完成前不冻结。

@@ -61,6 +61,10 @@ class GuestGraphicsEngine final {
     [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t font_handle);
     [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t font_handle, const char* text, uint32_t text_length,
                                       micropixel_text_metrics_t& metrics_out);
+    [[nodiscard]] int32_t DrawText(const device::TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                   micropixel_font_handle_t font_handle, const char* text, uint32_t text_length);
+    [[nodiscard]] int32_t CopyOpaqueBlocks(const device::PixelTarget& target, const device::OpaqueCopyBlock* blocks,
+                                           uint32_t count);
     [[nodiscard]] bool ScaleBitmapSoftware(const device::BitmapView& source, const device::BitmapView& destination);
     void Release();
 
@@ -272,6 +276,10 @@ class GuestGraphicsEngine final {
     LvglSoftwarePixelCompositor software_pixel_compositor_{};
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
     graphics::EspPixelCompositor hardware_pixel_compositor_;
+    // Serves raster IMAGE block copies on the Guest task. Separate from the
+    // compositor's engine, which the presenter task may be using at the same
+    // time; each engine owns its descriptors and the pool hands out channels.
+    graphics::Dma2dCopyEngine raster_copy_engine_{};
 #endif
     std::optional<graphics::AppSurfaceCompositor> app_surface_compositor_{};
     std::optional<graphics::GuestScene> guest_scene_{};

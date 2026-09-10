@@ -19,6 +19,15 @@ inline constexpr uint32_t kMaxRasterBytes = 32768U;
 inline constexpr uint32_t kMaxSurfaceBuffers = 3U;
 }  // namespace graphics_limits
 
+// Host-side BitmapView flag bits. They share the field with the public
+// MICROPIXEL_TEXTURE_FLAG_* bits but never reach the Guest.
+namespace bitmap_flags {
+// RGB565 pixels are stored with the two bytes of every pixel swapped, the
+// order of a MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED panel, so a raster
+// kernel or DMA engine can copy them into a Host buffer verbatim.
+inline constexpr uint32_t kRgb565ByteSwapped = 1U << 4U;
+}  // namespace bitmap_flags
+
 struct BitmapView final {
     const uint8_t* data{};
     uint32_t size{};
@@ -87,6 +96,36 @@ struct DirectSurfacePresentation final {
     bool byte_swapped{};
 };
 
+// RGB565 rows the Host draws into on behalf of a raster record (TEXT, or an
+// opaque IMAGE block copy): a Host-owned Direct Surface buffer that is not in
+// flight. `byte_swapped` mirrors DirectSurfacePresentation::byte_swapped.
+struct TextTarget final {
+    uint8_t* pixels{};
+    uint32_t width{};
+    uint32_t height{};
+    uint32_t pitch{};
+    bool byte_swapped{};
+};
+using PixelTarget = TextTarget;
+
+// One unscaled, opaque RGB565 rectangle copy from a texture into a PixelTarget,
+// already clipped by the caller: the destination rectangle lies inside the
+// target and the source rectangle inside the texture. Source pixels are in the
+// target's byte order (bitmap_flags::kRgb565ByteSwapped agrees with
+// PixelTarget::byte_swapped), so the device moves bytes without conversion.
+struct OpaqueCopyBlock final {
+    const uint8_t* source_pixels{};
+    uint32_t source_stride{};
+    uint32_t source_picture_width{};
+    uint32_t source_picture_height{};
+    uint32_t source_x{};
+    uint32_t source_y{};
+    uint32_t destination_x{};
+    uint32_t destination_y{};
+    uint32_t width{};
+    uint32_t height{};
+};
+
 // Called from a Host task (never the Guest task) once the Host no longer reads
 // buffer_index. Implementations must be able to invoke it while Present() or
 // SuspendDirectSurface() is executing on another task.
@@ -110,6 +149,19 @@ class Graphics {
     [[nodiscard]] virtual int32_t ReleaseFont(micropixel_font_handle_t font_handle) = 0;
     [[nodiscard]] virtual int32_t MeasureText(micropixel_font_handle_t font_handle, const char* text,
                                               uint32_t text_length, micropixel_text_metrics_t& metrics_out) = 0;
+    // Paints `text` with `font_handle` (the same handles MeasureText accepts)
+    // in `rgb888`, top-left at (x, y), clipped to the target; glyph coverage is
+    // blended over the existing pixels. Synchronous on the calling task.
+    // Copies every block in order (later blocks land on top of earlier ones)
+    // and returns only once the pixels are in memory and visible to the CPU.
+    // UNSUPPORTED when the device has no copy engine; any other failure leaves
+    // the caller to draw the same blocks itself, so partial writes are
+    // harmless as long as the caller then rewrites every block.
+    [[nodiscard]] virtual int32_t CopyOpaqueBlocks(const PixelTarget& target, const OpaqueCopyBlock* blocks,
+                                                   uint32_t count) = 0;
+    [[nodiscard]] virtual int32_t DrawText(const TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                           micropixel_font_handle_t font_handle, const char* text,
+                                           uint32_t text_length) = 0;
     // One blocking hardware-assisted resize used by the Resource background
     // path. Source and destination have identical pixel formats.
     [[nodiscard]] virtual int32_t ScaleBitmap(const BitmapView& source, const BitmapView& destination) = 0;

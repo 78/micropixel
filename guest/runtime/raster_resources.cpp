@@ -218,6 +218,60 @@ bool RasterDrawList::SpanPair(uint16_t y_floor, uint16_t y_ceiling, uint16_t x0,
     return Append(&record, sizeof(record));
 }
 
+bool RasterDrawList::Span(uint16_t y, uint16_t x0, uint16_t x1, uint8_t texture_slot, uint8_t light_level, int32_t s,
+                          int32_t t, int32_t ds, int32_t dt) {
+    micropixel_raster_span_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_SPAN;
+    record.texture_slot = texture_slot;
+    record.light_level = light_level;
+    record.y = y;
+    record.x0 = x0;
+    record.x1 = x1;
+    record.palette_slot = palette_slot_;
+    record.s = s;
+    record.t = t;
+    record.ds = ds;
+    record.dt = dt;
+    return Append(&record, sizeof(record));
+}
+
+// TEXT records are variable length: header, UTF-8 bytes, zero padding to 4.
+// They are staged in one buffer so Append sees a single record and flushes
+// before it when the wire is nearly full.
+bool RasterDrawList::AppendText(Point origin, const char* text, Color color, uint32_t font_handle) {
+    if (text == nullptr || font_handle == 0U) return false;
+    uint32_t length = 0U;
+    while (text[length] != '\0') {
+        if (++length > micropixel::runtime::limits::kMaxTextBytes) return false;
+    }
+    if (length == 0U || origin.x < INT16_MIN || origin.x > INT16_MAX || origin.y < INT16_MIN || origin.y > INT16_MAX) {
+        return false;
+    }
+    alignas(4) static uint8_t
+        staged[sizeof(micropixel_raster_text_t) + ((micropixel::runtime::limits::kMaxTextBytes + 3U) & ~3U)];
+    micropixel_raster_text_t header{};
+    header.type = MICROPIXEL_RASTER_RECORD_TEXT;
+    header.text_length = static_cast<uint16_t>(length);
+    header.x = static_cast<int16_t>(origin.x);
+    header.y = static_cast<int16_t>(origin.y);
+    header.color = color.rgb565();
+    header.font_handle = font_handle;
+    const uint32_t padded = (length + 3U) & ~3U;
+    CopyBytes(staged, &header, sizeof(header));
+    CopyBytes(staged + sizeof(header), text, length);
+    for (uint32_t index = length; index < padded; ++index) staged[sizeof(header) + index] = 0U;
+    return Append(staged, sizeof(header) + padded);
+}
+
+bool RasterDrawList::Text(Point origin, const char* text, Color color, SystemFont font) {
+    if (font < SystemFont::kSmall || font > SystemFont::kTitle) return false;
+    return AppendText(origin, text, color, static_cast<uint32_t>(font));
+}
+
+bool RasterDrawList::Text(Point origin, const char* text, Color color, const Font& font) {
+    return AppendText(origin, text, color, font.handle_);
+}
+
 namespace {
 
 // Clamps a Rect to the int16/uint16 fields of a raster record. Anything wider

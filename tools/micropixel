@@ -1782,6 +1782,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             root / "guest/runtime/raycast.cpp",
             root / "guest/runtime/mesh_renderer.cpp",
             root / "guest/runtime/sphere_view.cpp",
+            root / "guest/runtime/mode7_plane.cpp",
             root / "guest/runtime/application.cpp",
             root / "guest/runtime/scene_graph.cpp",
             *sources,

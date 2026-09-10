@@ -25,6 +25,22 @@ int32_t GraphicsAdapter::MeasureText(micropixel_font_handle_t font_handle, const
     return operations_.measure_text(operations_.context, font_handle, text, text_length, metrics_out);
 }
 
+int32_t GraphicsAdapter::DrawText(const device::TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                  micropixel_font_handle_t font_handle, const char* text, uint32_t text_length) {
+    if (operations_.draw_text == nullptr) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    return operations_.draw_text(operations_.context, target, x, y, rgb888, font_handle, text, text_length);
+}
+
+int32_t GraphicsAdapter::CopyOpaqueBlocks(const device::PixelTarget& target, const device::OpaqueCopyBlock* blocks,
+                                          uint32_t count) {
+    if (operations_.copy_opaque_blocks == nullptr) {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    return operations_.copy_opaque_blocks(operations_.context, target, blocks, count);
+}
+
 int32_t GraphicsAdapter::ScaleBitmap(const device::BitmapView& source, const device::BitmapView& destination) {
     return operations_.scale_bitmap(operations_.context, source, destination);
 }

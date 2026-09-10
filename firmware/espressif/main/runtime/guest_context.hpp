@@ -29,6 +29,15 @@ class BackgroundExecutor;
 
 namespace micropixel::runtime {
 
+// Widens canonical RGB565 by replicating the top bits, matching the SDK's
+// Color::FromRgb565 so a raster TEXT color renders like the Scene label color.
+[[nodiscard]] constexpr uint32_t Rgb565ToRgb888(uint16_t color) {
+    const uint32_t r5 = color >> 11U;
+    const uint32_t g6 = (color >> 5U) & 0x3FU;
+    const uint32_t b5 = color & 0x1FU;
+    return (((r5 << 3U) | (r5 >> 2U)) << 16U) | (((g6 << 2U) | (g6 >> 4U)) << 8U) | ((b5 << 3U) | (b5 >> 2U));
+}
+
 class GuestContext final {
    public:
     GuestContext(const micropixel_aot_package_t& package, device::DeviceServices& devices,
@@ -115,7 +124,13 @@ class GuestContext final {
     }
     [[nodiscard]] ServiceResult<micropixel_surface_create_response_t> SurfaceCreate(
         const micropixel_surface_create_request_t& request) {
-        return direct_surface_.Create(request);
+        auto created = direct_surface_.Create(request);
+        // Textures loaded from now on are stored in the surface's pixel format
+        // and byte order so raster IMAGE records copy them verbatim.
+        if (created) {
+            resources_.SetPreferredRasterTarget(created->native_pixel_format, direct_surface_.native_byte_swapped());
+        }
+        return created;
     }
     [[nodiscard]] ServiceResult<void> SurfacePresent(const micropixel_surface_present_request_t& request) {
         return direct_surface_.Present(request);
@@ -136,12 +151,49 @@ class GuestContext final {
         return raster_.UploadWarp(request);
     }
     [[nodiscard]] ServiceResult<void> RasterSubmit(const uint8_t* bytes, uint32_t length) {
+        // TEXT records reuse the Graphics device's font handles: MeasureText
+        // doubles as the validity check (handle resolves, UTF-8 lays out) and
+        // DrawText paints into the Host-owned buffer on this task.
+        const raster::TextBinding text{
+            .validate =
+                [](void* context, micropixel_font_handle_t font_handle, const char* string, uint32_t text_length) {
+                    return static_cast<bool>(
+                        static_cast<GuestContext*>(context)->MeasureText(font_handle, string, text_length));
+                },
+            .draw =
+                [](void* context, const raster::Target& target, int32_t x, int32_t y, uint16_t color,
+                   micropixel_font_handle_t font_handle, const char* string, uint32_t text_length) {
+                    const device::TextTarget destination{.pixels = target.pixels,
+                                                         .width = target.width,
+                                                         .height = target.height,
+                                                         .pitch = target.pitch,
+                                                         .byte_swapped = target.byte_swapped};
+                    return static_cast<bool>(static_cast<GuestContext*>(context)->devices_.graphics().DrawText(
+                        destination, x, y, Rgb565ToRgb888(color), font_handle, string, text_length));
+                },
+            .context = this,
+        };
+        const raster::CopyBinding copy{
+            .copy_blocks =
+                [](void* context, const raster::Target& target, const device::OpaqueCopyBlock* blocks, uint32_t count) {
+                    auto* self = static_cast<GuestContext*>(context);
+                    const device::PixelTarget destination{.pixels = target.pixels,
+                                                          .width = target.width,
+                                                          .height = target.height,
+                                                          .pitch = target.pitch,
+                                                          .byte_swapped = target.byte_swapped};
+                    return static_cast<bool>(self->devices_.graphics().CopyOpaqueBlocks(destination, blocks, count));
+                },
+            .context = this,
+        };
         return raster_.Submit(
             bytes, length, direct_surface_,
             [](void* context, uint32_t handle, device::BitmapView& view) {
-                return static_cast<GuestContext*>(context)->ResolveTexture(handle, view);
+                auto* self = static_cast<GuestContext*>(context);
+                return self->resources_.ResolveTextureForRaster(handle, self->direct_surface_.native_byte_swapped(),
+                                                                view);
             },
-            this);
+            this, text, copy);
     }
     [[nodiscard]] device::DeviceResult<micropixel_input_info_t> InputInfo() const { return devices_.input().GetInfo(); }
     [[nodiscard]] device::DeviceResult<micropixel_audio_info_t> AudioInfo() const { return devices_.audio().GetInfo(); }

@@ -186,6 +186,50 @@ int32_t SubmitQuad(const micropixel_raster_quad_t& quad) {
                                      sizeof(header) + sizeof(quad));
 }
 
+// Generic one-record list for the fixed-size kinds SubmitQuad does not cover.
+template <typename Record>
+int32_t SubmitRecord(const Record& record) {
+    static_assert(sizeof(Record) <= sizeof(micropixel_raster_quad_t));
+    const micropixel_raster_header_t header = Header(1U, sizeof(header) + sizeof(record));
+    Copy(g_polygon_list, &header, sizeof(header));
+    Copy(g_polygon_list + sizeof(header), &record, sizeof(record));
+    return micropixel_service_submit(g_service_handle, MICROPIXEL_GRAPHICS_CHANNEL_RASTER, g_polygon_list,
+                                     sizeof(header) + sizeof(record));
+}
+
+micropixel_raster_span_t Span() {
+    micropixel_raster_span_t span{};
+    span.type = MICROPIXEL_RASTER_RECORD_SPAN;
+    span.texture_slot = 1U;  // row-major
+    span.y = 5U;
+    span.x0 = 2U;
+    span.x1 = static_cast<uint16_t>(g_width - 1U);
+    span.ds = 1 << 12;
+    return span;
+}
+
+// TEXT header plus a short UTF-8 payload padded to 4 bytes.
+alignas(4) uint8_t g_text_list[sizeof(micropixel_raster_header_t) + sizeof(micropixel_raster_text_t) + 8U];
+
+int32_t SubmitText(micropixel_font_handle_t font, const char* text, uint32_t length, uint16_t declared_length) {
+    const uint32_t padded = (declared_length + 3U) & ~3U;
+    if (padded > 8U) return MICROPIXEL_STATUS_INTERNAL;
+    micropixel_raster_text_t record{};
+    record.type = MICROPIXEL_RASTER_RECORD_TEXT;
+    record.text_length = declared_length;
+    record.x = 4;
+    record.y = 4;
+    record.color = 0xFFFFU;
+    record.font_handle = font;
+    const uint32_t total = sizeof(micropixel_raster_header_t) + sizeof(record) + padded;
+    const micropixel_raster_header_t header = Header(1U, total);
+    for (uint8_t& byte : g_text_list) byte = 0U;
+    Copy(g_text_list, &header, sizeof(header));
+    Copy(g_text_list + sizeof(header), &record, sizeof(record));
+    Copy(g_text_list + sizeof(header) + sizeof(record), text, length);
+    return micropixel_service_submit(g_service_handle, MICROPIXEL_GRAPHICS_CHANNEL_RASTER, g_text_list, total);
+}
+
 micropixel_raster_quad_t Quad() {
     micropixel_raster_quad_t quad{};
     quad.type = MICROPIXEL_RASTER_RECORD_QUAD;
@@ -474,10 +518,34 @@ int main() {
     }
     // An unknown record type is rejected.
     micropixel_raster_rect_t unknown = rect;
-    unknown.type = 9U;
+    unknown.type = 11U;
     if (Submit(BuildList(nullptr, nullptr, nullptr, &unknown)) != MICROPIXEL_STATUS_INVALID_ARGUMENT) {
         return 92;
     }
+    // Single-row SPAN: inside the target with a row-major slot it draws; the
+    // right end past the target, a column-major slot and stray padding do not.
+    const micropixel_raster_span_t single = Span();
+    if (SubmitRecord(single) != MICROPIXEL_STATUS_OK) return 113;
+    micropixel_raster_span_t bad_single = single;
+    bad_single.x1 = static_cast<uint16_t>(g_width);
+    if (SubmitRecord(bad_single) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 114;
+    bad_single = single;
+    bad_single.texture_slot = 0U;
+    if (SubmitRecord(bad_single) != MICROPIXEL_STATUS_NOT_FOUND) return 115;
+    bad_single = single;
+    bad_single.reserved0 = 1U;
+    if (SubmitRecord(bad_single) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 116;
+    bad_single = single;
+    bad_single.light_level = kLightLevels;
+    if (SubmitRecord(bad_single) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 117;
+    // TEXT: a system font draws; a missing or unknown font, an empty or
+    // over-declared payload and malformed UTF-8 are refused.
+    if (SubmitText(MICROPIXEL_SYSTEM_FONT_MEDIUM, "Lap", 3U, 3U) != MICROPIXEL_STATUS_OK) return 118;
+    if (SubmitText(0U, "Lap", 3U, 3U) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 119;
+    if (SubmitText(0x7FFFU, "Lap", 3U, 3U) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 120;
+    if (SubmitText(MICROPIXEL_SYSTEM_FONT_MEDIUM, "Lap", 3U, 0U) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 121;
+    if (SubmitText(MICROPIXEL_SYSTEM_FONT_MEDIUM, "Lap", 3U, 7U) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 122;
+    if (SubmitText(MICROPIXEL_SYSTEM_FONT_MEDIUM, "\xC3(", 2U, 2U) != MICROPIXEL_STATUS_INVALID_ARGUMENT) return 123;
     // Polygons: a Gouraud-lit quad clipped by the left edge is accepted;
     // stray flags, padding, over-range lights and the wrong texture layout are
     // refused; FLAT_COLOR needs no texture; a zero-area quad draws nothing.
@@ -500,7 +568,8 @@ int main() {
         if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_NOT_FOUND) return 107;
         bad_quad.flags = MICROPIXEL_RASTER_POLYGON_FLAT_COLOR;  // texture ignored
         if (SubmitQuad(bad_quad) != MICROPIXEL_STATUS_OK) return 108;
-        micropixel_raster_texture_upload_request_t narrow = TextureUpload(250U, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR, g_floor);
+        micropixel_raster_texture_upload_request_t narrow =
+            TextureUpload(250U, MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR, g_floor);
         narrow.width = 12U;  // 12 x 16 row-major: not a power of two
         narrow.length = 12U * kTexSize;
         if (Call(MICROPIXEL_GRAPHICS_METHOD_RASTER_TEXTURE_UPLOAD, &narrow, sizeof(narrow)) != MICROPIXEL_STATUS_OK) {
@@ -520,9 +589,14 @@ int main() {
     if (Call(MICROPIXEL_GRAPHICS_METHOD_SURFACE_DESTROY, &destroy, sizeof(destroy)) != MICROPIXEL_STATUS_OK) {
         return 93;
     }
-    // Without a surface the kernels have no target again.
+    // Without a surface the kernels have no target again, and a texture cannot
+    // be scaled to the surface buffers (rejected in the SDK, no Host call).
     if (Submit(BuildList(nullptr, nullptr, nullptr, &rect)) != MICROPIXEL_STATUS_NOT_FOUND) {
         return 94;
+    }
+    {
+        auto scaled = app.resources().LoadTexture(micropixel::AssetId{1U}, micropixel::TextureScale::kSurface);
+        if (scaled || scaled.error().code() != micropixel::ErrorCode::kInvalidArgument) return 124;
     }
     // Exercise the public SDK with one whole 512x256 texture, arbitrary-size
     // textures, reusable uint8 slots and every texture-backed draw record.
@@ -554,6 +628,9 @@ int main() {
                                 __builtin_trap();
                             (void)draw.Column(0U, 0, 1, 254U, 0U, 511U, 0, 65536);
                             (void)draw.SpanPair(2U, 3U, 0U, 3U, 253U, 253U, 0U, -1000, 0, 6553, 6553);
+                            (void)draw.Span(20U, 0U, 3U, 253U, 0U, -1000, 0, 6553, 0);
+                            (void)draw.Text({2, 30}, "Lap 1/3", micropixel::Color::White(),
+                                            micropixel::SystemFont::kSmall);
                             (void)draw.Sprite({0, 4, 16, 16}, 254U, 0U, 0U, 0U, 512U, 256U);
                             if (renderer.info().polygon_supported()) {
                                 using micropixel::RasterVertex;

@@ -45,7 +45,10 @@ bool BitmapSurface(const device::BitmapView& bitmap, ConstPixelSurface& surface)
         format = SurfacePixelFormat::kBgra8888;
         bytes_per_pixel = 4U;
     } else if (bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
-        format = SurfacePixelFormat::kRgb565;
+        // A texture the raster path converted to panel order is still usable by
+        // a Scene sprite through the compositor's swapped-format software path.
+        format = (bitmap.flags & device::bitmap_flags::kRgb565ByteSwapped) != 0U ? SurfacePixelFormat::kRgb565Swapped
+                                                                                 : SurfacePixelFormat::kRgb565;
         bytes_per_pixel = 2U;
     } else {
         return false;

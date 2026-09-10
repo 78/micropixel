@@ -220,6 +220,18 @@ DeviceResult<micropixel_text_metrics_t> GraphicsService::MeasureText(micropixel_
                                           : Fail<micropixel_text_metrics_t>(status);
 }
 
+DeviceResult<void> GraphicsService::DrawText(const TextTarget& target, int32_t x, int32_t y, uint32_t rgb888,
+                                             micropixel_font_handle_t font_handle, const char* text,
+                                             uint32_t text_length) const {
+    const int32_t status = implementation_.DrawText(target, x, y, rgb888, font_handle, text, text_length);
+    return status == MICROPIXEL_STATUS_OK ? DeviceResult<void>{} : Fail<void>(status);
+}
+
+DeviceResult<void> GraphicsService::CopyOpaqueBlocks(const PixelTarget& target, const OpaqueCopyBlock* blocks,
+                                                     uint32_t count) const {
+    return StatusResult(implementation_.CopyOpaqueBlocks(target, blocks, count));
+}
+
 DeviceResult<void> GraphicsService::ScaleBitmap(const BitmapView& source, const BitmapView& destination) const {
     return StatusResult(implementation_.ScaleBitmap(source, destination));
 }

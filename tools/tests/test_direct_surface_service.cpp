@@ -37,6 +37,14 @@ class FakeGraphics final : public micropixel::device::Graphics {
                                       micropixel_text_metrics_t&) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
+    [[nodiscard]] int32_t DrawText(const micropixel::device::TextTarget&, int32_t, int32_t, uint32_t,
+                                   micropixel_font_handle_t, const char*, uint32_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t CopyOpaqueBlocks(const micropixel::device::PixelTarget&,
+                                           const micropixel::device::OpaqueCopyBlock*, uint32_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
     [[nodiscard]] int32_t ScaleBitmap(const micropixel::device::BitmapView&,
                                       const micropixel::device::BitmapView&) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;

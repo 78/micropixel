@@ -8,6 +8,8 @@
 #include <cstring>
 #include <random>
 #include <source_location>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -84,6 +86,14 @@ class FakeGraphics final : public micropixel::device::Graphics {
     [[nodiscard]] int32_t ReleaseFont(micropixel_font_handle_t) override { return MICROPIXEL_STATUS_UNSUPPORTED; }
     [[nodiscard]] int32_t MeasureText(micropixel_font_handle_t, const char*, uint32_t,
                                       micropixel_text_metrics_t&) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t DrawText(const micropixel::device::TextTarget&, int32_t, int32_t, uint32_t,
+                                   micropixel_font_handle_t, const char*, uint32_t) override {
+        return MICROPIXEL_STATUS_UNSUPPORTED;
+    }
+    [[nodiscard]] int32_t CopyOpaqueBlocks(const micropixel::device::PixelTarget&,
+                                           const micropixel::device::OpaqueCopyBlock*, uint32_t) override {
         return MICROPIXEL_STATUS_UNSUPPORTED;
     }
     [[nodiscard]] int32_t ScaleBitmap(const micropixel::device::BitmapView&,
@@ -198,6 +208,38 @@ micropixel_raster_span_pair_t SpanPair(uint16_t y_floor, uint16_t y_ceiling, uin
     span.ds = ds;
     span.dt = dt;
     return span;
+}
+
+micropixel_raster_span_t Span(uint16_t y, uint16_t x0, uint16_t x1, uint8_t texture_slot, uint8_t light, int32_t s,
+                              int32_t t, int32_t ds, int32_t dt) {
+    micropixel_raster_span_t span{};
+    span.type = MICROPIXEL_RASTER_RECORD_SPAN;
+    span.texture_slot = texture_slot;
+    span.light_level = light;
+    span.y = y;
+    span.x0 = x0;
+    span.x1 = x1;
+    span.s = s;
+    span.t = t;
+    span.ds = ds;
+    span.dt = dt;
+    return span;
+}
+
+// TEXT header plus its zero-padded UTF-8 payload as raw list bytes.
+std::vector<uint8_t> TextRecord(int16_t x, int16_t y, uint16_t color, micropixel_font_handle_t font,
+                                std::string_view text, uint16_t declared_length = 0U) {
+    micropixel_raster_text_t header{};
+    header.type = MICROPIXEL_RASTER_RECORD_TEXT;
+    header.text_length = declared_length != 0U ? declared_length : static_cast<uint16_t>(text.size());
+    header.x = x;
+    header.y = y;
+    header.color = color;
+    header.font_handle = font;
+    std::vector<uint8_t> bytes(sizeof(header) + ((text.size() + 3U) & ~3U), 0U);
+    std::memcpy(bytes.data(), &header, sizeof(header));
+    std::memcpy(bytes.data() + sizeof(header), text.data(), text.size());
+    return bytes;
 }
 
 micropixel_raster_sprite_t Sprite(int16_t x, int16_t y, uint16_t width, uint16_t height, uint8_t texture, uint8_t light,
@@ -437,6 +479,41 @@ void TestKernelsAgainstReference() {
     std::memcpy(&untouched, frame.data() + 30U * kPitch + 61U * 2U, sizeof(untouched));
     Require(untouched == 0U);
 
+    // Span: the single-row form samples like SpanPair. dt == 0 takes the
+    // hoisted-row unrolled path (61 pixels: 15 groups of four plus one), a
+    // non-zero dt the general one; both agree with the SpanPair walk.
+    std::fill(frame.begin(), frame.end(), 0U);
+    for (const int32_t dt : {0, -700}) {
+        const auto single = Span(33U, 3U, 63U, 1U, 3U, (5 << 16) + 3000, (2 << 16) + (1 << 15), 3000, dt);
+        raster::DrawSpan(target, textures[1], lit.data() + 3U * 256U, single);
+        const auto pair = SpanPair(34U, 34U, 3U, 63U, 1U, 1U, 3U, (5 << 16) + 3000, (2 << 16) + (1 << 15), 3000, dt);
+        raster::DrawSpanPair(target, textures[1], textures[1], lit.data() + 3U * 256U, pair);
+        for (uint32_t x = 3U; x <= 63U; ++x) {
+            Require(PixelAt(frame.data(), kPitch, x, 33U) == PixelAt(frame.data(), kPitch, x, 34U));
+        }
+        Require(PixelAt(frame.data(), kPitch, 3U, 33U) == Lit(3U, Texel(0U, 8U)));
+        Require(PixelAt(frame.data(), kPitch, 4U, 33U) == Lit(3U, Texel(1U, dt == 0 ? 8U : 7U)));
+        Require(PixelAt(frame.data(), kPitch, 2U, 33U) == 0U && PixelAt(frame.data(), kPitch, 3U, 32U) == 0U);
+    }
+    // Non-power-of-two texture: fract(s) * width selects the texel.
+    {
+        std::vector<uint8_t> odd(5U * 3U);
+        for (uint32_t index = 0U; index < odd.size(); ++index) odd[index] = static_cast<uint8_t>(index + 1U);
+        const raster::Texture texture{.pixels = odd.data(),
+                                      .width = 5U,
+                                      .height = 3U,
+                                      .log2_width = UINT8_MAX,
+                                      .log2_height = UINT8_MAX,
+                                      .layout = MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR};
+        const auto single = Span(35U, 0U, 9U, 1U, 0U, 0, (1 << 16) / 3 * 2 + 1, (1 << 16) / 10, 0);
+        raster::DrawSpan(target, texture, lit.data(), single);
+        uint32_t s = 0U;
+        for (uint32_t x = 0U; x <= 9U; ++x, s += static_cast<uint32_t>(single.ds)) {
+            const uint32_t tx = ((s & 0xffffU) * 5U) >> 16U;
+            Require(PixelAt(frame.data(), kPitch, x, 35U) == Lit(0U, odd[2U * 5U + tx]));
+        }
+    }
+
     // Sprite: 8x8 texels scaled x2 onto 16x16 at (50, 40), so the right and
     // bottom edges are clipped by the 64x48 target; transparent u == 0 skipped.
     std::fill(frame.begin(), frame.end(), 0U);
@@ -470,7 +547,8 @@ void TestKernelsAgainstReference() {
     Require(PixelAt(frame.data(), kPitch, 59U, 10U) == 0U && PixelAt(frame.data(), kPitch, 60U, 12U) == 0U);
     raster::DrawRect(target, Rect(60, 10, 2U, 1U, 0x001FU, 127U));
     const uint16_t blended = PixelAt(frame.data(), kPitch, 60U, 10U);
-    Require((blended >> 11U) == 15U && (blended & 0x1FU) == 15U && ((blended >> 5U) & 0x3FU) == 0U);
+    // 31 * 0.5 rounds to 16 (the blend works in 1/64 coverage steps, nearest).
+    Require((blended >> 11U) == 16U && (blended & 0x1FU) == 16U && ((blended >> 5U) & 0x3FU) == 0U);
     Require(PixelAt(frame.data(), kPitch, 62U, 10U) == 0xF800U);
 
     // Byte-swapped target: colors and blends land in panel order.
@@ -1113,6 +1191,7 @@ void TestServiceUploadsAndDraws() {
     DrawList list{kFrame0};
     list.Add(Column(10U, 0U, kHeight - 1U, 0U, 1U, 3U, 0, 1 << 15));
     list.Add(SpanPair(40U, 7U, 0U, kWidth - 1U, 1U, 1U, 0U, 0, 0, 1 << 12, 1 << 12));
+    list.Add(Span(41U, 0U, kWidth - 1U, 1U, 2U, 0, 3 << 12, 1 << 12, 0));
     list.Add(Sprite(30, 20, 4U, 4U, 0U, 2U, 4U, 4U, 4U, 4U));
     list.Add(Rect(50, 20, 2U, 2U, 0x07E0U));
     list.Finish();
@@ -1123,6 +1202,7 @@ void TestServiceUploadsAndDraws() {
     Require(PixelAt(frame0, 0U, 40U) == Lit(0U, Texel(0U, 0U)));
     Require(PixelAt(frame0, 1U, 40U) == Lit(0U, Texel(1U, 1U)));
     Require(PixelAt(frame0, 1U, 7U) == Lit(0U, Texel(1U, 1U)));
+    Require(PixelAt(frame0, 0U, 41U) == Lit(2U, Texel(0U, 3U)) && PixelAt(frame0, 5U, 41U) == Lit(2U, Texel(5U, 3U)));
     Require(PixelAt(frame0, 11U, 0U) == 0U);
     Require(PixelAt(frame0, 30U, 20U) == Lit(2U, Texel(4U, 4U)) && PixelAt(frame0, 33U, 23U) == Lit(2U, Texel(7U, 7U)));
     Require(PixelAt(frame0, 50U, 20U) == 0x07E0U && PixelAt(frame0, 51U, 21U) == 0x07E0U);
@@ -1186,6 +1266,140 @@ void TestServiceUploadsAndDraws() {
         DrawList broken{kFrame0};
         broken.Add(SpanPair(0U, 1U, 0U, 1U, 0U, 1U, 0U, 0, 0, 0, 0));  // column-major slot in a span
         reject(broken, MICROPIXEL_STATUS_NOT_FOUND);
+    }
+    {
+        DrawList broken{kFrame0};
+        broken.Add(Span(0U, 5U, 4U, 1U, 0U, 0, 0, 0, 0));  // x1 < x0
+        reject(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        broken.Add(Span(kHeight, 0U, 1U, 1U, 0U, 0, 0, 0, 0));  // row outside target
+        reject(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        broken.Add(Span(0U, 0U, kWidth, 1U, 0U, 0, 0, 0, 0));  // x1 outside target
+        reject(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        broken.Add(Span(0U, 0U, 1U, 0U, 0U, 0, 0, 0, 0));  // column-major slot in a span
+        reject(broken, MICROPIXEL_STATUS_NOT_FOUND);
+    }
+    {
+        DrawList broken{kFrame0};
+        auto span = Span(0U, 0U, 1U, 1U, 0U, 0, 0, 0, 0);
+        span.reserved0 = 1U;
+        broken.Add(span);
+        reject(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    // TEXT needs the device's text rasterizer; the plain service has none.
+    auto add_bytes = [](DrawList& target_list, const std::vector<uint8_t>& record) {
+        target_list.bytes.insert(target_list.bytes.end(), record.begin(), record.end());
+        ++target_list.record_count;
+    };
+    {
+        DrawList broken{kFrame0};
+        add_bytes(broken, TextRecord(1, 2, 0xFFFFU, MICROPIXEL_SYSTEM_FONT_SMALL, "Hi"));
+        reject(broken, MICROPIXEL_STATUS_UNSUPPORTED);
+    }
+    // With one bound, the record reaches it validated and its payload intact;
+    // malformed headers never do.
+    struct TextCalls final {
+        uint32_t validated{};
+        uint32_t drawn{};
+        micropixel_font_handle_t font{};
+        std::string text;
+        int32_t x{};
+        int32_t y{};
+        uint16_t color{};
+        bool accept{true};
+    } calls;
+    const raster::TextBinding binding{
+        .validate =
+            [](void* context, micropixel_font_handle_t font, const char* text, uint32_t length) {
+                auto& record = *static_cast<TextCalls*>(context);
+                ++record.validated;
+                record.font = font;
+                record.text.assign(text, length);
+                return record.accept;
+            },
+        .draw =
+            [](void* context, const raster::Target& target, int32_t x, int32_t y, uint16_t color,
+               micropixel_font_handle_t, const char*, uint32_t) {
+                auto& record = *static_cast<TextCalls*>(context);
+                ++record.drawn;
+                record.x = x;
+                record.y = y;
+                record.color = color;
+                // Mark the origin so the test sees the draw reached the buffer.
+                std::memcpy(target.pixels + static_cast<uint32_t>(y) * target.pitch + static_cast<uint32_t>(x) * 2U,
+                            &color, sizeof(color));
+                return true;
+            },
+        .context = &calls,
+    };
+    {
+        DrawList drawn{kFrame0};
+        add_bytes(drawn, TextRecord(7, 9, 0x1234U, MICROPIXEL_SYSTEM_FONT_LARGE, "Lap 2"));
+        drawn.Add(Rect(0, 0, 1U, 1U, 0x07E0U));  // records after a TEXT still parse
+        drawn.Finish();
+        Require(service
+                    .Submit(drawn.bytes.data(), static_cast<uint32_t>(drawn.bytes.size()), surfaces, nullptr, nullptr,
+                            binding)
+                    .has_value());
+        Require(calls.validated == 1U && calls.drawn == 1U && calls.font == MICROPIXEL_SYSTEM_FONT_LARGE);
+        Require(calls.text == "Lap 2" && calls.x == 7 && calls.y == 9 && calls.color == 0x1234U);
+        Require(PixelAt(frame0, 7U, 9U) == 0x1234U && PixelAt(frame0, 0U, 0U) == 0x07E0U);
+        std::memset(frame0.pixels, 0, kFrameBytes);
+    }
+    auto reject_text = [&](DrawList& broken, int32_t status) {
+        broken.Finish();
+        Require(service
+                    .Submit(broken.bytes.data(), static_cast<uint32_t>(broken.bytes.size()), surfaces, nullptr, nullptr,
+                            binding)
+                    .error()
+                    .status == status);
+        Require(calls.drawn == 1U);
+        for (uint32_t index = 0U; index < kFrameBytes; ++index) {
+            Require(frame0.pixels[index] == 0U);
+        }
+    };
+    {
+        DrawList broken{kFrame0};
+        add_bytes(broken, TextRecord(0, 0, 0U, MICROPIXEL_SYSTEM_FONT_SMALL, "abc", 7U));  // length past the list
+        reject_text(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        add_bytes(broken, TextRecord(0, 0, 0U, MICROPIXEL_SYSTEM_FONT_SMALL, "abcd", 1U));  // padding not zero
+        reject_text(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        add_bytes(broken, TextRecord(0, 0, 0U, 0U, "abc"));  // no font
+        reject_text(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        std::vector<uint8_t> empty = TextRecord(0, 0, 0U, MICROPIXEL_SYSTEM_FONT_SMALL, "");
+        add_bytes(broken, empty);  // zero length
+        reject_text(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        const uint32_t validated = calls.validated;
+        add_bytes(broken, TextRecord(0, 0, 0U, MICROPIXEL_SYSTEM_FONT_SMALL, "a\xC3(b"));  // malformed UTF-8
+        reject_text(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        Require(calls.validated == validated);  // refused before the device is asked
+    }
+    {
+        DrawList broken{kFrame0};
+        calls.accept = false;  // the device rejects the font
+        add_bytes(broken, TextRecord(0, 0, 0U, 99U, "abc"));
+        reject_text(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+        calls.accept = true;
     }
     {
         DrawList broken{kFrame0};
@@ -1624,10 +1838,250 @@ void SharedTextureImageSamplingAndValidation() {
     texture.size = sizeof(bgra);
     image.reserved0 = 1;
     Require(render(image) == MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    image.reserved0 = 0;
+
+    // Unscaled RGB565 rows take the copy path: clipped on the left, converted
+    // to panel order when the target is byte swapped, and identical to the
+    // per-pixel result of a scaled draw with the same geometry otherwise.
+    const uint16_t rgb565[]{0x1234, 0x5678, 0x9abc, 0xdef0, 0x0001, 0x0002};
+    BitmapView canonical{
+        reinterpret_cast<const uint8_t*>(rgb565), sizeof(rgb565), 3, 2, 6, MICROPIXEL_PIXEL_FORMAT_RGB565, 0};
+    resources.texture_context = &canonical;
+    image.x = -1;
+    image.y = 1;
+    image.width = image.source_width = 3;
+    image.height = image.source_height = 2;
+    std::fill_n(pixels, 24, 0);
+    target.byte_swapped = true;
+    Require(render(image) == MICROPIXEL_STATUS_OK);
+    Require(pixels[6] == 0x7856 && pixels[7] == 0xbc9a && pixels[8] == 0 && pixels[12] == 0x0100 &&
+            pixels[13] == 0x0200 && pixels[14] == 0);
+    Require(pixels[0] == 0 && pixels[18] == 0);
+    std::fill_n(pixels, 24, 0);
+    target.byte_swapped = false;
+    image.x = 0;
+    Require(render(image) == MICROPIXEL_STATUS_OK);
+    Require(pixels[6] == 0x1234 && pixels[8] == 0x9abc && pixels[12] == 0xdef0 && pixels[14] == 0x0002 &&
+            pixels[9] == 0);
+    // Scaling 3 source columns onto 5 destination columns samples floor(x * 3 / 5).
+    std::fill_n(pixels, 24, 0);
+    image.width = 5;
+    Require(render(image) == MICROPIXEL_STATUS_OK);
+    Require(pixels[6] == 0x1234 && pixels[7] == 0x1234 && pixels[8] == 0x5678 && pixels[9] == 0x5678 &&
+            pixels[10] == 0x9abc);
+
+    // A texture already stored in panel order (kRgb565ByteSwapped) copies
+    // verbatim into a swapped target, swaps back into a canonical target and
+    // blends from its canonical value.
+    const uint16_t swapped_texels[]{0x3412, 0x7856, 0xbc9a, 0xf0de, 0x0100, 0x0200};
+    BitmapView prepared{reinterpret_cast<const uint8_t*>(swapped_texels),
+                        sizeof(swapped_texels),
+                        3,
+                        2,
+                        6,
+                        MICROPIXEL_PIXEL_FORMAT_RGB565,
+                        micropixel::device::bitmap_flags::kRgb565ByteSwapped};
+    resources.texture_context = &prepared;
+    image.width = 3;
+    std::fill_n(pixels, 24, 0);
+    target.byte_swapped = true;
+    Require(render(image) == MICROPIXEL_STATUS_OK);
+    Require(pixels[6] == 0x3412 && pixels[8] == 0xbc9a && pixels[12] == 0xf0de && pixels[14] == 0x0200);
+    std::fill_n(pixels, 24, 0);
+    target.byte_swapped = false;
+    Require(render(image) == MICROPIXEL_STATUS_OK);
+    Require(pixels[6] == 0x1234 && pixels[8] == 0x9abc && pixels[12] == 0xdef0 && pixels[14] == 0x0002);
+    std::fill_n(pixels, 24, 0xffff);
+    image.opacity = 128;
+    Require(render(image) == MICROPIXEL_STATUS_OK);
+    // Half of white and 0x0001 (only the blue LSB set): the same value the
+    // canonical texture would produce.
+    resources.texture_context = &canonical;
+    uint16_t expected_blend[24]{};
+    std::fill_n(expected_blend, 24, 0xffff);
+    {
+        raster::Target reference{reinterpret_cast<uint8_t*>(expected_blend), 6, 4, 12, false};
+        std::swap(target, reference);
+        Require(render(image) == MICROPIXEL_STATUS_OK);
+        std::swap(target, reference);
+    }
+    Require(std::equal(pixels, pixels + 24, expected_blend));
+    image.opacity = 255;
+}
+
+// Opaque unscaled IMAGE records ride the device copy engine when one is bound:
+// consecutive eligible records form one batch (at most kMaxCopyBlocks), any
+// other record or an ineligible IMAGE flushes first so overlaps keep their
+// order, and a failed batch is redrawn by the CPU so the result never differs
+// from the CPU-only path.
+void SharedCopyEngineBatching() {
+    using micropixel::device::BitmapView;
+    using micropixel::device::OpaqueCopyBlock;
+    constexpr uint32_t kTextureWidth = 96U;
+    constexpr uint32_t kTextureHeight = 96U;
+    std::vector<uint16_t> texels(kTextureWidth * kTextureHeight);
+    for (size_t i = 0U; i < texels.size(); ++i) texels[i] = static_cast<uint16_t>(i * 2654435761U >> 5);
+    BitmapView texture{reinterpret_cast<const uint8_t*>(texels.data()),
+                       static_cast<uint32_t>(texels.size() * 2U),
+                       kTextureWidth,
+                       kTextureHeight,
+                       kTextureWidth * 2U,
+                       MICROPIXEL_PIXEL_FORMAT_RGB565,
+                       micropixel::device::bitmap_flags::kRgb565ByteSwapped};
+    constexpr uint32_t kTargetWidth = 160U;
+    constexpr uint32_t kTargetHeight = 120U;
+    std::vector<uint16_t> hardware(kTargetWidth * kTargetHeight);
+    std::vector<uint16_t> software(kTargetWidth * kTargetHeight);
+    raster::Target target{reinterpret_cast<uint8_t*>(hardware.data()), kTargetWidth, kTargetHeight, kTargetWidth * 2U,
+                          true};
+    raster::Target reference{reinterpret_cast<uint8_t*>(software.data()), kTargetWidth, kTargetHeight,
+                             kTargetWidth * 2U, true};
+
+    struct Engine final {
+        std::vector<uint32_t> batch_sizes;
+        std::vector<OpaqueCopyBlock> blocks;
+        uint32_t fail_batch = UINT32_MAX;  // index of the batch that reports failure
+        bool fail_after_partial_write = false;
+    } engine;
+    raster::Resources resources{};
+    resources.texture_context = &texture;
+    resources.resolve_texture = [](void* context, uint32_t handle, BitmapView& output) {
+        if (handle != 5U) return false;
+        output = *static_cast<BitmapView*>(context);
+        return true;
+    };
+    raster::CopyBatch batch{};
+    resources.copy_context = &engine;
+    resources.copy_batch = &batch;
+    resources.copy_blocks = [](void* context, const raster::Target& destination, const OpaqueCopyBlock* blocks,
+                               uint32_t count) {
+        auto& self = *static_cast<Engine*>(context);
+        const bool fail = self.batch_sizes.size() == self.fail_batch;
+        self.batch_sizes.push_back(count);
+        for (uint32_t index = 0U; index < count; ++index) {
+            const OpaqueCopyBlock& block = blocks[index];
+            self.blocks.push_back(block);
+            Require(block.width >= raster::kMinCopyBlockWidth &&
+                    static_cast<uint64_t>(block.width) * block.height >= raster::kMinCopyBlockPixels);
+            Require(block.source_x + block.width <= block.source_picture_width &&
+                    block.source_y + block.height <= block.source_picture_height);
+            Require(block.destination_x + block.width <= destination.width &&
+                    block.destination_y + block.height <= destination.height);
+            if (fail && !self.fail_after_partial_write) return false;
+            for (uint32_t row = 0U; row < block.height; ++row) {
+                const uint8_t* source = block.source_pixels + (block.source_y + row) * block.source_stride +
+                                        block.source_x * 2U;
+                uint8_t* out = destination.pixels + (block.destination_y + row) * destination.pitch +
+                               block.destination_x * 2U;
+                // A failing engine scribbles the first row of each block and
+                // gives up so the fallback has something to repair.
+                if (fail) {
+                    std::fill_n(out, block.width * 2U, 0xa5);
+                    return false;
+                }
+                std::memcpy(out, source, block.width * 2U);
+            }
+        }
+        return !fail;
+    };
+    raster::Resources cpu_only = resources;
+    cpu_only.copy_blocks = nullptr;
+    cpu_only.copy_context = nullptr;
+    cpu_only.copy_batch = nullptr;
+
+    const auto image_at = [](int32_t x, int32_t y, uint32_t size, uint8_t opacity) {
+        micropixel_raster_image_t image{};
+        image.type = MICROPIXEL_RASTER_RECORD_IMAGE;
+        image.opacity = opacity;
+        image.texture_handle = 5U;
+        image.x = x;
+        image.y = y;
+        image.width = image.height = size;
+        image.source_width = image.source_height = size;
+        return image;
+    };
+    const auto run = [&](const DrawList& list, const raster::Resources& with, raster::Target& on) {
+        micropixel_raster_header_t header{};
+        Require(raster::ValidateDrawList(list.bytes.data(), list.bytes.size(), on, with, header) ==
+                MICROPIXEL_STATUS_OK);
+        raster::ExecuteDrawList(list.bytes.data(), header, on, with);
+    };
+    const auto same_result = [&] { return hardware == software; };
+
+    // 35 overlapping 96x96 images (one partly off-screen), then a RECT that
+    // overlaps them, then a small image that is below the pixel threshold and
+    // draws on the CPU, then a translucent image, then a large one again.
+    DrawList list{0U};
+    for (uint32_t index = 0U; index < 35U; ++index) {
+        list.Add(image_at(static_cast<int32_t>(index % 7U) * 8 - 16, static_cast<int32_t>(index / 7U) * 5, 96U, 255U));
+    }
+    micropixel_raster_rect_t rect{};
+    rect.type = MICROPIXEL_RASTER_RECORD_RECT;
+    rect.opacity = 255U;
+    rect.x = 40;
+    rect.y = 30;
+    rect.width = 50U;
+    rect.height = 50U;
+    rect.color = 0x07e0;
+    list.Add(rect);
+    list.Add(image_at(50, 40, 32U, 255U));
+    list.Add(image_at(60, 50, 96U, 255U));
+    list.Add(image_at(70, 60, 96U, 200U));
+    list.Add(image_at(0, 0, 96U, 255U));
+    list.Finish();
+
+    std::fill(hardware.begin(), hardware.end(), 0x1111);
+    std::fill(software.begin(), software.end(), 0x1111);
+    run(list, resources, target);
+    run(list, cpu_only, reference);
+    Require(same_result());
+    // Batches: 32 + 3 (flushed by the RECT), then the 32x32 image flushes
+    // nothing and draws on the CPU, one 96x96 flushed by the translucent
+    // image, and the final one flushed at the end of the list.
+    Require(engine.batch_sizes.size() == 4U);
+    Require(engine.batch_sizes[0] == raster::kMaxCopyBlocks && engine.batch_sizes[1] == 3U &&
+            engine.batch_sizes[2] == 1U && engine.batch_sizes[3] == 1U);
+    Require(engine.blocks.size() == 37U);
+    // The off-screen image was clipped before it reached the engine.
+    Require(engine.blocks[0].destination_x == 0U && engine.blocks[0].source_x == 16U && engine.blocks[0].width == 80U);
+
+    // A failing batch (with or without partial writes) is redrawn by the CPU.
+    for (const bool partial : {false, true}) {
+        for (const uint32_t failing : {0U, 1U, 3U}) {
+            engine = {};
+            engine.fail_batch = failing;
+            engine.fail_after_partial_write = partial;
+            std::fill(hardware.begin(), hardware.end(), 0x2222);
+            std::fill(software.begin(), software.end(), 0x2222);
+            run(list, resources, target);
+            run(list, cpu_only, reference);
+            Require(same_result());
+            Require(engine.batch_sizes.size() == 4U);
+        }
+    }
+
+    // A canonical texture on a swapped target stays on the CPU (byte order
+    // mismatch), as does every image on a target with no engine bound.
+    engine = {};
+    texture.flags = 0U;
+    std::fill(hardware.begin(), hardware.end(), 0x3333);
+    std::fill(software.begin(), software.end(), 0x3333);
+    run(list, resources, target);
+    run(list, cpu_only, reference);
+    Require(same_result() && engine.batch_sizes.empty());
+    // ...and rides the engine on a canonical target.
+    target.byte_swapped = false;
+    reference.byte_swapped = false;
+    std::fill(hardware.begin(), hardware.end(), 0x4444);
+    std::fill(software.begin(), software.end(), 0x4444);
+    run(list, resources, target);
+    run(list, cpu_only, reference);
+    Require(same_result() && engine.batch_sizes.size() == 4U);
 }
 
 int main() {
     SharedTextureImageSamplingAndValidation();
+    SharedCopyEngineBatching();
     Require(raster::Log2Exact(64U) == 6U && raster::Log2Exact(8U) == 3U && raster::Log2Exact(300U) == UINT8_MAX);
     TestKernelsAgainstReference();
     TestPolygons();

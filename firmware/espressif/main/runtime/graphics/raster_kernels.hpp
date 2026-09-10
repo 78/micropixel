@@ -67,6 +67,52 @@ void WarpRowSpan(const uint32_t* row, uint32_t width, uint16_t& first, uint16_t&
 
 using TextureResolver = bool (*)(void*, uint32_t, device::BitmapView&);
 
+struct Target;
+
+// Host text for TEXT records. `validate_text` answers whether `font_handle`
+// resolves and `text` is well-formed UTF-8 the font can lay out (the Host's
+// TEXT_MEASURE rules); `draw_text` paints it with its top-left at (x, y) in
+// canonical RGB565 `color`, clipped to the target. Both are nullptr when the
+// device has no text rasterizer, which makes TEXT records UNSUPPORTED.
+using TextValidator = bool (*)(void*, micropixel_font_handle_t, const char*, uint32_t);
+using TextDrawer = bool (*)(void*, const Target&, int32_t, int32_t, uint16_t, micropixel_font_handle_t, const char*,
+                            uint32_t);
+
+struct TextBinding final {
+    TextValidator validate{};
+    TextDrawer draw{};
+    void* context{};
+};
+
+// Device copy engine for opaque, unscaled RGB565 IMAGE records whose texture is
+// already in the target's byte order. ExecuteDrawList batches consecutive
+// eligible records (up to kMaxCopyBlocks) into one call; a false return means
+// nothing can be assumed about the pixels and the kernels redraw every block.
+// nullptr when the device has no engine, which keeps IMAGE on the CPU.
+using BlockCopier = bool (*)(void*, const Target&, const device::OpaqueCopyBlock*, uint32_t);
+
+struct CopyBinding final {
+    BlockCopier copy_blocks{};
+    void* context{};
+};
+
+inline constexpr uint32_t kMaxCopyBlocks = 32U;
+// Blocks smaller than this stay on the CPU: descriptor setup, cache
+// maintenance and the completion interrupt cost about as much as copying a
+// few thousand pixels, and narrow blocks measured no faster than memcpy.
+inline constexpr uint32_t kMinCopyBlockPixels = 4096U;
+inline constexpr uint32_t kMinCopyBlockWidth = 32U;
+
+// Consecutive IMAGE records waiting for the copy engine. The records and their
+// textures are kept so a failed batch is redrawn by the CPU in order. Owned by
+// the caller (about 3 KiB) rather than the Guest task's stack.
+struct CopyBatch final {
+    device::OpaqueCopyBlock blocks[kMaxCopyBlocks]{};
+    micropixel_raster_image_t images[kMaxCopyBlocks]{};
+    device::BitmapView textures[kMaxCopyBlocks]{};
+    uint32_t count{};
+};
+
 struct Resources final {
     const Texture* textures{};
     uint32_t texture_count{};
@@ -76,6 +122,13 @@ struct Resources final {
     uint32_t warp_count{};
     TextureResolver resolve_texture{};
     void* texture_context{};
+    TextValidator validate_text{};
+    TextDrawer draw_text{};
+    void* text_context{};
+    // The engine is used only when both copy_blocks and copy_batch are set.
+    BlockCopier copy_blocks{};
+    void* copy_context{};
+    CopyBatch* copy_batch{};
     [[nodiscard]] const Texture* TextureAt(uint8_t texture_slot) const {
         return texture_slot < texture_count && textures != nullptr ? textures + texture_slot : nullptr;
     }
@@ -104,7 +157,7 @@ struct Target final {
 
 // Parses and validates a complete draw list: header (magic, version, sizes,
 // target geometry) and every record (type, sizes, coordinates inside the
-// target for COLUMN/SPAN_PAIR, texture slots present with the layout the
+// target for COLUMN/SPAN_PAIR/SPAN, texture slots present with the layout the
 // record needs, palette slot present with the light level below its count).
 // SPRITE, RECT, IMAGE and WARP may extend past the target; the kernels clip
 // them. Returns MICROPIXEL_STATUS_OK and fills `header_out` when the list may
@@ -119,11 +172,19 @@ struct Target final {
 // kinds. `now_us` is read around every record; nullptr disables timing but
 // still counts records and pixels.
 struct ExecuteProfile final {
-    static constexpr uint32_t kKinds = MICROPIXEL_RASTER_RECORD_QUAD + 1U;
+    static constexpr uint32_t kKinds = MICROPIXEL_RASTER_RECORD_TEXT + 1U;
     uint64_t (*now_us)(){};
     uint32_t records[kKinds]{};
     uint64_t pixels[kKinds]{};
     uint64_t time_us[kKinds]{};
+    // IMAGE records handed to the device copy engine (a subset of the IMAGE
+    // counters above): blocks, pixels, batches issued, batches that failed
+    // and were redrawn by the CPU, and the time spent inside the engine.
+    uint32_t copy_blocks{};
+    uint64_t copy_pixels{};
+    uint32_t copy_batches{};
+    uint32_t copy_failures{};
+    uint64_t copy_time_us{};
 };
 
 // Executes a list that ValidateDrawList accepted. `target.pixels` must cover
@@ -136,6 +197,7 @@ void DrawColumn(const Target& target, const Texture& texture, const uint16_t* li
                 const micropixel_raster_column_t& column);
 void DrawSpanPair(const Target& target, const Texture& floor_texture, const Texture& ceiling_texture,
                   const uint16_t* lit, const micropixel_raster_span_pair_t& span);
+void DrawSpan(const Target& target, const Texture& texture, const uint16_t* lit, const micropixel_raster_span_t& span);
 // `lit` may be nullptr for a SOLID_COLOR sprite.
 void DrawSprite(const Target& target, const Texture& texture, const uint16_t* lit,
                 const micropixel_raster_sprite_t& sprite);

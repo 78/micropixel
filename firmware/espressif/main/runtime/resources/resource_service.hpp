@@ -38,6 +38,21 @@ class ResourceService final {
     [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture_handle);
     [[nodiscard]] ServiceResult<device::FontResourceView> FindFont(uint32_t resource_id) const;
     [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture_handle, device::BitmapView& view_out) const;
+    // Raster kernels copy RGB565 textures into Host buffers that follow the
+    // surface's pixel format and panel byte order. Once a DirectSurface exists,
+    // opaque textures decoded afterwards use its RGB565 format (even on RGB888
+    // panels, where 2D UI textures default to BGR888) and its byte order, and
+    // ResolveTextureForRaster converts earlier owned RGB565 ones the first time
+    // a record uses them. Textures that stay canonical (flash-mapped, dynamic)
+    // still resolve; the kernel swaps per pixel.
+    void SetPreferredRasterTarget(uint32_t native_pixel_format, bool rgb565_swapped) {
+        if (native_pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565) {
+            preferred_opaque_format_.store(MICROPIXEL_PIXEL_FORMAT_RGB565);
+        }
+        preferred_rgb565_swapped_.store(rgb565_swapped);
+    }
+    [[nodiscard]] bool ResolveTextureForRaster(micropixel_texture_handle_t texture_handle, bool target_byte_swapped,
+                                               device::BitmapView& view_out);
     [[nodiscard]] bool RetainSceneTexture(micropixel_texture_handle_t texture_handle);
     void ReleaseSceneTexture(micropixel_texture_handle_t texture_handle);
     void Shutdown();
@@ -64,7 +79,9 @@ class ResourceService final {
     SemaphoreHandle_t work_done_{};
     micropixel_texture_handle_t completed_texture_{};
     int32_t completed_status_{MICROPIXEL_STATUS_INTERNAL};
-    uint32_t preferred_opaque_format_{MICROPIXEL_PIXEL_FORMAT_BGR888};
+    // Read on the background decode task, written on the Guest task.
+    std::atomic<uint32_t> preferred_opaque_format_{MICROPIXEL_PIXEL_FORMAT_BGR888};
+    std::atomic<bool> preferred_rgb565_swapped_{false};
     BitmapStore bitmaps_;
     GuestMemoryAccess memory_{};
     std::atomic<bool> stopping_{};

@@ -144,9 +144,34 @@ P4 的 LVGL 图像、App Surface、转场、扫描暂存池及对齐 bitmap 分�
 
 ## 6. 全屏光栅：降低跨边界与像素成本
 
-HostSurface 的 RasterDrawList 把 Column、SpanPair、Sprite 和 Rect 等批量记录交给 Host 执行。Guest 保留光线投射、
+HostSurface 的 RasterDrawList 把 Column、Span/SpanPair、Sprite/Image、Rect、Text 等批量记录交给 Host 执行。Guest 保留光线投射、
 遮挡判断和绘制顺序，Host 校验记录后写入空闲的 Host buffer。这样既摊薄跨 ABI 成本，也避免 Guest
 逐像素循环的地址计算和边界检查开销；Host kernel 仍可能受 PSRAM 带宽限制。
+
+S31/Mosaico 480×480 上的实测（coastline 迁移，`raster kinds` 遥测）：不缩放的不透明 Image 拷贝约 65–70 ns/px，
+Span 约 50 ns/px，不透明 Rect 约 60 ns/px，都接近 PSRAM 读+写的内存瓶颈；Host buffer 全屏写一遍约 6 ms。
+把内核改成 32 位字操作、按字换字节序，只带来约 5% 改善。因此第一优先级仍是减少被覆盖的像素
+（背景只画路面两侧、HUD 下不画路面），其次才是内核细节；关闭 Guest AOT 边界检查
+（`--unchecked-memory`）在 coastline 每帧约 40 ms 中只省约 1.3 ms，说明瓶颈不在 Guest 侧。
+HostSurface 帧由 Guest 同步提交，一帧超过 30 FPS 槽位时不要按周期网格跳到 15 FPS，应在完成后的下一
+Tick 续帧，并用三个 buffer 避免前一帧扫描未释放导致的空转（coastline 由此从 15 FPS 提到 24 FPS）。
+
+S31 上用 `Dma2dCopyEngine` 做 PSRAM→PSRAM 的 RGB565 裸拷贝：512×480 单块约 12 ns/px（3.2 ms），
+480×150 单块约 13 ns/px，而 32 个 100×4 窄条一次事务约 39 ns/px，与 CPU 换序拷贝（空载 39 ns/px）
+持平。所以 Raster 的 Image 硬件路径只接受裁剪后宽 ≥32、面积 ≥4096 的块，且全屏背景应作为一条
+记录提交，而不是按路面两侧切条。DMA2D 的 TX scrambler 按 3 字节组置换，不能给 2 字节像素换字节序
+（实测输出错位并在下一事务超时），因此纹理必须预先按面板字节序保存（`kRgb565ByteSwapped`），
+硬件只做同序拷贝。接入 coastline 后 S31 `--demo`：Host 内核 27 → 21.5 ms/帧（`raster copy engine` 每帧
+1 批 1 块 3.9 ms、16 ns/px 含 cache 同步与唤醒），渲染 34.8 → 29.5 ms，24 → 28 FPS；剩余 Image 时间是
+带 alpha 的 BGRA 赛车/图标，仍走 CPU。
+
+硬件路径要求纹理与目标同格式、同比例。P4/Claw4 的面板是 RGB888，`ResourceService` 默认把不透明纹理
+解码成 BGR888；同时 coastline 的 HostSurface 是 720/2 = 360×360 buffer，而 `TextureScale::kDisplay`
+按面板比例解码，背景对 buffer 是 2:1。两者叠加使整屏 Image 落到逐像素转换采样（约 26 ms、195 ns/px），
+比原先按路面切条时更慢。修正：建立 DirectSurface 后 `ResourceService` 改按 surface 的 RGB565 格式解码
+之后的不透明纹理；SDK 新增 `TextureScale::kSurface`（面板比例除以 surface upscale）。P4 `--demo`：
+Host 内核 36 → 13.3 ms/帧（Image 26 → 4.4 ms，DMA 背景块 2.4 ms、18 ns/px），渲染 38 → 19 ms，
+22.5 → 29.6 FPS。检查 `micropixel_resource: loaded format=… WxH bytes=…`：bytes 应为 W×H×2。
 
 先减少被覆盖的像素写入，例如只画墙面未覆盖的地板，再比较 kernel 本身。纹理布局应匹配读取方向，
 按列纹理的顺序读与目标按行写之间存在取舍，单纯改变目标遍历顺序可能得不偿失。

@@ -206,7 +206,7 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
 - `RASTER_TEXTURE_UPLOAD {texture_slot, width, height, layout, pixels, length}` 把 INDEX8 纹理复制进 Host 资源池
   （无固定资源池配额；关闭 `CONFIG_MICROPIXEL_RASTER_KERNELS` 时不提供 CAP_RASTER）。
   宽高为 1–65535；槽编号 0–255 可复用，不预分配全部槽，
-  `layout` 为 `COLUMN_MAJOR`（`pixels[u * height + v]`，供 COLUMN 记录）或 `ROW_MAJOR`（供 SPAN_PAIR 记录），
+  `layout` 为 `COLUMN_MAJOR`（`pixels[u * height + v]`，供 COLUMN/SPRITE 记录）或 `ROW_MAJOR`（供 SPAN_PAIR/SPAN/WARP/多边形记录），
   `length == width * height`。建议使用 2 的幂尺寸以启用移位/掩码快速采样。重复上传同一 texture_slot 替换旧纹理；被拒绝的上传（`INVALID_ARGUMENT`、
   `INVALID_MEMORY`、`RESOURCE_EXHAUSTED`）保留旧纹理；
 - `RASTER_PALETTE_UPLOAD {palette_slot, light_levels 1..32, pixels, length}` 向调色板槽上传 `light_levels x 256` 个
@@ -224,6 +224,15 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
   `COLUMN {x, y0..y1, texture_slot, light_level, u, v_start, v_step}` 沿一列按 16.16 步进取 `texel(u, v >> 16)`，
   `TRANSPARENT_INDEX0` 跳过纹素 0（世界 sprite）；`SPAN_PAIR {y_floor, y_ceiling, x0..x1, floor_texture_slot,
   ceiling_texture_slot, light_level, s, t, ds, dt}` 用同一条 (s, t) 走线填地板行和镜像天花板行；
+  `SPAN {y, x0..x1, texture_slot, light_level, palette_slot, s, t, ds, dt}`（type 9，28 字节）是它的单行形式，
+  透视地面（Mode7）每个屏幕行深度不同、各有自己的步进，因此每行一条；校验与 SPAN_PAIR 相同；
+  `IMAGE {x, y, width, height, opacity, texture_handle, source_x, source_y, source_width, source_height}` 把
+  Resource 服务加载的共享纹理（RGB565/BGR888/BGRA8888，含逐像素 alpha）的一块矩形最近邻缩放到目标矩形，
+  `texture_handle` 须属于本 Guest 且仍有效，源矩形须在纹理物理尺寸内；
+  `TEXT {flags, text_length 1..1024, x, y, color, font_handle}`（type 10，16 字节头 + UTF-8 文本补零到 4 字节）
+  用系统字体（`MICROPIXEL_SYSTEM_FONT_*` 句柄）或 `FONT_LOAD` 得到的字体在 `(x, y)` 左上角绘制一行文字，
+  字形覆盖率与目标像素 blend，布局与 `TEXT_MEASURE` 一致；它是第一种变长记录，Host 先按 `text_length`
+  推进再校验：句柄未知、长度为 0、补零字节非 0、文本含 NUL 或非法 UTF-8 都整批拒绝；
   `SPRITE {x, y, width, height, texture_slot, light_level, source_x, source_y, source_width, source_height, color}` 把 COLUMN_MAJOR 纹理的
   一块矩形最近邻缩放到目标矩形，目标可以部分出界由 Host 裁剪，`SOLID_COLOR` 让每个绘制的纹素写 `color`
   而不查调色板（字形图集、单色覆盖层）；`RECT {x, y, width, height, color, opacity}` 裁剪后填充，`opacity=255`
@@ -237,8 +246,8 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
   uint8 light}`，u/v/light 沿边和扫描线 affine 插值（无透视校正），取 ROW_MAJOR 2 的幂纹理的
   `texel(floor(u) & mask_x, floor(v) & mask_y)` 经插值 light 所在调色板行；顶点可任意绕向，QUAD 须为凸；
   `TRANSPARENT_INDEX0` 跳过纹素 0，`FLAT_COLOR` 忽略纹理、以 `vertices[0].u >> 8` 作调色板索引；像素中心
-  决定覆盖，Host 按目标裁剪，零面积多边形不画。COLUMN/SPAN_PAIR/SPRITE/TRIANGLE/QUAD
-  各带 `palette_slot`。Host 先整体校验（COLUMN/SPAN_PAIR 坐标在目标内、SPRITE/RECT 尺寸非 0、slot 已占用且
+  决定覆盖，Host 按目标裁剪，零面积多边形不画。COLUMN/SPAN_PAIR/SPAN/SPRITE/TRIANGLE/QUAD
+  各带 `palette_slot`。Host 先整体校验（COLUMN/SPAN_PAIR/SPAN 坐标在目标内、SPRITE/RECT/IMAGE 尺寸非 0、slot 已占用且
   layout 匹配、`light < light_levels`、WARP 纹理为 2 的幂且表中最大 light 在调色板范围内、多边形纹理为
   ROW_MAJOR 2 的幂且每个顶点 `light < light_levels`、reserved 为 0），
   任一记录非法则整批拒绝且不写任何像素；校验通过后同步执行，`service_submit` 返回时像素已在 Host buffer 中。

@@ -30,9 +30,14 @@ class RasterService final {
     [[nodiscard]] ServiceResult<void> UploadPalette(const micropixel_raster_palette_upload_request_t& request);
     [[nodiscard]] ServiceResult<void> UploadWarp(const micropixel_raster_warp_upload_request_t& request);
     // `surfaces` owns the target buffer and vetoes one the display still reads.
+    // `text` supplies the Host text rasterizer for TEXT records; without one
+    // such records are rejected as UNSUPPORTED. `copy` supplies the device copy
+    // engine for opaque IMAGE records; without one they draw on the CPU.
     [[nodiscard]] ServiceResult<void> Submit(const uint8_t* bytes, uint32_t length,
                                              const DirectSurfaceService& surfaces,
-                                             raster::TextureResolver resolve = nullptr, void* context = nullptr);
+                                             raster::TextureResolver resolve = nullptr, void* context = nullptr,
+                                             const raster::TextBinding& text = {},
+                                             const raster::CopyBinding& copy = {});
 
     void Shutdown();
 
@@ -72,6 +77,9 @@ class RasterService final {
     uint32_t telemetry_bytes_{};
     uint64_t telemetry_execute_us_{};
     raster::ExecuteProfile telemetry_profile_{};
+    // Pending IMAGE copies for the device engine; lives here so ExecuteDrawList
+    // keeps it off the Guest task's stack.
+    raster::CopyBatch copy_batch_{};
 };
 
 }  // namespace micropixel::runtime

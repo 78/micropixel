@@ -95,16 +95,20 @@ class Font final {
     int16_t descent_{};
 
     friend class Container;
+    friend class RasterDrawList;
     friend class Renderer;
     friend class Resources;
 };
 
-enum class TextureScale : uint8_t { kNative, kDisplay };
+// Native preserves authored pixels for shared Scene/Raster sampling. Display
+// scales to the panel (the logical-canvas adaptation 2D UI uses). Surface
+// scales to the App's live Direct Surface buffers (display scale divided by
+// the surface's integer upscale) so unscaled Image records copy rows verbatim;
+// it fails with InvalidArgument when no surface exists.
+enum class TextureScale : uint8_t { kNative, kDisplay, kSurface };
 
 class Resources final {
    public:
-    // Native preserves authored pixels for shared Scene/Raster sampling.
-    // Display explicitly selects the logical-canvas adaptation used by 2D UI.
     [[nodiscard]] Result<Texture> LoadTexture(AssetId asset, TextureScale scale = TextureScale::kNative) const;
     [[nodiscard]] Result<Font> LoadFont(AssetId asset) const;
     [[nodiscard]] Result<Texture> CreateDynamicTexture(Size size, PixelFormat format,

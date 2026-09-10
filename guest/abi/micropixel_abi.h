@@ -681,7 +681,8 @@ typedef enum micropixel_graphics_channel {
 typedef enum micropixel_raster_texture_layout {
     /* texel(u, v) = pixels[u * height + v]; used by COLUMN records. */
     MICROPIXEL_RASTER_LAYOUT_COLUMN_MAJOR = 1,
-    /* texel(u, v) = pixels[v * width + u]; used by SPAN_PAIR records. */
+    /* texel(u, v) = pixels[v * width + u]; used by SPAN_PAIR, SPAN, WARP and
+     * polygon records. */
     MICROPIXEL_RASTER_LAYOUT_ROW_MAJOR = 2,
 } micropixel_raster_texture_layout_t;
 
@@ -773,6 +774,10 @@ typedef enum micropixel_raster_record_type {
     MICROPIXEL_RASTER_RECORD_TRIANGLE = 7,
     /* micropixel_raster_quad_t: convex quadrilateral with the same sampling. */
     MICROPIXEL_RASTER_RECORD_QUAD = 8,
+    /* micropixel_raster_span_t: one textured row (Mode-7 ground, road strips). */
+    MICROPIXEL_RASTER_RECORD_SPAN = 9,
+    /* micropixel_raster_text_t: system or loaded font text drawn by the Host. */
+    MICROPIXEL_RASTER_RECORD_TEXT = 10,
 } micropixel_raster_record_type_t;
 
 typedef enum micropixel_raster_column_flag {
@@ -984,6 +989,48 @@ typedef struct micropixel_raster_quad {
     uint8_t palette_slot;
     micropixel_raster_vertex_t vertices[4];
 } micropixel_raster_quad_t;
+
+/* Row y over x0..x1 inclusive takes ROW_MAJOR `texture_slot` sampled at the
+ * same 16.16 (s, t) walk as SPAN_PAIR: texel_x = floor(fract(s / 65536) *
+ * width), texel_y likewise with t, both advancing by ds/dt per pixel. The
+ * single-row form of SPAN_PAIR for perspective ground planes, where every
+ * screen row has its own depth and therefore its own step: a Mode-7 plane or
+ * a pseudo-3D road is one record per row. The row and both ends must lie
+ * inside the target. */
+typedef struct micropixel_raster_span {
+    uint8_t type;
+    uint8_t flags;
+    uint8_t texture_slot;
+    uint8_t light_level;
+    uint16_t y;
+    uint16_t x0;
+    uint16_t x1;
+    uint8_t palette_slot;
+    uint8_t reserved0;
+    int32_t s;
+    int32_t t;
+    int32_t ds;
+    int32_t dt;
+} micropixel_raster_span_t;
+
+/* Draws `text_length` bytes of UTF-8 (which follow this header, padded with
+ * zero bytes to a multiple of 4; the record size is
+ * sizeof(micropixel_raster_text_t) + that padded length) with `font_handle`
+ * (a micropixel_system_font_handle_t or a FONT_LOAD handle) in canonical
+ * RGB565 `color`, the text's top-left at (x, y), clipped to the target.
+ * Metrics are those of TEXT_MEASURE and text_length obeys the same bound; an
+ * invalid handle or malformed UTF-8 rejects the submission. Glyph coverage
+ * is blended over the existing pixels, so HUD labels read over any ground. */
+typedef struct micropixel_raster_text {
+    uint8_t type;
+    uint8_t flags;
+    uint16_t text_length;
+    int16_t x;
+    int16_t y;
+    uint16_t color;
+    uint16_t reserved0;
+    micropixel_font_handle_t font_handle;
+} micropixel_raster_text_t;
 
 typedef enum micropixel_graphics_scene_message_kind {
     MICROPIXEL_GRAPHICS_SCENE_KEYFRAME = 1,
@@ -1699,6 +1746,11 @@ MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_vertex_t) == 10U, "micropi
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_triangle_t) == 36U,
                              "micropixel_raster_triangle_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_quad_t) == 44U, "micropixel_raster_quad_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_span_t) == 28U, "micropixel_raster_span_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(offsetof(micropixel_raster_span_t, s) == 12U, "micropixel_raster_span_t.s ABI offset changed");
+MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_raster_text_t) == 16U, "micropixel_raster_text_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(offsetof(micropixel_raster_text_t, font_handle) == 12U,
+                             "micropixel_raster_text_t.font_handle ABI offset changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_surface_create_request_t) == 24U,
                              "micropixel_surface_create_request_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_surface_create_response_t) == 20U,

@@ -17,6 +17,10 @@ class BitmapFontRasterizer final : public graphics::TextRasterizer {
     [[nodiscard]] bool Draw(graphics::PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
                             micropixel_font_handle_t font_handle, const char* text,
                             uint16_t text_length) const override;
+    // Same painter for a font the caller already resolved (raster TEXT
+    // records name Guest handles rather than retained Scene handles).
+    [[nodiscard]] bool DrawWithFont(graphics::PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
+                                    const lv_font_t* font, const char* text, uint16_t text_length) const;
 
    private:
     FontRegistry& fonts_;

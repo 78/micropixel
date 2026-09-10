@@ -216,7 +216,11 @@ bool BitmapFontRasterizer::Measure(micropixel_font_handle_t font_handle, const c
 
 bool BitmapFontRasterizer::Draw(graphics::PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
                                 micropixel_font_handle_t font_handle, const char* text, uint16_t text_length) const {
-    const lv_font_t* font = fonts_.ResolveRetainedHandle(font_handle);
+    return DrawWithFont(destination, x, y, rgb888, fonts_.ResolveRetainedHandle(font_handle), text, text_length);
+}
+
+bool BitmapFontRasterizer::DrawWithFont(graphics::PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
+                                        const lv_font_t* font, const char* text, uint16_t text_length) const {
     if (!ValidDestination(destination) || font == nullptr || text == nullptr || text_length == 0U ||
         text_length > micropixel::device::graphics_limits::kMaxTextBytes || (rgb888 & 0xff000000U) != 0U) {
         return false;
