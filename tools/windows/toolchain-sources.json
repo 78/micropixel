@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "wamr_commit": "af07c787ac6f7d1d20555f97ddc184f5fc13731a",
+  "wasi": {
+    "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-windows.tar.gz",
+    "sha256": "df14ca2a2127c2d6b6be07e6f5549b3af9c1b3c0112430c200a4749970c59f06",
+    "directory": "wasi-sdk-33.0-x86_64-windows"
+  },
+  "llvm": {
+    "riscv32-ilp32f": {
+      "repository": "https://github.com/llvm/llvm-project.git",
+      "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
+      "backend": "RISCV"
+    },
+    "xtensa": {
+      "repository": "https://github.com/espressif/llvm-project.git",
+      "commit": "344b928e67bfc1d07cb150609c55548e86a9bf19",
+      "backend": "Xtensa"
+    }
+  }
+}

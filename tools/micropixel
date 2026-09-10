@@ -148,6 +148,15 @@ class ProjectManifest:
     pinned_memory: bool
 
 
+def tool_executable(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    if os.name == "nt" and candidate.suffix.lower() != ".exe":
+        executable = candidate.with_name(candidate.name + ".exe")
+        if executable.is_file():
+            return executable
+    return candidate
+
+
 def sdk_root() -> Path:
     script_directory = Path(__file__).resolve().parent
     return script_directory if (script_directory / "guest").is_dir() else script_directory.parent
@@ -1536,7 +1545,7 @@ def _read_guest_depfile(path: Path) -> list[Path]:
     index = len("object:")
     while index < len(text):
         char = text[index]
-        if char == "\\" and index + 1 < len(text):
+        if char == "\\" and index + 1 < len(text) and text[index + 1] in " \t\r\n#\\":
             index += 1
             word.append(text[index])
         elif char == "$" and text[index:index + 2] == "$$":
@@ -1686,6 +1695,8 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         local_wasi = Path.home() / ".local/wasi-sdk/bin/clang++"
         if local_wasi.is_file():
             wasi_clangxx = str(local_wasi)
+    if wasi_clangxx:
+        wasi_clangxx = str(tool_executable(wasi_clangxx))
     if not wasi_clangxx or not os.access(Path(wasi_clangxx).expanduser(), os.X_OK):
         raise CliError("Set WASI_CLANGXX or WASI_SDK_PATH to a C++23 compiler with the wasm32 backend")
     wasi_clangxx = str(Path(wasi_clangxx).expanduser())
@@ -1709,6 +1720,8 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         wamrc = next((str(candidate) for candidate in candidates if os.access(candidate, os.X_OK)), "")
     if not wamrc:
         wamrc = shutil.which("wamrc") or ""
+    if wamrc:
+        wamrc = str(tool_executable(wamrc))
     if not wamrc or not os.access(Path(wamrc).expanduser(), os.X_OK):
         raise CliError("Set WAMRC to the locked wamrc 2.4.3 executable; see https://micropixel.ai/docs/environment/")
     wamrc = str(Path(wamrc).expanduser())
