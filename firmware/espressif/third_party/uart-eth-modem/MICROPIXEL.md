@@ -42,9 +42,11 @@ set the APN synchronously. Stop may return a timeout and must then be retried be
 destroying the object. Destruction with live workers is a fatal contract violation.
 The GPIO ISR service and ESP-NETIF/default event loop must be initialized by the board.
 
-Current integration: compiled for ESP32-P4, **not started by the board yet**. No new
-Guest ABI is introduced. Board power control, network selection, UI, service routing
-and shutdown integration remain required before enabling this driver.
+Current integration: the Claw4 `CellularController` starts this driver when the
+saved network mode is cellular and owns power, signal queries and shutdown.
+The Host UI requests factory-style mode switching with restart. No new Guest ABI
+is introduced. See `main/platform/boards/README.md` for the integration and target
+acceptance requirements.
 
 Validation: `tools/tests/test_firmware_host.sh` exercises the actual wire header,
 TX pool timeout/completion ordering, exhaustion and cancellation, and bounded AT

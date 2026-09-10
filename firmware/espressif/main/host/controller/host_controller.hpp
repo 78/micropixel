@@ -8,6 +8,7 @@ class Battery;
 class DeviceServices;
 class Power;
 class Wifi;
+class Cellular;
 }  // namespace micropixel::device
 
 namespace micropixel::host_ui {
@@ -39,7 +40,7 @@ class RemoteControlAgent;
 class HostController final {
    public:
     HostController(device::DeviceServices& devices, runtime::AppStore& app_store, device::Battery& battery,
-                   device::Wifi& wifi, device::Power& power, host_ui::SystemShell& shell,
+                   device::Wifi& wifi, device::Cellular& cellular, device::Power& power, host_ui::SystemShell& shell,
                    control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
                    remote_control::RemoteControlAgent& remote_control, work::BackgroundExecutor& background_executor);
     ~HostController();
@@ -53,6 +54,7 @@ class HostController final {
     runtime::AppStore& app_store_;
     device::Battery& battery_;
     device::Wifi& wifi_;
+    device::Cellular& cellular_;
     device::Power& power_;
     host_ui::SystemShell& shell_;
     control::ControlDispatcher& controls_;

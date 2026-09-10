@@ -149,6 +149,9 @@ class StatusLayerUi final {
 
     lv_obj_t* status_layer_{};
     lv_obj_t* status_dialog_{};
+    bool cellular_available_{};
+    bool cellular_enabled_{};
+    bool cellular_switching_{};
     lv_obj_t* quick_panels_[3]{};
     lv_obj_t* quick_name_labels_[3]{};
     lv_obj_t* quick_detail_labels_[3]{};

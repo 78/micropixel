@@ -50,10 +50,39 @@ Output latches are written before enabling their output directions to avoid
 transient PA/USB host activation. Subsequent audio and power-key operations
 continue through the shared I2C executor.
 
-These power defaults do not by themselves implement cellular networking, SD
-mounting, camera capture or GPS. Hardware acceptance must check the rail levels
-after both cold boot and an MCU-only reset, verify charging/key inputs, and
-measure current with the NT26 powered but not yet managed by a network driver.
+These power defaults do not by themselves implement SD mounting, camera capture
+or GPS. Hardware acceptance must check rail levels after cold boot and MCU reset,
+and verify charging/key inputs.
+
+## Metalio-Claw4 cellular network
+
+`CellularController` manages the factory NT26 UART Ethernet driver: UART1 at
+2,000,000 baud, TX28/RX29, MRDY13/SRDY4 and TCA9555 P0.7 power/reset. The default
+PDP context is the factory `IP` / `eapn1.net`; an APN editor and SIM-slot controls
+are not yet implemented.
+
+The status-layer 4G card explicitly offers a restart to the other network mode.
+The board saves `network/type` (0 Wi-Fi, 1 cellular) in `runtime_nvs`, waits one
+second and restarts, matching the factory selection policy. A failed write does
+not restart. Default/absent settings select Wi-Fi and disable the NT26 rail.
+There is no automatic Wi-Fi fallback when cellular registration fails.
+
+The Host reads cellular availability, mode, IP connection and measured CSQ bars.
+CSQ uses factory thresholds (0–9, 10–14, 15–19, 20–31; unknown is no bars) and is
+queried after connection and at most every five seconds while the system UI
+requests refresh. Remote control, App Store, OTA and SNTP accept cellular-only
+connectivity. Other boards retain an unavailable cellular capability.
+
+Power-off cancels queued mode switches and stops the modem before cutting board
+power. Manual sleep stops the driver and disables its rail; wake starts the saved
+cellular mode again. A failed stop rejects sleep instead of releasing live driver
+storage. Physical power-key wake remains the board's explicit-sleep policy.
+
+Host tests use fake UART, NVS and I2C dependencies to exercise the real board
+controller. Target acceptance remains pending: cold boot in both modes, mode
+persistence, actual SIM/APN registration, DHCP, signal changes, remote/store/OTA
+over 4G, no-SIM recovery, and shutdown/sleep during traffic. Neither build success
+nor the controller tests prove modem or power timing on hardware.
 
 ## Required files and registration
 

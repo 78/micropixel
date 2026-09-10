@@ -291,7 +291,9 @@ void StatusLayerUi::EmitTarget(TouchTarget target, uint64_t timestamp_us) {
             EmitAction(host_ui::SystemUiActionType::kOpenWifiSettings);
             break;
         case TouchTarget::kCellular:
-            // Cellular stays read-only until a real network service owns it.
+            if (cellular_available_ && !cellular_switching_) {
+                EmitAction(host_ui::SystemUiActionType::kSetCellularEnabled, cellular_enabled_ ? 0U : 1U);
+            }
             break;
         case TouchTarget::kPerformance:
             EmitAction(host_ui::SystemUiActionType::kTogglePerformanceOverlay);
@@ -467,7 +469,7 @@ void StatusLayerUi::DrawQuickCard(lv_obj_t* root, TouchTarget target, const char
     quick_panels_[index] = panel;
     quick_name_labels_[index] = name_label;
     quick_detail_labels_[index] = detail_label;
-    const bool interactive = target != TouchTarget::kCellular && available;
+    const bool interactive = available;
     lv_obj_add_event_cb(panel, QuickEvent, LV_EVENT_SHORT_CLICKED, this);
     if (!interactive) {
         lv_obj_add_state(panel, LV_STATE_DISABLED);
@@ -576,7 +578,7 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
     lv_label_set_text(quick_detail_labels_[index], detail);
     lv_obj_set_style_text_color(quick_detail_labels_[index],
                                 lv_color_hex(active && available ? theme::kOverlayText : theme::kSecondaryText), 0);
-    const bool interactive = target != TouchTarget::kCellular && available;
+    const bool interactive = available;
     if (interactive) {
         lv_obj_remove_state(quick_panels_[index], LV_STATE_DISABLED);
     } else {
@@ -585,6 +587,9 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
 }
 
 void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model) {
+    cellular_available_ = model.cellular_available;
+    cellular_enabled_ = model.cellular_enabled;
+    cellular_switching_ = model.cellular_switching;
     const bool compact = layout_ != nullptr && layout_->screen_width <= 320;
     const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
     const char* wifi_detail = !model.wifi_available
@@ -596,9 +601,9 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     const char* cellular_detail =
         !model.cellular_available
             ? unavailable
-            : (model.cellular_connected
-                   ? UiText(host_strings::Id::kUiConnectedCaps)
-                   : (model.cellular_enabled ? UiText(host_strings::Id::kUiOn) : UiText(host_strings::Id::kUiOffCaps)));
+            : (model.cellular_switch_failed ? "SAVE FAILED"
+               : model.cellular_switching   ? "RESTARTING"
+                                            : (model.cellular_enabled ? "RESTART TO WI-FI" : "RESTART TO 4G"));
     UpdateQuickCardLocked(TouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
     UpdateQuickCardLocked(TouchTarget::kCellular, cellular_detail, model.cellular_enabled, model.cellular_available);
     UpdateQuickCardLocked(TouchTarget::kPerformance,
@@ -625,6 +630,9 @@ void StatusLayerUi::UpdateSramMetricLocked(const host_ui::StatusLayerModel& mode
 }
 
 void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
+    cellular_available_ = model.cellular_available;
+    cellular_enabled_ = model.cellular_enabled;
+    cellular_switching_ = model.cellular_switching;
     ResolveLayoutLocked();
     if (status_layer_ == nullptr) {
         status_layer_ = lv_obj_create(lv_screen_active());
@@ -660,9 +668,9 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     const char* cellular_detail =
         !model.cellular_available
             ? unavailable
-            : (model.cellular_connected
-                   ? UiText(host_strings::Id::kUiConnectedCaps)
-                   : (model.cellular_enabled ? UiText(host_strings::Id::kUiOn) : UiText(host_strings::Id::kUiOffCaps)));
+            : (model.cellular_switch_failed ? "SAVE FAILED"
+               : model.cellular_switching   ? "RESTARTING"
+                                            : (model.cellular_enabled ? "RESTART TO WI-FI" : "RESTART TO 4G"));
     DrawQuickCard(status_dialog_, TouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled, model.wifi_available);
     DrawQuickCard(status_dialog_, TouchTarget::kCellular, "4G", cellular_detail, model.cellular_enabled,
                   model.cellular_available);

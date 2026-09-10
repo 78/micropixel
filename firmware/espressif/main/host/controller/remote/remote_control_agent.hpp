@@ -26,7 +26,8 @@ struct cJSON;
 
 namespace micropixel::device {
 class Wifi;
-}
+class Cellular;
+}  // namespace micropixel::device
 
 namespace micropixel::firmware::remote_control {
 
@@ -35,8 +36,9 @@ namespace micropixel::firmware::remote_control {
 // WAMR, LVGL, or board drivers from an HTTP/3 callback.
 class RemoteControlAgent final {
    public:
-    RemoteControlAgent(device::Wifi& wifi, const device::BoardInfo& board_info, control::ControlDispatcher& controls,
-                       logging::SystemLogBuffer& system_logs, bool screen_capture_supported);
+    RemoteControlAgent(device::Wifi& wifi, device::Cellular& cellular, const device::BoardInfo& board_info,
+                       control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
+                       bool screen_capture_supported);
     RemoteControlAgent(const RemoteControlAgent&) = delete;
     RemoteControlAgent& operator=(const RemoteControlAgent&) = delete;
     ~RemoteControlAgent();
@@ -174,6 +176,7 @@ class RemoteControlAgent final {
     host::fonts::FontDownload* font_download_{};
     control::ControlDispatcher& controls_;
     device::Wifi& wifi_;
+    device::Cellular& cellular_;
     const device::BoardInfo& board_info_;
     RemoteIdentityStore identity_store_;
     mutable std::mutex model_mutex_;

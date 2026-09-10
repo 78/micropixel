@@ -90,6 +90,12 @@ build_and_run nt26_transport \
     -I "$workspace_root/firmware/espressif/third_party/uart-eth-modem/include" \
     "$workspace_root/tools/tests/test_nt26_transport.cpp"
 
+build_and_run cellular_controller \
+    -iquote "$workspace_root/tools/tests/cellular_stubs" \
+    -include "$workspace_root/tools/tests/cellular_stubs/cellular_nvs_declarations.hpp" \
+    "$workspace_root/tools/tests/test_cellular_controller.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/boards/metalio-claw4/cellular_controller.cpp"
+
 build_and_run guest_timers \
     "$workspace_root/tools/tests/test_guest_timers.cpp" \
     "$workspace_root/guest/runtime/timers.cpp"

@@ -33,6 +33,7 @@
 #include "platform/boards/metalio-claw4/battery_peripheral.hpp"
 #include "platform/boards/metalio-claw4/board_config.hpp"
 #include "platform/boards/metalio-claw4/board_io.hpp"
+#include "platform/boards/metalio-claw4/cellular_controller.hpp"
 #include "platform/boards/metalio-claw4/display/display_pipeline.hpp"
 #include "platform/boards/metalio-claw4/display/screen_capture.hpp"
 #include "platform/boards/metalio-claw4/gpio_peripheral.hpp"
@@ -466,6 +467,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
                      esp_err_to_name(capture_error));
             return capture_error;
         }
+        cellular_.Configure(state_.board_io.IoExpander(), state_.i2c_executor);
         audio_output_.Configure(state_.board_io.IoExpander(), state_.i2c_executor);
         BoardRegistration& registration = registration_.emplace(device::BoardInfo{
             .board = "Metalio-Claw4",
@@ -489,6 +491,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
         registration.SetAudioOutput(audio_output_, audio_output_.SampleRate());
         registration.SetBattery(state_.battery);
         registration.SetWifi(wifi_);
+        registration.SetCellular(cellular_);
         registration.SetPower(*this);
         registration.SetLocalControl(metalio_claw4::UsbLocalControl());
         registration.SetSystemUi(system_ui_);
@@ -517,6 +520,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
         state_.ui.BindBackgroundExecutor(executor);
         state_.guest_graphics.BindBackgroundExecutor(executor);
         wifi_.BindBackgroundExecutor(executor);
+        cellular_.BindBackgroundExecutor(executor);
     }
 
     void SetPowerButtonSink(device::PowerButtonSink sink, void* context) override {
@@ -531,9 +535,18 @@ class MetalioClaw4Board final : public Board, public device::Power {
         return device::IdlePowerAction::kPowerOff;
     }
 
-    [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override { return EnterLowPowerImpl(state_); }
+    [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override {
+        if (cellular_.Pause() != ESP_OK) return std::unexpected(device::PowerError::kSleepRejected);
+        auto result = EnterLowPowerImpl(state_);
+        const esp_err_t resume = cellular_.Resume();
+        if (resume != ESP_OK) ESP_LOGW(board_detail::kTag, "cellular resume failed: %s", esp_err_to_name(resume));
+        return result;
+    }
 
-    [[noreturn]] void PowerOff() override { state_.power_key.PowerOff(); }
+    [[noreturn]] void PowerOff() override {
+        cellular_.Shutdown();
+        state_.power_key.PowerOff();
+    }
 
    private:
     static board_detail::MetalioClaw4BoardState& TaskState(buses::I2cExecutor& executor,
@@ -553,6 +566,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
     metalio_claw4::I2sAudioSink audio_output_{};
     wifi::EspHostedRadio wifi_radio_{};
     wifi::WifiManager wifi_{wifi_radio_};
+    metalio_claw4::CellularController cellular_{};
     board_detail::MetalioClaw4Presentation presentation_;
     host_ui::lvgl::square_common::SquareSystemUi system_ui_;
 };

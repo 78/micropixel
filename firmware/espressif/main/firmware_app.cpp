@@ -4,7 +4,9 @@
 
 #include "device/device_services.hpp"
 #include "esp_err.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "host/controller/control_dispatcher.hpp"
 #include "host/controller/host_controller.hpp"
@@ -80,15 +82,26 @@ void FirmwareApp::Run() {
     const platform::PlatformServices& services = platform_.Services();
     static MICROPIXEL_EXT_RAM_BSS host_ui::SystemShell shell(*services.system_ui);
 
-    auto wifi_result = services.wifi->Initialize();
-    if (!wifi_result) {
-        ESP_LOGW(kTag, "Wi-Fi is unavailable for this boot: error=%u", static_cast<unsigned>(wifi_result.error()));
-    } else {
+    const esp_err_t netif_status = esp_netif_init();
+    const esp_err_t event_status = esp_event_loop_create_default();
+    if ((netif_status == ESP_OK || netif_status == ESP_ERR_INVALID_STATE) &&
+        (event_status == ESP_OK || event_status == ESP_ERR_INVALID_STATE)) {
+        const auto cellular_result = services.cellular->Initialize();
+        if (!cellular_result) {
+            ESP_LOGW(kTag, "cellular initialization failed: error=%u", static_cast<unsigned>(cellular_result.error()));
+        }
+        // Factory mode selection is exclusive and persists across restart.
+        if (!services.cellular->Snapshot().enabled) {
+            const auto wifi_result = services.wifi->Initialize();
+            if (!wifi_result)
+                ESP_LOGW(kTag, "Wi-Fi is unavailable: error=%u", static_cast<unsigned>(wifi_result.error()));
+        }
         const esp_err_t time_error = network_time::Initialize(
             [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyTimeStateChanged(); }, &shell);
-        if (time_error != ESP_OK) {
-            ESP_LOGW(kTag, "Host network time is unavailable for this boot: %s", esp_err_to_name(time_error));
-        }
+        if (time_error != ESP_OK) ESP_LOGW(kTag, "network time unavailable: %s", esp_err_to_name(time_error));
+    } else {
+        ESP_LOGW(kTag, "network stack unavailable: netif=%s events=%s", esp_err_to_name(netif_status),
+                 esp_err_to_name(event_status));
     }
 
     // These composition-root objects live for the lifetime of the firmware.
@@ -105,7 +118,7 @@ void FirmwareApp::Run() {
         },
         &system_logs);
     static MICROPIXEL_EXT_RAM_BSS remote_control::RemoteControlAgent remote_control(
-        *services.wifi, services.board_info, controls, system_logs, shell.SupportsScreenCapture());
+        *services.wifi, *services.cellular, services.board_info, controls, system_logs, shell.SupportsScreenCapture());
     static MICROPIXEL_EXT_RAM_BSS local_control::LocalControlAgent local_control(
         *services.local_control, controls, system_logs, services.board_info, *services.wifi);
     if (!local_control.Start()) {
@@ -145,7 +158,7 @@ void FirmwareApp::Run() {
         &remote_control);
     shell.BindLanguagePacks(language_packs);
 #endif
-    HostController(devices, app_store, *services.battery, *services.wifi, *services.power, shell, controls, system_logs,
+    HostController(devices, app_store, *services.battery, *services.wifi, *services.cellular, *services.power, shell, controls, system_logs,
                    remote_control, background_executor)
         .Run();
 }

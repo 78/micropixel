@@ -17,6 +17,20 @@ namespace {
 
 constexpr char kTag[] = "micropixel_platform";
 
+class UnavailableCellular final : public device::Cellular {
+   public:
+    std::expected<void, device::CellularError> Initialize() override { return {}; }
+    device::CellularSnapshot Snapshot() const override { return {}; }
+    void SetStateChangeSink(device::CellularStateChangeSink, void*) override {}
+    std::expected<void, device::CellularError> SetEnabled(bool) override {
+        return std::unexpected(device::CellularError::kUnavailable);
+    }
+};
+UnavailableCellular& MissingCellular() {
+    static UnavailableCellular value;
+    return value;
+}
+
 class UnavailablePower final : public device::Power {
    public:
     void SetPowerButtonSink(device::PowerButtonSink, void*) override {}
@@ -77,9 +91,9 @@ defaults::UnavailableSystemUi& MissingSystemUi() {
 
 bool PlatformServices::Complete() const {
     return graphics != nullptr && input != nullptr && audio != nullptr && battery != nullptr && random != nullptr &&
-           wifi != nullptr && power != nullptr && local_control != nullptr && devices != nullptr &&
-           sensors != nullptr && gpio != nullptr && haptics != nullptr && board_info.board != nullptr &&
-           system_ui != nullptr;
+           wifi != nullptr && cellular != nullptr && power != nullptr && local_control != nullptr &&
+           devices != nullptr && sensors != nullptr && gpio != nullptr && haptics != nullptr &&
+           board_info.board != nullptr && system_ui != nullptr;
 }
 
 void BoardRegistration::SetAudioOutput(audio::AudioOutputPeripheral& output, uint32_t sample_rate,
@@ -184,6 +198,7 @@ bool Platform::Publish(const BoardRegistration& registration) {
         .battery = registration.battery_ != nullptr ? registration.battery_ : &MissingBattery(),
         .random = &random::SystemRandom(),
         .wifi = registration.wifi_ != nullptr ? registration.wifi_ : &MissingWifi(),
+        .cellular = registration.cellular_ != nullptr ? registration.cellular_ : &MissingCellular(),
         .power = registration.power_ != nullptr ? registration.power_ : &MissingPower(),
         .local_control = registration.local_control_ != nullptr ? registration.local_control_ : &MissingLocalControl(),
         .devices = &device_registry_,

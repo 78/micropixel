@@ -227,6 +227,8 @@ struct StatusLayerModel final {
     bool cellular_available{};
     bool cellular_enabled{};
     bool cellular_connected{};
+    bool cellular_switching{};
+    bool cellular_switch_failed{};
     bool battery_available{};
     bool battery_charging{};
     bool battery_discharging{};
@@ -509,6 +511,7 @@ enum class SystemUiActionType {
     kOpenWifiNetworkScan,
     kCloseWifiNetworkScan,
     kSetWifiEnabled,
+    kSetCellularEnabled,
     kConnectSavedWifi,
     kConnectNewWifi,
     kDisconnectWifi,

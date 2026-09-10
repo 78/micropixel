@@ -40,6 +40,12 @@ Runtime 表达应用运行所需的能力，Platform 把板上硬件实现为这
 Board 只登记初始化成功的能力；Platform 为缺失能力提供 unavailable 实现。这样服务集合可以完整，
 设备却不必具备全部硬件。Null Board 用于验证这种依赖边界，不是可烧录的产品替代品。
 
+Host 网络配置分别使用 `Wifi` 与 `Cellular` 契约，不把蜂窝连接伪装成 Wi-Fi。Claw4 沿用原厂的
+持久化模式选择：切换 Wi-Fi/4G 后重启，启动时只初始化所选网络。`FirmwareApp` 初始化公共网络栈，
+再注入两个能力；远控、App Store 与 OTA 共用所选网络，SNTP 不依赖 Wi-Fi 的初始化结果。
+蜂窝 UART/AT、I2C 电源和停止协议归板级控制器；Host UI 只读取快照、请求切换，不执行 AT 命令。
+信号查询由有界后台执行器完成，ISR 和驱动状态回调只发布变化。Guest Network Service 仍未开放。
+
 系统页面、交互和生命周期由 Host 统一管理，分辨率 profile 提供布局，Board 提供显示、亮度和转场能力。
 硬件转场可缺省，基本交互仍可工作。无转场时回到 Hall 必须同步刷新到面板，不能只标记 LVGL
 异步刷新：SPI GRAM 会继续显示上一帧 Guest，直到状态浮层等路径调用 `lv_refr_now`。

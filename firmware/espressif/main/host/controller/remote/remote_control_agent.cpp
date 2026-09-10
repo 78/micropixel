@@ -17,6 +17,7 @@
 #include "cJSON.h"
 #include "client/http3_async_client.h"
 #include "client/http3_client.h"
+#include "device/contracts/cellular.hpp"
 #include "device/contracts/wifi.hpp"
 #include "device/text.hpp"
 #include "esp_app_desc.h"
@@ -512,11 +513,12 @@ struct RemoteControlAgent::TaskContext final {
     device::WifiSnapshot wifi_snapshot{};
 };
 
-RemoteControlAgent::RemoteControlAgent(device::Wifi& wifi, const device::BoardInfo& board_info,
-                                       control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
-                                       bool screen_capture_supported)
+RemoteControlAgent::RemoteControlAgent(device::Wifi& wifi, device::Cellular& cellular,
+                                       const device::BoardInfo& board_info, control::ControlDispatcher& controls,
+                                       logging::SystemLogBuffer& system_logs, bool screen_capture_supported)
     : controls_(controls),
       wifi_(wifi),
+      cellular_(cellular),
       board_info_(board_info),
       system_logs_(system_logs),
       screen_capture_supported_(screen_capture_supported) {
@@ -688,7 +690,7 @@ bool RemoteControlAgent::CancelPairingCode() {
 
 bool RemoteControlAgent::RequestFirmwareUpdate() {
     std::lock_guard<std::mutex> lock(model_mutex_);
-    if (!model_.firmware_update_installable ||
+    if (cellular_.Snapshot().switching || !model_.firmware_update_installable ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kDownloading ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kVerifying ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kInstalling) {
@@ -1301,11 +1303,12 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
 
     task_context_->wifi_snapshot = wifi_.Snapshot();
     const device::WifiSnapshot& wifi = task_context_->wifi_snapshot;
+    const auto cellular = cellular_.Snapshot();
     cJSON* network = cJSON_AddObjectToObject(result, "network");
     if (network != nullptr) {
-        (void)cJSON_AddBoolToObject(network, "available", wifi.available);
-        (void)cJSON_AddBoolToObject(network, "enabled", wifi.enabled);
-        (void)cJSON_AddBoolToObject(network, "connected", wifi.connected);
+        (void)cJSON_AddBoolToObject(network, "available", wifi.available || cellular.available);
+        (void)cJSON_AddBoolToObject(network, "enabled", wifi.enabled || cellular.enabled);
+        (void)cJSON_AddBoolToObject(network, "connected", wifi.connected || cellular.connected);
         for (uint32_t index = 0U; index < wifi.saved_network_count; ++index) {
             if (wifi.saved_networks[index].connected) {
                 (void)cJSON_AddStringToObject(network, "ssid", wifi.saved_networks[index].ssid.data());
@@ -1313,14 +1316,16 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
                 break;
             }
         }
+        (void)cJSON_AddStringToObject(network, "transport",
+                                      cellular.connected ? "cellular" : (wifi.connected ? "wifi" : "none"));
         uint8_t station_mac[6]{};
-        if (esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
+        if (!cellular.enabled && esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
             char mac_text[18]{};
             std::snprintf(mac_text, sizeof(mac_text), "%02X:%02X:%02X:%02X:%02X:%02X", station_mac[0], station_mac[1],
                           station_mac[2], station_mac[3], station_mac[4], station_mac[5]);
             (void)cJSON_AddStringToObject(network, "macAddress", mac_text);
         }
-        esp_netif_t* station = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_t* station = esp_netif_get_default_netif();
         esp_netif_ip_info_t ip_info{};
         if (station != nullptr && esp_netif_get_ip_info(station, &ip_info) == ESP_OK) {
             char ip_address[16]{};
@@ -2109,6 +2114,8 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
         return PostCommandResult(client, identity, command_id, ok, result);
     };
 
+    if (cellular_.Snapshot().switching) return finish(false, "network_switch_pending");
+
     const char* version = cJSON_IsObject(params) ? JsonString(params, "version") : nullptr;
     const char* path = cJSON_IsObject(params) ? JsonString(params, "url") : nullptr;
     const char* sha256 = cJSON_IsObject(params) ? JsonString(params, "sha256") : nullptr;
@@ -2890,10 +2897,10 @@ void RemoteControlAgent::TaskMain() {
         }
         task_context.wifi_snapshot = wifi_.Snapshot();
         const device::WifiSnapshot& wifi = task_context.wifi_snapshot;
-        if (!wifi.connected) {
+        if (!wifi.connected && !cellular_.Snapshot().connected) {
             close_transport();
             if (snapshot.enabled) {
-                SetConnectionState(host_ui::RemoteControlConnectionState::kWaitingForNetwork, "Waiting for Wi-Fi");
+                SetConnectionState(host_ui::RemoteControlConnectionState::kWaitingForNetwork, "Waiting for network");
             }
             (void)WaitForWork(next_scheduled_wait());
             continue;
