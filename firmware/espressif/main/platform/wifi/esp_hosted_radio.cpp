@@ -4,7 +4,6 @@
 
 #include "esp_hosted.h"
 #include "esp_log.h"
-#include "esp_wifi.h"
 
 namespace micropixel::platform::wifi {
 namespace {
@@ -36,12 +35,6 @@ void LogCoprocessorInfo() {
 esp_err_t EspHostedRadio::Initialize() { return static_cast<esp_err_t>(esp_hosted_init()); }
 
 esp_err_t EspHostedRadio::OnStationStarted() {
-#if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5
-    const esp_err_t status = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
-    if (status != ESP_OK) {
-        return status;
-    }
-#endif
     LogCoprocessorInfo();
     return ESP_OK;
 }

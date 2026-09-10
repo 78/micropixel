@@ -464,11 +464,6 @@ std::expected<void, device::WifiError> WifiManager::SetEnabled(bool enabled) {
         }
 #endif
     }
-#if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5
-    if (status == ESP_OK && enabled) {
-        status = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
-    }
-#endif
     if (status != ESP_OK) {
         ScopedLock lock(mutex_);
         enabled_ = !enabled;
