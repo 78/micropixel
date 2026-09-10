@@ -2,7 +2,7 @@ name: SDK manager and archive tests
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/sdk-version-manager', 'codex/windows-sdk-installer', 'codex/windows-sdk-release']
+    branches: ['codex/sdk-version-manager', 'codex/windows-sdk-installer', 'codex/windows-sdk-release', 'codex/windows-toolchain-release', 'codex/windows-sdk-runtime']
   pull_request:
     paths: ['tools/**', 'guest/sdk/**', '.github/workflows/windows-sdk-tests.yml']
 permissions:
@@ -31,3 +31,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./tools/windows/inspect_crt.ps1
+      - name: Assemble and probe isolated Windows Python runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python tools/windows/build_manager.py --output 'build/中文 runtime'
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime assembly failed' }
+          $build = Get-Content -Raw 'build/中文 runtime/manager-build.json' | ConvertFrom-Json
+          $runtime = Join-Path 'build/中文 runtime' $build.directory
+          $raw = & (Join-Path $runtime 'python/python.exe') -I -X utf8 (Join-Path $runtime 'micropixel_manager.py') manager-version --json
+          if ($LASTEXITCODE -ne 0) { throw 'Embedded runtime failed' }
+          $result = $raw | ConvertFrom-Json
+          if (-not $result.ok -or $result.result.python_version -ne '3.13.12' -or $result.result.pyserial_version -ne '3.5') { throw 'Embedded runtime versions differ from pins' }

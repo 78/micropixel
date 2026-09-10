@@ -22,6 +22,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 VERSION = '0.1.0'
+_BUILD_FILE = Path(__file__).with_name('build.json')
+BUILD_ID = json.loads(_BUILD_FILE.read_text(encoding='utf-8'))['build_id'] if _BUILD_FILE.exists() else 'source'
 INDEX_URL = 'https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json'
 LOCK_NAME = 'micropixel.lock.json'
 IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z')
@@ -437,6 +439,9 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     if not arguments:
         raise Failure('invalid_arguments', 'Expected setup, doctor, sdk, update, or an SDK command', 2)
     command = arguments[0]
+    if command == 'manager-version':
+        import serial
+        return 0, {'manager_version': VERSION, 'build_id': BUILD_ID, 'python_version': sys.version.split()[0], 'pyserial_version': serial.__version__}
     project = Path.cwd()
     if command in ('setup', 'doctor', 'sdk', 'update'):
         parser = argparse.ArgumentParser(prog='micropixel ' + command)
@@ -499,13 +504,13 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 if probe.returncode:
                     raise Failure('tool_unusable', f'{name} could not execute', 4)
                 probes[name] = (probe.stdout or probe.stderr).splitlines()[0]
-            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'pyserial': serial_version, 'manager_version': VERSION}
+            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'pyserial': serial_version, 'manager_version': VERSION, 'manager_build_id': BUILD_ID}
         if command == 'update':
             index, state, checked = manager.index(force=True)
             candidate = index.get('manager')
-            result = {'current_version': VERSION, 'candidate_version': candidate.get('version') if candidate else None,
+            result = {'current_version': VERSION, 'current_build_id': BUILD_ID, 'candidate_build_id': candidate.get('build_id') if candidate else None, 'candidate_version': candidate.get('version') if candidate else None,
                       'check_status': state, 'checked_at': checked}
-            if args.check or not candidate or not newer(candidate['version'], VERSION):
+            if args.check or not candidate or not (newer(candidate['version'], VERSION) or (candidate['version'] == VERSION and candidate.get('build_id') != BUILD_ID)):
                 return 0, result
             required_yes(yes)
             if manager.offline:
@@ -516,6 +521,10 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 installed = manager.asset(candidate, install=True)
                 if not (installed / 'python/python.exe').is_file() or not (installed / 'micropixel_manager.py').is_file():
                     raise Failure('invalid_archive', 'Manager runtime is incomplete', 4)
+                probe = subprocess.run([str(installed / 'python/python.exe'), '-I', '-X', 'utf8', str(installed / 'micropixel_manager.py'), 'manager-version', '--json'], capture_output=True, text=True, timeout=20)
+                info = json.loads(probe.stdout)
+                if probe.returncode or not info.get('ok') or info['result'].get('manager_version') != candidate['version'] or info['result'].get('build_id') != candidate.get('build_id'):
+                    raise Failure('invalid_archive', 'Updated manager runtime failed its self-check', 4)
                 atomic_json(manager.root / 'current.json', {'directory': str(installed)})
             return 0, {**result, 'updated': True}
     parser_path = Path(__file__).with_name('bootstrap-cli.py')
@@ -563,7 +572,7 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     child_arguments = list(arguments)
     if json_mode:
         child_arguments.insert(child_arguments.index('--') if '--' in child_arguments else len(child_arguments), '--json')
-    result = subprocess.run([sys.executable, str(sdk / 'micropixel'), *child_arguments],
+    result = subprocess.run([sys.executable, '-X', 'utf8', str(sdk / 'micropixel'), *child_arguments],
                             env=env, stdout=subprocess.PIPE if json_mode else None, text=True, encoding='utf-8')
     if json_mode:
         try:
@@ -586,6 +595,10 @@ def main() -> int:
     boundary = arguments.index('--') if '--' in arguments else len(arguments)
     flags = arguments[:boundary]
     json_mode, yes, offline = '--json' in flags, '--yes' in flags, '--offline' in flags
+    if json_mode:
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, 'reconfigure'):
+                stream.reconfigure(encoding='utf-8')
     arguments = [a for a in flags if a not in ('--json', '--yes', '--offline')] + arguments[boundary:]
     root = Path(os.environ.get('MICROPIXEL_HOME', str(Path(os.environ.get('LOCALAPPDATA', Path.home() / '.local/share')) / 'MicroPixel')))
     manager = Manager(root, offline=offline)
