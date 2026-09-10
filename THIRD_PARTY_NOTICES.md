@@ -174,6 +174,18 @@ Component Registry:
 The declared version constraints are recorded in `firmware/espressif/main/idf_component.yml`, and the downloaded
 components retain their complete license files.
 
+### NT26 UART transport dependencies
+
+The ESP32-P4 build includes the factory NT26 transport prerequisites from the ESP Component Registry:
+
+- `78/uart-uhci` 0.2.2: <https://github.com/78/uart-uhci>, Apache-2.0;
+- `espressif/iot_eth` 0.1.0: <https://github.com/espressif/esp-iot-solution/tree/40e383f968c13e87e709c9d52a39892eca376e25/components/iot_eth>, Apache-2.0.
+
+The dependency declarations are recorded in `firmware/espressif/main/idf_component.yml`. The local uart-uhci copy
+in `firmware/espressif/third_party/uart-uhci` retains upstream documentation and package metadata, with an
+Apache-2.0 license copy. Its `MICROPIXEL.md` records the ESP-IDF 6.1 compatibility changes. The managed iot_eth
+component retains its license file. These prerequisites alone do not enable cellular connectivity.
+
 ## Font Awesome glyphs
 
 MicroPixel's generated `builtin-latin-v1` semantic fonts include the public SDK symbol set from the Font Awesome 5
