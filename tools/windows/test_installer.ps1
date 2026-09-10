@@ -9,10 +9,18 @@ $project = Join-Path $env:RUNNER_TEMP '中文 游戏 & project'
 New-Item -ItemType Directory -Force -Path $project | Out-Null
 Set-Content -LiteralPath (Join-Path $project 'keep.txt') -Value 'project must survive uninstall'
 function Execute-Installer([string]$File, [string]$Extra = '') {
-    $p = Start-Process -FilePath $File -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART $Extra" -PassThru
-    $p | Wait-Process -Timeout 120
-    $p.Refresh()
-    if ($p.ExitCode -ne 0) { throw "Installer/uninstaller exit: $($p.ExitCode)" }
+    # Inno uninstall can hand off to a temporary child executable. -Wait waits
+    # for the whole process tree; Wait-Process only waited for the bootstrap.
+    $job = Start-Job -ArgumentList $File, $Extra -ScriptBlock {
+        param($Executable, $Options)
+        $p = Start-Process -FilePath $Executable -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART $Options" -PassThru -Wait
+        $p.ExitCode
+    }
+    try {
+        if (-not (Wait-Job $job -Timeout 120)) { throw 'Installer process tree timed out' }
+        $code = Receive-Job $job -ErrorAction Stop
+        if ($code -ne 0) { throw "Installer/uninstaller exit: $code" }
+    } finally { Remove-Job $job -Force }
 }
 function Assert-PathCount([int]$Expected, [string]$Stage) {
     $bin = (Join-Path $root 'bin').ToLowerInvariant()
