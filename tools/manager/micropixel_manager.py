@@ -583,6 +583,12 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     cli = load_cli(parser_path)
     parsed = cli.parser().parse_args(arguments)
     command = parsed.command
+    transport = parsed.transport or ('usb' if parsed.port else os.environ.get('MICROPIXEL_TRANSPORT', 'remote'))
+    if manager.offline and (
+        (command == 'publish' and not parsed.dry_run) or command in ('auth', 'firmware')
+        or (command in {*cli.NETWORK_COMMANDS, 'run'} and transport != 'usb')
+    ):
+        raise Failure('offline_operation', 'This operation requires network access; --offline forbids it', 4)
     if json_mode and command == 'run' and parsed.follow:
         raise Failure('invalid_arguments', 'run --json requires --no-follow', 2)
     value = getattr(parsed, 'project', getattr(parsed, 'directory', getattr(parsed, 'source', '.')))
@@ -615,6 +621,9 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
         env['WASI_CLANG'] = ''
         env['WASI_CLANGXX'] = str(Path(paths['WASI_SDK_PATH']) / 'bin/clang++.exe')
     env['MICROPIXEL_TOOLCHAIN_ID'] = manifest['toolchain_id'] if not lock.get('external_toolchain') else 'external'
+    if status and json_mode and command in ('package', 'publish'):
+        print(f"Using locked SDK {lock['sdk_version']}; update check: {status['check_status']}", file=sys.stderr)
+        show_warnings(manager.warnings)
     if status and not json_mode:
         manager.human_warnings_handled = True
         manager.human_final_status = command in ('package', 'publish')

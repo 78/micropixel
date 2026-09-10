@@ -1935,10 +1935,12 @@ def _tool_path(name: str) -> Path:
 
 def _bundle_builder_command(arguments: list[str]) -> list[str]:
     local_builder = sdk_root() / "tools/build_app_bundle.py"
+    if not local_builder.is_file():
+        local_builder = sdk_root() / "libexec/build_app_bundle.py"
     if local_builder.is_file():
-        return [sys.executable, str(local_builder), *arguments]
+        return [sys.executable, "-X", "utf8", str(local_builder), *arguments]
     if EMBEDDED_BUNDLE_BUILDER is not None:
-        return [sys.executable, "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
+        return [sys.executable, "-X", "utf8", "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
     raise CliError("This development copy does not contain the Bundle builder")
 
 
@@ -2339,7 +2341,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
     if project.value.get("localization") is not None:
         _run_process(
             [
-                sys.executable,
+                sys.executable, "-X", "utf8",
                 str(_tool_path("generate_localization.py")),
                 "--app-manifest",
                 str(project.path),
@@ -2356,7 +2358,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
     sfx_manifest = project.path.parent / "audio/sfx.json"
     if sfx_manifest.is_file():
         analyze_command = [
-            sys.executable,
+            sys.executable, "-X", "utf8",
             str(_tool_path("analyze_sfx.py")),
             "--manifest",
             str(sfx_manifest),

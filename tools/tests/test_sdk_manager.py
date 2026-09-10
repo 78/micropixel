@@ -205,6 +205,14 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(self.manager.warnings[0]['code'], 'update_check_failed')
 
 
+    def test_offline_rejects_upload_and_remote_run_before_side_effects(self):
+        manager = m.Manager(self.root / 'offline', offline=True)
+        for arguments in (['publish', str(self.root)], ['run', str(self.root), '--no-follow']):
+            with self.assertRaises(m.Failure) as caught:
+                m.execute(manager, arguments, True, True)
+            self.assertEqual(caught.exception.code, 'offline_operation')
+            self.assertEqual(caught.exception.exit_code, 4)
+
     def test_failed_checks_are_throttled_but_explicit_check_retries(self):
         with patch.object(m, 'fetch', side_effect=OSError('offline')) as request:
             self.manager.status('1.0.0')

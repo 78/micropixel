@@ -25,6 +25,7 @@ class SdkArchive(unittest.TestCase):
             self.assertFalse(any('/coastline/' in name or '/build/' in name or '/.env' in name for name in names))
             self.assertIn(prefix + 'guest/sdk/GRAPHICS.md', names)
             self.assertIn(prefix + 'LICENSE', names)
+            self.assertIn(prefix + 'libexec/build_app_bundle.py', names)
             self.assertEqual(archive.getmember(prefix + 'micropixel').mode, 0o755)
             archive.extractall(temporary, filter='data')
             cli = Path(temporary) / prefix / 'micropixel'

@@ -44,7 +44,7 @@ def collect(root: Path) -> dict[str, bytes]:
                 continue
             if path.is_file() and path.name != 'README.md' and path.suffix != '.pyc':
                 files[relative.as_posix()] = path.read_bytes()
-    for name in ('generate_localization.py', 'analyze_sfx.py'):
+    for name in ('generate_localization.py', 'analyze_sfx.py', 'build_app_bundle.py'):
         files['libexec/' + name] = (root / 'tools' / name).read_bytes()
     return files
 
@@ -57,8 +57,8 @@ def build(root: Path) -> tuple[dict, bytes]:
         raise ValueError('SDK CLI must declare its version and one embedded-builder marker')
     version = match[1]
     files = collect(root)
-    builder = (root / 'tools/build_app_bundle.py').read_text(encoding='utf-8')
-    cli = cli.replace(MARKER, 'EMBEDDED_BUNDLE_BUILDER: str | None = ' + repr(builder))
+    # A script file avoids Windows' 32767-character CreateProcess limit.
+    cli = cli.replace(MARKER, 'EMBEDDED_BUNDLE_BUILDER = None')
     files['micropixel'] = cli.encode('utf-8')
     files['LICENSE'] = (root / 'LICENSE').read_bytes()
     files['README.md'] = f'''# MicroPixel SDK {version}
