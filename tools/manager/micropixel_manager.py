@@ -547,8 +547,11 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 raise Failure('dependency_missing', 'Bundled pyserial is missing', 4) from error
             probes = {}
             for name, path in [('clang', str(Path(paths['WASI_SDK_PATH']) / 'bin/clang++.exe')), ('riscv', paths['WAMRC']), ('xtensa', paths['XTENSA_WAMRC'])]:
-                probe = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=15)
-                if probe.returncode:
+                try:
+                    probe = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=15)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise Failure('tool_unusable', f'{name} could not execute', 4) from error
+                if probe.returncode or not (probe.stdout or probe.stderr).strip():
                     raise Failure('tool_unusable', f'{name} could not execute', 4)
                 probes[name] = (probe.stdout or probe.stderr).splitlines()[0]
             return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'python_version': sys.version.split()[0], 'pyserial_version': serial_version, 'wasi_sdk_version': manifest['platforms']['windows-x64']['wasi'].get('version', 'unknown'), 'manager_version': VERSION, 'manager_build_id': BUILD_ID}

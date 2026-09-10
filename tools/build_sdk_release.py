@@ -67,6 +67,7 @@ Restricted C++23 Guest SDK, Runtime, ABI and six example games.
 
 Start with [Quickstart](guest/sdk/QUICKSTART.md), then read
 [Publishing](guest/sdk/PUBLISHING.md) and [Graphics](guest/sdk/GRAPHICS.md).
+Windows users and AI agents: [Installation and managed builds](guest/sdk/AI.md).
 
 ## Toolchain
 

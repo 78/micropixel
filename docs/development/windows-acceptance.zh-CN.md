@@ -1,7 +1,7 @@
 # Windows 10 SDK 真机验收
 
-本清单针对 Windows 安装与版本管理项目。当前第一阶段只提供 Windows 工具链 CI，尚未发布安装器；
-以下 setup/doctor/sdk/JSON 命令属于待验收的安装管理接口，必须使用该项目后续 Preview 包，不能用 SDK 0.15.6 代替。
+本清单针对 Windows 安装与版本管理项目。使用 SDK 0.16.0 Windows Preview 安装器；
+setup/doctor/sdk/JSON 接口不能用独立 SDK 0.15.6 代替。
 CI 通过不能替代本清单。没有执行的项目标记 `not_run`，不能填写通过。
 
 ## 准备
@@ -9,7 +9,7 @@ CI 通过不能替代本清单。没有执行的项目标记 `not_run`，不能�
 - Windows 10 22H2 x64，普通用户账号，最好用户名包含中文。
 - 一款 P4/S31、一款 S3、两根可传输数据的 USB 线，设备已装匹配固件。
 - Preview Release 中的安装包、摘要、对应版本的本文及辅助脚本。
-- 两个可用的 SDK 测试版本 A/B；由发布维护者提供实际版本号，禁止伪造未发布版本。
+- Release 提供独立验收版本 A=9000.0.1、B=9000.0.2 和 `test-sdk-index.json`。两者使用相同源代码，仅版本身份不同，用来验证升级机制，不代表性能差异。
 - 测试商店发布时使用专用 App ID，不使用已有正式应用。
 
 记录安装包版本、SDK A/B 版本、系统版本、设备板型和固件版本，不记录设备 MAC、凭据或配对码。
@@ -80,19 +80,27 @@ Set-Location '.\中文 游戏\hello'
 | W18 | 更新管理组件、卸载重装 | PATH 无重复、项目保留、缓存按选择处理 | not_run |
 | W19 | 检查安全提示/签名 | Preview 提示如实记录；稳定包签名有效 | not_run |
 
-更新实验（把 A/B 替换为 Release 提供的实际版本）：
+更新实验在单独的新目录执行。以下脚本会创建两个测试项目，并显式执行 A→B→A，以及切换到附带的管理组件验收副本；
+不上传商店、不操作设备。不要把测试索引用于正式项目。
 
 ```powershell
-& $mp sdk use A --yes --json
-& $mp sdk status --check --json
-Get-FileHash .\micropixel.lock.json
-& $mp package --aot-target riscv32-ilp32f --json
-Get-FileHash .\micropixel.lock.json  # W12：与上次相同。
-& $mp sdk use B --yes --json
-& $mp build --aot-target riscv32-ilp32f --json
-& $mp sdk use A --yes --offline --json
-& $mp build --aot-target riscv32-ilp32f --offline --json
+$previousIndex = $env:MICROPIXEL_SDK_INDEX_URL
+try {
+    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.0/test-sdk-index.json'
+    .\test_acceptance_versions.ps1 -Launcher $mp -Directory '.\Windows A B 验收'
+} finally {
+    $env:MICROPIXEL_SDK_INDEX_URL = $previousIndex
+    & $mp update --yes --json
+    & $mp setup --version 0.16.0 --yes --json
+}
 ```
+
+预期最后输出 `A/B update notice, explicit upgrade, dual-target rebuild, offline rollback and project isolation passed.`。
+脚本检查打包没有改锁、另一项目仍用 A、`app.json` 未变、回退可离线构建。
+W15 手动在 `setup` 下载期间断开网络，预期返回非零并保留旧项目锁；联网后重试。
+W16 物理断网后在普通项目执行 `build --offline --json`，预期成功且版本状态为 `offline`。
+W18 脚本另输出 `Manager update and bootstrap switch passed.`，表示当前进程结束后，新命令已使用新版本目录。
+验收副本只有 build ID 不同，代码相同；finally 恢复正式索引对应组件。再手动完成卸载重装部分。
 
 W17 先执行 `publish --dry-run --json`；真实上传必须另行授权并登录，不由辅助脚本自动触发。
 
