@@ -8,10 +8,11 @@ from pathlib import Path
 
 def main():
     initial = Path(__file__).resolve().parent
-    root = Path(os.environ.get('MICROPIXEL_HOME', initial.parent.parent))
+    activating = len(sys.argv) in (2, 3) and sys.argv[1] == '--activate-manager'
+    root = Path(sys.argv[2]) if activating and len(sys.argv) == 3 else Path(os.environ.get('MICROPIXEL_HOME', initial.parent.parent))
     os.environ['MICROPIXEL_HOME'] = str(root)
     pointer = root / 'current.json'
-    if sys.argv[1:] == ['--activate-manager']:
+    if activating:
         from micropixel_manager import atomic_json, install_lock
         with install_lock(root):
             atomic_json(pointer, {'directory': str(initial)})

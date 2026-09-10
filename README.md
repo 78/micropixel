@@ -207,3 +207,5 @@ micropixel --transport usb run
 其他依赖的归属与例外见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+
+Windows 游戏开发使用 [SDK Preview 安装指南](docs/development/windows-sdk.zh-CN.md)；安装器仅准备 Guest 工具链，不包含固件开发环境。

@@ -47,3 +47,7 @@ Espressif 官方支持渠道取得。其他板卡和器件信息同样只引用�
 
 新的硬件引用只记录官方来源、型号、版本和必要的校验值；除非再分发许可明确允许，
 不把第三方二进制文档纳入版本控制。
+
+- [Windows SDK 真机验收](development/windows-acceptance.zh-CN.md)：安装、AI 命令、更新回退与双架构设备测试清单（安装器 Preview 就绪后执行）。
+
+- [Windows SDK 安装与版本管理](development/windows-sdk.zh-CN.md)

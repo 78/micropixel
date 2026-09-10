@@ -1,0 +1,82 @@
+# Windows SDK 安装与版本管理
+
+目标系统为 Windows 10 22H2 x64。当前分支正在实现 Preview，安装器须在 Windows 双架构编译验证通过后发布；
+SDK 0.15.6 的独立归档不包含本文的安装管理组件。macOS 继续使用原有 SDK 流程。
+
+## 安装契约
+
+每个 SDK Release 提供同一个 GUI/静默安装包、`sdk-manifest.json`、安装包下载清单与 SHA-256。
+安装器按当前用户安装到 `%LOCALAPPDATA%\MicroPixel`，不要求管理员权限；
+内置 Python 3.13.12、pyserial 3.5 和管理组件，不要求用户安装 Git、CMake、LLVM、ESP-IDF 或 WSL。
+依赖准备下载清单指定的 WASI SDK 33 和两种固定版本 `wamrc.exe`。
+
+新终端中使用 `micropixel`；当前终端尚未刷新 PATH 时使用：
+
+```powershell
+$mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
+& $mp setup --yes --json
+& $mp doctor --json
+```
+
+以最后一次 `doctor` 的 `ok: true`、`result.ready: true` 为环境可用标准。
+安装器成功退出本身不代表依赖下载成功。断网后重新执行 setup；已完整验证的归档会复用。
+未签名 Preview 被 Windows 拦截时需要用户核对发行来源，不能由 AI 关闭安全功能绕过。
+
+## 固定项目版本
+
+`init` 创建项目和 `micropixel.lock.json`。已有项目先显式选择版本：
+
+```powershell
+micropixel sdk use 0.16.0 --yes --json
+micropixel sdk status --check --json
+micropixel build --aot-target riscv32-ilp32f --json
+micropixel package --aot-target xtensa --json
+```
+
+示例版本必须替换为发布清单中实际存在的版本。将锁文件与源码一起提交到 Git。
+锁记录精确 SDK、工具链 ID 和 SDK 清单 SHA-256。CLI、Runtime、ABI 随 SDK 一起固定。
+依赖以内容摘要存放在用户缓存，多个项目可同时使用不同版本。
+
+```powershell
+micropixel sdk upgrade --yes --json
+micropixel sdk use 0.16.0 --yes --offline --json
+```
+
+升级先下载并验证全部依赖，再原子替换锁文件；失败保留旧锁。
+回退时依赖已缓存可离线执行。两个操作都不改游戏源码、`app.json` 或应用版本号。
+未知锁格式返回退出码 4，`--yes` 不会接受不兼容格式。
+需要源码迁移时单独处理，并在升级后重新构建、打包和真机测试。
+
+独立 SDK 归档仍允许手动设置编译器。受管理项目默认忽略机器上的编译器覆盖变量。
+确需外部工具链时，先锁定版本，再显式启用：
+
+```powershell
+micropixel sdk use 0.16.0 --external-toolchain --yes --json
+```
+
+外部模式必须提供 `WASI_SDK_PATH`、`WAMRC`、`XTENSA_WAMRC`，结果标记 `external`，不能视为已验证的固定工具链。
+再次 `sdk use <版本> --yes` 恢复受管理工具链。
+
+## 新版检查
+
+- `sdk status --check` 主动检查；`build`、`run` 使用一天内缓存。
+- `package` 和 `publish` 使用五分钟内缓存，每次结果包含版本状态。
+- `--offline` 不联网，返回 `offline` 和缓存时间；没有缓存时候选版本为空。
+- 网络失败返回 `unavailable` 提醒，不阻止依赖完整的旧项目构建或发布。
+- 只有比当前版本新的稳定 SDK 才提示升级。安装管理组件更新使用独立入口 `update --check` / `update --yes`。
+
+日常人类提醒按项目和候选版本去重；JSON 始终包含当前检查状态。
+性能提醒只有发布元数据同时提供描述、适用设备、所需固件和证据链接时才出现。
+“最新版一定更快”不属于 SDK 承诺。
+
+## 发布与验收
+
+源码锁见 [toolchain-sources.json](../../tools/windows/toolchain-sources.json)，
+内置运行时锁见 [runtime-sources.json](../../tools/windows/runtime-sources.json)。
+[统一 SDK 打包器](../../tools/build_sdk_release.py) 为网站与 GitHub 生成同一确定性归档。
+已发布的同版本文件禁止覆盖。
+
+Windows 验收使用 [W01–W19 清单](windows-acceptance.zh-CN.md)。稳定版必须通过自动验证、
+Windows 10 人工验收、两个设备架构实际运行和代码签名；当前 CI 运行于 Windows Server，不能代替 Windows 10 验收。
+
+AI 安装与使用契约见 [SDK AI 指南](../../guest/sdk/AI.md)。

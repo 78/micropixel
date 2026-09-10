@@ -1,0 +1,112 @@
+# Windows 10 SDK 真机验收
+
+本清单针对 Windows 安装与版本管理项目。当前第一阶段只提供 Windows 工具链 CI，尚未发布安装器；
+以下 setup/doctor/sdk/JSON 命令属于待验收的安装管理接口，必须使用该项目后续 Preview 包，不能用 SDK 0.15.6 代替。
+CI 通过不能替代本清单。没有执行的项目标记 `not_run`，不能填写通过。
+
+## 准备
+
+- Windows 10 22H2 x64，普通用户账号，最好用户名包含中文。
+- 一款 P4/S31、一款 S3、两根可传输数据的 USB 线，设备已装匹配固件。
+- Preview Release 中的安装包、摘要、对应版本的本文及辅助脚本。
+- 两个可用的 SDK 测试版本 A/B；由发布维护者提供实际版本号，禁止伪造未发布版本。
+- 测试商店发布时使用专用 App ID，不使用已有正式应用。
+
+记录安装包版本、SDK A/B 版本、系统版本、设备板型和固件版本，不记录设备 MAC、凭据或配对码。
+清理旧开发工具 PATH 后测试；无需卸载电脑上其他项目使用的 Python 或编译器。
+
+## 安装和通用命令
+
+先根据 Release 清单检查 `Get-FileHash .\micropixel-setup.exe -Algorithm SHA256`。
+GUI 安装直接双击。静默安装使用同一包：
+
+```powershell
+$process = Start-Process -FilePath '.\micropixel-setup.exe' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART /LOG="install.log"' -Wait -PassThru
+if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+$mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
+& $mp setup --yes --json
+if ($LASTEXITCODE -ne 0) { throw 'Tool preparation failed' }
+& $mp doctor --json
+```
+
+安装器成功不代表环境就绪。doctor 必须返回 `ok: true` 和 `result.ready: true`。
+Preview 的系统安全提示需要人工核对，不关闭系统安全功能、不绕过拦截。
+
+创建项目：
+
+```powershell
+& $mp init '.\中文 游戏\hello' --app-id local.windows.hello --title 'Windows Hello' --json
+Set-Location '.\中文 游戏\hello'
+& $mp build --aot-target riscv32-ilp32f --json
+& $mp package --aot-target riscv32-ilp32f --json
+& $mp package --aot-target xtensa --json
+```
+
+连接设备后的命令：
+
+```powershell
+& $mp port list
+# 仅替换为上一步确认的端口；两台设备时必须显式选择。
+& $mp --transport usb --port COM7 run --no-follow --json
+& $mp --transport usb --port COM7 screenshot --output '.\screen.jpg'
+& $mp --transport usb --port COM7 app stop
+& $mp --transport usb --port COM7 run
+# 检查持续日志后 Ctrl-C：电脑端结束跟随，设备 App 继续运行。
+```
+
+## 结果表
+
+每项填 `pass`、`fail` 或 `not_run`，失败补充最短复现步骤。不要把完整串口日志粘贴进报告。
+
+| 编号 | 操作 | 预期结果 | 结果 |
+|---|---|---|---|
+| W01 | GUI 安装 | 无需另装开发工具，向导显示环境就绪 | not_run |
+| W02 | 新开 PowerShell 执行 doctor --json | PATH 正确、单个有效 JSON、双架构工具可用 | not_run |
+| W03 | 卸载后静默安装 | 无向导、无隐藏等待，退出码准确 | not_run |
+| W04 | 不新开终端，用绝对路径运行启动器 | 不重启电脑即可使用 | not_run |
+| W05 | 中文和空格目录内构建两次，再改一个头文件构建 | 第一次成功，第二次复用，改头文件正确重编译 | not_run |
+| W06 | 分别打包 RISC-V/Xtensa | 目标、SDK、工具链和产物位置正确 | not_run |
+| W07 | P4/S31 安装运行 | 画面、输入、日志正常 | not_run |
+| W08 | S3 安装运行 | 架构识别正确、画面和输入正常 | not_run |
+| W09 | 截图、停止、重新运行 | 图片有效，App 状态与命令一致 | not_run |
+| W10 | 拔插、串口被占用、两台设备同时连接 | 明确报错、不挂死、不选错设备，释放后恢复 | not_run |
+| W11 | 跟随日志时 Ctrl-C | 仅结束电脑端日志，游戏继续运行 | not_run |
+| W12 | A 项目检查更新并打包 | 提醒 B，锁文件未变化，构建仍成功 | not_run |
+| W13 | 两个 A 项目，仅升级其中一个到 B | 升级项目重编译，另一个仍使用 A | not_run |
+| W14 | 将升级项目切回 A | 源码不变，可用缓存恢复 A | not_run |
+| W15 | 下载中断网，然后重试 | 不假报成功、不破坏旧版本，可恢复 | not_run |
+| W16 | 准备依赖后断网构建 | 构建通过，更新状态明确离线 | not_run |
+| W17 | 专用 App 预检，单独授权后上传 | 双架构通过，商店版本正确 | not_run |
+| W18 | 更新管理组件、卸载重装 | PATH 无重复、项目保留、缓存按选择处理 | not_run |
+| W19 | 检查安全提示/签名 | Preview 提示如实记录；稳定包签名有效 | not_run |
+
+更新实验（把 A/B 替换为 Release 提供的实际版本）：
+
+```powershell
+& $mp sdk use A --yes --json
+& $mp sdk status --check --json
+Get-FileHash .\micropixel.lock.json
+& $mp package --aot-target riscv32-ilp32f --json
+Get-FileHash .\micropixel.lock.json  # W12：与上次相同。
+& $mp sdk use B --yes --json
+& $mp build --aot-target riscv32-ilp32f --json
+& $mp sdk use A --yes --offline --json
+& $mp build --aot-target riscv32-ilp32f --offline --json
+```
+
+W17 先执行 `publish --dry-run --json`；真实上传必须另行授权并登录，不由辅助脚本自动触发。
+
+## 收集报告
+
+运行 [collect_acceptance.ps1](../../tools/windows/collect_acceptance.ps1)：
+
+```powershell
+.\collect_acceptance.ps1 -MicroPixel $mp -Output '.\acceptance.json'
+```
+
+脚本只调用离线诊断，记录系统版本、受限制的版本字段、退出码和空的 W01–W19 结果表；
+不安装、不升级、不操作设备、不上传数据。自行填写人工结果，分享前检查备注中没有个人路径或凭据。
+安装日志只留本地；定位问题时另行提供经过脱敏的最小片段。
+
+稳定发布须完成 W01–W19、解决关键故障、验证两个架构实际运行并提供签名安装包。
+性能改进需要同一设备和场景对比 A/B，不以“更新到最新版”代替性能验收。
