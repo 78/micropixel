@@ -8,12 +8,30 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from windows.release_metadata import file_digest
+from manager.micropixel_manager import extract
 
+
+
+def download_public(url: str, path: Path):
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response, path.open('wb') as output:
+                shutil.copyfileobj(response, output, 1024 * 1024)
+            return
+        except (urllib.error.URLError, TimeoutError) as error:
+            path.unlink(missing_ok=True)
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (404, 408, 429, 500, 502, 503, 504):
+                raise
+            if attempt == 4:
+                raise
+            print(f'Public asset {path.name} is not ready ({error}); retrying', file=sys.stderr)
+            time.sleep(2 * (attempt + 1))
 
 def main():
     parser = argparse.ArgumentParser()
@@ -58,7 +76,8 @@ def main():
         for line in (out / 'sha256sums.txt').read_text().splitlines():
             expected, name = line.split('  ', 1)
             path = root / name
-            urllib.request.urlretrieve(entry['entry']['url'].rsplit('/', 1)[0] + '/' + name, path)
+            print('Checking public asset:', name, flush=True)
+            download_public(entry['entry']['url'].rsplit('/', 1)[0] + '/' + name, path)
             if file_digest(path) != expected:
                 raise SystemExit('Public release asset differs: ' + name)
             path.unlink()
@@ -109,14 +128,16 @@ def main():
     invoke('sdk', 'use', version, '--project', str(example), '--yes')
     for target in ('riscv32-ilp32f', 'xtensa'):
         invoke('package', str(example), '--aot-target', target, '--offline')
-    fixture = root / '真机 验收 App'
-    shutil.copytree(ROOT / 'tools/windows/fixtures/acceptance', fixture)
+    fixture_directory = root / '真机 验收 App'
+    fixture_directory.mkdir()
+    extract(out / 'windows-acceptance-project.zip', fixture_directory)
+    fixture = fixture_directory / 'windows-acceptance'
     invoke('sdk', 'use', version, '--project', str(fixture), '--yes')
     for target in ('riscv32-ilp32f', 'xtensa'):
         invoke('package', str(fixture), '--aot-target', target, '--offline')
     powershell = Path(os.environ['WINDIR']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     command = [str(powershell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-               str(ROOT / 'tools/windows/test_acceptance_versions.ps1'), '-Launcher', str(launcher),
+               str(out / 'test_acceptance_versions.ps1'), '-Launcher', str(launcher),
                '-Directory', str(root / 'A B acceptance')]
     if not args.public:
         command.append('-OfflineFixtures')

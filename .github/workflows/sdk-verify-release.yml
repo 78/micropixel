@@ -1,0 +1,48 @@
+name: Reverify published SDK Preview
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing SDK Preview tag to verify and promote without replacing assets
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: sdk-channel-promotion
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.12'
+      - name: Download and verify existing immutable assets
+        run: python tools/windows/download_sdk_release.py --tag $env:RELEASE_TAG --directory build/release
+      - name: Install the published Preview
+        run: |
+          $metadata = Get-Content -Raw build/release/windows-installer.json | ConvertFrom-Json
+          $process = Start-Process -FilePath (Join-Path build/release $metadata.name) -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART' -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw 'Published installer failed' }
+      - name: Verify public downloads and fresh installed SDK
+        run: python tools/windows/verify_installed_sdk.py --directory build/release --public
+      - name: Promote verified Preview channel
+        run: |
+          git config --global credential.helper '!gh auth git-credential'
+          python tools/windows/publish_sdk.py promote --directory build/release
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: published-sdk-verification
+          path: build/release/public-verification.json
+          if-no-files-found: ignore
