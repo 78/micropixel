@@ -60,7 +60,8 @@ def toolchain(verified: Path, output: Path, repository: str):
     source_sha = file_digest(source_path)
     crt_lock = ROOT / 'tools/windows/msvc-crt-sources.json'
     recipe_sha = file_digest(ROOT / 'tools/windows/build_toolchain.py')
-    identity = hashlib.sha256((source_sha + recipe_sha + file_digest(crt_lock)).encode()).hexdigest()
+    packaging_sha = hashlib.sha256((Path(__file__).read_bytes() + (ROOT / 'tools/windows/package_crt.ps1').read_bytes())).hexdigest()
+    identity = hashlib.sha256((source_sha + recipe_sha + file_digest(crt_lock) + packaging_sha).encode()).hexdigest()
     toolchain_id = 'windows-x64-' + identity[:16]
     tag = 'toolchain-' + toolchain_id
     base = f'https://github.com/{repository}/releases/download/{tag}'
@@ -92,7 +93,7 @@ def toolchain(verified: Path, output: Path, repository: str):
     packages['wasi'] = {'name': 'wasi-sdk-33', 'url': wasi['url'], 'sha256': wasi['sha256'],
                         'size_bytes': wasi_archive.stat().st_size, 'root': wasi['directory']}
     write_json(output / 'toolchain.json', {'schema_version': 1, 'toolchain_id': toolchain_id,
-                'source_lock_sha256': source_sha, 'build_recipe_sha256': recipe_sha, 'msvc_crt': crt_sources, 'sources': sources, 'platforms': {'windows-x64': packages}})
+                'source_lock_sha256': source_sha, 'build_recipe_sha256': recipe_sha, 'packaging_recipe_sha256': packaging_sha, 'msvc_crt': crt_sources, 'sources': sources, 'platforms': {'windows-x64': packages}})
     return tag
 
 

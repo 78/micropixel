@@ -129,7 +129,7 @@ class ManagerTests(unittest.TestCase):
         with m.install_lock(root):
             self.manager.asset(sdk, install=True)
         tools_sha = '1' * 64
-        tool_root = root / 'packages' / tools_sha
+        tool_root = root / 'packages' / tools_sha[:24]
         (tool_root / 'tools/bin').mkdir(parents=True)
         (tool_root / 'tools/bin/clang++.exe').touch()
         (tool_root / 'tools/wamrc.exe').touch()
@@ -177,7 +177,7 @@ class ManagerTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.manager.asset(spec, install=True)
         self.assertFalse((self.manager.root / 'downloads' / (sha + '.part')).exists())
-        self.assertFalse((self.manager.root / 'packages' / sha).exists())
+        self.assertFalse((self.manager.root / 'packages' / sha[:24]).exists())
         with patch.object(m.urllib.request, 'urlopen', return_value=Response(data)):
             self.assertTrue((self.manager.asset(spec, install=True) / 'tool.exe').exists())
 
@@ -203,6 +203,15 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(value['check_status'], 'unavailable')
         self.assertIsNone(value['candidate_version'])
         self.assertEqual(self.manager.warnings[0]['code'], 'update_check_failed')
+
+
+    def test_failed_checks_are_throttled_but_explicit_check_retries(self):
+        with patch.object(m, 'fetch', side_effect=OSError('offline')) as request:
+            self.manager.status('1.0.0')
+            self.manager.status('1.0.0')
+            self.assertEqual(request.call_count, 1)
+            self.manager.status('1.0.0', force=True)
+            self.assertEqual(request.call_count, 2)
 
 
 
