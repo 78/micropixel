@@ -23,7 +23,7 @@ def main():
     out = args.directory.resolve()
     entry = json.loads((out / 'channel-entry.json').read_text())
     version = entry['version']
-    root = Path(os.environ['RUNNER_TEMP']) / ('mp-public' if args.public else 'mp-draft')
+    root = Path(os.environ['RUNNER_TEMP']) / ('mp-public 中文' if args.public else 'mp-draft 中文')
     if root.exists():
         raise SystemExit('Integration requires a fresh cache')
     root.mkdir()
@@ -32,7 +32,7 @@ def main():
     env.update(MICROPIXEL_HOME=str(root), MICROPIXEL_SDK_INDEX_URL=entry['entry']['url'].rsplit('/', 1)[0] + '/test-sdk-index.json')
     # Native tools must not accidentally find CI's Python/Git/CMake/LLVM/CRT.
     env['PATH'] = str(Path(env['WINDIR']) / 'System32')
-    for key in ('WASI_SDK_PATH', 'WASI_CLANG', 'WASI_CLANGXX', 'WAMRC', 'XTENSA_WAMRC', 'PYTHONPATH', 'PYTHONHOME'):
+    for key in ('WASI_SDK_PATH', 'WASI_CLANG', 'WASI_CLANGXX', 'WAMRC', 'XTENSA_WAMRC', 'PYTHONPATH', 'PYTHONHOME', 'PSModulePath'):
         env.pop(key, None)
     index = json.loads((out / 'test-sdk-index.json').read_text())
     if not args.public:
@@ -65,7 +65,7 @@ def main():
             raise RuntimeError(f'Installed command failed {command}: {result}')
         return result
 
-    invoke('setup', '--version', version, '--yes')
+    installed = invoke('setup', '--version', version, '--yes')['result']['paths']
     doctor = invoke('doctor', '--offline')
     if not doctor['result']['ready']:
         raise RuntimeError('Prepared tools did not pass doctor')
@@ -95,6 +95,13 @@ def main():
     invoke('publish', str(project), '--dry-run', '--offline')
     if (project / 'micropixel.lock.json').read_bytes() != lock_before:
         raise RuntimeError('Build/package/preflight modified the project lock')
+    # Exercise localization, audio generation and bundled resource files using
+    # only the published SDK's copies of the build helpers.
+    example = root / '素材 音效 示例'
+    shutil.copytree(Path(installed['sdk']) / 'guest/apps/blocks', example)
+    invoke('sdk', 'use', version, '--project', str(example), '--yes')
+    for target in ('riscv32-ilp32f', 'xtensa'):
+        invoke('package', str(example), '--aot-target', target, '--offline')
     powershell = Path(os.environ['WINDIR']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     command = [str(powershell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                str(ROOT / 'tools/windows/test_acceptance_versions.ps1'), '-Launcher', str(launcher),
