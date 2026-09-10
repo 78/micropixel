@@ -16,6 +16,9 @@
   共用的 Xtensa AOT、RGB565 路径、内存与硬件约束，以及当前验收方法；
 - [Host 构建与烧录指南](development/flashing.zh-CN.md)：P4 产品与 S31/S3 preview 的环境、设备识别、烧录和排错；
 - [USB 本地控制协议](design/usb-local-control.zh-CN.md)：CLI 本地 App 管理、日志、截图、输入和安全边界；
+- [Windows SDK 安装与版本管理](development/windows-sdk.zh-CN.md)；
+- [Windows SDK 真机验收](development/windows-acceptance.zh-CN.md)：W01–W19 与 A/B 实验；
+- [SDK 与 Windows 发布](development/sdk-release.zh-CN.md)：不可变产物、专用更新索引及稳定版门槛；
 - [音效清单模板](development/game-sfx.template.json)：新游戏的起始配置。
 
 与代码一起演进的组件级说明放在源码附近：
@@ -47,7 +50,3 @@ Espressif 官方支持渠道取得。其他板卡和器件信息同样只引用�
 
 新的硬件引用只记录官方来源、型号、版本和必要的校验值；除非再分发许可明确允许，
 不把第三方二进制文档纳入版本控制。
-
-- [Windows SDK 真机验收](development/windows-acceptance.zh-CN.md)：安装、AI 命令、更新回退与双架构设备测试清单（安装器 Preview 就绪后执行）。
-
-- [Windows SDK 安装与版本管理](development/windows-sdk.zh-CN.md)

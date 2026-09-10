@@ -6,10 +6,13 @@
 ## 安装
 
 安装必须有用户安装 SDK 的明确意图。下载清单包含 `version`、`architecture`、`url`、`size_bytes` 和 `sha256`。
-以下 PowerShell 示例中的 `$metadataUrl` 必须是已发布 Release 所提供的安装清单 HTTPS 地址：
+下面固定选择 0.16.0 Preview。自动发现使用专用 [SDK 索引](https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json)：
+`stable` 为空表示尚无稳定 Windows SDK；仅在用户接受 Preview 时使用 `preview`。
+`windows_installer` 是经过发布验证的安装器地址、大小和摘要。
 
 ```powershell
-$metadataUrl = 'https://github.com/78/micropixel/releases/download/sdk-v<VERSION>/windows-installer.json'
+# This explicit version is the unsigned Preview. Do not infer it from Latest Release.
+$metadataUrl = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.0/windows-installer.json'
 $meta = Invoke-RestMethod -Uri $metadataUrl
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
@@ -23,7 +26,7 @@ $log = Join-Path $env:TEMP 'micropixel-install.log'
 $p = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART /LOG=`"$log`"" -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-$setup = & $mp setup --yes --json | ConvertFrom-Json
+$setup = & $mp setup --version $meta.version --yes --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $setup.ok) { throw 'Environment preparation failed; see stderr' }
 $doctor = & $mp doctor --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $doctor.ok -or -not $doctor.result.ready) { throw 'Environment is not ready' }
@@ -40,10 +43,12 @@ if ($LASTEXITCODE -ne 0 -or -not $doctor.ok -or -not $doctor.result.ready) { thr
 ```text
 micropixel doctor --json
 micropixel sdk status --check --json
-micropixel build --json
-micropixel package --json
+micropixel build --aot-target riscv32-ilp32f --json
+micropixel package --aot-target riscv32-ilp32f --json
 micropixel publish --dry-run --json
 ```
+
+示例目标 `riscv32-ilp32f` 用于 P4/S31；S3 使用 `xtensa`。`publish --dry-run` 自动验证两种架构。
 
 新项目使用 `micropixel init <目录> --app-id <标识> --title <名称> --json`。
 已有未锁定项目须先选择清单中的具体版本 `sdk use <版本> --yes --json`。

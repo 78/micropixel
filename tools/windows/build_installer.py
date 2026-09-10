@@ -2,7 +2,6 @@
 """Build the unsigned Preview installer. Signing/stable promotion is a separate gate."""
 import argparse
 import json
-import re
 import subprocess
 import sys
 import urllib.request
@@ -11,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from windows.release_metadata import asset
+from windows.prepare_sdk_release import prepare_core
 from manager.micropixel_manager import file_digest
 
 
@@ -25,7 +25,7 @@ def main():
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    version = re.search(r'^VERSION = "([0-9.]+)"$', (ROOT / 'tools/micropixel').read_text(), re.M)[1]
+    version = prepare_core(output, args.repository)['version']
     run(sys.executable, ROOT / 'tools/windows/build_manager.py', '--output', output / 'runtime')
     build = json.loads((output / 'runtime/manager-build.json').read_text())
     build_id = build['build_id']

@@ -205,6 +205,27 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(self.manager.warnings[0]['code'], 'update_check_failed')
 
 
+    def test_upgrade_does_not_downgrade_a_newer_project(self):
+        project = self.root / 'newer-project'
+        lock = {'schema_version': 1, 'sdk_version': '2.0.0', 'toolchain_id': 'fixture',
+                'manifest_sha256': 'a' * 64, 'external_toolchain': False}
+        m.atomic_json(project / m.LOCK_NAME, lock)
+        before = (project / m.LOCK_NAME).read_bytes()
+        with patch.object(self.manager, 'index', return_value=({'stable': '1.0.0'}, 'checked', 1)), patch.object(self.manager, 'switch') as switch:
+            code, result = m.execute(self.manager, ['sdk', 'upgrade', '--project', str(project)], True, True)
+        self.assertEqual(code, 0)
+        self.assertFalse(result['changed'])
+        switch.assert_not_called()
+        self.assertEqual((project / m.LOCK_NAME).read_bytes(), before)
+
+    def test_offline_rejects_upload_and_remote_run_before_side_effects(self):
+        manager = m.Manager(self.root / 'offline', offline=True)
+        for arguments in (['publish', str(self.root)], ['run', str(self.root), '--no-follow']):
+            with self.assertRaises(m.Failure) as caught:
+                m.execute(manager, arguments, True, True)
+            self.assertEqual(caught.exception.code, 'offline_operation')
+            self.assertEqual(caught.exception.exit_code, 4)
+
     def test_failed_checks_are_throttled_but_explicit_check_retries(self):
         with patch.object(m, 'fetch', side_effect=OSError('offline')) as request:
             self.manager.status('1.0.0')

@@ -38,6 +38,15 @@ class JsonOutput(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn('--no-follow', value['error']['message'])
 
+    def test_package_requires_an_explicit_target_as_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'game'
+            self.call('init', root, '--app-id', 'test.json.hello', '--json')
+            result, value = self.call('package', root, '--json')
+            self.assertEqual(result.returncode, 3)
+            self.assertEqual(value['code'], 'input_required')
+            self.assertIn('--aot-target', value['error']['message'])
+
     def test_missing_compiler_is_environment_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'game'

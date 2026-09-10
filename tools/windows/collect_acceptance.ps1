@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: Apache-2.0
+﻿# SPDX-License-Identifier: Apache-2.0
 # Read-only environment collection. Never installs, upgrades, flashes or uploads.
 [CmdletBinding()]
 param(

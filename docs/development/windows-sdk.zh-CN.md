@@ -1,20 +1,24 @@
 # Windows SDK 安装与版本管理
 
-目标系统为 Windows 10 22H2 x64。当前分支正在实现 Preview，安装器须在 Windows 双架构编译验证通过后发布；
+目标系统为 Windows 10 22H2 x64。SDK 0.16.0 提供未签名 Preview 安装器，发布 workflow 在双架构编译与安装验证通过后发布；
 SDK 0.15.6 的独立归档不包含本文的安装管理组件。macOS 继续使用原有 SDK 流程。
+
+从 [SDK 0.16.0 Preview Release](https://github.com/78/micropixel/releases/tag/sdk-v0.16.0) 下载安装器和校验清单。
+双击安装器，完成后检查环境就绪提示；下载中断可点击重试。
 
 ## 安装契约
 
 每个 SDK Release 提供同一个 GUI/静默安装包、`sdk-manifest.json`、安装包下载清单与 SHA-256。
 安装器按当前用户安装到 `%LOCALAPPDATA%\MicroPixel`，不要求管理员权限；
 内置 Python 3.13.12、pyserial 3.5 和管理组件，不要求用户安装 Git、CMake、LLVM、ESP-IDF 或 WSL。
+安装器同时携带本版本 SDK 的校验清单；即使更新索引暂不可用，也可以按固定版本准备依赖。
 依赖准备下载清单指定的 WASI SDK 33 和两种固定版本 `wamrc.exe`。
 
 新终端中使用 `micropixel`；当前终端尚未刷新 PATH 时使用：
 
 ```powershell
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-& $mp setup --yes --json
+& $mp setup --version 0.16.0 --yes --json
 & $mp doctor --json
 ```
 
@@ -33,7 +37,7 @@ micropixel build --aot-target riscv32-ilp32f --json
 micropixel package --aot-target xtensa --json
 ```
 
-示例版本必须替换为发布清单中实际存在的版本。将锁文件与源码一起提交到 Git。
+后续使用发布清单中实际存在的版本。将锁文件与源码一起提交到 Git。
 锁记录精确 SDK、工具链 ID 和 SDK 清单 SHA-256。CLI、Runtime、ABI 随 SDK 一起固定。
 依赖以内容摘要存放在用户缓存，多个项目可同时使用不同版本。
 
@@ -41,6 +45,9 @@ micropixel package --aot-target xtensa --json
 micropixel sdk upgrade --yes --json
 micropixel sdk use 0.16.0 --yes --offline --json
 ```
+
+`sdk upgrade` 只选择稳定 SDK；首个 Windows Preview 尚无稳定推荐时，返回缺少选择（退出码 3），
+可显式 `sdk use 0.16.0 --yes`。Preview 不会被冒充为稳定版。
 
 升级先下载并验证全部依赖，再原子替换锁文件；失败保留旧锁。
 回退时依赖已缓存可离线执行。两个操作都不改游戏源码、`app.json` 或应用版本号。
@@ -80,3 +87,17 @@ Windows 验收使用 [W01–W19 清单](windows-acceptance.zh-CN.md)。稳定版
 Windows 10 人工验收、两个设备架构实际运行和代码签名；当前 CI 运行于 Windows Server，不能代替 Windows 10 验收。
 
 AI 安装与使用契约见 [SDK AI 指南](../../guest/sdk/AI.md)。
+
+## 卸载与缓存
+
+在 Windows“应用和功能”卸载 MicroPixel SDK。界面询问是否清除已下载缓存，默认保留。
+静默卸载同样默认保留缓存，不删除用户项目：
+
+```powershell
+$uninstaller = Get-ChildItem "$env:LOCALAPPDATA\MicroPixel" -Filter 'unins*.exe'
+if (@($uninstaller).Count -ne 1) { throw 'Expected one MicroPixel uninstaller' }
+Start-Process -FilePath $uninstaller.FullName -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait
+```
+
+仅在用户明确要求清理下载缓存时追加 `/PURGECACHE`。项目应保存在用户自己的工作目录，
+不要放在安装器管理的 `versions`、`packages` 或 `downloads` 内。

@@ -16,6 +16,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -200,6 +201,20 @@ def tool_executable(path: str | Path) -> Path:
             return executable
     return candidate
 
+
+
+def _run_aot_compiler(command: list[str], wasm: Path, aot: Path) -> None:
+    if sys.platform != "win32" or (str(wasm).isascii() and str(aot).isascii()):
+        _run_process([*command, "-o", str(aot), str(wasm)], check=True)
+        return
+    # The pinned WAMR fork uses narrow argv/fopen on Windows. CreateProcessW
+    # handles a Unicode working directory, so keep only ASCII filenames in argv.
+    # Stage beside the output and replace it only after a successful compilation.
+    with tempfile.TemporaryDirectory(prefix=".wamrc-", dir=aot.parent) as temporary:
+        staging = Path(temporary)
+        shutil.copyfile(wasm, staging / "module.wasm")
+        _run_process([str(Path(command[0]).absolute()), *command[1:], "-o", "module.aot", "module.wasm"], cwd=staging, check=True)
+        os.replace(staging / "module.aot", aot)
 
 def sdk_root() -> Path:
     script_directory = Path(__file__).resolve().parent
@@ -393,7 +408,7 @@ def usb_serial_ports() -> list[Any]:
     try:
         from serial.tools import list_ports
     except ImportError as error:
-        raise CliError("USB transport requires pyserial; install requirements-dev.txt") from error
+        raise EnvironmentFailure("USB transport requires pyserial; run doctor or install requirements-dev.txt for a manual toolchain") from error
     return list(list_ports.comports())
 
 
@@ -413,10 +428,10 @@ def discover_usb_port(explicit_port: str | None) -> str:
         if is_micropixel_usb_candidate(port)
     ]
     if not candidates:
-        raise CliError("No MicroPixel USB device found; connect the device, run 'port list', or pass --port")
+        raise EnvironmentFailure("No MicroPixel USB device found; connect the device, run 'port list', or pass --port")
     if len(candidates) != 1:
         shown = ", ".join(sorted(candidates))
-        raise CliError(f"Multiple MicroPixel USB devices found ({shown}); pass --port")
+        raise InputRequired(f"Multiple MicroPixel USB devices found ({shown}); pass --port")
     return candidates[0]
 
 
@@ -424,7 +439,7 @@ def open_usb_serial(port: str) -> Any:
     try:
         import serial
     except ImportError as error:
-        raise CliError("USB transport requires pyserial; install requirements-dev.txt") from error
+        raise EnvironmentFailure("USB transport requires pyserial; run doctor or install requirements-dev.txt for a manual toolchain") from error
     options: dict[str, Any] = {
         "port": None,
         "baudrate": 115200,
@@ -1878,7 +1893,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         ],
         check=True,
     )
-    _run_process(
+    _run_aot_compiler(
         [
             wamrc,
             *AOT_TARGET_FLAGS[aot_target],
@@ -1891,11 +1906,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             "--enable-dump-call-stack",
             # Experiment hook: extra wamrc flags for codegen A/B. Not a release knob.
             *shlex.split(environment.get("MICROPIXEL_WAMRC_EXTRA_FLAGS", "")),
-            "-o",
-            str(aot_output),
-            str(wasm_output),
         ],
-        check=True,
+        wasm_output,
+        aot_output,
     )
     # Feed compiler-discovered headers and toolchain files into the outer
     # project/Bundle stamp too, so its fast path cannot hide a stale object.
@@ -1922,10 +1935,12 @@ def _tool_path(name: str) -> Path:
 
 def _bundle_builder_command(arguments: list[str]) -> list[str]:
     local_builder = sdk_root() / "tools/build_app_bundle.py"
+    if not local_builder.is_file():
+        local_builder = sdk_root() / "libexec/build_app_bundle.py"
     if local_builder.is_file():
-        return [sys.executable, str(local_builder), *arguments]
+        return [sys.executable, "-X", "utf8", str(local_builder), *arguments]
     if EMBEDDED_BUNDLE_BUILDER is not None:
-        return [sys.executable, "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
+        return [sys.executable, "-X", "utf8", "-c", EMBEDDED_BUNDLE_BUILDER, *arguments]
     raise CliError("This development copy does not contain the Bundle builder")
 
 
@@ -2326,7 +2341,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
     if project.value.get("localization") is not None:
         _run_process(
             [
-                sys.executable,
+                sys.executable, "-X", "utf8",
                 str(_tool_path("generate_localization.py")),
                 "--app-manifest",
                 str(project.path),
@@ -2343,7 +2358,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
     sfx_manifest = project.path.parent / "audio/sfx.json"
     if sfx_manifest.is_file():
         analyze_command = [
-            sys.executable,
+            sys.executable, "-X", "utf8",
             str(_tool_path("analyze_sfx.py")),
             "--manifest",
             str(sfx_manifest),
@@ -2499,7 +2514,7 @@ def run_package(args: argparse.Namespace) -> Path:
         raise CliError("package requires a project directory or app.json")
     project = load_project_manifest(manifest_path)
     if project.package_type == "app" and getattr(args, "aot_target", None) is None:
-        raise CliError("Offline App packaging requires --aot-target")
+        raise InputRequired("Offline App packaging requires --aot-target")
     return package_project(
         project,
         args.profile,
@@ -3601,7 +3616,7 @@ def resolve_transport(args: argparse.Namespace) -> argparse.Namespace:
             args.transport = os.environ.get("MICROPIXEL_TRANSPORT", "remote")
         return args
     if args.transport == "remote" and args.port:
-        raise CliError("--port implies USB transport; omit --transport remote or pass --transport usb")
+        raise CliUsageError("--port implies USB transport; omit --transport remote or pass --transport usb")
     return args
 
 

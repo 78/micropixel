@@ -520,6 +520,8 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
             version = args.version if args.action == 'use' else manager.index(force=True)[0].get('stable')
             if not version:
                 raise Failure('input_required', 'Specify an SDK version or configure a stable release', 3)
+            if args.action == 'upgrade' and lock and not newer(version, lock['sdk_version']):
+                return 0, {'lock': lock, 'changed': False, 'reason': 'already_current_or_newer'}
             if args.external_toolchain:
                 if not lock or version != lock['sdk_version']:
                     raise Failure('invalid_arguments', 'External mode requires the currently locked version', 2)
@@ -547,8 +549,11 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 raise Failure('dependency_missing', 'Bundled pyserial is missing', 4) from error
             probes = {}
             for name, path in [('clang', str(Path(paths['WASI_SDK_PATH']) / 'bin/clang++.exe')), ('riscv', paths['WAMRC']), ('xtensa', paths['XTENSA_WAMRC'])]:
-                probe = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=15)
-                if probe.returncode:
+                try:
+                    probe = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=15)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise Failure('tool_unusable', f'{name} could not execute', 4) from error
+                if probe.returncode or not (probe.stdout or probe.stderr).strip():
                     raise Failure('tool_unusable', f'{name} could not execute', 4)
                 probes[name] = (probe.stdout or probe.stderr).splitlines()[0]
             return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'python_version': sys.version.split()[0], 'pyserial_version': serial_version, 'wasi_sdk_version': manifest['platforms']['windows-x64']['wasi'].get('version', 'unknown'), 'manager_version': VERSION, 'manager_build_id': BUILD_ID}
@@ -580,6 +585,12 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     cli = load_cli(parser_path)
     parsed = cli.parser().parse_args(arguments)
     command = parsed.command
+    transport = parsed.transport or ('usb' if parsed.port else os.environ.get('MICROPIXEL_TRANSPORT', 'remote'))
+    if manager.offline and (
+        (command == 'publish' and not parsed.dry_run) or command in ('auth', 'firmware')
+        or (command in {*cli.NETWORK_COMMANDS, 'run'} and transport != 'usb')
+    ):
+        raise Failure('offline_operation', 'This operation requires network access; --offline forbids it', 4)
     if json_mode and command == 'run' and parsed.follow:
         raise Failure('invalid_arguments', 'run --json requires --no-follow', 2)
     value = getattr(parsed, 'project', getattr(parsed, 'directory', getattr(parsed, 'source', '.')))
@@ -612,6 +623,9 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
         env['WASI_CLANG'] = ''
         env['WASI_CLANGXX'] = str(Path(paths['WASI_SDK_PATH']) / 'bin/clang++.exe')
     env['MICROPIXEL_TOOLCHAIN_ID'] = manifest['toolchain_id'] if not lock.get('external_toolchain') else 'external'
+    if status and json_mode and command in ('package', 'publish'):
+        print(f"Using locked SDK {lock['sdk_version']}; update check: {status['check_status']}", file=sys.stderr)
+        show_warnings(manager.warnings)
     if status and not json_mode:
         manager.human_warnings_handled = True
         manager.human_final_status = command in ('package', 'publish')

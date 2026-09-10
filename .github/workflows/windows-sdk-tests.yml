@@ -1,8 +1,6 @@
 name: SDK manager and archive tests
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/sdk-version-manager', 'codex/windows-sdk-installer', 'codex/windows-sdk-release', 'codex/windows-toolchain-release', 'codex/windows-sdk-runtime']
   pull_request:
     paths: ['tools/**', 'guest/sdk/**', '.github/workflows/windows-sdk-tests.yml']
 permissions:

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "app_id": "local.windows.acceptance",
+  "version": "0.1.0",
+  "threading": "none",
+  "title": "SDK Acceptance",
+  "sources": ["main.cpp"],
+  "requirements": {
+    "schema_version": 1,
+    "display": {"layouts": ["square", "portrait", "landscape"], "min_width": 240, "min_height": 240},
+    "required": [],
+    "optional": ["input.touch", "input.keys"],
+    "any_of": [],
+    "services": {}
+  }
+}
