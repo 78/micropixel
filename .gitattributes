@@ -1,0 +1,9 @@
+# Release archives and source-lock digests must be identical on Windows and POSIX.
+* text=auto eol=lf
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.zip -text
+*.ttf -text
+*.woff2 -text
+*.bin -text

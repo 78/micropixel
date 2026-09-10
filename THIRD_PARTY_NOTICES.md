@@ -186,3 +186,12 @@ License Version 2 and the bundled third-party license notices) and pyserial 3.5
 `tools/windows/runtime-sources.json`. Runtime archives must retain Python's
 `LICENSE.txt` and pyserial's wheel license metadata. Inno Setup is the build-time
 installer compiler; its license does not replace the bundled components' licenses.
+
+Windows WASI compiler deployment also includes app-local Microsoft Visual C++
+Runtime 2015–2022 files, version 14.44.35211.0, from the Visual Studio 2022
+redistributable directory. File hashes are pinned in `tools/windows/msvc-crt-sources.json`.
+These proprietary Microsoft components are covered by the
+[Microsoft runtime license](https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/)
+and [distributable list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution),
+not MicroPixel's Apache-2.0 license. The package retains a dedicated Microsoft notice.
+MicroPixel updates must also deliver updates to this app-local runtime.

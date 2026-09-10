@@ -58,18 +58,32 @@ def toolchain(verified: Path, output: Path, repository: str):
     source_path = ROOT / 'tools/windows/toolchain-sources.json'
     sources = json.loads(source_path.read_text())
     source_sha = file_digest(source_path)
-    toolchain_id = 'windows-x64-' + source_sha[:16]
+    crt_lock = ROOT / 'tools/windows/msvc-crt-sources.json'
+    recipe_sha = file_digest(ROOT / 'tools/windows/build_toolchain.py')
+    identity = hashlib.sha256((source_sha + recipe_sha + file_digest(crt_lock)).encode()).hexdigest()
+    toolchain_id = 'windows-x64-' + identity[:16]
     tag = 'toolchain-' + toolchain_id
     base = f'https://github.com/{repository}/releases/download/{tag}'
     packages = {}
     for target, key in [('riscv32-ilp32f', 'wamrc_riscv'), ('xtensa', 'wamrc_xtensa')]:
         directory = verified / ('wamrc-windows-x64-' + target)
         receipt = json.loads((directory / 'build-info.json').read_text())
-        if receipt['source_lock_sha256'] != source_sha or receipt['target'] != target or receipt['sha256'] != file_digest(directory / 'wamrc.exe'):
+        # The bootstrap verification predates .gitattributes; accept its CRLF
+        # checkout digest only when it is exactly the same pinned source text.
+        bootstrap_sha = hashlib.sha256(source_path.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')).hexdigest()
+        if receipt['source_lock_sha256'] not in (source_sha, bootstrap_sha) or receipt['target'] != target or receipt['sha256'] != file_digest(directory / 'wamrc.exe'):
             raise ValueError('Compiler provenance differs from pinned source manifest')
         filename = f'wamrc-{toolchain_id}-{target}.zip'
         archive(directory, output / filename, 'wamrc')
         packages[key] = asset(output / filename, base, 'wamrc')
+    crt_sources = json.loads(crt_lock.read_text())
+    crt_directory = verified / 'msvc-crt'
+    for name, pinned in crt_sources['files'].items():
+        if file_digest(crt_directory / name) != pinned['sha256']:
+            raise ValueError('MSVC runtime provenance mismatch: ' + name)
+    crt_archive = output / ('msvc-crt-' + toolchain_id + '.zip')
+    archive(crt_directory, crt_archive, 'crt')
+    packages['msvc_crt'] = asset(crt_archive, base, 'crt')
     wasi = sources['wasi']
     # Size is obtained from the already verified official archive in the producer job.
     wasi_archive = verified / 'wasi.tar.gz'
@@ -78,7 +92,7 @@ def toolchain(verified: Path, output: Path, repository: str):
     packages['wasi'] = {'name': 'wasi-sdk-33', 'url': wasi['url'], 'sha256': wasi['sha256'],
                         'size_bytes': wasi_archive.stat().st_size, 'root': wasi['directory']}
     write_json(output / 'toolchain.json', {'schema_version': 1, 'toolchain_id': toolchain_id,
-                'source_lock_sha256': source_sha, 'sources': sources, 'platforms': {'windows-x64': packages}})
+                'source_lock_sha256': source_sha, 'build_recipe_sha256': recipe_sha, 'msvc_crt': crt_sources, 'sources': sources, 'platforms': {'windows-x64': packages}})
     return tag
 
 
