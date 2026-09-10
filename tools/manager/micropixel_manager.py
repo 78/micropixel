@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 VERSION = '0.1.0'
-INDEX_URL = 'https://micropixel.ai/releases/sdk/index.json'
+INDEX_URL = 'https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json'
 LOCK_NAME = 'micropixel.lock.json'
 IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z')
 SHA256 = re.compile(r'[0-9a-f]{64}\Z')
@@ -59,6 +59,28 @@ def identifier(value: str) -> str:
     if not isinstance(value, str) or not IDENTIFIER.fullmatch(value):
         raise Failure('invalid_manifest', 'Invalid release identifier', 4)
     return value
+
+
+def validate_index(value: dict) -> bool:
+    if not isinstance(value, dict) or value.get('schema_version') != 1 or not isinstance(value.get('versions'), dict):
+        return False
+    versions = value['versions']
+    for channel in ('stable', 'preview'):
+        if value.get(channel) is not None and (not isinstance(value[channel], str) or value[channel] not in versions):
+            return False
+    for version, entry in versions.items():
+        if not isinstance(version, str) or not IDENTIFIER.fullmatch(version) or not isinstance(entry, dict):
+            return False
+        if not isinstance(entry.get('sha256'), str) or not SHA256.fullmatch(entry['sha256']):
+            return False
+        if not isinstance(entry.get('url'), str) or not entry['url'].startswith('https://'):
+            return False
+        if not isinstance(entry.get('performance', []), list):
+            return False
+    manager = value.get('manager')
+    if manager is not None and (not isinstance(manager, dict) or not isinstance(manager.get('version'), str)):
+        return False
+    return True
 
 
 def read_json(path: Path) -> dict:
@@ -190,17 +212,24 @@ class Manager:
             cached = read_json(cache_path) if cache_path.exists() else {}
         except (OSError, ValueError, Failure):
             cached = {}
+        url = os.environ.get('MICROPIXEL_SDK_INDEX_URL', INDEX_URL)
+        if cached.get('url', INDEX_URL) != url:
+            cached = {}
+        if not validate_index(cached.get('index', {})):
+            cached = {}
         checked = cached.get('checked_at')
+        if not isinstance(checked, int):
+            checked = None
         if self.offline:
             return cached.get('index', {}), 'offline', checked
-        if not force and checked and time.time() - checked < ttl:
+        if not force and checked and 0 <= time.time() - checked < ttl:
             return cached['index'], 'cached', checked
         try:
-            data = json.loads(fetch(os.environ.get('MICROPIXEL_SDK_INDEX_URL', INDEX_URL)))
-            if data.get('schema_version') != 1 or not isinstance(data.get('versions'), dict):
+            data = json.loads(fetch(url))
+            if not validate_index(data):
                 raise Failure('incompatible_index', 'Unsupported SDK index schema', 4)
             checked = int(time.time())
-            atomic_json(cache_path, {'checked_at': checked, 'index': data})
+            atomic_json(cache_path, {'url': url, 'checked_at': checked, 'index': data})
             return data, 'checked', checked
         except (OSError, ValueError, Failure) as error:
             self.warnings.append({'code': 'update_check_failed', 'message': str(error)})
@@ -235,12 +264,14 @@ class Manager:
         if expected and checksum != expected:
             raise Failure('checksum_mismatch', 'Cached manifest differs from the project lock', 4)
         manifest = json.loads(raw)
-        if manifest.get('schema_version') != 1 or manifest.get('sdk_version') != version:
+        if not isinstance(manifest, dict) or manifest.get('schema_version') != 1 or manifest.get('sdk_version') != version:
             raise Failure('incompatible_manifest', 'Unsupported or mismatched SDK manifest', 4)
         identifier(manifest['toolchain_id'])
         return manifest, checksum
 
     def asset(self, spec: dict, install: bool = False) -> Path:
+        if not isinstance(spec, dict):
+            raise Failure('invalid_manifest', 'Asset descriptor must be an object', 4)
         checksum = spec.get('sha256', '')
         if not SHA256.fullmatch(checksum):
             raise Failure('invalid_manifest', 'Asset requires a SHA-256 checksum', 4)
@@ -355,8 +386,8 @@ class Manager:
         lock = read_json(path)
         if lock.get('schema_version') != 1:
             raise Failure('incompatible_lock', 'Unsupported project lock format; --yes cannot override it', 4)
-        identifier(lock['sdk_version'])
-        identifier(lock['toolchain_id'])
+        identifier(lock.get('sdk_version'))
+        identifier(lock.get('toolchain_id'))
         if not SHA256.fullmatch(lock.get('manifest_sha256', '')):
             raise Failure('invalid_lock', 'Project lock requires a manifest digest', 4)
         return lock
@@ -378,12 +409,12 @@ class Manager:
         candidate = index.get('stable')
         result = {'current_version': current, 'candidate_version': candidate, 'check_status': state,
                   'checked_at': checked, 'release_notes_url': None, 'next_command': None}
-        if candidate and newer(candidate, current):
+        if isinstance(candidate, str) and newer(candidate, current):
             entry = index.get('versions', {}).get(candidate, {})
             result.update(release_notes_url=entry.get('release_notes_url'), next_command='micropixel sdk upgrade --yes --json')
             self.warnings.append({'code': 'sdk_update_available', **result})
             for improvement in entry.get('performance', []):
-                if all(improvement.get(k) for k in ('description', 'devices', 'firmware', 'evidence_url')):
+                if isinstance(improvement, dict) and all(improvement.get(k) for k in ('description', 'devices', 'firmware', 'evidence_url')):
                     self.warnings.append({'code': 'sdk_performance_improvement', **improvement})
         return result
 
@@ -428,7 +459,7 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 manifest, checksum = manager.manifest(version, index)
                 paths = manager.prepare(manifest, install=True)
                 atomic_json(manager.root / 'default.json', {'sdk_version': version, 'manifest_sha256': checksum})
-            return 0, {'ready': True, 'sdk_version': version, 'toolchain_id': manifest['toolchain_id'], 'paths': paths}
+            return 0, {'dependencies_prepared': True, 'sdk_version': version, 'toolchain_id': manifest['toolchain_id'], 'paths': paths}
         if command == 'sdk':
             lock = manager.lock(project) if (project / LOCK_NAME).exists() else None
             if args.action == 'status':
@@ -449,7 +480,12 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 raise Failure('environment_not_ready', 'Run micropixel setup --yes first', 4)
             lock = manager.lock(project) if (project / LOCK_NAME).exists() else read_json(manager.root / 'default.json')
             manifest, _ = manager.manifest(lock['sdk_version'], expected=lock['manifest_sha256'])
-            paths = manager.prepare(manifest)
+            if lock.get('external_toolchain'):
+                if not all(os.environ.get(k) for k in ('WASI_SDK_PATH', 'WAMRC', 'XTENSA_WAMRC')):
+                    raise Failure('dependency_missing', 'External toolchain variables are incomplete', 4)
+                paths = {k: os.environ[k] for k in ('WASI_SDK_PATH', 'WAMRC', 'XTENSA_WAMRC')}
+            else:
+                paths = manager.prepare(manifest)
             if lock.get('toolchain_id', manifest['toolchain_id']) != manifest['toolchain_id']:
                 raise Failure('incompatible_lock', 'Lock toolchain ID differs from manifest', 4)
             try:
@@ -463,7 +499,7 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 if probe.returncode:
                     raise Failure('tool_unusable', f'{name} could not execute', 4)
                 probes[name] = (probe.stdout or probe.stderr).splitlines()[0]
-            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': manifest['toolchain_id'], 'tools': probes, 'pyserial': serial_version}
+            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'pyserial': serial_version, 'manager_version': VERSION}
         if command == 'update':
             index, state, checked = manager.index(force=True)
             candidate = index.get('manager')
@@ -562,6 +598,8 @@ def main() -> int:
     except SystemExit as failure:
         code = int(failure.code or 0)
         error = {'code': 'invalid_arguments', 'message': 'See stderr for usage'} if code else None
+    except (TypeError, AttributeError) as failure:
+        code, error = 4, {'code': 'invalid_metadata', 'message': str(failure)}
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as failure:
         code, error = 1, {'code': 'execution_failed', 'message': str(failure)}
     except KeyboardInterrupt:

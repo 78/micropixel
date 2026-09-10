@@ -64,7 +64,7 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 'checksum_mismatch')
 
     def test_offline_and_network_failure_keep_update_state_honest(self):
-        index = {'schema_version': 1, 'stable': '2.0.0', 'versions': {'2.0.0': {'release_notes_url': 'https://example.org/notes'}}}
+        index = {'schema_version': 1, 'stable': '2.0.0', 'versions': {'2.0.0': {'release_notes_url': 'https://example.org/notes', 'url': 'https://example.org/manifest', 'sha256': '0' * 64}}}
         with patch.object(m, 'fetch', return_value=json.dumps(index).encode()) as request:
             state = self.manager.status('1.0.0', force=True)
             self.assertEqual(state['check_status'], 'checked')
@@ -140,7 +140,7 @@ class ManagerTests(unittest.TestCase):
         path = root / 'manifests' / (version + '.json')
         m.atomic_json(path, manifest)
         m.atomic_json(root / 'default.json', {'sdk_version': version, 'manifest_sha256': m.file_digest(path)})
-        m.atomic_json(root / 'index-cache.json', {'checked_at': 1, 'index': {'schema_version': 1, 'stable': '99.0.0', 'versions': {'99.0.0': {}}}})
+        m.atomic_json(root / 'index-cache.json', {'checked_at': 1, 'index': {'schema_version': 1, 'stable': '99.0.0', 'versions': {'99.0.0': {'url': 'https://example.org/manifest', 'sha256': '0' * 64}}}})
         project = self.root / '中文 game'
         env = {**os.environ, 'MICROPIXEL_HOME': str(root)}
         command = [sys.executable, str(repository / 'tools/manager/micropixel_manager.py')]
@@ -195,6 +195,14 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual((prepared / 'bin/msvcp140.dll').read_bytes(), b'redistributed')
         self.assertEqual((wasi / 'bin/msvcp140.dll').read_bytes(), b'original')
         self.assertEqual(self.manager.compose_wasi(wasi, crt, platform, False), prepared)
+
+
+    def test_malformed_update_service_does_not_block_cached_status(self):
+        with patch.object(m, 'fetch', return_value=b'{"schema_version":1,"versions":[],"stable":42}'):
+            value = self.manager.status('1.0.0', force=True)
+        self.assertEqual(value['check_status'], 'unavailable')
+        self.assertIsNone(value['candidate_version'])
+        self.assertEqual(self.manager.warnings[0]['code'], 'update_check_failed')
 
 
 
