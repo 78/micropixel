@@ -42,6 +42,19 @@ Set-Location '.\中文 游戏\hello'
 & $mp package --aot-target xtensa --json
 ```
 
+W07–W11 使用 Release 的 `windows-acceptance-project.zip`，解压后进入 `windows-acceptance` 目录，
+在下载目录执行：
+
+```powershell
+Expand-Archive .\windows-acceptance-project.zip -DestinationPath .\硬件验收
+Set-Location .\硬件验收\windows-acceptance
+& $mp sdk use 0.16.0 --yes --json
+```
+
+该 App 在 240×240 及以上画面显示触摸与按键状态，
+日志包含 `acceptance: ready`、`touch down/up`、`key down/up`；实际操作时画面和日志都应对应变化。
+没有实体应用按键的设备记录“不适用”，仍需完成触摸测试。
+
 连接设备后的命令：
 
 ```powershell
@@ -102,7 +115,8 @@ W16 物理断网后在普通项目执行 `build --offline --json`，预期成功
 W18 脚本另输出 `Manager update and bootstrap switch passed.`，表示当前进程结束后，新命令已使用新版本目录。
 验收副本只有 build ID 不同，代码相同；finally 恢复正式索引对应组件。再手动完成卸载重装部分。
 
-W17 先执行 `publish --dry-run --json`；真实上传必须另行授权并登录，不由辅助脚本自动触发。
+W17 复制验收 App 到独立目录，将 `app.json` 的 `app_id` 改为你拥有的新测试 ID，避免覆盖任何已有 App。
+先执行 `publish --dry-run --json`；真实上传必须另行授权并登录，不由辅助脚本自动触发。
 
 ## 收集报告
 
@@ -114,6 +128,7 @@ W17 先执行 `publish --dry-run --json`；真实上传必须另行授权并登�
 
 脚本只调用离线诊断，记录系统版本、受限制的版本字段、退出码和空的 W01–W19 结果表；
 不安装、不升级、不操作设备、不上传数据。自行填写人工结果，分享前检查备注中没有个人路径或凭据。
+若 PowerShell 策略阻止辅助脚本，记录提示并由用户按本机策略批准执行；AI 不自动修改执行策略。
 安装日志只留本地；定位问题时另行提供经过脱敏的最小片段。
 
 稳定发布须完成 W01–W19、解决关键故障、验证两个架构实际运行并提供签名安装包。

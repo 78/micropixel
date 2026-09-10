@@ -1,10 +1,6 @@
 name: Windows Preview installer
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/windows-sdk-installer']
-  pull_request:
-    paths: ['tools/windows/**', 'tools/manager/**', 'tools/micropixel', '.github/workflows/windows-installer.yml']
 permissions:
   contents: read
 concurrency:

@@ -63,6 +63,11 @@ def main():
         manifest_path = out / f'test-sdk-{fixture_version}.json'
         write_json(manifest_path, fixture_manifest)
         entries[fixture_version] = {**asset(manifest_path, base, ''), 'release_notes_url': manifest['release_notes_url'], 'performance': []}
+    with tempfile.TemporaryDirectory() as temporary:
+        fixture_source = Path(temporary)
+        for name in ('app.json', 'main.cpp'):
+            shutil.copyfile(ROOT / 'tools/windows/fixtures/acceptance' / name, fixture_source / name)
+        zip_archive(fixture_source, out / 'windows-acceptance-project.zip', 'windows-acceptance')
     runtime = json.loads((out / 'runtime/manager-build.json').read_text())
     manager_path = out / runtime['archive']
     shutil.copyfile(out / 'runtime' / runtime['archive'], manager_path)

@@ -109,6 +109,11 @@ def main():
     invoke('sdk', 'use', version, '--project', str(example), '--yes')
     for target in ('riscv32-ilp32f', 'xtensa'):
         invoke('package', str(example), '--aot-target', target, '--offline')
+    fixture = root / '真机 验收 App'
+    shutil.copytree(ROOT / 'tools/windows/fixtures/acceptance', fixture)
+    invoke('sdk', 'use', version, '--project', str(fixture), '--yes')
+    for target in ('riscv32-ilp32f', 'xtensa'):
+        invoke('package', str(fixture), '--aot-target', target, '--offline')
     powershell = Path(os.environ['WINDIR']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     command = [str(powershell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                str(ROOT / 'tools/windows/test_acceptance_versions.ps1'), '-Launcher', str(launcher),

@@ -2,10 +2,9 @@ name: Verify and publish SDK Preview
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/windows-sdk-preview']
     tags: ['sdk-v*']
   pull_request:
-    paths: ['guest/**', 'tools/micropixel', 'tools/manager/**', 'tools/windows/**', 'tools/build_sdk_release.py', '.github/workflows/sdk-release.yml']
+    paths: ['guest/**', 'tools/micropixel', 'tools/manager/**', 'tools/windows/**', 'tools/build_sdk_release.py', 'tools/build_app_bundle.py', 'tools/generate_localization.py', 'tools/analyze_sfx.py', '.github/workflows/sdk-release.yml']
 permissions:
   contents: write
 concurrency:
