@@ -11,13 +11,14 @@ SDK 0.15.6 的独立归档不包含本文的安装管理组件。macOS 继续使
 每个 SDK Release 提供同一个 GUI/静默安装包、`sdk-manifest.json`、安装包下载清单与 SHA-256。
 安装器按当前用户安装到 `%LOCALAPPDATA%\MicroPixel`，不要求管理员权限；
 内置 Python 3.13.12、pyserial 3.5 和管理组件，不要求用户安装 Git、CMake、LLVM、ESP-IDF 或 WSL。
+安装器同时携带本版本 SDK 的校验清单；即使更新索引暂不可用，也可以按固定版本准备依赖。
 依赖准备下载清单指定的 WASI SDK 33 和两种固定版本 `wamrc.exe`。
 
 新终端中使用 `micropixel`；当前终端尚未刷新 PATH 时使用：
 
 ```powershell
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-& $mp setup --yes --json
+& $mp setup --version 0.16.0 --yes --json
 & $mp doctor --json
 ```
 

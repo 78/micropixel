@@ -38,6 +38,8 @@ UninstallDisplayName=MicroPixel SDK Preview
 LicenseFile=..\..\LICENSE
 
 [Files]
+; The installer pins its own SDK independently of the mutable update channel.
+Source: "{#ReleaseDir}\sdk-manifest.json"; DestDir: "{app}\manifests"; DestName: "{#SdkVersion}.json"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 Source: "{#PayloadDir}\{#ManagerBuild}\*"; DestDir: "{app}\versions\{#ManagerBuild}"; Flags: recursesubdirs createallsubdirs ignoreversion onlyifdoesntexist
 Source: "{#PayloadDir}\micropixel.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\..\docs\development\windows-sdk.zh-CN.md"; DestDir: "{app}\docs"; Flags: ignoreversion

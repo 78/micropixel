@@ -26,7 +26,7 @@ $log = Join-Path $env:TEMP 'micropixel-install.log'
 $p = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART /LOG=`"$log`"" -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-$setup = & $mp setup --yes --json | ConvertFrom-Json
+$setup = & $mp setup --version $meta.version --yes --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $setup.ok) { throw 'Environment preparation failed; see stderr' }
 $doctor = & $mp doctor --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $doctor.ok -or -not $doctor.result.ready) { throw 'Environment is not ready' }

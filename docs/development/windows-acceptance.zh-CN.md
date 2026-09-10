@@ -24,7 +24,7 @@ GUI 安装直接双击。静默安装使用同一包：
 $process = Start-Process -FilePath '.\micropixel-setup.exe' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART /LOG="install.log"' -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-& $mp setup --yes --json
+& $mp setup --version 0.16.0 --yes --json
 if ($LASTEXITCODE -ne 0) { throw 'Tool preparation failed' }
 & $mp doctor --json
 ```

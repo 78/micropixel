@@ -15,6 +15,21 @@ import build_sdk_release as packager
 from windows.release_metadata import archive as zip_archive, asset, file_digest, sdk, write, write_json
 
 
+def prepare_core(out: Path, repository: str):
+    metadata, archive = packager.build(ROOT)
+    version = metadata['version']
+    base = f'https://github.com/{repository}/releases/download/sdk-v{version}'
+    pin = json.loads((ROOT / 'tools/windows/release-channel.json').read_text())
+    toolchain = out / 'toolchain.json'
+    if not toolchain.exists() or file_digest(toolchain) != pin['sha256']:
+        urllib.request.urlretrieve(pin['url'], toolchain)
+    if file_digest(toolchain) != pin['sha256']:
+        raise SystemExit('Published toolchain manifest checksum differs from release pin')
+    write(out / metadata['archiveName'], archive)
+    write_json(out / 'release.json', metadata)
+    sdk(out, toolchain, out, repository)
+    return metadata
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--directory', type=Path, required=True)
@@ -22,17 +37,9 @@ def main():
     args = parser.parse_args()
     out = args.directory.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    metadata, archive = packager.build(ROOT)
+    metadata = prepare_core(out, args.repository)
     version = metadata['version']
     base = f'https://github.com/{args.repository}/releases/download/sdk-v{version}'
-    pin = json.loads((ROOT / 'tools/windows/release-channel.json').read_text())
-    toolchain = out / 'toolchain.json'
-    urllib.request.urlretrieve(pin['url'], toolchain)
-    if file_digest(toolchain) != pin['sha256']:
-        raise SystemExit('Published toolchain manifest checksum differs from release pin')
-    write(out / metadata['archiveName'], archive)
-    write_json(out / 'release.json', metadata)
-    sdk(out, toolchain, out, args.repository)
     manifest = json.loads((out / 'sdk-manifest.json').read_text())
     entries = {version: {**asset(out / 'sdk-manifest.json', base, ''), 'release_notes_url': manifest['release_notes_url'], 'performance': []}}
     # These numeric versions are acceptance fixtures, never production channels.
