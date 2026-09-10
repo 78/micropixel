@@ -298,3 +298,5 @@ Network、Camera 和网络资源加载尚未定义公开接口。
 
 实现规则见 [代码风格](../../docs/development/code-style.zh-CN.md)，边界验收见
 [conformance](../tests/conformance/)。
+
+Mode7Plane、Span 与 surface 纹理的开发步骤见 [图形开发指南](GRAPHICS.md)。
