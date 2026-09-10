@@ -32,8 +32,15 @@ def main():
     env.update(MICROPIXEL_HOME=str(root), MICROPIXEL_SDK_INDEX_URL=entry['entry']['url'].rsplit('/', 1)[0] + '/test-sdk-index.json')
     # Native tools must not accidentally find CI's Python/Git/CMake/LLVM/CRT.
     env['PATH'] = str(Path(env['WINDIR']) / 'System32')
-    for key in ('WASI_SDK_PATH', 'WASI_CLANG', 'WASI_CLANGXX', 'WAMRC', 'XTENSA_WAMRC', 'PYTHONPATH', 'PYTHONHOME', 'PSModulePath'):
+    for key in ('WASI_SDK_PATH', 'WASI_CLANG', 'WASI_CLANGXX', 'WAMRC', 'XTENSA_WAMRC', 'PYTHONPATH', 'PYTHONHOME', 'PSMODULEPATH'):
         env.pop(key, None)
+    # os.environ normalizes Windows keys to uppercase. Keep only the system
+    # PowerShell 5.1 modules, not the parent PowerShell 7 module directory.
+    powershell_root = Path(os.environ['WINDIR']) / 'System32/WindowsPowerShell/v1.0'
+    env['PSMODULEPATH'] = str(powershell_root / 'Modules')
+    subprocess.run([str(powershell_root / 'powershell.exe'), '-NoProfile', '-Command',
+                    'Get-Command Get-FileHash -ErrorAction Stop | Select-Object -ExpandProperty Name'],
+                   env=env, check=True, timeout=30)
     index = json.loads((out / 'test-sdk-index.json').read_text())
     if not args.public:
         (root / 'manifests').mkdir()
