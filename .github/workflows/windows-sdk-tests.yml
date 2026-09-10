@@ -27,3 +27,7 @@ jobs:
           python-version: '3.13.12'
       - name: Test archive, locks, JSON and Windows paths
         run: python -m unittest tools.tests.test_windows_toolchain tools.tests.test_sdk_release tools.tests.test_sdk_manager tools.tests.test_cli_json -v
+      - name: Inventory Windows runtime dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/windows/inspect_crt.ps1
