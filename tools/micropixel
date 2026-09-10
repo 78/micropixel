@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import base64
 import hashlib
 import json
@@ -78,7 +79,28 @@ EMBEDDED_BUNDLE_BUILDER: str | None = None
 
 
 class CliError(RuntimeError):
-    pass
+    exit_code = 1
+    diagnostic_code = "execution_failed"
+
+
+class CliUsageError(CliError):
+    exit_code = 2
+    diagnostic_code = "invalid_arguments"
+
+
+class InputRequired(CliError):
+    exit_code = 3
+    diagnostic_code = "input_required"
+
+
+class CompatibilityFailure(CliError):
+    exit_code = 4
+    diagnostic_code = "incompatible_environment"
+
+
+class EnvironmentFailure(CliError):
+    exit_code = 4
+    diagnostic_code = "environment_unavailable"
 
 
 def validate_launch_arguments(arguments: list[str]) -> list[str]:
@@ -146,6 +168,28 @@ class ProjectManifest:
     threading: str
     # Linear memory pinned at its maximum (needed by GUEST_BUFFERS Direct Surfaces).
     pinned_memory: bool
+
+
+
+_CLI_JSON_MODE = False
+_CLI_RESULT: Any = None
+_CLI_ERROR: dict[str, Any] | None = None
+_CLI_ARTIFACTS: list[dict[str, str]] = []
+
+
+def _run_process(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess:
+    if _CLI_JSON_MODE and not kwargs.get("capture_output") and "stdout" not in kwargs:
+        kwargs["stdout"] = sys.stderr
+    return subprocess.run(*args, **kwargs)
+
+
+def _record_artifact(path: Path, kind: str, target: str | None = None) -> None:
+    if _CLI_JSON_MODE:
+        item = {"path": str(path.resolve()), "kind": kind}
+        if target:
+            item["target"] = target
+        if item not in _CLI_ARTIFACTS:
+            _CLI_ARTIFACTS.append(item)
 
 
 def tool_executable(path: str | Path) -> Path:
@@ -231,7 +275,7 @@ class ControlConfig:
         base_url = control_url(environment)
         token = environment.get("MICROPIXEL_API_TOKEN", "").strip()
         if not token:
-            raise CliError("Set MICROPIXEL_API_TOKEN in the process environment or local .env")
+            raise InputRequired("Set MICROPIXEL_API_TOKEN in the process environment or local .env")
         device_id = token_device_id(token)
         explicit_device_id = environment.get("MICROPIXEL_DEVICE_ID", "").strip()
         if explicit_device_id:
@@ -992,7 +1036,7 @@ def require_compatible_usb_firmware(status: dict[str, Any]) -> None:
     minimum = semantic_version(MINIMUM_FIRMWARE_VERSION)
     if current is None or minimum is None or current < minimum:
         shown = firmware_version if isinstance(firmware_version, str) and firmware_version else "unknown"
-        raise CliError(
+        raise CompatibilityFailure(
             f"Device firmware {shown} is not compatible with MicroPixel SDK/CLI {VERSION}. "
             f"Upgrade the device to firmware {MINIMUM_FIRMWARE_VERSION} or later, then retry."
         )
@@ -1189,17 +1233,21 @@ def require_bundle_target(bundle: Path, expected_target: str) -> dict[str, Any]:
     if details["hasAot"]:
         actual_target = details["aotTarget"]
         if actual_target is None:
-            raise CliError(
+            raise CompatibilityFailure(
                 "App Bundle has no AOT target metadata; rebuild it with the current MicroPixel CLI before installing"
             )
         if actual_target != expected_target:
-            raise CliError(
+            raise CompatibilityFailure(
                 f"App Bundle targets {actual_target}, but the connected device requires {expected_target}"
             )
     return details
 
 
 def print_json(value: Any) -> None:
+    global _CLI_RESULT
+    if _CLI_JSON_MODE:
+        _CLI_RESULT = value
+        return
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
@@ -1296,7 +1344,7 @@ def publisher_token() -> str:
             return saved["token"]
     except (OSError, ValueError, KeyError):
         pass
-    raise CliError("Developer login required: micropixel auth github")
+    raise InputRequired("Developer login required: micropixel auth github")
 
 
 def store_request(path: str, method: str = "GET", body: object = None, token: str | None = None) -> dict:
@@ -1634,7 +1682,7 @@ def _compile_guest_objects(
             temporary_depfile = temporary.with_suffix(".d")
             started = time.time_ns()
             try:
-                subprocess.run(
+                _run_process(
                     [*command, "-MD", "-MF", str(temporary_depfile), "-MT", "object",
                      "-c", str(source), "-o", str(temporary)],
                     check=True,
@@ -1687,8 +1735,9 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         choices = ", ".join(AOT_TARGET_FLAGS)
         raise CliError(f"Unsupported AOT target {aot_target!r}; choose one of: {choices}")
     wasi_clangxx = environment.get("WASI_CLANGXX", "").strip()
-    if not wasi_clangxx and environment.get("WASI_CLANG", "").strip().endswith("clang"):
-        wasi_clangxx = f"{environment['WASI_CLANG'].strip()[:-5]}clang++"
+    wasi_clang = environment.get("WASI_CLANG", "").strip()
+    if not wasi_clangxx and Path(wasi_clang).name in {"clang", "clang.exe"}:
+        wasi_clangxx = str(Path(wasi_clang).with_name("clang++.exe" if wasi_clang.endswith(".exe") else "clang++"))
     if not wasi_clangxx and environment.get("WASI_SDK_PATH", "").strip():
         wasi_clangxx = str(Path(environment["WASI_SDK_PATH"].strip()).expanduser() / "bin/clang++")
     if not wasi_clangxx:
@@ -1698,7 +1747,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     if wasi_clangxx:
         wasi_clangxx = str(tool_executable(wasi_clangxx))
     if not wasi_clangxx or not os.access(Path(wasi_clangxx).expanduser(), os.X_OK):
-        raise CliError("Set WASI_CLANGXX or WASI_SDK_PATH to a C++23 compiler with the wasm32 backend")
+        raise EnvironmentFailure("Set WASI_CLANGXX or WASI_SDK_PATH to a C++23 compiler with the wasm32 backend")
     wasi_clangxx = str(Path(wasi_clangxx).expanduser())
 
     wamrc = environment.get("XTENSA_WAMRC" if aot_target == "xtensa" else "WAMRC", "").strip()
@@ -1723,13 +1772,13 @@ def _run_build_sources(args: argparse.Namespace) -> None:
     if wamrc:
         wamrc = str(tool_executable(wamrc))
     if not wamrc or not os.access(Path(wamrc).expanduser(), os.X_OK):
-        raise CliError("Set WAMRC to the locked wamrc 2.4.3 executable; see https://micropixel.ai/docs/environment/")
+        raise EnvironmentFailure("Set WAMRC to the locked wamrc 2.4.3 executable; see https://micropixel.ai/docs/environment/")
     wamrc = str(Path(wamrc).expanduser())
-    version = subprocess.run(
+    version = _run_process(
         [wamrc, "--version"], check=True, capture_output=True, text=True
     ).stdout.strip()
     if version != "wamrc 2.4.3":
-        raise CliError(f"WAMRC must report 'wamrc 2.4.3', got {version!r}")
+        raise EnvironmentFailure(f"WAMRC must report 'wamrc 2.4.3', got {version!r}")
 
     generated_include_override = getattr(args, "generated_include_override", None)
     generated_include = (
@@ -1803,7 +1852,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         output_dir,
         bool(getattr(args, "force", False)),
     )
-    subprocess.run(
+    _run_process(
         [
             wasi_clangxx,
             f"--target={target}",
@@ -1829,7 +1878,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         ],
         check=True,
     )
-    subprocess.run(
+    _run_process(
         [
             wamrc,
             *AOT_TARGET_FLAGS[aot_target],
@@ -1854,6 +1903,8 @@ def _run_build_sources(args: argparse.Namespace) -> None:
         _guest_build_inputs_path(output_dir, name),
         [str(path) for path in sorted({*object_inputs, Path(wamrc).absolute()})],
     )
+    _record_artifact(wasm_output, "wasm", aot_target)
+    _record_artifact(aot_output, "aot", aot_target)
     memory_mode = "unchecked memory" if unchecked_memory else "checked memory"
     print(
         f"Guest built ({args.profile}, AOT target {aot_target}, threading {threading}, {memory_mode}):"
@@ -1879,7 +1930,7 @@ def _bundle_builder_command(arguments: list[str]) -> list[str]:
 
 
 def _run_bundle_builder(arguments: list[str]) -> None:
-    subprocess.run(_bundle_builder_command(arguments), check=True)
+    _run_process(_bundle_builder_command(arguments), check=True)
 
 
 def _manifest_child(root: Path, value: object, label: str) -> Path:
@@ -1941,7 +1992,7 @@ def run_init(args: argparse.Namespace) -> None:
     ):
         raise CliError("Invalid App ID; pass --app-id with 1..64 ASCII letters, digits, dots, hyphens or underscores")
     version = validate_app_version(args.app_version)
-    title = args.title if args.title is not None else root.name.replace("-", " ").replace("_", " ").title()
+    title = args.title if args.title is not None else root.name.replace("-", " ").replace("_", " ").title().strip()
     if (
         not title or title.startswith(" ") or title.endswith(" ") or len(title.encode("utf-8")) > 64
         or any(ord(char) < 32 or ord(char) == 127 for char in title)
@@ -2273,7 +2324,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
     generated_dir.mkdir(parents=True, exist_ok=True)
 
     if project.value.get("localization") is not None:
-        subprocess.run(
+        _run_process(
             [
                 sys.executable,
                 str(_tool_path("generate_localization.py")),
@@ -2302,7 +2353,7 @@ def prepare_project(project: ProjectManifest, output_dir: Path) -> tuple[Path, P
             str(output_dir / "sfx-report.json"),
             "--check",
         ]
-        subprocess.run(analyze_command, check=True)
+        _run_process(analyze_command, check=True)
 
     resource_pack = None
     if project.asset_manifest is not None:
@@ -2338,6 +2389,8 @@ def build_project(
         inputs = collect_project_build_inputs(project, output_dir)
         if not force and build_output_up_to_date(aot_output, command, inputs):
             print(f"Guest build unchanged, reusing: {aot_output}")
+            _record_artifact(aot_output, "aot", aot_target)
+            _record_artifact(aot_output.with_suffix(".wasm"), "wasm", aot_target)
             return aot_output
     generated_dir, _ = prepare_project(project, output_dir)
     if project.package_type == "component":
@@ -2380,6 +2433,7 @@ def package_project(
     inputs = collect_project_build_inputs(project, output_dir)
     if not force and build_output_up_to_date(bundle_output, command, inputs):
         print(f"Package unchanged, reusing: {bundle_output}")
+        _record_artifact(bundle_output, "bundle", aot_target)
         return bundle_output
 
     generated_dir, resource_pack = prepare_project(project, output_dir)
@@ -2409,6 +2463,7 @@ def package_project(
         arguments.extend(["--resource-pack", str(resource_pack)])
     _run_bundle_builder(arguments)
     write_build_stamp(bundle_output, command, collect_project_build_inputs(project, output_dir))
+    _record_artifact(bundle_output, "bundle", aot_target)
     print(f"Package ready: {bundle_output}")
     return bundle_output
 
@@ -3295,6 +3350,7 @@ def execute_usb(args: argparse.Namespace, client: UsbControlClient) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="micropixel", description=__doc__)
     result.add_argument("--version", action="version", version=f"micropixel {VERSION}")
+    result.add_argument("--json", action="store_true", help="One final JSON result for init/build/package/publish/run --no-follow; diagnostics go to stderr")
     result.add_argument(
         "--transport",
         choices=["remote", "usb"],
@@ -3568,8 +3624,14 @@ def parse_command_line(arguments: list[str] | None = None) -> argparse.Namespace
 
 
 def main() -> int:
+    global _CLI_ERROR, _CLI_RESULT
     try:
         args = parse_command_line()
+        if _CLI_JSON_MODE:
+            if args.command not in {"init", "build", "package", "publish", "run"}:
+                raise CliUsageError("--json is supported for init/build/package/publish/run --no-follow")
+            if args.command == "run" and args.follow:
+                raise CliUsageError("JSON run requires --no-follow; use separate log commands afterward")
         if args.command == "validate":
             print("micropixel: 'validate' is deprecated; use 'bundle validate'", file=sys.stderr)
         if args.command == "auth" and args.auth_command == "login":
@@ -3583,6 +3645,7 @@ def main() -> int:
             run_developer_auth(args)
         elif args.command == "init":
             run_init(args)
+            _CLI_RESULT = {"project": str(Path(args.directory).resolve())}
         elif args.command == "build":
             run_build(args)
         elif args.command == "package":
@@ -3641,9 +3704,46 @@ def main() -> int:
             raise CliError(f"Unsupported command: {args.command}")
         return 0
     except (CliError, FileNotFoundError, PermissionError, subprocess.CalledProcessError) as error:
+        _CLI_ERROR = {"code": getattr(error, "diagnostic_code", "execution_failed"), "message": str(error)}
         print(f"micropixel: {error}", file=sys.stderr)
-        return 1
+        return getattr(error, "exit_code", 1)
+
+
+def entrypoint() -> int:
+    global _CLI_JSON_MODE, _CLI_RESULT, _CLI_ERROR
+    raw = sys.argv[1:]
+    boundary = raw.index("--") if "--" in raw else len(raw)
+    if "--json" not in raw[:boundary]:
+        return main()
+    _CLI_JSON_MODE = True
+    _CLI_RESULT = None
+    _CLI_ERROR = None
+    _CLI_ARTIFACTS.clear()
+    sys.argv = [sys.argv[0], *[v for v in raw[:boundary] if v != "--json"], *raw[boundary:]]
+    output = sys.stdout
+    code = 1
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            code = main()
+        except SystemExit as error:
+            code = int(error.code or 0)
+            if code:
+                _CLI_ERROR = {"code": "invalid_arguments", "message": "See stderr for argument usage"}
+        except (OSError, ValueError) as error:
+            _CLI_ERROR = {"code": "execution_failed", "message": str(error)}
+        except KeyboardInterrupt:
+            _CLI_ERROR = {"code": "interrupted", "message": "Operation interrupted"}
+    result = {"sdk_version": VERSION, "toolchain_id": os.environ.get("MICROPIXEL_TOOLCHAIN_ID"),
+              "artifacts": list(_CLI_ARTIFACTS)}
+    if isinstance(_CLI_RESULT, dict):
+        result.update(_CLI_RESULT)
+    elif _CLI_RESULT is not None:
+        result["data"] = _CLI_RESULT
+    print(json.dumps({"schema_version": 1, "ok": code == 0,
+                      "code": "ok" if code == 0 else (_CLI_ERROR or {}).get("code", "execution_failed"),
+                      "result": result, "error": _CLI_ERROR, "warnings": []}, ensure_ascii=False), file=output)
+    return code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

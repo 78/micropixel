@@ -1,0 +1,33 @@
+name: SDK manager and archive tests
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/sdk-version-manager', 'codex/windows-sdk-installer', 'codex/windows-sdk-release']
+  pull_request:
+    paths: ['tools/**', 'guest/sdk/**', '.github/workflows/windows-sdk-tests.yml']
+permissions:
+  contents: read
+concurrency:
+  group: sdk-manager-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.12'
+      - name: Test archive, locks, JSON and Windows paths
+        run: python -m unittest tools.tests.test_windows_toolchain tools.tests.test_sdk_release tools.tests.test_sdk_manager tools.tests.test_cli_json -v
+      - name: Inventory Windows runtime dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/windows/inspect_crt.ps1
