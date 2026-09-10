@@ -112,7 +112,7 @@ class RemoteControlAgent final {
     [[nodiscard]] bool QueueCommand(const Command& command);
     void SetConnectionState(host_ui::RemoteControlConnectionState state, const char* message);
     void SetIdentityInSnapshot(const Identity& identity);
-    void ClearPairingInSnapshot(const char* message);
+    void ClearPairingInSnapshot(const char* message, const char* pairing_id = nullptr);
     void RefreshPairingDeadline();
     [[nodiscard]] bool LoadIdentity(Identity& identity) const;
     [[nodiscard]] bool SaveIdentity(const Identity& identity) const;
@@ -203,6 +203,7 @@ class RemoteControlAgent final {
     std::array<char, 256U> firmware_download_path_{};
     std::array<uint8_t, 32U> firmware_sha256_{};
     size_t firmware_size_{};
+    protocol::Uuid pairing_id_{};
     TickType_t pairing_deadline_ticks_{};
 };
 

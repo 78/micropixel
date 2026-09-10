@@ -4,6 +4,7 @@
 #include <iostream>
 
 #include "host/controller/remote/remote_control_defaults.hpp"
+#include "host/controller/remote/remote_pairing_policy.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
 
 namespace {
@@ -44,10 +45,26 @@ void TestRemoteControlReconnectPolicy() {
     assert(backoff.NextDelayMs(0U) == 10000U);
 }
 
+void TestPairingConsumedPolicy() {
+    using micropixel::firmware::remote_control::MatchesPairingConsumed;
+    constexpr auto kSession = "11111111-1111-4111-8111-111111111111";
+    constexpr auto kPairing = "22222222-2222-4222-8222-222222222222";
+    constexpr auto kOther = "33333333-3333-4333-8333-333333333333";
+    Check(MatchesPairingConsumed(1, kSession, kPairing, kSession, kPairing), "current pairing is consumed");
+    Check(!MatchesPairingConsumed(1, kSession, kPairing, kSession, kOther), "late event preserves new pairing");
+    Check(!MatchesPairingConsumed(1, kOther, kPairing, kSession, kPairing), "stale session is ignored");
+    Check(!MatchesPairingConsumed(2, kSession, kPairing, kSession, kPairing), "wrong protocol is ignored");
+    Check(!MatchesPairingConsumed(1.5, kSession, kPairing, kSession, kPairing), "fractional version is ignored");
+    Check(!MatchesPairingConsumed(1, "", kPairing, "", kPairing), "no active session cannot consume");
+    Check(!MatchesPairingConsumed(1, kSession, "", kSession, ""), "duplicate after clearing is ignored");
+    Check(!MatchesPairingConsumed(1, "", "", kSession, kPairing), "missing IDs cannot consume");
+}
+
 }  // namespace
 
 int main() {
     TestRemoteControlDefaults();
     TestRemoteControlReconnectPolicy();
+    TestPairingConsumedPolicy();
     return 0;
 }

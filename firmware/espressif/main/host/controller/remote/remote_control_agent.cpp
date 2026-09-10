@@ -33,6 +33,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "host/controller/remote/remote_control_defaults.hpp"
+#include "host/controller/remote/remote_pairing_policy.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
 #include "host/controller/remote/store_release.hpp"
 #include "mbedtls/base64.h"
@@ -588,6 +589,7 @@ bool RemoteControlAgent::SetEnabled(bool enabled) {
             model_.pairing_code_available = false;
             model_.pairing_code.fill('\0');
             model_.pairing_expires_seconds = 0U;
+            pairing_id_.fill('\0');
             pairing_deadline_ticks_ = 0U;
         }
     }
@@ -761,8 +763,12 @@ void RemoteControlAgent::SetIdentityInSnapshot(const Identity& identity) {
     model_.device_id = identity.device_id;
 }
 
-void RemoteControlAgent::ClearPairingInSnapshot(const char* message) {
+void RemoteControlAgent::ClearPairingInSnapshot(const char* message, const char* pairing_id) {
     std::lock_guard<std::mutex> lock(model_mutex_);
+    if (pairing_id != nullptr && std::strcmp(pairing_id, pairing_id_.data()) != 0) {
+        return;
+    }
+    pairing_id_.fill('\0');
     model_.pairing_code.fill('\0');
     model_.pairing_code_pending = false;
     model_.pairing_code_available = false;
@@ -784,6 +790,7 @@ void RemoteControlAgent::RefreshPairingDeadline() {
         model_.pairing_code_pending = false;
         model_.pairing_code_available = false;
         model_.pairing_expires_seconds = 0U;
+        pairing_id_.fill('\0');
         pairing_deadline_ticks_ = 0U;
         CopyText(model_.status_message, "Connection code expired");
         return;
@@ -2209,6 +2216,20 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
                 cJSON_Delete(hello);
             }
         }
+    } else if (type != nullptr && std::strcmp(type, "pairing.consumed") == 0) {
+        const cJSON* version = cJSON_GetObjectItemCaseSensitive(root, "protocolVersion");
+        const char* session_id = JsonString(root, "sessionId");
+        const char* pairing_id = JsonString(root, "pairingId");
+        bool matches = false;
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            matches = MatchesPairingConsumed(
+                cJSON_IsNumber(version) ? version->valuedouble : -1.0, session_id != nullptr ? session_id : "",
+                pairing_id != nullptr ? pairing_id : "", control_session_id_.data(), pairing_id_.data());
+        }
+        if (matches) {
+            ClearPairingInSnapshot("Connection code used", pairing_id);
+        }
     } else if (type != nullptr && std::strcmp(type, "command") == 0) {
         const char* command_id = JsonString(root, "commandId");
         const char* name = JsonString(root, "name");
@@ -2324,11 +2345,18 @@ void RemoteControlAgent::TaskMain() {
 
     auto close_transport = [&]() {
         bool pairing_code_pending = false;
+        protocol::Uuid stale_pairing_id{};
         {
             std::lock_guard<std::mutex> lock(model_mutex_);
             pairing_code_pending = model_.pairing_code_pending;
+            stale_pairing_id = pairing_id_;
         }
         const bool retry_pairing = pairing_request.valid() && pairing_code_pending;
+        // A consumed notification may be lost with the stream. Do not retain an
+        // unverifiable code across reconnects; the next request replaces it.
+        if (stale_pairing_id[0] != '\0') {
+            ClearPairingInSnapshot(nullptr, stale_pairing_id.data());
+        }
         if (control_stream) {
             control_stream->SetReadReadySink(nullptr, nullptr);
         }
@@ -2381,9 +2409,12 @@ void RemoteControlAgent::TaskMain() {
                                                                    result.body.size())
                                            : nullptr;
                 const char* code = root != nullptr ? JsonString(root, "code") : nullptr;
-                const bool valid = code != nullptr && std::strlen(code) < model_.pairing_code.size();
+                const char* pairing_id = root != nullptr ? JsonString(root, "pairingId") : nullptr;
+                const bool valid = code != nullptr && code[0] != '\0' &&
+                                   std::strlen(code) < model_.pairing_code.size() && protocol::IsUuid(pairing_id);
                 if (valid) {
                     std::lock_guard<std::mutex> lock(model_mutex_);
+                    CopyText(pairing_id_, pairing_id);
                     CopyText(model_.pairing_code, code);
                     model_.pairing_code_pending = false;
                     model_.pairing_code_available = true;
