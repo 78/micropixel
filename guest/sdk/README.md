@@ -300,3 +300,5 @@ Network、Camera 和网络资源加载尚未定义公开接口。
 [conformance](../tests/conformance/)。
 
 Mode7Plane、Span 与 surface 纹理的开发步骤见 [图形开发指南](GRAPHICS.md)。
+
+Windows Preview 的安装管理与结构化命令见 [AI 使用指南](AI.md)。
