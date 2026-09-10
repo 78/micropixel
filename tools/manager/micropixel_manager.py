@@ -520,6 +520,8 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
             version = args.version if args.action == 'use' else manager.index(force=True)[0].get('stable')
             if not version:
                 raise Failure('input_required', 'Specify an SDK version or configure a stable release', 3)
+            if args.action == 'upgrade' and lock and not newer(version, lock['sdk_version']):
+                return 0, {'lock': lock, 'changed': False, 'reason': 'already_current_or_newer'}
             if args.external_toolchain:
                 if not lock or version != lock['sdk_version']:
                     raise Failure('invalid_arguments', 'External mode requires the currently locked version', 2)

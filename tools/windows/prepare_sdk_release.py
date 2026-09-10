@@ -17,8 +17,6 @@ from windows.release_metadata import archive as zip_archive, asset, file_digest,
 
 def prepare_core(out: Path, repository: str):
     metadata, archive = packager.build(ROOT)
-    version = metadata['version']
-    base = f'https://github.com/{repository}/releases/download/sdk-v{version}'
     pin = json.loads((ROOT / 'tools/windows/release-channel.json').read_text())
     toolchain = out / 'toolchain.json'
     if not toolchain.exists() or file_digest(toolchain) != pin['sha256']:
@@ -81,7 +79,7 @@ def main():
     fixture_manager = {**asset(fixture_manager_path, base, 'manager'), 'version': runtime['version'], 'build_id': fixture_build['build_id']}
     write_json(out / 'test-sdk-index.json', {'schema_version': 1, 'test_only': True, 'stable': '9000.0.2', 'preview': None, 'versions': entries, 'manager': fixture_manager})
     write_json(out / 'channel-entry.json', {'schema_version': 1, 'version': version, 'entry': entries[version], 'manager': manager,
-                                          'installer': asset(out / json.loads((out / 'windows-installer.json').read_text())['name'], base, '')})
+                                          'installer': json.loads((out / 'windows-installer.json').read_text())})
     write_json(out / 'release-notes.json', {'schema_version': 1, 'sdk_version': version, 'channel': 'preview',
         'performance': [], 'migration': ['Existing unmanaged projects must explicitly select an SDK before managed builds.',
         'Source migration and real-device acceptance remain separate from SDK switching.'],
