@@ -1,12 +1,11 @@
 name: Windows toolchain verification
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/windows-sdk-bootstrap']
   pull_request:
     paths:
-      - 'tools/**'
-      - 'guest/**'
+      - 'tools/windows/build_toolchain.py'
+      - 'tools/windows/toolchain-sources.json'
+      - 'tools/windows/verify_build.py'
       - '.github/workflows/windows-toolchain.yml'
       - 'firmware/espressif/components/wasm-micro-runtime'
 permissions:
@@ -16,6 +15,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   compile:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-2022
     timeout-minutes: 350
     strategy:
@@ -40,7 +40,7 @@ jobs:
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
           cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+            if ($_ -match '^([^=]+)=(.*)$' -and $Matches[1] -in @('Path', 'INCLUDE', 'LIB', 'LIBPATH', 'VCINSTALLDIR', 'VCToolsInstallDir', 'VCToolsRedistDir', 'VCToolsVersion', 'WindowsSdkDir', 'WindowsSDKVersion')) { "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
           }
       - name: Cache exact LLVM build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
