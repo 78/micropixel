@@ -177,3 +177,12 @@ Espressif's LLVM fork for Xtensa). Exact revisions are recorded in
 Apache-2.0 WITH LLVM-exception; the compiler artifact carries both LLVM and WAMR license texts.
 WASI SDK is downloaded from its official release and verified against the locked SHA-256.
 No third-party compiler source or binary is committed into this repository.
+
+## Windows SDK embedded runtime
+
+Windows SDK manager distributions bundle CPython 3.13.12 (Python Software Foundation
+License Version 2 and the bundled third-party license notices) and pyserial 3.5
+(BSD-3-Clause). Exact upstream archives and SHA-256 values are locked in
+`tools/windows/runtime-sources.json`. Runtime archives must retain Python's
+`LICENSE.txt` and pyserial's wheel license metadata. Inno Setup is the build-time
+installer compiler; its license does not replace the bundled components' licenses.

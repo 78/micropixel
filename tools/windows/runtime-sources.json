@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "python": {
+    "version": "3.13.12",
+    "url": "https://www.python.org/ftp/python/3.13.12/python-3.13.12-embed-amd64.zip",
+    "size_bytes": 10941233,
+    "sha256": "76f238f606250c87c6beac75dccd35ee99070a13490555936abb6cb64ecce3d0"
+  },
+  "pyserial": {
+    "version": "3.5",
+    "url": "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl",
+    "size_bytes": 90585,
+    "sha256": "c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0"
+  }
+}
