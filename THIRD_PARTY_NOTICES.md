@@ -184,7 +184,7 @@ Windows SDK manager distributions bundle CPython 3.13.12 (Python Software Founda
 License Version 2 and the bundled third-party license notices) and pyserial 3.5
 (BSD-3-Clause). Exact upstream archives and SHA-256 values are locked in
 `tools/windows/runtime-sources.json`. Runtime archives must retain Python's
-`LICENSE.txt` and pyserial's wheel license metadata. Inno Setup is the build-time
+`LICENSE.txt` and pyserial's source license. Inno Setup is the build-time
 installer compiler; its license does not replace the bundled components' licenses.
 
 Windows WASI compiler deployment also includes app-local Microsoft Visual C++

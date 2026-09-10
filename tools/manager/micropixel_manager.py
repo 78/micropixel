@@ -22,6 +22,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 VERSION = '0.1.0'
+_BUILD_FILE = Path(__file__).with_name('build.json')
+BUILD_ID = json.loads(_BUILD_FILE.read_text(encoding='utf-8'))['build_id'] if _BUILD_FILE.exists() else 'source'
 INDEX_URL = 'https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json'
 LOCK_NAME = 'micropixel.lock.json'
 IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\Z')
@@ -201,10 +203,27 @@ def extract(archive: Path, destination: Path) -> None:
                         source.close()
 
 
+def show_warnings(warnings: list[dict]) -> None:
+    for warning in warnings:
+        code = warning['code']
+        if code == 'sdk_update_available':
+            message = f"Project SDK {warning['current_version']}; stable SDK {warning['candidate_version']} is available. This operation keeps the project lock."
+            message += f"\n  Notes: {warning.get('release_notes_url')}\n  Upgrade: {warning['next_command']}"
+        elif code == 'sdk_performance_improvement':
+            message = f"{warning['description']} Devices: {warning['devices']}; firmware: {warning['firmware']}. Evidence: {warning['evidence_url']}. Rebuild and compare on hardware after upgrading."
+        elif code == 'manager_update_available':
+            message = 'A manager update is available. Run micropixel update --check; update explicitly with micropixel update --yes.'
+        else:
+            message = warning.get('message', code)
+        print(f'micropixel [{code}]: {message}', file=sys.stderr)
+
+
 class Manager:
     def __init__(self, root: Path, *, offline: bool = False):
         self.root, self.offline = root, offline
         self.warnings: list[dict] = []
+        self.human_warnings_handled = False
+        self.human_final_status = False
 
     def index(self, ttl: int = 86400, force: bool = False) -> tuple[dict, str, int | None]:
         cache_path = self.root / 'index-cache.json'
@@ -216,24 +235,37 @@ class Manager:
         if cached.get('url', INDEX_URL) != url:
             cached = {}
         if not validate_index(cached.get('index', {})):
-            cached = {}
+            cached['index'] = {}
         checked = cached.get('checked_at')
         if not isinstance(checked, int):
             checked = None
+        attempted = cached.get('attempted_at', checked)
         if self.offline:
             return cached.get('index', {}), 'offline', checked
-        if not force and checked and 0 <= time.time() - checked < ttl:
-            return cached['index'], 'cached', checked
+        if not force and isinstance(attempted, int) and 0 <= time.time() - attempted < ttl:
+            if cached.get('last_error'):
+                self.warnings.append({'code': 'update_check_failed', 'message': cached['last_error']})
+                return cached.get('index', {}), 'unavailable', checked
+            return cached.get('index', {}), 'cached', checked
         try:
             data = json.loads(fetch(url))
             if not validate_index(data):
                 raise Failure('incompatible_index', 'Unsupported SDK index schema', 4)
-            checked = int(time.time())
-            atomic_json(cache_path, {'url': url, 'checked_at': checked, 'index': data})
-            return data, 'checked', checked
         except (OSError, ValueError, Failure) as error:
-            self.warnings.append({'code': 'update_check_failed', 'message': str(error)})
+            message = str(error)
+            self.warnings.append({'code': 'update_check_failed', 'message': message})
+            try:
+                atomic_json(cache_path, {'url': url, 'attempted_at': int(time.time()), 'checked_at': checked,
+                            'index': cached.get('index', {}), 'last_error': message})
+            except OSError:
+                pass  # A read-only cache must not prevent an otherwise offline build.
             return cached.get('index', {}), 'unavailable', checked
+        checked = int(time.time())
+        try:
+            atomic_json(cache_path, {'url': url, 'attempted_at': checked, 'checked_at': checked, 'index': data})
+        except OSError as error:
+            self.warnings.append({'code': 'update_cache_unwritable', 'message': str(error)})
+        return data, 'checked', checked
 
     def manifest(self, version: str, index: dict | None = None, expected: str | None = None) -> tuple[dict, str]:
         identifier(version)
@@ -267,6 +299,9 @@ class Manager:
         if not isinstance(manifest, dict) or manifest.get('schema_version') != 1 or manifest.get('sdk_version') != version:
             raise Failure('incompatible_manifest', 'Unsupported or mismatched SDK manifest', 4)
         identifier(manifest['toolchain_id'])
+        minimum = manifest.get('minimum_manager_version', '0.1.0')
+        if newer(minimum, VERSION):
+            raise Failure('manager_upgrade_required', 'SDK requires a newer manager; run micropixel update --yes', 4)
         return manifest, checksum
 
     def asset(self, spec: dict, install: bool = False) -> Path:
@@ -275,11 +310,15 @@ class Manager:
         checksum = spec.get('sha256', '')
         if not SHA256.fullmatch(checksum):
             raise Failure('invalid_manifest', 'Asset requires a SHA-256 checksum', 4)
-        location = self.root / 'packages' / checksum
+        location = self.root / 'packages' / checksum[:24]
         relative = safe_path(spec['root'])
         receipt = location / '.complete.json'
-        if receipt.is_file() and read_json(receipt).get('sha256') == checksum:
-            return location / relative
+        if receipt.is_file():
+            recorded = read_json(receipt).get('sha256')
+            if recorded == checksum:
+                return location / relative
+            if recorded:
+                raise Failure('cache_identity_conflict', 'Cache prefix belongs to another archive; no files were changed', 4)
         if not install or self.offline:
             raise Failure('dependency_missing', f"Dependency is not cached: {spec.get('name', checksum)}", 4)
         size = spec.get('size_bytes')
@@ -331,10 +370,14 @@ class Manager:
 
     def compose_wasi(self, wasi: Path, crt: Path, platform: dict, install: bool) -> Path:
         identity = digest((platform['wasi']['sha256'] + platform['msvc_crt']['sha256']).encode())
-        destination = self.root / 'environments' / identity
+        destination = self.root / 'environments' / identity[:24]
         receipt = destination / '.complete.json'
-        if receipt.is_file() and read_json(receipt).get('identity') == identity:
-            return destination / 'wasi'
+        if receipt.is_file():
+            recorded = read_json(receipt).get('identity')
+            if recorded == identity:
+                return destination / 'wasi'
+            if recorded:
+                raise Failure('cache_identity_conflict', 'Environment prefix belongs to another toolchain', 4)
         if not install:
             raise Failure('dependency_missing', 'Prepared WASI runtime is missing; rerun setup --yes', 4)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -377,6 +420,9 @@ class Manager:
         for path in (sdk / 'micropixel', wasi / 'bin/clang++.exe', Path(paths['WAMRC']), Path(paths['XTENSA_WAMRC'])):
             if not path.is_file():
                 raise Failure('dependency_corrupt', f'Required tool is missing: {path.name}', 4)
+        declared = re.search(r'^VERSION = "([^"]+)"$', (sdk / 'micropixel').read_text(encoding='utf-8'), re.M)
+        if not declared or declared[1] != manifest['sdk_version']:
+            raise Failure('sdk_identity_mismatch', 'Installed CLI version differs from the SDK manifest', 4)
         return paths
 
     def lock(self, project: Path) -> dict:
@@ -407,6 +453,9 @@ class Manager:
     def status(self, current: str | None, *, ttl: int = 86400, force: bool = False) -> dict:
         index, state, checked = self.index(ttl, force)
         candidate = index.get('stable')
+        component = index.get('manager')
+        if component and (newer(component['version'], VERSION) or (component['version'] == VERSION and component.get('build_id') != BUILD_ID)):
+            self.warnings.append({'code': 'manager_update_available', 'current_version': VERSION, 'candidate_version': component['version'], 'current_build_id': BUILD_ID, 'candidate_build_id': component.get('build_id'), 'next_command': 'micropixel update --yes --json'})
         result = {'current_version': current, 'candidate_version': candidate, 'check_status': state,
                   'checked_at': checked, 'release_notes_url': None, 'next_command': None}
         if isinstance(candidate, str) and newer(candidate, current):
@@ -437,6 +486,9 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     if not arguments:
         raise Failure('invalid_arguments', 'Expected setup, doctor, sdk, update, or an SDK command', 2)
     command = arguments[0]
+    if command == 'manager-version':
+        import serial
+        return 0, {'manager_version': VERSION, 'build_id': BUILD_ID, 'python_version': sys.version.split()[0], 'pyserial_version': serial.__version__}
     project = Path.cwd()
     if command in ('setup', 'doctor', 'sdk', 'update'):
         parser = argparse.ArgumentParser(prog='micropixel ' + command)
@@ -499,13 +551,13 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 if probe.returncode:
                     raise Failure('tool_unusable', f'{name} could not execute', 4)
                 probes[name] = (probe.stdout or probe.stderr).splitlines()[0]
-            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'pyserial': serial_version, 'manager_version': VERSION}
+            return 0, {'ready': True, 'sdk_version': lock['sdk_version'], 'toolchain_id': 'external' if lock.get('external_toolchain') else manifest['toolchain_id'], 'tools': probes, 'python_version': sys.version.split()[0], 'pyserial_version': serial_version, 'wasi_sdk_version': manifest['platforms']['windows-x64']['wasi'].get('version', 'unknown'), 'manager_version': VERSION, 'manager_build_id': BUILD_ID}
         if command == 'update':
             index, state, checked = manager.index(force=True)
             candidate = index.get('manager')
-            result = {'current_version': VERSION, 'candidate_version': candidate.get('version') if candidate else None,
+            result = {'current_version': VERSION, 'current_build_id': BUILD_ID, 'candidate_build_id': candidate.get('build_id') if candidate else None, 'candidate_version': candidate.get('version') if candidate else None,
                       'check_status': state, 'checked_at': checked}
-            if args.check or not candidate or not newer(candidate['version'], VERSION):
+            if args.check or not candidate or not (newer(candidate['version'], VERSION) or (candidate['version'] == VERSION and candidate.get('build_id') != BUILD_ID)):
                 return 0, result
             required_yes(yes)
             if manager.offline:
@@ -516,6 +568,10 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
                 installed = manager.asset(candidate, install=True)
                 if not (installed / 'python/python.exe').is_file() or not (installed / 'micropixel_manager.py').is_file():
                     raise Failure('invalid_archive', 'Manager runtime is incomplete', 4)
+                probe = subprocess.run([str(installed / 'python/python.exe'), '-I', '-X', 'utf8', str(installed / 'micropixel_manager.py'), 'manager-version', '--json'], capture_output=True, text=True, timeout=20)
+                info = json.loads(probe.stdout)
+                if probe.returncode or not info.get('ok') or info['result'].get('manager_version') != candidate['version'] or info['result'].get('build_id') != candidate.get('build_id'):
+                    raise Failure('invalid_archive', 'Updated manager runtime failed its self-check', 4)
                 atomic_json(manager.root / 'current.json', {'directory': str(installed)})
             return 0, {**result, 'updated': True}
     parser_path = Path(__file__).with_name('bootstrap-cli.py')
@@ -524,6 +580,8 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     cli = load_cli(parser_path)
     parsed = cli.parser().parse_args(arguments)
     command = parsed.command
+    if json_mode and command == 'run' and parsed.follow:
+        raise Failure('invalid_arguments', 'run --json requires --no-follow', 2)
     value = getattr(parsed, 'project', getattr(parsed, 'directory', getattr(parsed, 'source', '.')))
     project = Path(value).resolve()
     if project.is_file():
@@ -555,15 +613,25 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
         env['WASI_CLANGXX'] = str(Path(paths['WASI_SDK_PATH']) / 'bin/clang++.exe')
     env['MICROPIXEL_TOOLCHAIN_ID'] = manifest['toolchain_id'] if not lock.get('external_toolchain') else 'external'
     if status and not json_mode:
+        manager.human_warnings_handled = True
+        manager.human_final_status = command in ('package', 'publish')
         seen_path = manager.root / 'notices' / (digest(str(project).encode()) + '.json')
-        seen = read_json(seen_path) if seen_path.exists() else {}
-        if command in ('package', 'publish') or seen.get('candidate') != status['candidate_version']:
-            print(json.dumps(status, ensure_ascii=False), file=sys.stderr)
-            atomic_json(seen_path, {'candidate': status['candidate_version']})
+        try:
+            seen = read_json(seen_path) if seen_path.exists() else {}
+        except (OSError, ValueError, Failure):
+            seen = {}
+        notice = digest(json.dumps([(w['code'], w.get('candidate_version'), w.get('candidate_build_id')) for w in manager.warnings]).encode())
+        if manager.human_final_status or seen.get('notice') != notice:
+            print(f"Using locked SDK {lock['sdk_version']}; update check: {status['check_status']}", file=sys.stderr)
+            show_warnings(manager.warnings)
+            try:
+                atomic_json(seen_path, {'notice': notice})
+            except OSError:
+                pass
     child_arguments = list(arguments)
     if json_mode:
         child_arguments.insert(child_arguments.index('--') if '--' in child_arguments else len(child_arguments), '--json')
-    result = subprocess.run([sys.executable, str(sdk / 'micropixel'), *child_arguments],
+    result = subprocess.run([sys.executable, '-X', 'utf8', str(sdk / 'micropixel'), *child_arguments],
                             env=env, stdout=subprocess.PIPE if json_mode else None, text=True, encoding='utf-8')
     if json_mode:
         try:
@@ -586,6 +654,10 @@ def main() -> int:
     boundary = arguments.index('--') if '--' in arguments else len(arguments)
     flags = arguments[:boundary]
     json_mode, yes, offline = '--json' in flags, '--yes' in flags, '--offline' in flags
+    if json_mode:
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, 'reconfigure'):
+                stream.reconfigure(encoding='utf-8')
     arguments = [a for a in flags if a not in ('--json', '--yes', '--offline')] + arguments[boundary:]
     root = Path(os.environ.get('MICROPIXEL_HOME', str(Path(os.environ.get('LOCALAPPDATA', Path.home() / '.local/share')) / 'MicroPixel')))
     manager = Manager(root, offline=offline)
@@ -613,10 +685,17 @@ def main() -> int:
                     'result': result, 'error': error, 'warnings': manager.warnings}
     if json_mode:
         print(json.dumps(envelope, ensure_ascii=False))
-    elif error:
-        print('micropixel: ' + error['message'], file=sys.stderr)
-    elif result:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        if not manager.human_warnings_handled:
+            show_warnings(manager.warnings)
+        if error:
+            print('micropixel: ' + error['message'], file=sys.stderr)
+        elif 'result' in result and 'code' in result:
+            status = result['result'].get('version_status')
+            if manager.human_final_status and status:
+                print(f"SDK {status['current_version']} retained; version check: {status['check_status']}", file=sys.stderr)
+        elif result:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
     return code
 
 
