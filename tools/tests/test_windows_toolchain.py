@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 from pathlib import Path
 
 from tools.tests.test_micropixel_cli import CLI
@@ -17,6 +18,16 @@ class WindowsDependencies(unittest.TestCase):
                 Path(r'C:\Users\dev\game\main.cpp').absolute(),
                 Path('C:/中文/my game/header.hpp').absolute(),
             })
+
+    def test_usb_discovery_distinguishes_environment_and_missing_selection(self):
+        with patch.object(CLI, 'usb_serial_ports', return_value=[]):
+            with self.assertRaises(CLI.EnvironmentFailure):
+                CLI.discover_usb_port(None)
+        ports = [SimpleNamespace(device=name, vid=0x303A, pid=0x1001, product='MicroPixel') for name in ('COM4', 'COM5')]
+        with patch.object(CLI, 'usb_serial_ports', return_value=ports):
+            with self.assertRaises(CLI.InputRequired):
+                CLI.discover_usb_port(None)
+            self.assertEqual(CLI.discover_usb_port('COM5'), 'COM5')
 
     def test_wamrc_unicode_staging_preserves_output_on_failure(self):
         with tempfile.TemporaryDirectory(prefix='中文 game ') as temporary:

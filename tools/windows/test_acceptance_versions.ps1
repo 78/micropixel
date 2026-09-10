@@ -27,7 +27,7 @@ $appBefore = Get-FileHash -LiteralPath (Join-Path $a 'app.json')
 $lockBefore = Get-FileHash -LiteralPath (Join-Path $a 'micropixel.lock.json')
 $status = Invoke-MicroPixel @('sdk', 'status', '--project', $a, '--check')
 if (-not $OfflineFixtures -and $status.result.candidate_version -ne '9000.0.2') { throw 'Test channel did not recommend fixture B' }
-Invoke-MicroPixel @('package', $a) | Out-Null
+Invoke-MicroPixel @('package', $a, '--aot-target', 'riscv32-ilp32f') | Out-Null
 if ((Get-FileHash -LiteralPath (Join-Path $a 'micropixel.lock.json')).Hash -ne $lockBefore.Hash) { throw 'Package silently changed the project lock' }
 if ($OfflineFixtures) {
     Invoke-MicroPixel @('sdk', 'use', '9000.0.2', '--project', $a, '--yes') | Out-Null
@@ -38,7 +38,7 @@ foreach ($target in @('riscv32-ilp32f', 'xtensa')) {
     Invoke-MicroPixel @('package', $a, '--aot-target', $target) | Out-Null
 }
 Invoke-MicroPixel @('sdk', 'use', '9000.0.1', '--project', $a, '--yes', '--offline') | Out-Null
-Invoke-MicroPixel @('build', $a, '--offline') | Out-Null
+Invoke-MicroPixel @('build', $a, '--aot-target', 'riscv32-ilp32f', '--offline') | Out-Null
 if ((Get-FileHash -LiteralPath (Join-Path $a 'app.json')).Hash -ne $appBefore.Hash) { throw 'SDK switching modified app.json' }
 if ((Get-FileHash -LiteralPath (Join-Path $other 'micropixel.lock.json')).Hash -ne $otherLock.Hash) { throw 'SDK switching changed another project' }
 $before = Invoke-MicroPixel @('manager-version')

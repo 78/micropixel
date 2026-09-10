@@ -43,10 +43,12 @@ if ($LASTEXITCODE -ne 0 -or -not $doctor.ok -or -not $doctor.result.ready) { thr
 ```text
 micropixel doctor --json
 micropixel sdk status --check --json
-micropixel build --json
-micropixel package --json
+micropixel build --aot-target riscv32-ilp32f --json
+micropixel package --aot-target riscv32-ilp32f --json
 micropixel publish --dry-run --json
 ```
+
+示例目标 `riscv32-ilp32f` 用于 P4/S31；S3 使用 `xtensa`。`publish --dry-run` 自动验证两种架构。
 
 新项目使用 `micropixel init <目录> --app-id <标识> --title <名称> --json`。
 已有未锁定项目须先选择清单中的具体版本 `sdk use <版本> --yes --json`。
