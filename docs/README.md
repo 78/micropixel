@@ -18,6 +18,7 @@
 - [USB 本地控制协议](design/usb-local-control.zh-CN.md)：CLI 本地 App 管理、日志、截图、输入和安全边界；
 - [Windows SDK 安装与版本管理](development/windows-sdk.zh-CN.md)；
 - [Windows SDK 真机验收](development/windows-acceptance.zh-CN.md)：W01–W19 与 A/B 实验；
+- [固件与 SDK 发布流程](development/firmware-release.zh-CN.md)：发布范围、五板并行、失败恢复与网站交付；
 - [SDK 与 Windows 发布](development/sdk-release.zh-CN.md)：不可变产物、专用更新索引及稳定版门槛；
 - [音效清单模板](development/game-sfx.template.json)：新游戏的起始配置。
 

@@ -4,13 +4,33 @@ SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK
 工具链使用 `toolchain-windows-x64-<摘要>`；更新检查读取 `sdk-channel` 分支的 `index.json`，
 不使用混有固件和工具链的 GitHub Latest Release。
 
+## 安装包是否必须跟随 SDK 更新
+
+**当前发布实现会为每个 SDK 版本生成一个安装包；已安装用户不需要每次重新安装。**
+
+| 对象 | 当前更新方式 |
+| --- | --- |
+| 新用户下载的安装包 | 随 SDK 发版生成，网站指向同版 SDK 和安装包 |
+| 已有项目的 SDK | 在项目目录显式执行 `micropixel sdk upgrade --yes`；只切换该项目的锁定版本，之后重新构建和测试 |
+| 已安装的管理组件 | 用 `micropixel update --check` 检查，需要时执行 `micropixel update --yes`；不自动升级项目锁 |
+| WASI SDK / WAMRC | 继续使用清单固定的工具链包；只有工具链输入变化才重新构建、发布 WAMRC |
+
+这是当前分发方式的绑定，不是 SDK 在技术上要求用户重装：`micropixel.iss` 的安装器版本、
+文件名、内置 SDK 清单和首次 `setup --version` 都使用 `SdkVersion`，因此不能把旧 EXE 改名当作新包。
+管理组件虽然有独立版本，其构建摘要还包含 `tools/micropixel` 的 bootstrap CLI；当前 SDK 发版也可能产生新的管理组件 build ID。
+安装器重打包不等于重新编译 LLVM/WAMRC。仅更新 SDK 版本、清单、文档或因版本号产生新的 build ID，不触发完整升级回退验收；按安装和更新逻辑的实际改动判断。
+
+以后可以把安装器改为独立版本的引导程序，仅在安装逻辑、Python、pyserial 或管理组件变化时发布，
+首次安装再解析稳定 SDK 入口；这需要同步调整安装器、清单、网站版本校验及恢复测试，**目前尚未实现**。
+本流程按现有行为操作，不手工省略安装包或冒用旧安装包的版本与摘要。
+
 ## 日常 SDK 发布
 
 1. 修改 `tools/micropixel` 的精确版本，更新 API 文档、迁移说明和验收状态。
 2. 运行 `bash tools/p4.sh test`，提交 PR。Windows 验证会构建安装器并测试实际安装后的 SDK。
 3. PR 验证通过并合并后，给同一提交创建 `sdk-v<版本>` tag 并推送。
 4. `sdk-release.yml` 构建确定性 SDK 归档、内置运行时、安装器、清单和隔离的验收副本。
-5. 安装后完成双架构构建、打包、发布预检、中文路径和增量依赖检查，创建 Draft Release。安装器、管理组件或更新机制有变化时，手动启用 `full_validation`，追加 A/B 升级回退与组件切换。
+5. 默认不启用 `full_validation`。安装后完成双架构构建、打包、发布预检、中文路径和增量依赖检查，创建 Draft Release。安装器逻辑、内置 Python/pyserial、管理组件或更新机制有实质改动时，手动启用 `full_validation`，追加 A/B 升级回退与组件切换。先对待发布分支手动运行完整验证，再创建 tag；不要向已经发布的 tag 重跑创建 Release。
 6. 按 `tools/windows/release-policy.json` 指定的通道发布（当前为未签名正式版），再从公开下载地址核对核心产物摘要，关联本次全新安装缓存中的成功构建证据；同一批文件不重复安装编译。
 7. 公开复验成功后，才更新对应 `stable` 或 `preview` 索引及管理组件入口。
 
@@ -57,3 +77,5 @@ SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK
 验收脚本、9000.x 测试 SDK、验收 App、报告与发布内部索引放在独立的 `sdk-support-v<版本>` 维护者 Release，绝不作为新手安装步骤。
 常规发布验证正式下载文件的摘要；无本次安装证据的恢复 workflow 会合并下载两处原始文件，从独立验收索引执行实际安装与 A/B 检查。
 普通安装文档只展示下载、安装和开始开发；诊断与校验脚本放 FAQ，自动化脚本放 AI 指南。
+
+固件与 SDK 同时发布、五板构建恢复及网站切换步骤见 [固件与 SDK 发布](firmware-release.zh-CN.md)。
