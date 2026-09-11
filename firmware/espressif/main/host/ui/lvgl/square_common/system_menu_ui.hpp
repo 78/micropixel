@@ -120,7 +120,7 @@ class SystemMenuUi final {
     lv_obj_t* apps_update_dot_{};
     lv_obj_t* font_update_button_{};
     bool font_update_shown_{};
-    std::array<RowBinding, 7> row_bindings_{};
+    std::array<RowBinding, 8> row_bindings_{};
     host_ui::SystemUiActionSink action_sink_{};
     void* action_context_{};
 };

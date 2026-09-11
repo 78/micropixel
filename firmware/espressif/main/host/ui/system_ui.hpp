@@ -209,6 +209,7 @@ struct CpuUsageSample final {
 };
 
 struct StatusLayerModel final {
+    bool open_cellular_settings{};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     uint32_t memory_used_kib{};
     uint32_t memory_total_kib{};
@@ -251,6 +252,7 @@ enum class SystemMenuItem : uint32_t {
     kLanguage,
     kSystemInformation,
     kManageApps,
+    kCellular,
 };
 
 enum class LanguageDownloadState : uint8_t {
@@ -281,6 +283,7 @@ struct SystemMenuModel final {
     void* language_progress_context{};
     uint8_t language_progress{};
     LanguageDownloadState language_state{};
+    bool cellular_available{};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     const char* locale{"en"};
     const char* language{"English"};

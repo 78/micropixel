@@ -457,6 +457,7 @@ host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& st
                                              const host_ui::RemoteControlModel& remote_control,
                                              const char* effective_locale = "en") {
     return host_ui::SystemMenuModel{
+        .cellular_available = status.cellular_available,
         .idle_power_action = status.idle_power_action,
         .locale = effective_locale,
         .language = host_ui::LocaleDisplayName(effective_locale),
@@ -932,7 +933,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
                     device::Wifi& wifi, device::Cellular& cellular, host_ui::StatusLayerModel& model,
                     const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store,
                     RemoteCommandPump* command_pump, remote_control::RemoteControlAgent& remote_control,
-                    uint64_t trigger_timestamp_us) {
+                    uint64_t trigger_timestamp_us, bool open_cellular_settings = false) {
     if (controller != nullptr) {
         auto suspend_result = controller->Suspend(pdMS_TO_TICKS(500));
         if (!suspend_result) {
@@ -944,7 +945,10 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
     }
     RefreshStatusMetrics(model, catalog, battery);
     RefreshWifiStatus(model, wifi, cellular);
-    auto show_result = shell.ShowStatusLayer(model, trigger_timestamp_us);
+    auto initial_model = model;
+    initial_model.open_cellular_settings = open_cellular_settings;
+    if (open_cellular_settings) cellular.RequestSimRefresh();
+    auto show_result = shell.ShowStatusLayer(initial_model, trigger_timestamp_us);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show status layer: error=%u", static_cast<unsigned>(show_result.error()));
         if (controller == nullptr) {
@@ -1863,6 +1867,16 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     language_state = host_ui::LanguageDownloadState::kIdle;
                     shell.LeaveSystemMenu();
                     if (!shell.ShowSystemMenu(make_model())) return false;
+                } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kCellular)) {
+                    if (!cellular.Snapshot().available) break;
+                    shell.LeaveSystemMenu();
+                    if (!RunStatusLayer(shell, nullptr, battery, wifi, cellular, status_model, catalog, settings_store,
+                                        command_pump, remote_control, action->timestamp_us, true))
+                        return false;
+                    if (command_pump != nullptr && command_pump->unwind_requested) return true;
+                    RefreshWifiStatus(status_model, wifi, cellular);
+                    show_result = shell.ShowSystemMenu(make_model());
+                    if (!show_result) return false;
                 } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kWifi)) {
                     shell.LeaveSystemMenu();
                     if (!RunWifiSettings(shell, wifi, cellular, status_model, command_pump)) {

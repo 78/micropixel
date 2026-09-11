@@ -222,6 +222,7 @@ void SystemMenuUi::DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuIt
         case host_ui::SystemMenuItem::kAppearance:
             appearance_detail_label_ = detail_label;
             break;
+        case host_ui::SystemMenuItem::kCellular:
         case host_ui::SystemMenuItem::kLanguage:
         case host_ui::SystemMenuItem::kManageApps:
             break;
@@ -614,6 +615,10 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     } else {
         DrawRow(scroll_content_, 0U, host_ui::SystemMenuItem::kWifi, LV_SYMBOL_WIFI,
                 strings.Get(host_strings::Id::kSystemSettingsWifi), WifiDetail(model, strings), theme::kAccent, true);
+        if (model.cellular_available) {
+            DrawRow(scroll_content_, 7U, host_ui::SystemMenuItem::kCellular, "4G", "4G / SIM",
+                    "Network mode and SIM selection", theme::kAccent, true);
+        }
         DrawRow(scroll_content_, 1U, host_ui::SystemMenuItem::kRemoteControl, LV_SYMBOL_REFRESH,
                 strings.Get(host_strings::Id::kSystemSettingsRemoteControl), RemoteControlDetail(model, strings),
                 theme::kPositive, true);

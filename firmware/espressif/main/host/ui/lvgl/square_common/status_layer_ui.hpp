@@ -27,7 +27,10 @@ class StatusLayerUi final {
     void Deactivate();
     void LeaveLocked();
     [[nodiscard]] void* ActionContext() const;
-    [[nodiscard]] lv_obj_t* TransitionDialogLocked() const { return status_dialog_; }
+    [[nodiscard]] lv_obj_t* TransitionDialogLocked() const {
+        return cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN) ? cellular_dialog_
+                                                                                                     : status_dialog_;
+    }
     [[nodiscard]] int32_t TransitionDialogVisibleY() const;
     [[nodiscard]] int32_t TransitionDialogHiddenY() const;
     [[nodiscard]] uint32_t TransitionScrimRgb() const;
@@ -152,6 +155,7 @@ class StatusLayerUi final {
 
     lv_obj_t* status_layer_{};
     lv_obj_t* status_dialog_{};
+    bool cellular_settings_page_{};
     bool cellular_available_{};
     bool cellular_enabled_{};
     bool cellular_switching_{};

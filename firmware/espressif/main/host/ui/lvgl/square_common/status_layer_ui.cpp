@@ -320,7 +320,7 @@ void StatusLayerUi::ShowCellularDialogLocked() {
     }
     cellular_dialog_ = lv_obj_create(status_layer_);
     lv_obj_set_size(cellular_dialog_, layout_->dialog.width, layout_->dialog.height);
-    lv_obj_center(cellular_dialog_);
+    lv_obj_set_pos(cellular_dialog_, layout_->dialog.x, layout_->dialog.y);
     lv_obj_set_style_bg_color(cellular_dialog_, lv_color_hex(theme::kInactiveControlBackground), 0);
     lv_obj_set_style_bg_opa(cellular_dialog_, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(cellular_dialog_, lv_color_hex(theme::kPrimaryText), 0);
@@ -395,6 +395,10 @@ void StatusLayerUi::CellularEvent(lv_event_t* event) {
     if (ui == nullptr) return;
     const auto* target = lv_event_get_target_obj(event);
     if (target == ui->cellular_close_) {
+        if (ui->cellular_settings_page_) {
+            ui->EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer);
+            return;
+        }
         lv_obj_add_flag(ui->cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(ui->status_dialog_, LV_OBJ_FLAG_HIDDEN);
         return;
@@ -845,6 +849,8 @@ std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
     DrawLayerLocked(model);
+    cellular_settings_page_ = model.open_cellular_settings;
+    if (cellular_settings_page_) ShowCellularDialogLocked();
     SetTransitionProgressLocked(0U);
     action_sink_ = action_sink;
     action_context_ = action_context;
@@ -869,7 +875,7 @@ void StatusLayerUi::SetTransitionProgressLocked(uint16_t progress_per_mille) {
     const int32_t dialog_y =
         layout_->dialog_hidden_y +
         static_cast<int32_t>((layout_->dialog.y - layout_->dialog_hidden_y) * progress / kTransitionComplete);
-    lv_obj_set_y(status_dialog_, dialog_y);
+    lv_obj_set_y(TransitionDialogLocked(), dialog_y);
     // Keep the scrim stable while the panel moves. Animating a translucent
     // 720x720 object forces LVGL to blend and refresh the full display on
     // every step, which turns the status transition into a slideshow even
