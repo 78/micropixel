@@ -1,9 +1,13 @@
 """Stable launcher: selected runtimes are immutable and never overwritten in place."""
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+if __package__:
+    from .process_control import run_child
+else:
+    from process_control import run_child
 
 
 def main():
@@ -23,7 +27,7 @@ def main():
         if not selected.is_relative_to(root.resolve()):
             raise SystemExit('Invalid manager directory: outside the installation root')
     # A new process loads the selected Python DLLs; the bootstrap runtime stays intact.
-    return subprocess.call([str(selected / 'python/python.exe'), '-I', '-X', 'utf8', str(selected / 'micropixel_manager.py'), *sys.argv[1:]])
+    return run_child([str(selected / 'python/python.exe'), '-I', '-X', 'utf8', str(selected / 'micropixel_manager.py'), *sys.argv[1:]]).returncode
 
 
 if __name__ == '__main__':

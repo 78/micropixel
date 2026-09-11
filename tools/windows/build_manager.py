@@ -22,6 +22,7 @@ def main():
     pins = json.loads((ROOT / 'tools/windows/runtime-sources.json').read_text())
     sources = {'micropixel_manager.py': ROOT / 'tools/manager/micropixel_manager.py',
                'bootstrap-cli.py': ROOT / 'tools/micropixel', 'launch.py': ROOT / 'tools/manager/launch.py',
+               'process_control.py': ROOT / 'tools/manager/process_control.py',
                'THIRD_PARTY_NOTICES.md': ROOT / 'THIRD_PARTY_NOTICES.md', 'LICENSE': ROOT / 'LICENSE'}
     identity = hashlib.sha256(json.dumps(pins, sort_keys=True).encode())
     for name, path in sorted(sources.items()):
