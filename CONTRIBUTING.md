@@ -1,47 +1,38 @@
 # Contributing
 
-感谢参与。提交改动前请确保变更保持 Guest ABI 与具体芯片/板卡实现解耦，并遵循
-[项目代码风格](docs/development/code-style.zh-CN.md)。
+Keep Guest APIs independent of chips and boards. Follow the [C/C++ style guide](docs/development/code-style.zh-CN.md)
+(Chinese) and include the relevant checks and results in your pull request.
 
-## 基本检查
+## Checks
 
 ```sh
-git submodule update --init --recursive
 bash tools/build_guest_p4.sh
+bash tools/tests/test_firmware_host.sh
 bash tools/check_firmware_style.sh --format-only
 python3 -m unittest tools.tests.test_analyze_sfx -v
 bash -n tools/*.sh
 ```
 
-`bash tools/tests/test_firmware_host.sh` 每次都会执行全部 Host 测试，但会复用未变化的测试二进制。
-编译缓存位于 `build/host-tests/`，通过编译器解析依赖并检查源码、头文件内容、编译参数和工具链环境；
-修改这些输入后自动重编译。Bundle reader 的多组集成测试也共用该缓存。需要强制重编译时使用
-`HOST_TEST_REBUILD=1 bash tools/tests/test_firmware_host.sh`，或删除 `build/host-tests/`。
+Run checks appropriate to the change. Firmware changes also require `bash tools/p4.sh build-host`
+and relevant hardware checks. Shared graphics changes require S31 and at least one S3 build.
+Run `bash tools/p4.sh test` before release or push.
 
-小型 Host 测试按行为域组织：UI 控件集中在 `test_guest_ui.cpp`，大厅策略在 `test_hall_ui.cpp`，
-电源在 `test_power_policy.cpp`，串口在 `test_serial_transport.cpp`，远程连接在
-`test_remote_control_policy.cpp`，传感器/GPIO 生命周期在 `test_peripheral_lifecycle.cpp`。
-字体加载、句柄生命周期和板型默认字体共用 `test_font_registry.cpp`；工具侧字体测试在
-`test_font_tools.py`。相关回归优先加入现有套件，独立的编译条件、替身或故障注入环境才拆分目标。
-不要新增只验证自造数据、重复常量或文件读写本身的测试。
+Host tests run through the wrapper above and reuse unchanged binaries. Use `HOST_TEST_REBUILD=1` to rebuild them.
+Add tests to an existing suite unless a separate target needs different compilation, fixtures, or fault injection.
 
-涉及固件行为时，还应完成 ESP32-P4 Host 构建和相应真机回归。PR 中请写明测试环境、执行命令和结果；
-不要提交串口日志、性能采样、构建目录、固件镜像或设备标识。
+## Documentation
 
-## 新游戏音频
+Use English for default filenames and `.zh-CN.md` for Simplified Chinese.
+Keep the README focused on what the project does and how to start. Link to detailed guides instead of repeating them.
+Design documents describe mechanisms and contracts; testing and release procedures belong in development guides.
+Check relative links and run `git diff --check` for documentation changes.
 
-新增游戏或修改游戏音效时，必须遵循
-[游戏音频设计与感知校准规范](docs/development/game-audio.zh-CN.md)：使用 `audio/sfx.json` 作为唯一
-音色参数源，在正式 Bundle 构建中生成运行时头文件和报告并执行 `--check`，完成跨游戏层级比较和目标
-设备 A/B 试听。新 manifest 从
-[game-sfx.template.json](docs/development/game-sfx.template.json)复制，不能把波形、频率或音量重新硬编码到 C++。
+## Assets and dependencies
 
-## 新文件与依赖
+- Define game sounds in `audio/sfx.json`; follow the [audio specification](docs/development/game-audio.zh-CN.md).
+- Project-authored code defaults to Apache-2.0. Use `SPDX-License-Identifier: Apache-2.0` in new source files.
+- Check third-party licenses, preserve attribution, and update [third-party notices](THIRD_PARTY_NOTICES.md).
+- Link to vendor hardware documents; include copies only when redistribution is permitted.
+- Do not commit secrets, personal paths, device identifiers, raw logs, one-off measurements, or build outputs.
 
-- 项目自有代码默认采用 Apache-2.0；建议在新源码中使用 `SPDX-License-Identifier: Apache-2.0`。
-- 引入第三方代码前确认许可证兼容性，保留原版权/许可声明，并更新 `THIRD_PARTY_NOTICES.md`。
-- 第三方数据手册、原理图、截图和二进制素材只提交来源链接；只有明确允许再分发时才可入库。
-- 新测试应是可重复、仍由构建或 CI 执行的 conformance/regression test。一次性实验应在外部记录，
-  不把原始数据长期放进源码仓库。
-
-请勿提交密钥、令牌、私钥、个人绝对路径、设备序列号、MAC 地址或其他敏感数据。
+[简体中文](CONTRIBUTING.zh-CN.md)

@@ -62,7 +62,7 @@ python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 
 音效参数只维护在 `audio/sfx.json`。`tools/analyze_sfx.py` 逐采样复现 Host 合成器，结合可替换的设备
 频响计算 A-weighted 事件能量、重复暴露、尖锐度代理、瞬态和层级评分；构建会生成报告及 Guest 头文件，
-并在感知约束回归时失败。算法、WAV 导出和扬声器校准方法见 `audio/README.md`。
+并在感知约束回归时失败。算法、WAV 导出和扬声器校准方法见[音频规范](../../../docs/development/game-audio.zh-CN.md)。
 
 可通过统一 CLI 从 USB Serial/JTAG 注入同路径触控并立即抓图：
 

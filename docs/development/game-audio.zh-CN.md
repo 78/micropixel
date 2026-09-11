@@ -75,7 +75,7 @@ bash tools/build_<game>_bundle.sh
 
 `short` 衡量 50 ms 短时 RMS，是绝对数字电平与事件层级的主门禁；`event A` 衡量整段 A-weighted 能量，
 只用于累计暴露和辅助判断。长旋律不能再依靠多个很小的音符累计能量来通过响度门禁。相同系统音量下，
-不同游戏的参考效果原则上应控制在 ±1 dB 内；超过时必须在游戏的 `audio/README.md` 说明设计原因。
+不同游戏的参考效果原则上应控制在 ±1 dB 内；超过时必须在本规范中说明设计原因。
 
 所有产品板上的 Guest 都不得定义 App master，也不得对所有音效再做一层统一衰减。每个音效的
 相对响度由 `volume_per_mille` 表达；设备的整体音量由 Host 系统音量统一控制。
@@ -109,7 +109,7 @@ schema v2 的默认 limits 使用模板中的当前项目基线：
 5. 与至少一个现有游戏的同类事件比较 `event A`，避免切换游戏时整体突变。
 6. 构建正式 Bundle，烧录目标设备，连续触发高频事件并确认没有 audio command dropped。
 7. 在相同设备音量、握持方式和环境中 A/B 试听；至少检查安静环境、正常环境和连续操作三种场景。
-8. 将最终目标层级和有意保留的例外写进游戏的 `audio/README.md`。
+8. 将目标层级写入 `sfx.json`，有意保留的例外在本规范中说明。
 
 ## 6. 验收清单
 
@@ -122,7 +122,7 @@ schema v2 的默认 limits 使用模板中的当前项目基线：
 - [ ] 与 Blocks/Snake 的同类事件完成跨游戏层级比较；
 - [ ] 生成头文件的回归测试覆盖该 manifest 的关键 profile；
 - [ ] 正式 Bundle 构建通过，真机没有丢命令或 voice exhaustion；
-- [ ] 目标设备完成 A/B 试听，游戏特有取舍记录在 `audio/README.md`。
+- [ ] 目标设备完成 A/B 试听，游戏特有取舍记录在本规范中。
 
 分析报告只用于数字音频的相对比较，不能表述为绝对声压或医学听力安全结论。扬声器、结构腔体和安装方式
 造成的听感差异由目标设备上的 A/B 试听验收，不进入 Guest 的构建配置。
@@ -159,3 +159,23 @@ SDK 把来源与播放实例分开：`AudioClip` 可重复播放，`Playback` �
 Tone 的 8 voices 与 compressed playback 在 Host 统一混音，但分别计数。完成事件只表示自然结束或解码
 失败；主动 stop 是同步终态，不再投递事件。网络素材、进度条和关卡预加载以后由 Resource/Network 层负责，
 下载完成后仍交给同样的 clip/playback API。
+
+## 分析报告
+
+使用同一分析器导出指标与试听文件：
+
+```sh
+python3 tools/analyze_sfx.py --manifest guest/apps/snake/audio/sfx.json \
+  --report build/apps/snake/sfx-report.json --write-wavs build/apps/snake/sfx-wavs --check
+```
+
+`short/target` 比较短时 RMS 与目标；`relative` 比较游戏内参考音；`event A` 与 `repeat A`
+描述加权事件能量和重复暴露。`peak`、`HF ratio`、`jump/peak` 约束峰值、尖锐度与瞬态。
+`score` 是工程综合评分，`gain hint` 是建议倍率，均不代表绝对声压或设备听感。
+
+游戏内的参考事件、响度例外和重复频率由各自 `audio/sfx.json` 定义；不要在说明文档中复制数值。
+Snake 背景旋律的音符间隔由游戏等级控制，分析时的 delay 仅用于模拟暴露。
+
+游戏差异：Blocks 的落地参考声采用较高目标以改善设备可听度，移动和软降仍保持较低层级；
+Snake 用旋律长度区分启动、升级与失败，保持操作音优先于背景旋律；
+Tilt 的碰墙声使用短促反馈与 cooldown，避免连续接触造成重复噪声。

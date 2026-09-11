@@ -4,8 +4,7 @@
 setup/doctor/sdk/JSON 接口不能用独立 SDK 0.15.6 代替。
 CI 通过不能替代本清单。没有执行的项目标记 `not_run`，不能填写通过。
 
-SDK 0.16.0 的本机及真机验证范围见 [验收结论](windows-acceptance-2026-09-11.zh-CN.md)，
-其中区分发布安装包与隔离管理组件的结果。发布要求见 [SDK 发布政策](sdk-release.zh-CN.md#正式版发布政策)。
+发布要求见 [SDK 发布政策](sdk-release.zh-CN.md#正式版发布政策)。
 
 ## 准备
 

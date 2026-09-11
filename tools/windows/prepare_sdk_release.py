@@ -95,7 +95,6 @@ def main():
         'Run the new Windows installer when upgrading from 0.16.0 to replace its Ctrl-C bootstrap; manager or SDK updates alone do not replace it.'],
         'compatibility': manifest['compatibility'], 'windows_acceptance': policy['windows_acceptance'], 'code_signing': policy['code_signing'], 'release_policy': policy['policy']})
     for relative in ('docs/development/windows-sdk.zh-CN.md', 'docs/development/windows-sdk-faq.zh-CN.md', 'docs/development/windows-acceptance.zh-CN.md',
-                     'docs/development/windows-acceptance-2026-09-11.zh-CN.md',
                      'guest/sdk/AI.md', 'tools/windows/collect_acceptance.ps1', 'tools/windows/test_acceptance_versions.ps1', 'LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copyfile(ROOT / relative, out / Path(relative).name)
     split_checksums(out, json.loads((out / 'channel-entry.json').read_text()))

@@ -7,7 +7,7 @@
 
 中文：Board 初始化 Driver，把可用 Peripheral、Controller 和 Presentation 登记给 Platform；Platform 将
 Peripheral 转成公开 Device，由 Service 管理，并通过 ABI Endpoint 提供给 Guest。固定词义和命名规则见
-[`docs/design/firmware-terminology.zh-CN.md`](../../../../../docs/design/firmware-terminology.zh-CN.md)。
+[架构与术语](../../../../../docs/design/architecture.zh-CN.md#platform-术语)。
 
 `boards/<board>/` is a Platform composition layer. A new board begins with a
 board name and registers only hardware that has actually initialized. It owns

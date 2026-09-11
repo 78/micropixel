@@ -200,7 +200,7 @@ Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service
 - ESP-IDF、WAMR、LVGL 和具体开发板类型不得出现在 Guest Public API。
 - 一个 Public C++ 方法不自动对应一个 Wasm import；低频能力优先 lower 到通用 Service 控制面，
   高频/大块数据只有在测量证明需要时才增加专用 transport。新增 import 必须遵守
-  [Guest–Host ABI](../../guest/abi/README.md)。
+  [Guest–Host ABI](../../guest/abi/README.zh-CN.md)。
 
 ## 7. C 代码
 

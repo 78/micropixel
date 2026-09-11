@@ -5,7 +5,15 @@ ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 预览固件�
 
 ## 1. 准备环境
 
-先按根目录 [README](../../README.md#环境) 安装 ESP-IDF 6.1、WASI Clang、`wamrc` 和 Python 依赖。
+需要以下工具链：
+
+- ESP-IDF 6.1，固定版本见 `tools/ci/firmware-sources.json`；
+- WASI SDK 33，设置 `WASI_SDK_PATH` 或 `WASI_CLANG`；
+- 固定 WAMR submodule 构建的 `wamrc`，输出 AOT v6；P4/S31 使用 RISC-V，S3 使用 Xtensa；
+- Python 3，依赖见根目录 `requirements-dev.txt`。
+
+初始化子模块：`git submodule update --init --recursive`。上游 WAMRC 的版本字符串不足以证明 AOT 兼容性。
+
 每个新终端都必须先激活 ESP-IDF；`export.sh` 会设置 `IDF_PATH` 并切换到匹配的 Python 环境：
 
 ```sh

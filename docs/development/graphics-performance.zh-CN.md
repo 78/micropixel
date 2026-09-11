@@ -1,8 +1,8 @@
 # Graphics 性能诊断与基线
 
 图形性能要沿着“应用更新 → 合成 → 呈现”分别测量。CPU 占用、Guest 提交速度和屏幕可见帧率回答的是
-不同问题。本文保留测量方法、当前机制和回归标准；接口用法见 [Guest SDK](../../guest/sdk/README.md)，
-wire 规则见 [ABI](../../guest/abi/README.md)。
+不同问题。本文保留测量方法、当前机制和回归标准；接口用法见 [Guest SDK](../../guest/sdk/README.zh-CN.md)，
+wire 规则见 [ABI](../../guest/abi/README.zh-CN.md)。
 
 启用 `CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG` 后，同步 blit 扫描路径每 60 秒输出
 `scanout-timing`：`intervals` 为完成传输间隔数，`elapsed-us` 为窗口时间，`fps-milli`
@@ -151,7 +151,7 @@ HostSurface 的 RasterDrawList 把 Column、Span/SpanPair、Sprite/Image、Rect�
 分别比较各类记录的像素数、执行时间和 DMA 批次；同时测量 Guest 几何和缓冲等待，避免只优化单个内核。
 
 RGB565 Image 的硬件拷贝要求不透明、不缩放、源与目标字节序一致，并满足宽度与面积门槛。
-完整条件见 [SDK API 设计](../design/sdk-api.zh-CN.md#4-host-与协议)。大块拷贝可以摊薄 DMA
+完整条件见 [SDK 图形参考](../../guest/sdk/README.zh-CN.md#mode7-与-surface-纹理)。大块拷贝可以摊薄 DMA
 启动成本，拆成窄条则可能失去收益；背景整块拷贝与减少遮挡区域的 CPU 绘制应按场景对比。
 DMA2D 的 TX scrambler 按三字节组置换，不用于 RGB565 像素换序；硬件路径使用已按面板字节序保存的纹理。
 

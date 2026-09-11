@@ -4,8 +4,7 @@ Juicy Tilt 是使用加速度计控制的 100 关滚球迷宫 Guest App。第一
 经过物理自动试玩筛选的迷宫，逐步引入脉冲风扇、移动挡板、定时门、锁存压力门和单向回退陷阱。
 L8 就会出现较宽松的风扇＋定时门技巧关，L10 是第一次技巧考试，之后每章周期性升级。
 最终章的 L93、L96、L99、L100 是 Inferno 版本，需要利用停风和开门的重叠窗口控制入射角与速度。
-通关自动解锁下一关，并为每关分别保存最佳时间和精通评级。完整设计见
-[`DESIGN.zh-CN.md`](DESIGN.zh-CN.md)。
+通关自动解锁下一关，并为每关分别保存最佳时间和精通评级。
 
 开始页可用左右按钮选择已解锁关卡；`RUN FROM 01` 从第一关连续挑战。游戏中点击左上角品牌贴图暂停，
 暂停页可继续或重开当前关卡。
@@ -34,20 +33,19 @@ python3 guest/apps/tilt/assets/source/generate_hard_levels.py \
 `--resume-from` 可用于恢复长时间的批量筛选；配合 `--regenerate-from LEVEL` 可以只重做该关及之后的
 目录。
 
-用生产物理模型运行带推荐路线的 L02–L100 自动通关验收：
-
-```sh
-clang++ -std=c++23 -DMICROPIXEL_MODEL_TESTING -Iguest guest/apps/tilt/tilt_model.cpp \
-  guest/apps/tilt/tilt_model_test.cpp -o /tmp/tilt_model_test
-/tmp/tilt_model_test
-
-clang++ -std=c++23 -DMICROPIXEL_MODEL_TESTING -Iguest guest/apps/tilt/tilt_model.cpp \
-  guest/apps/tilt/tilt_autoplay_test.cpp -o /tmp/tilt_autoplay_test
-/tmp/tilt_autoplay_test
-```
+模型与关卡回归通过 `bash tools/tests/test_firmware_host.sh` 运行。
 
 构建正式 Bundle：
 
 ```sh
 python3 tools/micropixel package guest/apps/tilt --aot-target riscv32-ilp32f
 ```
+
+## 开发约束
+
+Scene 与物理使用 720×720 逻辑坐标，纹理选用与显示匹配的变体。
+碰撞与显示几何统一来自 `assets/source/levels.json`，不能从美术图片推导碰撞边界。
+素材生成方式见 [资源说明](assets/source/README.zh-CN.md)。
+
+加速度计样本来自 Host 缓存，`WouldBlock` 时保留最近输入，不阻塞事件循环。
+当前 S31 映射翻转 X；P4 轴向仍需确认，不应假定原始传感器坐标就是屏幕坐标。

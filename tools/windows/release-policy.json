@@ -3,6 +3,5 @@
   "channel": "stable",
   "code_signing": "unsigned",
   "windows_acceptance": "partial-windows-11",
-  "policy": "Open-source stable releases require automated verification. Code signing and remaining Windows 10/manual acceptance are disclosed limitations, not release blockers.",
-  "acceptance_record": "docs/development/windows-acceptance-2026-09-11.zh-CN.md"
+  "policy": "Open-source stable releases require automated verification. Code signing and remaining Windows 10/manual acceptance are disclosed limitations, not release blockers."
 }

@@ -12,7 +12,7 @@ Core ABI 为 **2.0**，与 1.x 完全不兼容，不保留任何 1.x 方法编�
 Storage、Random、Devices、Sensors、GPIO、Haptics、Power 均为 1.0。绘制通道为 `SCENE`（1）与
 `RASTER`（2）；2.5D 与多边形游戏的几何前端（`sdk/raycast.hpp`、`sdk/mesh_renderer.hpp`）完全在
 Guest SDK 内，不引入新的 wire。
-图形接口的设计契约见 [SDK API 设计](../../docs/design/sdk-api.zh-CN.md)。
+图形接口的设计契约见 [SDK API 设计](../sdk/README.zh-CN.md#图形先选择更新模型)。
 
 ## 七个稳定入口
 

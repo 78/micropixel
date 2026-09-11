@@ -2,8 +2,8 @@
 
 MicroPixel 把应用逻辑放在 WebAssembly Guest 中，把硬件、系统 UI 和资源管理留给 Host。
 这种分工让同一个应用源码适配不同开发板，同时由 Host 控制内存、设备访问和失控应用的退出。
-本文解释设计边界与取舍；接口用法见 [Guest SDK](../../guest/sdk/README.md)，
-实现入口见 [Firmware 导航](../../firmware/espressif/main/README.md)。
+本文解释设计边界与取舍；接口用法见 [Guest SDK](../../guest/sdk/README.zh-CN.md)，
+实现入口见 [Firmware 导航](../../firmware/espressif/main/README.zh-CN.md)。
 
 ## 1. 产品边界
 
@@ -44,8 +44,23 @@ Board 只登记初始化成功的能力；Platform 为缺失能力提供 unavail
 硬件转场可缺省，基本交互仍可工作。App Hall 只保留可见卡片及预取窗口，避免 UI 和封面内存随安装数量
 线性增长。板型只消费呈现请求，不读取 Hall 索引或持有页面内部状态。
 
-目录定位见 [Firmware 导航](../../firmware/espressif/main/README.md)，术语见
-[硬件分层与命名](firmware-terminology.zh-CN.md)。
+### Platform 术语
+
+| 类型 | 职责 |
+|---|---|
+| Board | PCB 引脚、器件组合、初始化与关机顺序 |
+| Bus / Driver | 共享总线调度 / 器件寄存器与厂商 API |
+| Peripheral / Channel | 可登记的物理功能 / 功能内部的局部地址 |
+| Device | Guest 可枚举的逻辑设备，使用 opaque DeviceId |
+| Controller / Presentation | 电源与亮度控制 / 转场、截图与显示呈现 |
+| Registry | 能力登记、身份分配和路由 |
+| Service / Endpoint | 能力业务与生命周期 / ABI 校验、编解码和分派 |
+| Adapter | 两个现有接口之间的转换 |
+
+Bus 不依赖具体 Driver；纯 Driver 不实现 Device contract，不依赖 Host UI 或 LVGL。
+外设既可来自 MCU 内部，也可来自板上器件。物理 channel 和显示名称不作为公开 DeviceId。
+显示层提供截图像素，传输层调用并封装协议；Board 只组合两者。
+类型使用明确角色名，不使用泛化的 Backend、Provider 或 Hardware 后缀。
 
 ## 3. Session 与事件模型
 
@@ -70,7 +85,7 @@ Platform 通过 `Power::GetIdlePowerAction()` 指定空闲时休眠、关机或�
 
 系统手势由 Host 拦截，不能同时成为 Guest 输入。具体电源策略见
 [定时器与空闲功耗](../development/timers-and-idle-power.zh-CN.md)，事件用法见
-[Guest SDK](../../guest/sdk/README.md)。
+[Guest SDK](../../guest/sdk/README.zh-CN.md)。
 
 ## 4. Guest–Host 边界
 
@@ -87,7 +102,7 @@ STL、vtable 或 Host 指针，避免编译器和内部布局变化影响应用�
 
 Service major 必须相同，Host minor 不低于 Guest 要求。已发布 ID 不得改义或复用；新能力优先扩展
 method/channel/event，其次新增 Service，增加 Core import 必须有现有传输不足的证据。
-ID、wire 布局和兼容规则集中在 [ABI 文档](../../guest/abi/README.md)与
+ID、wire 布局和兼容规则集中在 [ABI 文档](../../guest/abi/README.zh-CN.md)与
 [ABI header](../../guest/abi/micropixel_abi.h)。
 
 Host 验证所有 pointer/length、handle 类型、generation、所属 Guest 和容量。SDK 的类型安全只能帮助
@@ -100,7 +115,7 @@ GPIO 只暴露板级白名单，打开形成独占租用，释放后恢复安全
 
 ## 5. Graphics 与 Resource
 
-Scene、整数 Raster 前端与共享资源的契约见 [SDK API 设计](sdk-api.zh-CN.md)。
+图形接口用法见 [SDK 图形参考](../../guest/sdk/README.zh-CN.md#图形先选择更新模型)。
 
 图形提供两种应用模型，系统 UI 的所有权保持一致：
 
@@ -145,7 +160,7 @@ Host 实时与跨任务路径使用固定容量队列、数组和对象池，不
 后台解码、持久化和日志不得阻塞 Guest 热路径。ISR 不调用 WAMR、Guest 或 LVGL。
 
 Scene 与 Raster 仅在提交或上传入口按需显式分配，失败保留原状态，绘制期间不分配。应用资源随
-Session 释放，显示缓冲按显示生命周期管理；具体资源契约见 [ABI](../../guest/abi/README.md)。
+Session 释放，显示缓冲按显示生命周期管理；具体资源契约见 [ABI](../../guest/abi/README.zh-CN.md)。
 
 Guest 线性内存位于 PSRAM，按需增长，当前策略上限为 8 MiB，并受最大连续块与 Host 安全水位约束。
 Host-owned 纹理和 surface 在实际分配时同样检查安全水位，不提前占满理论配额。这样轻量应用能把内存

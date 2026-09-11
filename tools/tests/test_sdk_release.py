@@ -23,7 +23,10 @@ class SdkArchive(unittest.TestCase):
             prefix = 'micropixel-sdk-' + metadata['version'] + '/'
             self.assertTrue(all(name.startswith(prefix) for name in names))
             self.assertFalse(any('/coastline/' in name or '/build/' in name or '/.env' in name for name in names))
-            self.assertIn(prefix + 'guest/sdk/GRAPHICS.md', names)
+            self.assertIn(prefix + 'guest/sdk/README.md', names)
+            self.assertIn(prefix + 'guest/apps/tomb-explorer/README.md', names)
+            overview = archive.extractfile(prefix + 'guest/sdk/README.md').read().decode('utf-8')
+            self.assertIn('## Mode7 and surface textures', overview)
             self.assertIn(prefix + 'LICENSE', names)
             self.assertIn(prefix + 'libexec/build_app_bundle.py', names)
             self.assertEqual(archive.getmember(prefix + 'micropixel').mode, 0o755)
