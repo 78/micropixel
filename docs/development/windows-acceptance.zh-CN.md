@@ -1,8 +1,11 @@
 # Windows 10 SDK 真机验收
 
-本清单针对 Windows 安装与版本管理项目。使用 SDK 0.16.0 Windows Preview 安装器；
+本清单针对 Windows 安装与版本管理项目。使用 SDK 0.16.1 Windows Preview 安装器；
 setup/doctor/sdk/JSON 接口不能用独立 SDK 0.15.6 代替。
 CI 通过不能替代本清单。没有执行的项目标记 `not_run`，不能填写通过。
+
+已完成的本机及真机结果见 [2026-09-11 验收记录](windows-acceptance-2026-09-11.zh-CN.md)，
+其中区分原发布安装包问题与 Ctrl-C 修复后的隔离组件复验；尚不满足稳定发布门槛。
 
 ## 准备
 
@@ -24,7 +27,7 @@ GUI 安装直接双击。静默安装使用同一包：
 $process = Start-Process -FilePath '.\micropixel-setup.exe' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART /LOG="install.log"' -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-& $mp setup --version 0.16.0 --yes --json
+& $mp setup --version 0.16.1 --yes --json
 if ($LASTEXITCODE -ne 0) { throw 'Tool preparation failed' }
 & $mp doctor --json
 ```
@@ -48,7 +51,7 @@ W07–W11 使用 Release 的 `windows-acceptance-project.zip`，解压后进入 
 ```powershell
 Expand-Archive .\windows-acceptance-project.zip -DestinationPath .\硬件验收
 Set-Location .\硬件验收\windows-acceptance
-& $mp sdk use 0.16.0 --yes --json
+& $mp sdk use 0.16.1 --yes --json
 ```
 
 该 App 在 240×240 及以上画面显示触摸与按键状态，
@@ -99,12 +102,12 @@ Set-Location .\硬件验收\windows-acceptance
 ```powershell
 $previousIndex = $env:MICROPIXEL_SDK_INDEX_URL
 try {
-    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.0/test-sdk-index.json'
+    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.1/test-sdk-index.json'
     .\test_acceptance_versions.ps1 -Launcher $mp -Directory '.\Windows A B 验收'
 } finally {
     $env:MICROPIXEL_SDK_INDEX_URL = $previousIndex
     & $mp update --yes --json
-    & $mp setup --version 0.16.0 --yes --json
+    & $mp setup --version 0.16.1 --yes --json
 }
 ```
 

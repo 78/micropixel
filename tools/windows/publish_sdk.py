@@ -39,6 +39,8 @@ verified WASI SDK 33 and fixed RISC-V/Xtensa AOT v6 compilers.
 
 - Start with the attached Windows guide or AI.md; installer success alone does not mean ready.
 - Project SDK/toolchain versions are locked; upgrading and rolling back are explicit.
+- Windows Ctrl-C while following logs exits cleanly and keeps the device App running.
+- Upgrading from 0.16.0 requires this installer to replace the old bootstrap; manager or SDK updates alone do not replace it.
 - Unsigned Preview: Windows 10 GUI/security/USB acceptance and code signing remain pending.
 - `test-sdk-index.json` and SDK 9000.0.1/9000.0.2 are isolated acceptance fixtures only.
 - No new performance claim is made. Existing macOS toolchain usage remains supported.

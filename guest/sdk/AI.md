@@ -6,13 +6,13 @@
 ## 安装
 
 安装必须有用户安装 SDK 的明确意图。下载清单包含 `version`、`architecture`、`url`、`size_bytes` 和 `sha256`。
-下面固定选择 0.16.0 Preview。自动发现使用专用 [SDK 索引](https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json)：
+下面固定选择 0.16.1 Preview。自动发现使用专用 [SDK 索引](https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json)：
 `stable` 为空表示尚无稳定 Windows SDK；仅在用户接受 Preview 时使用 `preview`。
 `windows_installer` 是经过发布验证的安装器地址、大小和摘要。
 
 ```powershell
 # This explicit version is the unsigned Preview. Do not infer it from Latest Release.
-$metadataUrl = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.0/windows-installer.json'
+$metadataUrl = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.1/windows-installer.json'
 $meta = Invoke-RestMethod -Uri $metadataUrl
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
@@ -71,7 +71,7 @@ micropixel publish --dry-run --json
   "ok": true,
   "code": "ok",
   "result": {
-    "sdk_version": "0.16.0",
+    "sdk_version": "0.16.1",
     "toolchain_id": "windows-x64-<toolchain-digest>",
     "artifacts": [],
     "version_status": null

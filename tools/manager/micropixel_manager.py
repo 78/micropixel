@@ -21,6 +21,11 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
+if __package__:
+    from .process_control import run_child
+else:
+    from process_control import run_child
+
 VERSION = '0.1.0'
 _BUILD_FILE = Path(__file__).with_name('build.json')
 BUILD_ID = json.loads(_BUILD_FILE.read_text(encoding='utf-8'))['build_id'] if _BUILD_FILE.exists() else 'source'
@@ -645,7 +650,7 @@ def execute(manager: Manager, arguments: list[str], yes: bool, json_mode: bool) 
     child_arguments = list(arguments)
     if json_mode:
         child_arguments.insert(child_arguments.index('--') if '--' in child_arguments else len(child_arguments), '--json')
-    result = subprocess.run([sys.executable, '-X', 'utf8', str(sdk / 'micropixel'), *child_arguments],
+    result = run_child([sys.executable, '-X', 'utf8', str(sdk / 'micropixel'), *child_arguments],
                             env=env, stdout=subprocess.PIPE if json_mode else None, text=True, encoding='utf-8')
     if json_mode:
         try:
