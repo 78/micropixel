@@ -205,7 +205,9 @@ RasterDrawList 的 Column 使用列主序纹理，Span/SpanPair、Warp 与 Trian
 Host buffer，Guest 不再需要字形图集。`sdk/mode7_plane.hpp` 的 `Mode7Plane` 在初始化时按行求深度和缩放，
 每帧只填每行的中心、半宽、纹理行与 mip 槽位，`Draw(list)` 产出 Span 记录（coastline 使用）。Triangle/Quad 以 `RasterVertex::At(x, y, u, v, light)`（12.4 定点位置、8.8 定点纹素、
 调色板行）描述凸多边形并做 affine 插值，`FlatTriangle/FlatQuad` 用调色板索引代替纹理；能力位为
-`RendererInfo::polygon_supported()`。
+`RendererInfo::polygon_supported()`。`AdditiveSprite` 与 Sprite 参数相同，但每个纹素按通道饱和相加到
+目标像素，黑底上的光晕、光斑和拖尾可以叠加（gravity-balls 使用）；能力位为
+`RendererInfo::additive_sprite_supported()`。
 调色板按槽上传（`UploadLitPalette(slot, ...)`），`SetPalette(slot)` 之后的记录用该槽，一个 App 可以为地表、
 每种精灵和 UI 各留一套调色板。Warp 是 Host 持有的 screen→(u, v, light) 表（`UploadWarpMap` /
 `UpdateWarpRows` 分帧流式上传），每帧只提交一条记录和 `u_offset / v_offset`（`u_fraction_bits` 让 u 带纹素小数，

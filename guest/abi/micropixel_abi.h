@@ -576,6 +576,9 @@ typedef enum micropixel_graphics_capability {
     /* TRIANGLE and QUAD records (affine textured, per-vertex lit polygons) are
      * accepted by the RASTER channel. */
     MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON = 1U << 1U,
+    /* SPRITE records accept MICROPIXEL_RASTER_SPRITE_ADDITIVE (saturating
+     * per-channel add onto the target: glows, light pools, trails). */
+    MICROPIXEL_GRAPHICS_CAP_RASTER_SPRITE_ADDITIVE = 1U << 2U,
 } micropixel_graphics_capability_t;
 
 typedef enum micropixel_graphics_event_id {
@@ -791,6 +794,11 @@ typedef enum micropixel_raster_sprite_flag {
     /* Every texel that is drawn writes `color` instead of the lit palette entry
      * (glyph atlases, monochrome overlays); `light_level` is ignored. */
     MICROPIXEL_RASTER_SPRITE_SOLID_COLOR = 1U << 1U,
+    /* Every drawn texel is added to the target pixel channel by channel with
+     * saturation instead of replacing it (needs
+     * MICROPIXEL_GRAPHICS_CAP_RASTER_SPRITE_ADDITIVE). Combines with
+     * TRANSPARENT_INDEX0 and SOLID_COLOR. */
+    MICROPIXEL_RASTER_SPRITE_ADDITIVE = 1U << 2U,
 } micropixel_raster_sprite_flag_t;
 
 typedef enum micropixel_raster_warp_flag {

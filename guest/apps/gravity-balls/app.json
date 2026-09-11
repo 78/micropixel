@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.gravity-balls",
+  "version": "0.1.0",
+  "title": "Gravity Balls",
+  "threading": "none",
+  "sources": [
+    "src/main.cpp"
+  ],
+  "requirements": {
+    "schema_version": 1,
+    "display": {
+      "layouts": [
+        "square",
+        "portrait",
+        "landscape"
+      ],
+      "min_width": 320,
+      "min_height": 320
+    },
+    "required": [],
+    "optional": [
+      "sensor.acceleration",
+      "sensor.gyroscope",
+      "input.touch"
+    ],
+    "any_of": [],
+    "services": {}
+  }
+}

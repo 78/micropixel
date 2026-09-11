@@ -292,13 +292,26 @@ bool ClampRasterRect(Rect rect, int16_t& x, int16_t& y, uint16_t& width, uint16_
 
 bool RasterDrawList::Sprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0, uint16_t v0,
                             uint16_t source_width, uint16_t source_height, bool transparent) {
+    return AppendSprite(destination, texture_slot, light_level, u0, v0, source_width, source_height,
+                        transparent ? MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 : 0U);
+}
+
+bool RasterDrawList::AdditiveSprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0,
+                                    uint16_t v0, uint16_t source_width, uint16_t source_height, bool transparent) {
+    return AppendSprite(
+        destination, texture_slot, light_level, u0, v0, source_width, source_height,
+        MICROPIXEL_RASTER_SPRITE_ADDITIVE | (transparent ? MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 : 0U));
+}
+
+bool RasterDrawList::AppendSprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0, uint16_t v0,
+                                  uint16_t source_width, uint16_t source_height, uint8_t flags) {
     micropixel_raster_sprite_t record{};
     if (!ClampRasterRect(destination, record.x, record.y, record.width, record.height)) {
         if (status_ == MICROPIXEL_STATUS_OK) status_ = MICROPIXEL_STATUS_INVALID_ARGUMENT;
         return false;
     }
     record.type = MICROPIXEL_RASTER_RECORD_SPRITE;
-    record.flags = transparent ? MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 : 0U;
+    record.flags = flags;
     record.texture_slot = texture_slot;
     record.light_level = light_level;
     record.palette_slot = palette_slot_;

@@ -198,7 +198,8 @@ void DrawColumn(const Target& target, const Texture& texture, const uint16_t* li
 void DrawSpanPair(const Target& target, const Texture& floor_texture, const Texture& ceiling_texture,
                   const uint16_t* lit, const micropixel_raster_span_pair_t& span);
 void DrawSpan(const Target& target, const Texture& texture, const uint16_t* lit, const micropixel_raster_span_t& span);
-// `lit` may be nullptr for a SOLID_COLOR sprite.
+// `lit` may be nullptr for a SOLID_COLOR sprite. ADDITIVE sprites add each
+// drawn texel to the target pixel with per-channel saturation.
 void DrawSprite(const Target& target, const Texture& texture, const uint16_t* lit,
                 const micropixel_raster_sprite_t& sprite);
 void DrawRect(const Target& target, const micropixel_raster_rect_t& rect);

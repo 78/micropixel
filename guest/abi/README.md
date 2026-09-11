@@ -203,6 +203,8 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
   光照档位上限由 `MICROPIXEL_GRAPHICS_RASTER_MAX_LIGHT_LEVELS` 定义，不另设查询字段；
   含 `MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON`（`1U << 1U`）时额外接受 TRIANGLE/QUAD 记录，
   旧 Host 对未知记录类型整批拒绝，Guest 须先检查该位；
+  含 `MICROPIXEL_GRAPHICS_CAP_RASTER_SPRITE_ADDITIVE`（`1U << 2U`）时 SPRITE 接受 `ADDITIVE` 标志，
+  旧 Host 对未知标志位整批拒绝；
 - `RASTER_TEXTURE_UPLOAD {texture_slot, width, height, layout, pixels, length}` 把 INDEX8 纹理复制进 Host 资源池
   （无固定资源池配额；关闭 `CONFIG_MICROPIXEL_RASTER_KERNELS` 时不提供 CAP_RASTER）。
   宽高为 1–65535；槽编号 0–255 可复用，不预分配全部槽，
@@ -235,7 +237,8 @@ Guest 保留几何（光线投射、地板行、billboard 排序与深度测试�
   推进再校验：句柄未知、长度为 0、补零字节非 0、文本含 NUL 或非法 UTF-8 都整批拒绝；
   `SPRITE {x, y, width, height, texture_slot, light_level, source_x, source_y, source_width, source_height, color}` 把 COLUMN_MAJOR 纹理的
   一块矩形最近邻缩放到目标矩形，目标可以部分出界由 Host 裁剪，`SOLID_COLOR` 让每个绘制的纹素写 `color`
-  而不查调色板（字形图集、单色覆盖层）；`RECT {x, y, width, height, color, opacity}` 裁剪后填充，`opacity=255`
+  而不查调色板（字形图集、单色覆盖层），`ADDITIVE`（`1U << 2U`，需要 `CAP_RASTER_SPRITE_ADDITIVE`）让每个
+  绘制的纹素按 R/G/B 通道饱和相加到目标像素而不是覆盖（黑底上的光晕、光斑、拖尾），可与前两个标志组合；`RECT {x, y, width, height, color, opacity}` 裁剪后填充，`opacity=255`
   直写，更小则按通道 blend，`opacity=0` 拒绝；`WARP {x, y, warp_slot, texture_slot, palette_slot, u_offset,
   v_offset, fill_color, u_fraction_bits}` 把整张映射表放到 `(x, y)`，每项取 ROW_MAJOR 纹理的
   `texel(((u + u_offset) >> u_fraction_bits) & mask, (v + v_offset) & mask)` 经该项 light 查调色板；

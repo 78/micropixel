@@ -142,6 +142,19 @@ inline void CopyRowSwapped(uint16_t* row, const uint8_t* source, uint32_t count)
     return static_cast<uint16_t>((rb & 0xF81FU) | (g & 0x07E0U));
 }
 
+// Adds `color` to `dst` in canonical RGB565, each channel saturating at its
+// maximum. Additive sprites (glows, light pools) stack on a black background
+// the way light does; overlapping sprites sum instead of overwriting.
+[[nodiscard]] inline uint16_t AddSaturate565(uint16_t dst, uint16_t color) {
+    uint32_t r = (dst >> 11U) + (color >> 11U);
+    uint32_t g = ((dst >> 5U) & 0x3FU) + ((color >> 5U) & 0x3FU);
+    uint32_t b = (dst & 0x1FU) + (color & 0x1FU);
+    r = r > 0x1FU ? 0x1FU : r;
+    g = g > 0x3FU ? 0x3FU : g;
+    b = b > 0x1FU ? 0x1FU : b;
+    return static_cast<uint16_t>((r << 11U) | (g << 5U) | b);
+}
+
 [[nodiscard]] const Texture* SlotWithLayout(const Resources& resources, uint8_t slot, uint8_t layout) {
     const Texture* texture = resources.TextureAt(slot);
     return texture != nullptr && texture->pixels != nullptr && texture->layout == layout ? texture : nullptr;
@@ -271,7 +284,8 @@ inline void CopyRowSwapped(uint16_t* row, const uint8_t* source, uint32_t count)
 }
 
 [[nodiscard]] int32_t ValidateSprite(const micropixel_raster_sprite_t& sprite, const Resources& resources) {
-    if ((sprite.flags & ~(MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 | MICROPIXEL_RASTER_SPRITE_SOLID_COLOR)) != 0U ||
+    if ((sprite.flags & ~(MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 | MICROPIXEL_RASTER_SPRITE_SOLID_COLOR |
+                          MICROPIXEL_RASTER_SPRITE_ADDITIVE)) != 0U ||
         sprite.reserved0 != 0U || sprite.width == 0U || sprite.height == 0U || sprite.source_width == 0U ||
         sprite.source_height == 0U) {
         return MICROPIXEL_STATUS_INVALID_ARGUMENT;
@@ -486,15 +500,12 @@ int32_t ValidateDrawList(const uint8_t* bytes, uint32_t length, const Target& ta
     return MICROPIXEL_STATUS_OK;
 }
 
-void DrawSprite(const Target& target, const Texture& texture, const uint16_t* lit,
-                const micropixel_raster_sprite_t& sprite) {
-    ClippedRect clip{};
-    if (!ClipRect(target, sprite.x, sprite.y, sprite.width, sprite.height, clip)) {
-        return;
-    }
-    const bool transparent = (sprite.flags & MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0) != 0U;
-    const bool solid = (sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) != 0U;
-    const uint16_t solid_color = target.byte_swapped ? ByteSwap(sprite.color) : sprite.color;
+// Additive mode: 0 replaces, 1 adds in canonical order, 2 adds on a
+// byte-swapped panel (source and target both hold panel order).
+template <bool kTransparent, int kAdditive>
+void DrawSpriteRows(const Target& target, const Texture& texture, const uint16_t* lit,
+                    const micropixel_raster_sprite_t& sprite, const ClippedRect& clip, bool solid,
+                    uint16_t solid_color) {
     // 16.16 texel steps per destination pixel; sampling starts at the centre
     // of the first visible pixel so a clipped sprite keeps its phase.
     const uint32_t u_step = (static_cast<uint32_t>(sprite.source_width) << kFixedShift) / sprite.width;
@@ -509,11 +520,41 @@ void DrawSprite(const Target& target, const Texture& texture, const uint16_t* li
         for (uint32_t x = clip.x0; x < clip.x1; ++x, u += u_step) {
             const uint8_t texel =
                 texels[(static_cast<uint32_t>(sprite.source_x) + (u >> kFixedShift)) * texture_height];
-            if (transparent && texel == 0U) {
-                continue;
+            if constexpr (kTransparent) {
+                if (texel == 0U) continue;
             }
-            row[x - clip.x0] = solid ? solid_color : lit[texel];
+            const uint16_t source = solid ? solid_color : lit[texel];
+            uint16_t& out = row[x - clip.x0];
+            if constexpr (kAdditive == 0) {
+                out = source;
+            } else if constexpr (kAdditive == 1) {
+                out = AddSaturate565(out, source);
+            } else {
+                out = ByteSwap(AddSaturate565(ByteSwap(out), ByteSwap(source)));
+            }
         }
+    }
+}
+
+void DrawSprite(const Target& target, const Texture& texture, const uint16_t* lit,
+                const micropixel_raster_sprite_t& sprite) {
+    ClippedRect clip{};
+    if (!ClipRect(target, sprite.x, sprite.y, sprite.width, sprite.height, clip)) {
+        return;
+    }
+    const bool transparent = (sprite.flags & MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0) != 0U;
+    const bool solid = (sprite.flags & MICROPIXEL_RASTER_SPRITE_SOLID_COLOR) != 0U;
+    const bool additive = (sprite.flags & MICROPIXEL_RASTER_SPRITE_ADDITIVE) != 0U;
+    const uint16_t solid_color = target.byte_swapped ? ByteSwap(sprite.color) : sprite.color;
+    const int mode = additive ? (target.byte_swapped ? 2 : 1) : 0;
+    if (transparent) {
+        if (mode == 0) DrawSpriteRows<true, 0>(target, texture, lit, sprite, clip, solid, solid_color);
+        if (mode == 1) DrawSpriteRows<true, 1>(target, texture, lit, sprite, clip, solid, solid_color);
+        if (mode == 2) DrawSpriteRows<true, 2>(target, texture, lit, sprite, clip, solid, solid_color);
+    } else {
+        if (mode == 0) DrawSpriteRows<false, 0>(target, texture, lit, sprite, clip, solid, solid_color);
+        if (mode == 1) DrawSpriteRows<false, 1>(target, texture, lit, sprite, clip, solid, solid_color);
+        if (mode == 2) DrawSpriteRows<false, 2>(target, texture, lit, sprite, clip, solid, solid_color);
     }
 }
 

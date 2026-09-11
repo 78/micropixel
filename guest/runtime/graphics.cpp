@@ -1,8 +1,8 @@
 #include "sdk/graphics.hpp"
 
+#include "runtime/direct_surface_state.hpp"
 #include "runtime/display_context.hpp"
 #include "runtime/service_binding.hpp"
-#include "runtime/direct_surface_state.hpp"
 #include "runtime/texture_state.hpp"
 #include "sdk/input.hpp"
 #include "sdk/resources.hpp"
@@ -55,7 +55,8 @@ RendererInfo Renderer::info() const {
                         (raw.native_flags & MICROPIXEL_SURFACE_NATIVE_RGB565_BYTE_SWAPPED) != 0U,
                         raw.max_full_frame_fps,
                         (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER) != 0U,
-                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON) != 0U};
+                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON) != 0U,
+                        (GraphicsService().info.capabilities & MICROPIXEL_GRAPHICS_CAP_RASTER_SPRITE_ADDITIVE) != 0U};
 }
 
 namespace {

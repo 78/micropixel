@@ -541,7 +541,8 @@ ServiceDescriptor GraphicsServiceEndpoint::Describe() const {
         .interface_minor = MICROPIXEL_GRAPHICS_INTERFACE_MINOR,
         .flags = MICROPIXEL_SERVICE_FLAG_CALL | MICROPIXEL_SERVICE_FLAG_SUBMIT | MICROPIXEL_SERVICE_FLAG_EVENTS,
         .capabilities =
-            raster ? static_cast<uint32_t>(MICROPIXEL_GRAPHICS_CAP_RASTER | MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON)
+            raster ? static_cast<uint32_t>(MICROPIXEL_GRAPHICS_CAP_RASTER | MICROPIXEL_GRAPHICS_CAP_RASTER_POLYGON |
+                                           MICROPIXEL_GRAPHICS_CAP_RASTER_SPRITE_ADDITIVE)
                    : 0U,
         .max_request_bytes =
             sizeof(micropixel_graphics_measure_text_request_t) + micropixel::device::graphics_limits::kMaxTextBytes,

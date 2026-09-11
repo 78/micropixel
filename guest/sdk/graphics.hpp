@@ -140,11 +140,14 @@ class RendererInfo final {
     [[nodiscard]] constexpr bool raster_supported() const { return raster_supported_; }
     // Whether the Host accepts RasterDrawList::Triangle / Quad records.
     [[nodiscard]] constexpr bool polygon_supported() const { return polygon_supported_; }
+    // Whether the Host accepts RasterDrawList::AdditiveSprite records.
+    [[nodiscard]] constexpr bool additive_sprite_supported() const { return additive_sprite_supported_; }
 
    private:
     constexpr RendererInfo(uint32_t width, uint32_t height, uint32_t physical_width, uint32_t physical_height,
                            DisplayInsets safe_area_insets, bool direct_scanout, bool rgb565_byte_swapped,
-                           uint16_t max_full_frame_fps, bool raster_supported, bool polygon_supported)
+                           uint16_t max_full_frame_fps, bool raster_supported, bool polygon_supported,
+                           bool additive_sprite_supported)
         : width_(width),
           height_(height),
           physical_width_(physical_width),
@@ -154,7 +157,8 @@ class RendererInfo final {
           direct_scanout_(direct_scanout),
           rgb565_byte_swapped_(rgb565_byte_swapped),
           raster_supported_(raster_supported),
-          polygon_supported_(polygon_supported) {}
+          polygon_supported_(polygon_supported),
+          additive_sprite_supported_(additive_sprite_supported) {}
 
     uint32_t width_{};
     uint32_t height_{};
@@ -166,6 +170,7 @@ class RendererInfo final {
     bool rgb565_byte_swapped_{};
     bool raster_supported_{};
     bool polygon_supported_{};
+    bool additive_sprite_supported_{};
 
     friend class Renderer;
 };
@@ -427,6 +432,13 @@ class RasterDrawList final {
     // lit at `light_level`. `transparent` skips texel index 0. Weapons, HUD icons.
     [[nodiscard]] bool Sprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0, uint16_t v0,
                               uint16_t source_width, uint16_t source_height, bool transparent = true);
+    // Like Sprite, but every drawn texel is added to the pixel beneath it,
+    // channel by channel with saturation, instead of replacing it. On a dark
+    // background this is how glows, light pools and trails stack. Requires
+    // RendererInfo::additive_sprite_supported(); older Hosts reject the list.
+    [[nodiscard]] bool AdditiveSprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0,
+                                      uint16_t v0, uint16_t source_width, uint16_t source_height,
+                                      bool transparent = true);
     // Every entry of warp map `warp_slot` (RasterResources::UploadWarpMap) with
     // entry (0, 0) at `origin`, sampling kRowMajor `texture_slot` (power-of-two
     // size) at the entry's ((u + u_offset) >> u_fraction_bits, v + v_offset),
@@ -477,6 +489,8 @@ class RasterDrawList final {
     [[nodiscard]] constexpr bool open() const { return open_; }
     RasterDrawList(uint32_t surface_handle, uint32_t buffer_index);
     [[nodiscard]] bool Append(const void* record, uint32_t size);
+    [[nodiscard]] bool AppendSprite(Rect destination, uint8_t texture_slot, uint8_t light_level, uint16_t u0,
+                                    uint16_t v0, uint16_t source_width, uint16_t source_height, uint8_t flags);
     [[nodiscard]] bool AppendText(Point origin, const char* text, Color color, uint32_t font_handle);
     void Flush();
     void Close();

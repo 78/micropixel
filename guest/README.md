@@ -10,6 +10,7 @@ guest/
 ├── apps/sdk-demo/    # 可导航的 SDK 功能演示应用
 ├── apps/snake/   # 完整产品应用及其 metadata、素材
 ├── apps/blocks/  # 触控俄罗斯方块产品应用
+├── apps/gravity-balls/ # 加速度计控制的三维彩球物理实验
 ├── apps/tilt/    # 加速度计控制的 100 关滚球迷宫
 ├── apps/maze-evil/ # Direct Surface 全屏软渲染的 2.5D 射击游戏（体感 + 触摸）
 ├── apps/tomb-explorer/ # MeshRenderer 多边形路径的第三人称探索 demo（房间/传送门、低模角色）
@@ -193,3 +194,5 @@ namespace、ABI 前缀和内部入口统一使用 `micropixel`。
 详见[应用商店契约](../docs/design/app-store.zh-CN.md)。
 
 开发者入门见[SDK 快速入门](sdk/QUICKSTART.md)，截图、应用介绍与玩法说明见[发布应用](sdk/PUBLISHING.md)。
+
+三维球体碰撞实验见 [Gravity Balls](apps/gravity-balls/README.md)，支持体感倾斜与触摸弹起，独立打包。

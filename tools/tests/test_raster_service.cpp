@@ -561,6 +561,38 @@ void TestKernelsAgainstReference() {
     raster::DrawSprite(swapped, textures[0], nullptr,
                        Sprite(0, 31, 4U, 1U, 0U, 0U, 1U, 0U, 4U, 1U, MICROPIXEL_RASTER_SPRITE_SOLID_COLOR, 0x1234U));
     Require(PixelAt(frame.data(), kPitch, 0U, 31U) == Swap(0x1234U));
+
+    // ADDITIVE: drawn texels add channel by channel and saturate; index 0 with
+    // TRANSPARENT_INDEX0 still leaves the pixel alone.
+    constexpr uint16_t kAddBase = (10U << 11U) | (60U << 5U) | 31U;  // r=10 g=60 b=31
+    constexpr uint16_t kAddColor = (5U << 11U) | (5U << 5U) | 1U;    // r=5  g=5  b=1
+    constexpr uint16_t kAddSum = (15U << 11U) | (63U << 5U) | 31U;   // g and b saturate
+    raster::DrawRect(target, Rect(10, 10, 4U, 1U, kAddBase));
+    raster::DrawSprite(target, textures[0], nullptr,
+                       Sprite(10, 10, 4U, 1U, 0U, 0U, 0U, 0U, 4U, 1U,
+                              MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0 | MICROPIXEL_RASTER_SPRITE_SOLID_COLOR |
+                                  MICROPIXEL_RASTER_SPRITE_ADDITIVE,
+                              kAddColor));
+    Require(PixelAt(frame.data(), kPitch, 10U, 10U) == kAddBase);  // u == 0 column is transparent
+    Require(PixelAt(frame.data(), kPitch, 11U, 10U) == kAddSum && PixelAt(frame.data(), kPitch, 13U, 10U) == kAddSum);
+    // Lit texels add too: texel (1, 0) at light 1 plus itself doubles every channel below saturation.
+    raster::DrawRect(target, Rect(20, 30, 1U, 1U, 0U));
+    const auto lit_add = Sprite(20, 30, 1U, 1U, 0U, 1U, 1U, 0U, 1U, 1U, MICROPIXEL_RASTER_SPRITE_ADDITIVE);
+    raster::DrawSprite(target, textures[0], lit.data() + 256U, lit_add);
+    raster::DrawSprite(target, textures[0], lit.data() + 256U, lit_add);
+    {
+        const uint16_t once = Lit(1U, Texel(1U, 0U));
+        const uint32_t r = std::min<uint32_t>(31U, 2U * (once >> 11U));
+        const uint32_t g = std::min<uint32_t>(63U, 2U * ((once >> 5U) & 0x3FU));
+        const uint32_t b = std::min<uint32_t>(31U, 2U * (once & 0x1FU));
+        Require(PixelAt(frame.data(), kPitch, 20U, 30U) == static_cast<uint16_t>((r << 11U) | (g << 5U) | b));
+    }
+    // On a swapped panel the add happens in canonical order and lands swapped.
+    raster::DrawRect(swapped, Rect(30, 30, 1U, 1U, kAddBase));
+    raster::DrawSprite(swapped, textures[0], nullptr,
+                       Sprite(30, 30, 1U, 1U, 0U, 0U, 1U, 0U, 1U, 1U,
+                              MICROPIXEL_RASTER_SPRITE_SOLID_COLOR | MICROPIXEL_RASTER_SPRITE_ADDITIVE, kAddColor));
+    Require(PixelAt(frame.data(), kPitch, 30U, 30U) == Swap(kAddSum));
 }
 
 // Signed distance (pixels, positive inside) from a point to a convex polygon
@@ -1438,6 +1470,21 @@ void TestServiceUploadsAndDraws() {
         DrawList broken{kFrame0};
         broken.Add(Sprite(0, 0, 4U, 4U, 0U, kLightLevels, 0U, 0U, 4U, 4U));  // light too high
         reject(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList broken{kFrame0};
+        broken.Add(Sprite(0, 0, 4U, 4U, 0U, 0U, 0U, 0U, 4U, 4U,
+                          MICROPIXEL_RASTER_SPRITE_ADDITIVE << 1U));  // flag bit above ADDITIVE is unknown
+        reject(broken, MICROPIXEL_STATUS_INVALID_ARGUMENT);
+    }
+    {
+        DrawList additive{kFrame0};
+        additive.Add(Sprite(0, 0, 4U, 4U, 0U, 0U, 0U, 0U, 4U, 4U,
+                            MICROPIXEL_RASTER_SPRITE_ADDITIVE | MICROPIXEL_RASTER_SPRITE_TRANSPARENT_INDEX0));
+        additive.Finish();
+        Require(
+            service.Submit(additive.bytes.data(), static_cast<uint32_t>(additive.bytes.size()), surfaces).has_value());
+        std::memset(frame0.pixels, 0, kFrameBytes);  // the rejects below expect an untouched buffer
     }
     {
         DrawList broken{kFrame0};

@@ -69,6 +69,8 @@ Path(sys.argv[2]).write_text('\n'.join(lines)+'\n')
 PYFIXTURE
 build_and_run_c app_requirements -I "$test_output_dir" "$workspace_root/tools/tests/test_app_requirements.c"
 
+build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physics_test.cpp"
+
 build_and_run frame_timing \
     "$workspace_root/tools/tests/test_frame_timing.cpp"
 
