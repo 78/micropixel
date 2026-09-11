@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {"name": "launch", "format": "jpeg", "path": "launch.jpg"}
+  ]
+}

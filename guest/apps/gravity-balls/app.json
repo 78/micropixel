@@ -3,6 +3,8 @@
   "app_id": "micropixel.gravity-balls",
   "version": "0.1.0",
   "title": "Gravity Balls",
+  "asset_manifest": "assets/manifest.json",
+  "launch_asset": "launch",
   "threading": "none",
   "sources": [
     "src/main.cpp"

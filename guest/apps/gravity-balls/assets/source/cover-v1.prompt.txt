@@ -1,0 +1,9 @@
+Use case: stylized-concept
+Asset type: square game cover artwork, 1024x1024.
+Primary request: Design a polished cover for "Gravity Balls", a motion-controlled 3D physics toy where colorful balls bounce inside a transparent wireframe box. Faithful to its AMOLED pure black visual identity.
+Scene/backdrop: deep pure black, a restrained thin cool-gray blue wireframe cubic chamber in perspective with a faint far-wall grid. Box feels deep and dimensional.
+Subject: glossy luminous solid-colored spheres of varied sizes, cyan, coral red, amber yellow, mint green, blue and violet; a lively cluster in the lower two-thirds with several balls bouncing upward, clear overlap and depth, controlled soft colored glow and light pools. Smooth spherical shapes with tasteful specular highlights, rich saturated body color. Strong hero spheres, smaller balls further back. Convey playful gravity and tactile collisions.
+Style/medium: premium playful 3D game key art, clean graphic composition, crisp silhouettes, sophisticated restrained bloom.
+Composition/framing: square full bleed artwork, centered composition suitable for small launcher cards; generous black breathing room around large two-line title in upper third, spheres beneath. Keep title and primary balls inside central 80% so rounded corners are safe.
+Text (verbatim): "GRAVITY" on first line, "BALLS" on second line. Bold beautifully spaced geometric sans-serif, white, large and highly legible, restrained dimensional treatment.
+Constraints: Only this title. No subtitle, no logo, no watermark, no UI, no device mockup, no planets, no stars, no outer-space imagery, no elaborate trails, no characters. Actual deliverable cover artwork.
