@@ -30,11 +30,18 @@ constexpr uint8_t kPoolRow = 16;
 constexpr uint8_t kMaxShade = 252;   // ball / blob texels use 1..252
 constexpr uint8_t kGridIndex = 253;  // palette entry of the dim box rulers
 constexpr uint8_t kWireIndex = 254;  // palette entry of the box edges
-constexpr unsigned kDiameters[] = {14, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52};
-constexpr unsigned kSizeCount = sizeof(kDiameters) / sizeof(kDiameters[0]);
+// Ball sprite diameters authored for a 480 px buffer; larger buffers scale
+// them up (at most kMaxAtlasScale) so near balls are never magnified past
+// their baked anti-aliased rim.
+constexpr unsigned kBaseDiameters[] = {14, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52};
+constexpr unsigned kSizeCount = sizeof(kBaseDiameters) / sizeof(kBaseDiameters[0]);
+constexpr unsigned kBaseBufferSize = 480;
+constexpr float kMaxAtlasScale = 1.5F;
+constexpr unsigned kBaseDiameterSum = 14 + 16 + 20 + 24 + 28 + 32 + 36 + 40 + 44 + 48 + 52;
+constexpr unsigned kMaxDiameter = static_cast<unsigned>(52 * kMaxAtlasScale);
 constexpr unsigned kBlobSize = 64;
-constexpr unsigned kAtlasHeight = kBlobSize;
-constexpr unsigned kAtlasWidth = 14 + 16 + 20 + 24 + 28 + 32 + 36 + 40 + 44 + 48 + 52 + kBlobSize;
+constexpr unsigned kAtlasHeight = kMaxDiameter > kBlobSize ? kMaxDiameter : kBlobSize;
+constexpr unsigned kAtlasWidth = static_cast<unsigned>(kBaseDiameterSum * kMaxAtlasScale) + kSizeCount + kBlobSize;
 constexpr uint8_t kTextureSlot = 0;
 constexpr uint8_t kPaletteSlot = 0;
 constexpr unsigned kBufferCount = 3;
@@ -113,6 +120,9 @@ class Demo final {
         polygons_ = display.polygon_supported();
         additive_ = display.additive_sprite_supported();
         const float minimum = static_cast<float>(std::min(width_, height_));
+        const float atlas_scale = std::clamp(minimum / static_cast<float>(kBaseBufferSize), 1.0F, kMaxAtlasScale);
+        for (unsigned s = 0; s < kSizeCount; ++s)
+            diameters_[s] = std::min(kMaxDiameter, static_cast<unsigned>(Round(kBaseDiameters[s] * atlas_scale)));
         world_.extent = {kBoxHalfSize * static_cast<float>(width_) / minimum,
                          kBoxHalfSize * static_cast<float>(height_) / minimum,
                          kDepthOptions[kDefaultDepthOption] * 0.5F};
@@ -353,7 +363,7 @@ class Demo final {
         constexpr float kHalfVector[3] = {-0.248F, -0.331F, 0.911F};  // normalize(light + (0, 0, 1))
         unsigned offset = 0;
         for (unsigned s = 0; s < kSizeCount; ++s) {
-            const unsigned d = kDiameters[s];
+            const unsigned d = diameters_[s];
             size_offset_[s] = offset;
             const float radius = static_cast<float>(d) * 0.5F - 0.5F;
             const float centre = static_cast<float>(d) * 0.5F;
@@ -485,25 +495,33 @@ class Demo final {
         title_rect_ = {safe.x + 8, safe.y + 6, std::min(safe.width - 16, 260), title_h + 2};
         menu_button_ = {width_ - menu_w - 44, 4, menu_w + 40, button_h};
 
-        // Panel: nearly full width, finger-sized (>= 56 px) buttons, medium
-        // font. Title row, one row per setting and a hint, centred.
-        const int button = std::max(56, medium_h + 28);
-        const int row_h = button + 16;
-        const int panel_w = std::min(width_ - 24, label_w + value_w + 2 * button + 120);
-        const int panel_h = row_h * static_cast<int>(kSettingRows + 2) + 16;
+        // Panel: content-sized and centred, leaving at least ~10% of the
+        // buffer free on each side so a tap outside can close it. Buttons and
+        // padding scale with the buffer so they stay finger-sized on the panel
+        // whether the buffer is upscaled or native.
+        const float minimum = static_cast<float>(std::min(width_, height_));
+        const float ui = std::clamp(minimum / static_cast<float>(kBaseBufferSize), 0.75F, 1.5F);
+        const int pad = std::max(8, Round(16.0F * ui));
+        const int button = std::max(medium_h + 20, Round(56.0F * ui));
+        const int row_h = button + pad;
+        const int needed = 5 * pad + label_w + value_w + 2 * button;
+        const int panel_w = std::min(needed, width_ - 2 * Round(48.0F * ui));
+        const int title_h_row = medium_h + pad;
+        const int hint_h_row = small_h + pad;
+        const int panel_h = 2 * pad + title_h_row + row_h * static_cast<int>(kSettingRows) + hint_h_row;
         panel_rect_ = {(width_ - panel_w) / 2, (height_ - panel_h) / 2, panel_w, panel_h};
-        const int right = panel_rect_.x + panel_rect_.width - 16;
+        const int right = panel_rect_.x + panel_rect_.width - pad;
+        panel_title_ = {panel_rect_.x + pad, panel_rect_.y + pad + (title_h_row - medium_h) / 2};
         for (unsigned row = 0; row < kSettingRows; ++row) {
             SettingRow& r = rows_[row];
-            const int top = panel_rect_.y + 8 + row_h * static_cast<int>(row + 1);
-            r.label = {panel_rect_.x + 16, top + (row_h - medium_h) / 2};
+            const int top = panel_rect_.y + pad + title_h_row + row_h * static_cast<int>(row);
+            r.label = {panel_rect_.x + pad, top + (row_h - medium_h) / 2};
             r.plus = {right - button, top + (row_h - button) / 2, button, button};
-            r.value = {r.plus.x - 16 - value_w, r.label.y};
-            r.minus = {r.value.x - 16 - button, r.plus.y, button, button};
+            r.value = {r.plus.x - pad - value_w, r.label.y};
+            r.minus = {r.value.x - pad - button, r.plus.y, button, button};
         }
-        hint_ = {panel_rect_.x + 16,
-                 panel_rect_.y + 8 + row_h * static_cast<int>(kSettingRows + 1) + (row_h - small_h) / 2};
-        panel_title_ = {panel_rect_.x + 16, panel_rect_.y + 8 + (row_h - medium_h) / 2};
+        const int hint_top = panel_rect_.y + pad + title_h_row + row_h * static_cast<int>(kSettingRows);
+        hint_ = {panel_rect_.x + pad, hint_top + (hint_h_row - small_h) / 2};
     }
     static void FormatValue(mp::FixedString<16>& text, unsigned row, unsigned option) {
         text.Clear();
@@ -552,8 +570,8 @@ class Demo final {
             d.glow = Square(x, y, radius_px * 1.6F);
             unsigned best = 0;
             for (unsigned s = 1; s < kSizeCount; ++s)
-                if (Distance(static_cast<int>(kDiameters[s]), d.ball.width) <
-                    Distance(static_cast<int>(kDiameters[best]), d.ball.width))
+                if (Distance(static_cast<int>(diameters_[s]), d.ball.width) <
+                    Distance(static_cast<int>(diameters_[best]), d.ball.width))
                     best = s;
             d.size = static_cast<uint8_t>(best);
             d.color = static_cast<uint8_t>(i % kColors);
@@ -669,7 +687,7 @@ class Demo final {
             mp::Rect touched = d.ball;
             if (additive_) touched = Union(touched, d.glow);
             if (additive_ && d.pool_visible && Intersects(d.pool, touched)) touched = Union(touched, d.pool);
-            const auto diameter = static_cast<uint16_t>(kDiameters[d.size]);
+            const auto diameter = static_cast<uint16_t>(diameters_[d.size]);
             if (!list.Sprite(d.ball, kTextureSlot, d.color, static_cast<uint16_t>(size_offset_[d.size]), 0, diameter,
                              diameter))
                 return false;
@@ -842,6 +860,7 @@ class Demo final {
              gravity_option_ = kDefaultGravityOption;
     bool menu_open_{};
     unsigned size_offset_[kSizeCount]{};
+    unsigned diameters_[kSizeCount]{};
     unsigned wire_count_{}, blob_offset_{};
     int width_{}, height_{};
     float focal_{}, touch_scale_x_{1.0F}, touch_scale_y_{1.0F};
