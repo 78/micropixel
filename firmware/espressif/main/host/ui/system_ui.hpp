@@ -7,6 +7,7 @@
 #include <expected>
 #include <utility>
 
+#include "device/contracts/cellular.hpp"
 #include "device/contracts/power.hpp"
 #include "host/store_update_request.hpp"
 
@@ -229,6 +230,10 @@ struct StatusLayerModel final {
     bool cellular_connected{};
     bool cellular_switching{};
     bool cellular_switch_failed{};
+    device::CellularSimSlot cellular_sim_slot{device::CellularSimSlot::kUnknown};
+    bool cellular_sim_pending{};
+    bool cellular_sim_failed{};
+    uint8_t cellular_sim_restart_seconds{};
     bool battery_available{};
     bool battery_charging{};
     bool battery_discharging{};
@@ -512,6 +517,8 @@ enum class SystemUiActionType {
     kCloseWifiNetworkScan,
     kSetWifiEnabled,
     kSetCellularEnabled,
+    kRefreshCellularSim,
+    kSetCellularSimSlot,
     kConnectSavedWifi,
     kConnectNewWifi,
     kDisconnectWifi,

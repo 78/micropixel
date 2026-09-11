@@ -145,6 +145,7 @@ void CellularController::RequestSimRefresh() {
     if (!snapshot_.available || !snapshot_.enabled || background_ == nullptr || stopping_ || paused_ ||
         snapshot_.switching || snapshot_.sim_pending)
         return;
+    sim_cancelled_ = false;
     snapshot_.sim_pending = true;
     if (!background_->Submit(ReadSim, this)) snapshot_.sim_pending = false;
 }
@@ -156,7 +157,9 @@ std::expected<void, device::CellularError> CellularController::SetSimSlot(device
         return std::unexpected(device::CellularError::kUnavailable);
     }
     if (snapshot_.switching || snapshot_.sim_pending) return std::unexpected(device::CellularError::kBusy);
+    if (slot == snapshot_.sim_slot) return {};
     requested_sim_ = slot;
+    sim_cancelled_ = false;
     snapshot_.sim_pending = true;
     snapshot_.sim_failed = false;
     if (!background_->Submit(SwitchSim, this)) {
@@ -212,7 +215,7 @@ void CellularController::FinishSim(bool failed, device::CellularSimSlot slot) {
 void CellularController::ReadSim(void* context) {
     auto& self = *static_cast<CellularController*>(context);
     std::lock_guard operation(self.operation_mutex_);
-    if (self.stopping_ || self.paused_) {
+    if (self.stopping_ || self.paused_ || self.sim_cancelled_) {
         self.FinishSim(true, device::CellularSimSlot::kUnknown);
         return;
     }
@@ -223,7 +226,7 @@ void CellularController::ReadSim(void* context) {
 void CellularController::SwitchSim(void* context) {
     auto& self = *static_cast<CellularController*>(context);
     std::lock_guard operation(self.operation_mutex_);
-    if (self.stopping_ || self.paused_) {
+    if (self.stopping_ || self.paused_ || self.sim_cancelled_) {
         self.FinishSim(true, device::CellularSimSlot::kUnknown);
         return;
     }
@@ -245,7 +248,29 @@ void CellularController::SwitchSim(void* context) {
         (void)self.modem_.SendAt("AT+CFUN=1", response, failed ? 10000 : 15000);
     }
     // Read actual state after success and failure, never guess from a UI preference.
-    self.FinishSim(failed, self.QuerySimSlot());
+    const auto slot = self.QuerySimSlot();
+    if (!failed) {
+        // Factory network settings restart three seconds after a successful SIM write.
+        for (uint8_t seconds = 3; seconds != 0 && !self.stopping_; --seconds) {
+            {
+                std::lock_guard lock(self.snapshot_mutex_);
+                self.snapshot_.sim_slot = slot;
+                self.snapshot_.sim_restart_seconds = seconds;
+                if (self.sink_ != nullptr) self.sink_(self.sink_context_);
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        if (!self.stopping_) {
+            const esp_err_t status = self.modem_.Stop();
+            if (status != ESP_OK) ESP_LOGW(kTag, "modem stop before SIM restart: %s", esp_err_to_name(status));
+            if (!self.stopping_) esp_restart();
+        }
+    }
+    {
+        std::lock_guard lock(self.snapshot_mutex_);
+        self.snapshot_.sim_restart_seconds = 0;
+    }
+    self.FinishSim(failed, slot);
 }
 
 void CellularController::SwitchMode(void* context) {
@@ -336,10 +361,25 @@ void CellularController::ReadSignal(void* context) {
 
 esp_err_t CellularController::Pause() {
     std::lock_guard operation(operation_mutex_);
+    {
+        std::lock_guard lock(snapshot_mutex_);
+        // Block new SIM requests and invalidate the single pending job atomically.
+        // Resume does not clear cancellation; only a new accepted request does.
+        paused_ = true;
+        sim_cancelled_ = true;
+    }
     const esp_err_t status = modem_.Stop();
     if (status != ESP_OK) return status;
-    paused_ = true;
-    return SetPower(false);
+    const esp_err_t power = SetPower(false);
+    if (power != ESP_OK && !stopping_ && Snapshot().enabled) {
+        // Sleep is rejected by the caller, so restore service while the Host stays awake.
+        const esp_err_t rollback = StartModem();
+        if (rollback != ESP_OK) {
+            Publish(device::CellularState::kFailed);
+            ESP_LOGE(kTag, "cellular sleep rollback failed: %s", esp_err_to_name(rollback));
+        }
+    }
+    return power;
 }
 
 esp_err_t CellularController::Resume() {

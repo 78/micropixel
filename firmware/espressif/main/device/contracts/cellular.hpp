@@ -20,6 +20,7 @@ struct CellularSnapshot final {
     CellularSimSlot sim_slot{CellularSimSlot::kUnknown};
     bool sim_pending{};
     bool sim_failed{};
+    uint8_t sim_restart_seconds{};
     CellularState state{CellularState::kOff};
 };
 

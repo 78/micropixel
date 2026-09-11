@@ -338,6 +338,10 @@ void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::WifiSnaps
     model.cellular_connected = cell.connected;
     model.cellular_switching = cell.switching;
     model.cellular_switch_failed = cell.switch_failed;
+    model.cellular_sim_slot = cell.sim_slot;
+    model.cellular_sim_pending = cell.sim_pending;
+    model.cellular_sim_failed = cell.sim_failed;
+    model.cellular_sim_restart_seconds = cell.sim_restart_seconds;
     model.wifi_available = snapshot.available;
     model.wifi_enabled = snapshot.enabled;
     model.wifi_connected = snapshot.connected;
@@ -1026,6 +1030,19 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
                 controls_changed = RefreshBatteryStatus(model, battery);
                 next_battery_sample_us = esp_timer_get_time() + kBatterySamplePeriodUs;
                 break;
+            case host_ui::SystemUiActionType::kRefreshCellularSim:
+                cellular.RequestSimRefresh();
+                RefreshWifiStatus(model, wifi.Snapshot(), cellular);
+                controls_changed = true;
+                break;
+            case host_ui::SystemUiActionType::kSetCellularSimSlot: {
+                if (ReadFirmwareUpdate(remote_control).in_progress || action->value > 1U) break;
+                const auto result = cellular.SetSimSlot(static_cast<device::CellularSimSlot>(action->value));
+                if (!result) ESP_LOGW(kTag, "SIM switch rejected: error=%u", static_cast<unsigned>(result.error()));
+                RefreshWifiStatus(model, wifi.Snapshot(), cellular);
+                controls_changed = true;
+                break;
+            }
             case host_ui::SystemUiActionType::kSetCellularEnabled: {
                 if (ReadFirmwareUpdate(remote_control).in_progress) break;
                 const auto result = cellular.SetEnabled(action->value != 0);

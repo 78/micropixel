@@ -10,6 +10,8 @@ namespace {
 int32_t stored_mode{};
 bool mode_present{};
 bool fail_commit{};
+int failed_reads{};
+int failed_writes{};
 uint8_t output_port = 0xff;
 int restarts{};
 int wakeups{};
@@ -34,11 +36,19 @@ esp_err_t nvs_commit(nvs_handle_t) { return fail_commit ? ESP_FAIL : ESP_OK; }
 void esp_restart() { ++restarts; }
 esp_err_t i2c_master_transmit_receive(void*, const uint8_t* address, size_t size, uint8_t* data, size_t length, int) {
     assert(size == 1 && *address == 2 && length == 1);
+    if (failed_reads > 0) {
+        --failed_reads;
+        return ESP_FAIL;
+    }
     *data = output_port;
     return ESP_OK;
 }
 esp_err_t i2c_master_transmit(void*, const uint8_t* bytes, size_t length, int) {
     assert(length == 2 && bytes[0] == 2);
+    if (failed_writes > 0) {
+        --failed_writes;
+        return ESP_FAIL;
+    }
     output_port = bytes[1];
     return ESP_OK;
 }
@@ -138,19 +148,21 @@ int main() {
         }
         UartEthModem::query_response = "+ECSIMCFG: \"SimSimulator\",0\r\n+ECSIMCFG: \"SimSlot\", 1 \r\nOK";
         clear_commands();
+        const int restarts_before_sim = restarts;
         assert(controller.SetSimSlot(Slot::kInternal));
         background.Run();
         assert((UartEthModem::commands ==
                 std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG=SimSlot,1", "AT+CFUN=1", "AT+ECSIMCFG?"}));
         assert((UartEthModem::timeouts == std::vector<uint32_t>{8000, 5000, 15000, 5000}));
         assert(controller.Snapshot().sim_slot == Slot::kInternal && !controller.Snapshot().sim_failed);
-        // Failure to restore RF is best effort, as in the factory sequence.
+        assert(restarts == restarts_before_sim + 1);
+        // Selecting the known current slot must not enqueue work, drop RF or reboot.
         clear_commands();
-        UartEthModem::failed_command = "AT+CFUN=1";
         assert(controller.SetSimSlot(Slot::kInternal));
+        assert(!controller.Snapshot().sim_pending);
         background.Run();
-        assert(!controller.Snapshot().sim_failed);
-        // Slot-write failure still restores RF, then reads the actual slot.
+        assert(UartEthModem::commands.empty() && restarts == restarts_before_sim + 1);
+        // First exercise slot-write failure while the current slot is still internal.
         clear_commands();
         UartEthModem::failed_command = "AT+ECSIMCFG=SimSlot,0";
         assert(controller.SetSimSlot(Slot::kExternal));
@@ -159,28 +171,78 @@ int main() {
                 std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG=SimSlot,0", "AT+CFUN=1", "AT+ECSIMCFG?"}));
         assert(UartEthModem::timeouts[2] == 10000);
         assert(controller.Snapshot().sim_failed && controller.Snapshot().sim_slot == Slot::kInternal);
+        assert(restarts == restarts_before_sim + 1);
         clear_commands();
         UartEthModem::failed_command = "AT+CFUN=0";
         assert(controller.SetSimSlot(Slot::kExternal));
         background.Run();
         assert((UartEthModem::commands == std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG?"}));
         assert(controller.Snapshot().sim_failed);
+        // Failure to restore RF is best effort after successfully selecting a different SIM.
+        clear_commands();
+        UartEthModem::failed_command = "AT+CFUN=1";
+        UartEthModem::query_response = "+ECSIMCFG: \"SimSlot\",0\r\nOK\r\n";
+        assert(controller.SetSimSlot(Slot::kExternal));
+        background.Run();
+        assert(!controller.Snapshot().sim_failed && controller.Snapshot().sim_slot == Slot::kExternal);
+        assert(restarts == restarts_before_sim + 2);
+        clear_commands();
+        // Queued requests must stay cancelled even if resume finishes before the worker runs.
+        assert(controller.SetSimSlot(Slot::kInternal));
+        assert(controller.Pause() == ESP_OK);
+        assert(controller.Resume() == ESP_OK);
+        assert(!controller.SetSimSlot(Slot::kInternal));  // Old job still owns the pending slot.
+        background.Run();
+        assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
+        assert(restarts == restarts_before_sim + 2);
+        controller.RequestSimRefresh();
+        assert(controller.Pause() == ESP_OK);
+        assert(controller.Resume() == ESP_OK);
+        background.Run();
+        assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
+        // A new request after draining cancellation is accepted normally.
+        controller.RequestSimRefresh();
+        background.Run();
+        assert(controller.Snapshot().sim_slot == Slot::kExternal);
         clear_commands();
         background.accepting = false;
-        assert(!controller.SetSimSlot(Slot::kExternal));
+        assert(!controller.SetSimSlot(Slot::kInternal));
         assert(!controller.Snapshot().sim_pending);
         background.accepting = true;
         assert(!controller.SetSimSlot(Slot::kUnknown));
         assert(!controller.SetSimSlot(static_cast<Slot>(42)));
-        assert(controller.SetSimSlot(Slot::kExternal));
+        assert(controller.SetSimSlot(Slot::kInternal));
         assert(controller.Pause() == ESP_OK);
         background.Run();
         assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
-        assert(!controller.SetSimSlot(Slot::kExternal));
+        assert(!controller.SetSimSlot(Slot::kInternal));
         assert(controller.Resume() == ESP_OK);
         controller.RequestSimRefresh();
         controller.Shutdown();
         background.Run();
         assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
+    }
+    {
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        assert(controller.Initialize());
+        int starts = UartEthModem::starts;
+        failed_reads = 1;
+        assert(controller.Pause() == ESP_FAIL);
+        assert(UartEthModem::starts == ++starts && output_port == 0xff);
+        assert(controller.Snapshot().state == micropixel::device::CellularState::kConnecting);
+        failed_writes = 1;
+        assert(controller.Pause() == ESP_FAIL);
+        assert(UartEthModem::starts == ++starts && output_port == 0xff);
+        // A failed rollback is visible rather than reported as a successful recovery.
+        failed_reads = 2;
+        assert(controller.Pause() == ESP_FAIL);
+        assert(controller.Snapshot().state == micropixel::device::CellularState::kFailed);
+        assert(controller.Resume() == ESP_OK);
+        starts = UartEthModem::starts;
+        failed_writes = 1;
+        controller.Shutdown();
+        assert(UartEthModem::starts == starts);  // Never power back on during shutdown.
     }
 }

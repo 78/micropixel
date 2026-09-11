@@ -54,6 +54,7 @@ class CellularController final : public device::Cellular {
     work::BackgroundExecutor* background_{};
     std::atomic<bool> stopping_{};
     std::atomic<bool> paused_{true};
+    std::atomic<bool> sim_cancelled_{};
     device::CellularSimSlot requested_sim_{device::CellularSimSlot::kUnknown};
     bool requested_mode_{};
     bool initialized_{};

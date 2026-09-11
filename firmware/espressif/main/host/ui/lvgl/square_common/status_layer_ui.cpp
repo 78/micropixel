@@ -292,7 +292,8 @@ void StatusLayerUi::EmitTarget(TouchTarget target, uint64_t timestamp_us) {
             break;
         case TouchTarget::kCellular:
             if (cellular_available_ && !cellular_switching_) {
-                EmitAction(host_ui::SystemUiActionType::kSetCellularEnabled, cellular_enabled_ ? 0U : 1U);
+                ShowCellularDialogLocked();
+                EmitAction(host_ui::SystemUiActionType::kRefreshCellularSim);
             }
             break;
         case TouchTarget::kPerformance:
@@ -307,6 +308,108 @@ void StatusLayerUi::EmitTarget(TouchTarget target, uint64_t timestamp_us) {
             break;
         case TouchTarget::kNone:
             break;
+    }
+}
+
+void StatusLayerUi::ShowCellularDialogLocked() {
+    lv_obj_add_flag(status_dialog_, LV_OBJ_FLAG_HIDDEN);
+    if (cellular_dialog_ != nullptr) {
+        lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
+        UpdateCellularDialogLocked();
+        return;
+    }
+    cellular_dialog_ = lv_obj_create(status_layer_);
+    lv_obj_set_size(cellular_dialog_, layout_->dialog.width, layout_->dialog.height);
+    lv_obj_center(cellular_dialog_);
+    lv_obj_set_style_bg_color(cellular_dialog_, lv_color_hex(theme::kInactiveControlBackground), 0);
+    lv_obj_set_style_bg_opa(cellular_dialog_, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(cellular_dialog_, lv_color_hex(theme::kPrimaryText), 0);
+    lv_obj_set_style_text_font(cellular_dialog_, platform::lvgl::BuiltinLatinFont(layout_->control_font), 0);
+    lv_obj_set_flex_flow(cellular_dialog_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(cellular_dialog_, 12, 0);
+    lv_obj_set_style_pad_row(cellular_dialog_, 8, 0);
+    cellular_status_ = lv_label_create(cellular_dialog_);
+    lv_obj_set_width(cellular_status_, LV_PCT(100));
+    lv_label_set_long_mode(cellular_status_, LV_LABEL_LONG_WRAP);
+    const auto button = [this](const char* text, lv_obj_t** label_out = nullptr) {
+        auto* object = lv_button_create(cellular_dialog_);
+        lv_obj_set_width(object, LV_PCT(100));
+        lv_obj_set_height(object, layout_->screen_width <= 320 ? 36 : 48);
+        lv_obj_set_style_bg_color(object, lv_color_hex(theme::kAccentStrong), 0);
+        lv_obj_set_style_text_color(object, lv_color_hex(theme::kOverlayText), 0);
+        auto* label = lv_label_create(object);
+        lv_label_set_text(label, text);
+        lv_obj_center(label);
+        lv_obj_add_event_cb(object, CellularEvent, LV_EVENT_SHORT_CLICKED, this);
+        if (label_out != nullptr) *label_out = label;
+        return object;
+    };
+    cellular_mode_ = button("", &cellular_mode_label_);
+    cellular_sim_buttons_[0] = button("Use external SIM");
+    cellular_sim_buttons_[1] = button("Use internal SIM");
+    cellular_refresh_ = button("Refresh SIM status");
+    cellular_close_ = button("Back");
+    UpdateCellularDialogLocked();
+}
+
+void StatusLayerUi::UpdateCellularDialogLocked() {
+    if (cellular_dialog_ == nullptr) return;
+    const char* slot = cellular_sim_slot_ == device::CellularSimSlot::kExternal   ? "External SIM"
+                       : cellular_sim_slot_ == device::CellularSimSlot::kInternal ? "Internal SIM"
+                                                                                  : "SIM unknown";
+    const char* status = cellular_switching_       ? "Restarting..."
+                         : cellular_sim_pending_   ? "Updating SIM..."
+                         : cellular_switch_failed_ ? "Could not save network mode"
+                         : !cellular_enabled_      ? "Wi-Fi mode"
+                         : cellular_sim_failed_    ? "SIM operation failed. Refresh or retry."
+                                                   : slot;
+    char countdown[48]{};
+    if (cellular_sim_restart_seconds_ != 0) {
+        (void)std::snprintf(countdown, sizeof(countdown), "SIM selected. Restarting in %u...",
+                            static_cast<unsigned>(cellular_sim_restart_seconds_));
+        status = countdown;
+    }
+    lv_label_set_text(cellular_status_, status);
+    lv_label_set_text(cellular_mode_label_, cellular_enabled_ ? "Restart with Wi-Fi" : "Restart with 4G");
+    const bool busy = cellular_switching_ || cellular_sim_pending_;
+    const auto enabled = [](lv_obj_t* object, bool value) {
+        if (value)
+            lv_obj_remove_state(object, LV_STATE_DISABLED);
+        else
+            lv_obj_add_state(object, LV_STATE_DISABLED);
+    };
+    enabled(cellular_mode_, !busy && cellular_available_);
+    enabled(cellular_refresh_, !busy && cellular_enabled_);
+    for (uint32_t slot_index = 0; slot_index < 2; ++slot_index) {
+        auto* button = cellular_sim_buttons_[slot_index];
+        enabled(button, !busy && cellular_enabled_ && static_cast<uint32_t>(cellular_sim_slot_) != slot_index);
+        if (static_cast<uint32_t>(cellular_sim_slot_) == slot_index)
+            lv_obj_add_state(button, LV_STATE_CHECKED);
+        else
+            lv_obj_remove_state(button, LV_STATE_CHECKED);
+    }
+}
+
+void StatusLayerUi::CellularEvent(lv_event_t* event) {
+    auto* ui = static_cast<StatusLayerUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr) return;
+    const auto* target = lv_event_get_target_obj(event);
+    if (target == ui->cellular_close_) {
+        lv_obj_add_flag(ui->cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(ui->status_dialog_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (ui->cellular_switching_ || ui->cellular_sim_pending_) return;
+    if (target == ui->cellular_mode_) {
+        ui->EmitAction(host_ui::SystemUiActionType::kSetCellularEnabled, ui->cellular_enabled_ ? 0U : 1U);
+    } else if (target == ui->cellular_refresh_) {
+        ui->EmitAction(host_ui::SystemUiActionType::kRefreshCellularSim);
+    } else if (ui->cellular_enabled_) {
+        for (uint32_t slot = 0; slot < 2; ++slot) {
+            if (target == ui->cellular_sim_buttons_[slot]) {
+                ui->EmitAction(host_ui::SystemUiActionType::kSetCellularSimSlot, slot);
+            }
+        }
     }
 }
 
@@ -548,6 +651,14 @@ StatusLayerUi::MetricObjects StatusLayerUi::DrawMetric(lv_obj_t* root, uint32_t 
 }
 
 void StatusLayerUi::ResetObjectPointers() {
+    cellular_dialog_ = nullptr;
+    cellular_status_ = nullptr;
+    cellular_mode_ = nullptr;
+    cellular_mode_label_ = nullptr;
+    cellular_sim_buttons_[0] = nullptr;
+    cellular_sim_buttons_[1] = nullptr;
+    cellular_refresh_ = nullptr;
+    cellular_close_ = nullptr;
     status_dialog_ = nullptr;
     for (uint32_t index = 0U; index < 3U; ++index) {
         quick_panels_[index] = nullptr;
@@ -590,6 +701,11 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     cellular_available_ = model.cellular_available;
     cellular_enabled_ = model.cellular_enabled;
     cellular_switching_ = model.cellular_switching;
+    cellular_switch_failed_ = model.cellular_switch_failed;
+    cellular_sim_slot_ = model.cellular_sim_slot;
+    cellular_sim_pending_ = model.cellular_sim_pending;
+    cellular_sim_failed_ = model.cellular_sim_failed;
+    cellular_sim_restart_seconds_ = model.cellular_sim_restart_seconds;
     const bool compact = layout_ != nullptr && layout_->screen_width <= 320;
     const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
     const char* wifi_detail = !model.wifi_available
@@ -603,7 +719,7 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
             ? unavailable
             : (model.cellular_switch_failed ? "SAVE FAILED"
                : model.cellular_switching   ? "RESTARTING"
-                                            : (model.cellular_enabled ? "RESTART TO WI-FI" : "RESTART TO 4G"));
+                                            : (model.cellular_enabled ? "SIM / NETWORK" : "NETWORK"));
     UpdateQuickCardLocked(TouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
     UpdateQuickCardLocked(TouchTarget::kCellular, cellular_detail, model.cellular_enabled, model.cellular_available);
     UpdateQuickCardLocked(TouchTarget::kPerformance,
@@ -615,6 +731,7 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     UpdateSliderLocked(TouchTarget::kBrightness, model.brightness_percent);
     UpdateSliderLocked(TouchTarget::kVolume, model.volume_percent);
     UpdateSramMetricLocked(model);
+    UpdateCellularDialogLocked();
 }
 
 void StatusLayerUi::UpdateSramMetricLocked(const host_ui::StatusLayerModel& model) {
@@ -633,6 +750,11 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     cellular_available_ = model.cellular_available;
     cellular_enabled_ = model.cellular_enabled;
     cellular_switching_ = model.cellular_switching;
+    cellular_switch_failed_ = model.cellular_switch_failed;
+    cellular_sim_slot_ = model.cellular_sim_slot;
+    cellular_sim_pending_ = model.cellular_sim_pending;
+    cellular_sim_failed_ = model.cellular_sim_failed;
+    cellular_sim_restart_seconds_ = model.cellular_sim_restart_seconds;
     ResolveLayoutLocked();
     if (status_layer_ == nullptr) {
         status_layer_ = lv_obj_create(lv_screen_active());
@@ -670,7 +792,7 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
             ? unavailable
             : (model.cellular_switch_failed ? "SAVE FAILED"
                : model.cellular_switching   ? "RESTARTING"
-                                            : (model.cellular_enabled ? "RESTART TO WI-FI" : "RESTART TO 4G"));
+                                            : (model.cellular_enabled ? "SIM / NETWORK" : "NETWORK"));
     DrawQuickCard(status_dialog_, TouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled, model.wifi_available);
     DrawQuickCard(status_dialog_, TouchTarget::kCellular, "4G", cellular_detail, model.cellular_enabled,
                   model.cellular_available);
