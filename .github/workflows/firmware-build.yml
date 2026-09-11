@@ -132,6 +132,9 @@ jobs:
   assemble:
     name: Assemble verified release artifacts
     needs: [guests, hosts]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     if: ${{ always() && needs.guests.result == 'success' && (needs.hosts.result == 'success' || needs.hosts.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
@@ -140,6 +143,9 @@ jobs:
         with:
           name: firmware-guests
           path: build/ci-guests
+      - name: Wait for all reused Host jobs to succeed
+        if: inputs.reuse_hosts_run != ''
+        run: python3 tools/ci/wait_hosts.py --run '${{ inputs.reuse_hosts_run }}'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: host-*
