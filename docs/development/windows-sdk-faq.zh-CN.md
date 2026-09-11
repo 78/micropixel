@@ -86,7 +86,7 @@ micropixel sdk use 0.17.0 --external-toolchain --yes --json
 [统一 SDK 打包器](../../tools/build_sdk_release.py) 为网站与 GitHub 生成同一确定性归档。
 已发布的同版本文件禁止覆盖。
 
-Windows 验收使用 [W01–W19 清单](windows-acceptance.zh-CN.md)。正式版要求自动验证通过。开源发布允许未签名安装器和未完成的人工验收，但须公开说明：当前已在 Windows 11 与 S31/S3 完成部分验收，Windows 10 和其余人工项目待完成。代码签名不再是发布阻塞条件；当前 CI 运行于 Windows Server，不能代替 Windows 10 验收。
+Windows 验收使用 [W01–W19 清单](windows-acceptance.zh-CN.md)。正式版要求自动验证通过。开源发布允许未签名安装器和未完成的人工验收，但须公开说明：当前已在 Windows 11 与 S31/S3 完成部分验收，Windows 10 和其余人工项目待完成。代码签名不作为发布前置条件；当前 CI 运行于 Windows Server，不能代替 Windows 10 验收。
 
 AI 安装与使用契约见 [SDK AI 指南](../../guest/sdk/AI.md)。
 

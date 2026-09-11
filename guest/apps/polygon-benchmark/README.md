@@ -1,7 +1,7 @@
 # Polygon Benchmark
 
 Measures the Host raster `TRIANGLE`/`QUAD` kernels (Graphics 1.6 polygon capability) on a real
-board. It is the acceptance spike for the TR1-style polygon path: the numbers decide whether a
+board. Use it to determine whether a
 480×480 scene at ~1.5× overdraw fits in 20 fps or needs `--upscale=2` / portal scissors.
 
 ## Run
@@ -47,18 +47,3 @@ polygon-bench: phase=quads-1.5x frames=120 fps_x100=2210 render_avg_us=38210 pre
 Acceptance for the polygon path: `quads-1.5x` at 480×480 ≥ 20 fps (`fps_x100 ≥ 2000`). Below that,
 compare the same phase with `--upscale=2` before building content that relies on full resolution.
 Keep captured logs out of the repository.
-
-## ESP-Mosaico (S31) sample, 480×480, performance profile, Direct Surface
-
-| Phase | fps | render µs | Host ns/px (quad) | overdraw |
-|---|---:|---:|---:|---:|
-| `fill` | 40 | 14.3 | 60 | 1.00× |
-| `quads-1x` | 40 | 15.1 | 83 | 0.75× |
-| `quads-1.5x` | 39.5 | 22.6 | 83 | 1.14× |
-| `quads-2x` | 33.2 | 29.5 | 82 | 1.50× |
-| `small-2x` | 16.5 | 59.5 | 145 | 1.53× |
-| `room` | 28–29 | 33–35 | 91 (quad) / 108 (tri) | 1.99× |
-
-`quads-1.5x` clears the gate with headroom; full-resolution content does not need `upscale=2`.
-`small-2x` shows setup cost dominates when many tiny quads share the same pixel budget — keep room
-meshes coarse and rely on portal scissors rather than micro-tessellation.

@@ -7,8 +7,7 @@ S3 preview 用来验证同一 Guest 模型在 Xtensa、CPU 图形合成与 SPI �
 ## 1. 当前能力
 
 BOX-3 已接入 Xtensa AOT、RGB565 图形、320×240 System Shell、触摸、USB 本地控制与 JPEG 截图，
-以及原生 Wi-Fi、音频、板载 IMU、Pmod GPIO、OTA 和 Remote Control。历史 P0–P5 任务表不再作为
-当前配置或命令入口。
+以及原生 Wi-Fi、音频、板载 IMU、Pmod GPIO、OTA 和 Remote Control。
 
 BOX-3 侧边 Mute 归 Host，静音时保持用户保存的主音量。可选能力初始化失败时只标记 unavailable，
 不阻断显示、USB 和 Runtime。microSD、麦克风与 Bluetooth 尚未开放 Guest Service；BOX-3 不注册
@@ -48,8 +47,8 @@ canonical RGB565 与面板线序分开处理。换字节序仍有成本，但不
 资源可在打包期转为 RGB565，保留的压缩图片在加载时解码。
 
 BOX-3 当前使用 40MHz SPI、40 行 PSRAM double draw buffer，直接从 PSRAM 做 SPI DMA。
-双缓冲让 CPU 绘制与传输重叠，减少 flush 次数不一定更快；历史对照中整屏 single buffer 反而失去
-这种重叠。80MHz 曾出现显示异常，不能仅凭理论带宽提高默认时钟。
+双缓冲让 CPU 绘制与传输重叠；整屏单缓冲会失去这种并行能力，不能仅以 flush 次数判断性能。
+提高 SPI 时钟需验证显示稳定性，不能仅凭理论带宽修改默认值。
 具体参数以 [BOX-3 defaults](../../firmware/espressif/sdkconfig.s3-box-3.defaults)和
 [板级实现](../../firmware/espressif/main/platform/boards/esp32-s3-box-3/)为准。
 

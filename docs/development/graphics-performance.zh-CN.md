@@ -127,14 +127,13 @@ Guest buffer 的 pinned memory 会提前占用连续空间，默认 Host buffer 
 `lcd.dsi` 的 underrun 则表示扫描输出取数不足，应结合 PSRAM 带宽与真机画面单独验证。
 Claw4 的 DPI 像素时钟设为 40 MHz，由默认 240 MHz 时钟源精确 6 分频产生；
 按 720×720 和现有消隐时序估算约 65.5 Hz。
-相对原来的 48 MHz，扫描像素带宽需求降低约 16.7%；RGB888、DSI lane 速率保持不变。
 P4 L2 Cache 配置为 256 KiB、cache line 为 64 B；相对 128 KiB Cache 额外占用 128 KiB 内部 SRAM。
 ESP-Hosted transport 缓冲池优先放在 PSRAM，以保留内部 SRAM。当前发送池的 1600 B 块间距能满足
 64 B 对齐，但不能保证每块都满足 128 B 对齐；不要在该配置下单独将 cache line 改回 128 B，否则
 SDIO DMA 参数检查可能返回 `ESP_ERR_INVALID_ARG`（258），继而触发 Host 重启。
 P4 的 LVGL 图像、App Surface、转场、扫描暂存池及对齐 bitmap 分配跟随生成配置中的 cache line
 大小，当前为 64 B；DMA 目标分配长度仍覆盖完整 cache line。PPA/DMA 的 128 B burst 长度独立于
-分配对齐，不随本次 cache-line 配置调整。
+分配对齐，不由 cache-line 配置决定。
 调整后需真机检查内部 heap 最低余量及转场、应用运行时的 underrun，编译通过不能证明运行余量充足。
 
 保留截图作为卡片图片时，不要把 LVGL 绘制缓冲区的行对齐要求套在图片源上。P4 的 202×202 PPA
@@ -148,30 +147,18 @@ HostSurface 的 RasterDrawList 把 Column、Span/SpanPair、Sprite/Image、Rect�
 遮挡判断和绘制顺序，Host 校验记录后写入空闲的 Host buffer。这样既摊薄跨 ABI 成本，也避免 Guest
 逐像素循环的地址计算和边界检查开销；Host kernel 仍可能受 PSRAM 带宽限制。
 
-S31/Mosaico 480×480 上的实测（coastline 迁移，`raster kinds` 遥测）：不缩放的不透明 Image 拷贝约 65–70 ns/px，
-Span 约 50 ns/px，不透明 Rect 约 60 ns/px，都接近 PSRAM 读+写的内存瓶颈；Host buffer 全屏写一遍约 6 ms。
-把内核改成 32 位字操作、按字换字节序，只带来约 5% 改善。因此第一优先级仍是减少被覆盖的像素
-（背景只画路面两侧、HUD 下不画路面），其次才是内核细节；关闭 Guest AOT 边界检查
-（`--unchecked-memory`）在 coastline 每帧约 40 ms 中只省约 1.3 ms，说明瓶颈不在 Guest 侧。
-HostSurface 帧由 Guest 同步提交，一帧超过 30 FPS 槽位时不要按周期网格跳到 15 FPS，应在完成后的下一
-Tick 续帧，并用三个 buffer 避免前一帧扫描未释放导致的空转（coastline 由此从 15 FPS 提到 24 FPS）。
+图形填充可能受 PSRAM 带宽限制。使用 `raster kinds` 与 `raster copy engine` 聚合遥测，
+分别比较各类记录的像素数、执行时间和 DMA 批次；同时测量 Guest 几何和缓冲等待，避免只优化单个内核。
 
-S31 上用 `Dma2dCopyEngine` 做 PSRAM→PSRAM 的 RGB565 裸拷贝：512×480 单块约 12 ns/px（3.2 ms），
-480×150 单块约 13 ns/px，而 32 个 100×4 窄条一次事务约 39 ns/px，与 CPU 换序拷贝（空载 39 ns/px）
-持平。所以 Raster 的 Image 硬件路径只接受裁剪后宽 ≥32、面积 ≥4096 的块，且全屏背景应作为一条
-记录提交，而不是按路面两侧切条。DMA2D 的 TX scrambler 按 3 字节组置换，不能给 2 字节像素换字节序
-（实测输出错位并在下一事务超时），因此纹理必须预先按面板字节序保存（`kRgb565ByteSwapped`），
-硬件只做同序拷贝。接入 coastline 后 S31 `--demo`：Host 内核 27 → 21.5 ms/帧（`raster copy engine` 每帧
-1 批 1 块 3.9 ms、16 ns/px 含 cache 同步与唤醒），渲染 34.8 → 29.5 ms，24 → 28 FPS；剩余 Image 时间是
-带 alpha 的 BGRA 赛车/图标，仍走 CPU。
+RGB565 Image 的硬件拷贝要求不透明、不缩放、源与目标字节序一致，并满足宽度与面积门槛。
+完整条件见 [SDK API 设计](../design/sdk-api.zh-CN.md#4-host-与协议)。大块拷贝可以摊薄 DMA
+启动成本，拆成窄条则可能失去收益；背景整块拷贝与减少遮挡区域的 CPU 绘制应按场景对比。
+DMA2D 的 TX scrambler 按三字节组置换，不用于 RGB565 像素换序；硬件路径使用已按面板字节序保存的纹理。
 
-硬件路径要求纹理与目标同格式、同比例。P4/Claw4 的面板是 RGB888，`ResourceService` 默认把不透明纹理
-解码成 BGR888；同时 coastline 的 HostSurface 是 720/2 = 360×360 buffer，而 `TextureScale::kDisplay`
-按面板比例解码，背景对 buffer 是 2:1。两者叠加使整屏 Image 落到逐像素转换采样（约 26 ms、195 ns/px），
-比原先按路面切条时更慢。修正：建立 DirectSurface 后 `ResourceService` 改按 surface 的 RGB565 格式解码
-之后的不透明纹理；SDK 新增 `TextureScale::kSurface`（面板比例除以 surface upscale）。P4 `--demo`：
-Host 内核 36 → 13.3 ms/帧（Image 26 → 4.4 ms，DMA 背景块 2.4 ms、18 ns/px），渲染 38 → 19 ms，
-22.5 → 29.6 FPS。检查 `micropixel_resource: loaded format=… WxH bytes=…`：bytes 应为 W×H×2。
+在 RGB888 面板上使用 RGB565 DirectSurface 时，需核对资源加载格式与实际 buffer 分辨率。
+`ResourceService` 在 DirectSurface 建立后按 surface 格式解码随后加载的不透明纹理；
+`TextureScale::kSurface` 按 surface buffer 分辨率缩放。加载日志中的尺寸和字节数可用于检查：
+紧密排列的 RGB565 数据应为 W×H×2 字节。格式不一致或缩放采样会使 Image 走 CPU 路径。
 
 先减少被覆盖的像素写入，例如只画墙面未覆盖的地板，再比较 kernel 本身。纹理布局应匹配读取方向，
 按列纹理的顺序读与目标按行写之间存在取舍，单纯改变目标遍历顺序可能得不偿失。
@@ -179,14 +166,13 @@ Host 内核 36 → 13.3 ms/帧（Image 26 → 4.4 ms，DMA 背景块 2.4 ms、18
 整数缩小渲染能显著减少像素数，但 Host 放大、换序和面板传输仍有成本，不能直接把像素减少比例当作
 FPS 提升。P4 高分辨率场景与 S31 原尺寸输出应分别测量。
 
-不再维护已删除的 Fast memory/shared-heap 实验接口。该实验说明：改变数据驻留位置也可能改变所有
-访存的代码生成成本，必须用对照实验分离变量；不能仅凭查表耗时推断 cache miss 是主因。
+改变数据驻留位置也可能改变访存的代码生成成本，必须用对照测量分离变量；
+不能仅凭查表耗时推断 cache miss 是主因。
 
 ## 7. 回归与基线维护
 
 每条性能基线必须带板型、Host/Bundle 版本、构建 profile、分辨率/缩放、HUD/音频状态、场景和采样窗口。
-链路变更后重新测量并替换旧基线。旧文档中不同阶段的 FPS 和 A/B 表不再作为当前性能承诺；本次文档
-整理未重新测量真机，因此不补写新的性能数字。
+链路变更后重新测量并替换旧基线；缺少版本、场景或采样条件的数据不能作为当前性能承诺。
 
 Scene 真机回归使用 Snake；存在本地 Mario 时可增加滚屏场景，但它被 gitignore 排除，不作为仓库必需
 依赖。使用其 `--benchmark --no-bgm` 参数，长跑通过 `micropixel run --no-follow` 启动后按需读取日志，
@@ -214,7 +200,7 @@ Layer cache 和 translation-only wire，重绘区域小于全屏。面板窗口�
 ## 日常日志与详细启动采样
 
 默认保留每个 App 首个 scene 的完整性能报告，以及每 600 个 scene frame 的周期报告、
-每 300 次 display refresh 的统计和 layer-cache 状态切换。启动时不再连续输出八组累计统计。
+每 300 次 display refresh 的统计和 layer-cache 状态切换。
 排查启动前几帧时，将 `CONFIG_MICROPIXEL_APP_SURFACE_STARTUP_TELEMETRY_FRAMES` 设置为 `8`
 后重建 Host；默认值为 `1`。`CONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG` 仍控制整组图形遥测。
 这些累计硬件计数可能包含之前的 App，比较连续采样的差值，不要把首帧累计值当成本 App 耗时。
@@ -224,4 +210,4 @@ Layer cache 和 translation-only wire，重绘区域小于全屏。面板窗口�
 重复的 PNG 解码地址信息移到 DEBUG；资源服务的加载结果、尺寸和耗时仍在 INFO。
 需要 DEBUG 细节时，在专用 sdkconfig defaults 中设置 `CONFIG_LOG_DEFAULT_LEVEL_DEBUG=y`、
 `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y`，使用独立 build 目录构建，避免旧 sdkconfig 覆盖 defaults。
-错误、警告、触摸延迟、转场耗时及资源清理计数不受本次压缩影响。
+错误、警告、触摸延迟、转场耗时及资源清理计数保持独立记录。

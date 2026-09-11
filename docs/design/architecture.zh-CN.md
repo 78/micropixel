@@ -1,4 +1,4 @@
-# MicroPixel 架构与发布基线
+# MicroPixel 架构
 
 MicroPixel 把应用逻辑放在 WebAssembly Guest 中，把硬件、系统 UI 和资源管理留给 Host。
 这种分工让同一个应用源码适配不同开发板，同时由 Host 控制内存、设备访问和失控应用的退出。
@@ -16,7 +16,6 @@ MicroPixel 把应用逻辑放在 WebAssembly Guest 中，把硬件、系统 UI �
 - App Hall、Status Layer、系统手势、亮度和设备主音量由 Host 管理。
 
 多 Guest 并行、Guest 多线程、Guest Network/Camera Service 和通用 Widget Server 不属于当前基线。
-开发版远程安装已经实现，生产级分发仍受第 8 节的发布门槛约束。
 
 ## 2. Host 分层
 
@@ -69,7 +68,7 @@ Platform 通过 `Power::GetIdlePowerAction()` 指定空闲时休眠、关机或�
 必须释放后才接受新请求，避免误休眠或误关机；入睡被硬件拒绝不能当作成功唤醒。关机先停止应用、
 取消远控输入并静音，再交给板级断电能力。OTA 写入期间拒绝休眠和关机。
 
-系统手势由 Host 拦截，不能同时成为 Guest 输入。具体电源策略与验收见
+系统手势由 Host 拦截，不能同时成为 Guest 输入。具体电源策略见
 [定时器与空闲功耗](../development/timers-and-idle-power.zh-CN.md)，事件用法见
 [Guest SDK](../../guest/sdk/README.md)。
 
@@ -101,8 +100,7 @@ GPIO 只暴露板级白名单，打开形成独占租用，释放后恢复安全
 
 ## 5. Graphics 与 Resource
 
-正式版前的 Scene、2.5D 前端与共享资源设计见
-[SDK API 重构](sdk-api.zh-CN.md)。以下描述当前实现，迁移验收完成后再替换为新基线。
+Scene、整数 Raster 前端与共享资源的契约见 [SDK API 设计](sdk-api.zh-CN.md)。
 
 图形提供两种应用模型，系统 UI 的所有权保持一致：
 
@@ -112,7 +110,7 @@ GPIO 只暴露板级白名单，打开形成独占租用，释放后恢复安全
   连续的不透明整块 Image 拷贝攒批交给 Device contract `Graphics::CopyOpaqueBlocks`（Platform 用
   DMA2D 实现，无引擎的板型返回 Unsupported），同步执行、顺序不变，失败由 CPU 内核重画。
 
-Scene 的 Container 表达子树生命周期、局部坐标和继承属性。新路径的 setter 只修改 Guest 状态，
+Scene 的 Container 表达子树生命周期、局部坐标和继承属性。Scene 的 setter 只修改 Guest 状态，
 Renderer::Present 统一提交；失败保留待提交状态，删除的 handle 不会复活。可以保存多个场景，
 切换发送 keyframe；普通更新提交净差量 patch。Host 用 generation/revision 验证基线。
 
@@ -172,25 +170,7 @@ NVS 不影响应用。格式、迁移和恢复规则只在 [BundleFS 文档](bun
 缺失能力与权限拒绝必须使用不同错误语义，权限应按动作划分。
 当前 requirements section、权限声明与 grant 尚未实现，不能把进入 main 后的 Trap 当作兼容性预检。
 
-## 8. 发布基线
-
-五个集成应用覆盖完整游戏、公开 Service、DirectSurface、传感器和多 Bundle 生命周期。
-自动门禁与命令统一见 [CONTRIBUTING](../../CONTRIBUTING.md)，真机流程见
-[构建与烧录](../development/flashing.zh-CN.md)。
-
-真机回归必须覆盖：最多 50 个 App 的大厅滚动与启动；切换前旧 Session 清理；系统手势、暂停恢复和
-性能浮层；Texture retained 生命周期；Timer 积压；逻辑触摸坐标；亮度、主音量、音频完成和随机源；
-电源安全点超时、重复按键、休眠唤醒与实际关机。具体时序和参数以对应实现与测试为准。
-
-尚未完成的发布门槛：
-
-1. Bundle requirements 与 WAMR instance 创建前的完整兼容性 preflight。
-2. 权限声明、grant 与 method 级检查。
-3. Resource/Graphics/Input 协议版本冻结、兼容 fixture 和 wire 负向/fuzz 回归。
-4. Texture、Timer、Run/Stop 与五个集成应用的真机回归；Mosaico 传感器轴向和磁场校准验收。
-5. 生产 package 签名与授权、网络配置、TLS 负向真机矩阵，以及在线安装/升级/卸载的断电和错误恢复矩阵。
-
-## 9. 架构禁止项
+## 8. 架构禁止项
 
 不引入 Service Locator、深继承树或新的全局可变状态；不让组合根、ABI adapter 或 Platform 承担领域
 Service 业务；不为新板型分叉 Guest API；不以裸 new/delete、无界容器或 detached task 管理实时资源。

@@ -42,21 +42,9 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
 统计行字段与 demo 日志对齐：`render_avg_us`（几何 + 记录编码 + Host kernel 执行）、`present_avg_us`
 （`SURFACE_PRESENT` 调用）、`wait_avg_us`（等待 `SURFACE_RELEASED` 归还 buffer）以及 `frame_max_us`。
 
-Mosaico（ESP32-S31）实测（`--benchmark`，480×480，performance profile，Direct Surface 独占扫描，
-Host 性能 HUD 开启）：
-
-| 像素路径 | render avg | Host HUD fps |
-|---|---|---|
-| Host buffer + Host 光栅 kernel（当前） | ~23 ms | 40–41（面板上限 42） |
-| 旧 Guest buffer + Guest 逐像素（已删除，参考） | ~29–32 ms | 30–33 |
-| 原生 ESP-IDF demo（参考） | 17–23 ms | 40+ |
-
-Guest 逐像素路径已删除：Host kernel 是唯一一条到 40 fps 的路径（历史数据见
-`docs/development/graphics-performance.zh-CN.md` §10.1）。Metalio-Claw4（ESP32-P4，720×720）全分辩率时 Host
-buffer + kernel 约 59 ms、16–17 fps，瓶颈是 PSRAM 写带宽（1 MiB 目标即使 memset 也要 17.5 ms）；因此面板宽于
-480 px 时 App 自动用 `upscale = 2`（360×360 Host buffer，PPA 放大到 720×720），`render` 约 20 ms、39–40 fps，
-触摸摇杆坐标按 `upscale` 换算。系统菜单里开启性能 HUD 后，Direct Surface 独占期间它由 Host 直接 blend 进在飞的帧、
-传输后恢复，整帧仍是一笔零拷贝传输，只多约 0.7 ms。
+应用使用 Host buffer 与 Host Raster 内核。面板宽于 480 px 时自动使用 `upscale = 2`，
+减少填充像素与内存带宽需求；触摸摇杆坐标按 `upscale` 换算。性能 HUD 会改变绘制工作量，
+对比测量时应固定其状态。方法见 [图形性能诊断](../../../docs/development/graphics-performance.zh-CN.md)。
 
 示例直接使用 `gfx/textures.cpp`、`gfx/sprites.cpp` 中的索引像素数据，以及 `assets/launch.png` 和
 `assets/bgm_loop.ogg`，正常构建无需原始素材或美术生成工具。

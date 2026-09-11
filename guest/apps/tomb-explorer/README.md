@@ -55,20 +55,6 @@ culled polygons subdivided overdraw_x100 dropped room`. `render_avg_us` includes
 screen-area estimate of the queued polygons over the buffer area; `dropped` must stay 0 or the
 polygon pool in `main.cpp` needs to grow.
 
-## ESP-Mosaico (S31) `--benchmark` sample, 480×480, performance, Direct Surface
-
-Along the scripted route (1–3 visible rooms, ≈100–300 polygons/frame, overdraw ≈0.5–2.2×):
-
-| Stretch | fps | render µs | overdraw | notes |
-|---|---:|---:|---:|---|
-| corridor / hall | 23–30 | 31–42 | 1.1–1.5× | typical play |
-| looking into hall (2 rooms) | ≈20–25 | 41–48 | ≈2.1× | heaviest stretch |
-| crypt / pool glance | 23–38 | 19–42 | 0.5–1.3× | portal scissor helps |
-
-Host `raster kinds` on the same run: textured quads ≈80–95 ns/px, triangles ≈120–180 ns/px,
-`dropped=0`. Host `perf` while playing sits around 24–25 fps Direct Surface. The ≥20 fps gate
-holds at full resolution without `upscale=2`.
-
 ## Tests
 
 `tools/tests/test_tomb_room_world.cpp` (run by `bash tools/tests/test_firmware_host.sh`) checks the

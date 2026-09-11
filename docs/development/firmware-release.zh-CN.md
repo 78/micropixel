@@ -15,7 +15,7 @@
 
 ## 日常发布
 
-1. 更新固件与 SDK 版本、相关 API 文档；提交本次源码，保留未提交实验。
+1. 更新固件与 SDK 版本、相关 API 文档；提交与发布相关的源码。
 2. 运行一次相关自动回归与格式检查。`bash tools/p4.sh test` 是本地完整检查入口，不必对每块板重复执行。
 3. 创建 `sdk-v<版本>` tag。SDK workflow 验证安装与双架构构建一次，发布后核对同一批文件的公开摘要。
 4. 从对应提交运行 **Build release firmware in parallel**。Windows job 按架构各编译一次预装应用；五个 Ubuntu job 独立构建 Host，共享 Host 回归只在 P4 job 执行一次。
@@ -62,9 +62,6 @@ gh workflow run firmware-build.yml --ref main -f reuse_hosts_run=<原runID> -f r
 - 同样保留源码一致性、目标芯片、版本、容量、远控配置和 SHA-256 检查。不要通过修改下载器的成功状态检查来混用失败 job。
 - Release 如实说明哪些板来自本地、哪些来自 Actions，以及尚未完成的 CI / 真机检查。后续发现实质问题发修订版，不替换已经公开的二进制。
 
-2026-09-11 的固件 0.8.0 使用了此路径：P4 来自本地 `p4.sh test` 通过的构建，其余四板来自成功 Actions job，
-共享 Guest 使用 SDK 0.17.0 的成功双架构产物。网站及 GitHub 文件摘要均已核对。该记录不表示后续每次可省略构建或来源验证。
-
 ## 固定输入与缓存
 
 ESP-IDF commit 与板型列表位于 `tools/ci/firmware-sources.json`；WAMR 和 IOT solution 仍使用 Git submodule 固定版本。
@@ -76,7 +73,7 @@ SDK 来源须与本次 Guest 源码一致；仅修复 CI 或 Host 时可复用�
 
 - 安装器逻辑、内置 Python/pyserial、管理组件或更新机制有实质改动时，在 SDK workflow 手动启用 `full_validation`，增加 A/B 升级、回退与管理组件切换检查。
 - 无发布前安装证据的恢复任务仍执行公开下载后的真实安装编译，不能仅检查文件存在。
-- 真机检查针对本次行为变化，例如本次加法混合与 DirectSurface 截图；不要求每次重新填整份 Windows W01–W19。
+- 真机检查针对本次行为变化，例如混合模式与 DirectSurface 截图；不要求每次重新填整份 Windows W01–W19。
 - 未签名和尚未完成的 Windows 10 验收继续如实披露；按开源发布政策不阻塞正式版。
 
 不要把维护者脚本、矩阵细节或验收清单加入普通用户安装指南。正式 Release 顶部按系统/板型提供直接下载或烧录入口。

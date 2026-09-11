@@ -94,8 +94,7 @@ MicroPixel 是项目正式名称，C++ namespace 统一使用 `micropixel`。板
 | 宏、C ABI 常量 | `UPPER_SNAKE_CASE` | `MICROPIXEL_ABI_VERSION` |
 | 文件 | `lower_snake_case` | `timer_service.cpp` |
 
-C ABI 导出统一使用 `micropixel_` 前缀。此前的 placeholder 已随正式项目名称确定；ABI 冻结前仍可
-进行必要的不兼容演进，冻结后不得因营销名称改变而随意更名。
+C ABI 导出统一使用 `micropixel_` 前缀。已发布符号须遵循 ABI 版本兼容规则，不因项目展示名称改变而更名。
 
 以下名称保留 `snake_case`，但不能据此扩散到普通项目方法：
 

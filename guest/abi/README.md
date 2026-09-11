@@ -1,6 +1,6 @@
 # MicroPixel Guest–Host ABI v2
 
-状态：**v2 已实现，项目尚未发布。** 机器可读定义以
+ABI v2 的机器可读定义以
 [`micropixel_abi.h`](micropixel_abi.h) 为准；[`allowed_imports.txt`](allowed_imports.txt)
 是 Public Guest 唯一允许的 Host import 清单。
 
@@ -12,7 +12,7 @@ Core ABI 为 **2.0**，与 1.x 完全不兼容，不保留任何 1.x 方法编�
 Storage、Random、Devices、Sensors、GPIO、Haptics、Power 均为 1.0。绘制通道为 `SCENE`（1）与
 `RASTER`（2）；2.5D 与多边形游戏的几何前端（`sdk/raycast.hpp`、`sdk/mesh_renderer.hpp`）完全在
 Guest SDK 内，不引入新的 wire。
-协议尚处于正式版前迁移，冻结状态见 [SDK API 设计](../../docs/design/sdk-api.zh-CN.md)。
+图形接口的设计契约见 [SDK API 设计](../../docs/design/sdk-api.zh-CN.md)。
 
 ## 七个稳定入口
 
@@ -335,7 +335,7 @@ capabilities 与显示名称。
   作为 parent device，其按键和子传感器仍分别走对应 Service。
 - GPIO 把每根可开放物理引脚列为 `GPIO_LINE` device。应用枚举后可直接将任意一根以 input、output
   或 PWM 模式 `OPEN`；打开即取得 Session 内独占 lease，`CLOSE`/Session teardown 恢复安全输入状态。
-  第一阶段没有出厂 binding、用途命名或权限声明流程。input 只有配置 rising/falling/both edge 时才订阅
+  当前不提供出厂 binding、用途命名或权限声明流程。input 只有配置 rising/falling/both edge 时才订阅
   event；主动 `READ`、output 和 PWM 不需要 GPIO event worker。
 - Haptics 使用 move-only handle 播放/停止有界时长的震动，自然结束投递 finished event；
   `GET_INFO` 的 `capabilities` 为 32 位。

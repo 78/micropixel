@@ -191,7 +191,7 @@ micropixel --transport usb run
 
 ## 文档
 
-- [架构与发布基线](docs/design/architecture.zh-CN.md)
+- [架构](docs/design/architecture.zh-CN.md)
 - [Guest C++ SDK](guest/sdk/README.md)
 - [Guest–Host ABI](guest/abi/README.md)
 - [C/C++ 代码风格](docs/development/code-style.zh-CN.md)

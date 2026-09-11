@@ -2,8 +2,8 @@
 
 `docs/` 只保留跨模块且需要长期维护的文档：
 
-- [架构与发布基线](design/architecture.zh-CN.md)：产品边界、Host 分层、Guest–Host 数据路径、
-  生命周期、设计取舍和尚未完成的发布门槛；
+- [架构](design/architecture.zh-CN.md)：产品边界、Host 分层、Guest–Host 数据路径、
+  生命周期与设计取舍；
 - [应用商店与自动更新](design/app-store.zh-CN.md)：开发者发布、能力契约、签名与安装事务；
 - [BundleFS 持久化格式](design/bundlefs.zh-CN.md)：v2 Catalog、离散数据块、写时复制和 v1 迁移；
 - [Firmware 硬件分层与命名](design/firmware-terminology.zh-CN.md)：Board、Driver、Peripheral、Device、
@@ -25,7 +25,7 @@
 与代码一起演进的组件级说明放在源码附近：
 
 - [Guest C++ SDK](../guest/sdk/README.md)；
-- [正式版 SDK API 重构](design/sdk-api.zh-CN.md)：Scene、2.5D 整数 Raster 前端、统一帧提交与迁移验收目标；
+- [SDK API 设计](design/sdk-api.zh-CN.md)：Scene、整数 Raster 前端、资源所有权与帧提交语义；
 - [Guest–Host ABI](../guest/abi/README.md)；
 - [Guest 构建、Bundle 与应用](../guest/README.md)；
 - [Firmware 构建与烧录](../firmware/espressif/README.md)；
@@ -37,11 +37,13 @@
 - 代码、ABI header 和可执行测试是行为的最终事实来源；文档不复制完整文件树、接口清单或实现步骤；
 - 同一事实只在一个地方详细维护，其他文档链接过去；示例只保留解释模型所需的最小片段，完整用法放可运行 Demo；
 - 当前行为与未实现事项明确区分。实验结束后提炼设计理由并更新当前结论，不逐轮追加优化记录；
-- 设计文档只描述当前决策和尚未完成的产品门槛，不保留被取代的候选 API；
+- 设计文档只描述架构、机制、接口语义、设计取舍与约束，不包含回归流程、验收清单、发布门槛或被取代的候选 API；
 - 一次性原型、原始串口/trace、不可复现的性能快照和历史里程碑不进入长期文档；可重复测量的聚合
   baseline 必须同时记录场景、硬件、构建模式和测量边界；
 - 需要持续验证的行为写成 `guest/tests/conformance/`、Host test 或构建门禁；
-- 项目尚未发布，未公开的旧名称和 wire 不保留 deprecated alias。
+- 未公开的旧名称和 wire 不保留 deprecated alias；已发布接口按版本兼容规则维护。
+- 提交前删除工作区操作叙述、逐轮进度和过时方案；版本变更写入 Release notes，
+  验收结论仅保留可追溯的版本、环境、结果与限制，不混入修复过程或被取代的发布政策。
 
 ## 硬件来源
 

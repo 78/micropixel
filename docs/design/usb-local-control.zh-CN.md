@@ -107,5 +107,4 @@ MPX1 与 ESP 日志复用板卡选定的 USB CDC transport。Platform 只在写�
 日志跟随。Host 不为普通安装隐式停止 Guest；安装或启动失败时 CLI 尽力重新启动运行前记录的 App。
 
 CLI 使用 pyserial，支持 macOS/Linux 设备节点和 Windows `COMx` 端口；自动探测同时识别板卡声明的应用
-USB 产品名和 ROM USB 产品名。当前协议已经在 macOS 真机验证，Windows 代码路径受支持但尚未完成项目
-真机验证。
+USB 产品名和 ROM USB 产品名。

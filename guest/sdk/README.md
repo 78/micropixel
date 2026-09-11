@@ -3,8 +3,8 @@
 首次开发请从[快速入门](QUICKSTART.md)的 `init → run → publish` 开始。商店截图、介绍和玩法资料要求见[发布应用](PUBLISHING.md)。本页用于查询 SDK 契约与接口。
 
 
-正式版前的 Scene、2.5D 前端与统一帧 API 迁移设计见
-[SDK API 重构](../../docs/design/sdk-api.zh-CN.md)。该文描述目标接口；本文仍说明当前已实现行为。
+Scene、整数 Raster 前端与统一帧提交的设计契约见
+[SDK API 设计](../../docs/design/sdk-api.zh-CN.md)。本文说明接口用法。
 
 SDK 让应用通过强类型对象使用图形、输入、音频和设备能力。应用保存自己的状态，以单线程事件循环
 驱动更新；Host 管理硬件、资源和系统 UI。本文介绍编程模型与易错边界，完整可运行用法见
@@ -98,7 +98,7 @@ visibility、opacity、translation 和 clip 沿父链生效。
 直接修改节点后调用 `renderer.Present(scene)`。setter 只修改 Guest 状态；提交失败保留旧画面和
 待提交变化。节点销毁立即失效，失败不恢复已销毁 handle，槽位复用也不能让旧 handle 指向新对象。
 首次、场景切换和结构变化提交 keyframe；其他帧合并净变化。旧 `Scene::Update` 已移除。
-基础节点工厂返回 `Result<节点类型>`；容量不足时不会创建半个节点。具体剩余工作见 [SDK 重构状态](../../docs/design/sdk-api.zh-CN.md)。
+基础节点工厂返回 `Result<节点类型>`；容量不足时不会创建半个节点。所有权与提交语义见 [SDK API 设计](../../docs/design/sdk-api.zh-CN.md)。
 
 布局依据 RendererInfo 的逻辑 width/height 与 safe area。SDK 使用短边 720 的逻辑画布，序列化时统一
 转换为物理值；physical width/height 用于物理素材选择等明确需要原生像素的场景。Touch 属于 Scene
@@ -147,7 +147,7 @@ AnimationClip/Track。资源清单、生成绑定与 Bundle 工作流见 [Guest 
 所有状态为固定容量数组（`kMaxColumns`、`kMaxBillboards`），`Initialize` 后不再分配。
 
 `sdk/raster_world.hpp` 放 2.5D 前端共享的 `DistanceLighting` / `LightTable` 与 `Billboard`，
-后续的 Mode-7 地面（赛车）与球面视图（earth）复用同一套光照与 billboard 约定。
+Mode-7 地面与球面视图复用同一套光照与 billboard 约定。
 maze-evil 的 `game/renderer.cpp` 是当前的完整用法。
 
 ### MeshRenderer（PS1 级多边形前端）

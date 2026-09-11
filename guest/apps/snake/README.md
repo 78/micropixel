@@ -1,7 +1,6 @@
 # Juicy Snake
 
-这是 MicroPixel 的首个完整 Guest 游戏。目录只保留产品源码、Bundle metadata 和最终素材；历史
-验收页面、contract 与测试场景已经移除，需要回归时按当时的产品行为重新编写测试。
+Juicy Snake 是 MicroPixel 的完整 Guest 游戏示例，包含游戏源码、Bundle metadata 和运行时素材。
 
 ```text
 snake/

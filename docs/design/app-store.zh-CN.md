@@ -73,18 +73,9 @@ P4/S31 发布 defaults 内置 micropixel.ai 的 store-v1 公钥；自建服务�
 检查不创建安装任务。用户选择新版本后才创建持久操作；手动安装会停止运行中的应用，
 不等待大厅空闲 30 秒。页面关闭不撤销已经确认的安装。
 
-## 验证与上线
+## 功能边界
 
-主仓库测试入口：Python CLI/Bundle tests、tools/tests/test_firmware_host.sh、格式检查与 P4/S31 Host 构建。
-跨仓库能力词表和版本样例是 tools/tests/fixtures/app-requirements-v1.json，Control 的同名 fixture 必须一致。
-Control 负责 API/网站/Console 的 typecheck、test、build 和 Caddy 校验。
-
-生产先配置稳定认证密钥、GitHub OAuth、平台签名、官方应用归属和备份；随后升级支持签名的 Host，
-开放手动安装与新版本检查；自动安装保持禁用，不提供自动更新开关。
-
-上线门槛仍包括 P4/S31 真机安装/运行、适配提示后继续安装、ABI 拒绝、忙碌状态、断网、各写入阶段掉电恢复、存档保留，
-以及使用正式域名的 GitHub 浏览器/CLI 授权。软件测试不能代替这些验收。
-首版不包含评论评分、多实例、Xtensa 商店发布或业务崩溃后的自动回滚，不自动上架仓库本地应用。
+当前不包含评论评分、多实例、Xtensa 商店发布或业务崩溃后的自动回滚，不自动上架仓库本地应用。
 
 ## 手动安装的适配提示
 
