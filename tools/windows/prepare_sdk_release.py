@@ -87,9 +87,11 @@ def main():
                                           'installer': json.loads((out / 'windows-installer.json').read_text())})
     write_json(out / 'release-notes.json', {'schema_version': 1, 'sdk_version': version, 'channel': 'preview',
         'performance': [], 'migration': ['Existing unmanaged projects must explicitly select an SDK before managed builds.',
-        'Source migration and real-device acceptance remain separate from SDK switching.'],
+        'Source migration and real-device acceptance remain separate from SDK switching.',
+        'Run the new Windows installer when upgrading from 0.16.0 to replace its Ctrl-C bootstrap; manager or SDK updates alone do not replace it.'],
         'compatibility': manifest['compatibility'], 'windows_acceptance': 'pending', 'code_signing': 'unsigned-preview'})
     for relative in ('docs/development/windows-sdk.zh-CN.md', 'docs/development/windows-acceptance.zh-CN.md',
+                     'docs/development/windows-acceptance-2026-09-11.zh-CN.md',
                      'guest/sdk/AI.md', 'tools/windows/collect_acceptance.ps1', 'tools/windows/test_acceptance_versions.ps1', 'LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copyfile(ROOT / relative, out / Path(relative).name)
     assets = sorted(path for path in out.iterdir() if path.is_file() and path.name not in ('inno-setup.exe', 'sha256sums.txt', 'release-notes.md'))
