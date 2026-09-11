@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from windows.release_metadata import file_digest
+from windows.release_assets import asset_url
 from manager.micropixel_manager import extract
 
 
@@ -47,7 +48,7 @@ def main():
     root.mkdir()
     launcher = Path(os.environ['LOCALAPPDATA']) / 'MicroPixel/bin/micropixel.exe'
     env = dict(os.environ)
-    env.update(MICROPIXEL_HOME=str(root), MICROPIXEL_SDK_INDEX_URL=entry['entry']['url'].rsplit('/', 1)[0] + '/test-sdk-index.json')
+    env.update(MICROPIXEL_HOME=str(root), MICROPIXEL_SDK_INDEX_URL=asset_url(entry, 'test-sdk-index.json'))
     # Native tools must not accidentally find CI's Python/Git/CMake/LLVM/CRT.
     env['PATH'] = str(Path(env['WINDIR']) / 'System32')
     for key in ('WASI_SDK_PATH', 'WASI_CLANG', 'WASI_CLANGXX', 'WAMRC', 'XTENSA_WAMRC', 'PYTHONPATH', 'PYTHONHOME', 'PSMODULEPATH'):
@@ -73,11 +74,14 @@ def main():
             'checked_at': int(time.time()), 'attempted_at': int(time.time())}))
     else:
         # Independently fetch and verify every published small/SDK/installer asset.
-        for line in (out / 'sha256sums.txt').read_text().splitlines():
+        checksums = out / 'verification-sha256sums.txt'
+        if not checksums.exists():
+            checksums = out / 'sha256sums.txt'
+        for line in checksums.read_text().splitlines():
             expected, name = line.split('  ', 1)
             path = root / name
             print('Checking public asset:', name, flush=True)
-            download_public(entry['entry']['url'].rsplit('/', 1)[0] + '/' + name, path)
+            download_public(asset_url(entry, name), path)
             if file_digest(path) != expected:
                 raise SystemExit('Public release asset differs: ' + name)
             path.unlink()

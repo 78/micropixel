@@ -43,6 +43,7 @@ Source: "{#ReleaseDir}\sdk-manifest.json"; DestDir: "{app}\manifests"; DestName:
 Source: "{#PayloadDir}\{#ManagerBuild}\*"; DestDir: "{app}\versions\{#ManagerBuild}"; Flags: recursesubdirs createallsubdirs ignoreversion onlyifdoesntexist
 Source: "{#PayloadDir}\micropixel.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\..\docs\development\windows-sdk.zh-CN.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "..\..\docs\development\windows-sdk-faq.zh-CN.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\..\guest\sdk\AI.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Icons]

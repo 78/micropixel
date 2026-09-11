@@ -8,6 +8,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+try:
+    from .release_assets import support_tag, user_assets
+except ImportError:
+    from release_assets import support_tag, user_assets
+
 
 def run(*args, **kwargs):
     return subprocess.run(list(map(str, args)), check=True, **kwargs)
@@ -50,27 +55,38 @@ def main():
         if not json.loads((out / 'draft-verification.json').read_text()).get('ok'):
             raise SystemExit('Installed draft verification is required')
         notes = out / 'release-notes.md'
-        notes.write_text(f'''# MicroPixel SDK {version}{label}
+        notes.write_text(f"""## 开始开发：只下载与你电脑对应的一个文件
 
-Per-user GUI and silent installer with embedded Python 3.13.12/pyserial 3.5,
-verified WASI SDK 33 and fixed RISC-V/Xtensa AOT v6 compilers.
+| 你的电脑 | 下载 | 下一步 |
+| --- | --- | --- |
+| **Windows 10 / 11 x64** | **[Windows 安装包]({entry['installer']['url']})** | 双击安装，自动准备 Python 和编译工具链 |
+| **macOS / Linux** | **[SDK 归档](https://github.com/78/micropixel/releases/download/{tag}/micropixel-sdk-{version}.tar.gz)** | 解压后按指南配置工具链 |
 
-- Start with the attached Windows guide or AI.md; installer success alone does not mean ready.
-- Project SDK/toolchain versions are locked; upgrading and rolling back are explicit.
-- Windows Ctrl-C while following logs exits cleanly and keeps the device App running.
-- Upgrading from 0.16.0 requires this installer to replace the old bootstrap; manager or SDK updates alone do not replace it.
-- Unsigned Windows installer: Windows 11 software and S31/S3 device checks are recorded; Windows 10 and remaining manual checks are pending.
-- Open-source release policy: automated verification gates stable publication; signing and remaining manual acceptance are disclosed limitations.
-- `test-sdk-index.json` and SDK 9000.0.1/9000.0.2 are isolated acceptance fixtures only.
-- No new performance claim is made. Existing macOS toolchain usage remains supported.
+**[安装与 AI 使用指南](https://micropixel.ai/docs/environment/)** · **[创建第一个游戏](https://micropixel.ai/docs/quickstart/)**
 
-Do not use the test index for production projects. See windows-acceptance.zh-CN.md.
-''', encoding='utf-8')
+安装完成后直接创建第一个游戏。遇到问题再查看[安装 FAQ](https://micropixel.ai/docs/environment-faq/)。
+无需另装 Git 或 ESP-IDF。其余 JSON、manager ZIP 和校验文件供安装与更新流程使用，无需手动下载。
+GitHub 自动生成的 Source code 是仓库源码，不是 SDK。
+
+已有项目保持版本锁，升级和回退需显式执行。从 0.16.0 升级请运行新安装包，以修复 Ctrl-C 启动层。
+Windows 安装包未签名；Windows 11 与 S31/S3 部分验收已完成，Windows 10 和剩余人工项目继续跟踪。
+自动安装、双架构编译及升级回退验证通过。验收材料单独保存，不属于普通用户安装内容。
+""", encoding='utf-8')
         run('gh', 'release', 'create', tag, '--draft', '--prerelease=' + str(preview).lower(), '--latest=false', '--target', os.environ['GITHUB_SHA'],
             '--title', f'SDK {version}{label}', '--notes-file', notes)
-        names = [line.split('  ', 1)[1] for line in (out / 'sha256sums.txt').read_text().splitlines()]
-        run('gh', 'release', 'upload', tag, *[out / name for name in names], out / 'sha256sums.txt', out / 'draft-verification.json')
+        names = sorted(user_assets(entry))
+        run('gh', 'release', 'upload', tag, *[out / name for name in names], out / 'sha256sums.txt')
+        support = support_tag(version)
+        support_notes = out / 'support-notes.md'
+        support_notes.write_text('Maintainer-only SDK verification fixtures and evidence. Users: download the SDK or installer from ' + tag + '.\n')
+        run('gh', 'release', 'create', support, '--draft', '--prerelease', '--latest=false',
+            '--target', os.environ['GITHUB_SHA'], '--title', f'Internal verification — SDK {version}', '--notes-file', support_notes)
+        internal = [line.split('  ', 1)[1] for line in (out / 'verification-sha256sums.txt').read_text().splitlines()
+                    if line.split('  ', 1)[1] not in user_assets(entry)]
+        run('gh', 'release', 'upload', support, *[out / name for name in internal],
+            out / 'verification-sha256sums.txt', out / 'draft-verification.json')
     elif args.action == 'publish':
+        run('gh', 'release', 'edit', support_tag(version), '--draft=false', '--prerelease', '--latest=false')
         run('gh', 'release', 'edit', tag, '--draft=false', '--prerelease=' + str(preview).lower(), '--latest=false')
     else:
         report = json.loads((out / 'public-verification.json').read_text())
@@ -99,9 +115,10 @@ Do not use the test index for production projects. See windows-acceptance.zh-CN.
                 run('git', '-C', directory, 'commit', '-m', f'Promote verified SDK {version} {channel}')
                 # A concurrent channel change fails normally; never force-push it.
                 run('git', '-C', directory, 'push', 'origin', 'HEAD:refs/heads/sdk-channel')
-        release = json.loads(subprocess.check_output(['gh', 'release', 'view', tag, '--json', 'assets']))
+        evidence_tag = support_tag(version) if entry.get('verification_base') else tag
+        release = json.loads(subprocess.check_output(['gh', 'release', 'view', evidence_tag, '--json', 'assets']))
         if not any(asset['name'] == 'public-verification.json' for asset in release['assets']):
-            run('gh', 'release', 'upload', tag, out / 'public-verification.json')
+            run('gh', 'release', 'upload', evidence_tag, out / 'public-verification.json')
 
 
 if __name__ == '__main__':

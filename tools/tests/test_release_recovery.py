@@ -1,6 +1,8 @@
 """Public release checks tolerate propagation failures without replacing assets."""
 import copy
 import io
+import json
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -60,6 +62,49 @@ class ChannelPromotion(unittest.TestCase):
                               'installer': {'preview': True, 'version': '0.16.1'}})
         self.assertEqual(index['windows_installer']['version'], '0.16.2')
         self.assertEqual(index['manager']['build_id'], 'stable')
+
+
+class ReleasePresentation(unittest.TestCase):
+    def test_user_files_exclude_fixtures_and_route_support_separately(self):
+        from tools.windows.release_assets import user_assets, asset_url, split_checksums
+        entry = {'version': '1.2.3', 'installer': {'name': 'setup.exe'}, 'manager': {'name': 'manager.zip'},
+                 'entry': {'url': 'https://example.org/sdk/sdk-manifest.json'}, 'verification_base': 'https://example.org/support'}
+        self.assertNotIn('test-sdk-index.json', user_assets(entry))
+        self.assertEqual(asset_url(entry, 'test-sdk-index.json'), 'https://example.org/support/test-sdk-index.json')
+        self.assertEqual(asset_url(entry, 'setup.exe'), 'https://example.org/sdk/setup.exe')
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary).resolve()
+            (out / 'setup.exe').write_bytes(b'installer')
+            (out / 'test-sdk-index.json').write_bytes(b'tests')
+            split_checksums(out, entry)
+            self.assertNotIn('test-sdk-index', (out / 'sha256sums.txt').read_text())
+            self.assertIn('test-sdk-index', (out / 'verification-sha256sums.txt').read_text())
+
+    def test_legacy_verification_urls_still_work(self):
+        from tools.windows.release_assets import asset_url
+        entry = {'version': '1.2.3', 'installer': {'name': 'setup.exe'}, 'manager': {'name': 'manager.zip'},
+                 'entry': {'url': 'https://example.org/sdk/sdk-manifest.json'}}
+        self.assertEqual(asset_url(entry, 'test-sdk-index.json'), 'https://example.org/sdk/test-sdk-index.json')
+
+
+class PublishLayout(unittest.TestCase):
+    def test_draft_sends_fixtures_only_to_support_release(self):
+        from tools.windows import publish_sdk
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary).resolve()
+            entry = {'version': '1.2.3', 'installer': {'name': 'setup.exe', 'url': 'https://example.org/setup.exe', 'preview': False},
+                     'manager': {'name': 'manager.zip'}, 'entry': {'url': 'https://example.org/sdk-manifest.json'}}
+            (out / 'channel-entry.json').write_text(json.dumps(entry))
+            (out / 'draft-verification.json').write_text('{"ok":true}')
+            (out / 'verification-sha256sums.txt').write_text('hash  setup.exe\nhash  test-sdk-index.json\n')
+            with patch('sys.argv', ['publish_sdk', 'draft', '--directory', str(out)]), patch.dict(publish_sdk.os.environ, {'GITHUB_SHA': 'commit', 'GITHUB_REF_TYPE': 'branch'}), patch.object(publish_sdk.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)), patch.object(publish_sdk, 'run') as run:
+                publish_sdk.main()
+            uploads = [call.args for call in run.call_args_list if call.args[:3] == ('gh', 'release', 'upload')]
+            public = next(args for args in uploads if args[3] == 'sdk-v1.2.3')
+            support = next(args for args in uploads if args[3] == 'sdk-support-v1.2.3')
+            self.assertNotIn(out / 'test-sdk-index.json', public)
+            self.assertIn(out / 'test-sdk-index.json', support)
+            self.assertNotIn(out / 'setup.exe', support)
 
 
 if __name__ == '__main__':

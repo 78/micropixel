@@ -102,7 +102,7 @@ Set-Location .\硬件验收\windows-acceptance
 ```powershell
 $previousIndex = $env:MICROPIXEL_SDK_INDEX_URL
 try {
-    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.2/test-sdk-index.json'
+    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-support-v0.16.2/test-sdk-index.json'
     .\test_acceptance_versions.ps1 -Launcher $mp -Directory '.\Windows A B 验收'
 } finally {
     $env:MICROPIXEL_SDK_INDEX_URL = $previousIndex
