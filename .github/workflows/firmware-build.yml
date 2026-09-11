@@ -3,7 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       reuse_hosts_run:
-        description: Reuse the five successful Host artifacts from a previous run
+        description: Reuse successful Host artifacts from a previous run
+        type: string
+        default: ""
+      rebuild_profiles:
+        description: Comma-separated profiles to rebuild when reusing a run
         type: string
         default: ""
 permissions:
@@ -13,6 +17,17 @@ concurrency:
   group: firmware-build-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: select
+        env:
+          REUSE_RUN: ${{ inputs.reuse_hosts_run }}
+          REBUILD_PROFILES: ${{ inputs.rebuild_profiles }}
+        run: python3 tools/ci/plan_hosts.py
   guests:
     name: Shared Guest bundles (two architectures)
     runs-on: windows-2022
@@ -70,19 +85,15 @@ jobs:
           path: build/ci-guests/
           retention-days: 14
   hosts:
-    if: ${{ !inputs.reuse_hosts_run }}
+    needs: plan
+    if: ${{ !inputs.reuse_hosts_run || inputs.rebuild_profiles != '' }}
     name: Host ${{ matrix.profile }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {profile: metalio-claw4, chip: esp32p4, wrapper: 'p4.sh build-host'}
-          - {profile: esp-mosaico, chip: esp32s31, wrapper: 's31.sh build-host'}
-          - {profile: esp-box-3, chip: esp32s3, wrapper: 's3.sh build-host'}
-          - {profile: szpi-esp32s3, chip: esp32s3, wrapper: 's3.sh build-szpi'}
-          - {profile: m5stack-cores3, chip: esp32s3, wrapper: 's3.sh build-cores3'}
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       IDF_PATH: ${{ github.workspace }}/.ci/esp-idf
       IDF_CCACHE_ENABLE: '1'
@@ -114,7 +125,7 @@ jobs:
       - name: Install fixed IDF tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ninja-build ccache libusb-1.0-0 python3-venv
+          sudo apt-get install -y ninja-build ccache libusb-1.0-0 python3-venv clang-18 libc++-18-dev libc++abi-18-dev
           "$IDF_PATH/install.sh" ${{ matrix.chip }}
       - name: Compile this board and verify embedded release configuration
         run: |
@@ -123,7 +134,10 @@ jobs:
           python tools/ci/firmware_artifacts.py collect --profile ${{ matrix.profile }} --output build/ci-host/${{ matrix.profile }}
       - name: Run shared Host regression once
         if: matrix.profile == 'metalio-claw4'
-        run: bash tools/tests/test_firmware_host.sh
+        run: |
+          printf '#!/bin/sh\nexec /usr/bin/clang++-18 -stdlib=libc++ "$@"\n' > "$RUNNER_TEMP/host-cxx"
+          chmod +x "$RUNNER_TEMP/host-cxx"
+          CXX="$RUNNER_TEMP/host-cxx" CC=/usr/bin/clang-18 bash tools/tests/test_firmware_host.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: host-${{ matrix.profile }}
@@ -145,12 +159,20 @@ jobs:
           path: build/ci-guests
       - name: Wait for all reused Host jobs to succeed
         if: inputs.reuse_hosts_run != ''
-        run: python3 tools/ci/wait_hosts.py --run '${{ inputs.reuse_hosts_run }}'
+        env:
+          REUSE_RUN: ${{ inputs.reuse_hosts_run }}
+          REBUILD_PROFILES: ${{ inputs.rebuild_profiles }}
+        run: python3 tools/ci/wait_hosts.py --run "$REUSE_RUN" --exclude "$REBUILD_PROFILES"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: host-*
           github-token: ${{ github.token }}
           run-id: ${{ inputs.reuse_hosts_run || github.run_id }}
+          path: build/host-artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.reuse_hosts_run != '' && inputs.rebuild_profiles != ''
+        with:
+          pattern: host-*
           path: build/host-artifacts
       - name: Assemble all five full images
         run: |
