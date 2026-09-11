@@ -15,6 +15,8 @@
 python3 tools/ci/download_firmware.py --run <成功的 run ID> --output build/release-<版本>/firmware
 ```
 
+共享应用或汇总阶段失败时，可用 `reuse_hosts_run` 指定已完成五板 Host 的原 run，复用其文件，避免重复编译。汇总前会验证 Guest/firmware 源码没有变化，原 Host commit 与本次 workflow commit 分别保留。
+
 下载器拒绝失败 workflow、非本仓库来源、缺少板型、源提交不一致或摘要不匹配的产物。网站目录保留旧版本，最后切换发布清单。
 
 ## 固定输入与缓存

@@ -40,7 +40,7 @@ def write(path, value):
 
 def inventory(directory):
     return {str(p.relative_to(directory)).replace('\\', '/'): {'sha256': digest(p), 'size': p.stat().st_size}
-            for p in sorted(directory.rglob('*')) if p.is_file() and p.name != 'manifest.json'}
+            for p in sorted(directory.rglob('*')) if p.is_file() and p != directory / 'manifest.json'}
 
 
 def check_files(directory, files):
@@ -112,6 +112,15 @@ def collect(profile, output):
           'files': inventory(output)})
 
 
+def matching_source(commit):
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Invalid source commit')
+    if commit != os.environ['GITHUB_SHA']:
+        run('git', 'fetch', 'origin', commit, '--depth=1')
+        run('git', 'diff', '--exit-code', commit, 'HEAD', '--', 'guest', 'firmware', 'tools/micropixel',
+            'tools/build_app_bundle.py', 'tools/generate_localization.py', 'tools/analyze_sfx.py')
+
+
 def assemble(inputs, guests, output):
     version, sdk = versions()
     guest_manifest = json.loads((guests / 'manifest.json').read_text())
@@ -119,10 +128,13 @@ def assemble(inputs, guests, output):
         raise ValueError('Guest source commit or SDK mismatch')
     check_files(guests, guest_manifest['files'])
     configs = set()
+    host_sources = {}
     for profile in SOURCES['profiles']:
         source = inputs / profile
         metadata = json.loads((source / 'manifest.json').read_text())
-        if metadata['source_commit'] != os.environ['GITHUB_SHA'] or metadata['firmware_version'] != version:
+        matching_source(metadata['source_commit'])
+        host_sources[profile] = metadata['source_commit']
+        if metadata['firmware_version'] != version:
             raise ValueError('Host source commit or version mismatch')
         check_files(source, metadata['files'])
         configs.add(metadata['remote_configuration_sha256'])
@@ -145,7 +157,7 @@ def assemble(inputs, guests, output):
     if len(configs) != 1:
         raise ValueError('Boards use different release configuration')
     write(output / 'manifest.json', {'source_commit': os.environ['GITHUB_SHA'], 'firmware_version': version,
-          'sdk_version': sdk, 'profiles': SOURCES['profiles'], 'files': inventory(output)})
+          'sdk_version': sdk, 'profiles': SOURCES['profiles'], 'host_source_commits': host_sources, 'files': inventory(output)})
 
 
 if __name__ == '__main__':

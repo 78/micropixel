@@ -27,7 +27,7 @@ def main():
     for profile in SOURCES['profiles']:
         directory = args.output / profile
         board = json.loads((directory / 'manifest.json').read_text())
-        if board['source_commit'] != run['head_sha'] or board['firmware_version'] != manifest['firmware_version']:
+        if board['source_commit'] != manifest.get('host_source_commits', {}).get(profile, run['head_sha']) or board['firmware_version'] != manifest['firmware_version']:
             raise SystemExit('Board provenance mismatch')
         check_files(directory, board['files'])
         check_image(directory / 'micropixel.bin', PROFILES[profile]['target'], manifest['firmware_version'])
