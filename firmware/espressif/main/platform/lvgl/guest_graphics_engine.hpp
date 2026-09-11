@@ -100,6 +100,14 @@ class GuestGraphicsEngine final {
     // screenshots read the surface on the panel instead. Returns false when
     // LVGL owns the panel. The pixels may change while being read.
     [[nodiscard]] bool DirectlyScannedAppSurface(graphics::ConstPixelSurface& surface_out) const;
+    // Same purpose for a Direct Surface (Host or Guest buffers) the presenter
+    // scans out: copies the frame on the panel into `destination` as
+    // canonical RGB565 at panel size. False when LVGL owns the panel.
+    [[nodiscard]] bool CaptureDirectSurfaceFront(uint8_t* destination, uint32_t destination_stride,
+                                                 uint32_t destination_width, uint32_t destination_height) {
+        return direct_surface_presenter_.CaptureFront(destination, destination_stride, destination_width,
+                                                      destination_height);
+    }
     // Frames the presenter put on the panel or composited: Direct Surface
     // presents plus App Surface frames scanned out directly.
     [[nodiscard]] uint32_t DirectSurfaceFramesPresented() const { return direct_surface_presenter_.FramesPresented(); }

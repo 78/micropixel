@@ -203,8 +203,10 @@ Layer cache 和 translation-only wire，重绘区域小于全屏。面板窗口�
 
 仍需关注的限制：
 
-- 原记录中 Mosaico 的 DirectSurface 独占截图仍读取旧 LVGL 内容；Scene 直接输出已有独立截图来源。
-  修改截图时应分别验证这两种模式，不能由一条通过推断另一条通过。
+- Mosaico 截图有三个来源：LVGL 合成时读 displayed shadow；Scene 直接输出读正在扫描的 App Surface；
+  Direct Surface（HostSurface / Guest buffers）独占扫描时由 presenter 任务把 front buffer 拷成一帧
+  面板尺寸的 RGB565 再编码（`DirectSurfacePresenter::CaptureFront`），拷贝期间 front 不会被释放。
+  修改截图时应分别验证这三种模式，不能由一条通过推断另一条通过。
 - 状态层的大块对话框快照在 PSRAM 紧张时可能退化为无动画。
 - Claw4 Scene 直接输出仍需 App Surface 到 DPI framebuffer 的拷贝；进一步消除它需要重新设计
   buffer 借用与 LVGL 交接，不能仅删除 copy。

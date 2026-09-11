@@ -1,5 +1,6 @@
 #include "platform/lvgl/display/direct_surface_presenter.hpp"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstring>
 
@@ -252,7 +253,7 @@ int32_t DirectSurfacePresenter::Present(const device::DirectSurfacePresentation&
     return MICROPIXEL_STATUS_OK;
 }
 
-bool DirectSurfacePresenter::PostControl(JobKind kind) {
+bool DirectSurfacePresenter::PostControl(JobKind kind, FrontCapture* capture) {
     if (task_ == nullptr) {
         return false;
     }
@@ -263,7 +264,7 @@ bool DirectSurfacePresenter::PostControl(JobKind kind) {
         return false;
     }
     (void)xSemaphoreTake(control_done_, 0);
-    Job job{.kind = kind, .done = control_done_};
+    Job job{.kind = kind, .done = control_done_, .capture = capture};
     bool completed = false;
     if (xQueueSend(queue_, &job, kControlTimeout) != pdTRUE) {
         ESP_LOGW(kTag, "control job dropped: queue full");
@@ -428,6 +429,11 @@ void DirectSurfacePresenter::Run() {
                 break;
             case JobKind::kOverlayRefresh:
                 HandleOverlayRefresh();
+                break;
+            case JobKind::kCaptureFront:
+                if (job.capture != nullptr) {
+                    HandleCaptureFront(*job.capture);
+                }
                 break;
         }
         if (job.done != nullptr) {
@@ -1625,6 +1631,40 @@ bool DirectSurfacePresenter::ScanoutFramebuffer(const device::DirectSurfacePrese
 
 bool DirectSurfacePresenter::Composite(const device::DirectSurfacePresentation& frame, bool source_byte_swapped) {
     return composite_.composite != nullptr && composite_.composite(composite_.context, frame, source_byte_swapped);
+}
+
+bool DirectSurfacePresenter::CaptureFront(uint8_t* destination, uint32_t destination_stride, uint32_t destination_width,
+                                          uint32_t destination_height) {
+    if (destination == nullptr || destination_width == 0U || destination_height == 0U ||
+        destination_stride < destination_width * 2U || !exclusive_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    FrontCapture capture{.destination = destination,
+                         .stride = destination_stride,
+                         .width = destination_width,
+                         .height = destination_height};
+    return PostControl(JobKind::kCaptureFront, &capture) && capture.captured;
+}
+
+// Presenter task: the front buffer is owned by the Host until the next
+// present replaces it, so it can be read here without racing the Guest.
+void DirectSurfacePresenter::HandleCaptureFront(FrontCapture& capture) const {
+    capture.captured = false;
+    if (!has_front_ || !exclusive_.load(std::memory_order_acquire) || front_.pixels == nullptr ||
+        front_.source_width == 0U || front_.source_height == 0U) {
+        return;
+    }
+    for (uint32_t y = 0; y < capture.height; ++y) {
+        const uint32_t source_y = std::min(y * front_.source_height / capture.height, front_.source_height - 1U);
+        const auto* source_row = reinterpret_cast<const uint16_t*>(front_.pixels + source_y * front_.pitch);
+        auto* row = reinterpret_cast<uint16_t*>(capture.destination + y * capture.stride);
+        for (uint32_t x = 0; x < capture.width; ++x) {
+            const uint32_t source_x = std::min(x * front_.source_width / capture.width, front_.source_width - 1U);
+            const uint16_t pixel = source_row[source_x];
+            row[x] = front_byte_swapped_ ? static_cast<uint16_t>((pixel >> 8U) | (pixel << 8U)) : pixel;
+        }
+    }
+    capture.captured = true;
 }
 
 void DirectSurfacePresenter::ReleaseFront() {

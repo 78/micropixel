@@ -223,12 +223,28 @@ class DirectSurfacePresenter final {
     // Direct Surface, whose Destroy() already drains the presenter.
     void ReleaseAppSurfaceFrames();
 
+    // Screenshot support: copies the Direct Surface frame currently on the
+    // panel into `destination` (canonical RGB565, panel size, nearest
+    // upscale when the surface is smaller), run on the presenter task so the
+    // front buffer cannot be released or replaced mid-copy. False when the
+    // presenter is not scanning a Direct Surface out, or the copy timed out.
+    [[nodiscard]] bool CaptureFront(uint8_t* destination, uint32_t destination_stride, uint32_t destination_width,
+                                    uint32_t destination_height);
+
    private:
-    enum class JobKind : uint8_t { kPresent, kYield, kBarrier, kAppSurfaceFrame, kOverlayRefresh };
+    enum class JobKind : uint8_t { kPresent, kYield, kBarrier, kAppSurfaceFrame, kOverlayRefresh, kCaptureFront };
+    struct FrontCapture final {
+        uint8_t* destination{};
+        uint32_t stride{};
+        uint32_t width{};
+        uint32_t height{};
+        bool captured{};
+    };
     struct Job final {
         JobKind kind{};
         device::DirectSurfacePresentation frame{};
         SemaphoreHandle_t done{};
+        FrontCapture* capture{};
     };
     static constexpr UBaseType_t kQueueDepth = 8U;
     static constexpr uint32_t kTaskStackBytes = 6 * 1024U;
@@ -276,7 +292,8 @@ class DirectSurfacePresenter final {
     // LVGL task: an overlay changed while App Surface frames are on the panel, so the
     // rows under it have to be sent again even without Guest damage.
     void RequestOverlayRefresh();
-    bool PostControl(JobKind kind);
+    bool PostControl(JobKind kind, FrontCapture* capture = nullptr);
+    void HandleCaptureFront(FrontCapture& capture) const;
     [[nodiscard]] bool EnterExclusive();
     void LeaveExclusive(bool composite_front);
     [[nodiscard]] bool ScanoutBlit(const device::DirectSurfacePresentation& frame, bool source_byte_swapped);

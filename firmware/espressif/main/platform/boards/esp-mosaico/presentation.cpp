@@ -154,7 +154,48 @@ std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> MosaicoPresentati
     };
 }
 
+std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> MosaicoPresentation::CaptureScannedAppSurface(
+    MosaicoBoardState& state) {
+    static constexpr bool kReady = true;
+    static constexpr auto kPanelWidth = static_cast<uint32_t>(kWidth);
+    static constexpr auto kPanelHeight = static_cast<uint32_t>(kHeight);
+    graphics::ConstPixelSurface surface{};
+    if (state.guest_graphics.DirectlyScannedAppSurface(surface) &&
+        surface.format == graphics::SurfacePixelFormat::kRgb565) {
+        return lvgl::CaptureScreenJpeg(state.display, kPanelWidth, kPanelHeight,
+                                       {.pixels = surface.pixels,
+                                        .stride = surface.stride,
+                                        .format = lvgl::DisplayCapturePixelFormat::kRgb565,
+                                        .ready = &kReady});
+    }
+    // Direct Surface (HostSurface / Guest buffers): the presenter copies the
+    // front buffer into a temporary panel-sized frame while it still owns it.
+    if (!state.guest_graphics.DirectSurfaceActive()) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    const size_t stride = static_cast<size_t>(kPanelWidth) * 2U;
+    auto* frame = static_cast<uint8_t*>(heap_caps_malloc(stride * kPanelHeight, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (frame == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> result =
+        std::unexpected(host_ui::SystemUiError::kUnavailable);
+    if (state.guest_graphics.CaptureDirectSurfaceFront(frame, static_cast<uint32_t>(stride), kPanelWidth,
+                                                       kPanelHeight)) {
+        result = lvgl::CaptureScreenJpeg(state.display, kPanelWidth, kPanelHeight,
+                                         {.pixels = frame,
+                                          .stride = static_cast<uint32_t>(stride),
+                                          .format = lvgl::DisplayCapturePixelFormat::kRgb565,
+                                          .ready = &kReady});
+    }
+    heap_caps_free(frame);
+    return result;
+}
+
 std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> MosaicoPresentation::CaptureScreenJpeg() {
+    if (auto scanned = CaptureScannedAppSurface(state_); scanned.has_value()) {
+        return scanned;
+    }
     return lvgl::CaptureScreenJpeg(state_.display, static_cast<uint32_t>(kWidth), static_cast<uint32_t>(kHeight),
                                    {.pixels = state_.display_pipeline.DisplayedShadow(),
                                     .stride = kDisplayFrameStride,

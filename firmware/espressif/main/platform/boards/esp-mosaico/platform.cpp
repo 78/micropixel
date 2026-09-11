@@ -54,22 +54,13 @@ namespace {
 
 namespace board_detail = esp_mosaico::detail;
 
-// USB screenshot while the presenter scans the App Surface out directly: the
-// displayed-shadow copy only follows LVGL flushes, so the surface on the panel
-// is read instead. Falls through to the shadow capture otherwise.
+// Development display control shares the Remote Control screenshot logic.
 std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScannedAppSurface(void* context) {
     auto* state = static_cast<board_detail::MosaicoBoardState*>(context);
-    graphics::ConstPixelSurface surface{};
-    if (state == nullptr || !state->guest_graphics.DirectlyScannedAppSurface(surface) ||
-        surface.format != graphics::SurfacePixelFormat::kRgb565) {
+    if (state == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    static constexpr bool kReady = true;
-    return lvgl::CaptureScreenJpeg(state->display, board_detail::kWidth, board_detail::kHeight,
-                                   {.pixels = surface.pixels,
-                                    .stride = surface.stride,
-                                    .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                    .ready = &kReady});
+    return board_detail::MosaicoPresentation::CaptureScannedAppSurface(*state);
 }
 
 esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {

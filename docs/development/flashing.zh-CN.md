@@ -252,7 +252,8 @@ Windows 使用 pyserial 的 COM 端口后端，代码路径受支持，但尚未
 USB CDC 端口，不能同时占用。截图统一使用 `micropixel --transport usb screenshot`，在 P4 与 S31 上使用
 相同的 JPEG framing，并只抓取当前显示提交缓冲。Claw4 上当 Direct Surface 或系统转场持有 dummy draw
 时，LVGL 绘制缓冲不再是屏幕内容，截图改为读取正在显示的 DPI framebuffer，因此也能抓 Guest 全屏软渲染
-的画面。
+的画面。Mosaico 上 Direct Surface 独占扫描时，presenter 把正在显示的 front buffer 拷贝成一帧后编码，
+Scene 直接输出读正在扫描的 App Surface，其余情况读 displayed shadow。
 
 ## 7. Conformance 配置与串口调试
 

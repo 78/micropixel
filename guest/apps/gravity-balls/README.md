@@ -97,8 +97,8 @@ python3 tools/micropixel --transport usb run guest/apps/gravity-balls
 
 真机验收：平放后球落到远墙（否则翻转 `kDepthAxisSign`）、四向倾斜方向正确、甩动时球撞玻璃与侧壁、
 旋转时离心方向正确、暂停恢复无大时间步和残影、横竖屏文字可读且球群完整可见；对照遥测确认
-`clear_px` 远小于整屏、`dropped` 接近 0，并记录实际 fps。S31 Direct Surface 独占扫描输出时
-`micropixel screenshot` 只能读到首帧合成内容，运动状态要看遥测里的 `z_avg_x100` / `speed_avg_x100`。
+`clear_px` 远小于整屏、`dropped` 接近 0，并记录实际 fps。没有画面时可用遥测里的
+`z_avg_x100` / `speed_avg_x100` 判断运动状态。
 
 2026-09-11 Mosaico（S31）实测（`--profile performance`，面板上限 42 fps）：静止 32 fps 的首版经过
 缩小光晕/光斑、合并脏矩形、光晕先于球体绘制后，静止与甩动时均为 35–39 fps（update 19–21 ms、physics 3.5–3.8 ms、
