@@ -102,7 +102,8 @@ class PublishLayout(unittest.TestCase):
             uploads = [call.args for call in run.call_args_list if call.args[:3] == ('gh', 'release', 'upload')]
             public = next(args for args in uploads if args[3] == 'sdk-v1.2.3')
             support = next(args for args in uploads if args[3] == 'sdk-support-v1.2.3')
-            self.assertNotIn(out / 'test-sdk-index.json', public)
+            self.assertFalse(any('test-sdk-index.json' in str(value) for value in public))
+            self.assertTrue(any('#Windows' in str(value) for value in public))
             self.assertIn(out / 'test-sdk-index.json', support)
             self.assertNotIn(out / 'setup.exe', support)
 

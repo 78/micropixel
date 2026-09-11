@@ -9,9 +9,9 @@ import tempfile
 from pathlib import Path
 
 try:
-    from .release_assets import support_tag, user_assets
+    from .release_assets import support_tag, user_assets, display_label
 except ImportError:
-    from release_assets import support_tag, user_assets
+    from release_assets import support_tag, user_assets, display_label
 
 
 def run(*args, **kwargs):
@@ -75,7 +75,7 @@ Windows 安装包未签名；Windows 11 与 S31/S3 部分验收已完成，Windo
         run('gh', 'release', 'create', tag, '--draft', '--prerelease=' + str(preview).lower(), '--latest=false', '--target', os.environ['GITHUB_SHA'],
             '--title', f'SDK {version}{label}', '--notes-file', notes)
         names = sorted(user_assets(entry))
-        run('gh', 'release', 'upload', tag, *[out / name for name in names], out / 'sha256sums.txt')
+        run('gh', 'release', 'upload', tag, *[str(out / name) + '#' + display_label(entry, name) for name in names], str(out / 'sha256sums.txt') + '#下载校验（可选）')
         support = support_tag(version)
         support_notes = out / 'support-notes.md'
         support_notes.write_text('Maintainer-only SDK verification fixtures and evidence. Users: download the SDK or installer from ' + tag + '.\n')

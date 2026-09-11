@@ -25,3 +25,13 @@ def split_checksums(out, entry):
 def asset_url(entry, name):
     base = entry['entry']['url'].rsplit('/', 1)[0]
     return (base if name in user_assets(entry) or name == 'sha256sums.txt' else entry.get('verification_base', base)) + '/' + name
+
+
+def display_label(entry, name):
+    if name == entry['installer']['name']:
+        return 'Windows 10 / 11 x64 安装包（Windows 用户下载这个）'
+    if name == f"micropixel-sdk-{entry['version']}.tar.gz":
+        return 'macOS / Linux SDK（macOS 和 Linux 用户下载这个）'
+    if name == entry['manager']['name']:
+        return '自动更新组件（无需手动下载）'
+    return '机器清单（无需手动下载）'
