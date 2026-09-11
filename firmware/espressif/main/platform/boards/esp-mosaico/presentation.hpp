@@ -37,14 +37,12 @@ class MosaicoPresentation final : public host_ui::lvgl::square_common::SquarePre
     [[nodiscard]] std::expected<host_ui::HallCoverModel, host_ui::SystemUiError> CaptureGuestFrame(
         const host_ui::lvgl::square_common::HallTransitionPresentation& presentation, uint64_t trigger_timestamp_us,
         uint32_t transition_duration_ms) override;
-    // USB screenshot. While the presenter scans the App Surface out directly
-    // the displayed shadow only follows LVGL flushes (all dummy draws), so
-    // the surface on the panel is read instead; otherwise the shadow.
+    // Screenshot for Remote Control and USB development control. While the
+    // presenter scans a Guest frame out directly the displayed shadow only
+    // follows LVGL flushes (all dummy draws), so the frame on the panel is
+    // read instead: the scanned App Surface, else the Direct Surface front
+    // buffer copied by the presenter; otherwise the shadow.
     [[nodiscard]] std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg() override;
-    // The directly scanned-out App Surface, or kUnavailable when the panel is
-    // showing composited LVGL content.
-    [[nodiscard]] static std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScannedAppSurface(
-        MosaicoBoardState& state);
     void ReleaseGuestSnapshot() override;
     [[nodiscard]] bool SynchronizeGuestReveal() const override { return false; }
     [[nodiscard]] bool PrepareHallBackgroundLocked();

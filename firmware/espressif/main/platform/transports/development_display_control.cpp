@@ -38,21 +38,29 @@ bool TransmitJpeg(const uint8_t* jpeg_bytes, uint32_t jpeg_size, uint32_t sequen
     return success;
 }
 
+std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CapturePresentation(void* context) {
+    auto* screen = static_cast<host_ui::lvgl::square_common::ScreenCapture*>(context);
+    if (screen == nullptr) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    return screen->CaptureScreenJpeg();
+}
+
 }  // namespace
 
-esp_err_t DevelopmentDisplayControl::Start(lv_display_t* display, device::Input& input,
-                                           DevelopmentLocalControlTransport& transport, uint32_t width, uint32_t height,
-                                           lvgl::DisplayCaptureSource display_source,
-                                           DevelopmentCaptureHook capture_hook) {
-    if (display == nullptr || width == 0U || height == 0U) {
+DevelopmentCaptureHook DevelopmentCaptureHook::For(host_ui::lvgl::square_common::ScreenCapture& screen) {
+    return {.capture = CapturePresentation, .context = &screen};
+}
+
+esp_err_t DevelopmentDisplayControl::Start(device::Input& input, DevelopmentLocalControlTransport& transport,
+                                           uint32_t width, uint32_t height, DevelopmentCaptureHook capture_hook) {
+    if (width == 0U || height == 0U || capture_hook.capture == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    display_ = display;
     input_ = &input;
     transport_ = &transport;
     width_ = width;
     height_ = height;
-    display_source_ = display_source;
     capture_hook_ = capture_hook;
     ESP_LOGI(kTag, "development commands=%s, %s <phase> <id> <x> <y> <pressure>", kCaptureCommand, kTouchCommand);
     return transport.Start(ReceiveCommand, this);
@@ -111,13 +119,7 @@ void DevelopmentDisplayControl::ProcessCommand(const char* command) {
 
 void DevelopmentDisplayControl::CaptureAndTransmit() {
     std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> capture_result =
-        std::unexpected(host_ui::SystemUiError::kUnavailable);
-    if (capture_hook_.capture != nullptr) {
-        capture_result = capture_hook_.capture(capture_hook_.context);
-    }
-    if (!capture_result.has_value()) {
-        capture_result = lvgl::CaptureScreenJpeg(display_, width_, height_, display_source_);
-    }
+        capture_hook_.capture(capture_hook_.context);
     if (!capture_result.has_value()) {
         ESP_LOGE(kTag, "display-buffer screen capture failed");
         return;

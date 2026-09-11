@@ -258,12 +258,7 @@ esp_err_t InitializeLvgl(board_detail::MetalioClaw4BoardState& state) {
         return status;
     }
     lvgl::RequestDisplayRefresh(state.display);
-    status = esp_lv_adapter_start();
-    if (status == ESP_OK) {
-        status = metalio_claw4::InitializeScreenCapture(state.display, state.board_io.Panel(), state.touch_input,
-                                                        board_detail::kWidth, board_detail::kHeight);
-    }
-    return status;
+    return esp_lv_adapter_start();
 }
 
 }  // namespace
@@ -455,6 +450,15 @@ class MetalioClaw4Board final : public Board, public device::Power {
         const esp_err_t initialize_error = InitializePlatformImpl(state_);
         if (initialize_error != ESP_OK) {
             return initialize_error;
+        }
+        // USB development screenshots take the same path as Remote Control.
+        const esp_err_t capture_error =
+            metalio_claw4::InitializeScreenCapture(state_.touch_input, board_detail::kWidth, board_detail::kHeight,
+                                                   transports::DevelopmentCaptureHook::For(presentation_));
+        if (capture_error != ESP_OK) {
+            ESP_LOGE(board_detail::kTag, "start USB screen capture/local control failed: %s",
+                     esp_err_to_name(capture_error));
+            return capture_error;
         }
         audio_output_.Configure(state_.board_io.IoExpander(), state_.i2c_executor);
         BoardRegistration registration{{

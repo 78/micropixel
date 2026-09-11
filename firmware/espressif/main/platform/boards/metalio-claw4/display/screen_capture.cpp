@@ -22,29 +22,11 @@ constexpr char kTag[] = "micropixel_capture";
 struct DevelopmentCapture final {
     transports::UsbSerialJtagLocalControl transport{};
     transports::DevelopmentDisplayControl display_control{};
-    lv_display_t* display{};
-    esp_lcd_panel_handle_t panel{};
-    uint32_t width{};
-    uint32_t height{};
 };
 
 DevelopmentCapture& DevelopmentInstance() {
     static DevelopmentCapture instance;
     return instance;
-}
-
-// USB development capture. While dummy draw is active (Direct Surface or a
-// system transition scans out to a panel framebuffer) the LVGL draw buffer is
-// not what the panel shows, so encode the displayed framebuffer instead. When
-// LVGL owns the panel, fall through to the generic draw-buffer capture rather
-// than toggling dummy draw from the transport task.
-std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureDisplayedFramebuffer(void* context) {
-    auto* capture = static_cast<DevelopmentCapture*>(context);
-    if (capture->display == nullptr || capture->panel == nullptr ||
-        esp_lv_adapter_dummy_draw_get_free_buf_preserve(capture->display) == nullptr) {
-        return std::unexpected(host_ui::SystemUiError::kUnavailable);
-    }
-    return CaptureScreenJpeg(capture->display, capture->panel, capture->width, capture->height);
 }
 
 void ReleaseCaptureBuffer(uint8_t* data) { heap_caps_free(data); }
@@ -68,16 +50,10 @@ uint8_t* DisplayedFrameBuffer(lv_display_t* display, esp_lcd_panel_handle_t pane
 
 }  // namespace
 
-esp_err_t InitializeScreenCapture(lv_display_t* display, esp_lcd_panel_handle_t panel, input::Gt911Input& touch_input,
-                                  uint32_t width, uint32_t height) {
+esp_err_t InitializeScreenCapture(input::Gt911Input& touch_input, uint32_t width, uint32_t height,
+                                  transports::DevelopmentCaptureHook capture_hook) {
     auto& development = DevelopmentInstance();
-    development.display = display;
-    development.panel = panel;
-    development.width = width;
-    development.height = height;
-    return development.display_control.Start(
-        display, touch_input, development.transport, width, height, {},
-        transports::DevelopmentCaptureHook{.capture = CaptureDisplayedFramebuffer, .context = &development});
+    return development.display_control.Start(touch_input, development.transport, width, height, capture_hook);
 }
 
 device::LocalControl& UsbLocalControl() { return DevelopmentInstance().transport; }
@@ -87,6 +63,12 @@ std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(
                                                                                 uint32_t width, uint32_t height) {
     if (display == nullptr || panel == nullptr || width == 0U || height == 0U || height > UINT32_MAX / width / 3U) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
+    }
+    // While LVGL owns the panel its draw buffer is the screen content and the
+    // generic locked capture reads it; toggling dummy draw here would race the
+    // LVGL task from whichever task requested the screenshot.
+    if (esp_lv_adapter_dummy_draw_get_free_buf_preserve(display) == nullptr) {
+        return lvgl::CaptureScreenJpeg(display, width, height);
     }
     const uint32_t frame_bytes = width * height * 3U;
     jpeg_encode_memory_alloc_cfg_t output_memory_config{
@@ -100,12 +82,10 @@ std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
 
-    // Dummy draw freezes the physical framebuffers while LVGL continues to
-    // render into its private buffer. If a compositor already owns dummy draw,
-    // preserve that ownership after the capture.
-    const bool dummy_draw_was_enabled = esp_lv_adapter_dummy_draw_get_free_buf_preserve(display) != nullptr;
-    esp_err_t status = dummy_draw_was_enabled ? ESP_OK : esp_lv_adapter_set_dummy_draw(display, true);
-    uint8_t* displayed_frame = status == ESP_OK ? DisplayedFrameBuffer(display, panel) : nullptr;
+    // A compositor (Direct Surface or system transition) owns dummy draw, so
+    // the physical framebuffers are stable and the displayed one is encoded.
+    esp_err_t status = ESP_OK;
+    uint8_t* displayed_frame = DisplayedFrameBuffer(display, panel);
 
     jpeg_encoder_handle_t encoder = nullptr;
     if (displayed_frame != nullptr) {
@@ -133,14 +113,8 @@ std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(
             status = release_status;
         }
     }
-    if (!dummy_draw_was_enabled) {
-        const esp_err_t restore_status = esp_lv_adapter_set_dummy_draw(display, false);
-        if (status == ESP_OK) {
-            status = restore_status;
-        }
-    }
     if (status != ESP_OK || jpeg_size == 0U) {
-        ESP_LOGE(kTag, "Remote Control JPEG capture failed: %s", esp_err_to_name(status));
+        ESP_LOGE(kTag, "displayed framebuffer JPEG capture failed: %s", esp_err_to_name(status));
         heap_caps_free(jpeg_bytes);
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }

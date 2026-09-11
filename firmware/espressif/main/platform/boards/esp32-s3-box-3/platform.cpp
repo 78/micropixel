@@ -104,12 +104,10 @@ class Esp32S3Box3Board final : public Board {
         if (gpio_status != ESP_OK) {
             ESP_LOGW(board_detail::kTag, "BOX-3 Pmod GPIO unavailable for this boot: %s", esp_err_to_name(gpio_status));
         }
-        ESP_RETURN_ON_ERROR(state_.development_display.Start(state_.display, state_.touch_input, state_.local_control,
+        // USB development screenshots take the same path as Remote Control.
+        ESP_RETURN_ON_ERROR(state_.development_display.Start(state_.touch_input, state_.local_control,
                                                              board_detail::kWidth, board_detail::kHeight,
-                                                             {.pixels = state_.display_shadow.Pixels(),
-                                                              .stride = state_.display_shadow.Stride(),
-                                                              .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                                              .ready = state_.display_shadow.Ready()}),
+                                                             transports::DevelopmentCaptureHook::For(presentation_)),
                             board_detail::kTag, "start USB Serial/JTAG development control failed");
         ESP_RETURN_ON_ERROR(hardware_.SetBrightness(80), board_detail::kTag, "set startup brightness failed");
 

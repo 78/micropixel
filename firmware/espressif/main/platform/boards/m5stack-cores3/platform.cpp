@@ -101,13 +101,11 @@ class M5StackCoreS3Board final : public Board, public device::Power {
         if (audio_status != ESP_OK) {
             ESP_LOGW(kTag, "audio unavailable for this boot: %s", esp_err_to_name(audio_status));
         }
-        ESP_RETURN_ON_ERROR(state_.development_display.Start(state_.display, state_.touch_input, state_.local_control,
-                                                             common::kWidth, common::kHeight,
-                                                             {.pixels = state_.display_shadow.Pixels(),
-                                                              .stride = state_.display_shadow.Stride(),
-                                                              .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                                              .ready = state_.display_shadow.Ready()}),
-                            kTag, "start USB development control failed");
+        // USB development screenshots take the same path as Remote Control.
+        ESP_RETURN_ON_ERROR(
+            state_.development_display.Start(state_.touch_input, state_.local_control, common::kWidth, common::kHeight,
+                                             transports::DevelopmentCaptureHook::For(presentation_)),
+            kTag, "start USB development control failed");
         ESP_RETURN_ON_ERROR(hardware_.SetBrightness(80), kTag, "set startup brightness failed");
 
         BoardRegistration registration{{

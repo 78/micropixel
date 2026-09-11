@@ -35,7 +35,6 @@
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/input/esp_lcd_touch_input.hpp"
 #include "platform/lvgl/display/scanout_stage_pool.hpp"
-#include "platform/lvgl/display/screen_capture.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/guest_graphics_engine.hpp"
@@ -53,15 +52,6 @@ namespace micropixel::platform {
 namespace {
 
 namespace board_detail = esp_mosaico::detail;
-
-// Development display control shares the Remote Control screenshot logic.
-std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScannedAppSurface(void* context) {
-    auto* state = static_cast<board_detail::MosaicoBoardState*>(context);
-    if (state == nullptr) {
-        return std::unexpected(host_ui::SystemUiError::kUnavailable);
-    }
-    return board_detail::MosaicoPresentation::CaptureScannedAppSurface(*state);
-}
 
 esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
     ESP_RETURN_ON_ERROR(state.display_pipeline.InitializePanel(), board_detail::kTag,
@@ -235,13 +225,10 @@ class EspMosaicoBoard final : public Board, public device::Power {
                             "initialize Mosaico function button failed");
         ESP_RETURN_ON_ERROR(state_.touch_input.Start(state_.display), board_detail::kTag,
                             "start interrupt-driven touch failed");
-        ESP_RETURN_ON_ERROR(state_.development_display.Start(state_.display, state_.touch_input, state_.local_control,
+        // USB development screenshots take the same path as Remote Control.
+        ESP_RETURN_ON_ERROR(state_.development_display.Start(state_.touch_input, state_.local_control,
                                                              board_detail::kWidth, board_detail::kHeight,
-                                                             {.pixels = state_.display_pipeline.DisplayedShadow(),
-                                                              .stride = board_detail::kWidth * 2U,
-                                                              .format = lvgl::DisplayCapturePixelFormat::kRgb565,
-                                                              .ready = state_.display_pipeline.DisplayedShadowReady()},
-                                                             {.capture = CaptureScannedAppSurface, .context = &state_}),
+                                                             transports::DevelopmentCaptureHook::For(presentation_)),
                             board_detail::kTag, "start USB screen capture/local control failed");
         ESP_LOGI(board_detail::kTag,
                  "Mosaico HMI ready: 480x480 QSPI display, interrupt-driven touch, shared Guest renderer");
