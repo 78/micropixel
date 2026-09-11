@@ -1,18 +1,18 @@
 # AI 使用 MicroPixel SDK
 
-本文描述 Windows 安装管理组件的 Preview 接口；仅下载独立 SDK 0.15.6 不会获得 setup、doctor 或版本锁管理。
+本文描述 Windows 安装管理组件的接口；仅下载独立 SDK 0.15.6 不会获得 setup、doctor 或版本锁管理。
 先读取对应 Release 的安装元数据，不能猜测最新版本或使用仓库混合的 Latest Release。
 
 ## 安装
 
 安装必须有用户安装 SDK 的明确意图。下载清单包含 `version`、`architecture`、`url`、`size_bytes` 和 `sha256`。
-下面固定选择 0.16.1 Preview。自动发现使用专用 [SDK 索引](https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json)：
-`stable` 为空表示尚无稳定 Windows SDK；仅在用户接受 Preview 时使用 `preview`。
+下面固定选择 0.16.2。自动发现使用专用 [SDK 索引](https://raw.githubusercontent.com/78/micropixel/sdk-channel/index.json)：
+默认使用 `stable`；仅在用户接受预览版时使用 `preview`。正式版安装器当前未签名，Windows 10 验收待完成。
 `windows_installer` 是经过发布验证的安装器地址、大小和摘要。
 
 ```powershell
-# This explicit version is the unsigned Preview. Do not infer it from Latest Release.
-$metadataUrl = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.1/windows-installer.json'
+# This explicit version uses the unsigned stable installer. Do not infer it from Latest Release.
+$metadataUrl = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.2/windows-installer.json'
 $meta = Invoke-RestMethod -Uri $metadataUrl
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
@@ -71,7 +71,7 @@ micropixel publish --dry-run --json
   "ok": true,
   "code": "ok",
   "result": {
-    "sdk_version": "0.16.1",
+    "sdk_version": "0.16.2",
     "toolchain_id": "windows-x64-<toolchain-digest>",
     "artifacts": [],
     "version_status": null

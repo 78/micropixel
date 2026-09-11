@@ -37,6 +37,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     metadata = prepare_core(out, args.repository)
     version = metadata['version']
+    policy = json.loads((ROOT / 'tools/windows/release-policy.json').read_text())
     base = f'https://github.com/{args.repository}/releases/download/sdk-v{version}'
     manifest = json.loads((out / 'sdk-manifest.json').read_text())
     entries = {version: {**asset(out / 'sdk-manifest.json', base, ''), 'release_notes_url': manifest['release_notes_url'], 'performance': []}}
@@ -85,11 +86,11 @@ def main():
     write_json(out / 'test-sdk-index.json', {'schema_version': 1, 'test_only': True, 'stable': '9000.0.2', 'preview': None, 'versions': entries, 'manager': fixture_manager})
     write_json(out / 'channel-entry.json', {'schema_version': 1, 'version': version, 'entry': entries[version], 'manager': manager,
                                           'installer': json.loads((out / 'windows-installer.json').read_text())})
-    write_json(out / 'release-notes.json', {'schema_version': 1, 'sdk_version': version, 'channel': 'preview',
+    write_json(out / 'release-notes.json', {'schema_version': 1, 'sdk_version': version, 'channel': policy['channel'],
         'performance': [], 'migration': ['Existing unmanaged projects must explicitly select an SDK before managed builds.',
         'Source migration and real-device acceptance remain separate from SDK switching.',
         'Run the new Windows installer when upgrading from 0.16.0 to replace its Ctrl-C bootstrap; manager or SDK updates alone do not replace it.'],
-        'compatibility': manifest['compatibility'], 'windows_acceptance': 'pending', 'code_signing': 'unsigned-preview'})
+        'compatibility': manifest['compatibility'], 'windows_acceptance': policy['windows_acceptance'], 'code_signing': policy['code_signing'], 'release_policy': policy['policy']})
     for relative in ('docs/development/windows-sdk.zh-CN.md', 'docs/development/windows-acceptance.zh-CN.md',
                      'docs/development/windows-acceptance-2026-09-11.zh-CN.md',
                      'guest/sdk/AI.md', 'tools/windows/collect_acceptance.ps1', 'tools/windows/test_acceptance_versions.ps1', 'LICENSE', 'THIRD_PARTY_NOTICES.md'):

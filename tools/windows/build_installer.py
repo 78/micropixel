@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the unsigned Preview installer. Signing/stable promotion is a separate gate."""
+"""Build the installer with explicit channel and signing metadata."""
 import argparse
 import json
 import subprocess
@@ -26,6 +26,11 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     version = prepare_core(output, args.repository)['version']
+    policy = json.loads((ROOT / 'tools/windows/release-policy.json').read_text())
+    if policy['channel'] not in ('stable', 'preview') or policy['code_signing'] != 'unsigned':
+        raise SystemExit('This builder supports explicit stable/preview unsigned releases only')
+    preview = policy['channel'] == 'preview'
+    suffix = '-preview' if preview else ''
     run(sys.executable, ROOT / 'tools/windows/build_manager.py', '--output', output / 'runtime')
     build = json.loads((output / 'runtime/manager-build.json').read_text())
     build_id = build['build_id']
@@ -43,12 +48,12 @@ def main():
         raise SystemExit('Inno Setup checksum mismatch')
     compiler = output / 'inno'
     run(compiler_installer, '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-', '/NORESTART', '/NOICONS', '/DIR=' + str(compiler))
-    run(compiler / 'ISCC.exe', '/DSdkVersion=' + version, '/DManagerBuild=' + build_id,
+    run(compiler / 'ISCC.exe', '/DSdkVersion=' + version, '/DReleaseSuffix=' + suffix, '/DManagerBuild=' + build_id,
         '/DPayloadDir=' + str(output / 'runtime'), '/DReleaseDir=' + str(output), ROOT / 'tools/windows/micropixel.iss')
-    installer = output / f'micropixel-setup-{version}-windows-x64-preview.exe'
+    installer = output / f'micropixel-setup-{version}-windows-x64{suffix}.exe'
     metadata = asset(installer, f'https://github.com/{args.repository}/releases/download/sdk-v{version}', '')
     metadata.pop('root')
-    metadata.update(schema_version=1, version=version, architecture='windows-x64', preview=True,
+    metadata.update(schema_version=1, version=version, architecture='windows-x64', preview=preview, code_signing=policy['code_signing'], windows_acceptance=policy['windows_acceptance'],
                     manager_version=build['version'], manager_build_id=build_id)
     (output / 'windows-installer.json').write_text(json.dumps(metadata, indent=2) + '\n')
     print(json.dumps(metadata))

@@ -13,7 +13,7 @@
 #endif
 [Setup]
 AppId=MicroPixel.SDK
-AppName=MicroPixel SDK Preview
+AppName=MicroPixel SDK
 AppVersion={#SdkVersion}
 AppPublisher=MicroPixel
 AppPublisherURL=https://micropixel.ai
@@ -33,8 +33,8 @@ RestartIfNeededByRun=no
 Compression=lzma2/normal
 SolidCompression=yes
 OutputDir={#ReleaseDir}
-OutputBaseFilename=micropixel-setup-{#SdkVersion}-windows-x64-preview
-UninstallDisplayName=MicroPixel SDK Preview
+OutputBaseFilename=micropixel-setup-{#SdkVersion}-windows-x64{#ReleaseSuffix}
+UninstallDisplayName=MicroPixel SDK
 LicenseFile=..\..\LICENSE
 
 [Files]

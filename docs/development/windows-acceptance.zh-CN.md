@@ -1,11 +1,11 @@
 # Windows 10 SDK 真机验收
 
-本清单针对 Windows 安装与版本管理项目。使用 SDK 0.16.1 Windows Preview 安装器；
+本清单针对 Windows 安装与版本管理项目。使用 SDK 0.16.2 安装器；
 setup/doctor/sdk/JSON 接口不能用独立 SDK 0.15.6 代替。
 CI 通过不能替代本清单。没有执行的项目标记 `not_run`，不能填写通过。
 
 已完成的本机及真机结果见 [2026-09-11 验收记录](windows-acceptance-2026-09-11.zh-CN.md)，
-其中区分原发布安装包问题与 Ctrl-C 修复后的隔离组件复验；尚不满足稳定发布门槛。
+其中区分原发布安装包问题与 Ctrl-C 修复后的隔离组件复验；未完成项目继续跟踪；按 2026-09-11 更新的开源发布政策，不再阻塞正式版。
 
 ## 准备
 
@@ -27,13 +27,13 @@ GUI 安装直接双击。静默安装使用同一包：
 $process = Start-Process -FilePath '.\micropixel-setup.exe' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART /LOG="install.log"' -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-& $mp setup --version 0.16.1 --yes --json
+& $mp setup --version 0.16.2 --yes --json
 if ($LASTEXITCODE -ne 0) { throw 'Tool preparation failed' }
 & $mp doctor --json
 ```
 
 安装器成功不代表环境就绪。doctor 必须返回 `ok: true` 和 `result.ready: true`。
-Preview 的系统安全提示需要人工核对，不关闭系统安全功能、不绕过拦截。
+未签名安装器的系统安全提示需要人工核对，不关闭系统安全功能、不绕过拦截。
 
 创建项目：
 
@@ -51,7 +51,7 @@ W07–W11 使用 Release 的 `windows-acceptance-project.zip`，解压后进入 
 ```powershell
 Expand-Archive .\windows-acceptance-project.zip -DestinationPath .\硬件验收
 Set-Location .\硬件验收\windows-acceptance
-& $mp sdk use 0.16.1 --yes --json
+& $mp sdk use 0.16.2 --yes --json
 ```
 
 该 App 在 240×240 及以上画面显示触摸与按键状态，
@@ -102,12 +102,12 @@ Set-Location .\硬件验收\windows-acceptance
 ```powershell
 $previousIndex = $env:MICROPIXEL_SDK_INDEX_URL
 try {
-    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.1/test-sdk-index.json'
+    $env:MICROPIXEL_SDK_INDEX_URL = 'https://github.com/78/micropixel/releases/download/sdk-v0.16.2/test-sdk-index.json'
     .\test_acceptance_versions.ps1 -Launcher $mp -Directory '.\Windows A B 验收'
 } finally {
     $env:MICROPIXEL_SDK_INDEX_URL = $previousIndex
     & $mp update --yes --json
-    & $mp setup --version 0.16.1 --yes --json
+    & $mp setup --version 0.16.2 --yes --json
 }
 ```
 
@@ -134,5 +134,5 @@ W17 复制验收 App 到独立目录，将 `app.json` 的 `app_id` 改为你拥�
 若 PowerShell 策略阻止辅助脚本，记录提示并由用户按本机策略批准执行；AI 不自动修改执行策略。
 安装日志只留本地；定位问题时另行提供经过脱敏的最小片段。
 
-稳定发布须完成 W01–W19、解决关键故障、验证两个架构实际运行并提供签名安装包。
+正式版要求自动验证通过；W01–W19 是持续质量验收清单，未完成项目与未签名状态必须披露，不再作为正式发布的全部前置条件。
 性能改进需要同一设备和场景对比 A/B，不以“更新到最新版”代替性能验收。

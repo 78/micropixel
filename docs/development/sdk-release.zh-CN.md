@@ -1,4 +1,4 @@
-# SDK 与 Windows Preview 发布
+# SDK 与 Windows 安装器发布
 
 SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK 使用 `sdk-v<版本>`，
 工具链使用 `toolchain-windows-x64-<摘要>`；更新检查读取 `sdk-channel` 分支的 `index.json`，
@@ -11,21 +11,21 @@ SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK
 3. PR 验证通过并合并后，给同一提交创建 `sdk-v<版本>` tag 并推送。
 4. `sdk-release.yml` 构建确定性 SDK 归档、内置运行时、安装器、清单和隔离的验收副本。
 5. 安装后完成双架构构建、打包、发布预检、中文路径、增量依赖、A/B 升级回退和组件切换后，创建 Draft Release。
-6. 发布为未签名 Preview，再从公开下载地址逐一核对产物摘要，并用全新缓存重新完成实际构建。
-7. 公开复验成功后，才更新专用索引的 `preview` 和管理组件入口。`stable` 保持不变。
+6. 按 `tools/windows/release-policy.json` 指定的通道发布（当前为未签名正式版），再从公开下载地址逐一核对产物摘要，并用全新缓存重新完成实际构建。
+7. 公开复验成功后，才更新对应 `stable` 或 `preview` 索引及管理组件入口。
 
 发布 workflow 从不上传应用商店、不烧录固件，也不覆盖已经存在的 SDK Release。
 失败时查看具体步骤：Draft 创建之前可以修复并重新验证；已经创建 Release 后不要覆盖同名产物，
-产物本身有修复时需使用新版本号。公开复验失败的 Preview 不会进入自动发现索引。
+产物本身有修复时需使用新版本号。公开复验失败的版本 不会进入自动发现索引。
 
-仅公开下载或索引提升步骤失败时，可从主分支运行 `Reverify published SDK Preview`，
+仅公开下载或索引提升步骤失败时，可从主分支运行 `Reverify published SDK`，
 输入已发布的精确 tag。它下载现有产物，核对 GitHub 摘要与发布校验清单，使用原安装包和
 原验收项目完成 Windows 复验后再提升索引；不重新生成、替换安装包或 SDK。
 公开下载对短暂的 404、限流与服务错误进行有界重试。重复提升同一版本不会重复提交索引，
 较旧的 Preview 也不能覆盖已提升的较新版本。
 
 网站稳定 SDK 入口只引用经验证的 GitHub 归档及固定摘要，不重新打包当前工作区。
-在 Windows 稳定验收完成前，网站原有独立 SDK 入口与 Windows Preview 分开维护。
+网站 SDK 和安装器入口使用同一正式版本，并披露安装器签名和人工验收状态。
 
 ## 工具链更新
 
@@ -40,20 +40,13 @@ SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK
 
 `wamrc --version` 本身不能证明 AOT 兼容性；还必须保留固定 WAMR commit、来源摘要和 AOT v6 契约。
 
-## 稳定版门槛
+## 正式版发布政策（2026-09-11 更新）
 
-当前自动流程只发布 Preview，不能将未签名安装器或未验收版本自动提升到 `stable`。
-稳定发布仍需 [W01–W19 真机验收](windows-acceptance.zh-CN.md)、两个设备架构实际运行、
-关键故障关闭，以及受信任的 Windows 代码签名和时间戳。
+项目维护者明确授权放宽开源发布门槛。正式版要求自动化回归、安装生命周期、双架构构建、公开下载摘要和全新缓存验证通过。
+代码签名和全部 W01–W19 人工验收不再阻塞正式发布；发布说明、安装元数据及网站必须如实披露未签名、Windows 10 待验收和其余未完成项。
+已完成的 Windows 11 / S31 / S3 结果见 [验收记录](windows-acceptance-2026-09-11.zh-CN.md)，不能写成 Windows 10 已验收。
 
-签名后重新核对最终安装器的 SHA-256、下载清单和安装回归，不能沿用签名前的摘要。
-在 Windows 上检查最终文件：
-
-```powershell
-Get-AuthenticodeSignature .\micropixel-setup.exe | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
-Get-FileHash .\micropixel-setup.exe -Algorithm SHA256
-```
-
-Preview 预期为未签名，必须如实记录；稳定包要求 `Status = Valid`，且发布者与正式签名身份一致。
-签名基础设施与人工验收结果尚未提供，因此稳定签名与入口提升不会在当前 Preview workflow 中执行。
-性能发布说明必须有对应场景的真机证据；没有证据时 `performance` 保持空数组。
+发布元数据的 `preview` 表示发布通道，`code_signing` 独立表示签名状态，正式版不意味着已经签名。
+不得通过修改验收结果、覆盖旧产物或关闭 Windows 安全功能达成发布。
+将来引入签名时应对最终签名文件重新生成 SHA-256，并完成安装回归；不能沿用签名前的摘要。
+性能发布说明仍需对应场景的真机证据；没有证据时 `performance` 保持空数组。

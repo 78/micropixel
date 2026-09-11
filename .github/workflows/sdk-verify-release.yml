@@ -1,9 +1,9 @@
-name: Reverify published SDK Preview
+name: Reverify published SDK
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing SDK Preview tag to verify and promote without replacing assets
+        description: Existing SDK tag to verify and promote without replacing assets
         required: true
         type: string
 permissions:
@@ -28,14 +28,14 @@ jobs:
           python-version: '3.13.12'
       - name: Download and verify existing immutable assets
         run: python tools/windows/download_sdk_release.py --tag $env:RELEASE_TAG --directory build/release
-      - name: Install the published Preview
+      - name: Install the published SDK
         run: |
           $metadata = Get-Content -Raw build/release/windows-installer.json | ConvertFrom-Json
           $process = Start-Process -FilePath (Join-Path build/release $metadata.name) -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART' -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw 'Published installer failed' }
       - name: Verify public downloads and fresh installed SDK
         run: python tools/windows/verify_installed_sdk.py --directory build/release --public
-      - name: Promote verified Preview channel
+      - name: Promote verified SDK channel
         run: |
           git config --global credential.helper '!gh auth git-credential'
           python tools/windows/publish_sdk.py promote --directory build/release

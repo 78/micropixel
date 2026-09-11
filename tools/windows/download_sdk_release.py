@@ -20,8 +20,8 @@ def main():
     if not re.fullmatch(r'sdk-v[0-9]+\.[0-9]+\.[0-9]+', args.tag):
         raise SystemExit('Expected an exact SDK tag')
     release = json.loads(subprocess.check_output(['gh', 'release', 'view', args.tag, '--json', 'isDraft,isPrerelease,assets']))
-    if release['isDraft'] or not release['isPrerelease']:
-        raise SystemExit('Recovery accepts published Preview releases only')
+    if release['isDraft']:
+        raise SystemExit('Recovery accepts published releases only')
     if args.directory.exists():
         raise SystemExit('Recovery needs a fresh output directory')
     assets = release['assets']
@@ -40,9 +40,9 @@ def main():
         if not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or file_digest(args.directory / name) != sha:
             raise SystemExit('Published checksum list differs: ' + name)
     entry = json.loads((args.directory / 'channel-entry.json').read_text())
-    if 'sdk-v' + entry['version'] != args.tag or not entry['installer']['preview']:
-        raise SystemExit('Release identity differs from requested Preview')
-    print('Published Preview assets verified; no release files were changed.')
+    if 'sdk-v' + entry['version'] != args.tag or entry['installer']['preview'] != release['isPrerelease']:
+        raise SystemExit('Release identity differs from requested release')
+    print('Published SDK assets verified; no release files were changed.')
 
 
 if __name__ == '__main__':
