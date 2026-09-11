@@ -151,7 +151,8 @@ def assemble(inputs, guests, output):
         check_image(destination / 'micropixel.bin', target, version)
         full = (destination / 'micropixel-full.bin').read_bytes()
         ota = (destination / 'micropixel.bin').read_bytes()
-        if len(full) != (32 if target == 'esp32p4' else 16) * 1024 * 1024 or full[0x30000:0x30000 + len(ota)] != ota:
+        # The flasher intentionally omits unused flash tail bytes.
+        if not 0x30000 + len(ota) <= len(full) <= (32 if target == 'esp32p4' else 16) * 1024 * 1024 or full[0x30000:0x30000 + len(ota)] != ota:
             raise ValueError('Full firmware size or embedded OTA mismatch')
         metadata['files'] = inventory(destination)
         write(destination / 'manifest.json', metadata)
