@@ -59,7 +59,7 @@ constexpr float kBoxHalfSize = 4.4F;
 constexpr unsigned kBallOptions[] = {8, 16, 24, 32, 48, 64};
 constexpr float kDepthOptions[] = {6.0F, 9.0F, 12.0F, 15.0F};
 constexpr float kGravityOptions[] = {0.5F, 1.0F, 1.5F, 2.0F};
-constexpr unsigned kDefaultBallOption = 2, kDefaultDepthOption = 1, kDefaultGravityOption = 1;
+constexpr unsigned kDefaultBallOption = 2, kDefaultDepthOption = 2, kDefaultGravityOption = 1;
 constexpr unsigned kSettingRows = 3;
 // Sign that maps the accelerometer z axis onto "into the screen". Tilt
 // established X opposite to and Y along screen axes on ESP-Mosaico; with a
