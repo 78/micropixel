@@ -21,6 +21,8 @@ class UnavailableCellular final : public device::Cellular {
    public:
     std::expected<void, device::CellularError> Initialize() override { return {}; }
     device::CellularSnapshot Snapshot() const override { return {}; }
+    bool TryBeginFirmwareUpdate() override { return true; }
+    void EndFirmwareUpdate() override {}
     void SetStateChangeSink(device::CellularStateChangeSink, void*) override {}
     std::expected<void, device::CellularError> SetEnabled(bool) override {
         return std::unexpected(device::CellularError::kUnavailable);

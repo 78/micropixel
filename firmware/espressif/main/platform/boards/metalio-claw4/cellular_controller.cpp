@@ -43,6 +43,20 @@ device::CellularSnapshot CellularController::Snapshot() const {
     return snapshot_;
 }
 
+bool CellularController::TryBeginFirmwareUpdate() {
+    std::lock_guard lock(snapshot_mutex_);
+    if (stopping_ || firmware_update_active_ || snapshot_.switching || snapshot_.sim_pending ||
+        (snapshot_.enabled && paused_))
+        return false;
+    firmware_update_active_ = true;
+    return true;
+}
+
+void CellularController::EndFirmwareUpdate() {
+    std::lock_guard lock(snapshot_mutex_);
+    firmware_update_active_ = false;
+}
+
 void CellularController::SetStateChangeSink(device::CellularStateChangeSink sink, void* context) {
     std::lock_guard lock(snapshot_mutex_);
     sink_ = sink;
@@ -127,7 +141,8 @@ std::expected<void, device::CellularError> CellularController::SetEnabled(bool e
     if (!snapshot_.available || background_ == nullptr || stopping_) {
         return std::unexpected(device::CellularError::kUnavailable);
     }
-    if (snapshot_.switching || snapshot_.sim_pending) return std::unexpected(device::CellularError::kBusy);
+    if (firmware_update_active_ || snapshot_.switching || snapshot_.sim_pending)
+        return std::unexpected(device::CellularError::kBusy);
     if (enabled == snapshot_.enabled) return {};
     requested_mode_ = enabled;
     snapshot_.switching = true;
@@ -143,7 +158,7 @@ std::expected<void, device::CellularError> CellularController::SetEnabled(bool e
 void CellularController::RequestSimRefresh() {
     std::lock_guard lock(snapshot_mutex_);
     if (!snapshot_.available || !snapshot_.enabled || background_ == nullptr || stopping_ || paused_ ||
-        snapshot_.switching || snapshot_.sim_pending)
+        firmware_update_active_ || snapshot_.switching || snapshot_.sim_pending)
         return;
     sim_cancelled_ = false;
     snapshot_.sim_pending = true;
@@ -156,7 +171,8 @@ std::expected<void, device::CellularError> CellularController::SetSimSlot(device
         (slot != device::CellularSimSlot::kExternal && slot != device::CellularSimSlot::kInternal)) {
         return std::unexpected(device::CellularError::kUnavailable);
     }
-    if (snapshot_.switching || snapshot_.sim_pending) return std::unexpected(device::CellularError::kBusy);
+    if (firmware_update_active_ || snapshot_.switching || snapshot_.sim_pending)
+        return std::unexpected(device::CellularError::kBusy);
     if (slot == snapshot_.sim_slot) return {};
     requested_sim_ = slot;
     sim_cancelled_ = false;
@@ -363,6 +379,7 @@ esp_err_t CellularController::Pause() {
     std::lock_guard operation(operation_mutex_);
     {
         std::lock_guard lock(snapshot_mutex_);
+        if (firmware_update_active_ && !stopping_) return ESP_ERR_INVALID_STATE;
         // Block new SIM requests and invalidate the single pending job atomically.
         // Resume does not clear cancellation; only a new accepted request does.
         paused_ = true;

@@ -91,6 +91,7 @@ build_and_run nt26_transport \
     "$workspace_root/tools/tests/test_nt26_transport.cpp"
 
 build_and_run cellular_controller \
+    -pthread \
     -iquote "$workspace_root/tools/tests/cellular_stubs" \
     -include "$workspace_root/tools/tests/cellular_stubs/cellular_nvs_declarations.hpp" \
     "$workspace_root/tools/tests/test_cellular_controller.cpp" \

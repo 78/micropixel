@@ -1,5 +1,7 @@
+#include <atomic>
 #include <cassert>
 #include <cstring>
+#include <thread>
 
 #include "cellular_nvs_declarations.hpp"
 #include "platform/boards/metalio-claw4/cellular_controller.hpp"
@@ -244,5 +246,78 @@ int main() {
         failed_writes = 1;
         controller.Shutdown();
         assert(UartEthModem::starts == starts);  // Never power back on during shutdown.
+    }
+    {
+        using Slot = micropixel::device::CellularSimSlot;
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        assert(controller.Initialize());
+        assert(controller.TryBeginFirmwareUpdate());
+        assert(!controller.TryBeginFirmwareUpdate());
+        assert(!controller.SetEnabled(false));
+        assert(!controller.SetSimSlot(Slot::kInternal));
+        controller.RequestSimRefresh();
+        assert(!controller.Snapshot().sim_pending);
+        const int stops = UartEthModem::stops;
+        assert(controller.Pause() == ESP_ERR_INVALID_STATE);
+        assert(UartEthModem::stops == stops);  // Failed sleep cannot disrupt an update.
+        controller.EndFirmwareUpdate();
+        controller.RequestSimRefresh();
+        assert(controller.Snapshot().sim_pending && !controller.TryBeginFirmwareUpdate());
+        background.Run();
+        assert(controller.TryBeginFirmwareUpdate());
+        controller.EndFirmwareUpdate();
+        assert(controller.SetSimSlot(Slot::kInternal));
+        assert(!controller.TryBeginFirmwareUpdate());
+        controller.Shutdown();
+        background.Run();
+        assert(!controller.TryBeginFirmwareUpdate());
+    }
+    {
+        // OTA over Wi-Fi must still work when the cellular modem is intentionally off.
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        stored_mode = 0;
+        assert(controller.Initialize());
+        assert(controller.TryBeginFirmwareUpdate());
+        assert(!controller.SetEnabled(true));
+        controller.EndFirmwareUpdate();
+        assert(controller.SetEnabled(true));
+        assert(!controller.TryBeginFirmwareUpdate());
+        controller.Shutdown();
+        background.Run();
+        stored_mode = 1;
+    }
+    // Real concurrent submissions: precisely one side may reserve the network.
+    // Exercise both a SIM change and a Wi-Fi/4G change against OTA acquisition.
+    for (bool change_sim : {false, true}) {
+        for (int iteration = 0; iteration < 32; ++iteration) {
+            CellularController controller;
+            controller.Configure(&bus, bus);
+            controller.BindBackgroundExecutor(background);
+            assert(controller.Initialize());
+            std::atomic<bool> go{};
+            bool updating = false;
+            bool switching = false;
+            std::thread update([&] {
+                while (!go.load()) std::this_thread::yield();
+                updating = controller.TryBeginFirmwareUpdate();
+            });
+            std::thread change([&] {
+                while (!go.load()) std::this_thread::yield();
+                switching = change_sim
+                                ? controller.SetSimSlot(micropixel::device::CellularSimSlot::kInternal).has_value()
+                                : controller.SetEnabled(false).has_value();
+            });
+            go = true;
+            update.join();
+            change.join();
+            assert(updating != switching);
+            if (updating) controller.EndFirmwareUpdate();
+            controller.Shutdown();
+            background.Run();  // Cancel the winning configuration job without restarting.
+        }
     }
 }

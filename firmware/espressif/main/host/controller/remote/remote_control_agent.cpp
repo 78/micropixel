@@ -690,7 +690,8 @@ bool RemoteControlAgent::CancelPairingCode() {
 
 bool RemoteControlAgent::RequestFirmwareUpdate() {
     std::lock_guard<std::mutex> lock(model_mutex_);
-    if (cellular_.Snapshot().switching || !model_.firmware_update_installable ||
+    const auto cellular = cellular_.Snapshot();
+    if (cellular.switching || cellular.sim_pending || !model_.firmware_update_installable ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kDownloading ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kVerifying ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kInstalling) {
@@ -2114,7 +2115,15 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
         return PostCommandResult(client, identity, command_id, ok, result);
     };
 
-    if (cellular_.Snapshot().switching) return finish(false, "network_switch_pending");
+    // Covers both local and remote OTA. Snapshot checks alone race SetEnabled/SetSimSlot.
+    if (!cellular_.TryBeginFirmwareUpdate()) return finish(false, "network_switch_pending");
+    struct UpdateReservation final {
+        explicit UpdateReservation(device::Cellular& service) : service(service) {}
+        ~UpdateReservation() { service.EndFirmwareUpdate(); }
+        UpdateReservation(const UpdateReservation&) = delete;
+        UpdateReservation& operator=(const UpdateReservation&) = delete;
+        device::Cellular& service;
+    } reservation(cellular_);
 
     const char* version = cJSON_IsObject(params) ? JsonString(params, "version") : nullptr;
     const char* path = cJSON_IsObject(params) ? JsonString(params, "url") : nullptr;

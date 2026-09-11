@@ -33,6 +33,11 @@ class Cellular {
     virtual ~Cellular() = default;
     [[nodiscard]] virtual std::expected<void, CellularError> Initialize() = 0;
     [[nodiscard]] virtual CellularSnapshot Snapshot() const = 0;
+    // Atomically reserve a stable network configuration for OTA. A successful
+    // caller must EndFirmwareUpdate on every return path; configuration changes
+    // and sleep must reject while reserved. Unsupported cellular services allow OTA.
+    [[nodiscard]] virtual bool TryBeginFirmwareUpdate() = 0;
+    virtual void EndFirmwareUpdate() = 0;
     virtual void RequestSignalRefresh() {}
     virtual void RequestSimRefresh() {}
     [[nodiscard]] virtual std::expected<void, CellularError> SetSimSlot(CellularSimSlot) {

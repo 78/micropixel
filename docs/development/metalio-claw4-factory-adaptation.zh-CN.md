@@ -25,12 +25,22 @@ SIM 写入成功后显示原厂的 3 秒倒计时并重启；当前槽位按钮�
 界面入口和控制链路已接入，仍需下列真机验收。
 其他原厂功能仍需逐项对照，不能用本项测试证明整板适配完成。
 
+## OTA 与网络配置互斥
+
+OTA 下载前通过 `Cellular::TryBeginFirmwareUpdate()` 原子检查并占用网络配置。
+Wi-Fi/4G 切换、SIM 查询或切换尚未完成时拒绝 OTA，包括 SIM 成功后的重启倒计时。
+占用期间拒绝新的网络配置操作和蜂窝休眠，避免先检查状态、随后被另一个任务切断网络。
+本地更新请求和远端更新命令共用此入口；函数退出时由 RAII 释放占用，覆盖参数无效、下载失败、
+校验失败、写入失败和无需更新等返回路径。没有蜂窝硬件的板型仍允许原有 OTA。
+
 ## 验证
 
 执行 `bash tools/tests/test_firmware_host.sh`，其中
 [test_cellular_controller.cpp](../../tools/tests/test_cellular_controller.cpp) 覆盖命令顺序、超时、缺卡、
 非法响应、同槽位无操作、失败恢复、请求互斥、队列拒绝、跨休眠恢复取消以及断电失败回滚。
-再执行 `bash tools/check_firmware_style.sh --format-only` 与 `bash tools/p4.sh build-host`。
+OTA 测试还覆盖两个方向的互斥、释放后恢复操作、Wi-Fi 模式更新，以及 64 轮真实线程竞争。
+再执行 `bash tools/check_firmware_style.sh --format-only`、`bash tools/p4.sh build-host`、
+`bash tools/s31.sh build-host` 与 `bash tools/s3.sh build-host box3`。
 
 尚需真机确认：两种 SIM 实际入网、未插外置卡时切换内置卡、切换后断电槽位保持、
 射频恢复超时后的搜网、休眠恢复与关机行为。Host stub 不替代这些验收。

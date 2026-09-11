@@ -23,6 +23,8 @@ class CellularController final : public device::Cellular {
     void BindBackgroundExecutor(work::BackgroundExecutor& executor);
     [[nodiscard]] std::expected<void, device::CellularError> Initialize() override;
     [[nodiscard]] device::CellularSnapshot Snapshot() const override;
+    [[nodiscard]] bool TryBeginFirmwareUpdate() override;
+    void EndFirmwareUpdate() override;
     void RequestSignalRefresh() override;
     void RequestSimRefresh() override;
     [[nodiscard]] std::expected<void, device::CellularError> SetSimSlot(device::CellularSimSlot slot) override;
@@ -56,6 +58,7 @@ class CellularController final : public device::Cellular {
     std::atomic<bool> paused_{true};
     std::atomic<bool> sim_cancelled_{};
     device::CellularSimSlot requested_sim_{device::CellularSimSlot::kUnknown};
+    bool firmware_update_active_{};  // Protected by snapshot_mutex_.
     bool requested_mode_{};
     bool initialized_{};
     bool signal_pending_{};
