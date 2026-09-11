@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "esp_idf_commit": "812f3e98ca5da31ed4fc6be8b703019f7b6dcaa6",
+  "guest_apps": ["sdk-demo", "snake", "maze-evil", "blocks", "tilt", "tomb-explorer"],
+  "profiles": ["metalio-claw4", "esp-mosaico", "esp-box-3", "szpi-esp32s3", "m5stack-cores3"]
+}

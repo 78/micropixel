@@ -89,6 +89,7 @@ def main():
     write_json(out / 'channel-entry.json', {'schema_version': 1, 'version': version, 'verification_base': support_base, 'entry': entries[version], 'manager': manager,
                                           'installer': json.loads((out / 'windows-installer.json').read_text())})
     write_json(out / 'release-notes.json', {'schema_version': 1, 'sdk_version': version, 'channel': policy['channel'],
+        'summary': ['Adds AdditiveSprite and additive_sprite_supported; requires firmware 0.8.0 for additive rendering.'],
         'performance': [], 'migration': ['Existing unmanaged projects must explicitly select an SDK before managed builds.',
         'Source migration and real-device acceptance remain separate from SDK switching.',
         'Run the new Windows installer when upgrading from 0.16.0 to replace its Ctrl-C bootstrap; manager or SDK updates alone do not replace it.'],

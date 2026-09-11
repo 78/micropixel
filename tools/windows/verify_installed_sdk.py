@@ -38,10 +38,31 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--public', action='store_true')
+    parser.add_argument('--quick-public', action='store_true', help='Verify published bytes against this job’s already tested installer')
+    parser.add_argument('--full-validation', action='store_true', help='Also exercise A/B upgrade, rollback and manager switching')
     args = parser.parse_args()
     out = args.directory.resolve()
     entry = json.loads((out / 'channel-entry.json').read_text())
     version = entry['version']
+    if args.quick_public:
+        if not args.public:
+            raise SystemExit('--quick-public requires --public')
+        report = json.loads((out / 'draft-verification.json').read_text())
+        if not report.get('ok') or report.get('sdk_version') != version or report.get('stage') != 'draft':
+            raise SystemExit('Matching installed build verification is required')
+        for line in (out / 'sha256sums.txt').read_text().splitlines():
+            expected, name = line.split('  ', 1)
+            path = out / (name + '.public-check')
+            try:
+                download_public(asset_url(entry, name), path)
+                if file_digest(path) != expected:
+                    raise SystemExit('Public asset checksum differs: ' + name)
+            finally:
+                path.unlink(missing_ok=True)
+        report.update(stage='public', verification='published hashes plus same-job installed dual-target build')
+        (out / 'public-verification.json').write_text(json.dumps(report, indent=2) + '\n')
+        print(json.dumps(report))
+        return
     root = Path(os.environ['RUNNER_TEMP']) / ('mp-public 中文' if args.public else 'mp-draft 中文')
     if root.exists():
         raise SystemExit('Integration requires a fresh cache')
@@ -132,23 +153,24 @@ def main():
     invoke('sdk', 'use', version, '--project', str(example), '--yes')
     for target in ('riscv32-ilp32f', 'xtensa'):
         invoke('package', str(example), '--aot-target', target, '--offline')
-    fixture_directory = root / '真机 验收 App'
-    fixture_directory.mkdir()
-    extract(out / 'windows-acceptance-project.zip', fixture_directory)
-    fixture = fixture_directory / 'windows-acceptance'
-    invoke('sdk', 'use', version, '--project', str(fixture), '--yes')
-    for target in ('riscv32-ilp32f', 'xtensa'):
-        invoke('package', str(fixture), '--aot-target', target, '--offline')
-    powershell = Path(os.environ['WINDIR']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    command = [str(powershell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-               str(out / 'test_acceptance_versions.ps1'), '-Launcher', str(launcher),
-               '-Directory', str(root / 'A B acceptance')]
-    if not args.public:
-        command.append('-OfflineFixtures')
-    subprocess.run(command, env=env, check=True, timeout=900)
+    if args.full_validation:
+        fixture_directory = root / '真机 验收 App'
+        fixture_directory.mkdir()
+        extract(out / 'windows-acceptance-project.zip', fixture_directory)
+        fixture = fixture_directory / 'windows-acceptance'
+        invoke('sdk', 'use', version, '--project', str(fixture), '--yes')
+        for target in ('riscv32-ilp32f', 'xtensa'):
+            invoke('package', str(fixture), '--aot-target', target, '--offline')
+        powershell = Path(os.environ['WINDIR']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        command = [str(powershell), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                   str(out / 'test_acceptance_versions.ps1'), '-Launcher', str(launcher),
+                   '-Directory', str(root / 'A B acceptance')]
+        if not args.public:
+            command.append('-OfflineFixtures')
+        subprocess.run(command, env=env, check=True, timeout=900)
     report = {'schema_version': 1, 'ok': True, 'stage': 'public' if args.public else 'draft',
               'sdk_version': version, 'toolchain_id': doctor['result']['toolchain_id'],
-              'targets': ['riscv32-ilp32f', 'xtensa'], 'windows_10_manual_acceptance': 'pending'}
+              'targets': ['riscv32-ilp32f', 'xtensa'], 'windows_10_manual_acceptance': 'pending', 'validation': 'full' if args.full_validation else 'standard'}
     (out / ('public-verification.json' if args.public else 'draft-verification.json')).write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))
 

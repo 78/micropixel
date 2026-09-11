@@ -108,5 +108,30 @@ class PublishLayout(unittest.TestCase):
             self.assertNotIn(out / 'setup.exe', support)
 
 
+class QuickPublicVerification(unittest.TestCase):
+    def test_requires_matching_installed_evidence_and_exact_public_bytes(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary).resolve()
+            entry = {'version': '1.2.3', 'entry': {'url': 'https://example.org/sdk-manifest.json'},
+                     'installer': {'name': 'setup.exe'}, 'manager': {'name': 'manager.zip'}}
+            (out / 'channel-entry.json').write_text(json.dumps(entry))
+            (out / 'draft-verification.json').write_text(json.dumps({'ok': True, 'stage': 'draft', 'sdk_version': '1.2.3'}))
+            (out / 'sha256sums.txt').write_text(hashlib.sha256(b'installer').hexdigest() + '  setup.exe\n')
+            def download(url, path): path.write_bytes(b'installer')
+            argv = ['verify', '--directory', str(out), '--public', '--quick-public']
+            with patch('sys.argv', argv), patch.object(verification, 'download_public', side_effect=download):
+                verification.main()
+            self.assertTrue(json.loads((out / 'public-verification.json').read_text())['ok'])
+            (out / 'public-verification.json').unlink()
+            with patch('sys.argv', argv), patch.object(verification, 'download_public', side_effect=lambda url, path: path.write_bytes(b'changed')):
+                with self.assertRaises(SystemExit): verification.main()
+            self.assertFalse((out / 'public-verification.json').exists())
+            (out / 'draft-verification.json').write_text('{"ok":false}')
+            with patch('sys.argv', argv), patch.object(verification, 'download_public') as request:
+                with self.assertRaises(SystemExit): verification.main()
+                request.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

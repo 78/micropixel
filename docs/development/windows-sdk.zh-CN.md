@@ -1,6 +1,6 @@
 # 安装 Windows SDK
 
-1. [下载 Windows x64 安装包](https://micropixel.ai/docs/releases/sdk/0.16.2/micropixel-setup-0.16.2-windows-x64.exe)。
+1. [下载 Windows x64 安装包](https://micropixel.ai/docs/releases/sdk/0.17.0/micropixel-setup-0.17.0-windows-x64.exe)。
 2. 双击安装，按向导完成操作，等待环境就绪。
 3. 前往[创建第一个游戏](https://micropixel.ai/docs/quickstart/)。
 

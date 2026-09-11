@@ -1,12 +1,12 @@
 # Windows SDK FAQ 与版本管理
 
-目标系统为 Windows 10 22H2 x64。SDK 0.16.2 提供未签名正式版安装器，发布 workflow 在双架构编译与安装验证通过后发布；
+目标系统为 Windows 10 22H2 x64。SDK 0.17.0 提供未签名正式版安装器，发布 workflow 在双架构编译与安装验证通过后发布；
 SDK 0.15.6 的独立归档不包含本文的安装管理组件。macOS 继续使用原有 SDK 流程。
 
-从 [SDK 0.16.2 Release](https://github.com/78/micropixel/releases/tag/sdk-v0.16.2) 下载安装器和校验清单。
+从 [SDK 0.17.0 Release](https://github.com/78/micropixel/releases/tag/sdk-v0.17.0) 下载安装器和校验清单。
 双击安装器，完成后检查环境就绪提示；下载中断可点击重试。
 
-0.16.2 修复 Windows 日志跟随时 Ctrl-C 导致外层启动器打印中断堆栈的问题。由 0.16.0 升级时需要运行
+0.17.0 修复 Windows 日志跟随时 Ctrl-C 导致外层启动器打印中断堆栈的问题。由 0.16.0 升级时需要运行
 新安装包，以更新安装器内置的 bootstrap；仅执行 `update` 或 `sdk use` 不能替换旧 bootstrap。
 项目源码、既有锁文件和缓存保留，项目使用新 SDK 仍需显式选择版本。
 
@@ -22,7 +22,7 @@ SDK 0.15.6 的独立归档不包含本文的安装管理组件。macOS 继续使
 
 ```powershell
 $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
-& $mp setup --version 0.16.2 --yes --json
+& $mp setup --version 0.17.0 --yes --json
 & $mp doctor --json
 ```
 
@@ -35,7 +35,7 @@ $mp = "$env:LOCALAPPDATA\MicroPixel\bin\micropixel.exe"
 `init` 创建项目和 `micropixel.lock.json`。已有项目先显式选择版本：
 
 ```powershell
-micropixel sdk use 0.16.2 --yes --json
+micropixel sdk use 0.17.0 --yes --json
 micropixel sdk status --check --json
 micropixel build --aot-target riscv32-ilp32f --json
 micropixel package --aot-target xtensa --json
@@ -47,10 +47,10 @@ micropixel package --aot-target xtensa --json
 
 ```powershell
 micropixel sdk upgrade --yes --json
-micropixel sdk use 0.16.2 --yes --offline --json
+micropixel sdk use 0.17.0 --yes --offline --json
 ```
 
-`sdk upgrade` 只选择稳定 SDK；也可显式 `sdk use 0.16.2 --yes`，已有项目不会静默升级。
+`sdk upgrade` 只选择稳定 SDK；也可显式 `sdk use 0.17.0 --yes`，已有项目不会静默升级。
 
 升级先下载并验证全部依赖，再原子替换锁文件；失败保留旧锁。
 回退时依赖已缓存可离线执行。两个操作都不改游戏源码、`app.json` 或应用版本号。
@@ -61,7 +61,7 @@ micropixel sdk use 0.16.2 --yes --offline --json
 确需外部工具链时，先锁定版本，再显式启用：
 
 ```powershell
-micropixel sdk use 0.16.2 --external-toolchain --yes --json
+micropixel sdk use 0.17.0 --external-toolchain --yes --json
 ```
 
 外部模式必须提供 `WASI_SDK_PATH`、`WAMRC`、`XTENSA_WAMRC`，结果标记 `external`，不能视为已验证的固定工具链。
