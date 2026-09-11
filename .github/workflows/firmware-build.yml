@@ -135,7 +135,8 @@ jobs:
       - name: Run shared Host regression once
         if: matrix.profile == 'metalio-claw4'
         run: |
-          printf '#!/bin/sh\nexec /usr/bin/clang++-18 -stdlib=libc++ "$@"\n' > "$RUNNER_TEMP/host-cxx"
+          # Test fixtures intentionally zero-initialize omitted aggregate fields.
+          printf '#!/bin/sh\nexec /usr/bin/clang++-18 -stdlib=libc++ -Wno-missing-field-initializers "$@"\n' > "$RUNNER_TEMP/host-cxx"
           chmod +x "$RUNNER_TEMP/host-cxx"
           CXX="$RUNNER_TEMP/host-cxx" CC=/usr/bin/clang-18 bash tools/tests/test_firmware_host.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
