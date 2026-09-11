@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -38,10 +39,13 @@ class UartEthModem {
     inline static std::vector<uint32_t> timeouts;
     inline static std::string query_response = "\r\n+ECSIMCFG: \"SimSlot\",0\r\nOK\r\n";
     inline static std::string failed_command;
+    inline static std::map<std::string, std::string> responses;
     esp_err_t SendAt(const std::string& command, std::string& response, uint32_t timeout) {
         commands.push_back(command);
         timeouts.push_back(timeout);
-        response = command == "AT+ECSIMCFG?" ? query_response : "OK";
+        response = command == "AT+ECSIMCFG?"     ? query_response
+                   : responses.contains(command) ? responses.at(command)
+                                                 : "OK";
         return command == failed_command ? ESP_FAIL : ESP_OK;
     }
     int GetSignalStrength() { return strength; }

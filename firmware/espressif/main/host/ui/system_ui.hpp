@@ -210,6 +210,8 @@ struct CpuUsageSample final {
 
 struct StatusLayerModel final {
     bool open_cellular_settings{};
+    device::CellularDiagnostics cellular_diagnostics{};
+    device::CellularState cellular_state{device::CellularState::kOff};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     uint32_t memory_used_kib{};
     uint32_t memory_total_kib{};

@@ -23,8 +23,22 @@ Host 契约为 [Cellular](../../firmware/espressif/main/device/contracts/cellula
 系统设置的 `4G / SIM` 项和状态层的 4G 卡片共用网络设置，可刷新槽位、选择另一张 SIM
 或重启切换 Wi-Fi/4G。系统设置入口仅在板型提供蜂窝能力时显示，返回键回到原来的设置列表。
 SIM 写入成功后显示原厂的 3 秒倒计时并重启；当前槽位按钮不可重复选择。
-已在 P4 真机验证系统设置入口、当前内置卡回读、刷新和返回；仍需下列入网与电源验收。
+已在 P4 真机验证系统设置入口、内置卡离线诊断、详情滚动、连续刷新和返回；仍需下列入网与电源验收。
 其他原厂功能仍需逐项对照，不能用本项测试证明整板适配完成。
+
+## 网络诊断页面
+
+4G / SIM 页复用 Wi-Fi 页的全屏标题栏、卡片、滚动列和板型密度配置。顶部显示连接阶段与排查建议，
+SIM 选项标明当前槽位；网络模式切换保留重启提示。详情包含 SIM 就绪/PIN/PUK/缺卡、CSQ 信号、
+注册状态、运营商、射频、数据附着、APN 与 PDP 地址。PDP 地址是模组读数，不等同于 Host 已联网。
+
+打开页面或手动刷新时，既有 BackgroundExecutor 在操作锁内查询槽位及 `CPIN?`、`CFUN?`、`CSQ`、
+`CEREG?`、`CGATT?`、`COPS?`、`CGDCONT?` 和 `CGPADDR=1`，无需模组先注册成功。
+各诊断命令超时 1 秒，槽位查询沿用 5 秒；查询只读，不设置 APN、不切换运营商。
+结果存入固定容量 Host 契约，格式错误、超长字段和失败查询显示未知，不沿用旧成功值。
+休眠清除旧读数；页面提示手动刷新，避免把诊断快照当成实时值。
+`CSQ=99` 显示信号未知，搜网状态建议检查天线和覆盖，不推断 SIM 是否激活。
+
 
 ## OTA 与网络配置互斥
 
@@ -40,6 +54,8 @@ Wi-Fi/4G 切换、SIM 查询或切换尚未完成时拒绝 OTA，包括 SIM 成�
 [test_cellular_controller.cpp](../../tools/tests/test_cellular_controller.cpp) 覆盖命令顺序、超时、缺卡、
 非法响应、同槽位无操作、失败恢复、请求互斥、队列拒绝、跨休眠恢复取消以及断电失败回滚。
 OTA 测试还覆盖两个方向的互斥、释放后恢复操作、Wi-Fi 模式更新，以及 64 轮真实线程竞争。
+诊断测试覆盖未注册读取、缺卡错误、未知 CSQ、注册拒绝、带逗号的运营商名称、CID 匹配、
+超长和损坏响应、失败查询清除旧值，以及 PIN/PUK 和已注册但未附着的提示。
 再执行 `bash tools/check_firmware_style.sh --format-only`、`bash tools/p4.sh build-host`、
 `bash tools/s31.sh build-host` 与 `bash tools/s3.sh build-host box3`。
 

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <expected>
 
+#include "host/ui/lvgl/square_common/system_page_layout.hpp"
 #include "host/ui/system_ui.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -14,7 +15,7 @@ namespace micropixel::host_ui::lvgl::square_common {
 // lock for methods whose name ends in Locked.
 class StatusLayerUi final {
    public:
-    StatusLayerUi() = default;
+    explicit StatusLayerUi(const SystemPageLayout& layout) : cellular_layout_(layout) {}
     StatusLayerUi(const StatusLayerUi&) = delete;
     StatusLayerUi& operator=(const StatusLayerUi&) = delete;
     ~StatusLayerUi();
@@ -132,6 +133,8 @@ class StatusLayerUi final {
 
     static void LayerEvent(lv_event_t* event);
     static void QuickEvent(lv_event_t* event);
+    static void CellularBackEvent(lv_event_t* event);
+    static void CellularScrollEvent(lv_event_t* event);
     static void CellularEvent(lv_event_t* event);
     void ShowCellularDialogLocked();
     void UpdateCellularDialogLocked();
@@ -170,7 +173,14 @@ class StatusLayerUi final {
     lv_obj_t* cellular_mode_label_{};
     lv_obj_t* cellular_sim_buttons_[2]{};
     lv_obj_t* cellular_refresh_{};
-    lv_obj_t* cellular_close_{};
+    const SystemPageLayout& cellular_layout_;
+    device::CellularDiagnostics cellular_diagnostics_{};
+    device::CellularState cellular_state_{};
+    bool cellular_connected_{};
+    lv_obj_t* cellular_hint_{};
+    lv_obj_t* cellular_freshness_{};
+    lv_obj_t* cellular_sim_labels_[2]{};
+    lv_obj_t* cellular_detail_values_[8]{};
     lv_obj_t* quick_panels_[3]{};
     lv_obj_t* quick_name_labels_[3]{};
     lv_obj_t* quick_detail_labels_[3]{};

@@ -4,7 +4,9 @@
 #include <thread>
 
 #include "cellular_nvs_declarations.hpp"
+#include "host/ui/cellular_status.hpp"
 #include "platform/boards/metalio-claw4/cellular_controller.hpp"
+#include "platform/boards/metalio-claw4/cellular_diagnostics.hpp"
 #include "platform/buses/i2c_executor.hpp"
 #include "work/background_executor.hpp"
 
@@ -319,5 +321,81 @@ int main() {
             controller.Shutdown();
             background.Run();  // Cancel the winning configuration job without restarting.
         }
+    }
+    {
+        using micropixel::device::CellularSimStatus;
+        using micropixel::device::CellularState;
+        using micropixel::host_ui::DescribeCellularConnection;
+        stored_mode = 1;
+        UartEthModem::failed_command.clear();
+        UartEthModem::responses = {
+            {"AT+CPIN?", "\r\n+CPIN: READY\r\nOK"},
+            {"AT+CFUN?", "+CFUN: 1\r\nOK"},
+            {"AT+CSQ", "+CSQ: 99,99\r\nOK"},
+            {"AT+CEREG?", "+CEREG: 2,2\r\nOK"},
+            {"AT+CGATT?", "+CGATT: 0\r\nOK"},
+            {"AT+COPS?", "+COPS: 0\r\nOK"},
+            {"AT+CGDCONT?", "+CGDCONT: 11,\"IP\",\"wrong\"\r\n+CGDCONT: 1,\"IP\",\"eapn1.net\",,,,,\r\nOK"},
+            {"AT+CGPADDR=1", "+CGPADDR: 1,0.0.0.0\r\nOK"},
+        };
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        assert(controller.Initialize());
+        controller.RequestSimRefresh();
+        background.Run();
+        auto details = controller.Snapshot().diagnostics;
+        assert(details.sampled && !details.incomplete);
+        assert(details.sim_status == CellularSimStatus::kReady && details.signal_csq == 99);
+        assert(details.registration == 2 && details.attached == 0 && details.radio_function == 1);
+        assert(std::strcmp(details.apn.data(), "eapn1.net") == 0);
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kConnecting, details).title,
+                           "Searching for network") == 0);
+        UartEthModem::failed_command = "AT+CPIN?";
+        UartEthModem::responses["AT+CPIN?"] = "+CME ERROR: 10\r\n";
+        controller.RequestSimRefresh();
+        background.Run();
+        details = controller.Snapshot().diagnostics;
+        assert(details.sim_status == CellularSimStatus::kAbsent);
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kFailed, details).title,
+                           "No SIM detected") == 0);
+        UartEthModem::failed_command.clear();
+        UartEthModem::responses["AT+CPIN?"] = "+CPIN: READY\r\nOK";
+        // Registration denial and no signal are distinct; never infer SIM activation from CSQ.
+        UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,3\r\nOK";
+        UartEthModem::responses["AT+COPS?"] = "+COPS: 0,0,\"Carrier, Test\",7\r\nOK";
+        UartEthModem::responses["AT+CSQ"] = "+CSQ: 17,99\r\nOK";
+        controller.RequestSimRefresh();
+        background.Run();
+        details = controller.Snapshot().diagnostics;
+        assert(details.signal_csq == 17 && std::strcmp(details.operator_name.data(), "Carrier, Test") == 0);
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kFailed, details).title,
+                           "Registration denied") == 0);
+        // Failed/malformed queries replace previous values with unknown, not stale success.
+        UartEthModem::failed_command = "AT+CSQ";
+        UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,1garbage\r\nOK";
+        UartEthModem::responses["AT+COPS?"] = "+COPS: 0,0,\"" + std::string(60, 'x') + "\",7\r\nOK";
+        controller.RequestSimRefresh();
+        background.Run();
+        details = controller.Snapshot().diagnostics;
+        assert(details.incomplete && details.signal_csq == -1 && details.registration == -1 &&
+               details.operator_name[0] == 0);
+        details.sim_status = CellularSimStatus::kPinRequired;
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kFailed, details).title,
+                           "SIM PIN required") == 0);
+        details.sim_status = CellularSimStatus::kPukRequired;
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kFailed, details).title,
+                           "SIM PUK required") == 0);
+        details.sim_status = CellularSimStatus::kReady;
+        details.registration = 5;
+        details.attached = 0;
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kConnecting, details).title,
+                           "Registered, no mobile data") == 0);
+        assert(std::strcmp(DescribeCellularConnection(false, false, CellularState::kOff, details).title, "4G is off") ==
+               0);
+        assert(std::strcmp(DescribeCellularConnection(true, true, CellularState::kConnected, details).title,
+                           "Connected") == 0);
+        UartEthModem::failed_command.clear();
+        UartEthModem::responses.clear();
     }
 }

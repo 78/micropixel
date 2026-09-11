@@ -40,6 +40,7 @@ class CellularController final : public device::Cellular {
     static void ReadSim(void* context);
     static void SwitchSim(void* context);
     [[nodiscard]] device::CellularSimSlot QuerySimSlot();
+    [[nodiscard]] device::CellularDiagnostics QueryDiagnostics();
     void FinishSim(bool failed, device::CellularSimSlot slot);
     void OnModemEvent(UartEthModem::UartEthModemEvent event);
     void Publish(device::CellularState state);

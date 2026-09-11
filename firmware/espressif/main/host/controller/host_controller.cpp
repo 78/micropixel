@@ -333,6 +333,8 @@ void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::WifiSnaps
                        device::Cellular& cellular) {
     cellular.RequestSignalRefresh();
     const auto cell = cellular.Snapshot();
+    model.cellular_diagnostics = cell.diagnostics;
+    model.cellular_state = cell.state;
     model.cellular_available = cell.available;
     model.cellular_enabled = cell.enabled;
     model.cellular_connected = cell.connected;

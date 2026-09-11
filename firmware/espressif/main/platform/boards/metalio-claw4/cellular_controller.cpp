@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "nvs.h"
 #include "platform/boards/metalio-claw4/board_config.hpp"
+#include "platform/boards/metalio-claw4/cellular_diagnostics.hpp"
 #include "platform/buses/i2c_executor.hpp"
 #include "work/background_executor.hpp"
 
@@ -228,6 +229,59 @@ void CellularController::FinishSim(bool failed, device::CellularSimSlot slot) {
     if (sink_ != nullptr) sink_(sink_context_);
 }
 
+device::CellularDiagnostics CellularController::QueryDiagnostics() {
+    device::CellularDiagnostics result{};
+    std::string response;
+    const auto query = [&](const char* command) {
+        response.clear();
+        if (stopping_ || paused_ || sim_cancelled_) {
+            result.incomplete = true;
+            return false;
+        }
+        if (modem_.SendAt(command, response, 1000) != ESP_OK) {
+            result.incomplete = true;
+            return false;
+        }
+        return true;
+    };
+    (void)query("AT+CPIN?");
+    result.sim_status = diagnostics::SimStatus(response);
+    if (query("AT+CFUN?")) result.radio_function = diagnostics::Number(diagnostics::Line(response, "+CFUN:"), 127);
+    if (query("AT+CSQ")) {
+        result.signal_csq = diagnostics::Number(diagnostics::Field(diagnostics::Line(response, "+CSQ:"), 0), 99);
+        if (result.signal_csq > 31 && result.signal_csq != 99) result.signal_csq = -1;
+    }
+    if (query("AT+CEREG?"))
+        result.registration = diagnostics::Number(diagnostics::Field(diagnostics::Line(response, "+CEREG:"), 1), 10);
+    if (query("AT+CGATT?")) result.attached = diagnostics::Number(diagnostics::Line(response, "+CGATT:"), 1);
+    if (query("AT+COPS?")) {
+        const auto line = diagnostics::Line(response, "+COPS:");
+        const auto name = diagnostics::Field(line, 2);
+        if (!name.empty() && !diagnostics::Text(name, result.operator_name)) result.incomplete = true;
+    }
+    if (query("AT+CGDCONT?")) {
+        const auto line = diagnostics::Line(response, "+CGDCONT: 1,");
+        if (!diagnostics::Text(diagnostics::Field(line, 1), result.apn)) result.incomplete = true;
+    }
+    if (query("AT+CGPADDR=1")) {
+        auto address = diagnostics::Field(diagnostics::Line(response, "+CGPADDR: 1,"), 0);
+        if (!address.empty()) {
+            if (address.front() == '"') {
+                if (!diagnostics::Text(address, result.pdp_address)) result.incomplete = true;
+            } else if (address.size() < result.pdp_address.size() &&
+                       address.find_first_not_of("0123456789abcdefABCDEF:.") == std::string_view::npos) {
+                std::copy(address.begin(), address.end(), result.pdp_address.begin());
+            } else
+                result.incomplete = true;
+        }
+    }
+    result.sampled = true;
+    result.incomplete = result.incomplete || result.sim_status == device::CellularSimStatus::kUnknown ||
+                        result.signal_csq < 0 || result.registration < 0 || result.radio_function < 0 ||
+                        result.attached < 0;
+    return result;
+}
+
 void CellularController::ReadSim(void* context) {
     auto& self = *static_cast<CellularController*>(context);
     std::lock_guard operation(self.operation_mutex_);
@@ -236,6 +290,11 @@ void CellularController::ReadSim(void* context) {
         return;
     }
     const auto slot = self.QuerySimSlot();
+    const auto details = self.QueryDiagnostics();
+    {
+        std::lock_guard lock(self.snapshot_mutex_);
+        self.snapshot_.diagnostics = details;
+    }
     self.FinishSim(slot == device::CellularSimSlot::kUnknown, slot);
 }
 
@@ -384,6 +443,7 @@ esp_err_t CellularController::Pause() {
         // Resume does not clear cancellation; only a new accepted request does.
         paused_ = true;
         sim_cancelled_ = true;
+        snapshot_.diagnostics = {};
     }
     const esp_err_t status = modem_.Stop();
     if (status != ESP_OK) return status;

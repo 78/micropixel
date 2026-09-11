@@ -79,6 +79,7 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
                                          StatusLayerTransition& transition,
                                          const SquareSystemUiProfile& selected_profile)
     : profile(selected_profile),
+      status_layer_ui(profile.system_page),
       action_sheets(transition),
       system_menu_ui(profile.system_page, action_sheets),
       system_detail_ui(profile.system_page, action_sheets),

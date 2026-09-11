@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <expected>
 
@@ -10,7 +11,23 @@ enum class CellularSimSlot : uint8_t { kExternal, kInternal, kUnknown };
 
 enum class CellularError : uint8_t { kUnavailable, kBusy, kStorage, kOperationFailed };
 
+enum class CellularSimStatus : uint8_t { kUnknown, kReady, kPinRequired, kPukRequired, kNotReady, kAbsent };
+
+struct CellularDiagnostics final {
+    CellularSimStatus sim_status{CellularSimStatus::kUnknown};
+    int8_t signal_csq{-1};  // 0..31 or 99 (unknown); -1 means query unavailable.
+    int8_t registration{-1};
+    int8_t radio_function{-1};
+    int8_t attached{-1};
+    std::array<char, 48> operator_name{};
+    std::array<char, 64> apn{};
+    std::array<char, 48> pdp_address{};
+    bool sampled{};
+    bool incomplete{};
+};
+
 struct CellularSnapshot final {
+    CellularDiagnostics diagnostics{};
     uint8_t signal_bars{};
     bool available{};
     bool enabled{};
