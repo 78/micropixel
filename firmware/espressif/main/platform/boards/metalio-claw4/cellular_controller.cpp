@@ -1,5 +1,7 @@
 #include "platform/boards/metalio-claw4/cellular_controller.hpp"
 
+#include <string_view>
+
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -115,7 +117,9 @@ esp_err_t CellularController::StartModem() {
     const esp_err_t pdp = modem_.SetPdpContext("eapn1.net", "IP");
     if (pdp != ESP_OK) return pdp;
     Publish(device::CellularState::kConnecting);
-    return modem_.Start();
+    const esp_err_t status = modem_.Start();
+    if (status == ESP_OK) paused_ = false;
+    return status;
 }
 
 std::expected<void, device::CellularError> CellularController::SetEnabled(bool enabled) {
@@ -123,7 +127,7 @@ std::expected<void, device::CellularError> CellularController::SetEnabled(bool e
     if (!snapshot_.available || background_ == nullptr || stopping_) {
         return std::unexpected(device::CellularError::kUnavailable);
     }
-    if (snapshot_.switching) return std::unexpected(device::CellularError::kBusy);
+    if (snapshot_.switching || snapshot_.sim_pending) return std::unexpected(device::CellularError::kBusy);
     if (enabled == snapshot_.enabled) return {};
     requested_mode_ = enabled;
     snapshot_.switching = true;
@@ -134,6 +138,114 @@ std::expected<void, device::CellularError> CellularController::SetEnabled(bool e
     }
     if (sink_ != nullptr) sink_(sink_context_);
     return {};
+}
+
+void CellularController::RequestSimRefresh() {
+    std::lock_guard lock(snapshot_mutex_);
+    if (!snapshot_.available || !snapshot_.enabled || background_ == nullptr || stopping_ || paused_ ||
+        snapshot_.switching || snapshot_.sim_pending)
+        return;
+    snapshot_.sim_pending = true;
+    if (!background_->Submit(ReadSim, this)) snapshot_.sim_pending = false;
+}
+
+std::expected<void, device::CellularError> CellularController::SetSimSlot(device::CellularSimSlot slot) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (!snapshot_.available || !snapshot_.enabled || background_ == nullptr || stopping_ || paused_ ||
+        (slot != device::CellularSimSlot::kExternal && slot != device::CellularSimSlot::kInternal)) {
+        return std::unexpected(device::CellularError::kUnavailable);
+    }
+    if (snapshot_.switching || snapshot_.sim_pending) return std::unexpected(device::CellularError::kBusy);
+    requested_sim_ = slot;
+    snapshot_.sim_pending = true;
+    snapshot_.sim_failed = false;
+    if (!background_->Submit(SwitchSim, this)) {
+        snapshot_.sim_pending = false;
+        return std::unexpected(device::CellularError::kBusy);
+    }
+    if (sink_ != nullptr) sink_(sink_context_);
+    return {};
+}
+
+device::CellularSimSlot CellularController::QuerySimSlot() {
+    using Slot = device::CellularSimSlot;
+    std::string response;
+    // Do not require registration or IsInitialized: a missing SIM must not
+    // prevent querying or selecting the other slot, as on the factory firmware.
+    if (modem_.SendAt("AT+ECSIMCFG?", response, 5000) != ESP_OK) return Slot::kUnknown;
+    std::string_view remaining(response);
+    while (!remaining.empty()) {
+        const size_t end = remaining.find_first_of("\r\n");
+        auto line = remaining.substr(0, end);
+        if (line.starts_with("+ECSIMCFG:")) {
+            line.remove_prefix(std::string_view("+ECSIMCFG:").size());
+            const auto first = line.find_first_not_of(" \t");
+            if (first != std::string_view::npos) line.remove_prefix(first);
+            if (line.starts_with("\"SimSlot\"")) {
+                line.remove_prefix(std::string_view("\"SimSlot\"").size());
+                const auto comma = line.find_first_not_of(" \t");
+                if (comma == std::string_view::npos || line[comma] != ',') return Slot::kUnknown;
+                line.remove_prefix(comma + 1);
+                const auto value = line.find_first_not_of(" \t");
+                if (value == std::string_view::npos) return Slot::kUnknown;
+                line.remove_prefix(value);
+                if (line.find_first_not_of(" \t", 1) != std::string_view::npos) return Slot::kUnknown;
+                if (line.front() == '0') return Slot::kExternal;
+                if (line.front() == '1') return Slot::kInternal;
+                return Slot::kUnknown;
+            }
+        }
+        if (end == std::string_view::npos) break;
+        remaining.remove_prefix(end + 1);
+    }
+    return Slot::kUnknown;
+}
+
+void CellularController::FinishSim(bool failed, device::CellularSimSlot slot) {
+    std::lock_guard lock(snapshot_mutex_);
+    snapshot_.sim_slot = slot;
+    snapshot_.sim_failed = failed;
+    snapshot_.sim_pending = false;
+    if (sink_ != nullptr) sink_(sink_context_);
+}
+
+void CellularController::ReadSim(void* context) {
+    auto& self = *static_cast<CellularController*>(context);
+    std::lock_guard operation(self.operation_mutex_);
+    if (self.stopping_ || self.paused_) {
+        self.FinishSim(true, device::CellularSimSlot::kUnknown);
+        return;
+    }
+    const auto slot = self.QuerySimSlot();
+    self.FinishSim(slot == device::CellularSimSlot::kUnknown, slot);
+}
+
+void CellularController::SwitchSim(void* context) {
+    auto& self = *static_cast<CellularController*>(context);
+    std::lock_guard operation(self.operation_mutex_);
+    if (self.stopping_ || self.paused_) {
+        self.FinishSim(true, device::CellularSimSlot::kUnknown);
+        return;
+    }
+    device::CellularSimSlot target;
+    {
+        std::lock_guard lock(self.snapshot_mutex_);
+        target = self.requested_sim_;
+    }
+    std::string response;
+    bool failed = self.modem_.SendAt("AT+CFUN=0", response, 8000) != ESP_OK;
+    if (!failed) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        failed = self.modem_.SendAt(
+                     target == device::CellularSimSlot::kExternal ? "AT+ECSIMCFG=SimSlot,0" : "AT+ECSIMCFG=SimSlot,1",
+                     response, 5000) != ESP_OK;
+        if (!failed) vTaskDelay(pdMS_TO_TICKS(500));
+        // Factory policy: restore RF even when changing the slot failed. A
+        // successful slot command persists in the modem; CFUN=1 may time out.
+        (void)self.modem_.SendAt("AT+CFUN=1", response, failed ? 10000 : 15000);
+    }
+    // Read actual state after success and failure, never guess from a UI preference.
+    self.FinishSim(failed, self.QuerySimSlot());
 }
 
 void CellularController::SwitchMode(void* context) {
@@ -226,6 +338,7 @@ esp_err_t CellularController::Pause() {
     std::lock_guard operation(operation_mutex_);
     const esp_err_t status = modem_.Stop();
     if (status != ESP_OK) return status;
+    paused_ = true;
     return SetPower(false);
 }
 

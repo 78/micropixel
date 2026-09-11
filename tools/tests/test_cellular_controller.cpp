@@ -108,4 +108,79 @@ int main() {
         assert(controller.Resume() == ESP_OK && output_port == 0x7f);
         assert(!controller.SetEnabled(false));
     }
+    {
+        using Slot = micropixel::device::CellularSimSlot;
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        stored_mode = 1;
+        assert(controller.Initialize());
+        auto clear_commands = [] {
+            UartEthModem::commands.clear();
+            UartEthModem::timeouts.clear();
+            UartEthModem::failed_command.clear();
+        };
+        // A missing SIM does not disable the command channel or require connection.
+        UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::ErrorNoSim);
+        controller.RequestSimRefresh();
+        assert(controller.Snapshot().sim_pending);
+        assert(!controller.SetSimSlot(Slot::kInternal));
+        assert(!controller.SetEnabled(false));
+        background.Run();
+        assert(controller.Snapshot().sim_slot == Slot::kExternal);
+        assert(!controller.Snapshot().sim_pending && !controller.Snapshot().sim_failed);
+        for (const char* malformed : {"OK", "+ECSIMCFG: \"SimSlot\",10\r\nOK", "+ECSIMCFG: \"SimSlot\",-1\r\nOK",
+                                      "+ECSIMCFG: \"SimSlot\",1garbage\r\nOK", "+ECSIMCFG: \"SimSlot\",\r\nOK"}) {
+            UartEthModem::query_response = malformed;
+            controller.RequestSimRefresh();
+            background.Run();
+            assert(controller.Snapshot().sim_slot == Slot::kUnknown && controller.Snapshot().sim_failed);
+        }
+        UartEthModem::query_response = "+ECSIMCFG: \"SimSimulator\",0\r\n+ECSIMCFG: \"SimSlot\", 1 \r\nOK";
+        clear_commands();
+        assert(controller.SetSimSlot(Slot::kInternal));
+        background.Run();
+        assert((UartEthModem::commands ==
+                std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG=SimSlot,1", "AT+CFUN=1", "AT+ECSIMCFG?"}));
+        assert((UartEthModem::timeouts == std::vector<uint32_t>{8000, 5000, 15000, 5000}));
+        assert(controller.Snapshot().sim_slot == Slot::kInternal && !controller.Snapshot().sim_failed);
+        // Failure to restore RF is best effort, as in the factory sequence.
+        clear_commands();
+        UartEthModem::failed_command = "AT+CFUN=1";
+        assert(controller.SetSimSlot(Slot::kInternal));
+        background.Run();
+        assert(!controller.Snapshot().sim_failed);
+        // Slot-write failure still restores RF, then reads the actual slot.
+        clear_commands();
+        UartEthModem::failed_command = "AT+ECSIMCFG=SimSlot,0";
+        assert(controller.SetSimSlot(Slot::kExternal));
+        background.Run();
+        assert((UartEthModem::commands ==
+                std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG=SimSlot,0", "AT+CFUN=1", "AT+ECSIMCFG?"}));
+        assert(UartEthModem::timeouts[2] == 10000);
+        assert(controller.Snapshot().sim_failed && controller.Snapshot().sim_slot == Slot::kInternal);
+        clear_commands();
+        UartEthModem::failed_command = "AT+CFUN=0";
+        assert(controller.SetSimSlot(Slot::kExternal));
+        background.Run();
+        assert((UartEthModem::commands == std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG?"}));
+        assert(controller.Snapshot().sim_failed);
+        clear_commands();
+        background.accepting = false;
+        assert(!controller.SetSimSlot(Slot::kExternal));
+        assert(!controller.Snapshot().sim_pending);
+        background.accepting = true;
+        assert(!controller.SetSimSlot(Slot::kUnknown));
+        assert(!controller.SetSimSlot(static_cast<Slot>(42)));
+        assert(controller.SetSimSlot(Slot::kExternal));
+        assert(controller.Pause() == ESP_OK);
+        background.Run();
+        assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
+        assert(!controller.SetSimSlot(Slot::kExternal));
+        assert(controller.Resume() == ESP_OK);
+        controller.RequestSimRefresh();
+        controller.Shutdown();
+        background.Run();
+        assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
+    }
 }

@@ -24,6 +24,8 @@ class CellularController final : public device::Cellular {
     [[nodiscard]] std::expected<void, device::CellularError> Initialize() override;
     [[nodiscard]] device::CellularSnapshot Snapshot() const override;
     void RequestSignalRefresh() override;
+    void RequestSimRefresh() override;
+    [[nodiscard]] std::expected<void, device::CellularError> SetSimSlot(device::CellularSimSlot slot) override;
     void SetStateChangeSink(device::CellularStateChangeSink sink, void* context) override;
     [[nodiscard]] std::expected<void, device::CellularError> SetEnabled(bool enabled) override;
     [[nodiscard]] esp_err_t Pause();
@@ -33,6 +35,10 @@ class CellularController final : public device::Cellular {
    private:
     static void SwitchMode(void* context);
     static void ReadSignal(void* context);
+    static void ReadSim(void* context);
+    static void SwitchSim(void* context);
+    [[nodiscard]] device::CellularSimSlot QuerySimSlot();
+    void FinishSim(bool failed, device::CellularSimSlot slot);
     void OnModemEvent(UartEthModem::UartEthModemEvent event);
     void Publish(device::CellularState state);
     [[nodiscard]] esp_err_t SetPower(bool enabled);
@@ -47,6 +53,8 @@ class CellularController final : public device::Cellular {
     buses::I2cExecutor* i2c_{};
     work::BackgroundExecutor* background_{};
     std::atomic<bool> stopping_{};
+    std::atomic<bool> paused_{true};
+    device::CellularSimSlot requested_sim_{device::CellularSimSlot::kUnknown};
     bool requested_mode_{};
     bool initialized_{};
     bool signal_pending_{};
