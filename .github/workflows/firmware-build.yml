@@ -132,11 +132,21 @@ jobs:
           bash tools/${{ matrix.wrapper }}
           . "$IDF_PATH/export.sh" >/dev/null
           python tools/ci/firmware_artifacts.py collect --profile ${{ matrix.profile }} --output build/ci-host/${{ matrix.profile }}
+      - name: Save compiled tool cache before independent regression
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.espressif
+          key: idf-linux-${{ matrix.chip }}-${{ env.IDF_REVISION }}
+      - name: Save compiler cache before independent regression
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.profile }}-${{ env.IDF_REVISION }}-${{ github.sha }}
       - name: Run shared Host regression once
         if: matrix.profile == 'metalio-claw4'
         run: |
           # Test fixtures intentionally zero-initialize omitted aggregate fields.
-          printf '#!/bin/sh\nexec /usr/bin/clang++-18 -stdlib=libc++ -Wno-missing-field-initializers "$@"\n' > "$RUNNER_TEMP/host-cxx"
+          printf '#!/bin/sh\nexec /usr/bin/clang++-18 -stdlib=libc++ "$@" -Wno-missing-field-initializers\n' > "$RUNNER_TEMP/host-cxx"
           chmod +x "$RUNNER_TEMP/host-cxx"
           CXX="$RUNNER_TEMP/host-cxx" CC=/usr/bin/clang-18 bash tools/tests/test_firmware_host.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
