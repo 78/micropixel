@@ -124,7 +124,8 @@ def matching_source(commit):
 def assemble(inputs, guests, output):
     version, sdk = versions()
     guest_manifest = json.loads((guests / 'manifest.json').read_text())
-    if guest_manifest['source_commit'] != os.environ['GITHUB_SHA'] or guest_manifest['sdk_version'] != sdk:
+    matching_source(guest_manifest['source_commit'])
+    if guest_manifest['sdk_version'] != sdk:
         raise ValueError('Guest source commit or SDK mismatch')
     check_files(guests, guest_manifest['files'])
     configs = set()
@@ -157,7 +158,8 @@ def assemble(inputs, guests, output):
     if len(configs) != 1:
         raise ValueError('Boards use different release configuration')
     write(output / 'manifest.json', {'source_commit': os.environ['GITHUB_SHA'], 'firmware_version': version,
-          'sdk_version': sdk, 'profiles': SOURCES['profiles'], 'host_source_commits': host_sources, 'files': inventory(output)})
+          'sdk_version': sdk, 'profiles': SOURCES['profiles'], 'guest_source_commit': guest_manifest['source_commit'],
+          'host_source_commits': host_sources, 'files': inventory(output)})
 
 
 if __name__ == '__main__':
