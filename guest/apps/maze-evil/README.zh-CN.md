@@ -20,13 +20,23 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
   火光，`SolidSprite` 画 HUD 字形，`FillRect` 画状态栏、十字线、虚拟摇杆和伤害/死亡蒙层。先投射全部墙柱，
   再只对未被墙遮住的 x 段画地板/天花板（16 列一块粗筛），少写约 40% 像素。绿通道与红蓝一样量化到 5 bit，
   避免 RGB888 面板补零展开时灰阶偏绿。
-- 开始页：以静止的游戏第一帧为背景，叠加人物面对竖立设备的侧视图说明握持姿势，用覆盖实际左右半屏的半透明双色区域、
-  四向摇杆与准星图标说明左侧移动和右侧开火，并辅以简短体感瞄准提示；松开任意触点或确认键后立即开始世界和 BGM。
-  体感在后台归中，不显示 HOLD STILL 或阻塞开局；3 秒未完成则在游戏内切换为触摸控制。
-  死亡或通关后点击重玩仍回到说明页，需再次点击开始。`--benchmark` 自动跳过说明。
-- 输入：默认使用 Sensors `Accelerometer/Gyroscope` 的姿态无关体感（前后倾斜前进/后退，左右倾斜转向，
-  挥动瞄准），右半屏点击开火、长按 Function Button 1.5 s 重新校准中立姿态；`--no-motion` 退回纯触摸
-  （左半屏虚拟摇杆，右半屏视角/开火）。
+- 开始页：以静止的游戏第一帧为背景，用左右区域、四向摇杆、转向箭头和右侧中部开火圆圈说明操作。
+  全屏点击或按下并松开任意 Guest 按键后开始世界和 BGM；死亡或通关后同样可全屏点击或按键返回说明页，
+  无需命中开火热区。每次页面切换需要新的按下、松开，取消的触摸或按键不触发确认。
+  `--benchmark` 自动跳过说明。
+- 输入：默认纯触摸。左半屏浮动摇杆控制前进、后退和左右平移；右侧拖动控制水平转向，右下方留给拇指滑动，另一根手指可同时按住右侧中部开火键。
+  右侧中部常驻 `FIRE` 圆圈，按下即开火、按住连发，松开停止；确认键也可开火。
+  圆圈半径为屏幕短边的 1/10，触摸热区半径为短边的 1/8（720 px 屏幕分别为 72 / 90 px），
+  按下时优先判定开火热区。每个触点在按下时确定职责，滑入其他区域不会切换职责或误开枪；
+  触点取消和恢复应用时清理按住状态。多指同时移动、转向、开火取决于面板支持的触点数量。
+  `--motion` 可显式开启体感辅助移动和瞄准，长按确认键 1.5 s 重新归中；`--no-motion` 强制关闭。
+  体感在后台归中，3 秒未完成会退回纯触摸。
+- 纪录：开始页显示 `BEST`，游玩和结算页显示 `TIME / BEST`，统一使用 `00:00`（分:秒），不显示小数秒。只累计前台实际游玩时间，
+  不包含说明页、暂停和结算等待，也不使用限幅后的模拟时间。通关结算只显示本次 `TIME` 和本轮开始前的 `PREV BEST`（首次为 `--:--`）。严格快于旧成绩时更新纪录，
+  用应用 KV 存储的 `level1_v1_ms` 保存毫秒成绩；平局、死亡和 benchmark 不更新纪录。
+  保存失败会在结算页提示，当前会话仍保留成绩。修改地图或通关规则时需更换纪录键。
+- 关卡：当前仅一张固定地图，直接定义在 `game/level.cpp` 的字符数组中，并非 JSON 或随机生成。
+  `World::Reset()` 将字符转换为墙、门、敌人和道具；击杀全部敌人并贴近出口后通关。
 - 音频：16 个音效只写在 [`audio/sfx.json`](audio/sfx.json)，BGM 用 `assets/bgm_loop.ogg` 循环播放；
   `--no-bgm` 关闭 BGM 以便测量。
 - 数学：Guest 不链接 libm，`rc_math.hpp` 用 Wasm 指令和短多项式提供 `sin/cos/atan/sqrt/floor`。
@@ -37,7 +47,8 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
 |---|---|
 | `--benchmark` | 固定 1/40 s 步长、固定 RNG 种子和脚本化自动漫游，每 120 帧输出 `maze-break-bench:` 一行；默认静音，`--sound` 恢复 |
 | `--perf` | 正常游玩时同样输出统计并显示 HUD 的 FPS / RENDER / PRESENT / WAIT |
-| `--mute` / `--no-bgm` / `--no-motion` | 关闭全部声音 / 只关 BGM / 关闭体感 |
+| `--mute` / `--no-bgm` | 关闭全部声音 / 只关 BGM |
+| `--motion` / `--no-motion` | 开启体感辅助 / 强制纯触摸（默认） |
 
 统计行字段与 demo 日志对齐：`render_avg_us`（几何 + 记录编码 + Host kernel 执行）、`present_avg_us`
 （`SURFACE_PRESENT` 调用）、`wait_avg_us`（等待 `SURFACE_RELEASED` 归还 buffer）以及 `frame_max_us`。
@@ -66,3 +77,8 @@ python3 tools/micropixel package guest/apps/maze-evil --aot-target riscv32-ilp32
 python3 tools/micropixel --transport usb run guest/apps/maze-evil --no-follow -- --benchmark
 python3 tools/micropixel --transport usb logs -n 40
 ```
+
+## 商店资料
+
+[玩法说明](store/description.md)、[版本说明](store/release-notes.txt)，以及
+[开始页](store/01-start.jpg)和[游戏画面](store/02-playing.jpg)用于商店发布。

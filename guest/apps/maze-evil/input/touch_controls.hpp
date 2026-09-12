@@ -8,24 +8,23 @@
 
 namespace maze_break::input {
 
-// Touch and key input, fed from the SDK event stream.
-//
-// Left half: virtual stick. The first finger down defines the centre; forward
-// and strafe come from its displacement.
-// Right half in touch mode: dragging turns, a short tap fires once, and a
-// finger held still fires repeatedly. In motion mode turning comes from the
-// IMU, so the whole right half is a plain fire button.
-// The function key (kConfirm) fires while held.
+// Left: floating movement stick. Right: drag to turn. Middle-right: padded fire
+// button. Each contact keeps its role until release, even across region boundaries.
 class TouchControls final {
    public:
-    void Initialize(int view_width) { half_width_ = view_width / 2; }
-    void SetMotionMode(bool enabled) { motion_mode_ = enabled; }
+    void Initialize(int view_width, int view_height) {
+        half_width_ = view_width / 2;
+        const int unit = view_width < view_height ? view_width : view_height;
+        fire_radius_ = unit / 10;
+        fire_hit_radius_ = unit / 8;
+        fire_x_ = view_width - unit / 8;
+        fire_y_ = view_height / 2;
+    }
 
     void OnTouch(const micropixel::TouchEvent& touch);
     void OnKey(const micropixel::KeyEvent& key);
 
-    // Drains the per-frame deltas; `now_us` decides whether a held finger has
-    // turned into repeat fire.
+    // Drains per-frame turn and fire presses.
     [[nodiscard]] game::Controls Consume(uint64_t now_us);
 
     // True while the function key has been held for longer than
@@ -40,9 +39,12 @@ class TouchControls final {
         bool stick_active{};
         int stick_origin_x{}, stick_origin_y{};
         int stick_x{}, stick_y{};
+        int fire_x{}, fire_y{}, fire_radius{};
+        bool fire_active{};
     };
     [[nodiscard]] Overlay overlay() const {  // NOLINT(readability-identifier-naming)
-        return Overlay{stick_.down, stick_.origin_x, stick_.origin_y, stick_.x, stick_.y};
+        return Overlay{stick_.down, stick_.origin_x, stick_.origin_y, stick_.x,  stick_.y,
+                       fire_x_,     fire_y_,         fire_radius_,    fire_.down};
     }
 
    private:
@@ -51,17 +53,16 @@ class TouchControls final {
         uint32_t id{};
         int x{}, y{};
         int origin_x{}, origin_y{};
-        uint64_t down_at_us{};
-        int travel{};
     };
 
     [[nodiscard]] static float Deflection(int delta);
-    void Release(Finger& finger, uint64_t now_us);
+    [[nodiscard]] bool HitsFire(int x, int y) const;
 
     int half_width_{240};
-    bool motion_mode_{};
+    int fire_x_{420}, fire_y_{240}, fire_radius_{48}, fire_hit_radius_{60};
     Finger stick_{};
     Finger look_{};
+    Finger fire_{};
     float turn_accum_{};
     bool tap_fired_{};
     bool key_down_{};

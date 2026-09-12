@@ -71,6 +71,10 @@ build_and_run guest_failure_detail "$workspace_root/tools/tests/test_guest_failu
 
 build_and_run_c app_requirements -I "$test_output_dir" "$workspace_root/tools/tests/test_app_requirements.c"
 
+build_and_run maze_touch_controls \
+    "$workspace_root/tools/tests/test_maze_touch_controls.cpp" \
+    "$workspace_root/guest/apps/maze-evil/input/touch_controls.cpp"
+
 build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physics_test.cpp"
 
 build_and_run frame_timing \

@@ -3,11 +3,13 @@
 #include <stdint.h>
 
 #include "apps/maze-evil/game/renderer.hpp"
+#include "apps/maze-evil/game/run_record.hpp"
 #include "apps/maze-evil/game/world.hpp"
 #include "apps/maze-evil/gfx/font.hpp"
 #include "apps/maze-evil/gfx/palette.hpp"
 #include "apps/maze-evil/gfx/sprites.hpp"
 #include "apps/maze-evil/gfx/textures.hpp"
+#include "apps/maze-evil/input/menu_controls.hpp"
 #include "apps/maze-evil/input/motion_controls.hpp"
 #include "apps/maze-evil/input/touch_controls.hpp"
 #include "apps/maze-evil/maze_break_audio.hpp"
@@ -28,6 +30,18 @@ constexpr float kBenchmarkDt = 1.0F / 40.0F;
 constexpr uint64_t kBenchmarkDtUs = 25'000U;
 
 using Line = micropixel::FixedString<224U>;
+// Keep records separate when the map or its completion rules change.
+constexpr const char* kBestTimeKey = "level1_v1_ms";
+
+void AppendTime(Line& line, uint32_t ms) {
+    const uint32_t minutes = ms / 60'000U;
+    if (minutes < 10U) line.Append("0");
+    line.AppendUint(minutes);
+    line.Append(":");
+    const uint32_t seconds = ms / 1000U % 60U;
+    if (seconds < 10U) line.Append("0");
+    line.AppendUint(seconds);
+}
 
 bool HasLaunchFlag(const micropixel::LaunchArguments& args, const char* name) {
     for (uint32_t index = 0U; index < args.count(); ++index) {
@@ -77,8 +91,14 @@ constexpr uint32_t kUpscaleThresholdWidth = 480U;
 // may be `upscale` times smaller.
 bool DrawStickOverlay(micropixel::RasterDrawList& list, const game::Renderer& renderer,
                       const input::TouchControls::Overlay& overlay, int upscale) {
+    const uint16_t fire_color = gfx::PaletteRgb565(gfx::Index(overlay.fire_active ? gfx::kWhite : gfx::kOrange, 14));
+    const int fire_x = overlay.fire_x / upscale;
+    const int fire_y = overlay.fire_y / upscale;
+    bool fire_ok = renderer.DrawCircle(list, fire_x, fire_y, overlay.fire_radius / upscale, fire_color, false);
+    fire_ok =
+        renderer.DrawText(list, fire_x - gfx::TextWidth("FIRE", 1) / 2, fire_y - 3, "FIRE", fire_color, 1) && fire_ok;
     if (!overlay.stick_active) {
-        return true;
+        return fire_ok;
     }
     const gfx::ViewConfig& view = renderer.view();
     const uint16_t ring = gfx::PaletteRgb565(gfx::Index(gfx::kWhite, 9));
@@ -87,7 +107,7 @@ bool DrawStickOverlay(micropixel::RasterDrawList& list, const game::Renderer& re
     const int knob_radius = 8 * view.hud_scale;
     const int origin_x = overlay.stick_origin_x / upscale;
     const int origin_y = overlay.stick_origin_y / upscale;
-    bool ok = renderer.DrawCircle(list, origin_x, origin_y, ring_radius, ring, false);
+    bool ok = renderer.DrawCircle(list, origin_x, origin_y, ring_radius, ring, false) && fire_ok;
     int dx = (overlay.stick_x - overlay.stick_origin_x) / upscale;
     int dy = (overlay.stick_y - overlay.stick_origin_y) / upscale;
     const float len = math::Sqrt(static_cast<float>(dx * dx + dy * dy));
@@ -115,7 +135,7 @@ struct Options {
     bool benchmark{};
     bool bgm{true};
     bool mute{};
-    bool motion{true};
+    bool motion{};
     bool perf{};
 };
 
@@ -125,7 +145,7 @@ Options ParseOptions(const micropixel::LaunchArguments& args) {
     options.bgm = !HasLaunchFlag(args, "--no-bgm");
     // Benchmarks measure graphics; keep the room quiet unless --sound is given.
     options.mute = HasLaunchFlag(args, "--mute") || (options.benchmark && !HasLaunchFlag(args, "--sound"));
-    options.motion = !HasLaunchFlag(args, "--no-motion");
+    options.motion = HasLaunchFlag(args, "--motion") && !HasLaunchFlag(args, "--no-motion");
     options.perf = options.benchmark || HasLaunchFlag(args, "--perf");
     return options;
 }
@@ -158,6 +178,7 @@ class MazeBreakApp final {
     game::Controls GatherControls(uint64_t now_us, float dt);
     void PumpSounds();
     void RequestStart();
+    bool DrawRecord(micropixel::RasterDrawList& list);
     bool DrawInstructions(micropixel::RasterDrawList& list);
     void PublishStats(uint64_t now_us);
     void LogStats(uint64_t elapsed_us);
@@ -176,6 +197,8 @@ class MazeBreakApp final {
     input::MotionControls motion_{};
     bool motion_mode_{};
     bool recalibrate_armed_{true};
+    game::RunRecord record_{};
+    bool record_save_failed_{};
     GameAudio audio_{};
     game::HudStats hud_{};
     FrameStats stats_{};
@@ -184,9 +207,8 @@ class MazeBreakApp final {
     bool resumed_{};
     bool started_{};
     bool calibrating_{};
-    bool start_touch_down_{};
-    uint32_t start_touch_id_{};
-    bool start_key_down_{};
+    input::MenuControls menu_{};
+    bool retry_requested_{};
     uint64_t calibration_started_us_{};
 };
 
@@ -197,20 +219,19 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
         case micropixel::EventType::kResume:
             // The Host stopped audio and returned every buffer while we were
             // paused; the frame clock restarts so dt does not jump.
+            touch_ = input::TouchControls{};
+            touch_.Initialize(static_cast<int>(surface_.width()), static_cast<int>(surface_.height()));
+            menu_ = input::MenuControls{};
             resumed_ = true;
             return true;
         case micropixel::EventType::kTouch:
-            if (!started_) {
-                const auto& touch = *event.touch();
-                if (touch.phase() == micropixel::TouchPhase::kDown) {
-                    start_touch_down_ = true;
-                    start_touch_id_ = touch.id();
-                } else if (start_touch_down_ && touch.id() == start_touch_id_ &&
-                           (touch.phase() == micropixel::TouchPhase::kUp ||
-                            touch.phase() == micropixel::TouchPhase::kCancel)) {
-                    start_touch_down_ = false;
-                    if (touch.phase() == micropixel::TouchPhase::kUp) {
+            if (!started_ || world_.phase() != game::Phase::kPlaying) {
+                if (!retry_requested_ && menu_.OnTouch(*event.touch())) {
+                    if (!started_) {
+                        menu_ = input::MenuControls{};
                         RequestStart();
+                    } else {
+                        retry_requested_ = true;
                     }
                 }
                 return true;
@@ -219,16 +240,13 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
                 ToPanelTouch(*event.touch(), surface_.width(), surface_.height(), logical_width_, logical_height_));
             return true;
         case micropixel::EventType::kKey:
-            if (!started_) {
-                if (event.key()->code() == micropixel::KeyCode::kConfirm) {
-                    if (event.key()->phase() == micropixel::KeyPhase::kDown) {
-                        start_key_down_ = true;
-                    } else if (event.key()->phase() == micropixel::KeyPhase::kUp) {
-                        const bool pressed = start_key_down_;
-                        start_key_down_ = false;
-                        if (pressed) {
-                            RequestStart();
-                        }
+            if (!started_ || world_.phase() != game::Phase::kPlaying) {
+                if (!retry_requested_ && menu_.OnKey(*event.key())) {
+                    if (!started_) {
+                        menu_ = input::MenuControls{};
+                        RequestStart();
+                    } else {
+                        retry_requested_ = true;
                     }
                 }
                 return true;
@@ -249,6 +267,8 @@ void MazeBreakApp::RequestStart() {
     if (started_) {
         return;
     }
+    record_.Start();
+    record_save_failed_ = false;
     started_ = true;
     calibrating_ = motion_mode_;
     calibration_started_us_ = app_.clock().Now().microseconds();
@@ -259,6 +279,37 @@ void MazeBreakApp::RequestStart() {
     audio_.StartBgm();
     stats_ = FrameStats{};
     stats_.window_start_us = calibration_started_us_;
+}
+
+bool MazeBreakApp::DrawRecord(micropixel::RasterDrawList& list) {
+    Line label;
+    if (started_) {
+        label.Append("TIME ");
+        AppendTime(label, record_.elapsed_ms());
+        label.Append("  ");
+    }
+    const bool won = started_ && world_.phase() == game::Phase::kWon;
+    const uint32_t best_ms = won ? record_.previous_best_ms() : record_.best_ms();
+    label.Append(won ? "PREV BEST " : "BEST ");
+    if (best_ms == 0)
+        label.Append("--:--");
+    else
+        AppendTime(label, best_ms);
+    const int unit = view_.width < view_.height ? view_.width : view_.height;
+    const int scale = unit >= 440 ? 2 : 1;
+    const int y = started_ ? 16 * scale : (view_.height - unit * 220 / 240) / 2 + 58 * unit / 240;
+    const int x = (view_.width - gfx::TextWidth(label.c_str(), scale)) / 2;
+    const uint16_t color = gfx::PaletteRgb565(gfx::Index(gfx::kCyan, 14));
+    bool ok = list.FillRect(micropixel::Rect{x - 2, y - 2, gfx::TextWidth(label.c_str(), scale) + 4, 10 * scale},
+                            micropixel::Color::Rgb(12, 18, 28), 200U);
+    ok = renderer_.DrawText(list, x, y, label.c_str(), color, scale) && ok;
+    if (won && record_save_failed_) {
+        const char* message = "SAVE FAILED";
+        ok = renderer_.DrawText(list, (view_.width - gfx::TextWidth(message, scale)) / 2, y + 13 * scale, message,
+                                color, scale) &&
+             ok;
+    }
+    return ok;
 }
 
 bool MazeBreakApp::DrawInstructions(micropixel::RasterDrawList& list) {
@@ -302,21 +353,6 @@ bool MazeBreakApp::DrawInstructions(micropixel::RasterDrawList& list) {
     };
 
     text(120, 0, "MAZE EVIL", white);
-    // Side view: a person looks at an upright screen, held in front of the face.
-    circle(72, 32, 9, white, false);
-    rect(79, 30, 5, 3, white);  // nose points towards the screen
-    rect(69, 42, 4, 24, white);
-    rect(73, 52, 24, 3, white);  // arm and hand supporting the device
-    rect(95, 48, 4, 7, white);
-    rect(103, 23, 6, 35, cyan);
-    rect(104, 26, 2, 28, white);
-    for (int x = 87; x < 102; x += 5) {
-        rect(x, 33, 2, 1, cyan);  // eye line
-    }
-    arrow(116, 43, 0, -1, cyan);
-    text(171, 29, motion_mode_ ? "HOLD UPRIGHT" : "GET READY", white);
-    text(171, 44, motion_mode_ ? "FACE SCREEN" : "TOUCH MODE", cyan);
-    text(120, 73, motion_mode_ ? "TILT TO MOVE / SWING TO AIM" : "DRAG RIGHT SIDE TO LOOK", white);
 
     // The coloured panels cover the actual left and right touch halves.
     const int region_top = py(91);
@@ -329,24 +365,19 @@ bool MazeBreakApp::DrawInstructions(micropixel::RasterDrawList& list) {
          ok;
     rect(119, 91, 2, 92, white);
     text(60, 97, "MOVE", cyan);
-    text(180, 97, "FIRE", orange);
+    text(180, 97, "FIRE / LOOK", orange);
+    arrow(165, 162, -1, 0, orange);
+    arrow(195, 162, 1, 0, orange);
     circle(60, 138, 17, cyan, false);
     circle(60, 138, 6, cyan, true);
     arrow(60, 117, 0, -1, cyan);
     arrow(60, 159, 0, 1, cyan);
     arrow(39, 138, -1, 0, cyan);
     arrow(81, 138, 1, 0, cyan);
-    // A crosshair inside a large fire pad, visually distinct from the move stick.
-    circle(180, 137, 23, orange, false);
-    circle(180, 137, 10, orange, false);
-    rect(179, 120, 2, 10, orange);
-    rect(179, 145, 2, 10, orange);
-    rect(163, 136, 10, 2, orange);
-    rect(188, 136, 10, 2, orange);
-    circle(180, 137, 2, white, true);
+    circle(202, 130, 22, orange, false);
+    text(202, 127, "FIRE", orange);
     text(60, 174, "DRAG LEFT", white);
-    text(180, 174, "TAP / HOLD", white);
-    text(120, 191, motion_mode_ ? "FUNCTION 1.5S: RECENTER" : "FUNCTION: FIRE", white);
+    text(180, 174, "DRAG TO LOOK", white);
     rect(12, 207, 216, 13, cyan);
     text(120, 210, "TAP ANYWHERE TO START", gfx::PaletteRgb565(gfx::Index(gfx::kGray, 1)));
     return ok;
@@ -385,7 +416,6 @@ game::Controls MazeBreakApp::GatherControls(uint64_t now_us, float dt) {
             } else if (now_us - calibration_started_us_ >= 3'000'000U) {
                 calibrating_ = false;
                 motion_mode_ = false;
-                touch_.SetMotionMode(false);
                 app_.log().Info("maze-break: calibration timed out; continuing with touch controls");
                 return controls;
             }
@@ -495,11 +525,12 @@ int MazeBreakApp::Run() {
         app_.log().Error("maze-break: Host raster refused the texture or palette upload");
         return 2;
     }
-    touch_.Initialize(static_cast<int>(surface_.width()));
+    touch_.Initialize(static_cast<int>(surface_.width()), static_cast<int>(surface_.height()));
 
     motion_mode_ = options_.motion && !options_.benchmark && motion_.Initialize(app_);
-    touch_.SetMotionMode(motion_mode_);
 
+    auto best = app_.storage().GetU32(kBestTimeKey);
+    if (best.has_value()) record_.Restore(best.value());
     world_.Reset();
     if (options_.benchmark) {
         world_.SeedRng(1U);
@@ -526,8 +557,9 @@ int MazeBreakApp::Run() {
         msg.AppendUint(surface_.max_full_frame_fps());
         msg.Append(" fps");
         app_.log().Info(msg.c_str());
-        app_.log().Info(motion_mode_ ? "maze-break: motion controls; tilt to move/turn, swing to aim, right half fires"
-                                     : "maze-break: touch controls; left half stick, right half look/fire");
+        app_.log().Info(motion_mode_
+                            ? "maze-break: motion controls; tilt to move/turn, swing to aim, middle-right fires"
+                            : "maze-break: touch controls; left half stick, right drag looks, middle-right fires");
     }
 
     const uint64_t start_us = app_.clock().Now().microseconds();
@@ -559,7 +591,8 @@ int MazeBreakApp::Run() {
                 motion_.Recalibrate();
             }
         }
-        uint64_t dt_us = now_us - last_frame_us_;
+        const uint64_t active_elapsed_us = now_us - last_frame_us_;
+        uint64_t dt_us = active_elapsed_us;
         last_frame_us_ = now_us;
         if (dt_us > kMaxFrameDtUs) {
             dt_us = kMaxFrameDtUs;
@@ -570,9 +603,27 @@ int MazeBreakApp::Run() {
         const float dt = static_cast<float>(dt_us) * 1e-6F;
 
         if (started_) {
-            const game::Controls controls = GatherControls(now_us, dt);
+            game::Controls controls = GatherControls(now_us, dt);
             const game::Phase phase_before = world_.phase();
+            if (phase_before != game::Phase::kPlaying && !options_.benchmark) {
+                controls = {};  // Menu confirmation is independent of gameplay fire.
+            }
+            if (phase_before == game::Phase::kPlaying && !options_.benchmark) {
+                record_.Advance(active_elapsed_us);
+            }
             world_.Update(dt, controls);
+            if (phase_before == game::Phase::kPlaying && world_.phase() == game::Phase::kWon && !options_.benchmark &&
+                record_.Finish()) {
+                record_save_failed_ = !app_.storage().SetU32(kBestTimeKey, record_.best_ms()).has_value();
+                if (record_save_failed_) app_.log().Error("maze-break: best time save failed");
+            }
+            if (phase_before == game::Phase::kPlaying && world_.phase() != game::Phase::kPlaying) {
+                menu_ = input::MenuControls{};
+            }
+            if (retry_requested_) {
+                retry_requested_ = false;
+                world_.Reset();
+            }
             if (phase_before != game::Phase::kPlaying && world_.phase() == game::Phase::kPlaying &&
                 !options_.benchmark) {
                 // Both win and death retries return to the frozen first-frame
@@ -580,12 +631,10 @@ int MazeBreakApp::Run() {
                 // release cannot silently confirm a new neutral orientation.
                 started_ = false;
                 calibrating_ = false;
-                start_touch_down_ = false;
-                start_key_down_ = false;
+                menu_ = input::MenuControls{};
                 recalibrate_armed_ = true;
                 touch_ = input::TouchControls{};
-                touch_.Initialize(static_cast<int>(surface_.width()));
-                touch_.SetMotionMode(motion_mode_);
+                touch_.Initialize(static_cast<int>(surface_.width()), static_cast<int>(surface_.height()));
                 audio_.StopAll();
             }
             PumpSounds();
@@ -596,7 +645,8 @@ int MazeBreakApp::Run() {
         bool drawn = false;
         auto rendered = surface_.Update(index, [&](micropixel::RasterDrawList& list) {
             drawn = started_ ? renderer_.Render(list, world_, hud_) : DrawInstructions(list);
-            if (drawn && started_ && !options_.benchmark) {
+            if (drawn && !options_.benchmark) drawn = DrawRecord(list);
+            if (drawn && started_ && !options_.benchmark && world_.phase() == game::Phase::kPlaying) {
                 drawn = DrawStickOverlay(list, renderer_, touch_.overlay(), static_cast<int>(upscale_));
             }
         });
