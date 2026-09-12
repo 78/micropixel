@@ -45,53 +45,89 @@ static bool load_bundle(const char* path) {
     return true;
 }
 
-bundlefs_error_t bundlefs_get_file_info(const bundlefs_file_t* file, bundlefs_file_info_t* info_out) {
-    if (file == NULL || info_out == NULL || file->opaque[0] != 1U) {
-        return BUNDLEFS_ERR_INVALID_ARGUMENT;
+/*
+ * Memory-backed Bundle source. The mappable variant hands out pointers into
+ * the loaded file like BundleFS on NOR; the read-only variant has no `map`
+ * so the reader must serve each opened section from its own RAM copy.
+ */
+static const uint32_t kTestSourceToken = 0x5eedU;
+
+static bool test_source_size(const micropixel_bundle_source_t* source, uint32_t* size_out) {
+    if (source->state[0] != kTestSourceToken) {
+        return false;
     }
-    memset(info_out, 0, sizeof(*info_out));
-    info_out->size = test_bundle_size;
-    return BUNDLEFS_OK;
+    *size_out = test_bundle_size;
+    return true;
 }
 
-bundlefs_error_t bundlefs_read(const bundlefs_file_t* file, uint32_t offset, void* destination, uint32_t size) {
-    if (file == NULL || file->opaque[0] != 1U || destination == NULL || offset > test_bundle_size ||
-        size > test_bundle_size - offset) {
-        return BUNDLEFS_ERR_INVALID_ARGUMENT;
+static bool test_source_read(const micropixel_bundle_source_t* source, uint32_t offset, void* destination,
+                             uint32_t size) {
+    if (source->state[0] != kTestSourceToken || offset > test_bundle_size || size > test_bundle_size - offset) {
+        return false;
     }
     memcpy(destination, test_bundle + offset, size);
-    return BUNDLEFS_OK;
+    return true;
 }
 
-bundlefs_error_t bundlefs_mmap(const bundlefs_file_t* file, uint32_t offset, uint32_t size,
-                               bundlefs_mapping_t* mapping_out) {
-    if (file == NULL || file->opaque[0] != 1U || mapping_out == NULL || size == 0U || offset > test_bundle_size ||
-        size > test_bundle_size - offset) {
-        return BUNDLEFS_ERR_INVALID_ARGUMENT;
+static void test_source_unmap(micropixel_bundle_mapping_t* mapping) {
+    if (mapping->base != NULL && active_mappings > 0U) {
+        --active_mappings;
     }
-    *mapping_out = (bundlefs_mapping_t){
+    memset(mapping, 0, sizeof(*mapping));
+}
+
+static const micropixel_bundle_mapping_ops_t kTestMappingOps = {.unmap = test_source_unmap};
+
+static bool test_source_map(const micropixel_bundle_source_t* source, uint32_t offset, uint32_t size,
+                            micropixel_bundle_mapping_t* mapping_out) {
+    if (source->state[0] != kTestSourceToken || size == 0U || offset > test_bundle_size ||
+        size > test_bundle_size - offset) {
+        return false;
+    }
+    *mapping_out = (micropixel_bundle_mapping_t){
         .data = test_bundle + offset,
-        .mapping = test_bundle + offset,
+        .base = test_bundle + offset,
         .size = size,
-        .mapping_handle = next_mapping_handle++,
+        .handle = next_mapping_handle++,
+        .ops = &kTestMappingOps,
     };
     ++active_mappings;
     last_mapping_offset = offset;
     last_mapping_size = size;
-    return BUNDLEFS_OK;
+    return true;
 }
 
-void bundlefs_munmap(bundlefs_mapping_t* mapping) {
-    if (mapping != NULL && mapping->mapping != NULL && active_mappings > 0U) {
-        --active_mappings;
-    }
-    if (mapping != NULL) {
-        memset(mapping, 0, sizeof(*mapping));
-    }
+static const micropixel_bundle_source_ops_t kMappableSourceOps = {
+    .size = test_source_size,
+    .read = test_source_read,
+    .map = test_source_map,
+};
+
+static const micropixel_bundle_source_ops_t kReadOnlySourceOps = {
+    .size = test_source_size,
+    .read = test_source_read,
+    .map = NULL,
+};
+
+static bool in_test_bundle(const uint8_t* pointer) {
+    return pointer != NULL && pointer >= test_bundle && pointer < test_bundle + test_bundle_size;
 }
 
-static bool validate_bundle(void) {
-    const bundlefs_file_t file = {.opaque = {1U}};
+static bool launch_asset_offset(const micropixel_bundle_header_t* header, uint32_t* offset_out) {
+    for (uint32_t index = 0U; index < header->section_count; ++index) {
+        micropixel_bundle_section_t section;
+        memcpy(&section, test_bundle + header->toc_offset + index * sizeof(section), sizeof(section));
+        if (section.kind == MICROPIXEL_BUNDLE_SECTION_ASSET && section.id == header->launch_asset_id) {
+            *offset_out = section.offset;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool validate_bundle(bool mappable) {
+    micropixel_bundle_source_t file = {.ops = mappable ? &kMappableSourceOps : &kReadOnlySourceOps};
+    file.state[0] = kTestSourceToken;
     micropixel_bundle_header_t header;
     memcpy(&header, test_bundle, sizeof(header));
     const bool has_launch_asset = header.launch_asset_id != 0U;
@@ -141,21 +177,49 @@ static bool validate_bundle(void) {
                check(active_mappings == 0U, "Component validation must release its Bundle mapping");
     }
 
+    /* A mappable source hands out one mapping per view; a read-only source never maps. */
+    const uint32_t one_view = mappable ? 1U : 0U;
     micropixel_bundle_asset_mapping_t cover;
-    uint32_t cover_offset = 0U;
     if (has_launch_asset) {
-        if (!check(micropixel_open_launch_asset(&file, &cover), "launch cover must map") ||
-            !check(active_mappings == 1U, "cover path must own exactly one mapping") ||
-            !check(last_mapping_offset > 0U, "cover mapping must begin at the asset, not Bundle start") ||
-            !check(last_mapping_size == cover.asset.size && last_mapping_size < metadata.bundle_size,
+        if (!check(micropixel_open_launch_asset(&file, &cover), "launch cover must open") ||
+            !check(active_mappings == one_view, "cover path must own exactly one mapping when mappable") ||
+            !check(!mappable || last_mapping_offset > 0U, "cover mapping must begin at the asset, not Bundle start") ||
+            !check(!mappable || (last_mapping_size == cover.asset.size && last_mapping_size < metadata.bundle_size),
                    "Hall must map only the launch asset") ||
+            !check(cover.asset.data != NULL && cover.mapping.data == cover.asset.data,
+                   "cover view must expose the asset bytes") ||
+            !check(mappable == in_test_bundle(cover.asset.data),
+                   "mappable covers alias the source; read-only covers are Host-owned copies") ||
             !check(cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG ||
                        cover.asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG,
                    "production Hall cover must use JPEG or PNG") ||
             !check(cover.asset.content_hash != 0U, "Hall cover identity must include its content hash")) {
             return false;
         }
-        cover_offset = (uint32_t)(cover.asset.data - test_bundle);
+        if (!mappable) {
+            /* Hall's NAND copy must survive an App session without reopening its source. */
+            const uint8_t* retained_data = cover.asset.data;
+            micropixel_aot_package_t retained_package;
+            micropixel_bundle_asset_mapping_t guest_cover;
+            if (!check(micropixel_open_aot_package(&file, &retained_package),
+                       "App must open while the Hall RAM cover is retained") ||
+                !check(micropixel_bundle_open_asset(&retained_package, retained_package.launch_asset_id, &guest_cover),
+                       "Guest must open its own cover while Hall retains a copy") ||
+                !check(guest_cover.asset.data != retained_data && guest_cover.asset.size == cover.asset.size &&
+                           memcmp(guest_cover.asset.data, retained_data, cover.asset.size) == 0,
+                       "Guest and Hall must own independent copies of the same cover")) {
+                return false;
+            }
+            micropixel_close_asset_mapping(&guest_cover);
+            micropixel_close_aot_package(&retained_package);
+            uint32_t retained_offset = 0U;
+            if (!check(launch_asset_offset(&header, &retained_offset), "retained cover must have a source offset") ||
+                !check(cover.asset.data == retained_data &&
+                           memcmp(retained_data, test_bundle + retained_offset, cover.asset.size) == 0,
+                       "App teardown must preserve the Hall cover for immediate reuse")) {
+                return false;
+            }
+        }
         micropixel_close_asset_mapping(&cover);
         if (!check(active_mappings == 0U, "closing a cover must release its mapping")) {
             return false;
@@ -168,33 +232,85 @@ static bool validate_bundle(void) {
 
     micropixel_aot_package_t package;
     if (!check(micropixel_open_aot_package(&file, &package), "Bundle must open as an AOT package") ||
-        !check(active_mappings == 1U, "running package must own one Bundle mapping") ||
-        !check(last_mapping_offset == 0U && last_mapping_size == metadata.bundle_size,
-               "running package must map its logical Bundle") ||
-        !check(package.payload != NULL && package.payload_size > 0U, "relocatable AOT must be copied for WAMR") ||
+        !check(active_mappings == 0U, "an open package must not keep any part of the Bundle mapped") ||
+        !check(package.sections != NULL && package.section_count == header.section_count &&
+                   !in_test_bundle((const uint8_t*)package.sections),
+               "the package must own a Host copy of the TOC") ||
+        !check(package.payload != NULL && package.payload_size > 0U && !in_test_bundle(package.payload),
+               "relocatable AOT must be copied for WAMR") ||
         !check((package.aot_flags & MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED) != 0U,
                "current App Bundles must declare their Guest threading policy")) {
         return false;
     }
-    micropixel_bundle_asset_view_t launch;
-    const bool found_launch = micropixel_bundle_find_asset(&package, package.launch_asset_id, &launch);
+    micropixel_bundle_asset_mapping_t launch;
+    const bool opened_launch = micropixel_bundle_open_asset(&package, package.launch_asset_id, &launch);
+    if (!check(opened_launch == has_launch_asset, "running package launch asset state must match its header")) {
+        return false;
+    }
+    uint32_t cover_offset = 0U;
+    if (has_launch_asset) {
+        if (!check(launch_asset_offset(&header, &cover_offset), "launch asset must be listed in the TOC") ||
+            !check(active_mappings == one_view, "an opened section must own exactly one mapping when mappable") ||
+            !check(!mappable || (last_mapping_offset == cover_offset && last_mapping_size == launch.asset.size),
+                   "an opened section must map only its own bytes") ||
+            !check(mappable == in_test_bundle(launch.asset.data),
+                   "mappable sections alias the source; read-only sections are Host-owned copies") ||
+            !check(launch.asset.content_hash != 0U && launch.asset.format != 0U,
+                   "an opened section must carry its TOC attributes")) {
+            return false;
+        }
+        micropixel_close_asset_mapping(&launch);
+        if (!check(active_mappings == 0U, "closing a section must release its mapping")) {
+            return false;
+        }
+        /* Corruption inside a section is caught when that section is opened, without touching others. */
+        const uint8_t original = test_bundle[cover_offset];
+        test_bundle[cover_offset] ^= 0xffU;
+        const bool corrupt_opened = micropixel_bundle_open_asset(&package, package.launch_asset_id, &launch);
+        if (corrupt_opened) {
+            micropixel_close_asset_mapping(&launch);
+        }
+        micropixel_bundle_metadata_t validated;
+        const bool corrupt_validated = micropixel_validate_app_package(&file, &validated);
+        test_bundle[cover_offset] = original;
+        if (!check(!corrupt_opened, "a section whose hash mismatches must not open") ||
+            !check(!corrupt_validated, "install validation must reject a Bundle with a corrupt section") ||
+            !check(active_mappings == 0U, "failed section validation must not leak a mapping")) {
+            return false;
+        }
+    }
+    micropixel_bundle_asset_mapping_t missing;
+    micropixel_bundle_font_mapping_t missing_font;
+    if (!check(!micropixel_bundle_open_asset(&package, 0xfffffffeU, &missing), "unknown asset ids must not open") ||
+        !check(!micropixel_bundle_open_font(&package, 0xfffffffeU, &missing_font), "unknown font ids must not open") ||
+        !check(active_mappings == 0U, "failed lookups must not create mappings")) {
+        return false;
+    }
     micropixel_close_aot_package(&package);
-    if (!check(found_launch == has_launch_asset, "running package launch asset state must match its header") ||
-        !check(active_mappings == 0U, "closing a package must release its Bundle mapping")) {
+    if (!check(package.sections == NULL && package.payload == NULL, "closing a package must clear it") ||
+        !check(active_mappings == 0U, "closing a package must leave no mapping behind")) {
         return false;
     }
 
+    micropixel_bundle_metadata_t validated;
+    if (!check(micropixel_validate_app_package(&file, &validated), "install validation must accept a valid Bundle") ||
+        !check(validated.bundle_size == test_bundle_size && validated.app_id[0] != 0U,
+               "install validation must return the Bundle metadata") ||
+        !check(active_mappings == 0U, "install validation must stream and leave no mapping behind")) {
+        return false;
+    }
     if (!has_launch_asset) {
         return true;
     }
+    micropixel_bundle_asset_mapping_t cover_again;
     const uint8_t original = test_bundle[cover_offset];
     test_bundle[cover_offset] ^= 0xffU;
-    const bool corrupt_opened = micropixel_open_launch_asset(&file, &cover);
+    const bool corrupt_cover_opened = micropixel_open_launch_asset(&file, &cover_again);
     test_bundle[cover_offset] = original;
-    if (corrupt_opened) {
-        micropixel_close_asset_mapping(&cover);
+    if (corrupt_cover_opened) {
+        micropixel_close_asset_mapping(&cover_again);
     }
-    return check(!corrupt_opened, "Bundle reader must reject a corrupt cover") &&
+    return check(!corrupt_cover_opened, "Bundle reader must reject a corrupt cover") &&
            check(active_mappings == 0U, "failed cover validation must not leak a mapping");
 }
 
@@ -203,11 +319,13 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Usage: bundle_reader_test APP_BUNDLE\n");
         return 2;
     }
-    const bool passed = validate_bundle();
+    const bool passed = validate_bundle(true) && validate_bundle(false);
     free(test_bundle);
     if (!passed) {
         return 1;
     }
-    puts("Bundle reader host integration passed (opaque BundleFS file, asset/full mapping and corruption checks). ");
+    puts(
+        "Bundle reader host integration passed (mappable and read-only Bundle sources, on-demand sections, install "
+        "validation and corruption checks).");
     return 0;
 }

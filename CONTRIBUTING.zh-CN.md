@@ -9,7 +9,7 @@
 
 ```sh
 git submodule update --init --recursive
-bash tools/build_guest_p4.sh
+# Guest 改动：使用当前目标对应的 Guest 构建入口。
 bash tools/check_firmware_style.sh --format-only
 python3 -m unittest tools.tests.test_analyze_sfx -v
 bash -n tools/*.sh
@@ -27,7 +27,10 @@ bash -n tools/*.sh
 `test_font_tools.py`。相关回归优先加入现有套件，独立的编译条件、替身或故障注入环境才拆分目标。
 不要新增只验证自造数据、重复常量或文件读写本身的测试。
 
-涉及固件行为时，还应完成 ESP32-P4 Host 构建和相应真机回归。PR 中请写明测试环境、执行命令和结果；
+涉及固件行为时，应完成用户指定或当前硬件任务对应板卡的 Host 构建和真机回归；S31 使用
+`bash tools/s31.sh build-host`。不默认构建 P4，也不强制构建无关板卡；只有明确受影响的平台分支
+或显式多板任务才增加跨板检查。发布和推送前按变更范围及发布目标执行检查。
+PR 中请写明测试环境、执行命令和结果；
 不要提交串口日志、性能采样、构建目录、固件镜像或设备标识。
 
 ## 文档

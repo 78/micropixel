@@ -26,10 +26,36 @@ struct HallCoverCacheSlot final {
     bool occupied{};
     uint64_t key{};
     uint32_t app_index{};
+    uint64_t last_used{};
 };
 
 struct HallCoverCachePolicy final {
     static constexpr size_t kNoSlot = static_cast<size_t>(-1);
+
+    static constexpr size_t kCapacity = host_ui::kMaxHallApps;
+    static constexpr size_t kPsramReserve = 2U * 1024U * 1024U;
+
+    [[nodiscard]] static constexpr bool RetainForLaunch(uint32_t app_index, uint32_t window_first, uint32_t window_last,
+                                                        bool launch_image) {
+        return launch_image || (app_index >= window_first && app_index < window_last);
+    }
+
+    [[nodiscard]] static constexpr bool CanGrow(size_t free_bytes, size_t allocation_bytes) {
+        return free_bytes >= allocation_bytes && free_bytes - allocation_bytes >= kPsramReserve;
+    }
+
+    template <size_t Capacity>
+    [[nodiscard]] static constexpr size_t OldestOutsideWindow(const std::array<HallCoverCacheSlot, Capacity>& slots,
+                                                              uint32_t first, uint32_t last) {
+        size_t oldest = kNoSlot;
+        for (size_t index = 0U; index < Capacity; ++index) {
+            if (slots[index].occupied && (slots[index].app_index < first || slots[index].app_index >= last) &&
+                (oldest == kNoSlot || slots[index].last_used < slots[oldest].last_used)) {
+                oldest = index;
+            }
+        }
+        return oldest;
+    }
 
     // Retained PPA screenshots are tightly packed; decoded cache entries use
     // LVGL's padded rows. An image descriptor supports either explicit stride.
@@ -55,12 +81,7 @@ struct HallCoverCachePolicy final {
                 return index;
             }
         }
-        for (size_t index = 0U; index < Capacity; ++index) {
-            if (slots[index].app_index < window_first || slots[index].app_index >= window_last) {
-                return index;
-            }
-        }
-        return kNoSlot;
+        return OldestOutsideWindow(slots, window_first, window_last);
     }
 };
 

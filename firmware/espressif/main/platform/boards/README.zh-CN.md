@@ -54,7 +54,7 @@ properties.
    scripts are aliases for product workflows; they must delegate ESP-IDF
    build, flash, monitor and chip-safe port selection to `tools/firmware.py`.
 
-The ESP-Mosaico P0/P1 profile proves ESP32-S31 target selection, WAMR/AOT
+The ESP-Mosaico profile proves ESP32-S31 target selection, WAMR/AOT
 configuration, 16 KiB MMU-page-safe BundleFS, native Wi-Fi, CO5300 display,
 the `78/esp_lcd_touch_cst92xx` interrupt-driven touch component, BQ27220
 battery, ES8311/NS4150B audio and the
@@ -75,7 +75,15 @@ only successfully initialized acceleration, angular-velocity and magnetic-field
 channels are registered. Axis mapping and magnetic calibration still require
 hardware validation and must not be guessed from Metalio-Claw4. The POWER switch,
 Function button, status LED, battery refresh and explicit light-sleep/power-off path
-are present; NAND App Store and module discovery remain P2.
+are present. The external 128 MiB SPI NAND (SPI3_HOST, single-line SPI at 40 MHz; WP#
+and HOLD# are driven high as GPIO outputs in non-quad modes) is registered through
+`BoardRegistration::SetAppStorage` as a `device::BlockStorage` with an explicit
+4 KiB BundleFS block size (`kNandBundleBlockSize`, two FTL sectors) as a fixed
+(non-removable) medium, so `FirmwareApp` may format it automatically when it holds no
+BundleFS or another geometry; boards that expose a user-owned card must pass
+`removable = true` so formatting only happens after confirmation in the System UI.
+`FirmwareApp` mounts a second BundleFS on it for downloaded Apps. Module discovery
+remains P2.
 
 Every Board implementation submits one `BoardRegistration`. A hardware release
 profile supplies both its human-readable `board` and stable `firmware_target`;
@@ -115,7 +123,7 @@ Before adding board-local code, check these homes:
 
 Run at least the Host regression suite, architecture check, format check and
 the new board's full ESP-IDF build. Keep `bash tools/p4.sh build-null` passing.
-For the preview S31 target use `bash tools/s31.sh build-null` and
+For the S31 target use `bash tools/s31.sh build-null` and
 `bash tools/s31.sh build-host`. `s31-null` cannot be flashed; the physical
 bring-up profile exposes `flash-host` and `monitor` with mandatory S31 chip
 verification.

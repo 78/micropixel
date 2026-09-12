@@ -1,4 +1,4 @@
-# M5Stack CoreS3 preview profile (ESP32-S3, 16 MiB flash, 8 MiB Quad PSRAM).
+# M5Stack CoreS3 board profile (ESP32-S3, 16 MiB flash, 8 MiB Quad PSRAM).
 CONFIG_MICROPIXEL_BOARD_M5STACK_CORES3=y
 CONFIG_MICROPIXEL_CORES3_LVGL_DOUBLE_BUFFER=y
 

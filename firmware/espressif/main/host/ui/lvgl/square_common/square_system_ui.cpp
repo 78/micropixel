@@ -26,11 +26,14 @@ void SquareSystemUi::UpdateHallInstallProgress(uint32_t app_index, uint8_t progr
 
 void SquareSystemUi::PauseHallCoverLoading() { hall_policy_.PauseCoverLoading(); }
 
+void SquareSystemUi::ResumeHallCoverLoading() { hall_policy_.ResumeCoverLoading(); }
+
 void SquareSystemUi::PrepareAppLaunch(uint32_t app_index) { hall_policy_.PrepareLaunch(app_index); }
 
 void SquareSystemUi::LeaveHall() { hall_policy_.Leave(); }
 
 std::expected<void, host_ui::SystemUiError> SquareSystemUi::RestoreGuestView() {
+    hall_policy_.PauseCoverLoading();
     uint32_t running_index = host_ui::kMaxHallApps;
     for (uint32_t index = 0U; index < state_.hall_app_count; ++index) {
         if (state_.hall_app_running[index]) {
@@ -71,6 +74,7 @@ std::expected<void, host_ui::SystemUiError> SquareSystemUi::RestoreGuestView() {
     }
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         state_.ResetHallPresentationLocked();
+        state_.hall_cover_cache.TrimForLaunchLocked(nullptr);
         esp_lv_adapter_unlock();
     }
     (void)transitioned;

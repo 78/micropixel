@@ -21,6 +21,9 @@ void HallCoverCache::BindUi(HallCoverCacheUi ui) { ui_ = ui; }
 
 void HallCoverCache::BeginCatalog(const host_ui::HallModel& model, uint32_t app_count, uint64_t catalog_signature) {
     Pause();
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
     ++catalog_generation_;
     sources_.fill({});
     app_count_ = std::min<uint32_t>(app_count, host_ui::kMaxHallApps);
@@ -33,6 +36,8 @@ void HallCoverCache::BeginCatalog(const host_ui::HallModel& model, uint32_t app_
     for (Entry& entry : entries_) {
         entry.app_index = host_ui::kMaxHallApps;
     }
+    Resume();
+    esp_lv_adapter_unlock();
 }
 
 bool HallCoverCache::ValidSource(const host_ui::HallCoverModel& source) const {
@@ -40,8 +45,10 @@ bool HallCoverCache::ValidSource(const host_ui::HallCoverModel& source) const {
         source.width == 0U || source.height == 0U || source.size == 0U) {
         return false;
     }
+    // Compressed covers may be flash-mapped (NOR) or staged in PSRAM by a non-mappable Bundle source
+    // (e.g. NAND); the owner keeps the source alive until PauseHallCoverLoading() drains the worker.
     if (source.format == host_ui::HallCoverFormat::kJpeg || source.format == host_ui::HallCoverFormat::kPng) {
-        return esp_ptr_in_drom(source.data) && source.stride == 0U;
+        return source.stride == 0U;
     }
     return source.stride >= source.width * 3U && source.size >= source.stride * source.height;
 }
@@ -76,6 +83,7 @@ bool HallCoverCache::PrepareSource(const host_ui::HallCoverModel& source, host_u
     if (cached == entries_.end()) {
         return false;
     }
+    cached->last_used = ++use_sequence_;
     cover = {.data = cached->pixels,
              .size = bytes,
              .width = config_.target_size,
@@ -105,6 +113,34 @@ void HallCoverCache::ReleaseEntry(Entry& entry) {
     entry = {};
 }
 
+bool HallCoverCache::EvictOutsideWindow() {
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return false;
+    }
+    std::array<HallCoverCacheSlot, kCapacity> slots{};
+    for (size_t index = 0U; index < slots.size(); ++index) {
+        slots[index] = {.occupied = entries_[index].pixels != nullptr,
+                        .key = entries_[index].identity.key,
+                        .app_index = entries_[index].app_index,
+                        .last_used = entries_[index].last_used};
+    }
+    const size_t index = HallCoverCachePolicy::OldestOutsideWindow(slots, window_first_, window_last_);
+    if (index != HallCoverCachePolicy::kNoSlot) {
+        ReleaseEntry(entries_[index]);
+    }
+    esp_lv_adapter_unlock();
+    return index != HallCoverCachePolicy::kNoSlot;
+}
+
+void HallCoverCache::TrimForLaunchLocked(const uint8_t* retained_pixels) {
+    for (Entry& entry : entries_) {
+        if (!HallCoverCachePolicy::RetainForLaunch(entry.app_index, window_first_, window_last_,
+                                                   entry.pixels != nullptr && entry.pixels == retained_pixels)) {
+            ReleaseEntry(entry);
+        }
+    }
+}
+
 bool HallCoverCache::EnsureQueue() {
     if (queue_ == nullptr) {
         queue_ = xQueueCreateStatic(kJobQueueCapacity, sizeof(Job), queue_bytes_.data(), &queue_storage_);
@@ -130,12 +166,13 @@ bool HallCoverCache::Schedule() {
 void HallCoverCache::DispatchEntry(void* context) { static_cast<HallCoverCache*>(context)->Dispatch(); }
 
 void HallCoverCache::Dispatch() {
+    // Mark active before removing a job so Pause cannot miss a dequeued read.
+    worker_active_.store(true);
     Job job{};
     if (xQueueReceive(queue_, &job, 0U) == pdTRUE) {
-        worker_active_.store(true, std::memory_order_release);
         Process(job);
-        worker_active_.store(false, std::memory_order_release);
     }
+    worker_active_.store(false);
     dispatch_scheduled_.store(false, std::memory_order_release);
     if (uxQueueMessagesWaiting(queue_) != 0U) {
         (void)Schedule();
@@ -143,16 +180,48 @@ void HallCoverCache::Dispatch() {
 }
 
 void HallCoverCache::Process(const Job& job) {
-    if (job.request_generation != request_generation_.load(std::memory_order_acquire)) {
+    if (paused_.load() || job.request_generation != request_generation_.load(std::memory_order_acquire)) {
         return;
     }
     constexpr uint32_t kAlignment = 64U;
     const uint32_t bytes = HallCoverBytes(config_.target_size);
     const uint32_t allocation_bytes = (bytes + kAlignment - 1U) / kAlignment * kAlignment;
-    auto* pixels = static_cast<uint8_t*>(
-        heap_caps_aligned_calloc(kAlignment, allocation_bytes, 1U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    bool decoded = pixels != nullptr && DecodeHallCoverRgb888(job.source, config_.target_size, config_.corner_radius,
-                                                              config_.top_background_rgb, pixels);
+    constexpr uint32_t kCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    while (!HallCoverCachePolicy::CanGrow(heap_caps_get_free_size(kCaps), allocation_bytes)) {
+        if (!EvictOutsideWindow()) {
+            // Keep the visible working set usable even below the retention reserve.
+            break;
+        }
+    }
+    auto* pixels = static_cast<uint8_t*>(heap_caps_aligned_calloc(kAlignment, allocation_bytes, 1U, kCaps));
+    while (pixels == nullptr && EvictOutsideWindow()) {
+        pixels = static_cast<uint8_t*>(heap_caps_aligned_calloc(kAlignment, allocation_bytes, 1U, kCaps));
+    }
+    struct DecodeContext final {
+        HallCoverCache* cache;
+        const Job* job;
+        uint8_t* pixels;
+    } context{this, &job, pixels};
+    const auto consume = [](void* opaque, const host_ui::HallCoverModel& source) {
+        const auto& work = *static_cast<const DecodeContext*>(opaque);
+        const auto& cache = *work.cache;
+        if (cache.paused_.load() ||
+            work.job->request_generation != cache.request_generation_.load(std::memory_order_acquire) ||
+            !cache.ValidSource(source)) {
+            return false;
+        }
+        return DecodeHallCoverRgb888(source, cache.config_.target_size, cache.config_.corner_radius,
+                                     cache.config_.top_background_rgb, work.pixels);
+    };
+    // The source reader lends bytes only to consume. It releases compressed
+    // bytes/mappings before this task publishes the independent decoded image.
+    bool decoded = false;
+    if (pixels != nullptr && !paused_.load() &&
+        job.request_generation == request_generation_.load(std::memory_order_acquire)) {
+        decoded = job.source.read_source != nullptr
+                      ? job.source.read_source(job.source.reader_context, consume, &context)
+                      : consume(&context, job.source);
+    }
     if (decoded) {
         lv_draw_buf_t draw_buf{};
         decoded = lv_draw_buf_init(&draw_buf, config_.target_size, config_.target_size, LV_COLOR_FORMAT_RGB888,
@@ -162,7 +231,8 @@ void HallCoverCache::Process(const Job& job) {
         }
     }
     if (decoded && esp_lv_adapter_lock(-1) == ESP_OK) {
-        const bool current = job.request_generation == request_generation_.load(std::memory_order_acquire) &&
+        const bool current = !paused_.load() &&
+                             job.request_generation == request_generation_.load(std::memory_order_acquire) &&
                              job.catalog_signature == catalog_signature_ && job.app_index >= window_first_ &&
                              job.app_index < window_last_ && job.app_index < app_count_ &&
                              sources_[job.app_index].cache_key == job.source.cache_key;
@@ -176,7 +246,8 @@ void HallCoverCache::Process(const Job& job) {
                 for (size_t index = 0U; index < slots.size(); ++index) {
                     slots[index] = {.occupied = entries_[index].pixels != nullptr,
                                     .key = entries_[index].identity.key,
-                                    .app_index = entries_[index].app_index};
+                                    .app_index = entries_[index].app_index,
+                                    .last_used = entries_[index].last_used};
                 }
                 const size_t slot_index = HallCoverCachePolicy::ReplacementIndex(
                     slots, job.source.cache_key, job.app_index, window_first_, window_last_);
@@ -192,6 +263,7 @@ void HallCoverCache::Process(const Job& job) {
             }
             if (existing != entries_.end()) {
                 existing->app_index = job.app_index;
+                existing->last_used = ++use_sequence_;
                 Attach(job.app_index, {.data = existing->pixels,
                                        .size = bytes,
                                        .width = config_.target_size,
@@ -209,7 +281,7 @@ void HallCoverCache::Process(const Job& job) {
 }
 
 void HallCoverCache::RequestWindow(uint32_t first, uint32_t last, bool force) {
-    if (app_count_ == 0U || !EnsureQueue()) {
+    if (paused_.load() || app_count_ == 0U || !EnsureQueue()) {
         return;
     }
     first = std::min(first, app_count_);
@@ -229,16 +301,15 @@ void HallCoverCache::RequestWindow(uint32_t first, uint32_t last, bool force) {
     bool queued = false;
     for (uint32_t index = first; index < last; ++index) {
         const host_ui::HallCoverModel& source = sources_[index];
-        if (!ValidSource(source)) {
-            ShowPlaceholder(index);
-            continue;
-        }
         host_ui::HallCoverModel prepared{};
         if (Prepared(index, prepared)) {
             Attach(index, prepared);
             continue;
         }
         ShowPlaceholder(index);
+        if (!ValidSource(source) && (source.read_source == nullptr || source.cache_key == 0U)) {
+            continue;
+        }
         const Job job{.source = source,
                       .catalog_signature = catalog_signature_,
                       .app_index = index,
@@ -251,14 +322,23 @@ void HallCoverCache::RequestWindow(uint32_t first, uint32_t last, bool force) {
 }
 
 void HallCoverCache::Pause() {
+    paused_.store(true);
+    // Serialize cancellation with RequestWindow, which runs under the UI lock.
+    // Release the lock before draining: the worker may need it to discard/publish.
+    const bool locked = esp_lv_adapter_lock(-1) == ESP_OK;
     request_generation_.fetch_add(1U, std::memory_order_acq_rel);
     if (queue_ != nullptr) {
         (void)xQueueReset(queue_);
     }
-    while (worker_active_.load(std::memory_order_acquire)) {
+    if (locked) {
+        esp_lv_adapter_unlock();
+    }
+    while (worker_active_.load()) {
         vTaskDelay(1U);
     }
 }
+
+void HallCoverCache::Resume() { paused_.store(false); }
 
 void HallCoverCache::SetBackgroundColorLocked(uint32_t top_background_rgb) {
     for (Entry& entry : entries_) {

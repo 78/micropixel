@@ -115,6 +115,17 @@ ESP-Mosaico and ESP32-S3 ES8311/AW88298 initialization use `espressif/esp_codec_
 The declared version constraint is recorded in `firmware/espressif/main/idf_component.yml`, and the downloaded
 component retains its complete license file.
 
+### spi_nand_flash and dhara
+
+The ESP-Mosaico App Store medium (external 128 MiB SPI NAND) is driven through `espressif/spi_nand_flash` from the
+ESP Component Registry, which vendors the dhara flash translation layer via `espressif/dhara`:
+
+- upstream: <https://components.espressif.com/components/espressif/spi_nand_flash>, Apache-2.0;
+- dhara: <https://github.com/dlbeer/dhara>, ISC-style permissive licence, redistributed inside the component;
+- scope: chip detection, SPI command sequencing, wear-leveling and logical-sector journaling; MicroPixel supplies the
+  `device::BlockStorage` adapter (`platform/storage/spi_nand_block_storage.cpp`) and keeps BundleFS's copy-on-write
+  transaction and recovery model above it. The dependency is declared only for the `esp32s31` target.
+
 ### ESP-BOX-3 board definitions
 
 The native ESP32-S3-BOX-3 backend derives its pin assignments, controller selection and vendor display initialization

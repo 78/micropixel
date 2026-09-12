@@ -7,9 +7,9 @@
 
 namespace micropixel::runtime {
 
-std::expected<void, AotPackageError> ScanInstalledApps(InstalledAppCatalog& catalog_out,
+std::expected<void, AotPackageError> ScanInstalledApps(AppStore& store, InstalledAppCatalog& catalog_out,
                                                        std::string_view effective_locale) {
-    if (!LoadAppStoreCatalog(catalog_out, effective_locale)) {
+    if (!store.LoadCatalog(catalog_out, effective_locale)) {
         return std::unexpected(AotPackageError::kOpenFailed);
     }
     return {};
@@ -28,9 +28,9 @@ LaunchAssetMapping& LaunchAssetMapping::operator=(LaunchAssetMapping&& other) no
 
 LaunchAssetMapping::~LaunchAssetMapping() { Reset(); }
 
-std::expected<LaunchAssetMapping, AotPackageError> LaunchAssetMapping::Open(const bundlefs_file_t& file) {
+std::expected<LaunchAssetMapping, AotPackageError> LaunchAssetMapping::Open(const micropixel_bundle_source_t& source) {
     LaunchAssetMapping mapping;
-    if (!micropixel_open_launch_asset(&file, &mapping.mapping_)) {
+    if (!micropixel_open_launch_asset(&source, &mapping.mapping_)) {
         return std::unexpected(AotPackageError::kOpenFailed);
     }
     return mapping;
@@ -50,9 +50,9 @@ AotPackage& AotPackage::operator=(AotPackage&& other) noexcept {
 
 AotPackage::~AotPackage() { Reset(); }
 
-std::expected<AotPackage, AotPackageError> AotPackage::Load(const bundlefs_file_t& file) {
+std::expected<AotPackage, AotPackageError> AotPackage::Load(const micropixel_bundle_source_t& source) {
     AotPackage package;
-    if (!micropixel_open_aot_package(&file, &package.package_)) {
+    if (!micropixel_open_aot_package(&source, &package.package_)) {
         return std::unexpected(AotPackageError::kOpenFailed);
     }
     return package;

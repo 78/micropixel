@@ -1,6 +1,7 @@
 #ifndef MICROPIXEL_RUNTIME_RESOURCES_RESOURCE_SERVICE_HPP
 #define MICROPIXEL_RUNTIME_RESOURCES_RESOURCE_SERVICE_HPP
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 
@@ -36,7 +37,9 @@ class ResourceService final {
     [[nodiscard]] ServiceResult<micropixel_texture_info_t> LoadTexture(uint32_t asset_id, uint32_t scale_numerator,
                                                                        uint32_t scale_denominator);
     [[nodiscard]] ServiceResult<void> ReleaseTexture(micropixel_texture_handle_t texture_handle);
-    [[nodiscard]] ServiceResult<device::FontResourceView> FindFont(uint32_t resource_id) const;
+    // Font bytes stay addressable for the rest of the session: LVGL reads
+    // glyphs from them in place. Each font section is opened once.
+    [[nodiscard]] ServiceResult<device::FontResourceView> FindFont(uint32_t resource_id);
     [[nodiscard]] bool ResolveTexture(micropixel_texture_handle_t texture_handle, device::BitmapView& view_out) const;
     // Raster kernels copy RGB565 textures into Host buffers that follow the
     // surface's pixel format and panel byte order. Once a DirectSurface exists,
@@ -56,13 +59,20 @@ class ResourceService final {
     [[nodiscard]] bool RetainSceneTexture(micropixel_texture_handle_t texture_handle);
     void ReleaseSceneTexture(micropixel_texture_handle_t texture_handle);
     void Shutdown();
+    [[nodiscard]] const char* LastDecodeFailure() const { return last_decode_failure_.data(); }
 
    private:
     struct Work final {
         ResourceService* service{};
-        micropixel_bundle_asset_view_t asset{};
+        micropixel_bundle_asset_view_t asset{};  // points into a mapping LoadTexture holds open
         uint32_t scale_numerator{1U};
         uint32_t scale_denominator{1U};
+        uint32_t asset_id{};
+    };
+
+    struct FontSlot final {
+        uint32_t resource_id{};
+        micropixel_bundle_font_mapping_t mapping{};
     };
 
     static void ProcessEntry(void* argument);
@@ -72,8 +82,13 @@ class ResourceService final {
     [[nodiscard]] micropixel_texture_info_t TextureInfo(micropixel_texture_handle_t texture_handle,
                                                         const device::BitmapView& view) const;
 
-    // AotPackage owns the mapping for the complete AppSession.
+    // Shallow view of the AotPackage that outlives this service; sections are
+    // opened on demand through it.
     micropixel_aot_package_t package_{};
+    // One slot per Bundle section (allocated on first font load), so every
+    // font the Bundle can contain fits without a separate limit.
+    FontSlot* fonts_{};
+    uint32_t font_count_{};
     work::BackgroundExecutor& background_executor_;
     device::GraphicsService& graphics_;
     SemaphoreHandle_t work_done_{};
@@ -82,6 +97,8 @@ class ResourceService final {
     // Read on the background decode task, written on the Guest task.
     std::atomic<uint32_t> preferred_opaque_format_{MICROPIXEL_PIXEL_FORMAT_BGR888};
     std::atomic<bool> preferred_rgb565_swapped_{false};
+    // Written by the decoder; read by the Guest after work_done_ signals completion.
+    std::array<char, 144U> last_decode_failure_{};
     BitmapStore bitmaps_;
     GuestMemoryAccess memory_{};
     std::atomic<bool> stopping_{};

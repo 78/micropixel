@@ -6,6 +6,7 @@
 
 #include "device/contracts/audio.hpp"
 #include "device/contracts/battery.hpp"
+#include "device/contracts/block_storage.hpp"
 #include "device/contracts/board_info.hpp"
 #include "device/contracts/graphics.hpp"
 #include "device/contracts/input.hpp"
@@ -44,6 +45,16 @@ struct PlatformServices final {
     device::Sensors* sensors{};
     device::Gpio* gpio{};
     device::Haptics* haptics{};
+    // Optional dedicated App store medium (NAND, card). Null when the board
+    // installs every Bundle into the NOR app_store partition.
+    device::BlockStorage* app_storage{};
+    // BundleFS data block for formatting `app_storage` (the board's mkfs -b);
+    // zero takes the medium's own unit. A committed Catalog always wins.
+    uint32_t app_storage_block_size{};
+    // True for user-owned media (a card). Only a board-soldered medium may be
+    // formatted without asking; removable media wait for the user's consent
+    // in the System UI.
+    bool app_storage_removable{};
     device::BoardInfo board_info{};
     host_ui::SystemUi* system_ui{};
 
@@ -65,6 +76,11 @@ class BoardRegistration final {
     void SetWifi(device::Wifi& wifi) { wifi_ = &wifi; }
     void SetPower(device::Power& power) { power_ = &power; }
     void SetLocalControl(device::LocalControl& local_control) { local_control_ = &local_control; }
+    void SetAppStorage(device::BlockStorage& storage, uint32_t bundle_block_size = 0U, bool removable = false) {
+        app_storage_ = &storage;
+        app_storage_block_size_ = bundle_block_size;
+        app_storage_removable_ = removable;
+    }
     void SetSystemUi(host_ui::SystemUi& system_ui) { system_ui_ = &system_ui; }
     [[nodiscard]] bool AddSensor(device::SensorPeripheral& peripheral, device::PeripheralChannelId channel,
                                  const char* name);
@@ -93,6 +109,9 @@ class BoardRegistration final {
     device::Wifi* wifi_{};
     device::Power* power_{};
     device::LocalControl* local_control_{};
+    device::BlockStorage* app_storage_{};
+    uint32_t app_storage_block_size_{};
+    bool app_storage_removable_{};
     host_ui::SystemUi* system_ui_{};
     std::array<Peripheral<device::SensorPeripheral>, 8U> sensors_{};
     std::array<Peripheral<device::GpioPeripheral>, 32U> gpio_{};

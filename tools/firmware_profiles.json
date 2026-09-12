@@ -37,7 +37,7 @@
     "monitor": false
   },
   "esp-mosaico": {
-    "description": "ESP32-S31 + ESP-Mosaico P0/P1 bring-up firmware",
+    "description": "ESP32-S31 + ESP-Mosaico firmware",
     "target": "esp32s31",
     "chip_markers": [
       "ESP32-S31"
@@ -66,7 +66,7 @@
     "monitor": true
   },
   "s31-null": {
-    "description": "ESP32-S31 hardware-independent preview compile gate",
+    "description": "ESP32-S31 hardware-independent compile gate",
     "target": "esp32s31",
     "build_dir": "build/host-esp32s31-null",
     "build_dir_env": "S31_NULL_HOST_BUILD_DIR",
@@ -96,7 +96,7 @@
     "monitor": false
   },
   "esp-box-3": {
-    "description": "ESP32-S3-BOX-3 preview Host",
+    "description": "ESP32-S3-BOX-3 Host",
     "target": "esp32s3",
     "chip_markers": [
       "ESP32-S3"
@@ -117,7 +117,7 @@
     "monitor": true
   },
   "szpi-esp32s3": {
-    "description": "LCKFB SZPI ESP32-S3 preview Host",
+    "description": "LCKFB SZPI ESP32-S3 Host",
     "target": "esp32s3",
     "chip_markers": [
       "ESP32-S3"
@@ -138,7 +138,7 @@
     "monitor": true
   },
   "m5stack-cores3": {
-    "description": "M5Stack CoreS3 preview Host",
+    "description": "M5Stack CoreS3 Host",
     "target": "esp32s3",
     "chip_markers": [
       "ESP32-S3"

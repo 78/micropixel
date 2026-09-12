@@ -3,7 +3,7 @@ CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.s3.csv"
 
-# ESP32-S3 preview boards use the native USB Serial/JTAG peripheral for the preview console.
+# ESP32-S3 boards use the native USB Serial/JTAG peripheral for the console.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # Most S3 profiles use octal PSRAM. Boards with Quad PSRAM override this in

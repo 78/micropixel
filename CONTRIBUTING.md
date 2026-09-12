@@ -6,16 +6,17 @@ Keep Guest APIs independent of chips and boards. Follow the [C/C++ style guide](
 ## Checks
 
 ```sh
-bash tools/build_guest_p4.sh
+# Guest changes: use the selected target’s Guest build entry point.
 bash tools/tests/test_firmware_host.sh
 bash tools/check_firmware_style.sh --format-only
 python3 -m unittest tools.tests.test_analyze_sfx -v
 bash -n tools/*.sh
 ```
 
-Run checks appropriate to the change. Firmware changes also require `bash tools/p4.sh build-host`
-and relevant hardware checks. Shared graphics changes require S31 and at least one S3 build.
-Run `bash tools/p4.sh test` before release or push.
+Run checks appropriate to the change and selected target. Firmware changes require that board’s
+`build-host` and relevant hardware checks (for example, `bash tools/s31.sh build-host` for S31).
+Do not default to P4 or build unrelated boards. Add cross-board checks only for a concrete affected
+platform branch or an explicit multi-board request. Before release or push, validate the release targets.
 
 Host tests run through the wrapper above and reuse unchanged binaries. Use `HOST_TEST_REBUILD=1` to rebuild them.
 Add tests to an existing suite unless a separate target needs different compilation, fixtures, or fault injection.

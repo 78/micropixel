@@ -1,7 +1,7 @@
 # Host 固件构建与烧录指南
 
 本文说明如何构建和烧录 Metalio-Claw4（ESP32-P4）产品固件，以及 ESP-Mosaico（ESP32-S31）、
-ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 预览固件。以下命令均在仓库根目录执行。
+ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 固件。以下命令均在仓库根目录执行。
 
 ## 1. 准备环境
 
@@ -78,9 +78,10 @@ bash tools/p4.sh monitor "$P4_PORT"     # 持续查看串口；Ctrl+] 退出
 bash tools/p4.sh fullclean-host
 ```
 
-## ESP32-S31 / ESP-Mosaico 预览版
+## ESP32-S31 / ESP-Mosaico
 
-ESP-Mosaico 使用 ESP32-S31 preview target 和独立 build 目录：
+ESP-Mosaico 使用 ESP32-S31 target 和独立 build 目录。工具自动传入当前 ESP-IDF 要求的
+`--preview` 参数；该参数不表示 MicroPixel 板型支持等级。
 
 ```sh
 bash tools/s31.sh build-host
@@ -114,7 +115,15 @@ ROM，随后按同一 USB 物理位置等待 ROM 产品名并在同一个 esptoo
 BMI270、双 BMM150、BQ27220 主动刷新、GPIO57 关机输出/Function Button、状态 LED、白名单扩展 GPIO、板级 3V3
 电源、共用 Runtime、BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D
 转场；RGB565/QSPI 只作为板级 presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。
-NAND、麦克风采集与模块发现仍未纳入当前范围；传感器轴向/磁校准和电源时序必须按下方真机清单验收。
+外部 128 MiB SPI NAND 作为第二个 BundleFS 承载下载的 App：NOR `app_store` 只保留系统组件和出厂 App，
+`flash-apps`/`flash-all` 仍只写 NOR 镜像；NAND 首次启动若含非 BundleFS 内容（例如出厂 FAT 镜像）或
+块大小不同的旧 BundleFS，会被自动格式化为 4 KiB 块的 BundleFS v3（NAND 上已安装的 App 需要
+重新安装），之后通过 `micropixel app install` 安装的 App 落在 NAND，升级出厂 App 会把它迁到
+NAND 并清退 NOR 上的旧副本。Catalog 损坏的 NAND 不会被自动格式化：系统设置 → Manage Apps 顶部会显示
+"Extension storage is damaged"，点击并确认后格式化；期间下载的 App 回退到 NOR。NAND 探测失败只会在
+日志里提示 `SPI NAND App store unavailable`，设备退化为只使用 NOR。Manage Apps 按 System /
+Extension 两个存储分组列出 App 并分别显示容量。麦克风采集与模块发现仍未纳入当前范围；传感器轴向/磁校准和电源时序必须按下方
+真机清单验收。
 
 第一阶段真机验收至少包括：静置/六面翻转检查加速度方向，绕三轴转动检查陀螺仪符号，两颗磁力计分别
 读取且无串址；电池供电空闲达到设定时间后，Host 停止 App 并请求整机关机，短按 POWER 应重新开机。
@@ -126,9 +135,9 @@ down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange statu
 触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 
-## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI 与 M5Stack CoreS3 预览版
+## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI 与 M5Stack CoreS3
 
-BOX-3 正式预览配置固定使用 40 MHz SPI、40 行 PSRAM partial buffer 和双缓冲：
+BOX-3 配置固定使用 40 MHz SPI、40 行 PSRAM partial buffer 和双缓冲：
 
 ```sh
 bash tools/s3.sh build-host box3
@@ -205,11 +214,8 @@ bash tools/p4.sh flash-all "$P4_PORT"
 3. 烧录 bootloader、分区表、OTA 初始数据和 Host 固件；
 4. 清空并烧录 App Store，随后读回校验。
 
-该命令不运行测试。发布前或推送前单独执行：
-
-```sh
-bash tools/p4.sh test
-```
+该命令不运行测试。发布前或推送前按变更范围和发布目标执行相关测试、格式检查与构建；
+不要求 S31 或 S3 的任务额外构建 P4。
 
 成功时命令末尾会输出 `System Shell P4 flashed on ... with five Apps.`。脚本不再自动抓取启动日志，
 用 `bash tools/p4.sh monitor "$P4_PORT"` 确认 `System Shell ready: App Hall rendered with apps=5`；
@@ -313,7 +319,7 @@ bash tools/p4.sh monitor "$P4_PORT"
   `sdkconfig.release` 让下次 `build-host` 重新生成，或对该 build dir 执行一次 `idf.py reconfigure`。
 - macOS 没有 `timeout` 命令；给 `micropixel run` 限时请用 `--no-follow` 加随后的 `logs -n N`，不要依赖
   `timeout`。
-- ESP-MOSAICO `0.2.4` 或更早版本的 OTA 在 99% 报 `ESP_ERR_OTA_VALIDATE_FAILED`：这些预览固件早于多板型
+- ESP-MOSAICO `0.2.4` 或更早版本的 OTA 在 99% 报 `ESP_ERR_OTA_VALIDATE_FAILED`：这些固件早于多板型
   release target，更新检查会落到兼容旧 P4 的默认目录并下载 P4 镜像。先用 `bash tools/s31.sh flash-host`
   进行一次保留 NVS 与 `app_store` 的 USB Host 更新；`0.3.0` 及以后版本会显式请求 `esp-mosaico`，后续可
   正常 OTA。不要把服务器默认 target 改成 S31，否则会让同版本的旧 P4 设备下载错误镜像。

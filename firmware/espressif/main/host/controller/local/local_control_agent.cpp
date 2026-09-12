@@ -409,7 +409,7 @@ void LocalControlAgent::HandleAppList(uint32_t request_id, std::string_view argu
     auto& detail = command_workspace_->detail;
     detail = {};
     const int prefix_length =
-        std::snprintf(detail.data(), detail.size(), "APP_LIST %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32 " %" PRIu32,
+        std::snprintf(detail.data(), detail.size(), "APP_LIST %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 " %" PRIu32,
                       end, catalog.count, catalog.store_used_bytes, catalog.store_total_bytes, end - offset);
     if (prefix_length <= 0 || static_cast<size_t>(prefix_length) >= detail.size()) {
         (void)QueueResponse(request_id, "ERROR", "response_too_large");
@@ -646,7 +646,7 @@ void LocalControlAgent::HandleDeviceStatus(uint32_t request_id, std::string_view
         snapshot_workspace_->active_app_id[0] != '\0' ? snapshot_workspace_->active_app_id.data() : "-";
     const int length = std::snprintf(
         detail.data(), detail.size(),
-        "DEVICE_STATUS %.*s %.*s %.*s %" PRIu64 " %s %s %" PRIu32 " %" PRIu32 " %" PRIu32 " %zu %zu %" PRIu32
+        "DEVICE_STATUS %.*s %.*s %.*s %" PRIu64 " %s %s %" PRIu32 " %" PRIu64 " %" PRIu64 " %zu %zu %" PRIu32
         " %" PRIu32 " %u %u %u",
         static_cast<int>(version_size), version.data(), static_cast<int>(board_size), board.data(),
         static_cast<int>(chip_size), chip.data(), static_cast<uint64_t>(esp_timer_get_time() / 1000), active_app,

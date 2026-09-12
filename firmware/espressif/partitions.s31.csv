@@ -1,5 +1,7 @@
-# ESP32-S31 ESP-Mosaico 16 MiB NOR layout. The external 128 MiB NAND is
-# intentionally outside P0/P1; BundleFS stays on the final 8 MiB NOR region.
+# ESP32-S31 ESP-Mosaico 16 MiB NOR layout. The NOR app_store keeps the system
+# BundleFS (components and factory Apps); downloaded Apps live in a second
+# BundleFS on the external 128 MiB SPI NAND, which the board registers at boot
+# and FirmwareApp formats on first use. The NAND is not part of this table.
 # Name,       Type, SubType, Offset,   Size,       Flags
 nvs,          data, nvs,     0x009000, 0x006000,
 phy_init,     data, phy,     0x00f000, 0x001000,

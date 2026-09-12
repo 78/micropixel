@@ -1,7 +1,7 @@
-# ESP32-S3 preview 适配指南
+# ESP32-S3 适配指南
 
-S3 preview 用来验证同一 Guest 模型在 Xtensa、CPU 图形合成与 SPI 屏幕上的适配边界。
-当前维护 BOX-3、立创 SZPI ESP32-S3 和 M5Stack CoreS3；产品基线仍为 P4 + Metalio-Claw4。
+S3 用来验证同一 Guest 模型在 Xtensa、CPU 图形合成与 SPI 屏幕上的适配边界。
+当前维护 BOX-3、立创 SZPI ESP32-S3 和 M5Stack CoreS3；P4 + Metalio-Claw4 使用独立的显示与板级配置。
 本文重点解释 BOX-3 的硬件约束与跨 S3 原则，构建烧录统一见 [烧录指南](flashing.zh-CN.md)。
 
 ## 1. 当前能力
@@ -97,7 +97,7 @@ internal memory。能力分配失败应明确降级，不静默挤占保留给�
 
 自动检查包括相关 Host test、CLI test、Guest 构建与三款 S3 Host 构建；涉及共享图形时同时构建 P4/S31。
 发布通过 `tools/s3.sh build-release BOARD` 生成对应板型产物，BOARD 为 box3、szpi 或 cores3。
-OTA rollback、BundleFS 断电恢复与生产分发仍按跨板发布门槛验收，不因 preview 接入而视为完成。
+OTA rollback、BundleFS 断电恢复与生产分发仍按跨板发布门槛验收，不因板型接入而视为完成。
 
 ## 7. 硬件来源与变体
 

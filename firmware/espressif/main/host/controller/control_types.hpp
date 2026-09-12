@@ -30,8 +30,8 @@ struct AppDescriptor final {
 struct CatalogSnapshot final {
     std::array<AppDescriptor, kMaxApps> apps{};
     uint32_t count{};
-    uint32_t store_total_bytes{};
-    uint32_t store_used_bytes{};
+    uint64_t store_total_bytes{};
+    uint64_t store_used_bytes{};
 };
 
 struct AppDiagnostic final {

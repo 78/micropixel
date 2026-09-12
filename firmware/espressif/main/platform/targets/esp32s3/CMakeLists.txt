@@ -1,4 +1,4 @@
-# ESP32-S3 supports the Null compile gate and several 320x240 preview boards. Early
+# ESP32-S3 supports the Null compile gate and several 320x240 boards. Early
 # component expansion cannot see the board Kconfig choice, so this is the
 # narrow union required by both profiles.
 list(APPEND micropixel_requires

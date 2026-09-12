@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "runtime/guest_context.hpp"
+#include "runtime/guest_failure_detail.hpp"
 #include "runtime/guest_log_sink.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "runtime/wamr/watchdog.h"
@@ -68,12 +69,12 @@ AppSession::AppSession(AppSession&& other) noexcept
 AppSession::~AppSession() = default;
 
 std::expected<AppSession, AppSessionFailure> AppSession::Create(
-    device::DeviceServices& devices, work::BackgroundExecutor& background_executor, const bundlefs_file_t& file,
-    std::string_view effective_locale, const micropixel_system_launch_arguments_response_t& launch_arguments,
-    GuestLogSink* log_sink) {
+    device::DeviceServices& devices, work::BackgroundExecutor& background_executor,
+    const micropixel_bundle_source_t& source, std::string_view effective_locale,
+    const micropixel_system_launch_arguments_response_t& launch_arguments, GuestLogSink* log_sink) {
     int64_t stage_started_us = esp_timer_get_time();
     ESP_LOGD(kTag, "AppSession stage begin: package");
-    auto package_result = AotPackage::Load(file);
+    auto package_result = AotPackage::Load(source);
     if (!package_result) {
         ESP_LOGE(kTag, "unable to read the configured AOT package");
         return std::unexpected(MakeFailure(AppSessionError::kPackageLoad, "unable to read the configured AOT package"));
@@ -215,15 +216,9 @@ std::expected<void, AppSessionFailure> AppSession::Run() {
         if (exception == nullptr) {
             exception = "unknown WAMR trap";
         }
-        // The SDK reports its own panics as a single "panic: ..." log line right
-        // before __builtin_trap(); surface it next to the bare WAMR exception.
         const char* panic = context_ != nullptr ? context_->LastPanic() : "";
-        std::array<char, 256U> detail{};
-        if (panic[0] != '\0') {
-            (void)std::snprintf(detail.data(), detail.size(), "%s; %s", panic, exception);
-        } else {
-            (void)std::snprintf(detail.data(), detail.size(), "%s", exception);
-        }
+        const char* decode_failure = context_ != nullptr ? context_->LastDecodeFailure() : "";
+        const auto detail = FormatGuestTrapDetail(exception, panic, decode_failure);
         ESP_LOGE(kTag, "guest trapped: %s", detail.data());
         ESP_LOGE(kTag, "Guest call stack follows");
         wasm_runtime_dump_call_stack(guest_.exec_env());

@@ -33,6 +33,54 @@ void AppSizeRow(lv_obj_t* parent, const char* text, uint32_t size_kib, platform:
     FormatSize(size_kib, size, sizeof(size));
     (void)Label(row, size, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
 }
+
+void FormatUsageCapacity(const host_ui::StorageUsageModel& usage, char* output, size_t capacity) {
+    const uint32_t used_tenths = static_cast<uint32_t>((static_cast<uint64_t>(usage.used_kib) * 10U) / 1024U);
+    const uint32_t total_tenths = static_cast<uint32_t>((static_cast<uint64_t>(usage.total_kib) * 10U) / 1024U);
+    std::snprintf(output, capacity, "%" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB", used_tenths / 10U,
+                  used_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
+}
+
+void SectionTitleWithUsage(lv_obj_t* parent, const char* title, const host_ui::StorageUsageModel& usage) {
+    lv_obj_t* row = CreateSystemColumn(parent, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_t* label = Label(row, title, platform::lvgl::SystemFontRole::kSmall, theme::kMutedText);
+    lv_obj_set_width(label, 0);
+    lv_obj_set_flex_grow(label, 1);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    char capacity[40]{};
+    FormatUsageCapacity(usage, capacity, sizeof(capacity));
+    (void)Label(row, capacity, platform::lvgl::SystemFontRole::kSmall, theme::kMutedText);
+}
+
+const char* AppManagementSubtitle(uint8_t store_check_state) {
+    if (store_check_state == 1U) {
+        return "Update check pending; keep device online";
+    }
+    if (store_check_state != 0U && store_check_state != 2U) {
+        return "Update check failed; reopen to retry";
+    }
+    return "Installed apps and storage";
+}
+
+const char* ExternalStorageStatusText(host_ui::ExternalStorageStatus status) {
+    switch (status) {
+        case host_ui::ExternalStorageStatus::kNotFormatted:
+            return "Extension storage is not formatted";
+        case host_ui::ExternalStorageStatus::kUnsupportedFormat:
+            return "Extension storage has an incompatible format";
+        case host_ui::ExternalStorageStatus::kCorrupt:
+            return "Extension storage is damaged";
+        case host_ui::ExternalStorageStatus::kUnavailable:
+            return "Extension storage is unavailable";
+        case host_ui::ExternalStorageStatus::kReady:
+        case host_ui::ExternalStorageStatus::kAbsent:
+        default:
+            return "";
+    }
+}
 }  // namespace
 
 std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLocked(
@@ -41,11 +89,26 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
     if (root == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    // The Host re-shows the same screen when the Store update check changes
+    // state; an open action or confirmation sheet must survive that refresh
+    // as long as the App it refers to is still listed.
+    const bool refresh = AppManagementVisible() && root_ == root;
+    const uint32_t previous_index = app_management_selected_index_;
+    const AppOverlay previous_overlay = app_management_overlay_;
     ResetActiveScreen();
     root_ = root;
     app_management_model_ = model;
     app_management_selected_index_ = 0U;
     app_management_overlay_ = AppOverlay::kNone;
+    if (refresh && previous_overlay != AppOverlay::kNone) {
+        const bool app_sheet = previous_overlay == AppOverlay::kActions ||
+                               previous_overlay == AppOverlay::kUninstallConfirmation ||
+                               previous_overlay == AppOverlay::kUninstallUnavailable;
+        if (!app_sheet || previous_index < model.app_count) {
+            app_management_selected_index_ = app_sheet ? previous_index : 0U;
+            app_management_overlay_ = previous_overlay;
+        }
+    }
     action_sink_ = action_sink;
     action_context_ = action_context;
     active_screen_ = Screen::kAppManagement;
@@ -56,8 +119,11 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
         lv_display_add_event_cb(display, AppManagementDisplayEvent, LV_EVENT_REFR_READY, this);
     }
     if (model.action_app_index < model.app_count) {
+        // Opened directly from the Hall: only the sheet is drawn over it.
         app_management_selected_index_ = model.action_app_index;
-        app_management_overlay_ = AppOverlay::kActions;
+        if (app_management_overlay_ == AppOverlay::kNone) {
+            app_management_overlay_ = AppOverlay::kActions;
+        }
         RenderAppManagementOverlayLocked();
     } else {
         RenderAppManagementLocked();
@@ -71,59 +137,108 @@ void SystemDetailUi::RenderAppManagementLocked() {
     }
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
-    Header(layout_, root_, "App Management", "Installed apps and storage", AppManagementBackEvent, this);
+    Header(layout_, root_, "App Management", AppManagementSubtitle(app_management_model_.store_check_state),
+           AppManagementBackEvent, this);
     lv_obj_t* scroll = Scroll(layout_, root_, ScrollEvent, this);
-    char storage[80]{};
-    const uint32_t used_tenths =
-        static_cast<uint32_t>((static_cast<uint64_t>(app_management_model_.storage_used_kib) * 10U) / 1024U);
-    const uint32_t total_tenths =
-        static_cast<uint32_t>((static_cast<uint64_t>(app_management_model_.storage_total_kib) * 10U) / 1024U);
-    std::snprintf(storage, sizeof(storage), "Storage %" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB",
-                  used_tenths / 10U, used_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
-    (void)Label(scroll, storage, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
-    if (app_management_model_.store_check_state != 0U && app_management_model_.store_check_state != 2U) {
-        const char* status = app_management_model_.store_check_state == 1U ? "Update check pending; keep device online"
-                                                                           : "Update check failed; reopen to retry";
-        (void)Label(scroll, status, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
-    }
     app_bindings_ = {};
 
+    const auto status = app_management_model_.external_storage_status;
+    if (status == host_ui::ExternalStorageStatus::kAbsent) {
+        SectionTitleWithUsage(scroll, "STORAGE",
+                              host_ui::StorageUsageModel{.used_kib = app_management_model_.storage_used_kib,
+                                                         .total_kib = app_management_model_.storage_total_kib});
+    } else if (status != host_ui::ExternalStorageStatus::kReady) {
+        DrawAppManagementFormatRowLocked(scroll);
+    }
+
     if (app_management_model_.app_count == 0U) {
+        if (status == host_ui::ExternalStorageStatus::kReady) {
+            DrawAppManagementGroupLocked(scroll, "EXTENSION STORAGE", app_management_model_.external_storage, true);
+            DrawAppManagementGroupLocked(scroll, "SYSTEM STORAGE", app_management_model_.system_storage, false);
+        } else if (status != host_ui::ExternalStorageStatus::kAbsent) {
+            DrawAppManagementGroupLocked(scroll, "SYSTEM STORAGE", app_management_model_.system_storage, false);
+        }
         lv_obj_t* empty = Panel(layout_, scroll);
         (void)Label(empty, "No apps installed", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    }
-    for (uint32_t index = 0U; index < app_management_model_.app_count; ++index) {
-        const host_ui::InstalledAppModel& app = app_management_model_.apps[index];
-        app_bindings_[index] = {.ui = this, .index = index};
-        lv_obj_t* row = CreateSystemButtonPanel(scroll, layout_);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(row, 8, 0);
-        lv_obj_set_style_bg_color(row, lv_color_hex(theme::kPressedBackground),
-                                  static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-        lv_obj_add_event_cb(row, AppManagementRowEvent, LV_EVENT_SHORT_CLICKED, &app_bindings_[index]);
-        lv_obj_t* app_text = square_common::CreateSystemColumn(row, 4);
-        lv_obj_set_width(app_text, 0);
-        lv_obj_set_flex_grow(app_text, 1);
-        lv_obj_t* name = Label(app_text, app.display_name, platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-        lv_obj_set_width(name, LV_PCT(100));
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        AppSizeRow(app_text, system_detail_internal::DisplayText(app.app_id, "Unknown"), app.bundle_size_kib,
-                   platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
-
-        char version[112]{};
-        if (app.update_version[0] != '\0')
-            std::snprintf(version, sizeof(version), "%s -> %s available", app.version != nullptr ? app.version : "?",
-                          app.update_version.data());
-        else
-            std::snprintf(version, sizeof(version), "Version %s",
-                          app.version != nullptr && app.version[0] != '\0' ? app.version : "unknown");
-        (void)Label(app_text, version, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
-        (void)square_common::CreateSystemMoreIndicator(row, 32, 52, 6, 5);
+    } else if (status == host_ui::ExternalStorageStatus::kAbsent) {
+        for (uint32_t index = 0U; index < app_management_model_.app_count; ++index) {
+            DrawAppManagementRowLocked(scroll, index);
+        }
+    } else {
+        // Two media: downloaded Apps on the extension storage lead, factory
+        // Apps on system storage follow, matching the catalog order. Capacity
+        // sits on the section title so it does not need its own row.
+        if (status == host_ui::ExternalStorageStatus::kReady) {
+            DrawAppManagementGroupLocked(scroll, "EXTENSION STORAGE", app_management_model_.external_storage, true);
+        }
+        DrawAppManagementGroupLocked(scroll, "SYSTEM STORAGE", app_management_model_.system_storage, false);
     }
     RenderAppManagementOverlayLocked();
     lv_obj_move_foreground(root_);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(root_));
+}
+
+void SystemDetailUi::DrawAppManagementFormatRowLocked(lv_obj_t* scroll) {
+    // Not ready: one tappable row explains the state and leads to the
+    // user-confirmed format. Capacity for the system store still appears on
+    // its section title below.
+    lv_obj_t* row = CreateSystemButtonPanel(scroll, layout_);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_set_style_bg_color(row, lv_color_hex(theme::kPressedBackground),
+                              static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+    lv_obj_add_event_cb(row, AppManagementStorageEvent, LV_EVENT_SHORT_CLICKED, this);
+    lv_obj_t* text = square_common::CreateSystemColumn(row, 4);
+    lv_obj_set_width(text, 0);
+    lv_obj_set_flex_grow(text, 1);
+    lv_obj_t* title = Label(text, ExternalStorageStatusText(app_management_model_.external_storage_status),
+                            platform::lvgl::SystemFontRole::kMedium, theme::kPrimaryText);
+    lv_obj_set_width(title, LV_PCT(100));
+    lv_label_set_long_mode(title, LV_LABEL_LONG_WRAP);
+    (void)Label(text, "Tap to format it for Apps", platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    (void)square_common::CreateSystemMoreIndicator(row, 32, 52, 6, 5);
+}
+
+void SystemDetailUi::DrawAppManagementGroupLocked(lv_obj_t* scroll, const char* title,
+                                                  const host_ui::StorageUsageModel& usage, bool external_storage) {
+    SectionTitleWithUsage(scroll, title, usage);
+    for (uint32_t index = 0U; index < app_management_model_.app_count; ++index) {
+        if (app_management_model_.apps[index].external_storage != external_storage) {
+            continue;
+        }
+        DrawAppManagementRowLocked(scroll, index);
+    }
+}
+
+void SystemDetailUi::DrawAppManagementRowLocked(lv_obj_t* scroll, uint32_t index) {
+    const host_ui::InstalledAppModel& app = app_management_model_.apps[index];
+    app_bindings_[index] = {.ui = this, .index = index};
+    lv_obj_t* row = CreateSystemButtonPanel(scroll, layout_);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_set_style_bg_color(row, lv_color_hex(theme::kPressedBackground),
+                              static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+    lv_obj_add_event_cb(row, AppManagementRowEvent, LV_EVENT_SHORT_CLICKED, &app_bindings_[index]);
+    lv_obj_t* app_text = square_common::CreateSystemColumn(row, 4);
+    lv_obj_set_width(app_text, 0);
+    lv_obj_set_flex_grow(app_text, 1);
+    lv_obj_t* name = Label(app_text, app.display_name, platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
+    lv_obj_set_width(name, LV_PCT(100));
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    AppSizeRow(app_text, system_detail_internal::DisplayText(app.app_id, "Unknown"), app.bundle_size_kib,
+               platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+
+    char version[112]{};
+    if (app.update_version[0] != '\0')
+        std::snprintf(version, sizeof(version), "%s -> %s available", app.version != nullptr ? app.version : "?",
+                      app.update_version.data());
+    else
+        std::snprintf(version, sizeof(version), "Version %s",
+                      app.version != nullptr && app.version[0] != '\0' ? app.version : "unknown");
+    (void)Label(app_text, version, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    (void)square_common::CreateSystemMoreIndicator(row, 32, 52, 6, 5);
 }
 
 void SystemDetailUi::RenderAppManagementOverlayLocked() {
@@ -143,6 +258,12 @@ void SystemDetailUi::RenderAppManagementOverlayLocked() {
             break;
         case AppOverlay::kUninstallUnavailable:
             DrawAppManagementUninstallUnavailableLocked();
+            break;
+        case AppOverlay::kFormatConfirmation:
+            DrawAppManagementFormatConfirmationLocked();
+            break;
+        case AppOverlay::kFormatUnavailable:
+            DrawAppManagementFormatUnavailableLocked();
             break;
         case AppOverlay::kNone:
         default:
@@ -295,12 +416,62 @@ void SystemDetailUi::AppManagementConfirmUninstallEvent(lv_event_t* event) {
     }
 }
 
+void SystemDetailUi::AppManagementStorageEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui != nullptr) {
+        ui->app_management_overlay_ = ui->app_management_model_.format_available ? AppOverlay::kFormatConfirmation
+                                                                                 : AppOverlay::kFormatUnavailable;
+        ui->BeginAppManagementLatencyProbe("format.open");
+        ui->QueueAppManagementRender();
+    }
+}
+
+void SystemDetailUi::AppManagementConfirmFormatEvent(lv_event_t* event) {
+    auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
+    if (ui != nullptr && ui->action_sink_ != nullptr && ui->app_management_model_.format_available &&
+        ui->app_management_model_.external_storage_status != host_ui::ExternalStorageStatus::kAbsent) {
+        ui->action_sink_(ui->action_context_,
+                         host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kFormatExternalStorage});
+    }
+}
+
+void SystemDetailUi::DrawAppManagementFormatConfirmationLocked() {
+    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kDangerBorder,
+                                        &app_management_overlay_root_);
+    (void)Label(sheet, "Format extension storage?", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
+    lv_obj_t* detail =
+        Label(sheet, "Everything on it is erased and it becomes App storage. Apps on system storage are kept.",
+              platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
+    lv_obj_set_width(detail, LV_PCT(100));
+    lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+    lv_obj_t* format = Button(layout_, sheet, "Format", theme::kDanger);
+    lv_obj_add_event_cb(format, AppManagementConfirmFormatEvent, LV_EVENT_SHORT_CLICKED, this);
+    lv_obj_t* cancel = Button(layout_, sheet, "Cancel");
+    lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
+}
+
+void SystemDetailUi::DrawAppManagementFormatUnavailableLocked() {
+    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
+                                        &app_management_overlay_root_);
+    (void)Label(sheet, "Format unavailable", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
+    lv_obj_t* detail = Label(sheet, "Close the running App from the Hall before formatting storage.",
+                             platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
+    lv_obj_set_width(detail, LV_PCT(100));
+    lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+    lv_obj_t* done = Button(layout_, sheet, "Done");
+    lv_obj_add_event_cb(done, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
+}
+
 void SystemDetailUi::DrawAppManagementActionsLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
     lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
                                         &app_management_overlay_root_);
     AppSizeRow(sheet, app.display_name, app.bundle_size_kib, platform::lvgl::SystemFontRole::kLarge,
                theme::kPrimaryText);
+    if (app_management_model_.external_storage_status != host_ui::ExternalStorageStatus::kAbsent) {
+        (void)Label(sheet, app.external_storage ? "On extension storage" : "On system storage",
+                    platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    }
     if (app.update_version[0] != '\0' && app_management_model_.action_app_index < app_management_model_.app_count) {
         char title[80]{};
         std::snprintf(title, sizeof(title), "Install %s and run", app.update_version.data());

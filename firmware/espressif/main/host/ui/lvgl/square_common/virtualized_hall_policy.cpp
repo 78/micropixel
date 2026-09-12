@@ -219,6 +219,12 @@ void VirtualizedHallPolicy::RequestRefresh(void* context) {
 
 bool VirtualizedHallPolicy::PrepareSource(const host_ui::HallCoverModel& source, uint32_t index,
                                           host_ui::HallCoverModel& prepared) {
+    // Lazy sources have no resident bytes. Card creation and transition
+    // backgrounds may only look up their already-decoded cache entry.
+    if (source.read_source != nullptr) {
+        return source.cache_key != 0U && index < host_ui::kMaxHallApps &&
+               state_.hall_cover_cache.PrepareSource(source, prepared);
+    }
     if (source.data == nullptr || (!esp_ptr_in_drom(source.data) && !esp_ptr_external_ram(source.data)) ||
         source.width == 0U || source.height == 0U || source.size == 0U) {
         return false;
@@ -228,7 +234,8 @@ bool VirtualizedHallPolicy::PrepareSource(const host_ui::HallCoverModel& source,
         return true;
     }
     if (source.format == host_ui::HallCoverFormat::kJpeg || source.format == host_ui::HallCoverFormat::kPng) {
-        if (!esp_ptr_in_drom(source.data) || source.stride != 0U) {
+        // Flash-mapped or PSRAM-staged compressed covers are both acceptable; see HallCoverCache::ValidSource.
+        if (source.stride != 0U) {
             return false;
         }
     } else {
@@ -457,6 +464,8 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
                 state_.hall_status_bar_valid = true;
                 platform::lvgl::RequestDisplayRefresh(state_.display);
             }
+            state_.hall_cover_cache.Resume();
+            RequestCoverWindowLocked(true);
             state_.status_layer_ui.RaisePerformanceOverlayLocked();
             state_.SetHostPointerEnabledLocked(true);
             esp_lv_adapter_unlock();
@@ -608,6 +617,14 @@ void VirtualizedHallPolicy::UpdateInstallProgress(uint32_t app_index, uint8_t pr
 
 void VirtualizedHallPolicy::PauseCoverLoading() { state_.hall_cover_cache.Pause(); }
 
+void VirtualizedHallPolicy::ResumeCoverLoading() {
+    if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        state_.hall_cover_cache.Resume();
+        RequestCoverWindowLocked(true);
+        esp_lv_adapter_unlock();
+    }
+}
+
 void VirtualizedHallPolicy::PrepareLaunch(uint32_t app_index) {
     pending_launch_index_ = app_index < state_.hall_app_count ? app_index : host_ui::kMaxHallApps;
 }
@@ -666,6 +683,7 @@ void VirtualizedHallPolicy::Leave() {
     state_.WaitForGuestRefreshReady();
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         ResetLocked();
+        state_.hall_cover_cache.TrimForLaunchLocked(launch_cover.data);
         esp_lv_adapter_unlock();
     }
     if (launch_cover.data != nullptr) {

@@ -186,6 +186,9 @@ bool Platform::Publish(const BoardRegistration& registration) {
         .sensors = &device_registry_,
         .gpio = &device_registry_,
         .haptics = &device_registry_,
+        .app_storage = registration.app_storage_,
+        .app_storage_block_size = registration.app_storage_block_size_,
+        .app_storage_removable = registration.app_storage_removable_,
         .board_info = registration.board_info_,
         .system_ui = registration.system_ui_ != nullptr ? registration.system_ui_ : &MissingSystemUi(),
     };

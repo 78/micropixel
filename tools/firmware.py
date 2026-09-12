@@ -325,6 +325,7 @@ def idf_command(
     profile: Profile, idf_py: Path, idf_arguments: Sequence[str]
 ) -> list[str]:
     command = [str(idf_py)]
+    # ESP-IDF target opt-in (required by S31), not MicroPixel board support status.
     if profile.preview:
         command.append("--preview")
     command.extend(

@@ -67,6 +67,8 @@ for key in ('capabilities','services'):
 lines.append('static const struct { const char* current; const char* candidate; bool update; } fixture_versions[] = {'+','.join('{'+json.dumps(a)+','+json.dumps(b)+','+str(c).lower()+'}' for a,b,c in fixture['versions'])+'};')
 Path(sys.argv[2]).write_text('\n'.join(lines)+'\n')
 PYFIXTURE
+build_and_run guest_failure_detail "$workspace_root/tools/tests/test_guest_failure_detail.cpp"
+
 build_and_run_c app_requirements -I "$test_output_dir" "$workspace_root/tools/tests/test_app_requirements.c"
 
 build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physics_test.cpp"
@@ -120,6 +122,11 @@ build_and_run host_pointer_event_queue \
 build_and_run hall_ui \
     "$workspace_root/tools/tests/test_hall_ui.cpp" \
     "$workspace_root/firmware/espressif/main/host/ui/lvgl/square_common/hall_cover_mask.cpp"
+
+build_and_run hall_cover_cache \
+    -iquote "$workspace_root/tools/tests/hall_cover_stubs" \
+    "$workspace_root/tools/tests/test_hall_cover_cache.cpp" \
+    "$workspace_root/firmware/espressif/main/host/ui/lvgl/square_common/hall_cover_cache.cpp"
 
 build_and_run guest_display_transform \
     -I "$workspace_root/guest" \
@@ -310,23 +317,32 @@ build_and_run device_catalog \
     "$workspace_root/tools/tests/test_device_catalog.cpp" \
     "$workspace_root/firmware/espressif/main/device/device_registry.cpp"
 
-build_and_run app_store \
-    "$workspace_root/tools/tests/test_app_store.cpp" \
+# The memory Bundle source is plain C shared with the Bundle reader; the Host
+# test compiles it as C++ so one driver invocation links everything (keep it last).
+app_store_sources=(
+    "$workspace_root/tools/tests/test_app_store.cpp"
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
+    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundle_store_source.cpp"
+    -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
+)
+
+build_and_run app_store "${app_store_sources[@]}"
 
 build_and_run app_store_s3 \
     -DCONFIG_IDF_TARGET_ESP32P4=0 -DCONFIG_IDF_TARGET_ESP32S3=1 \
-    "$workspace_root/tools/tests/test_app_store.cpp" \
-    "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
+    "${app_store_sources[@]}"
 
-build_and_run bundlefs \
-    "$workspace_root/tools/tests/test_bundlefs.cpp" \
+bundlefs_sources=(
+    "$workspace_root/tools/tests/test_bundlefs.cpp"
     "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
+    "$workspace_root/firmware/espressif/main/platform/storage/partition_block_storage.cpp"
+)
+
+build_and_run bundlefs "${bundlefs_sources[@]}"
 
 build_and_run bundlefs_16k_mmu \
     -DSPI_FLASH_MMU_PAGE_SIZE=16384U \
-    "$workspace_root/tools/tests/test_bundlefs.cpp" \
-    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
+    "${bundlefs_sources[@]}"
 
 build_and_run http3_tls_parser \
     -I "$http3_component_dir/include" \

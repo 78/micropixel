@@ -1187,8 +1187,8 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     std::array<char, control::kAppIdCapacity> active_app{};
     std::array<char, control::kCommandIdCapacity> app_session{};
     std::array<char, 24U> lifecycle{};
-    uint32_t store_total_bytes = 0U;
-    uint32_t store_used_bytes = 0U;
+    uint64_t store_total_bytes = 0U;
+    uint64_t store_used_bytes = 0U;
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
         if (cold_state_ != nullptr) {
@@ -1203,11 +1203,11 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     if (storage != nullptr) {
         cJSON* app_store = cJSON_AddObjectToObject(storage, "appStore");
         if (app_store != nullptr) {
-            (void)cJSON_AddNumberToObject(app_store, "totalBytes", store_total_bytes);
-            (void)cJSON_AddNumberToObject(app_store, "usedBytes", store_used_bytes);
+            (void)cJSON_AddNumberToObject(app_store, "totalBytes", static_cast<double>(store_total_bytes));
+            (void)cJSON_AddNumberToObject(app_store, "usedBytes", static_cast<double>(store_used_bytes));
             (void)cJSON_AddNumberToObject(
                 app_store, "freeBytes",
-                store_total_bytes >= store_used_bytes ? store_total_bytes - store_used_bytes : 0U);
+                static_cast<double>(store_total_bytes >= store_used_bytes ? store_total_bytes - store_used_bytes : 0U));
         }
     }
 
@@ -1384,9 +1384,9 @@ bool RemoteControlAgent::PostInstalledApps(void* client, const Identity& identit
         cJSON_AddItemToArray(apps, item);
     }
     (void)cJSON_AddNumberToObject(result, "freeBytes",
-                                  catalog.store_total_bytes >= catalog.store_used_bytes
-                                      ? catalog.store_total_bytes - catalog.store_used_bytes
-                                      : 0U);
+                                  static_cast<double>(catalog.store_total_bytes >= catalog.store_used_bytes
+                                                          ? catalog.store_total_bytes - catalog.store_used_bytes
+                                                          : 0U));
     (void)cJSON_AddNumberToObject(result, "count", catalog.count);
     return PostCommandResult(client, identity, command_id, true, result);
 }

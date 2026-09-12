@@ -28,6 +28,7 @@ class SystemShell final {
     void UpdateHallStatusBar(const HallStatusBarModel& model);
     void UpdateHallInstallProgress(uint32_t app_index, uint8_t progress_percent);
     void PauseHallCoverLoading();
+    void ResumeHallCoverLoading();
     void PrepareAppLaunch(uint32_t app_index);
     [[nodiscard]] std::optional<SystemUiAction> PollAction(TickType_t timeout);
     void LeaveHall();

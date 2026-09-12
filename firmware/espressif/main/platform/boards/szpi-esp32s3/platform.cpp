@@ -51,7 +51,7 @@ class SzpiEsp32S3Board final : public Board {
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
         presentation_.BindAudioEngine(context.AudioEngine());
-        ESP_LOGI(kTag, "initializing LCKFB SZPI ESP32-S3 preview");
+        ESP_LOGI(kTag, "initializing LCKFB SZPI ESP32-S3");
         ESP_RETURN_ON_ERROR(board_detail::InitializeDisplayHardware(hardware_, state_), kTag,
                             "initialize ST7789 display failed");
 #if CONFIG_MICROPIXEL_SZPI_S3_LVGL_DOUBLE_BUFFER

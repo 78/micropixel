@@ -68,6 +68,7 @@ class GuestContext final {
     // report), or an empty string. Attached to the trap failure detail so the
     // developer sees the cause instead of only "Exception: unreachable".
     [[nodiscard]] const char* LastPanic() const { return last_panic_.data(); }
+    [[nodiscard]] const char* LastDecodeFailure() const { return resources_.LastDecodeFailure(); }
     void NoteEventDelivered(const micropixel_event_t& event) { touch_events_.NoteDelivered(event); }
     [[nodiscard]] int32_t ServiceOpen(uint32_t service_id, uint32_t required_interface_version,
                                       micropixel_service_info_t& info_out, uint32_t info_capacity) const {

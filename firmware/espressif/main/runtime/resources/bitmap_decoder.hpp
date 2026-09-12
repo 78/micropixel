@@ -1,6 +1,7 @@
 #ifndef MICROPIXEL_RUNTIME_RESOURCES_BITMAP_DECODER_HPP
 #define MICROPIXEL_RUNTIME_RESOURCES_BITMAP_DECODER_HPP
 
+#include <array>
 #include <cstdint>
 
 #include "device/contracts/graphics.hpp"
@@ -18,6 +19,7 @@ class DecodedBitmap final {
     [[nodiscard]] bool valid() const { return view_.data != nullptr; }      // NOLINT(readability-identifier-naming)
     [[nodiscard]] const device::BitmapView& view() const { return view_; }  // NOLINT(readability-identifier-naming)
     void ReleaseOwnership();
+    [[nodiscard]] const char* FailureDetail() const { return failure_detail_.data(); }
 
    private:
     friend bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_opaque_format,
@@ -25,6 +27,7 @@ class DecodedBitmap final {
     friend bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, DecodedBitmap& bitmap,
                                uint32_t stride_alignment_pixels);
     device::BitmapView view_{};
+    std::array<char, 96U> failure_detail_{};
 };
 
 [[nodiscard]] bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, DecodedBitmap& decoded);

@@ -214,10 +214,10 @@ void SquareSystemUiState::ResetHallPresentationLocked() { ResetHallLocked(); }
 
 std::expected<void, host_ui::SystemUiError> SquareSystemUiState::ShowShutdown(PrepareHardwareCallback prepare_locked,
                                                                               void* prepare_context) {
+    hall_cover_cache.Pause();
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return std::unexpected(host_ui::SystemUiError::kRenderFailed);
     }
-    hall_cover_cache.Pause();
     SetHostPointerEnabledLocked(false);
     if (prepare_locked != nullptr) {
         prepare_locked(prepare_context);
@@ -866,6 +866,7 @@ void SquareSystemUiState::ApplyTheme(host_ui::SystemThemeMode mode) {
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
+    hall_cover_cache.Resume();
     if (theme::SetModeLocked(ThemeMode(mode))) {
         hall_cover_cache.SetBackgroundColorLocked(theme::kHallBackground);
         if (theme_changed_locked_ != nullptr) {

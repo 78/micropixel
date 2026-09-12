@@ -48,6 +48,9 @@ enum class HallCoverFormat : uint8_t {
     kPng,
 };
 
+struct HallCoverModel;
+using HallCoverConsumer = bool (*)(void* context, const HallCoverModel& source);
+
 struct HallCoverModel final {
     const uint8_t* data{};
     uint32_t size{};
@@ -59,6 +62,12 @@ struct HallCoverModel final {
     // PSRAM thumbnail cache for this Hall slot. Zero denotes a transient image
     // whose decoded pixels must not be reused across Hall model updates.
     uint64_t cache_key{};
+    // Optional lazy source. Only the background cover worker may invoke it.
+    // The reader owns bytes until consume returns, then releases them even on
+    // failure. Host must pause/drain reads before changing reader_context.
+    // Lazy sources require a nonzero cache_key and need no resident data.
+    const void* reader_context{};
+    bool (*read_source)(const void* reader_context, HallCoverConsumer consume, void* context){};
 };
 
 using ScreenCaptureRelease = void (*)(uint8_t* data);
@@ -342,6 +351,24 @@ struct InstalledAppModel final {
     const char* app_id{};
     const char* display_name{};
     uint32_t bundle_size_kib{};
+    // True when the Bundle lives on the board's external App storage.
+    bool external_storage{};
+};
+
+// External App storage as shown in App Management. kAbsent hides the storage
+// split entirely; every other non-ready state offers a user-confirmed format.
+enum class ExternalStorageStatus : uint8_t {
+    kAbsent,
+    kReady,
+    kNotFormatted,
+    kUnsupportedFormat,
+    kCorrupt,
+    kUnavailable,
+};
+
+struct StorageUsageModel final {
+    uint32_t used_kib{};
+    uint32_t total_kib{};
 };
 
 struct AppManagementModel final {
@@ -350,8 +377,14 @@ struct AppManagementModel final {
     uint32_t app_count{};
     uint32_t storage_used_kib{};
     uint32_t storage_total_kib{};
+    StorageUsageModel system_storage{};
+    StorageUsageModel external_storage{};
+    ExternalStorageStatus external_storage_status{ExternalStorageStatus::kAbsent};
     bool launch_available{};
     bool uninstall_available{};
+    // Formatting erases every App on the external storage; unavailable while
+    // an AppSession exists, like uninstall.
+    bool format_available{};
     // A valid index opens the shared action sheet directly over the Hall.
     uint32_t action_app_index{kMaxHallApps};
 };
@@ -419,6 +452,7 @@ enum class SystemUiActionType {
     kLaunchInstalledApp,
     kUninstallInstalledApp,
     kUpdateInstalledApp,
+    kFormatExternalStorage,
     kCloseWifiSettings,
     kOpenWifiNetworkScan,
     kCloseWifiNetworkScan,
@@ -475,6 +509,7 @@ class SystemUi {
         (void)progress_percent;
     }
     virtual void PauseHallCoverLoading() {}
+    virtual void ResumeHallCoverLoading() {}
     virtual void PrepareAppLaunch(uint32_t app_index) { (void)app_index; }
     virtual void LeaveHall() = 0;
     [[nodiscard]] virtual std::expected<void, SystemUiError> RestoreGuestView() = 0;

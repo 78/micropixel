@@ -57,7 +57,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
         presentation_.BindAudioEngine(context.AudioEngine());
-        ESP_LOGI(kTag, "initializing M5Stack CoreS3 preview");
+        ESP_LOGI(kTag, "initializing M5Stack CoreS3");
         ESP_RETURN_ON_ERROR(board_detail::InitializeDisplayHardware(hardware_, state_), kTag,
                             "initialize ILI9342C display failed");
 #if CONFIG_MICROPIXEL_CORES3_LVGL_DOUBLE_BUFFER

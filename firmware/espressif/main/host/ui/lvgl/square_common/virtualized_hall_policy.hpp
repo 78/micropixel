@@ -21,6 +21,7 @@ class VirtualizedHallPolicy final {
     void UpdateStatusBar(const host_ui::HallStatusBarModel& model);
     void UpdateInstallProgress(uint32_t app_index, uint8_t progress_percent);
     void PauseCoverLoading();
+    void ResumeCoverLoading();
     void PrepareLaunch(uint32_t app_index);
     void Leave();
 

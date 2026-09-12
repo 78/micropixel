@@ -38,6 +38,21 @@ inline constexpr uint32_t kLightSleepEntryAttempts = 3U;
 
 inline constexpr gpio_num_t kHapticMotor = GPIO_NUM_8;
 
+// On-board 1 Gbit SPI NAND (GD5F1GM7) on its own GP-SPI host. The pins are the
+// SD_* pad group of the CoreBoard; the NAND is the only device on this bus.
+inline constexpr spi_host_device_t kNandSpiHost = SPI3_HOST;
+inline constexpr gpio_num_t kNandClock = GPIO_NUM_20;
+inline constexpr gpio_num_t kNandDataOut = GPIO_NUM_21;  // NAND_D / SIO0
+inline constexpr gpio_num_t kNandDataIn = GPIO_NUM_22;   // NAND_Q / SIO1
+inline constexpr gpio_num_t kNandChipSelect = GPIO_NUM_23;
+inline constexpr gpio_num_t kNandHold = GPIO_NUM_24;          // NAND_HOLD / SIO3
+inline constexpr gpio_num_t kNandWriteProtect = GPIO_NUM_25;  // NAND_WP / SIO2
+inline constexpr uint32_t kNandClockHz = 40U * 1000U * 1000U;
+// BundleFS allocation unit on the NAND App store: two FTL sectors. Halves the
+// resident Catalog block map against the 2 KiB sector while wasting at most
+// 2 KiB per installed Bundle. Recorded in the Catalog; only fresh formats use it.
+inline constexpr uint32_t kNandBundleBlockSize = 4096U;
+
 // Only pins that remain independent of display, touch, shared I2C, audio,
 // module EEPROM selection, power control and recovery/debug transports are
 // Guest-visible. The hardware can route more pins through the GPIO matrix,

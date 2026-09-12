@@ -627,11 +627,95 @@ static bool valid_launch_asset_section(const micropixel_bundle_section_t* sectio
            section->stride == 0U;
 }
 
-static bool read_logical(const bundlefs_file_t* file, uint32_t logical_offset, void* destination, uint32_t size) {
-    return bundlefs_read(file, logical_offset, destination, size) == BUNDLEFS_OK;
+static bool read_logical(const micropixel_bundle_source_t* source, uint32_t logical_offset, void* destination,
+                         uint32_t size) {
+    return micropixel_bundle_source_read(source, logical_offset, destination, size);
 }
 
-static bool read_package_metadata(const bundlefs_file_t* file, const micropixel_bundle_header_t* header,
+/* Section bytes are streamed through this many bytes when they are hashed without being mapped. */
+#define BUNDLE_HASH_CHUNK_BYTES 4096U
+
+static void release_ram_view(micropixel_bundle_mapping_t* mapping) {
+    /* `base` is the Host-owned copy; `data` aliases it. */
+    heap_caps_free((void*)mapping->base);
+    memset(mapping, 0, sizeof(*mapping));
+}
+
+static const micropixel_bundle_mapping_ops_t kRamViewOps = {
+    .unmap = release_ram_view,
+};
+
+/*
+ * Makes one section `[offset, offset + size)` addressable. Sources that can
+ * map return a zero-copy view; all other sources copy the section into PSRAM.
+ * Only ever called for one section at a time, never for the whole Bundle, so
+ * the RAM cost is bounded by the largest section a consumer opens. Running
+ * out of PSRAM fails here with the byte count in the log.
+ */
+static bool acquire_view(const micropixel_bundle_source_t* source, uint32_t offset, uint32_t size,
+                         micropixel_bundle_mapping_t* view_out) {
+    memset(view_out, 0, sizeof(*view_out));
+    if (size == 0U) {
+        return false;
+    }
+    if (micropixel_bundle_source_can_map(source)) {
+        return micropixel_bundle_source_map(source, offset, size, view_out);
+    }
+    uint8_t* copy = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (copy == NULL) {
+        ESP_LOGE(TAG, "Bundle section copy failed: PSRAM allocation of %" PRIu32 " bytes", size);
+        return false;
+    }
+    if (!read_logical(source, offset, copy, size)) {
+        heap_caps_free(copy);
+        return false;
+    }
+    view_out->data = copy;
+    view_out->base = copy;
+    view_out->size = size;
+    view_out->ops = &kRamViewOps;
+    return true;
+}
+
+/* Opens a section and verifies its content hash; releases the view on mismatch. */
+static bool acquire_verified_section(const micropixel_bundle_source_t* source,
+                                     const micropixel_bundle_section_t* section,
+                                     micropixel_bundle_mapping_t* view_out) {
+    if (!acquire_view(source, section->offset, section->size, view_out)) {
+        return false;
+    }
+    const uint32_t actual_hash = fnv1a32(view_out->data, section->size);
+    if (actual_hash != section->hash) {
+        ESP_LOGE(TAG,
+                 "Bundle section hash mismatch: kind=%" PRIu32 " id=%" PRIu32 " offset=%" PRIu32 " size=%" PRIu32
+                 " expected=%08" PRIx32 " actual=%08" PRIx32,
+                 section->kind, section->id, section->offset, section->size, section->hash, actual_hash);
+        micropixel_bundle_mapping_release(view_out);
+        return false;
+    }
+    return true;
+}
+
+/* Hashes one section straight from the source in fixed chunks; no section-sized buffer. */
+static bool section_hash_matches(const micropixel_bundle_source_t* source, const micropixel_bundle_section_t* section,
+                                 uint8_t* chunk) {
+    uint32_t hash = 2166136261U;
+    for (uint32_t consumed = 0U; consumed < section->size;) {
+        const uint32_t step =
+            section->size - consumed < BUNDLE_HASH_CHUNK_BYTES ? section->size - consumed : BUNDLE_HASH_CHUNK_BYTES;
+        if (!read_logical(source, section->offset + consumed, chunk, step)) {
+            return false;
+        }
+        for (uint32_t index = 0U; index < step; ++index) {
+            hash ^= chunk[index];
+            hash *= 16777619U;
+        }
+        consumed += step;
+    }
+    return hash == section->hash;
+}
+
+static bool read_package_metadata(const micropixel_bundle_source_t* source, const micropixel_bundle_header_t* header,
                                   const char* effective_locale, micropixel_bundle_metadata_t* metadata_out) {
     const uint32_t toc_end = header->toc_offset + header->section_count * sizeof(micropixel_bundle_section_t);
     bool metadata_found = false;
@@ -639,7 +723,7 @@ static bool read_package_metadata(const bundlefs_file_t* file, const micropixel_
     for (uint32_t index = 0U; index < header->section_count; ++index) {
         micropixel_bundle_section_t section;
         const uint32_t section_offset = header->toc_offset + index * sizeof(section);
-        if (!read_logical(file, section_offset, &section, sizeof(section))) {
+        if (!read_logical(source, section_offset, &section, sizeof(section))) {
             return false;
         }
         if (section.kind != MICROPIXEL_BUNDLE_SECTION_APP_METADATA) {
@@ -657,7 +741,7 @@ static bool read_package_metadata(const bundlefs_file_t* file, const micropixel_
             return false;
         }
         uint8_t* payload = malloc(section.size + 1U);
-        if (payload == NULL || !read_logical(file, section.offset, payload, section.size) ||
+        if (payload == NULL || !read_logical(source, section.offset, payload, section.size) ||
             fnv1a32(payload, section.size) != section.hash) {
             free(payload);
             return false;
@@ -686,17 +770,17 @@ static bool read_package_metadata(const bundlefs_file_t* file, const micropixel_
     return true;
 }
 
-static bool read_valid_header(const bundlefs_file_t* file, micropixel_bundle_header_t* header_out,
+static bool read_valid_header(const micropixel_bundle_source_t* source, micropixel_bundle_header_t* header_out,
                               const char* effective_locale, micropixel_bundle_metadata_t* metadata_out) {
-    if (file == NULL || header_out == NULL) {
+    if (!micropixel_bundle_source_valid(source) || header_out == NULL) {
         return false;
     }
-    bundlefs_file_info_t file_info;
-    if (bundlefs_get_file_info(file, &file_info) != BUNDLEFS_OK) {
+    uint32_t source_size = 0U;
+    if (!micropixel_bundle_source_size(source, &source_size)) {
         return false;
     }
     micropixel_bundle_header_t header;
-    if (!read_logical(file, 0U, &header, sizeof(header))) {
+    if (source_size < sizeof(header) || !read_logical(source, 0U, &header, sizeof(header))) {
         return false;
     }
     if (memcmp(header.magic, MICROPIXEL_BUNDLE_MAGIC, sizeof(header.magic)) != 0 ||
@@ -704,7 +788,7 @@ static bool read_valid_header(const bundlefs_file_t* file, micropixel_bundle_hea
         header.framework_abi_version != MICROPIXEL_BUNDLE_FRAMEWORK_ABI_VERSION) {
         return false;
     }
-    if (header.bundle_size != file_info.size || header.section_count == 0U ||
+    if (header.bundle_size != source_size || header.section_count == 0U ||
         header.section_count > MICROPIXEL_BUNDLE_MAX_SECTIONS || header.toc_offset != sizeof(header) ||
         header.section_count > (header.bundle_size - header.toc_offset) / sizeof(micropixel_bundle_section_t) ||
         !valid_app_id(&header) || header.reserved0 != 0U || header.reserved1 != 0U || header.reserved2 != 0U ||
@@ -715,25 +799,190 @@ static bool read_valid_header(const bundlefs_file_t* file, micropixel_bundle_hea
     const uint32_t expected_header_hash = hash_header.header_hash;
     hash_header.header_hash = 0U;
     if (fnv1a32((const uint8_t*)&hash_header, sizeof(hash_header)) != expected_header_hash ||
-        !read_package_metadata(file, &header, effective_locale, metadata_out)) {
+        !read_package_metadata(source, &header, effective_locale, metadata_out)) {
         return false;
     }
     *header_out = header;
     return true;
 }
 
-bool micropixel_read_bundle_metadata(const bundlefs_file_t* file, micropixel_bundle_metadata_t* metadata_out) {
-    return micropixel_read_bundle_metadata_for_locale(file, "en", metadata_out);
+/* Reads the TOC into a Host-owned array; the caller frees it. */
+static micropixel_bundle_section_t* read_toc(const micropixel_bundle_source_t* source,
+                                             const micropixel_bundle_header_t* header) {
+    const size_t toc_bytes = (size_t)header->section_count * sizeof(micropixel_bundle_section_t);
+    micropixel_bundle_section_t* sections = malloc(toc_bytes);
+    if (sections == NULL) {
+        ESP_LOGE(TAG, "Bundle TOC allocation failed: %u bytes", (unsigned)toc_bytes);
+        return NULL;
+    }
+    if (!read_logical(source, header->toc_offset, sections, (uint32_t)toc_bytes)) {
+        free(sections);
+        return NULL;
+    }
+    return sections;
 }
 
-bool micropixel_read_bundle_metadata_for_locale(const bundlefs_file_t* file, const char* effective_locale,
+/* Placement rules shared by every section kind: inside the payload area, 64-byte aligned, no overlap. */
+static bool valid_section_placement(const micropixel_bundle_header_t* header,
+                                    const micropixel_bundle_section_t* sections, uint32_t index) {
+    const micropixel_bundle_section_t* section = &sections[index];
+    const uint32_t toc_end = header->toc_offset + header->section_count * sizeof(*section);
+    if (section->size == 0U || section->offset < toc_end || (section->offset & 63U) != 0U ||
+        section->offset > header->bundle_size || section->size > header->bundle_size - section->offset ||
+        section->reserved1 != 0U) {
+        return false;
+    }
+    for (uint32_t previous = 0U; previous < index; ++previous) {
+        const micropixel_bundle_section_t* other = &sections[previous];
+        const uint64_t section_end = (uint64_t)section->offset + section->size;
+        const uint64_t other_end = (uint64_t)other->offset + other->size;
+        if ((uint64_t)section->offset < other_end && (uint64_t)other->offset < section_end) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool unique_section_id(const micropixel_bundle_section_t* sections, uint32_t index, uint32_t kind) {
+    for (uint32_t previous = 0U; previous < index; ++previous) {
+        if (sections[previous].kind == kind && sections[previous].id == sections[index].id) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Structural validation of an App Bundle TOC. Content hashes are not checked
+ * here; `micropixel_validate_app_package` streams them at install time and
+ * every section is verified again when it is opened. Returns the AOT section
+ * index or UINT32_MAX.
+ */
+static uint32_t validate_app_toc(const micropixel_bundle_header_t* header,
+                                 const micropixel_bundle_section_t* sections) {
+    uint32_t aot_index = UINT32_MAX;
+    bool launch_found = header->launch_asset_id == 0U;
+    bool metadata_found = false;
+    for (uint32_t index = 0U; index < header->section_count; ++index) {
+        const micropixel_bundle_section_t* section = &sections[index];
+        if (!valid_section_placement(header, sections, index) ||
+            (section->kind != MICROPIXEL_BUNDLE_SECTION_AOT && section->flags != 0U)) {
+            return UINT32_MAX;
+        }
+        if (section->kind == MICROPIXEL_BUNDLE_SECTION_AOT) {
+            const bool valid_threading_flags = (section->flags & ~MICROPIXEL_BUNDLE_AOT_FLAG_MASK) == 0U &&
+                                               ((section->flags & MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY) == 0U ||
+                                                (section->flags & MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED) != 0U);
+            if (aot_index != UINT32_MAX || section->id != 0U ||
+                section->format != MICROPIXEL_BUNDLE_FORMAT_AOT_RELOCATABLE || section->width != 0U ||
+                section->height != 0U || section->stride != 0U || !valid_threading_flags ||
+                (section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE &&
+                 section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F &&
+                 section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3)) {
+                return UINT32_MAX;
+            }
+            aot_index = index;
+        } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_ASSET) {
+            const bool audio = section->format == MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS;
+            const bool bitmap = section->format >= MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
+                                section->format <= MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
+            const bool raw_rgb565 = section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565;
+            if (section->reserved0 != 0U || section->id == 0U || (!bitmap && !raw_rgb565 && !audio) ||
+                (audio && (section->width != 0U || section->height != 0U || section->stride != 0U)) ||
+                (!audio && (section->width == 0U || section->height == 0U)) ||
+                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
+                 (section->stride != section->width * 3U ||
+                  (uint64_t)section->stride * section->height != section->size)) ||
+                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 &&
+                 (section->stride != section->width * 4U ||
+                  (uint64_t)section->stride * section->height != section->size)) ||
+                (raw_rgb565 && (section->stride != section->width * 2U ||
+                                (uint64_t)section->stride * section->height != section->size)) ||
+                !unique_section_id(sections, index, MICROPIXEL_BUNDLE_SECTION_ASSET)) {
+                return UINT32_MAX;
+            }
+            if (section->id == header->launch_asset_id) {
+                if (!valid_launch_asset_section(section)) {
+                    return UINT32_MAX;
+                }
+                launch_found = true;
+            }
+        } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_APP_METADATA) {
+            const bool legacy = section->format == MICROPIXEL_BUNDLE_FORMAT_UTF8;
+            if (metadata_found || section->id != 0U || section->reserved0 != 0U ||
+                section->size >
+                    (legacy ? MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH : MICROPIXEL_BUNDLE_METADATA_MAX_LENGTH) ||
+                (!legacy && section->format != MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON) ||
+                section->width != 0U || section->height != 0U || section->stride != 0U) {
+                return UINT32_MAX;
+            }
+            metadata_found = true;
+        } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_FONT) {
+            if (section->reserved0 != 0U || section->id == 0U ||
+                section->format != MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 || section->width != 0U ||
+                section->height != 0U || section->stride != 0U ||
+                !unique_section_id(sections, index, MICROPIXEL_BUNDLE_SECTION_FONT)) {
+                return UINT32_MAX;
+            }
+        } else {
+            return UINT32_MAX;
+        }
+    }
+    return aot_index != UINT32_MAX && launch_found && metadata_found ? aot_index : UINT32_MAX;
+}
+
+/* Copies the AOT section into PSRAM and verifies its hash and relocatable form. */
+static uint8_t* copy_aot_payload(const micropixel_bundle_source_t* source, const micropixel_bundle_section_t* aot) {
+    uint8_t* payload = heap_caps_malloc(aot->size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (payload == NULL) {
+        ESP_LOGE(TAG, "AOT payload allocation failed: %" PRIu32 " bytes", aot->size);
+        return NULL;
+    }
+    if (!read_logical(source, aot->offset, payload, aot->size)) {
+        free(payload);
+        return NULL;
+    }
+    const uint32_t actual_hash = fnv1a32(payload, aot->size);
+    if (actual_hash != aot->hash) {
+        ESP_LOGE(TAG, "AOT section hash mismatch: expected=%08" PRIx32 " actual=%08" PRIx32, aot->hash, actual_hash);
+        free(payload);
+        return NULL;
+    }
+    if (wasm_runtime_is_xip_file(payload, aot->size)) {
+        ESP_LOGE(TAG, "AOT section is an XIP image; only relocatable AOT is accepted");
+        free(payload);
+        return NULL;
+    }
+    return payload;
+}
+
+static const micropixel_bundle_section_t* find_section(const micropixel_aot_package_t* package, uint32_t kind,
+                                                       uint32_t id) {
+    if (package == NULL || package->sections == NULL || id == 0U) {
+        return NULL;
+    }
+    for (uint32_t index = 0U; index < package->section_count; ++index) {
+        const micropixel_bundle_section_t* section = &package->sections[index];
+        if (section->kind == kind && section->id == id) {
+            return section;
+        }
+    }
+    return NULL;
+}
+
+bool micropixel_read_bundle_metadata(const micropixel_bundle_source_t* source,
+                                     micropixel_bundle_metadata_t* metadata_out) {
+    return micropixel_read_bundle_metadata_for_locale(source, "en", metadata_out);
+}
+
+bool micropixel_read_bundle_metadata_for_locale(const micropixel_bundle_source_t* source, const char* effective_locale,
                                                 micropixel_bundle_metadata_t* metadata_out) {
     if (metadata_out == NULL) {
         return false;
     }
     memset(metadata_out, 0, sizeof(*metadata_out));
     micropixel_bundle_header_t header;
-    if (!read_valid_header(file, &header, effective_locale, metadata_out)) {
+    if (!read_valid_header(source, &header, effective_locale, metadata_out)) {
         return false;
     }
     metadata_out->bundle_size = header.bundle_size;
@@ -773,44 +1022,30 @@ static bool valid_font_cbin_envelope(const uint8_t* data, uint32_t size) {
            memcmp(digest, data + MICROPIXEL_FONT_CBIN_OFFSET_PAYLOAD_SHA256, sizeof(digest)) == 0;
 }
 
-bool micropixel_validate_component_package(const bundlefs_file_t* file, micropixel_bundle_metadata_t* metadata_out) {
+bool micropixel_validate_component_package(const micropixel_bundle_source_t* source,
+                                           micropixel_bundle_metadata_t* metadata_out) {
     micropixel_bundle_header_t header;
     micropixel_bundle_metadata_t metadata = {0};
-    if (metadata_out == NULL || !read_valid_header(file, &header, "en", &metadata) ||
+    if (metadata_out == NULL || !read_valid_header(source, &header, "en", &metadata) ||
         metadata.package_type != MICROPIXEL_BUNDLE_PACKAGE_COMPONENT ||
         metadata.component_type != MICROPIXEL_BUNDLE_COMPONENT_FONT || header.launch_asset_id != 0U) {
         return false;
     }
-    bundlefs_mapping_t mapping;
-    if (bundlefs_mmap(file, 0U, header.bundle_size, &mapping) != BUNDLEFS_OK) {
+    micropixel_bundle_section_t* sections = read_toc(source, &header);
+    if (sections == NULL) {
         return false;
     }
-    const uint8_t* bundle = mapping.data;
-    const micropixel_bundle_header_t* mapped_header = (const micropixel_bundle_header_t*)bundle;
-    const micropixel_bundle_section_t* sections =
-        (const micropixel_bundle_section_t*)(bundle + mapped_header->toc_offset);
-    bool valid = memcmp(mapped_header, &header, sizeof(header)) == 0;
+    bool valid = true;
     bool metadata_found = false;
     bool font_found[MICROPIXEL_BUNDLE_FONT_ROLE_COUNT] = {false};
-    const uint32_t toc_end = mapped_header->toc_offset + mapped_header->section_count * sizeof(*sections);
-    for (uint32_t index = 0U; valid && index < mapped_header->section_count; ++index) {
+    for (uint32_t index = 0U; valid && index < header.section_count; ++index) {
         const micropixel_bundle_section_t* section = &sections[index];
-        valid = section->size != 0U && section->offset >= toc_end && (section->offset & 63U) == 0U &&
-                section->offset <= mapped_header->bundle_size &&
-                section->size <= mapped_header->bundle_size - section->offset && section->flags == 0U &&
-                section->reserved0 == 0U && section->reserved1 == 0U;
-        for (uint32_t previous = 0U; valid && previous < index; ++previous) {
-            const micropixel_bundle_section_t* other = &sections[previous];
-            const uint64_t section_end = (uint64_t)section->offset + section->size;
-            const uint64_t other_end = (uint64_t)other->offset + other->size;
-            valid = (uint64_t)section->offset >= other_end || (uint64_t)other->offset >= section_end;
-        }
-        const uint8_t* section_data = bundle + section->offset;
-        valid = valid && fnv1a32(section_data, section->size) == section->hash;
+        valid = valid_section_placement(&header, sections, index) && section->flags == 0U && section->reserved0 == 0U;
         if (!valid) {
             break;
         }
         if (section->kind == MICROPIXEL_BUNDLE_SECTION_APP_METADATA) {
+            /* Content already verified by read_valid_header. */
             valid = !metadata_found && section->id == 0U &&
                     section->format == MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON && section->width == 0U &&
                     section->height == 0U && section->stride == 0U;
@@ -819,12 +1054,20 @@ bool micropixel_validate_component_package(const bundlefs_file_t* file, micropix
         }
         if (section->kind != MICROPIXEL_BUNDLE_SECTION_FONT || section->id == 0U ||
             section->format != MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 || section->width != 0U || section->height != 0U ||
-            section->stride != 0U || !valid_font_cbin_envelope(section_data, section->size)) {
+            section->stride != 0U) {
             valid = false;
             break;
         }
+        /* One font at a time: the cbin envelope check needs the section addressable. */
+        micropixel_bundle_mapping_t view;
+        valid = acquire_verified_section(source, section, &view);
+        if (!valid) {
+            break;
+        }
+        valid = valid_font_cbin_envelope(view.data, section->size);
+        micropixel_bundle_mapping_release(&view);
         bool matched = false;
-        for (uint32_t role = 0U; role < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++role) {
+        for (uint32_t role = 0U; valid && role < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++role) {
             if (metadata.font_asset_ids[role] == section->id) {
                 valid = !font_found[role];
                 font_found[role] = valid;
@@ -834,11 +1077,11 @@ bool micropixel_validate_component_package(const bundlefs_file_t* file, micropix
         }
         valid = valid && matched;
     }
+    free(sections);
     valid = valid && metadata_found;
     for (uint32_t role = 0U; valid && role < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++role) {
         valid = font_found[role];
     }
-    bundlefs_munmap(&mapping);
     if (!valid) {
         return false;
     }
@@ -848,13 +1091,62 @@ bool micropixel_validate_component_package(const bundlefs_file_t* file, micropix
     return true;
 }
 
-bool micropixel_open_launch_asset(const bundlefs_file_t* file, micropixel_bundle_asset_mapping_t* mapping_out) {
+bool micropixel_validate_app_package(const micropixel_bundle_source_t* source,
+                                     micropixel_bundle_metadata_t* metadata_out) {
+    micropixel_bundle_header_t header;
+    micropixel_bundle_metadata_t metadata = {0};
+    if (!read_valid_header(source, &header, "en", &metadata) ||
+        metadata.package_type != MICROPIXEL_BUNDLE_PACKAGE_APP) {
+        return false;
+    }
+    micropixel_bundle_section_t* sections = read_toc(source, &header);
+    if (sections == NULL) {
+        return false;
+    }
+    const uint32_t aot_index = validate_app_toc(&header, sections);
+    bool valid = aot_index != UINT32_MAX;
+    uint8_t* chunk = valid ? malloc(BUNDLE_HASH_CHUNK_BYTES) : NULL;
+    valid = valid && chunk != NULL;
+    for (uint32_t index = 0U; valid && index < header.section_count; ++index) {
+        const micropixel_bundle_section_t* section = &sections[index];
+        if (section->kind == MICROPIXEL_BUNDLE_SECTION_APP_METADATA) {
+            continue; /* verified by read_valid_header */
+        }
+        valid = section_hash_matches(source, section, chunk);
+        if (!valid) {
+            ESP_LOGE(TAG,
+                     "Bundle section hash mismatch during validation: index=%" PRIu32 " kind=%" PRIu32 " id=%" PRIu32
+                     " size=%" PRIu32,
+                     index, section->kind, section->id, section->size);
+        }
+    }
+    free(chunk);
+    if (valid) {
+        /* The same copy launch performs; an AOT that cannot be staged cannot run either. */
+        uint8_t* payload = copy_aot_payload(source, &sections[aot_index]);
+        valid = payload != NULL;
+        free(payload);
+    }
+    free(sections);
+    if (!valid) {
+        return false;
+    }
+    if (metadata_out != NULL) {
+        metadata.bundle_size = header.bundle_size;
+        memcpy(metadata.app_id, header.app_id, header.app_id_length);
+        *metadata_out = metadata;
+    }
+    return true;
+}
+
+bool micropixel_open_launch_asset(const micropixel_bundle_source_t* source,
+                                  micropixel_bundle_asset_mapping_t* mapping_out) {
     if (mapping_out == NULL) {
         return false;
     }
     memset(mapping_out, 0, sizeof(*mapping_out));
     micropixel_bundle_header_t header;
-    if (!read_valid_header(file, &header, NULL, NULL) || header.launch_asset_id == 0U) {
+    if (!read_valid_header(source, &header, NULL, NULL) || header.launch_asset_id == 0U) {
         return false;
     }
 
@@ -865,7 +1157,7 @@ bool micropixel_open_launch_asset(const bundlefs_file_t* file, micropixel_bundle
     for (uint32_t index = 0U; index < header.section_count; ++index) {
         micropixel_bundle_section_t section;
         const uint32_t section_offset = header.toc_offset + index * sizeof(section);
-        if (!read_logical(file, section_offset, &section, sizeof(section))) {
+        if (!read_logical(source, section_offset, &section, sizeof(section))) {
             return false;
         }
         if (section.kind != MICROPIXEL_BUNDLE_SECTION_ASSET || section.id != header.launch_asset_id) {
@@ -884,25 +1176,18 @@ bool micropixel_open_launch_asset(const bundlefs_file_t* file, micropixel_bundle
         return false;
     }
 
-    bundlefs_mapping_t bundlefs_mapping;
-    if (bundlefs_mmap(file, launch_section.offset, launch_section.size, &bundlefs_mapping) != BUNDLEFS_OK) {
+    micropixel_bundle_mapping_t view;
+    if (!acquire_verified_section(source, &launch_section, &view)) {
         return false;
     }
-    const uint8_t* asset_data = bundlefs_mapping.data;
-    if (fnv1a32(asset_data, launch_section.size) != launch_section.hash) {
-        bundlefs_munmap(&bundlefs_mapping);
-        return false;
-    }
-
-    mapping_out->asset.data = asset_data;
+    mapping_out->asset.data = view.data;
     mapping_out->asset.size = launch_section.size;
     mapping_out->asset.format = launch_section.format;
     mapping_out->asset.width = launch_section.width;
     mapping_out->asset.height = launch_section.height;
     mapping_out->asset.stride = launch_section.stride;
     mapping_out->asset.content_hash = launch_section.hash;
-    mapping_out->mapping = bundlefs_mapping.mapping;
-    mapping_out->mapping_handle = bundlefs_mapping.mapping_handle;
+    mapping_out->mapping = view;
     return true;
 }
 
@@ -910,184 +1195,49 @@ void micropixel_close_asset_mapping(micropixel_bundle_asset_mapping_t* mapping) 
     if (mapping == NULL) {
         return;
     }
-    if (mapping->mapping != NULL) {
-        bundlefs_mapping_t bundlefs_mapping = {
-            .data = mapping->asset.data,
-            .mapping = mapping->mapping,
-            .size = mapping->asset.size,
-            .mapping_handle = mapping->mapping_handle,
-        };
-        bundlefs_munmap(&bundlefs_mapping);
-    }
+    micropixel_bundle_mapping_release(&mapping->mapping);
     memset(mapping, 0, sizeof(*mapping));
 }
 
-bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_package_t* package_out) {
+bool micropixel_open_aot_package(const micropixel_bundle_source_t* source, micropixel_aot_package_t* package_out) {
     if (package_out == NULL) {
         return false;
     }
     memset(package_out, 0, sizeof(*package_out));
     micropixel_bundle_header_t header;
     micropixel_bundle_metadata_t metadata;
-    if (!read_valid_header(file, &header, NULL, &metadata) || metadata.package_type != MICROPIXEL_BUNDLE_PACKAGE_APP) {
+    if (!read_valid_header(source, &header, NULL, &metadata) ||
+        metadata.package_type != MICROPIXEL_BUNDLE_PACKAGE_APP) {
         return false;
     }
-
-    bundlefs_mapping_t bundlefs_mapping;
-    const bundlefs_error_t map_error = bundlefs_mmap(file, 0U, header.bundle_size, &bundlefs_mapping);
-    if (map_error != BUNDLEFS_OK) {
-        ESP_LOGE(TAG, "Bundle mapping failed: bytes=%" PRIu32 " error=%u", header.bundle_size, (unsigned)map_error);
+    micropixel_bundle_section_t* sections = read_toc(source, &header);
+    if (sections == NULL) {
         return false;
     }
-    const uint8_t* bundle_bytes = bundlefs_mapping.data;
-    const micropixel_bundle_header_t* mapped_header = (const micropixel_bundle_header_t*)bundle_bytes;
-    if (memcmp(mapped_header, &header, sizeof(header)) != 0) {
-        ESP_LOGE(TAG, "Mapped Bundle header differs from flash read");
-        bundlefs_munmap(&bundlefs_mapping);
+    const uint32_t aot_index = validate_app_toc(&header, sections);
+    if (aot_index == UINT32_MAX) {
+        ESP_LOGE(TAG, "Bundle TOC rejected: app=%.*s sections=%" PRIu32, (int)header.app_id_length,
+                 (const char*)header.app_id, header.section_count);
+        free(sections);
         return false;
     }
-
-    const micropixel_bundle_section_t* sections =
-        (const micropixel_bundle_section_t*)(bundle_bytes + mapped_header->toc_offset);
-    const micropixel_bundle_section_t* aot_section = NULL;
-    bool launch_found = mapped_header->launch_asset_id == 0U;
-    bool metadata_found = false;
-    for (uint32_t index = 0U; index < mapped_header->section_count; ++index) {
-        const micropixel_bundle_section_t* section = &sections[index];
-        const uint32_t toc_end = mapped_header->toc_offset + mapped_header->section_count * sizeof(*section);
-        if (section->size == 0U || section->offset < toc_end || (section->offset & 63U) != 0U ||
-            section->offset > mapped_header->bundle_size ||
-            section->size > mapped_header->bundle_size - section->offset ||
-            (section->kind != MICROPIXEL_BUNDLE_SECTION_AOT && section->flags != 0U) || section->reserved1 != 0U) {
-            bundlefs_munmap(&bundlefs_mapping);
-            return false;
-        }
-        for (uint32_t previous = 0U; previous < index; ++previous) {
-            const micropixel_bundle_section_t* other = &sections[previous];
-            const uint64_t section_end = (uint64_t)section->offset + section->size;
-            const uint64_t other_end = (uint64_t)other->offset + other->size;
-            if ((uint64_t)section->offset < other_end && (uint64_t)other->offset < section_end) {
-                bundlefs_munmap(&bundlefs_mapping);
-                return false;
-            }
-        }
-        const uint8_t* section_data = bundle_bytes + section->offset;
-        const uint32_t actual_hash = fnv1a32(section_data, section->size);
-        if (actual_hash != section->hash) {
-            ESP_LOGE(TAG,
-                     "Mapped Bundle section hash mismatch: index=%" PRIu32 " offset=%" PRIu32 " size=%" PRIu32
-                     " expected=%08" PRIx32 " actual=%08" PRIx32,
-                     index, section->offset, section->size, section->hash, actual_hash);
-            bundlefs_munmap(&bundlefs_mapping);
-            return false;
-        }
-        if (section->kind == MICROPIXEL_BUNDLE_SECTION_AOT) {
-            const bool valid_threading_flags = (section->flags & ~MICROPIXEL_BUNDLE_AOT_FLAG_MASK) == 0U &&
-                                               ((section->flags & MICROPIXEL_BUNDLE_AOT_FLAG_SHARED_MEMORY) == 0U ||
-                                                (section->flags & MICROPIXEL_BUNDLE_AOT_FLAG_THREADING_DECLARED) != 0U);
-            if (aot_section != NULL || section->id != 0U ||
-                section->format != MICROPIXEL_BUNDLE_FORMAT_AOT_RELOCATABLE || section->width != 0U ||
-                section->height != 0U || section->stride != 0U || !valid_threading_flags ||
-                (section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE &&
-                 section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F &&
-                 section->reserved0 != MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3)) {
-                bundlefs_munmap(&bundlefs_mapping);
-                return false;
-            }
-            aot_section = section;
-        } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_ASSET) {
-            const bool audio = section->format == MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS;
-            const bool bitmap = section->format >= MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
-                                section->format <= MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888;
-            const bool raw_rgb565 = section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565;
-            if (section->reserved0 != 0U || section->id == 0U || (!bitmap && !raw_rgb565 && !audio) ||
-                (audio && (section->width != 0U || section->height != 0U || section->stride != 0U)) ||
-                (!audio && (section->width == 0U || section->height == 0U)) ||
-                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGR888 &&
-                 (section->stride != section->width * 3U ||
-                  (uint64_t)section->stride * section->height != section->size)) ||
-                (section->format == MICROPIXEL_BUNDLE_FORMAT_RAW_BGRA8888 &&
-                 (section->stride != section->width * 4U ||
-                  (uint64_t)section->stride * section->height != section->size)) ||
-                (raw_rgb565 && (section->stride != section->width * 2U ||
-                                (uint64_t)section->stride * section->height != section->size))) {
-                bundlefs_munmap(&bundlefs_mapping);
-                return false;
-            }
-            for (uint32_t previous = 0U; previous < index; ++previous) {
-                if (sections[previous].kind == MICROPIXEL_BUNDLE_SECTION_ASSET &&
-                    sections[previous].id == section->id) {
-                    bundlefs_munmap(&bundlefs_mapping);
-                    return false;
-                }
-            }
-            if (section->id == mapped_header->launch_asset_id) {
-                if (!valid_launch_asset_section(section)) {
-                    bundlefs_munmap(&bundlefs_mapping);
-                    return false;
-                }
-                launch_found = true;
-            }
-        } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_APP_METADATA) {
-            const bool legacy = section->format == MICROPIXEL_BUNDLE_FORMAT_UTF8;
-            if (metadata_found || section->id != 0U || section->reserved0 != 0U ||
-                section->size >
-                    (legacy ? MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH : MICROPIXEL_BUNDLE_METADATA_MAX_LENGTH) ||
-                (!legacy && section->format != MICROPIXEL_BUNDLE_FORMAT_PACKAGE_METADATA_JSON) ||
-                section->width != 0U || section->height != 0U || section->stride != 0U ||
-                (legacy && !valid_display_name(section_data, section->size))) {
-                bundlefs_munmap(&bundlefs_mapping);
-                return false;
-            }
-            metadata_found = true;
-        } else if (section->kind == MICROPIXEL_BUNDLE_SECTION_FONT) {
-            if (section->reserved0 != 0U || section->id == 0U ||
-                section->format != MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 || section->width != 0U ||
-                section->height != 0U || section->stride != 0U) {
-                bundlefs_munmap(&bundlefs_mapping);
-                return false;
-            }
-            for (uint32_t previous = 0U; previous < index; ++previous) {
-                if (sections[previous].kind == MICROPIXEL_BUNDLE_SECTION_FONT && sections[previous].id == section->id) {
-                    bundlefs_munmap(&bundlefs_mapping);
-                    return false;
-                }
-            }
-        } else {
-            bundlefs_munmap(&bundlefs_mapping);
-            return false;
-        }
-    }
-    if (aot_section == NULL || !launch_found || !metadata_found) {
-        bundlefs_munmap(&bundlefs_mapping);
-        return false;
-    }
-
-    const uint32_t payload_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
-    uint8_t* payload = heap_caps_malloc(aot_section->size, payload_caps);
+    uint8_t* payload = copy_aot_payload(source, &sections[aot_index]);
     if (payload == NULL) {
-        bundlefs_munmap(&bundlefs_mapping);
-        return false;
-    }
-    memcpy(payload, bundle_bytes + aot_section->offset, aot_section->size);
-    if (wasm_runtime_is_xip_file(payload, aot_section->size)) {
-        free(payload);
-        bundlefs_munmap(&bundlefs_mapping);
+        free(sections);
         return false;
     }
 
     package_out->payload = payload;
-    package_out->payload_size = aot_section->size;
-    package_out->bundle_mapping = bundle_bytes;
-    package_out->bundle_size = mapped_header->bundle_size;
+    package_out->payload_size = sections[aot_index].size;
+    package_out->source = *source;
     package_out->sections = sections;
-    package_out->section_count = mapped_header->section_count;
-    package_out->launch_asset_id = mapped_header->launch_asset_id;
-    package_out->aot_flags = aot_section->flags;
-    memcpy(package_out->app_id, mapped_header->app_id, mapped_header->app_id_length);
-    package_out->mapping_handle = bundlefs_mapping.mapping_handle;
-    ESP_LOGI(TAG, "Bundle mapped: app=%s virtual=%p bytes=%" PRIu32, package_out->app_id, bundle_bytes,
-             mapped_header->bundle_size);
+    package_out->section_count = header.section_count;
+    package_out->launch_asset_id = header.launch_asset_id;
+    package_out->aot_flags = sections[aot_index].flags;
+    memcpy(package_out->app_id, header.app_id, header.app_id_length);
+    ESP_LOGI(TAG, "Bundle opened: app=%s bytes=%" PRIu32 " sections=%" PRIu32 " aot=%" PRIu32 " bytes, sections %s",
+             package_out->app_id, header.bundle_size, header.section_count, package_out->payload_size,
+             micropixel_bundle_source_can_map(source) ? "mapped on demand" : "copied on demand");
     return true;
 }
 
@@ -1098,54 +1248,60 @@ void micropixel_close_aot_package(micropixel_aot_package_t* package) {
     if (package->payload != NULL) {
         free((void*)package->payload);
     }
-    if (package->bundle_mapping != NULL) {
-        bundlefs_mapping_t bundlefs_mapping = {
-            .data = package->bundle_mapping,
-            .mapping = package->bundle_mapping,
-            .size = package->bundle_size,
-            .mapping_handle = package->mapping_handle,
-        };
-        bundlefs_munmap(&bundlefs_mapping);
-    }
+    free((void*)package->sections);
     memset(package, 0, sizeof(*package));
 }
 
-bool micropixel_bundle_find_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
-                                  micropixel_bundle_asset_view_t* view_out) {
-    if (package == NULL || view_out == NULL || package->bundle_mapping == NULL || asset_id == 0U) {
+bool micropixel_bundle_open_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
+                                  micropixel_bundle_asset_mapping_t* mapping_out) {
+    if (mapping_out == NULL) {
         return false;
     }
-    memset(view_out, 0, sizeof(*view_out));
-    for (uint32_t index = 0U; index < package->section_count; ++index) {
-        const micropixel_bundle_section_t* section = &package->sections[index];
-        if (section->kind == MICROPIXEL_BUNDLE_SECTION_ASSET && section->id == asset_id) {
-            view_out->data = package->bundle_mapping + section->offset;
-            view_out->size = section->size;
-            view_out->format = section->format;
-            view_out->width = section->width;
-            view_out->height = section->height;
-            view_out->stride = section->stride;
-            view_out->content_hash = section->hash;
-            return true;
-        }
+    memset(mapping_out, 0, sizeof(*mapping_out));
+    const micropixel_bundle_section_t* section = find_section(package, MICROPIXEL_BUNDLE_SECTION_ASSET, asset_id);
+    if (section == NULL) {
+        return false;
     }
-    return false;
+    micropixel_bundle_mapping_t view;
+    if (!acquire_verified_section(&package->source, section, &view)) {
+        return false;
+    }
+    mapping_out->asset.data = view.data;
+    mapping_out->asset.size = section->size;
+    mapping_out->asset.format = section->format;
+    mapping_out->asset.width = section->width;
+    mapping_out->asset.height = section->height;
+    mapping_out->asset.stride = section->stride;
+    mapping_out->asset.content_hash = section->hash;
+    mapping_out->mapping = view;
+    return true;
 }
 
-bool micropixel_bundle_find_font(const micropixel_aot_package_t* package, uint32_t resource_id,
-                                 micropixel_bundle_font_view_t* view_out) {
-    if (package == NULL || view_out == NULL || package->bundle_mapping == NULL || resource_id == 0U) {
+bool micropixel_bundle_open_font(const micropixel_aot_package_t* package, uint32_t resource_id,
+                                 micropixel_bundle_font_mapping_t* mapping_out) {
+    if (mapping_out == NULL) {
         return false;
     }
-    memset(view_out, 0, sizeof(*view_out));
-    for (uint32_t index = 0U; index < package->section_count; ++index) {
-        const micropixel_bundle_section_t* section = &package->sections[index];
-        if (section->kind == MICROPIXEL_BUNDLE_SECTION_FONT && section->id == resource_id) {
-            view_out->data = package->bundle_mapping + section->offset;
-            view_out->size = section->size;
-            view_out->content_hash = section->hash;
-            return true;
-        }
+    memset(mapping_out, 0, sizeof(*mapping_out));
+    const micropixel_bundle_section_t* section = find_section(package, MICROPIXEL_BUNDLE_SECTION_FONT, resource_id);
+    if (section == NULL) {
+        return false;
     }
-    return false;
+    micropixel_bundle_mapping_t view;
+    if (!acquire_verified_section(&package->source, section, &view)) {
+        return false;
+    }
+    mapping_out->font.data = view.data;
+    mapping_out->font.size = section->size;
+    mapping_out->font.content_hash = section->hash;
+    mapping_out->mapping = view;
+    return true;
+}
+
+void micropixel_close_font_mapping(micropixel_bundle_font_mapping_t* mapping) {
+    if (mapping == NULL) {
+        return;
+    }
+    micropixel_bundle_mapping_release(&mapping->mapping);
+    memset(mapping, 0, sizeof(*mapping));
 }

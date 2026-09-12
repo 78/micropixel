@@ -49,7 +49,10 @@ class AudioPlaybackService final {
     static constexpr uint32_t kDecodeSampleRate = 16000U;
 
     struct ClipSlot final {
-        micropixel_bundle_asset_view_t asset{};
+        // Section mapping held open while the clip exists; the decoder reads
+        // the encoded bytes from it in place.
+        micropixel_bundle_asset_mapping_t section{};
+        micropixel_bundle_asset_view_t asset{};  // alias of section.asset
         uint32_t asset_id{};
         uint32_t generation{};
         uint16_t playback_refs{};
@@ -84,6 +87,7 @@ class AudioPlaybackService final {
     static void OnPcmCompletion(void* context, const device::PcmCompletion& completion);
     void FinishPlayback(uint32_t token, int32_t status);
     void ReleasePin(PlaybackSlot& slot);
+    static void ReleaseClipBytes(ClipSlot& clip);
     void ClearPlayback(PlaybackSlot& slot);
     [[nodiscard]] ClipSlot* FindClip(micropixel_audio_clip_handle_t handle);
     [[nodiscard]] PlaybackSlot* FindPlayback(micropixel_audio_playback_handle_t handle);

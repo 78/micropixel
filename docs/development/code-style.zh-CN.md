@@ -38,7 +38,7 @@ bash tools/check_firmware_style.sh --configure
 bash tools/check_firmware_style.sh
 ```
 
-普通 build/flash 不隐式执行格式或静态分析门禁。发布前或推送前统一运行 `bash tools/p4.sh test`；需要
+普通 build/flash 不隐式执行格式或静态分析门禁。发布前或推送前按变更范围和当前目标板执行相关检查；需要
 单独检查完整 clang-tidy 时仍使用上面的检查脚本，避免使用 GCC compilation database 时靠删除未知参数
 得到不可靠结果。Firmware 的 conformance test hooks 也在检查范围内，只有第三方组件、managed
 components 和生成目录排除。
@@ -219,5 +219,5 @@ Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service
 
 1. 最小 Guest Demo 功能页或 test；
 2. Host/Guest 空目录构建；
-3. 与风险匹配的 P4 真机回归；
+3. 与风险匹配的当前目标板真机回归；
 4. Public API、ABI 文档和 roadmap 的同步更新。

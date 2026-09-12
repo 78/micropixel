@@ -88,7 +88,7 @@ Usage: bash tools/s3.sh COMMAND [BOARD] [PORT] [--reset]
 
 Boards: box3 (default), szpi, cores3
 
-Common ESP32-S3 preview commands:
+Common ESP32-S3 commands:
   build-null          Compile the ESP32-S3 hardware-independent Null gate.
   build-host [BOARD]  Build one board Host.
   build-wamrc         Build locked WAMR 2.4.3 wamrc with the Xtensa LLVM backend.
@@ -119,7 +119,7 @@ Compatibility aliases:
 S3_PORT/S3_BAUD, SZPI_S3_PORT/SZPI_S3_BAUD, CORES3_S3_PORT/CORES3_S3_BAUD
 and MICROPIXEL_REMOTE_CONTROL_* may be set in the repository-root .env.
 Explicit environment variables and a command-line PORT take precedence.
-Each preview profile selects its own panel, touch, codec, power and sensor
+Each board profile selects its own panel, touch, codec, power and sensor
 wiring while reusing the ESP32-S3 Runtime and Xtensa Guest baseline.
 EOF
 }
@@ -411,7 +411,7 @@ build_release() {
         exit 2
     fi
     select_board "$1"
-    echo "==> Building shared ESP32-S3 preview Apps: SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer"
+    echo "==> Building shared ESP32-S3 Apps: SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer"
     build_apps
     build_profile "$board_profile" "$board_build_dir" "${board_defaults[@]}"
     echo "==> Creating $board_title browser image with SDK Demo, Snake, Maze Evil, Blocks, Tilt, and Tomb Explorer"

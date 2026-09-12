@@ -8,11 +8,13 @@
 
 ## 支持硬件
 
-| 芯片 | 开发板 | 状态 |
-|---|---|---|
-| ESP32-P4 | [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4) | 产品 |
-| ESP32-S31 | ESP-Mosaico | 预览 |
-| ESP32-S3 | ESP32-S3-BOX-3、立创 SZPI、M5Stack CoreS3 | 预览 |
+| 芯片 | 开发板 |
+|---|---|
+| ESP32-P4 | [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4) |
+| ESP32-S31 | [ESP-Mosaico](https://github.com/esp-mosaico/esp-mosaico-bsp) |
+| ESP32-S3 | [ESP32-S3-BOX-3](https://github.com/espressif/esp-box) |
+| ESP32-S3 | [立创 SZPI](https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html) |
+| ESP32-S3 | [M5Stack CoreS3](https://docs.m5stack.com/en/core/CoreS3) |
 
 Host 使用 ESP-IDF 6.1 和固定版本的 [WAMR fork](https://github.com/78/wasm-micro-runtime)。
 应用按目标架构编译为 AOT v6 Bundle，ABI 仍在演进。

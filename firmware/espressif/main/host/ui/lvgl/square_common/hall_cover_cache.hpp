@@ -31,7 +31,7 @@ struct HallCoverCacheUi final {
 
 class HallCoverCache final {
    public:
-    static constexpr size_t kCapacity = 6U;
+    static constexpr size_t kCapacity = HallCoverCachePolicy::kCapacity;
     static constexpr uint32_t kJobQueueCapacity = 8U;
 
     explicit HallCoverCache(HallCoverCacheConfig config) : config_(config) {}
@@ -45,16 +45,20 @@ class HallCoverCache final {
     void RequestWindow(uint32_t first, uint32_t last, bool force = false);
     [[nodiscard]] bool PrepareSource(const host_ui::HallCoverModel& source, host_ui::HallCoverModel& prepared);
     void Pause();
+    void Resume();
     // Pause() must complete before this is called. The LVGL lock must be held
     // because releasing entries may detach visible image descriptors.
     void SetBackgroundColorLocked(uint32_t top_background_rgb);
     void Release();
+    // Worker paused and LVGL lock held; retain the current cover window and borrowed launch image.
+    void TrimForLaunchLocked(const uint8_t* retained_pixels);
 
    private:
     struct Entry final {
         uint8_t* pixels{};
         HallCoverCacheIdentity identity{};
         uint32_t app_index{host_ui::kMaxHallApps};
+        uint64_t last_used{};
     };
 
     struct Job final {
@@ -74,6 +78,7 @@ class HallCoverCache final {
     void ShowPlaceholder(uint32_t app_index);
     void Attach(uint32_t app_index, const host_ui::HallCoverModel& cover);
     void ReleaseEntry(Entry& entry);
+    [[nodiscard]] bool EvictOutsideWindow();
 
     HallCoverCacheConfig config_{};
     HallCoverCacheUi ui_{};
@@ -85,7 +90,9 @@ class HallCoverCache final {
     std::array<uint8_t, sizeof(Job) * kJobQueueCapacity> queue_bytes_{};
     std::atomic_bool dispatch_scheduled_{};
     std::atomic_bool worker_active_{};
+    std::atomic_bool paused_{true};
     std::atomic_uint32_t request_generation_{1U};
+    uint64_t use_sequence_{};
     uint64_t catalog_signature_{};
     uint64_t catalog_generation_{};
     uint32_t app_count_{};

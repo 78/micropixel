@@ -6,23 +6,30 @@
 
 #include "runtime/bundle/app_requirements.h"
 #include "runtime/bundle/bundle_format.h"
-#include "runtime/bundlefs/bundlefs.h"
+#include "runtime/bundle/bundle_source.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/*
+ * An opened App Bundle. `payload` is a Host-owned PSRAM copy of the AOT
+ * section handed to WAMR. `sections` is a Host-owned copy of the validated
+ * TOC; the section bytes themselves stay on the medium and are made
+ * addressable one section at a time through `micropixel_bundle_open_asset`
+ * and `micropixel_bundle_open_font`, so a Bundle may be far larger than RAM.
+ * Copies of this struct are shallow views; only the original passed to
+ * `micropixel_close_aot_package` owns the payload and the TOC.
+ */
 typedef struct {
     const uint8_t* payload;
     uint32_t payload_size;
-    const uint8_t* bundle_mapping;
-    uint32_t bundle_size;
+    micropixel_bundle_source_t source;
     const micropixel_bundle_section_t* sections;
     uint32_t section_count;
     uint32_t launch_asset_id;
     uint32_t aot_flags;
     uint8_t app_id[MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U];
-    uint32_t mapping_handle;
 } micropixel_aot_package_t;
 
 typedef struct {
@@ -56,24 +63,55 @@ typedef struct {
     uint32_t content_hash;
 } micropixel_bundle_font_view_t;
 
+/*
+ * One section kept addressable on its own; `asset.data` / `font.data` point
+ * into `mapping`: a zero-copy Flash mapping when the source can map, else a
+ * Host-owned PSRAM copy. The section hash is verified before either is
+ * returned. Close the mapping as soon as the bytes have been consumed
+ * (decoded, copied); keep it only while a consumer still reads the bytes
+ * (an audio clip being streamed, a font in use).
+ */
 typedef struct {
     micropixel_bundle_asset_view_t asset;
-    const uint8_t* mapping;
-    uint32_t mapping_handle;
+    micropixel_bundle_mapping_t mapping;
 } micropixel_bundle_asset_mapping_t;
 
-bool micropixel_read_bundle_metadata(const bundlefs_file_t* file, micropixel_bundle_metadata_t* metadata_out);
-bool micropixel_read_bundle_metadata_for_locale(const bundlefs_file_t* file, const char* effective_locale,
+typedef struct {
+    micropixel_bundle_font_view_t font;
+    micropixel_bundle_mapping_t mapping;
+} micropixel_bundle_font_mapping_t;
+
+/*
+ * Every entry point below reads through the Bundle source contract and never
+ * makes the complete Bundle addressable. Metadata and TOC are read in small
+ * pieces; section bytes are hashed in a streaming fashion at install time
+ * (`micropixel_validate_app_package`, `micropixel_validate_component_package`)
+ * and again for each section when it is opened.
+ */
+bool micropixel_read_bundle_metadata(const micropixel_bundle_source_t* source,
+                                     micropixel_bundle_metadata_t* metadata_out);
+bool micropixel_read_bundle_metadata_for_locale(const micropixel_bundle_source_t* source, const char* effective_locale,
                                                 micropixel_bundle_metadata_t* metadata_out);
-bool micropixel_validate_component_package(const bundlefs_file_t* file, micropixel_bundle_metadata_t* metadata_out);
-bool micropixel_open_launch_asset(const bundlefs_file_t* file, micropixel_bundle_asset_mapping_t* mapping_out);
+/* Full structural and content validation of an App Bundle before it is committed to a store. */
+bool micropixel_validate_app_package(const micropixel_bundle_source_t* source,
+                                     micropixel_bundle_metadata_t* metadata_out);
+bool micropixel_validate_component_package(const micropixel_bundle_source_t* source,
+                                           micropixel_bundle_metadata_t* metadata_out);
+bool micropixel_open_launch_asset(const micropixel_bundle_source_t* source,
+                                  micropixel_bundle_asset_mapping_t* mapping_out);
 void micropixel_close_asset_mapping(micropixel_bundle_asset_mapping_t* mapping);
-bool micropixel_open_aot_package(const bundlefs_file_t* file, micropixel_aot_package_t* package_out);
+/*
+ * Opens an App Bundle for execution: validates header, metadata and TOC,
+ * copies the AOT section into PSRAM (hash-verified) and keeps the TOC.
+ * Other sections are verified when opened.
+ */
+bool micropixel_open_aot_package(const micropixel_bundle_source_t* source, micropixel_aot_package_t* package_out);
 void micropixel_close_aot_package(micropixel_aot_package_t* package);
-bool micropixel_bundle_find_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
-                                  micropixel_bundle_asset_view_t* view_out);
-bool micropixel_bundle_find_font(const micropixel_aot_package_t* package, uint32_t resource_id,
-                                 micropixel_bundle_font_view_t* view_out);
+bool micropixel_bundle_open_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
+                                  micropixel_bundle_asset_mapping_t* mapping_out);
+bool micropixel_bundle_open_font(const micropixel_aot_package_t* package, uint32_t resource_id,
+                                 micropixel_bundle_font_mapping_t* mapping_out);
+void micropixel_close_font_mapping(micropixel_bundle_font_mapping_t* mapping);
 
 #ifdef __cplusplus
 }

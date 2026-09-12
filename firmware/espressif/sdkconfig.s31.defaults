@@ -18,7 +18,7 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_250M=y
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
-# Keep the S31 preview at 320 MHz. Startup DFS currently prevents ESP-Mosaico
+# Keep the S31 at 320 MHz. Startup DFS currently prevents ESP-Mosaico
 # from booting reliably, so leave frequency scaling disabled while retaining PM
 # support for tickless idle. The Host power state machine remains authoritative.
 CONFIG_PM_ENABLE=y
@@ -39,7 +39,7 @@ CONFIG_MICROPIXEL_MOSAICO_LVGL_DOUBLE_BUFFER=y
 # as tightly packed rows. Keep LVGL's global stride packed; persistent
 # MicroPixel-owned RGB888 surfaces apply their own 16-pixel stride alignment.
 CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1
-# Keep hosted/native network payload allocations in PSRAM on the S31 preview;
+# Keep hosted/native network payload allocations in PSRAM on the S31;
 # only native ESP32-S3 profiles use the bounded dynamic Wi-Fi pool.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 

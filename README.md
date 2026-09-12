@@ -8,11 +8,13 @@ The firmware manages hardware, app isolation, and the system UI.
 
 ## Hardware
 
-| Profile | Boards | Status |
-|---|---|---|
-| ESP32-P4 | [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4) | Product |
-| ESP32-S31 | ESP-Mosaico | Preview |
-| ESP32-S3 | ESP32-S3-BOX-3, LCKFB SZPI, M5Stack CoreS3 | Preview |
+| Chip | Board |
+|---|---|
+| ESP32-P4 | [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4) |
+| ESP32-S31 | [ESP-Mosaico](https://github.com/esp-mosaico/esp-mosaico-bsp) |
+| ESP32-S3 | [ESP32-S3-BOX-3](https://github.com/espressif/esp-box) |
+| ESP32-S3 | [LCKFB SZPI](https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html) |
+| ESP32-S3 | [M5Stack CoreS3](https://docs.m5stack.com/en/core/CoreS3) |
 
 The Host uses ESP-IDF 6.1 and a pinned [WAMR fork](https://github.com/78/wasm-micro-runtime).
 Apps are compiled to architecture-specific AOT v6 bundles. The ABI is still evolving.

@@ -1,5 +1,7 @@
 #include "firmware_app.hpp"
 
+#include <cinttypes>
+
 #include "device/device_services.hpp"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -13,12 +15,42 @@
 #include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
 #include "platform/platform.hpp"
+#include "platform/storage/partition_block_storage.hpp"
+#include "runtime/bundle/app_store.hpp"
+#include "runtime/bundlefs/bundlefs.hpp"
 #include "work/background_executor.hpp"
 
 namespace micropixel::firmware {
 namespace {
 
 constexpr char kTag[] = "micropixel_main";
+constexpr char kAppStorePartition[] = "app_store";
+constexpr auto kAppStoreSubtype = static_cast<esp_partition_subtype_t>(0x40);
+
+// A board-soldered App storage medium belongs to MicroPixel alone, so foreign
+// content (typically the vendor's factory FAT image) or a BundleFS formatted
+// with another block size is formatted on first use: it only ever holds
+// downloaded Apps, which the Store can fetch again. Removable media are the
+// user's and are never formatted here. A damaged BundleFS is left untouched in
+// both cases; the AppStore reports the state and the System UI offers to
+// format it after the user confirms.
+void PrepareBoardAppStorage(runtime::BundleFs& store, bool removable) {
+    bundlefs_error_t error = store.Mount();
+    if (!removable && (error == BUNDLEFS_ERR_NOT_FORMATTED || error == BUNDLEFS_ERR_UNSUPPORTED_FORMAT)) {
+        ESP_LOGW(kTag, "board App storage holds %s; formatting it for the App Store",
+                 error == BUNDLEFS_ERR_NOT_FORMATTED ? "no BundleFS" : "a BundleFS with another geometry");
+        error = store.Format();
+        if (error == BUNDLEFS_OK) {
+            error = store.Mount();
+        }
+    }
+    if (error != BUNDLEFS_OK) {
+        ESP_LOGE(kTag,
+                 "external App storage is not ready (BundleFS error %d); downloaded Apps use the NOR app_store until "
+                 "it is formatted from System Settings",
+                 static_cast<int>(error));
+    }
+}
 
 }  // namespace
 
@@ -74,7 +106,29 @@ void FirmwareApp::Run() {
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "local control is unavailable for this boot");
     }
-    HostController(devices, *services.battery, *services.wifi, *services.power, shell, controls, system_logs,
+    // Bundle stores: the NOR app_store partition always hosts Components and
+    // factory Apps; a board-published medium (Mosaico NAND) takes downloaded
+    // Apps so system storage stays small and mappable.
+    static platform::storage::PartitionBlockStorage nor_storage(kAppStorePartition, kAppStoreSubtype);
+    static runtime::BundleFs system_store(nor_storage);
+    static runtime::BundleFs* external_store = nullptr;
+    if (services.app_storage != nullptr) {
+        static runtime::BundleFs board_store(*services.app_storage, services.app_storage_block_size);
+        if (board_store.data_block_size() == 0U) {
+            ESP_LOGW(kTag, "board App storage geometry is unsupported; using the NOR app_store partition");
+        } else {
+            PrepareBoardAppStorage(board_store, services.app_storage_removable);
+            external_store = &board_store;
+            ESP_LOGI(kTag, "external App storage: %" PRIu64 " MiB, %" PRIu32 " KiB blocks%s",
+                     services.app_storage->geometry().size_bytes / (1024U * 1024U),
+                     board_store.data_block_size() / 1024U, services.app_storage_removable ? ", removable" : "");
+        }
+    }
+    if (!nor_storage.present()) {
+        ESP_LOGE(kTag, "app_store partition is missing; the App Store is unavailable");
+    }
+    static runtime::AppStore app_store(system_store, external_store);
+    HostController(devices, app_store, *services.battery, *services.wifi, *services.power, shell, controls, system_logs,
                    remote_control, background_executor)
         .Run();
 }

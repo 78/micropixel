@@ -42,6 +42,7 @@
 #include "platform/lvgl/host_pointer_router.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "platform/random/system_random.hpp"
+#include "platform/storage/spi_nand_block_storage.hpp"
 #include "platform/transports/tinyusb_cdc_local_control.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
@@ -219,6 +220,23 @@ class EspMosaicoBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(audio_output_.Configure(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
                             "configure Mosaico ES8311 audio hardware failed");
         battery_.Initialize(state_.i2c_bus, state_.i2c_executor);
+        // The NAND App store is optional for boot: without it downloaded Apps
+        // fall back to the NOR app_store partition.
+        const esp_err_t nand_status = nand_storage_.Initialize(storage::SpiNandBlockStorage::Config{
+            .host = esp_mosaico::board::kNandSpiHost,
+            .clock = esp_mosaico::board::kNandClock,
+            .data_out = esp_mosaico::board::kNandDataOut,
+            .data_in = esp_mosaico::board::kNandDataIn,
+            .chip_select = esp_mosaico::board::kNandChipSelect,
+            .write_protect = esp_mosaico::board::kNandWriteProtect,
+            .hold = esp_mosaico::board::kNandHold,
+            .clock_hz = esp_mosaico::board::kNandClockHz,
+            .io_mode = SPI_NAND_IO_MODE_SIO,
+        });
+        if (nand_status != ESP_OK) {
+            ESP_LOGW(board_detail::kTag, "SPI NAND App store unavailable for this boot: %s",
+                     esp_err_to_name(nand_status));
+        }
         ESP_RETURN_ON_ERROR(haptics_.Initialize(), board_detail::kTag, "initialize Mosaico vibration motor failed");
         ESP_RETURN_ON_ERROR(gpio_.Initialize(), board_detail::kTag, "initialize Mosaico application GPIO failed");
         ESP_RETURN_ON_ERROR(function_button_.Initialize(state_.ui.Input()), board_detail::kTag,
@@ -271,6 +289,9 @@ class EspMosaicoBoard final : public Board, public device::Power {
         registration.SetWifi(wifi_);
         registration.SetPower(*this);
         registration.SetLocalControl(state_.local_control);
+        if (nand_storage_.present()) {
+            registration.SetAppStorage(nand_storage_, esp_mosaico::board::kNandBundleBlockSize);
+        }
         registration.SetSystemUi(system_ui_);
         bool registered = true;
         if (sensors_.acceleration_available()) {
@@ -352,6 +373,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
     wifi::WifiManager wifi_{wifi_radio_};
     esp_mosaico::PowerController power_{};
     haptics::TimedHapticsPeripheral haptics_{esp_mosaico::ConfiguredHapticActuator(), 0U};
+    storage::SpiNandBlockStorage nand_storage_{};
 };
 
 }  // namespace

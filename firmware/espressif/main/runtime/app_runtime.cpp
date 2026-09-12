@@ -116,7 +116,7 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app,
     CopyAppId(app.app_id.data(), outcome.app_id);
     micropixel_bundle_metadata_t metadata{};
     const auto environment = AppEnvironment(devices_);
-    if (!micropixel_read_bundle_metadata(&app.file, &metadata) ||
+    if (!micropixel_read_bundle_metadata(&app.source, &metadata) ||
         !micropixel_app_runtime_compatible(&metadata.requirements, &environment)) {
         outcome.error = AppSessionError::kPackageLoad;
         (void)std::snprintf(outcome.detail.data(), outcome.detail.size(), "application requirements are not satisfied");
@@ -141,7 +141,7 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app,
     GiveSessionLock();
 
     micropixel_log_heap_state("AppSession create begin");
-    auto session_result = AppSession::Create(devices_, background_executor_, app.file, effective_locale_.data(),
+    auto session_result = AppSession::Create(devices_, background_executor_, app.source, effective_locale_.data(),
                                              launch_arguments, log_sink_);
     if (!session_result) {
         if (session_result.error().app_id[0] != '\0') {

@@ -94,6 +94,12 @@ micropixel_audio_playback_handle_t AudioPlaybackService::PlaybackHandle(const Pl
     return (slot.generation << 8U) | (index + 1U);
 }
 
+void AudioPlaybackService::ReleaseClipBytes(ClipSlot& clip) {
+    clip.active = false;
+    clip.asset = {};
+    micropixel_close_asset_mapping(&clip.section);
+}
+
 AudioPlaybackService::ClipSlot* AudioPlaybackService::FindClip(micropixel_audio_clip_handle_t handle) {
     const uint32_t encoded_index = handle & 0xffU;
     if (encoded_index == 0U || encoded_index > kMaxClips) {
@@ -122,14 +128,17 @@ ServiceResult<micropixel_audio_clip_info_t> AudioPlaybackService::LoadClip(uint3
     if (asset_id == 0U) {
         return FailService<micropixel_audio_clip_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    micropixel_bundle_asset_view_t asset{};
-    if (!micropixel_bundle_find_asset(&package_, asset_id, &asset)) {
+    micropixel_bundle_asset_mapping_t section{};
+    if (!micropixel_bundle_open_asset(&package_, asset_id, &section)) {
         return FailService<micropixel_audio_clip_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
     }
+    const micropixel_bundle_asset_view_t asset = section.asset;
     if (asset.format != MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS || asset.data == nullptr || asset.size == 0U) {
+        micropixel_close_asset_mapping(&section);
         return FailService<micropixel_audio_clip_info_t>(MICROPIXEL_STATUS_UNSUPPORTED);
     }
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE) {
+        micropixel_close_asset_mapping(&section);
         return FailService<micropixel_audio_clip_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
     ClipSlot* selected = nullptr;
@@ -141,9 +150,11 @@ ServiceResult<micropixel_audio_clip_info_t> AudioPlaybackService::LoadClip(uint3
     }
     if (selected == nullptr) {
         (void)xSemaphoreGive(mutex_);
+        micropixel_close_asset_mapping(&section);
         return FailService<micropixel_audio_clip_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     selected->generation = NextGeneration(selected->generation);
+    selected->section = section;
     selected->asset = asset;
     selected->asset_id = asset_id;
     selected->playback_refs = 0U;
@@ -168,8 +179,7 @@ ServiceResult<void> AudioPlaybackService::ReleaseClip(micropixel_audio_clip_hand
     }
     slot->guest_owned = false;
     if (slot->playback_refs == 0U) {
-        slot->active = false;
-        slot->asset = {};
+        ReleaseClipBytes(*slot);
     }
     (void)xSemaphoreGive(mutex_);
     return {};
@@ -366,8 +376,7 @@ void AudioPlaybackService::ReleasePin(PlaybackSlot& slot) {
         --clip->playback_refs;
     }
     if (clip->playback_refs == 0U && !clip->guest_owned) {
-        clip->active = false;
-        clip->asset = {};
+        ReleaseClipBytes(*clip);
     }
     slot.pinned = false;
 }
@@ -574,8 +583,7 @@ void AudioPlaybackService::Shutdown() {
         worker_ = nullptr;
     }
     for (ClipSlot& clip : clips_) {
-        clip.active = false;
-        clip.asset = {};
+        ReleaseClipBytes(clip);
     }
     shutdown_complete_ = true;
 }

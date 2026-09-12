@@ -262,7 +262,7 @@ prepare_host_config() {
 
 build_profile() {
     local profile="$1"
-    echo "==> ESP32-S31 preview compile gate: $profile (build only)"
+    echo "==> ESP32-S31 compile gate: $profile (build only)"
     if [[ "$profile" == "esp-mosaico" ]]; then
         prepare_host_config
         python3 "$workspace_root/tools/firmware.py" "$profile" build \

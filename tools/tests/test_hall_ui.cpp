@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 
+#include "host/ui/hall_install_model.hpp"
 #include "host/ui/lvgl/square_common/hall_carousel.hpp"
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
@@ -139,7 +140,7 @@ void BoundedCoverWindow() {
     Check(HallCarousel::CoverWindowLast(50U, HallCarousel::MaxOffset(50U)) == 50U,
           "the final cover window must clamp to the Catalog");
     Check(HallCarousel::kMaximumCachedCovers == 6U,
-          "decoded Hall cover memory must remain bounded independently of App count");
+          "the prefetch window must remain bounded independently of retained decoded covers");
 }
 
 void SnapshotCacheIdentity() {
@@ -175,6 +176,40 @@ void CoverCacheReplacementAfterAppUpdate() {
 
     Check(HallCoverCachePolicy::ReplacementIndex(kFullCache, 99U, 15U, 10U, 16U) == 0U,
           "a cover outside the current window must remain the fallback eviction candidate");
+}
+
+void RetainedCoverBudgetAndEviction() {
+    Check(HallCoverCachePolicy::kCapacity == host_ui::kMaxHallApps,
+          "retained cache must accommodate the bounded Hall, not just its visible window");
+    Check(HallCoverCachePolicy::CanGrow(8U * 1024U * 1024U, 65536U),
+          "ample PSRAM must allow retaining previously visited covers");
+    Check(!HallCoverCachePolicy::CanGrow(HallCoverCachePolicy::kPsramReserve, 65536U),
+          "retention must leave a PSRAM reserve for the Host and decoder");
+    Check(!HallCoverCachePolicy::CanGrow(1U, 65536U), "budget checks must not underflow");
+    std::array<HallCoverCacheSlot, HallCoverCachePolicy::kCapacity> slots{};
+    for (uint32_t index = 0U; index < 9U; ++index) {
+        const size_t slot = HallCoverCachePolicy::ReplacementIndex(slots, index + 1U, index, index, index + 1U);
+        Check(slot == index, "scrolling through nine covers must retain all previous entries when space permits");
+        slots[slot] = {.occupied = true, .key = index + 1U, .app_index = index, .last_used = index + 1U};
+    }
+    slots[0].last_used = 20U;
+    Check(HallCoverCachePolicy::OldestOutsideWindow(slots, 3U, 9U) == 1U,
+          "memory pressure must evict the least recently used offscreen cover");
+    Check(HallCoverCachePolicy::OldestOutsideWindow(slots, 0U, 9U) == HallCoverCachePolicy::kNoSlot,
+          "visible and prefetched covers must never be evicted for memory pressure");
+}
+
+void LaunchRetainsCurrentCoverWindow() {
+    for (uint32_t index = 0U; index < host_ui::kMaxHallApps; ++index) {
+        const bool retained = HallCoverCachePolicy::RetainForLaunch(index, 9U, 15U, index == 11U);
+        Check(retained == (index >= 9U && index < 15U),
+              "launch must retain all current covers, not only the selected app, and release distant covers");
+    }
+    Check(HallCoverCachePolicy::RetainForLaunch(20U, 9U, 15U, true),
+          "an explicitly borrowed launch image must remain valid outside the current window");
+    Check(!HallCoverCachePolicy::RetainForLaunch(host_ui::kMaxHallApps, host_ui::kMaxHallApps, host_ui::kMaxHallApps,
+                                                 false),
+          "an empty window must not retain stale catalog entries");
 }
 
 void NativeScreenshotCover() {
@@ -289,9 +324,37 @@ void TestHallCoverMask() {
     CheckStride(135U, 432U, 15U);
 }
 
+void InstallationPlacement() {
+    host_ui::HallModel model{};
+    model.app_count = 2U;
+    model.apps[0].app_id = "first";
+    model.apps[1].app_id = "second";
+    host_ui::ApplyHallInstallation(model, "new", 12U);
+    Check(model.app_count == 3U && std::strcmp(model.apps[0].app_id, "new") == 0,
+          "new installation must be visible at the front");
+    Check(std::strcmp(model.apps[1].app_id, "first") == 0 && std::strcmp(model.apps[2].app_id, "second") == 0,
+          "existing apps must retain their relative order");
+    host_ui::ApplyHallInstallation(model, "new", 75U);
+    Check(model.app_count == 3U && model.apps[0].install_progress_percent == 75U,
+          "progress must update the same card without adding a duplicate");
+    host_ui::ApplyHallInstallation(model, "second", 25U);
+    Check(model.app_count == 3U && model.apps[2].install_progress_percent == 25U,
+          "updating an existing app must preserve its position");
+    model.app_count = host_ui::kMaxHallApps;
+    host_ui::ApplyHallInstallation(model, "another", 0U);
+    Check(model.app_count == host_ui::kMaxHallApps && std::strcmp(model.apps[0].app_id, "another") == 0,
+          "a full Hall must still show installation progress within its capacity");
+    model = {};
+    model.status = host_ui::HallStatus::kNoApps;
+    host_ui::ApplyHallInstallation(model, "only", 0U);
+    Check(model.app_count == 1U && model.status == host_ui::HallStatus::kReady,
+          "an empty Hall must show the first installation");
+}
+
 }  // namespace
 
 int main() {
+    InstallationPlacement();
     CapacityAndGeometry();
     Square480Geometry();
     Landscape320Geometry();
@@ -300,6 +363,8 @@ int main() {
     ContinuousIndicator();
     CardRevealOffset();
     BoundedCoverWindow();
+    LaunchRetainsCurrentCoverWindow();
+    RetainedCoverBudgetAndEviction();
     SnapshotCacheIdentity();
     CoverCacheReplacementAfterAppUpdate();
     NativeScreenshotCover();

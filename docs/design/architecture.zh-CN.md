@@ -7,8 +7,8 @@ MicroPixel 把应用逻辑放在 WebAssembly Guest 中，把硬件、系统 UI �
 
 ## 1. 产品边界
 
-- 产品硬件为 ESP32-P4 + Metalio-Claw4；ESP32-S31 + ESP-Mosaico、ESP32-S3-BOX-3、立创
-  SZPI ESP32-S3 和 M5Stack CoreS3 为 preview profile。
+- 支持 ESP32-P4 + Metalio-Claw4、ESP32-S31 + ESP-Mosaico，以及 ESP32-S3-BOX-3、
+  立创 SZPI ESP32-S3 和 M5Stack CoreS3。
 - Host 使用 ESP-IDF 6.1 与固定 commit 的 MicroPixel WAMR fork，执行 AOT format v6。
   Guest 使用受限 C++23，不依赖 ESP-IDF、LVGL 或板级 SDK。
 - 一个长驻 Runtime 同时最多持有一个 AppSession。Guest 按单线程事件模型运行。
@@ -41,8 +41,11 @@ Board 只登记初始化成功的能力；Platform 为缺失能力提供 unavail
 设备却不必具备全部硬件。Null Board 用于验证这种依赖边界，不是可烧录的产品替代品。
 
 系统页面、交互和生命周期由 Host 统一管理，分辨率 profile 提供布局，Board 提供显示、亮度和转场能力。
-硬件转场可缺省，基本交互仍可工作。App Hall 只保留可见卡片及预取窗口，避免 UI 和封面内存随安装数量
-线性增长。板型只消费呈现请求，不读取 Hall 索引或持有页面内部状态。
+硬件转场可缺省，基本交互仍可工作。App Hall 只为可见卡片及预取窗口创建 UI 和提交封面任务；
+解码缓存按内存余量保留，启动时只保留当前窗口及启动画面借用的像素。Host 提供带稳定内容标识的
+封面读取回调，后台任务在缓存缺失时读取、解码，并在回调返回前释放原始数据；绘制和返回大厅不读存储。
+目录变更前必须暂停并排空封面读取，回调不得跨任务保留源指针。板型只消费呈现请求，不读取 Hall 索引
+或持有页面内部状态。
 
 ### Platform 术语
 
@@ -167,6 +170,9 @@ Host-owned 纹理和 surface 在实际分配时同样检查安全水位，不提
 留给显示、解码和系统交互；应用不能假定理论上限始终可分配。
 
 可处理的业务失败返回 Result；编程错误和 ABI 安全失败进入 panic/fault policy。异常和 RTTI 关闭。
+AppSession 的 trap 详情保留 SDK panic、WAMR 异常及最近一次图片解码失败的资源 ID 和原因；
+解码错误只作为上下文，不视为 trap 的确定原因。后续纹理加载成功会清除该解码错误，
+新 AppSession 不继承旧会话诊断。诊断使用固定容量缓冲区，不改变 Guest 的错误恢复行为。
 设备主音量归 Host；Guest 只控制单次音效或播放的音量。详细规则见
 [代码风格](../development/code-style.zh-CN.md)与[游戏音频规范](../development/game-audio.zh-CN.md)。
 
@@ -175,6 +181,27 @@ Host-owned 纹理和 surface 在实际分配时同样检查安全水位，不提
 Bundle reader 在创建 WAMR instance 前检查格式、hash、范围、对齐和唯一性。当前一个 Bundle 只含一个
 AOT section，按 CPU 架构分别构建；安装在写入 App Store 前拒绝缺少 target 元数据或架构不匹配的 AOT。
 容器为未来多架构留有空间，但多 AOT 选择尚未启用。
+
+Bundle reader、`AotPackage`、大厅封面和 Guest 资源服务不直接依赖任何存储实现，只依赖
+`runtime/bundle/bundle_source.h` 定义的 Bundle source 契约：一个 source 是某个不可变 Bundle 文件的
+只读视图，提供 `size`、`read` 和可选的 `map`。source 是按值复制的 POD，ops 表共享且不可变，文件状态
+内联保存，因此 catalog 可以直接持有它，而不关心文件来自 NOR 上的 BundleFS、NAND 上的 BundleFS，还是
+未来 LittleFS/FAT 目录中的侧载文件。reader 从不整包读取：打开时只读 TOC 并把 AOT 段复制到 PSRAM，
+贴图、字体、音频剪辑和封面在被使用时才逐段打开并校验哈希。能进入 CPU 地址空间的存储（NOR
+`app_store`）提供 `map`，一段就是一个零拷贝映射窗口；不能映射的存储把 `map` 留空，reader 把该段读入
+Host 持有的 PSRAM 副本，行为一致，只有内存成本不同。副本不设人为大小上限：PSRAM 不足时在加载点失败并
+记录请求字节数。安装、卸载和写时复制替换仍然只由 `AppStore` 通过 BundleFS 完成；source 契约不包含写操作。
+
+存储介质走 Device 契约 `device::BlockStorage`（`Read/Program/Erase/Sync`、可选 `Map`、64 位容量与
+偏移的几何报告）；Platform 提供 NOR 分区和 SPI NAND 适配器（`platform/storage/`），板型通过
+`SetAppStorage(storage, bundle_block_size, removable)` 注册可选的大容量 App 介质，可为它指定格式化块
+大小并声明是否可插拔。BundleFS 的块大小和 Catalog 几何来自介质而不是常量，详见
+[BundleFS](bundlefs.zh-CN.md)第 1 节。`runtime::BundleFs` 是绑定一个介质的实例，`runtime::AppStore`
+持有系统商店（NOR，系统组件与出厂 App）和可选的扩展商店（板载介质，下载的 App），按 Bundle 类型路由
+写入并合并两个 Catalog；目录里每个 App 带有所在存储（`AppStorage`），扩展商店的挂载状态
+（`ExternalStorageState`）随目录一起上报，未就绪时由 App 管理页在用户确认后通过
+`AppStore::FormatExternalStore()` 格式化（见 BundleFS 第 5 节）。`FirmwareApp` 是唯一组装介质、
+BundleFS 实例和 `AppStore` 的地方。
 
 BundleFS 使用写时复制：先写并验证新数据，最后提交新 Catalog，掉电后选择最后一代有效记录。
 离散数据块减少连续空洞问题。App Store 重装已安装 App 时先卸载旧版本再安装，只需容纳新版本，

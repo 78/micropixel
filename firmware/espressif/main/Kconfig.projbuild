@@ -122,6 +122,17 @@ menu "WAMR application quotas"
         range 100 60000
         default 1000
 
+    config MICROPIXEL_BUNDLEFS_BLOCK_MAP_BUDGET_KIB
+        int "BundleFS Catalog block-map RAM budget per store (KiB)"
+        range 16 16384
+        default 1024
+        help
+            When a store is formatted, the data block defaults to the medium's own
+            unit (erase sector or MMU page) and is doubled only while the Catalog
+            block map (4 bytes per data block, kept in RAM while mounted) would
+            exceed this budget. Mounting adopts whatever block size the committed
+            Catalog records; this value only affects fresh formats.
+
 endmenu
 
 menu "MicroPixel board backends"
@@ -140,46 +151,46 @@ menu "MicroPixel board backends"
             backend and is not exposed through the Guest ABI.
 
     config MICROPIXEL_BOARD_ESP_MOSAICO
-        bool "ESP-Mosaico bring-up profile"
+        bool "ESP-Mosaico"
         depends on IDF_TARGET_ESP32S31
         help
             Bring up the CO5300 display and 78/esp_lcd_touch_cst92xx driver with the
             shared Runtime, Guest graphics engine and native ESP32-S31 Wi-Fi.
-            Audio, sensors, battery, NAND and module discovery remain outside
-            the initial HMI integration.
+            Board services include audio, sensors, battery and haptics.
+            NAND and module discovery are not exposed to Guests.
 
     config MICROPIXEL_BOARD_ESP32_S3_BOX_3
-        bool "ESP32-S3-BOX-3 preview profile"
+        bool "ESP32-S3-BOX-3 board profile"
         depends on IDF_TARGET_ESP32S3
         help
             Bring up the native ESP-BOX-3 display, touch, audio, Wi-Fi,
             built-in ICM-42607-P IMU, Pmod GPIO, Guest Graphics and App Hall.
 
     config MICROPIXEL_BOARD_SZPI_ESP32S3
-        bool "LCKFB SZPI ESP32-S3 preview profile"
+        bool "LCKFB SZPI ESP32-S3 board profile"
         depends on IDF_TARGET_ESP32S3
         help
             Bring up the LCKFB SZPI ESP32-S3 board's ST7789 display, FT6336
             touch controller, ES8311 audio output, native Wi-Fi, QMI8658 IMU,
             BOOT key, expansion GPIO, Guest Graphics and App Hall. Camera,
-            microphone and SD card remain outside the preview profile.
+            microphone and SD card remain outside the board profile.
 
     config MICROPIXEL_BOARD_M5STACK_CORES3
-        bool "M5Stack CoreS3 preview profile"
+        bool "M5Stack CoreS3 board profile"
         depends on IDF_TARGET_ESP32S3
         help
             Bring up the M5Stack CoreS3 ILI9342C display, FT6336U touch,
             AW88298 speaker, AXP2101 battery/power control, BMI270 sensors,
             native Wi-Fi, Guest Graphics and App Hall. Camera,
             microphone, RTC, proximity sensor and SD card remain outside this
-            preview profile.
+            board profile.
 
     config MICROPIXEL_BOARD_NULL
         bool "Null board"
         help
             Build hardware-independent Runtime and Device paths with unavailable
-            device backends. Product profiles do not select this board; preview
-            bring-up profiles may flash it before board peripherals are enabled.
+            device backends. Hardware profiles do not select this board; it is used only for
+            hardware-independent compile checks.
 
     endchoice
 

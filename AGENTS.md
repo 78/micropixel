@@ -6,8 +6,9 @@ Applies to the entire repository. Use source code, ABI headers, and executable t
 
 MicroPixel runs WebAssembly apps on Espressif MCUs using ESP-IDF 6.1 and a pinned WAMR fork (AOT v6).
 Guests use a restricted C++23 SDK and a single-threaded event loop; only one AppSession can exist at a time.
-ESP32-P4 / Metalio-Claw4 is the product profile; S31 / Mosaico and S3 boards are previews.
-Bundle v1 distributes apps; BundleFS v2 provides copy-on-write storage and power-loss recovery.
+Supported boards are Metalio-Claw4, ESP-Mosaico, ESP32-S3-BOX-3, LCKFB SZPI, and M5Stack CoreS3.
+Bundle v1 distributes apps; BundleFS v3 provides copy-on-write storage and power-loss recovery with
+geometry derived from the block device (v1/v2 catalogs are imported in place).
 
 Dependencies: `Runtime → Device contracts ← Platform`. `FirmwareApp` is the only composition root.
 The Host owns hardware, app lifecycle, and system UI. Guests access capabilities through the Service ABI.
@@ -56,15 +57,17 @@ Host paths below are relative to `firmware/espressif/main/`. Detailed design gui
 | Change | Required checks |
 |---|---|
 | Documentation | Relative links and `git diff --check` |
-| Guest SDK / ABI | `bash tools/build_guest_p4.sh` and relevant conformance tests |
-| Firmware / System Shell | Host tests, formatting, `bash tools/p4.sh build-host`; no Guest or App Store rebuild for Host-only changes |
-| Shared graphics / LVGL / PPA branches | Also build S31 and at least one S3 profile |
+| Guest SDK / ABI | Build Guests for the selected target and run relevant conformance tests |
+| Firmware / System Shell | Host tests, formatting, and the selected board’s `build-host`; no Guest or App Store rebuild for Host-only changes |
+| Shared graphics / LVGL / PPA branches | Validate the selected target; add other boards only for a concrete affected platform branch or an explicit multi-board request |
 | Bundle / integrated app | Relevant tests and the app's release Bundle; build Host only if changed |
 | Sound effects | Analyzer unit tests, release Bundle, hardware A/B listening |
 | Graphics performance | Guest and Host stage measurements plus visible output; CPU usage alone is insufficient |
 
 Run Host tests only through `bash tools/tests/test_firmware_host.sh`, never by invoking clang++ directly.
-Formatting: `bash tools/check_firmware_style.sh --format-only`. Before release or push, run `bash tools/p4.sh test`.
+Formatting: `bash tools/check_firmware_style.sh --format-only`. Before release or push, run checks relevant to the change and release targets.
+Use the board specified by the user or established by the current hardware task. Do not default to P4 or build
+unrelated boards. For S31 work, use `bash tools/s31.sh build-host` and, when requested, `flash-host`.
 See [Contributing](CONTRIBUTING.md) for additional checks.
 
 Activate ESP-IDF 6.1 via `export.sh` and configure WASI SDK and matching WAMRC before building.

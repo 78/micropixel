@@ -1,11 +1,11 @@
 #include "runtime/resources/resource_service.hpp"
 
 #include <cinttypes>
+#include <cstdio>
 #include <cstring>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "runtime/resources/bitmap_decoder.hpp"
 #include "work/background_executor.hpp"
@@ -73,30 +73,21 @@ micropixel_texture_info_t ResourceService::TextureInfo(micropixel_texture_handle
 ServiceResult<micropixel_texture_info_t> ResourceService::AddAsset(const micropixel_bundle_asset_view_t& asset) {
     const uint32_t pixel_format = AssetPixelFormat(asset.format);
     device::BitmapView view{asset.data, asset.size, asset.width, asset.height, asset.stride, pixel_format};
-    // Raw assets are mapped straight out of the Bundle in flash. That mapping is
-    // fine for the CPU, but every compositor read of it goes through the flash
-    // cache: DMA2D/PPA sources measured ~180 ns/px from flash against ~23 ns/px
-    // from PSRAM, and the sustained flash traffic starves the DSI frame buffer
-    // fetch ("underrun"). Stage the pixels in PSRAM once at load time; fall
-    // back to the flash view only when PSRAM is exhausted.
-    bool staged = false;
-    if (esp_ptr_in_drom(asset.data)) {
-        auto* pixels = static_cast<uint8_t*>(
-            heap_caps_aligned_alloc(kStagedAssetAlignment, asset.size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (pixels != nullptr) {
-            std::memcpy(pixels, asset.data, asset.size);
-            view.data = pixels;
-            staged = true;
-        } else {
-            ESP_LOGW(kTag, "raw asset %" PRIu32 " bytes stays flash-mapped: PSRAM staging allocation failed",
-                     asset.size);
-        }
+    // The section mapping is closed as soon as this returns, so the texture
+    // owns a PSRAM copy of the pixels. That is also the fast path: compositor
+    // reads of a flash-mapped source measured ~180 ns/px against ~23 ns/px
+    // from PSRAM, and sustained flash traffic starves the DSI frame buffer.
+    auto* pixels = static_cast<uint8_t*>(
+        heap_caps_aligned_alloc(kStagedAssetAlignment, asset.size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (pixels == nullptr) {
+        ESP_LOGE(kTag, "raw asset staging failed: PSRAM allocation of %" PRIu32 " bytes", asset.size);
+        return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
-    const micropixel_texture_handle_t texture = bitmaps_.Add(view, staged);
+    std::memcpy(pixels, asset.data, asset.size);
+    view.data = pixels;
+    const micropixel_texture_handle_t texture = bitmaps_.Add(view, true);
     if (texture == 0U) {
-        if (staged) {
-            heap_caps_free(const_cast<uint8_t*>(view.data));
-        }
+        heap_caps_free(pixels);
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     return TextureInfo(texture, view);
@@ -108,37 +99,43 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
         scale_denominator > 4096U || stopping_.load(std::memory_order_acquire)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    micropixel_bundle_asset_view_t asset{};
-    if (!micropixel_bundle_find_asset(&package_, asset_id, &asset)) {
+    // The section is addressable only for the duration of this call: decoded
+    // or copied pixels become the texture, the Bundle bytes are released.
+    micropixel_bundle_asset_mapping_t section{};
+    if (!micropixel_bundle_open_asset(&package_, asset_id, &section)) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_NOT_FOUND);
     }
+    const micropixel_bundle_asset_view_t asset = section.asset;
     const bool scaled = scale_numerator != scale_denominator;
 
     if (!scaled && IsRawBitmapFormat(asset.format)) {
         const int64_t started_us = esp_timer_get_time();
         auto result = AddAsset(asset);
-        device::BitmapView view{};
-        const bool resolved = result && bitmaps_.Resolve(result->texture_handle, view);
-        ESP_LOGI(kTag, "loaded raw asset=%" PRIu32 " texture=%" PRIu32 " bytes=%" PRIu32 " %s elapsed=%" PRId64 " us",
-                 asset_id, result ? result->texture_handle : 0U, asset.size,
-                 resolved ? (esp_ptr_in_drom(view.data) ? "flash-mapped" : "psram-staged") : "failed",
-                 esp_timer_get_time() - started_us);
+        micropixel_close_asset_mapping(&section);
+        ESP_LOGI(kTag, "loaded raw asset=%" PRIu32 " texture=%" PRIu32 " bytes=%" PRIu32 " elapsed=%" PRId64 " us",
+                 asset_id, result ? result->texture_handle : 0U, asset.size, esp_timer_get_time() - started_us);
+        if (result) {
+            last_decode_failure_[0] = '\0';
+        }
         return result;
     }
 
     // Guest service calls are serialized. This stack context remains valid
     // because the call waits for Process() to signal completion below.
-    Work work{this, asset, scale_numerator, scale_denominator};
+    Work work{this, asset, scale_numerator, scale_denominator, asset_id};
     completed_texture_ = 0U;
     completed_status_ = MICROPIXEL_STATUS_INTERNAL;
     while (xSemaphoreTake(work_done_, 0U) == pdTRUE) {
     }
     if (!background_executor_.Submit(ProcessEntry, &work)) {
+        micropixel_close_asset_mapping(&section);
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
     }
     ESP_LOGI(kTag, "loading asset=%" PRIu32 " format=%" PRIu32 " bytes=%" PRIu32 " scale=%" PRIu32 "/%" PRIu32,
              asset_id, asset.format, asset.size, scale_numerator, scale_denominator);
-    if (xSemaphoreTake(work_done_, portMAX_DELAY) != pdTRUE) {
+    const bool completed = xSemaphoreTake(work_done_, portMAX_DELAY) == pdTRUE;
+    micropixel_close_asset_mapping(&section);
+    if (!completed) {
         return FailService<micropixel_texture_info_t>(MICROPIXEL_STATUS_INTERNAL);
     }
     if (completed_status_ != MICROPIXEL_STATUS_OK || completed_texture_ == 0U) {
@@ -152,6 +149,7 @@ ServiceResult<micropixel_texture_info_t> ResourceService::LoadTexture(uint32_t a
     // The Guest addresses the authored size; only the stored bitmap is scaled.
     info.width = asset.width;
     info.height = asset.height;
+    last_decode_failure_[0] = '\0';
     return info;
 }
 
@@ -163,15 +161,33 @@ ServiceResult<void> ResourceService::ReleaseTexture(micropixel_texture_handle_t 
     return {};
 }
 
-ServiceResult<device::FontResourceView> ResourceService::FindFont(uint32_t resource_id) const {
+ServiceResult<device::FontResourceView> ResourceService::FindFont(uint32_t resource_id) {
     if (resource_id == 0U || stopping_.load(std::memory_order_acquire)) {
         return FailService<device::FontResourceView>(MICROPIXEL_STATUS_INVALID_ARGUMENT);
     }
-    micropixel_bundle_font_view_t font{};
-    if (!micropixel_bundle_find_font(&package_, resource_id, &font)) {
+    if (fonts_ == nullptr) {
+        fonts_ = static_cast<FontSlot*>(
+            heap_caps_calloc(package_.section_count, sizeof(FontSlot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (fonts_ == nullptr) {
+            ESP_LOGE(kTag, "font slot allocation failed: %" PRIu32 " slots", package_.section_count);
+            return FailService<device::FontResourceView>(MICROPIXEL_STATUS_RESOURCE_EXHAUSTED);
+        }
+    }
+    for (uint32_t index = 0U; index < font_count_; ++index) {
+        if (fonts_[index].resource_id == resource_id) {
+            return device::FontResourceView{fonts_[index].mapping.font.data, fonts_[index].mapping.font.size};
+        }
+    }
+    if (font_count_ >= package_.section_count) {
         return FailService<device::FontResourceView>(MICROPIXEL_STATUS_NOT_FOUND);
     }
-    return device::FontResourceView{font.data, font.size};
+    FontSlot& slot = fonts_[font_count_];
+    if (!micropixel_bundle_open_font(&package_, resource_id, &slot.mapping)) {
+        return FailService<device::FontResourceView>(MICROPIXEL_STATUS_NOT_FOUND);
+    }
+    slot.resource_id = resource_id;
+    ++font_count_;
+    return device::FontResourceView{slot.mapping.font.data, slot.mapping.font.size};
 }
 
 ServiceResult<micropixel_texture_info_t> ResourceService::CreateDynamicTexture(
@@ -266,6 +282,8 @@ int32_t ResourceService::LoadOwnedAsset(const Work& work, micropixel_texture_han
             std::memcpy(destination + row * row_bytes, work.asset.data + row * work.asset.stride, row_bytes);
         }
     } else if (!DecodeBitmap(work.asset, preferred_opaque_format_.load(), source)) {
+        (void)std::snprintf(last_decode_failure_.data(), last_decode_failure_.size(), "asset=%" PRIu32 ": %s",
+                            work.asset_id, source.FailureDetail());
         return MICROPIXEL_STATUS_INTERNAL;
     }
 
@@ -326,6 +344,13 @@ void ResourceService::Shutdown() {
     stopping_.store(true, std::memory_order_release);
     const uint32_t texture_high_water_mark = bitmaps_.HighWaterMark();
     bitmaps_.ReleaseAll();
+    // Guest fonts were released with the graphics resources before this.
+    for (uint32_t index = 0U; index < font_count_; ++index) {
+        micropixel_close_font_mapping(&fonts_[index].mapping);
+    }
+    heap_caps_free(fonts_);
+    fonts_ = nullptr;
+    font_count_ = 0U;
     shutdown_complete_ = true;
     ESP_LOGI(kTag, "resource textures released: high-water=%" PRIu32 "/%" PRIu32, texture_high_water_mark,
              limits::kMaxBitmaps);

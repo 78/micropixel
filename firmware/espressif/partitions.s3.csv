@@ -1,4 +1,4 @@
-# ESP32-S3 16 MiB preview layout. The final 8 MiB remains a writable BundleFS
+# ESP32-S3 16 MiB layout. The final 8 MiB remains a writable BundleFS
 # app_store so every S3 board uses the same install and launch path.
 # Name,       Type, SubType, Offset,   Size,       Flags
 nvs,          data, nvs,     0x009000, 0x006000,

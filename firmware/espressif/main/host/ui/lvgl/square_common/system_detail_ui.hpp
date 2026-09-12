@@ -66,6 +66,8 @@ class SystemDetailUi final {
         kActions,
         kUninstallConfirmation,
         kUninstallUnavailable,
+        kFormatConfirmation,
+        kFormatUnavailable,
     };
 
     enum class Screen : uint8_t {
@@ -104,6 +106,8 @@ class SystemDetailUi final {
     static void AppManagementOpenEvent(lv_event_t* event);
     static void AppManagementUninstallEvent(lv_event_t* event);
     static void AppManagementConfirmUninstallEvent(lv_event_t* event);
+    static void AppManagementStorageEvent(lv_event_t* event);
+    static void AppManagementConfirmFormatEvent(lv_event_t* event);
     static void AppManagementDisplayEvent(lv_event_t* event);
 
     void RenderSystemInformationLocked();
@@ -118,6 +122,12 @@ class SystemDetailUi final {
     void DrawAppManagementActionsLocked();
     void DrawAppManagementUninstallUnavailableLocked();
     void DrawAppManagementUninstallConfirmationLocked();
+    void DrawAppManagementFormatConfirmationLocked();
+    void DrawAppManagementFormatUnavailableLocked();
+    void DrawAppManagementFormatRowLocked(lv_obj_t* scroll);
+    void DrawAppManagementGroupLocked(lv_obj_t* scroll, const char* title, const host_ui::StorageUsageModel& usage,
+                                      bool external_storage);
+    void DrawAppManagementRowLocked(lv_obj_t* scroll, uint32_t index);
     void QueueAppManagementRender();
     void BeginAppManagementLatencyProbe(const char* operation);
     void StartAppManagementLatencyProbe();

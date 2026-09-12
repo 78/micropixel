@@ -35,6 +35,7 @@
 #include "host/controller/remote/remote_control_agent.hpp"
 #include "host/logging/system_log_buffer.hpp"
 #include "host/time/system_time.hpp"
+#include "host/ui/hall_install_model.hpp"
 #include "host/ui/system_settings_store.hpp"
 #include "host/ui/system_shell.hpp"
 #include "runtime/app_runtime.hpp"
@@ -151,7 +152,36 @@ class CpuUsageSampler final {
 #endif
 };
 
-using HallCoverMappings = std::array<runtime::LaunchAssetMapping, runtime::kMaxInstalledApps>;
+bool ReadHallCover(const void* context, host_ui::HallCoverConsumer consume, void* consumer_context) {
+    const auto& app = *static_cast<const runtime::InstalledApp*>(context);
+    auto mapping = runtime::LaunchAssetMapping::Open(app.source);
+    if (!mapping) {
+        ESP_LOGW(kTag, "App Hall cover unavailable: app=%s", app.app_id.data());
+        return false;
+    }
+    const auto& asset = mapping->asset();
+    const host_ui::HallCoverModel source{
+        .data = asset.data,
+        .size = asset.size,
+        .width = asset.width,
+        .height = asset.height,
+        .stride = asset.stride,
+        .format = asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG
+                      ? host_ui::HallCoverFormat::kJpeg
+                      : (asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG ? host_ui::HallCoverFormat::kPng
+                                                                      : host_ui::HallCoverFormat::kRgb888)};
+    return consume(consumer_context, source);
+}
+
+uint64_t HallCoverKey(const runtime::InstalledApp& app) {
+    // The catalog already owns the Bundle digest. No asset read is needed to
+    // identify a cached cover; replacing the Bundle invalidates its thumbnail.
+    uint64_t key = 14695981039346656037ULL;
+    for (const uint8_t byte : app.sha256) {
+        key = (key ^ byte) * 1099511628211ULL;
+    }
+    return key != 0U ? key : 1U;
+}
 
 host_ui::HallWifiModel MakeHallWifiModel(const device::WifiSnapshot& wifi) {
     host_ui::HallWifiModel model{.available = wifi.available, .enabled = wifi.enabled, .connected = wifi.connected};
@@ -182,7 +212,6 @@ host_ui::HallStatusBarModel MakeHallStatusBarModel(const device::WifiSnapshot& w
 void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog& catalog,
                    const device::WifiSnapshot& wifi, const device::BatterySnapshot& battery, host_ui::HallStatus status,
                    const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U, bool launch_enabled = true,
-                   const HallCoverMappings* covers = nullptr,
                    const std::optional<uint32_t>& suspended_index = std::nullopt,
                    const host_ui::HallCoverModel* suspended_snapshot = nullptr, uint64_t transition_trigger_us = 0U,
                    bool firmware_update_available = false, const control::InstallActivity* install_activity = nullptr) {
@@ -210,65 +239,21 @@ void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog
     model.transition_trigger_us = transition_trigger_us;
     model.firmware_update_available = firmware_update_available;
     model.install_active = install_active;
-    bool installing_app_found = false;
     for (uint32_t index = 0U; index < catalog.count && index < host_ui::kMaxHallApps; ++index) {
         model.apps[index].app_id = catalog.apps[index].app_id.data();
         model.apps[index].display_name = catalog.apps[index].display_name.data();
-        if (covers != nullptr && (*covers)[index].valid()) {
-            const auto& asset = (*covers)[index].asset();
-            model.apps[index].cover = host_ui::HallCoverModel{
-                .data = asset.data,
-                .size = asset.size,
-                .width = asset.width,
-                .height = asset.height,
-                .stride = asset.stride,
-                .format = asset.format == MICROPIXEL_BUNDLE_FORMAT_JPEG
-                              ? host_ui::HallCoverFormat::kJpeg
-                              : (asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG ? host_ui::HallCoverFormat::kPng
-                                                                              : host_ui::HallCoverFormat::kRgb888),
-                .cache_key = (static_cast<uint64_t>(catalog.apps[index].content_id) << 32U) | asset.content_hash};
-        }
+        model.apps[index].cover = {.cache_key = HallCoverKey(catalog.apps[index]),
+                                   .reader_context = &catalog.apps[index],
+                                   .read_source = ReadHallCover};
         if (suspended_index.has_value() && *suspended_index == index) {
             model.apps[index].running = true;
             if (suspended_snapshot != nullptr && suspended_snapshot->data != nullptr) {
                 model.apps[index].cover = *suspended_snapshot;
             }
         }
-        if (install_active && std::strcmp(catalog.apps[index].app_id.data(), install_activity->app_id.data()) == 0) {
-            model.apps[index].installing = true;
-            model.apps[index].install_progress_percent = install_activity->progress_percent;
-            installing_app_found = true;
-        }
     }
-    if (install_active && !installing_app_found && model.app_count < host_ui::kMaxHallApps) {
-        auto& app = model.apps[model.app_count++];
-        app.app_id = install_activity->app_id.data();
-        app.display_name = install_activity->app_id.data();
-        app.installing = true;
-        app.install_progress_percent = install_activity->progress_percent;
-        if (model.status == host_ui::HallStatus::kNoApps) {
-            model.status = host_ui::HallStatus::kReady;
-        }
-    }
-}
-
-void OpenHallCovers(const runtime::InstalledAppCatalog& catalog, HallCoverMappings& covers_out,
-                    const std::optional<uint32_t>& snapshot_index = std::nullopt) {
-    for (auto& cover : covers_out) {
-        cover = {};
-    }
-    const uint32_t visible_count = std::min(catalog.count, host_ui::kMaxHallApps);
-    for (uint32_t index = 0U; index < visible_count; ++index) {
-        if (snapshot_index.has_value() && *snapshot_index == index) {
-            continue;
-        }
-        auto mapping_result = runtime::LaunchAssetMapping::Open(catalog.apps[index].file);
-        if (!mapping_result) {
-            ESP_LOGW(kTag, "App Hall cover unavailable: index=%" PRIu32 " app=%s", index,
-                     catalog.apps[index].app_id.data());
-            continue;
-        }
-        covers_out[index] = std::move(*mapping_result);
+    if (install_active) {
+        host_ui::ApplyHallInstallation(model, install_activity->app_id.data(), install_activity->progress_percent);
     }
 }
 
@@ -316,8 +301,8 @@ void RefreshStatusMetrics(host_ui::StatusLayerModel& model, const runtime::Insta
     model.sram_total_kib = static_cast<uint32_t>(sram_total / 1024U);
     model.sram_used_kib = static_cast<uint32_t>((sram_total - sram_free) / 1024U);
 
-    model.storage_total_kib = catalog.store_total_bytes / 1024U;
-    model.storage_used_kib = catalog.store_used_bytes / 1024U;
+    model.storage_total_kib = static_cast<uint32_t>(catalog.store_total_bytes / 1024U);
+    model.storage_used_kib = static_cast<uint32_t>(catalog.store_used_bytes / 1024U);
 
     (void)RefreshBatteryStatus(model, battery);
 }
@@ -654,16 +639,46 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
     return model;
 }
 
+host_ui::ExternalStorageStatus ExternalStorageStatusOf(runtime::ExternalStorageState state) {
+    switch (state) {
+        case runtime::ExternalStorageState::kReady:
+            return host_ui::ExternalStorageStatus::kReady;
+        case runtime::ExternalStorageState::kNotFormatted:
+            return host_ui::ExternalStorageStatus::kNotFormatted;
+        case runtime::ExternalStorageState::kUnsupportedFormat:
+            return host_ui::ExternalStorageStatus::kUnsupportedFormat;
+        case runtime::ExternalStorageState::kCorrupt:
+            return host_ui::ExternalStorageStatus::kCorrupt;
+        case runtime::ExternalStorageState::kUnavailable:
+            return host_ui::ExternalStorageStatus::kUnavailable;
+        case runtime::ExternalStorageState::kAbsent:
+        default:
+            return host_ui::ExternalStorageStatus::kAbsent;
+    }
+}
+
+host_ui::StorageUsageModel StorageUsageOf(const runtime::StorageUsage& usage) {
+    return host_ui::StorageUsageModel{
+        .used_kib = static_cast<uint32_t>(usage.used_bytes / 1024U),
+        .total_kib = static_cast<uint32_t>(usage.total_bytes / 1024U),
+    };
+}
+
 void FillAppManagementModel(host_ui::AppManagementModel& model, const runtime::InstalledAppCatalog& catalog,
                             bool launch_available, bool uninstall_available) {
     // Refresh in place: returning a second 50-App model reserves another large
     // temporary in RunAppManagement's stack frame, including while it polls.
-    model = {};
+    std::construct_at(&model);
     model.app_count = std::min(catalog.count, host_ui::kMaxHallApps);
     model.launch_available = launch_available;
     model.uninstall_available = uninstall_available;
-    model.storage_total_kib = catalog.store_total_bytes / 1024U;
-    model.storage_used_kib = catalog.store_used_bytes / 1024U;
+    // Formatting shares the "no AppSession" precondition with uninstall.
+    model.format_available = uninstall_available;
+    model.storage_total_kib = static_cast<uint32_t>(catalog.store_total_bytes / 1024U);
+    model.storage_used_kib = static_cast<uint32_t>(catalog.store_used_bytes / 1024U);
+    model.system_storage = StorageUsageOf(catalog.system_storage);
+    model.external_storage = StorageUsageOf(catalog.external_storage);
+    model.external_storage_status = ExternalStorageStatusOf(catalog.external_state);
     for (uint32_t index = 0U; index < model.app_count; ++index) {
         const runtime::InstalledApp& source = catalog.apps[index];
         model.apps[index] = host_ui::InstalledAppModel{
@@ -671,6 +686,7 @@ void FillAppManagementModel(host_ui::AppManagementModel& model, const runtime::I
             .app_id = source.app_id.data(),
             .display_name = source.display_name.data(),
             .bundle_size_kib = source.bundle_size / 1024U,
+            .external_storage = source.storage == runtime::AppStorage::kExternal,
         };
     }
 }
@@ -819,13 +835,19 @@ struct RemoteCommandPump final {
     }
 };
 
+// Destructive App Management operations the menu hands back to the Host; both
+// require that no AppSession exists.
 struct AppManagementUninstallHandler final {
     bool (*uninstall)(void*, uint32_t){};
+    bool (*format_external)(void*){};
     void* context{};
     bool available{};
 
     [[nodiscard]] bool Uninstall(uint32_t app_index) const {
         return available && uninstall != nullptr && uninstall(context, app_index);
+    }
+    [[nodiscard]] bool FormatExternal() const {
+        return available && format_external != nullptr && format_external(context);
     }
 };
 
@@ -1386,7 +1408,8 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
         model.store_check_state = command_pump->store_check_state(command_pump->context);
     if (command_pump != nullptr && command_pump->fill_store != nullptr)
         command_pump->fill_store(command_pump->context, model);
-    TickType_t next_store_check = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
+    // Store update check runs once when the page opens; the loop only watches
+    // for that one-shot result so the subtitle can clear without re-checking.
     auto show_result = shell.ShowAppManagement(model);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show App Management: error=%u", static_cast<unsigned>(show_result.error()));
@@ -1394,11 +1417,6 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
     }
     for (;;) {
         const auto action = shell.PollAction(RemoteAwareTimeout(pdMS_TO_TICKS(1000), command_pump));
-        if (command_pump != nullptr && command_pump->check_store != nullptr &&
-            static_cast<int32_t>(xTaskGetTickCount() - next_store_check) >= 0) {
-            command_pump->check_store(command_pump->context);
-            next_store_check = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
-        }
         if (command_pump != nullptr && command_pump->store_check_state != nullptr) {
             const uint8_t state = command_pump->store_check_state(command_pump->context);
             if (state != model.store_check_state) {
@@ -1450,6 +1468,31 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             show_result = shell.ShowAppManagement(model);
             if (!show_result) {
                 ESP_LOGE(kTag, "failed to refresh App Management after uninstall: error=%u",
+                         static_cast<unsigned>(show_result.error()));
+                return false;
+            }
+            continue;
+        }
+        if (action->type == host_ui::SystemUiActionType::kFormatExternalStorage) {
+            if (!uninstall_available || model.external_storage_status == host_ui::ExternalStorageStatus::kAbsent) {
+                ESP_LOGW(kTag, "ignored unavailable external storage format request");
+                continue;
+            }
+            // The format erases the metadata area synchronously (seconds on
+            // NAND); the menu is torn down so no stale storage figures show.
+            shell.LeaveAppManagement();
+            if (!uninstall_handler->FormatExternal()) {
+                ESP_LOGE(kTag, "external storage format failed");
+            }
+            if (action_app_index < host_ui::kMaxHallApps) {
+                return true;
+            }
+            FillAppManagementModel(model, catalog, launch_available, uninstall_available);
+            if (command_pump != nullptr && command_pump->fill_store != nullptr)
+                command_pump->fill_store(command_pump->context, model);
+            show_result = shell.ShowAppManagement(model);
+            if (!show_result) {
+                ESP_LOGE(kTag, "failed to refresh App Management after formatting: error=%u",
                          static_cast<unsigned>(show_result.error()));
                 return false;
             }
@@ -1644,13 +1687,15 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
                         host_ui::HallStatus status, uint32_t detail, host_ui::StatusLayerModel& status_model,
                         host_ui::SystemSettingsStore& settings_store,
                         remote_control::RemoteControlAgent& remote_control) {
+    struct ReadLifetime final {
+        host_ui::SystemShell& shell;
+        ~ReadLifetime() { shell.PauseHallCoverLoading(); }
+    } read_lifetime{shell};
     auto hall_model = MakePsramObject<host_ui::HallModel>();
     if (!hall_model) {
         ESP_LOGE(kTag, "failed to allocate Hall model");
         return;
     }
-    HallCoverMappings covers{};
-    OpenHallCovers(catalog, covers);
     RemoteCommandPump power_pump{
         .poll = [](void* context) { return static_cast<host_ui::SystemShell*>(context)->PowerTransitionRequested(); },
         .context = &shell,
@@ -1688,7 +1733,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
         const device::BatterySnapshot battery_snapshot = battery.Snapshot();
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control.Snapshot();
         const bool firmware_update_available = remote_control_snapshot.firmware_update_available;
-        FillHallModel(*hall_model, catalog, wifi_snapshot, battery_snapshot, status, nullptr, detail, false, &covers,
+        FillHallModel(*hall_model, catalog, wifi_snapshot, battery_snapshot, status, nullptr, detail, false,
                       std::nullopt, nullptr, 0U, firmware_update_available);
         if (!ShowHall(shell, *hall_model)) {
             return;
@@ -1796,12 +1841,14 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
 
 class ActiveHost final {
    public:
-    ActiveHost(runtime::InstalledAppCatalog&& catalog, runtime::AppRuntime& runtime, device::DeviceServices& devices,
-               host_ui::SystemShell& shell, device::Battery& battery, device::Wifi& wifi, device::Power& power,
-               HostPowerStateMachine& power_state, host_ui::StatusLayerModel& status_model,
-               host_ui::SystemSettingsStore& settings_store, control::ControlDispatcher& controls,
-               remote_control::RemoteControlAgent& remote_control, std::string_view effective_locale)
+    ActiveHost(runtime::InstalledAppCatalog&& catalog, runtime::AppStore& app_store, runtime::AppRuntime& runtime,
+               device::DeviceServices& devices, host_ui::SystemShell& shell, device::Battery& battery,
+               device::Wifi& wifi, device::Power& power, HostPowerStateMachine& power_state,
+               host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store,
+               control::ControlDispatcher& controls, remote_control::RemoteControlAgent& remote_control,
+               std::string_view effective_locale)
         : catalog_(std::move(catalog)),
+          app_store_(app_store),
           app_controller_(runtime),
           devices_(devices),
           shell_(shell),
@@ -1814,7 +1861,6 @@ class ActiveHost final {
           controls_(controls),
           remote_control_(remote_control),
           hall_status_(catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady) {
-        OpenHallCovers(catalog_, covers_);
         std::snprintf(effective_locale_.data(), effective_locale_.size(), "%.*s",
                       static_cast<int>(effective_locale.size()), effective_locale.data());
         UpdateControlCatalog(controls_, catalog_);
@@ -1822,6 +1868,8 @@ class ActiveHost final {
     }
 
     [[nodiscard]] bool Valid() const { return app_controller_.valid(); }
+
+    ~ActiveHost() { shell_.PauseHallCoverLoading(); }
 
     [[nodiscard]] const runtime::InstalledAppCatalog& catalog() const { return catalog_; }
 
@@ -1871,20 +1919,23 @@ class ActiveHost final {
         hall_firmware_update_available_ = remote_control_snapshot.firmware_update_available;
         controls_.CopyInstallActivity(hall_install_activity_);
         FillHallModel(hall_model_, catalog_, wifi_snapshot, battery_.Snapshot(), hall_status_, outcome_, hall_detail_,
-                      CanLaunch(), &covers_, suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
+                      CanLaunch(), suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
                       hall_firmware_update_available_, &hall_install_activity_);
     }
 
     [[nodiscard]] bool ShowCurrentHall() {
-        if (hall_covers_released_ || hall_cover_snapshot_index_ != suspended_index_) {
-            RestoreHallCovers();
-        }
+        const int64_t model_started_us = esp_timer_get_time();
         PrepareCurrentHall();
+        const int64_t model_ready_us = esp_timer_get_time();
         micropixel_check_heap("before Hall render");
         if (!ShowHall(shell_, hall_model_)) {
             return false;
         }
         micropixel_check_heap("after Hall render");
+        if (hall_transition_trigger_us_ != 0U) {
+            ESP_LOGI(kTag, "Hall restore timing: model=%" PRIi64 " us render=%" PRIi64 " us",
+                     model_ready_us - model_started_us, esp_timer_get_time() - model_ready_us);
+        }
         hall_transition_trigger_us_ = 0U;
         shell_.UpdatePerformanceOverlay(status_model_.performance_overlay_enabled, host_ui::CpuUsageSample{});
         if (!ready_logged_) {
@@ -1946,11 +1997,12 @@ class ActiveHost final {
         if (!current.active) {
             return true;
         }
-        const std::optional<uint32_t> installed_index = FindApp(current.app_id.data());
-        if (installed_index.has_value()) {
-            shell_.UpdateHallInstallProgress(*installed_index, current.progress_percent);
-        } else if (catalog_.count < host_ui::kMaxHallApps) {
-            shell_.UpdateHallInstallProgress(catalog_.count, current.progress_percent);
+        for (uint32_t index = 0U; index < hall_model_.app_count; ++index) {
+            if (hall_model_.apps[index].app_id != nullptr &&
+                std::strcmp(hall_model_.apps[index].app_id, current.app_id.data()) == 0) {
+                shell_.UpdateHallInstallProgress(index, current.progress_percent);
+                break;
+            }
         }
         return true;
     }
@@ -1959,13 +2011,12 @@ class ActiveHost final {
         // Preserve the active catalog if scanning fails without placing the
         // 3456-byte replacement catalog on the Host supervisor stack.
         auto reloaded_catalog = MakePsramObject<runtime::InstalledAppCatalog>();
-        if (reloaded_catalog == nullptr || !runtime::ScanInstalledApps(*reloaded_catalog, effective_locale_.data())) {
+        if (reloaded_catalog == nullptr ||
+            !runtime::ScanInstalledApps(app_store_, *reloaded_catalog, effective_locale_.data())) {
             return false;
         }
+        shell_.PauseHallCoverLoading();
         catalog_ = std::move(*reloaded_catalog);
-        OpenHallCovers(catalog_, covers_);
-        hall_covers_released_ = false;
-        hall_cover_snapshot_index_.reset();
         UpdateControlCatalog(controls_, catalog_);
         RefreshStatusMetrics(status_model_, catalog_, battery_);
         hall_status_ = catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady;
@@ -1974,42 +2025,47 @@ class ActiveHost final {
         return true;
     }
 
-    void ReleaseHallCovers() {
-        shell_.PauseHallCoverLoading();
-        for (auto& cover : covers_) {
-            cover = {};
-        }
-        hall_covers_released_ = true;
-    }
-
-    void RestoreHallCovers() {
-        shell_.PauseHallCoverLoading();
-        OpenHallCovers(catalog_, covers_, suspended_index_);
-        hall_covers_released_ = false;
-        hall_cover_snapshot_index_ = suspended_index_;
-    }
-
     [[nodiscard]] bool UninstallInstalledApp(uint32_t app_index) {
         if (app_controller_.state() != AppLifecycleState::kNotRunning || app_index >= catalog_.count) {
             return false;
         }
         const auto app_id = catalog_.apps[app_index].app_id;
         ESP_LOGI(kTag, "uninstalling App from System Settings: index=%" PRIu32 " app=%s", app_index, app_id.data());
-        ReleaseHallCovers();
-        const auto uninstall_result = runtime::UninstallApp(app_id.data());
+        shell_.PauseHallCoverLoading();
+        const auto uninstall_result = app_store_.UninstallApp(app_id.data());
         if (!uninstall_result) {
             ESP_LOGE(kTag, "System Settings App uninstall failed: app=%s error=%s", app_id.data(),
                      AppStoreErrorText(uninstall_result.error()));
-            RestoreHallCovers();
             return false;
         }
         if (!ReloadAppCatalog()) {
             ESP_LOGE(kTag, "App catalog refresh failed after uninstalling app=%s", app_id.data());
-            RestoreHallCovers();
             return false;
         }
         ESP_LOGI(kTag, "System Settings App uninstall completed: app=%s", app_id.data());
         return true;
+    }
+
+    [[nodiscard]] bool FormatExternalStorage() {
+        if (app_controller_.state() != AppLifecycleState::kNotRunning) {
+            return false;
+        }
+        ESP_LOGW(kTag, "formatting external App storage from System Settings");
+        // Stop source reads before erasing the external Catalog.
+        shell_.PauseHallCoverLoading();
+        const auto format_result = app_store_.FormatExternalStore();
+        if (!format_result) {
+            ESP_LOGE(kTag, "System Settings external storage format failed: error=%s",
+                     AppStoreErrorText(format_result.error()));
+        }
+        if (!ReloadAppCatalog()) {
+            ESP_LOGE(kTag, "App catalog refresh failed after formatting external storage");
+            return false;
+        }
+        if (format_result) {
+            ESP_LOGI(kTag, "external App storage formatted and mounted empty");
+        }
+        return format_result.has_value();
     }
 
     void SubmitRemoteResult(control::HostResult& result, bool ok, const char* message) {
@@ -2177,7 +2233,7 @@ class ActiveHost final {
             .environment = &environment,
             .expected_version = command.store_verified ? command.store_version.data() : nullptr,
         };
-        auto install_result = runtime::InstallApp(request, effective_locale_.data());
+        auto install_result = app_store_.Install(request, effective_locale_.data());
         heap_caps_free(command.package_data);
         if (!install_result) {
             return AppStoreErrorText(install_result.error());
@@ -2215,17 +2271,17 @@ class ActiveHost final {
                 return false;
             }
         }
-        ReleaseHallCovers();
+        shell_.PauseHallCoverLoading();
         bool changed = false;
         if (const char* install_error = CommitInstallPackage(command, changed); install_error != nullptr) {
-            RestoreHallCovers();
+            shell_.ResumeHallCoverLoading();
             controls_.EndInstallActivity(command.source, command.command_id.data());
             SubmitRemoteResult(result, false, install_error);
             return false;
         }
         if (!ReloadAppCatalog()) {
-            RestoreHallCovers();
             controls_.EndInstallActivity(command.source, command.command_id.data());
+            shell_.ResumeHallCoverLoading();
             SubmitRemoteResult(result, false, "catalog_refresh_failed");
             return false;
         }
@@ -2370,15 +2426,15 @@ class ActiveHost final {
                     SubmitRemoteResult(result, true, "already_uninstalled");
                     return false;
                 }
-                ReleaseHallCovers();
-                auto uninstall_result = runtime::UninstallApp(command.app_id.data());
+                shell_.PauseHallCoverLoading();
+                auto uninstall_result = app_store_.UninstallApp(command.app_id.data());
                 if (!uninstall_result) {
-                    RestoreHallCovers();
+                    shell_.ResumeHallCoverLoading();
                     SubmitRemoteResult(result, false, AppStoreErrorText(uninstall_result.error()));
                     return false;
                 }
                 if (!ReloadAppCatalog()) {
-                    RestoreHallCovers();
+                    shell_.ResumeHallCoverLoading();
                     SubmitRemoteResult(result, false, "catalog_refresh_failed");
                     return false;
                 }
@@ -2537,6 +2593,18 @@ class ActiveHost final {
             }
 
             host_ui::SystemUiAction action = *pending_action;
+            if (action.type == host_ui::SystemUiActionType::kLaunchApp ||
+                action.type == host_ui::SystemUiActionType::kStopApp ||
+                action.type == host_ui::SystemUiActionType::kOpenAppActions) {
+                if (action.app_index >= hall_model_.app_count) {
+                    continue;
+                }
+                const auto catalog_index = FindApp(hall_model_.apps[action.app_index].app_id);
+                if (!catalog_index.has_value()) {
+                    continue;
+                }
+                action.app_index = *catalog_index;
+            }
             if (action.type == host_ui::SystemUiActionType::kLaunchApp && action.app_index < catalog_.count) {
                 const auto update = controls_.FindStoreUpdate(catalog_.apps[action.app_index].app_id.data());
                 if (update.version[0] != '\0' && update.baseline_sha256 == catalog_.apps[action.app_index].sha256)
@@ -2613,6 +2681,8 @@ class ActiveHost final {
                         [](void* context, uint32_t app_index) {
                             return static_cast<ActiveHost*>(context)->UninstallInstalledApp(app_index);
                         },
+                    .format_external =
+                        [](void* context) { return static_cast<ActiveHost*>(context)->FormatExternalStorage(); },
                     .context = this,
                     .available = app_controller_.state() == AppLifecycleState::kNotRunning,
                 };
@@ -2771,11 +2841,9 @@ class ActiveHost final {
             micropixel_check_heap("after leave Hall");
         }
 
-        // The retained launch cover / Guest view owns its pixels now. Release
-        // the Hall file mappings before mapping the full Bundle: a fragmented
-        // Bundle can otherwise contain a run already mapped by its cover,
-        // which spi_flash_mmap_pages rejects with ESP_ERR_INVALID_STATE.
-        ReleaseHallCovers();
+        // Drain any source read before the Guest starts. Each background
+        // decode releases its own NOR mapping / NAND copy on completion.
+        shell_.PauseHallCoverLoading();
 
         const runtime::InstalledApp& selected_app = catalog_.apps[selected_index];
         if (!resumed_existing) {
@@ -3175,10 +3243,7 @@ class ActiveHost final {
 
     host_ui::HallModel hall_model_{};
     runtime::InstalledAppCatalog catalog_;
-    HallCoverMappings covers_;
-    bool hall_covers_released_{};
-    // The snapshot card has no file mapping; stopping it must reopen its cover.
-    std::optional<uint32_t> hall_cover_snapshot_index_;
+    runtime::AppStore& app_store_;
     AppController app_controller_;
     device::DeviceServices& devices_;
     host_ui::SystemShell& shell_;
@@ -3216,12 +3281,13 @@ class ActiveHost final {
 
 }  // namespace
 
-HostController::HostController(device::DeviceServices& devices, device::Battery& battery, device::Wifi& wifi,
-                               device::Power& power, host_ui::SystemShell& shell, control::ControlDispatcher& controls,
-                               logging::SystemLogBuffer& system_logs,
+HostController::HostController(device::DeviceServices& devices, runtime::AppStore& app_store, device::Battery& battery,
+                               device::Wifi& wifi, device::Power& power, host_ui::SystemShell& shell,
+                               control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
                                remote_control::RemoteControlAgent& remote_control,
                                work::BackgroundExecutor& background_executor)
     : devices_(devices),
+      app_store_(app_store),
       battery_(battery),
       wifi_(wifi),
       power_(power),
@@ -3320,10 +3386,10 @@ void HostController::Run() {
         ESP_LOGE(kTag, "failed to allocate App Store catalog");
         return;
     }
-    auto catalog_result = runtime::ScanInstalledApps(*catalog, locale.effective());
+    auto catalog_result = runtime::ScanInstalledApps(app_store_, *catalog, locale.effective());
     if (!catalog_result) {
         ESP_LOGE(kTag, "App Store catalog scan failed");
-        *catalog = {};
+        catalog->Reset();
         UpdateControlCatalog(controls_, *catalog);
         controls_.UpdateAppLifecycle(nullptr, "not_running");
         RunUnavailableHall(shell_, battery_, wifi_, power_, power_state_, *catalog, host_ui::HallStatus::kNoApps,
@@ -3345,9 +3411,9 @@ void HostController::Run() {
     }
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
-    auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_runtime, devices_, shell_, battery_, wifi_,
-                                                   power_, power_state_, status_model, settings_store, controls_,
-                                                   remote_control_, locale.effective());
+    auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_store_, app_runtime, devices_, shell_,
+                                                   battery_, wifi_, power_, power_state_, status_model, settings_store,
+                                                   controls_, remote_control_, locale.effective());
     if (active_host == nullptr) {
         ESP_LOGE(kTag, "failed to allocate ActiveHost state");
         RunUnavailableHall(
