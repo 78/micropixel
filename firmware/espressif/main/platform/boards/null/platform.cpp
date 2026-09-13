@@ -2,6 +2,7 @@
 
 #include "esp_log.h"
 #include "platform/defaults/unavailable_services.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 
 namespace micropixel::platform {
 namespace {
@@ -29,7 +30,7 @@ class SmokeSystemUi final : public defaults::UnavailableSystemUi {
 };
 
 SmokeSystemUi& SelfTestSystemUi() {
-    static SmokeSystemUi value;
+    static MICROPIXEL_EXT_RAM_BSS SmokeSystemUi value;
     return value;
 }
 #endif
@@ -52,7 +53,7 @@ class NullBoard final : public Board {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static NullBoard board;
+    static MICROPIXEL_EXT_RAM_BSS NullBoard board;
     return board;
 }
 

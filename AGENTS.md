@@ -25,6 +25,7 @@ Host paths below are relative to `firmware/espressif/main/`. Detailed design gui
 | Wire protocol | `runtime/abi/`, `runtime/services/` | [ABI](guest/abi/README.zh-CN.md), [header](guest/abi/micropixel_abi.h) |
 | System UI | `host/ui/`, `host/controller/` | [Source guide](firmware/espressif/main/README.zh-CN.md) |
 | Graphics | `platform/graphics/`, `platform/lvgl/`, `runtime/graphics/` | [Performance](docs/development/graphics-performance.zh-CN.md) |
+| Host memory | `platform/memory/` | [Architecture](docs/design/architecture.zh-CN.md) |
 | App storage | `runtime/bundle/`, `runtime/bundlefs/` | [BundleFS](docs/design/bundlefs.zh-CN.md) |
 | Audio | `guest/apps/<app>/audio/sfx.json` (repository root) | [Audio specification](docs/development/game-audio.zh-CN.md) |
 | Boards | `platform/boards/` | [Flashing](docs/development/flashing.zh-CN.md), [S3 support](docs/development/esp32-s3-box-3-bring-up.zh-CN.md) |
@@ -39,6 +40,10 @@ Host paths below are relative to `firmware/espressif/main/`. Detailed design gui
 - Real-time and cross-task Host paths use fixed-capacity queues, arrays, or pools; no implicit growth or detached tasks.
   Scene submission and Raster upload may explicitly grow PSRAM storage after validation. Allocation failure preserves
   old resources; drawing does not allocate; app termination releases storage.
+- Host APIs prefer `string_view` and `span`. When Host code must own growable text or collections, use
+  `PsramString`, `PsramVector`, or `PsramMap` so storage lands in PSRAM. Process-lifetime fixed-size Host
+  objects use `MICROPIXEL_EXT_RAM_BSS` (empty when the target has no PSRAM BSS). Real-time paths still use
+  fixed capacity. `PsramBuffer` is the fallible, explicitly sized trivially-copyable buffer.
 - Use move-only RAII or an explicit shutdown protocol. Destructors perform best-effort cleanup. Do not use raw
   new/delete for real-time resource ownership. Exceptions and RTTI are disabled.
 - ISRs record minimal POD state and wake tasks; they never call WAMR, Guest code, or LVGL.

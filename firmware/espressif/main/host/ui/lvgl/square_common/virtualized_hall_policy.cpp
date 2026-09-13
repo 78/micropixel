@@ -11,6 +11,7 @@
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
 #include "host/ui/lvgl/square_common/hall_transition_policy.hpp"
+#include "lvgl.h"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include "src/misc/cache/instance/lv_image_header_cache.h"
@@ -548,12 +549,23 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
         }
     }
     const bool transition_ready = candidate && background_ready;
+    // Hall is the current page before the present so a mailbox adopt during
+    // lv_refr_now cannot delete this root or raise the suspended Guest frame.
+    state_.hall_action_sink = action_sink;
+    state_.hall_action_context = action_context;
+    if (!transition_ready && guest != nullptr) {
+        lv_obj_add_flag(guest, LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_move_foreground(transition_ready ? guest : state_.root);
     if (state_.status_layer_ui.PerformanceOverlayVisibleLocked()) {
         state_.status_layer_ui.RaisePerformanceOverlayLocked();
     }
     if (!transition_ready) {
-        platform::lvgl::RequestDisplayRefresh(state_.display);
+        // Boards without DisplayTransition never rewrite the panel during
+        // CaptureGuestFrame. An async refresh can leave the last Guest frame
+        // in SPI GRAM; the status layer works because it calls lv_refr_now.
+        lv_obj_invalidate(state_.root);
+        lv_refr_now(state_.display);
     }
     state_.SetHostPointerEnabledLocked(true);
     esp_lv_adapter_unlock();
@@ -568,20 +580,21 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
             if (state_.status_layer_ui.PerformanceOverlayVisibleLocked()) {
                 state_.status_layer_ui.RaisePerformanceOverlayLocked();
             }
-            platform::lvgl::RequestDisplayRefresh(state_.display);
+            lv_obj_invalidate(state_.root);
+            lv_refr_now(state_.display);
             esp_lv_adapter_unlock();
         }
         if (!animated) {
             ESP_LOGW(kTag, "Guest-to-Hall transition failed; Hall restored directly");
         }
-    } else if (transition != nullptr) {
-        transition->CancelEnterTransition();
+    } else {
+        if (transition != nullptr) {
+            transition->CancelEnterTransition();
+        }
         if (!hall_was_visible) {
             ESP_LOGI(kTag, "Hall presented without a root transition");
         }
     }
-    state_.hall_action_sink = action_sink;
-    state_.hall_action_context = action_context;
     state_.hall_firmware_update_available = model.firmware_update_available;
     state_.hall_launch_enabled = model.launch_enabled;
     state_.hall_status_bar = model.status_bar;

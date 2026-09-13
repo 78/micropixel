@@ -68,6 +68,7 @@ ESP-IDF commit 与板型列表位于 `tools/ci/firmware-sources.json`；WAMR 和
 IDF 自带工具下载清单验证编译器摘要，工具与 ccache 按板型/IDF 缓存。每块板使用独立 runner，不共享 managed_components 或 sdkconfig。
 SDK 来源须与本次 Guest 源码一致；仅修复 CI 或 Host 时可复用已发布 SDK，但不能夹带不同 Guest SDK/ABI。
 远控四项配置使用同名 GitHub Secrets；构建逐项对照生成的 sdkconfig，artifact 仅记录配置摘要，不输出配置内容。
+修改 `sdkconfig.defaults` 中的选择项后，已有 `sdkconfig.release` 会保留旧值；本地发布前备份并重新生成受影响板型的配置，再核对 PSRAM、内部保留池与缓存参数，不能仅凭默认配置文件判断已生效。
 
 ## 按需执行的检查
 

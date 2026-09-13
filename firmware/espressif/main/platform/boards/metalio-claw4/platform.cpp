@@ -53,6 +53,7 @@
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/lvgl/host_pointer_router.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/memory/graphics_buffer_alignment.hpp"
 #include "platform/platform.hpp"
 #include "platform/random/system_random.hpp"
@@ -543,7 +544,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MetalioClaw4Board board;
+    static MICROPIXEL_EXT_RAM_BSS MetalioClaw4Board board;
     return board;
 }
 

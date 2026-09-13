@@ -9,6 +9,7 @@
 #include "platform/audio/audio_output_peripheral.hpp"
 #include "platform/audio/audio_power_controller.hpp"
 #include "platform/defaults/unavailable_services.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/random/system_random.hpp"
 
 namespace micropixel::platform {
@@ -219,7 +220,7 @@ esp_err_t Platform::Initialize() {
 void Platform::BindBackgroundExecutor(work::BackgroundExecutor& executor) { board_.BindBackgroundExecutor(executor); }
 
 Platform& ConfiguredPlatform() {
-    static Platform platform(ConfiguredBoard());
+    static MICROPIXEL_EXT_RAM_BSS Platform platform(ConfiguredBoard());
     return platform;
 }
 

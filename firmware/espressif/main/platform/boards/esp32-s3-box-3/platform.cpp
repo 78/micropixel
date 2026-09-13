@@ -20,6 +20,7 @@
 #include "platform/controllers/brightness_curve.hpp"
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
 
@@ -180,7 +181,7 @@ class Esp32S3Box3Board final : public Board {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static Esp32S3Box3Board board;
+    static MICROPIXEL_EXT_RAM_BSS Esp32S3Box3Board board;
     return board;
 }
 

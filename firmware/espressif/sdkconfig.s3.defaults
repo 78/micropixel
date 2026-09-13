@@ -13,6 +13,12 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
+# Guest AOT, flash text and PSRAM traffic share the S3 caches. Prefer the full
+# 32 KB I-cache and 64 KB / 64 B D-cache over returning that SRAM to heap.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
 # S3 Wi-Fi is used for bounded OTA/App downloads rather than sustained high
 # throughput. Match the measured Pocket Sage profile: keep the hardware RX
 # pool aligned with the upstream BA window, allocate TX/RX payload buffers on

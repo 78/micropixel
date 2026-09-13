@@ -64,6 +64,7 @@ std::expected<void, host_ui::SystemUiError> SquareSystemUi::RestoreGuestView() {
     lv_obj_delete(state_.root);
     state_.root = nullptr;
     state_.launch_image_descriptor = {};
+    lv_obj_remove_flag(guest_frame, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(guest_frame);
     lv_obj_invalidate(guest_frame);
     platform::lvgl::RequestDisplayRefresh(state_.display);

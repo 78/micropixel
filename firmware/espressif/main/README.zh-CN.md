@@ -10,6 +10,7 @@
 | `platform/drivers/`、`platform/buses/` | 器件驱动与共享总线 |
 | `platform/graphics/`、`platform/lvgl/` | 合成、呈现与 LVGL 适配 |
 | `platform/storage/` | `device::BlockStorage` 介质适配器（NOR 分区、SPI NAND） |
+| `platform/memory/` | PSRAM 分配器、`MICROPIXEL_EXT_RAM_BSS`、`PsramString` / `PsramVector` / `PsramMap` 与 `PsramBuffer` |
 | `runtime/bundlefs/`、`runtime/bundle/` | BundleFS 实例、Bundle source 与多商店 `AppStore` |
 | `host/controller/` | 应用切换、电源与本地/远程控制 |
 | `host/ui/` | 大厅、系统页面、手势与布局 |

@@ -19,6 +19,7 @@
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/input/gpio_key_input.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
 #include "work/task_policy.hpp"
@@ -168,7 +169,7 @@ class SzpiEsp32S3Board final : public Board {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static SzpiEsp32S3Board board;
+    static MICROPIXEL_EXT_RAM_BSS SzpiEsp32S3Board board;
     return board;
 }
 

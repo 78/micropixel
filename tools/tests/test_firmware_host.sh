@@ -164,6 +164,10 @@ build_and_run pixel_compositor \
     "$workspace_root/tools/tests/test_pixel_compositor.cpp" \
     "$workspace_root/firmware/espressif/main/platform/graphics/pixel_compositor.cpp"
 
+build_and_run psram_allocator \
+    -DMICROPIXEL_TEST_TRACK_HEAP \
+    "$workspace_root/tools/tests/test_psram_allocator.cpp"
+
 build_and_run app_surface_compositor \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_app_surface_compositor.cpp" \
@@ -351,7 +355,8 @@ build_and_run bundlefs_16k_mmu \
 build_and_run http3_tls_parser \
     -I "$http3_component_dir/include" \
     "$workspace_root/tools/tests/test_http3_tls_parser.cpp" \
-    "$http3_component_dir/src/tls/tls_handshake.cc"
+    "$http3_component_dir/src/tls/tls_handshake.cc" \
+    "$http3_component_dir/src/esp_http3_memory.cc"
 
 metadata_output_dir="$test_output_dir/package-metadata"
 mkdir -p "$metadata_output_dir"

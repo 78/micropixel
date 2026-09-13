@@ -5,8 +5,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4.csv"
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
 
-# The attached ESP32-P4 has 16-line PSRAM. Keep standard malloc() internal;
-# WAMR linear memory and the Host comparison buffer request PSRAM explicitly.
+# The attached ESP32-P4 has 16-line PSRAM. WAMR linear memory and the Host
+# comparison buffer still request PSRAM explicitly.
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_CACHE_L2_CACHE_256KB=y

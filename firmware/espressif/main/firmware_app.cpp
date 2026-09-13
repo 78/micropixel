@@ -14,6 +14,7 @@
 #include "host/time/network_time.hpp"
 #include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/platform.hpp"
 #include "platform/storage/partition_block_storage.hpp"
 #include "runtime/bundle/app_store.hpp"
@@ -61,7 +62,7 @@ void FirmwareApp::Run() {
 
     // Bind shared work before Wi-Fi starts posting events so connection
     // persistence never runs on the system event task.
-    static work::BackgroundExecutor background_executor;
+    static MICROPIXEL_EXT_RAM_BSS work::BackgroundExecutor background_executor;
     if (!background_executor.valid()) {
         ESP_LOGE(kTag, "shared background executor is unavailable");
         return;
@@ -73,7 +74,7 @@ void FirmwareApp::Run() {
         return;
     }
     const platform::PlatformServices& services = platform_.Services();
-    static host_ui::SystemShell shell(*services.system_ui);
+    static MICROPIXEL_EXT_RAM_BSS host_ui::SystemShell shell(*services.system_ui);
 
     auto wifi_result = services.wifi->Initialize();
     if (!wifi_result) {
@@ -87,33 +88,35 @@ void FirmwareApp::Run() {
     }
 
     // These composition-root objects live for the lifetime of the firmware.
-    // Keep them out of app_main's bounded stack: RemoteControlAgent owns
-    // several fixed-capacity protocol buffers even when remote control is
-    // disabled.
-    static device::DeviceServices devices(*services.graphics, services.board_info.display, *services.input,
-                                          *services.audio, *services.random, *services.devices, *services.sensors,
-                                          *services.gpio, *services.haptics, *services.battery);
+    // Keep them out of app_main's bounded stack and, on PSRAM boards, out of
+    // internal SRAM: RemoteControlAgent owns several fixed-capacity protocol
+    // buffers even when remote control is disabled.
+    static MICROPIXEL_EXT_RAM_BSS device::DeviceServices devices(
+        *services.graphics, services.board_info.display, *services.input, *services.audio, *services.random,
+        *services.devices, *services.sensors, *services.gpio, *services.haptics, *services.battery);
     logging::SystemLogBuffer& system_logs = logging::SystemLogs();
-    static control::ControlDispatcher controls(
+    static MICROPIXEL_EXT_RAM_BSS control::ControlDispatcher controls(
         [](void* context, const char* app_id) {
             static_cast<logging::SystemLogBuffer*>(context)->UpdateAppLifecycle(app_id);
         },
         &system_logs);
-    static remote_control::RemoteControlAgent remote_control(*services.wifi, services.board_info, controls, system_logs,
-                                                             shell.SupportsScreenCapture());
-    static local_control::LocalControlAgent local_control(*services.local_control, controls, system_logs,
-                                                          services.board_info, *services.wifi);
+    static MICROPIXEL_EXT_RAM_BSS remote_control::RemoteControlAgent remote_control(
+        *services.wifi, services.board_info, controls, system_logs, shell.SupportsScreenCapture());
+    static MICROPIXEL_EXT_RAM_BSS local_control::LocalControlAgent local_control(
+        *services.local_control, controls, system_logs, services.board_info, *services.wifi);
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "local control is unavailable for this boot");
     }
     // Bundle stores: the NOR app_store partition always hosts Components and
     // factory Apps; a board-published medium (Mosaico NAND) takes downloaded
     // Apps so system storage stays small and mappable.
-    static platform::storage::PartitionBlockStorage nor_storage(kAppStorePartition, kAppStoreSubtype);
-    static runtime::BundleFs system_store(nor_storage);
+    static MICROPIXEL_EXT_RAM_BSS platform::storage::PartitionBlockStorage nor_storage(kAppStorePartition,
+                                                                                       kAppStoreSubtype);
+    static MICROPIXEL_EXT_RAM_BSS runtime::BundleFs system_store(nor_storage);
     static runtime::BundleFs* external_store = nullptr;
     if (services.app_storage != nullptr) {
-        static runtime::BundleFs board_store(*services.app_storage, services.app_storage_block_size);
+        static MICROPIXEL_EXT_RAM_BSS runtime::BundleFs board_store(*services.app_storage,
+                                                                    services.app_storage_block_size);
         if (board_store.data_block_size() == 0U) {
             ESP_LOGW(kTag, "board App storage geometry is unsupported; using the NOR app_store partition");
         } else {
@@ -127,7 +130,7 @@ void FirmwareApp::Run() {
     if (!nor_storage.present()) {
         ESP_LOGE(kTag, "app_store partition is missing; the App Store is unavailable");
     }
-    static runtime::AppStore app_store(system_store, external_store);
+    static MICROPIXEL_EXT_RAM_BSS runtime::AppStore app_store(system_store, external_store);
     HostController(devices, app_store, *services.battery, *services.wifi, *services.power, shell, controls, system_logs,
                    remote_control, background_executor)
         .Run();

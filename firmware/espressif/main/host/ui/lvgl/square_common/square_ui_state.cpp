@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cinttypes>
 
-#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_memory_utils.h"
@@ -12,6 +11,7 @@
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "sdkconfig.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include "src/misc/cache/instance/lv_image_header_cache.h"
@@ -24,11 +24,7 @@ namespace {
 constexpr const char* kPerfTag = "perf";
 #endif
 
-#if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
-EXT_RAM_BSS_ATTR SquareSystemUiHallStorage g_hall_storage;
-#else
-SquareSystemUiHallStorage g_hall_storage;
-#endif
+MICROPIXEL_EXT_RAM_BSS SquareSystemUiHallStorage g_hall_storage;
 
 void StyleFullscreen(lv_obj_t* object, uint32_t background, int32_t width, int32_t height) {
     lv_obj_set_pos(object, 0, 0);
@@ -347,6 +343,11 @@ bool SquareSystemUiState::DismissLaunchBitmap() {
 
 void SquareSystemUiState::PrepareGuestFrameLocked(lv_obj_t* guest_frame, bool created_guest_frame,
                                                   bool& needs_present) {
+    if (hall_action_context != nullptr) {
+        // Hall already owns the screen. A frame from a suspended Guest must
+        // not tear down the Hall root or move the Guest tree in front of it.
+        return;
+    }
     const bool releasing_root = root != nullptr;
     if (releasing_root) {
         if (before_root_release_locked_ != nullptr) {

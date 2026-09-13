@@ -20,6 +20,7 @@
 #include "platform/controllers/brightness_curve.hpp"
 #include "platform/drivers/sensors/bmi270.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/sensors/polled_inertial_sensor_peripheral.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
@@ -195,7 +196,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static M5StackCoreS3Board board;
+    static MICROPIXEL_EXT_RAM_BSS M5StackCoreS3Board board;
     return board;
 }
 

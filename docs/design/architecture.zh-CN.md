@@ -41,7 +41,9 @@ Board 只登记初始化成功的能力；Platform 为缺失能力提供 unavail
 设备却不必具备全部硬件。Null Board 用于验证这种依赖边界，不是可烧录的产品替代品。
 
 系统页面、交互和生命周期由 Host 统一管理，分辨率 profile 提供布局，Board 提供显示、亮度和转场能力。
-硬件转场可缺省，基本交互仍可工作。App Hall 只为可见卡片及预取窗口创建 UI 和提交封面任务；
+硬件转场可缺省，基本交互仍可工作。无转场时回到 Hall 必须同步刷新到面板，不能只标记 LVGL
+异步刷新：SPI GRAM 会继续显示上一帧 Guest，直到状态浮层等路径调用 `lv_refr_now`。
+App Hall 只为可见卡片及预取窗口创建 UI 和提交封面任务；
 解码缓存按内存余量保留，启动时只保留当前窗口及启动画面借用的像素。Host 提供带稳定内容标识的
 封面读取回调，后台任务在缓存缺失时读取、解码，并在回调返回前释放原始数据；绘制和返回大厅不读存储。
 目录变更前必须暂停并排空封面读取，回调不得跨任务保留源指针。板型只消费呈现请求，不读取 Hall 索引
@@ -161,6 +163,14 @@ best-effort cleanup，不 Panic、不抛异常。
 Host 实时与跨任务路径使用固定容量队列、数组和对象池，不隐式扩容、不创建 detached task。
 任务核心和优先级集中在 [task_policy.hpp](../../firmware/espressif/main/work/task_policy.hpp)，
 后台解码、持久化和日志不得阻塞 Guest 热路径。ISR 不调用 WAMR、Guest 或 LVGL。
+Host API 与非拥有视图优先使用 `std::string_view` 和 `std::span`，避免把文本或缓冲复制进内部 SRAM。
+必须由 Host 持有可增长文本或集合时，使用 `PsramString` / `PsramVector` / `PsramMap`
+（[psram_allocator.hpp](../../firmware/espressif/main/platform/memory/psram_allocator.hpp)），
+存储落在 PSRAM；进程寿命的固定大小对象使用 `MICROPIXEL_EXT_RAM_BSS`
+（[ext_ram_bss.hpp](../../firmware/espressif/main/platform/memory/ext_ram_bss.hpp)），
+有 PSRAM BSS 时落入外部 RAM，无 PSRAM 的编译目标宏为空。实时路径仍用固定容量容器。
+`PsramBuffer` 用于可失败、容量显式的 trivially-copyable 缓冲。
+第三方同步 API 仍可能要求 `std::string`，只在该边界构造一次。
 
 Scene 与 Raster 仅在提交或上传入口按需显式分配，失败保留原状态，绘制期间不分配。应用资源随
 Session 释放，显示缓冲按显示生命周期管理；具体资源契约见 [ABI](../../guest/abi/README.zh-CN.md)。

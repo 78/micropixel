@@ -4,12 +4,14 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
-# Every supported profile has PSRAM. Keep ordinary malloc() internal while
-# allowing explicitly capable Host, WAMR, Wi-Fi and static allocations to use it.
+# Every supported profile has PSRAM. Keep ESP-IDF defaults for PSRAM malloc
+# integration and allocation threshold.
+# Reserve 64 KiB of internal memory for task stacks and DMA allocations.
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MEMTEST=n
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 
 # WAMR AOT requires executable allocations on every target. All supported
 # devices keep both the mutable package input and relocated executable text in

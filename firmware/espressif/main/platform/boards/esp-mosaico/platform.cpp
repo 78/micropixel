@@ -41,6 +41,7 @@
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/lvgl/host_pointer_router.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "platform/random/system_random.hpp"
 #include "platform/storage/spi_nand_block_storage.hpp"
 #include "platform/transports/tinyusb_cdc_local_control.hpp"
@@ -379,7 +380,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static EspMosaicoBoard board;
+    static MICROPIXEL_EXT_RAM_BSS EspMosaicoBoard board;
     return board;
 }
 

@@ -7,7 +7,9 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -37,6 +39,7 @@
 #include "host/controller/remote/remote_reconnect_policy.hpp"
 #include "host/controller/remote/store_release.hpp"
 #include "mbedtls/base64.h"
+#include "platform/memory/psram_allocator.hpp"
 #include "psa/crypto.h"
 #include "runtime/bundle/bundle_format.h"
 #include "sdkconfig.h"
@@ -385,14 +388,14 @@ bool DecodeTrustedCa(std::vector<uint8_t>& certificate_out) {
     if (required_size == 0U) {
         return false;
     }
-    certificate_out.resize(required_size);
+    micropixel::platform::memory::PsramVector<uint8_t> decoded(required_size);
     size_t decoded_size = 0U;
-    const int result = mbedtls_base64_decode(certificate_out.data(), certificate_out.size(), &decoded_size,
+    const int result = mbedtls_base64_decode(decoded.data(), decoded.size(), &decoded_size,
                                              reinterpret_cast<const uint8_t*>(encoded), encoded_size);
     if (result != 0 || decoded_size != required_size) {
-        certificate_out.clear();
         return false;
     }
+    certificate_out.assign(decoded.begin(), decoded.end());
     return true;
 }
 
@@ -407,13 +410,73 @@ void AddMemoryStatistics(cJSON* parent, const char* name, uint32_t capabilities)
     (void)cJSON_AddNumberToObject(memory, "largestFreeBlockBytes", heap_caps_get_largest_free_block(capabilities));
 }
 
+constexpr size_t kDevicePathCapacity = 192U;
+constexpr size_t kAuthorizationCapacity = 8U + 1024U;
+constexpr std::string_view kPublicFirmwarePrefix = "/firmware/releases/";
+
+[[nodiscard]] bool WriteDevicePath(std::span<char> out, std::string_view device_id, std::string_view suffix) {
+    if (out.empty()) {
+        return false;
+    }
+    const int written =
+        std::snprintf(out.data(), out.size(), "/device/v1/devices/%.*s%.*s", static_cast<int>(device_id.size()),
+                      device_id.data(), static_cast<int>(suffix.size()), suffix.data());
+    return written > 0 && static_cast<size_t>(written) < out.size();
+}
+
+template <typename String>
+[[nodiscard]] bool AssignDevicePath(String& out, std::string_view device_id, std::string_view suffix) {
+    std::array<char, kDevicePathCapacity> path{};
+    if (!WriteDevicePath(path, device_id, suffix)) {
+        out.clear();
+        return false;
+    }
+    out.assign(path.data());
+    return true;
+}
+
+[[nodiscard]] std::string DevicePath(std::string_view device_id, std::string_view suffix) {
+    std::string path;
+    (void)AssignDevicePath(path, device_id, suffix);
+    return path;
+}
+
+[[nodiscard]] bool PathStartsWithDevicePrefix(std::string_view path, std::string_view device_id,
+                                              std::string_view suffix) {
+    std::array<char, kDevicePathCapacity> prefix{};
+    if (!WriteDevicePath(prefix, device_id, suffix)) {
+        return false;
+    }
+    const std::string_view expected(prefix.data());
+    return path.starts_with(expected) && path.substr(expected.size()).find('/') == std::string_view::npos;
+}
+
+[[nodiscard]] bool WriteAuthorization(std::span<char> out, const char* credential) {
+    if (out.empty() || credential == nullptr) {
+        return false;
+    }
+    const int written = std::snprintf(out.data(), out.size(), "Device %s", credential);
+    return written > 0 && static_cast<size_t>(written) < out.size();
+}
+
+[[nodiscard]] std::string AuthorizationValue(const char* credential) {
+    std::array<char, kAuthorizationCapacity> header{};
+    if (!WriteAuthorization(header, credential)) {
+        return {};
+    }
+    return header.data();
+}
+
 std::vector<std::pair<std::string, std::string>> JsonHeaders(const char* credential) {
-    return {{"authorization", std::string("Device ") + credential}, {"content-type", "application/json"}};
+    return {{"authorization", AuthorizationValue(credential)}, {"content-type", "application/json"}};
 }
 
 esp_http3::Http3Headers AsyncJsonHeaders(const char* credential) {
     esp_http3::Http3Headers headers;
-    headers.emplace_back(esp_http3::Http3String("authorization"), esp_http3::Http3String("Device ") + credential);
+    std::array<char, kAuthorizationCapacity> header{};
+    if (WriteAuthorization(header, credential)) {
+        headers.emplace_back(esp_http3::Http3String("authorization"), esp_http3::Http3String(header.data()));
+    }
     headers.emplace_back(esp_http3::Http3String("content-type"), esp_http3::Http3String("application/json"));
     return headers;
 }
@@ -852,7 +915,7 @@ bool RemoteControlAgent::RefreshCredential(void* client, Identity& identity) {
     if (client == nullptr || identity.device_id[0] == '\0' || identity.credential[0] == '\0') {
         return false;
     }
-    const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/credentials/refresh";
+    const std::string path = DevicePath(identity.device_id.data(), "/credentials/refresh");
     static constexpr uint8_t kEmptyBody[] = {'{', '}'};
     Http3Response response{};
     if (!ClientFrom(client).Post(path, JsonHeaders(identity.credential.data()), kEmptyBody, sizeof(kEmptyBody),
@@ -984,7 +1047,7 @@ bool RemoteControlAgent::SendCommandResultBody(void* client, const Identity& ide
     if (client == nullptr || body == nullptr || body_size == 0U || body_size > kMaxEventBodyBytes) {
         return false;
     }
-    const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/events";
+    const std::string path = DevicePath(identity.device_id.data(), "/events");
     Http3Response response{};
     return ClientFrom(client).Post(path, JsonHeaders(identity.credential.data()), body, body_size, response,
                                    kRequestTimeoutMs) &&
@@ -1471,12 +1534,14 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         const char* path = params != nullptr ? JsonString(params, "url") : nullptr;
         const char* sha256 = params != nullptr ? JsonString(params, "sha256") : nullptr;
         uint32_t package_size = 0U;
-        const std::string expected_prefix =
-            std::string("/device/v1/devices/") + identity.device_id.data() +
-            (JsonString(params, "storeRelease") != nullptr ? "/store/releases/" : "/packages/");
+        std::array<char, kDevicePathCapacity> expected_prefix{};
+        const std::string_view prefix_suffix =
+            JsonString(params, "storeRelease") != nullptr ? "/store/releases/" : "/packages/";
+        const bool have_prefix = WriteDevicePath(expected_prefix, identity.device_id.data(), prefix_suffix);
+        const std::string_view prefix = have_prefix ? std::string_view(expected_prefix.data()) : std::string_view{};
+        const std::string_view url = path != nullptr ? std::string_view(path) : std::string_view{};
         if (app_id == nullptr || app_id[0] == '\0' || std::strlen(app_id) >= command.app_id.size() || path == nullptr ||
-            std::strncmp(path, expected_prefix.c_str(), expected_prefix.size()) != 0 ||
-            std::strchr(path + expected_prefix.size(), '/') != nullptr ||
+            !have_prefix || !url.starts_with(prefix) || url.substr(prefix.size()).find('/') != std::string_view::npos ||
             !JsonUint(params, "sizeBytes", kMaxPackageBytes, package_size) || package_size == 0U ||
             (package_size % MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT) != 0U || !ParseSha256(sha256, command.package_sha256)) {
             return reject("invalid_install_request");
@@ -1485,7 +1550,7 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         CopyText(command.app_id, app_id);
         command.package_size = package_size;
         const char* release = JsonString(params, "storeRelease");
-        if (release != nullptr && !VerifyStoreRelease(release, path + expected_prefix.size(), command)) {
+        if (release != nullptr && !VerifyStoreRelease(release, path + prefix.size(), command)) {
             return reject("invalid_store_signature");
         }
         command.automatic = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "automatic"));
@@ -1616,10 +1681,9 @@ bool RemoteControlAgent::DownloadPackage(void* client, const Identity& identity,
     Http3Request request{};
     request.method = "GET";
     request.path = path;
-    constexpr char kPublicFirmwarePrefix[] = "/firmware/releases/";
-    const bool public_firmware = std::strncmp(path, kPublicFirmwarePrefix, sizeof(kPublicFirmwarePrefix) - 1U) == 0;
+    const bool public_firmware = std::string_view(path).starts_with(kPublicFirmwarePrefix);
     if (!public_firmware) {
-        request.headers = {{"authorization", std::string("Device ") + identity.credential.data()}};
+        request.headers = {{"authorization", AuthorizationValue(identity.credential.data())}};
     }
     std::unique_ptr<Http3Stream> stream = ClientFrom(client).Open(request);
     if (!stream || stream->GetStatus(kRequestTimeoutMs) != 200) {
@@ -1694,8 +1758,14 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
         CopyText(model_.firmware_update_message, "Firmware target unavailable");
         return false;
     }
-    request.path =
-        std::string("/firmware/releases/latest?currentVersion=") + current->version + "&target=" + release_target;
+    std::array<char, 256U> latest_path{};
+    const int latest_path_size =
+        std::snprintf(latest_path.data(), latest_path.size(), "/firmware/releases/latest?currentVersion=%s&target=%s",
+                      current->version, release_target);
+    if (latest_path_size <= 0 || static_cast<size_t>(latest_path_size) >= latest_path.size()) {
+        return false;
+    }
+    request.path = latest_path.data();
     std::unique_ptr<Http3Stream> stream = ClientFrom(client).Open(request);
     if (!stream || stream->GetStatus(kRequestTimeoutMs) != 200) {
         std::lock_guard<std::mutex> lock(model_mutex_);
@@ -1799,15 +1869,10 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
     const char* sha256 = cJSON_IsObject(params) ? JsonString(params, "sha256") : nullptr;
     uint32_t size = 0U;
     std::array<uint8_t, 32U> expected_digest{};
-    constexpr char kPublicFirmwarePrefix[] = "/firmware/releases/";
-    const std::string device_firmware_prefix =
-        std::string("/device/v1/devices/") + identity.device_id.data() + "/firmware/";
-    const bool public_path = path != nullptr &&
-                             std::strncmp(path, kPublicFirmwarePrefix, sizeof(kPublicFirmwarePrefix) - 1U) == 0 &&
-                             std::strchr(path + sizeof(kPublicFirmwarePrefix) - 1U, '/') == nullptr;
-    const bool device_path = path != nullptr &&
-                             std::strncmp(path, device_firmware_prefix.c_str(), device_firmware_prefix.size()) == 0 &&
-                             std::strchr(path + device_firmware_prefix.size(), '/') == nullptr;
+    const std::string_view url = path != nullptr ? std::string_view(path) : std::string_view{};
+    const bool public_path = url.starts_with(kPublicFirmwarePrefix) &&
+                             url.substr(kPublicFirmwarePrefix.size()).find('/') == std::string_view::npos;
+    const bool device_path = PathStartsWithDevicePrefix(url, identity.device_id.data(), "/firmware/");
     if (version == nullptr || std::strlen(version) >= host_ui::kFirmwareVersionTextCapacity || path == nullptr ||
         (!public_path && !device_path) || !JsonUint(params, "sizeBytes", kMaxFirmwareBytes, size) || size == 0U ||
         !ParseSha256(sha256, expected_digest)) {
@@ -1968,9 +2033,9 @@ bool RemoteControlAgent::UploadArtifact(void* client, const Identity& identity, 
     if (artifact.data == nullptr || artifact.size == 0U || artifact.release == nullptr || artifacts == nullptr) {
         return false;
     }
-    const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/artifacts";
+    const std::string path = DevicePath(identity.device_id.data(), "/artifacts");
     const std::vector<std::pair<std::string, std::string>> headers = {
-        {"authorization", std::string("Device ") + identity.credential.data()}, {"content-type", "image/jpeg"}};
+        {"authorization", AuthorizationValue(identity.credential.data())}, {"content-type", "image/jpeg"}};
     Http3Response response{};
     if (!ClientFrom(client).Post(path, headers, artifact.data, artifact.size, response, kRequestTimeoutMs) ||
         response.status != 201) {
@@ -2628,7 +2693,7 @@ void RemoteControlAgent::TaskMain() {
         if (identity.device_id[0] == '\0' && !Bootstrap(client.get(), identity)) {
             const std::string error = client->GetLastError();
             close_transport();
-            if (error.find("TLS") != std::string::npos) {
+            if (std::string_view(error).find("TLS") != std::string_view::npos) {
                 wait_before_retry(host_ui::RemoteControlConnectionState::kAuthenticationError,
                                   "Control service TLS verification failed");
             } else {
@@ -2646,7 +2711,7 @@ void RemoteControlAgent::TaskMain() {
         if (!control_stream) {
             Http3Request request{};
             request.method = "GET";
-            request.path = std::string("/device/v1/devices/") + identity.device_id.data() + "/control";
+            (void)AssignDevicePath(request.path, identity.device_id.data(), "/control");
             request.headers = JsonHeaders(identity.credential.data());
             control_stream = async_client->Open(request);
             if (control_stream) {
@@ -2688,7 +2753,7 @@ void RemoteControlAgent::TaskMain() {
             }
             Http3AsyncRequest request{};
             request.method = "DELETE";
-            request.path = std::string("/device/v1/devices/") + identity.device_id.data() + "/pairings/current";
+            (void)AssignDevicePath(request.path, identity.device_id.data(), "/pairings/current");
             request.headers = AsyncJsonHeaders(identity.credential.data());
             request.timeout_ms = kRequestTimeoutMs;
             request.max_response_body_size = 1024U;
@@ -2704,7 +2769,7 @@ void RemoteControlAgent::TaskMain() {
                 static constexpr uint8_t kEmptyBody[] = {'{', '}'};
                 Http3AsyncRequest request{};
                 request.method = "POST";
-                request.path = std::string("/device/v1/devices/") + identity.device_id.data() + "/pairings";
+                (void)AssignDevicePath(request.path, identity.device_id.data(), "/pairings");
                 request.headers = AsyncJsonHeaders(identity.credential.data());
                 request.body.assign(kEmptyBody, kEmptyBody + sizeof(kEmptyBody));
                 request.timeout_ms = kRequestTimeoutMs;
@@ -2731,7 +2796,7 @@ void RemoteControlAgent::TaskMain() {
         PublishRuntimeSnapshotIfChanged(client.get(), identity);
         std::array<char, control::kAppIdCapacity> update_app{};
         if (controls_.ConsumeStoreUpdate(update_app)) {
-            const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/store/install";
+            const std::string path = DevicePath(identity.device_id.data(), "/store/install");
             Http3Response response{};
             cJSON* body = cJSON_CreateObject();
             if (body != nullptr) cJSON_AddStringToObject(body, "appId", update_app.data());
@@ -2747,7 +2812,7 @@ void RemoteControlAgent::TaskMain() {
             if (queued) controls_.RequestStoreCheck();
         }
         if (controls_.ConsumeStoreCheck()) {
-            const std::string path = std::string("/device/v1/devices/") + identity.device_id.data() + "/store/check";
+            const std::string path = DevicePath(identity.device_id.data(), "/store/check");
             Http3Response response{};
             const char* body = "{}";
             bool checked =
