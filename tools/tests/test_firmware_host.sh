@@ -277,6 +277,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
 
 # Graphics 1.6 raster kernels and the RasterService in front of them; shares
 # the in-flight veto with DirectSurfaceService, hence the same link set.
+# Exercise the telemetry branch too, including its otherwise-unused counters.
 python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -std=c++23 \
     -Wall -Wextra -Werror \
@@ -284,6 +285,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -I "$workspace_root/firmware/espressif/main" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
+    -DCONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG=1 \
     -DMICROPIXEL_TEST_TRACK_HEAP -fsanitize=address,undefined -g \
     "$workspace_root/tools/tests/test_raster_service.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/graphics/raster_kernels.cpp" \
