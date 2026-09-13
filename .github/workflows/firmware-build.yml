@@ -23,6 +23,8 @@ jobs:
       matrix: ${{ steps.select.outputs.matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Test SDK build-input verification
+        run: python3 -m unittest tools.tests.test_verify_firmware_sdk -v
       - id: select
         env:
           REUSE_RUN: ${{ inputs.reuse_hosts_run }}
@@ -62,8 +64,8 @@ jobs:
           if ($commit.Trim() -ne $env:GITHUB_SHA) {
             git fetch origin "refs/tags/$tag`:refs/tags/$tag" --depth=1
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect SDK source tag' }
-            git diff --exit-code $tag HEAD -- guest tools/micropixel tools/build_app_bundle.py tools/generate_localization.py tools/analyze_sfx.py
-            if ($LASTEXITCODE -ne 0) { throw 'Published SDK sources differ from firmware Guest sources' }
+            python tools/ci/verify_firmware_sdk.py $tag
+            if ($LASTEXITCODE -ne 0) { throw 'Published SDK build inputs differ from firmware inputs' }
           }
           New-Item -ItemType Directory -Force build/sdk | Out-Null
           gh release download $tag --pattern windows-installer.json --dir build/sdk
