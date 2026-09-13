@@ -224,3 +224,32 @@ Timer 只能通过 `app.timers().After/Every()` 创建。优先在 Input service
 2. Host/Guest 空目录构建；
 3. 与风险匹配的当前目标板真机回归；
 4. Public API、ABI 文档和 roadmap 的同步更新。
+
+## 9. Host 任务栈门禁
+
+固定容量不等于可以放在栈上。任务入口及其调用链中的大数组、结构体、编解码工作区应放入任务独占的
+PSRAM 上下文；进程寿命对象可使用 `MICROPIXEL_EXT_RAM_BSS`，但必须明确并发访问和所有权。
+检查聚合初始化、赋值、按值传参和返回值是否产生隐藏栈副本；初始化已分配的对象时优先原地构造。
+不能通过关闭警告或增加任务栈来容纳工作缓冲区。
+
+`main/CMakeLists.txt` 对仓库自有 Host component 强制栈帧门禁：默认上限为 1536 字节，
+包括使用 8 KiB 任务栈的远程控制编译单元。11 个已有较大栈帧的源文件在 CMake 中逐个列出
+1792–4608 字节的迁移上限，按 SZPI release 构建校准，不放宽其他文件的默认限制。新增违规代码
+应减小栈帧，不能随手增加例外或提高上限。阈值不是安全栈预算；1 KiB 是新函数的设计目标，
+调用链还需要为 HTTP/3、验签等留空间。其他板型仍需使用对应构建验证。禁止 VLA 和 `alloca`，避免运行时长度绕过静态栈帧检查。
+这些选项不施加到 ESP-IDF 和第三方 component。
+
+GCC 构建同时启用 `-fstack-usage`，在对象文件旁生成 `.su` 报告，例如
+`build/host-esp32s3-szpi/esp-idf/main/CMakeFiles/__idf_main.dir/` 下的对应源文件目录。
+报告必须用当前目标和当前构建生成，不提交到 Git。检查最深调用链上的累计开销，不能只看最大的单个函数。
+[GCC 警告文档](https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html) 说明栈帧估计并非保守上界，
+所以编译通过不能替代真机测试。
+
+涉及安装、验签、下载或 OTA 时，在所选板上覆盖成功和失败路径，再运行：
+
+```sh
+python3 tools/micropixel --transport usb --port "$DEVICE_PORT" device diagnostics
+```
+
+检查 `taskDiagnostics` 中相关任务的 `stackHighWaterMarkBytes`（启动以来最小剩余栈），并记录运行过的路径。
+读数必须保留调用链余量；未执行的路径不能据此宣称安全。运行诊断前先退出串口 monitor。

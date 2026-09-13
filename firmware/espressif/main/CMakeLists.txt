@@ -199,3 +199,27 @@ target_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
     $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
 )
+
+# Enforce on our Host component only, not ESP-IDF or third-party components.
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Werror=frame-larger-than=1536
+    -Werror=vla
+    -Werror=alloca
+    $<$<COMPILE_LANG_AND_ID:C,GNU>:-fstack-usage>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fstack-usage>
+)
+
+# Existing larger frames, bounded per source rather than weakening the default.
+# Calibrated with the SZPI release build; these are migration ceilings, not safe
+# task-stack budgets. Do not add entries merely to silence a new regression.
+set_property(SOURCE runtime/app_session.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3072)
+set_property(SOURCE runtime/app_runtime.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2304)
+set_property(SOURCE runtime/bundle/app_store.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=4608)
+set_property(SOURCE runtime/audio/audio_playback_service.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=4096)
+set_property(SOURCE runtime/bundlefs/bundlefs.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=1792)
+set_property(SOURCE host/controller/control_dispatcher.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3072)
+set_property(SOURCE host/controller/host_controller.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3840)
+set_property(SOURCE host/controller/local/local_control_agent.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2560)
+set_property(SOURCE host/ui/lvgl/square_common/hall_cover_cache.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=1792)
+set_property(SOURCE platform/transports/usb_serial_jtag_local_control.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2176)
+set_property(SOURCE platform/boards/szpi-esp32s3/platform.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2304)

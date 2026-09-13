@@ -493,6 +493,7 @@ struct RemoteControlAgent::ColdState final {
 };
 
 struct RemoteControlAgent::TaskContext final {
+    StoreReleaseWorkspace store_release_workspace{};
     Identity identity{};
     std::array<uint8_t, 1024U> control_read_buffer{};
     std::array<uint8_t, 4096U> firmware_response_bytes{};
@@ -1550,7 +1551,8 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         CopyText(command.app_id, app_id);
         command.package_size = package_size;
         const char* release = JsonString(params, "storeRelease");
-        if (release != nullptr && !VerifyStoreRelease(release, path + prefix.size(), command)) {
+        if (release != nullptr &&
+            !VerifyStoreRelease(release, path + prefix.size(), command, task_context_->store_release_workspace)) {
             return reject("invalid_store_signature");
         }
         command.automatic = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "automatic"));

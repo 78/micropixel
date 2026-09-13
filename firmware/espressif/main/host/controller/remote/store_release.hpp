@@ -30,8 +30,18 @@ inline constexpr const char* StoreAotTarget() {
 #endif
 }
 inline bool StoreTrustConfigured() { return CONFIG_MICROPIXEL_STORE_PUBLIC_KEY_DER_BASE64[0] != '\0'; }
-inline bool DecodeStoreBase64(std::string_view input, uint8_t* output, size_t capacity, size_t& written) {
-    std::array<uint8_t, 2048U> text{};
+// Owned by the remote task's PSRAM context, never by its limited call stack.
+struct StoreReleaseWorkspace final {
+    std::array<uint8_t, 2048U> base64_text{};
+    std::array<uint8_t, 256U> header_bytes{};
+    std::array<uint8_t, 1024U> payload_bytes{};
+    std::array<uint8_t, 64U> signature{};
+    std::array<uint8_t, 256U> key_der{};
+    std::array<uint8_t, 72U> der{};
+};
+inline bool DecodeStoreBase64(std::string_view input, uint8_t* output, size_t capacity, size_t& written,
+                              StoreReleaseWorkspace& workspace) {
+    auto& text = workspace.base64_text;
     if (input.empty() || input.size() > text.size() - 4U) return false;
     size_t length = input.size();
     for (size_t i = 0; i < length; ++i) {
@@ -48,19 +58,24 @@ inline const char* StoreString(const cJSON* object, const char* name) {
     const cJSON* value = cJSON_GetObjectItemCaseSensitive(object, name);
     return cJSON_IsString(value) ? value->valuestring : "";
 }
-inline bool VerifyStoreRelease(const char* envelope, const char* release_id, control::HostCommand& command) {
+inline bool VerifyStoreRelease(const char* envelope, const char* release_id, control::HostCommand& command,
+                               StoreReleaseWorkspace& workspace) {
     if (!StoreTrustConfigured() || envelope == nullptr || std::strlen(envelope) > 1800U) return false;
     const std::string_view text(envelope);
     const size_t first = text.find('.'), second = first == text.npos ? text.npos : text.find('.', first + 1U);
     if (second == text.npos || text.find('.', second + 1U) != text.npos) return false;
-    std::array<uint8_t, 256U> header_bytes{};
-    std::array<uint8_t, 1024U> payload_bytes{};
-    std::array<uint8_t, 64U> signature{};
+    auto& header_bytes = workspace.header_bytes;
+    header_bytes.fill(0U);
+    auto& payload_bytes = workspace.payload_bytes;
+    payload_bytes.fill(0U);
+    auto& signature = workspace.signature;
+    signature.fill(0U);
     size_t header_size = 0, payload_size = 0, signature_size = 0;
-    if (!DecodeStoreBase64(text.substr(0, first), header_bytes.data(), header_bytes.size() - 1U, header_size) ||
+    if (!DecodeStoreBase64(text.substr(0, first), header_bytes.data(), header_bytes.size() - 1U, header_size,
+                           workspace) ||
         !DecodeStoreBase64(text.substr(first + 1U, second - first - 1U), payload_bytes.data(),
-                           payload_bytes.size() - 1U, payload_size) ||
-        !DecodeStoreBase64(text.substr(second + 1U), signature.data(), signature.size(), signature_size) ||
+                           payload_bytes.size() - 1U, payload_size, workspace) ||
+        !DecodeStoreBase64(text.substr(second + 1U), signature.data(), signature.size(), signature_size, workspace) ||
         signature_size != 64U)
         return false;
     cJSON* header =
@@ -75,10 +90,12 @@ inline bool VerifyStoreRelease(const char* envelope, const char* release_id, con
     }
     cJSON_Delete(header);
     if (key == nullptr || key[0] == '\0') return false;
-    std::array<uint8_t, 256U> key_der{};
+    auto& key_der = workspace.key_der;
+    key_der.fill(0U);
     size_t key_size = 0;
-    if (!DecodeStoreBase64(key, key_der.data(), key_der.size(), key_size)) return false;
-    std::array<uint8_t, 72U> der{};
+    if (!DecodeStoreBase64(key, key_der.data(), key_der.size(), key_size, workspace)) return false;
+    auto& der = workspace.der;
+    der.fill(0U);
     size_t cursor = 2U;
     for (size_t part = 0; part < 2U; ++part) {
         size_t offset = part * 32U;

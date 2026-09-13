@@ -44,6 +44,10 @@ Host paths below are relative to `firmware/espressif/main/`. Detailed design gui
   `PsramString`, `PsramVector`, or `PsramMap` so storage lands in PSRAM. Process-lifetime fixed-size Host
   objects use `MICROPIXEL_EXT_RAM_BSS` (empty when the target has no PSRAM BSS). Real-time paths still use
   fixed capacity. `PsramBuffer` is the fallible, explicitly sized trivially-copyable buffer.
+- Host task entry points and their callees must not put large arrays, structs, or temporary copies on the stack.
+  Keep fixed workspaces in task-owned PSRAM contexts (or process-lifetime PSRAM BSS with explicit ownership).
+  Audit aggregate initialization, assignment, return-by-value and by-value arguments for hidden stack copies.
+  Do not bypass stack-frame checks or simply increase task stacks to accommodate work buffers.
 - Use move-only RAII or an explicit shutdown protocol. Destructors perform best-effort cleanup. Do not use raw
   new/delete for real-time resource ownership. Exceptions and RTTI are disabled.
 - ISRs record minimal POD state and wake tasks; they never call WAMR, Guest code, or LVGL.
@@ -76,7 +80,11 @@ unrelated boards. For S31 work, use `bash tools/s31.sh build-host` and, when req
 See [Contributing](CONTRIBUTING.md) for additional checks.
 
 Activate ESP-IDF 6.1 via `export.sh` and configure WASI SDK and matching WAMRC before building.
-A missing environment is not a Host build failure. After adding Kconfig symbols, inspect generated configuration.
+A missing environment is not a Host build failure.
+Host builds enforce stack-frame limits and emit GCC `.su` reports next to object files. For changes to
+installation, signature verification, downloads or OTA, inspect the affected call chain and measure task
+minimum free stack on the selected board after success and failure paths; a frame limit is not a total
+call-stack bound. Record test results outside design docs; do not commit generated stack reports. After adding Kconfig symbols, inspect generated configuration.
 Before hardware operations, read the flashing guide and identify the chip by MAC, not a re-enumerating port name.
 Only one serial tool may own a device at a time.
 
