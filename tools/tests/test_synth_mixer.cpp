@@ -19,11 +19,11 @@ micropixel_audio_tone_t Tone(uint16_t waveform = MICROPIXEL_AUDIO_WAVE_SINE) {
         .size = sizeof(micropixel_audio_tone_t),
         .waveform = waveform,
         .volume_per_mille = 800U,
-        .attack_ms = 2U,
+        .reserved0 = 0U,
         .frequency_millihz = 440000U,
         .duration_ms = 10U,
+        .attack_ms = 2U,
         .release_ms = 2U,
-        .reserved0 = 0U,
     };
 }
 

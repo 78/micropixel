@@ -19,8 +19,8 @@ REMOTE_KEYS = ['MICROPIXEL_REMOTE_CONTROL_HOST', 'MICROPIXEL_REMOTE_CONTROL_PORT
                'MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS', 'MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64']
 
 
-def run(*args):
-    subprocess.run(list(map(str, args)), check=True)
+def run(*args, env=None):
+    subprocess.run(list(map(str, args)), check=True, env=env)
 
 
 def versions():
@@ -64,20 +64,33 @@ def check_image(path, target, version):
 
 def guest(output, launcher):
     version, sdk_version = versions()
+    prepared = json.loads(subprocess.check_output(
+        [str(launcher), 'setup', '--version', sdk_version, '--yes', '--json', '--offline'], text=True))
+    if not prepared.get('ok') or prepared['result']['sdk_version'] != sdk_version:
+        raise ValueError('Verified SDK toolchain setup failed')
+    paths = prepared['result']['paths']
+    environment = os.environ.copy()
+    for key in ('WASI_SDK_PATH', 'WAMRC', 'XTENSA_WAMRC'):
+        environment[key] = paths[key]
+    environment['WASI_CLANG'] = ''
+    environment['WASI_CLANGXX'] = str(Path(paths['WASI_SDK_PATH']) / 'bin/clang++.exe')
+    # The workflow verifies these SDK sources against the published SDK. Build
+    # with the checkout CLI so apps/... headers also come from this checkout,
+    # rather than the installed SDK's older example copies.
     for target in ('riscv32-ilp32f', 'xtensa'):
         bundles = []
         for app in SOURCES['guest_apps']:
             project = ROOT / 'guest/apps' / app
-            run(launcher, 'sdk', 'use', sdk_version, '--project', project, '--yes', '--json')
             bundle = output / target / (app + '.bundle.bin')
             bundle.parent.mkdir(parents=True, exist_ok=True)
-            run(launcher, 'package', project, '--aot-target', target, '--output', bundle, '--json', '--offline')
+            run(sys.executable, ROOT / 'tools/micropixel', 'package', project, '--aot-target', target,
+                '--output', bundle, '--json', env=environment)
             bundles.append(bundle)
         for size in ((8, 24) if target == 'riscv32-ilp32f' else (8,)):
             run(sys.executable, ROOT / 'tools/build_app_store_image.py', '--app-store-size', size * 1024 * 1024,
                 '--output', output / target / f'app-store-{size}m.bin', *bundles)
     write(output / 'manifest.json', {'source_commit': os.environ['GITHUB_SHA'], 'firmware_version': version,
-          'sdk_version': sdk_version, 'files': inventory(output)})
+          'sdk_version': sdk_version, 'toolchain_id': prepared['result']['toolchain_id'], 'files': inventory(output)})
 
 
 def collect(profile, output):
