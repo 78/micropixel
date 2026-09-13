@@ -344,7 +344,13 @@ bundlefs_sources=(
     "$workspace_root/tools/tests/test_bundlefs.cpp"
     "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
     "$workspace_root/firmware/espressif/main/platform/storage/partition_block_storage.cpp"
+    "$workspace_root/firmware/espressif/main/platform/storage/flash_page_mapping_cache.cpp"
 )
+
+build_and_run flash_page_mapping_cache \
+    -pthread -DMICROPIXEL_TEST_TRACK_HEAP \
+    "$workspace_root/tools/tests/test_flash_page_mapping_cache.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/storage/flash_page_mapping_cache.cpp"
 
 build_and_run bundlefs "${bundlefs_sources[@]}"
 

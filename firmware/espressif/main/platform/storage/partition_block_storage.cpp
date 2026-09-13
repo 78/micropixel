@@ -1,16 +1,11 @@
 #include "platform/storage/partition_block_storage.hpp"
 
-#include <cinttypes>
-#include <cstdlib>
-
 #include "esp_heap_caps.h"
-#include "esp_log.h"
 #include "spi_flash_mmap.h"
 
 namespace micropixel::platform::storage {
 namespace {
 
-constexpr char kTag[] = "nor_storage";
 constexpr uint32_t kEraseSectorSize = 4096U;
 
 device::BlockStorageGeometry GeometryOf(const esp_partition_t* partition) {
@@ -82,6 +77,9 @@ std::expected<device::BlockStorageMapping, device::BlockStorageError> PartitionB
         return std::unexpected(device::BlockStorageError::kInvalidArgument);
     }
     const uint32_t pages_per_block = block_size / SPI_FLASH_MMU_PAGE_SIZE;
+    if (block_offsets.size() > FlashPageMappingCache::kMaxPages / pages_per_block) {
+        return std::unexpected(device::BlockStorageError::kUnavailable);
+    }
     const uint32_t page_count = static_cast<uint32_t>(block_offsets.size()) * pages_per_block;
     int* pages =
         static_cast<int*>(heap_caps_malloc(page_count * sizeof(*pages), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -103,22 +101,11 @@ std::expected<device::BlockStorageMapping, device::BlockStorageError> PartitionB
                 static_cast<int>(block_physical / SPI_FLASH_MMU_PAGE_SIZE + page_index);
         }
     }
-    const void* mapped = nullptr;
-    spi_flash_mmap_handle_t handle = 0U;
-    const esp_err_t error = spi_flash_mmap_pages(pages, page_count, SPI_FLASH_MMAP_FLAG_DATA, &mapped, &handle);
+    auto mapping = mapping_cache_.Map(std::span<const int>(pages, page_count));
     heap_caps_free(pages);
-    if (error != ESP_OK) {
-        ESP_LOGE(kTag, "flash page mapping failed: pages=%" PRIu32 " error=%s", page_count, esp_err_to_name(error));
-        return std::unexpected(device::BlockStorageError::kUnavailable);
-    }
-    return device::BlockStorageMapping{.data = mapped, .handle = static_cast<uint32_t>(handle)};
+    return mapping;
 }
 
-void PartitionBlockStorage::Unmap(device::BlockStorageMapping& mapping) {
-    if (mapping.data != nullptr) {
-        spi_flash_munmap(static_cast<spi_flash_mmap_handle_t>(mapping.handle));
-    }
-    mapping = {};
-}
+void PartitionBlockStorage::Unmap(device::BlockStorageMapping& mapping) { mapping_cache_.Unmap(mapping); }
 
 }  // namespace micropixel::platform::storage

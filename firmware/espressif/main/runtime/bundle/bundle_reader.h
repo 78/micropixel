@@ -15,16 +15,17 @@ extern "C" {
 /*
  * An opened App Bundle. `payload` is a Host-owned PSRAM copy of the AOT
  * section handed to WAMR. `sections` is a Host-owned copy of the validated
- * TOC; the section bytes themselves stay on the medium and are made
- * addressable one section at a time through `micropixel_bundle_open_asset`
- * and `micropixel_bundle_open_font`, so a Bundle may be far larger than RAM.
+ * TOC. `bundle_mapping` holds a whole-Bundle lease for the package lifetime.
+ * When that mapping is unavailable, all sections use on-demand PSRAM copies
+ * for this package lifetime; the whole Bundle is never copied into RAM.
  * Copies of this struct are shallow views; only the original passed to
- * `micropixel_close_aot_package` owns the payload and the TOC.
+ * `micropixel_close_aot_package` owns the payload, TOC and whole-Bundle lease.
  */
 typedef struct {
     const uint8_t* payload;
     uint32_t payload_size;
     micropixel_bundle_source_t source;
+    micropixel_bundle_mapping_t bundle_mapping;
     const micropixel_bundle_section_t* sections;
     uint32_t section_count;
     uint32_t launch_asset_id;

@@ -647,19 +647,20 @@ static const micropixel_bundle_mapping_ops_t kRamViewOps = {
 
 /*
  * Makes one section `[offset, offset + size)` addressable. Sources that can
- * map return a zero-copy view; all other sources copy the section into PSRAM.
+ * map return a zero-copy view; unavailable mappings fall back to a PSRAM copy.
  * Only ever called for one section at a time, never for the whole Bundle, so
  * the RAM cost is bounded by the largest section a consumer opens. Running
  * out of PSRAM fails here with the byte count in the log.
  */
-static bool acquire_view(const micropixel_bundle_source_t* source, uint32_t offset, uint32_t size,
+static bool acquire_view(const micropixel_bundle_source_t* source, uint32_t offset, uint32_t size, bool allow_mapping,
                          micropixel_bundle_mapping_t* view_out) {
     memset(view_out, 0, sizeof(*view_out));
     if (size == 0U) {
         return false;
     }
-    if (micropixel_bundle_source_can_map(source)) {
-        return micropixel_bundle_source_map(source, offset, size, view_out);
+    if (allow_mapping && micropixel_bundle_source_can_map(source) &&
+        micropixel_bundle_source_map(source, offset, size, view_out)) {
+        return true;
     }
     uint8_t* copy = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (copy == NULL) {
@@ -679,9 +680,9 @@ static bool acquire_view(const micropixel_bundle_source_t* source, uint32_t offs
 
 /* Opens a section and verifies its content hash; releases the view on mismatch. */
 static bool acquire_verified_section(const micropixel_bundle_source_t* source,
-                                     const micropixel_bundle_section_t* section,
+                                     const micropixel_bundle_section_t* section, bool allow_mapping,
                                      micropixel_bundle_mapping_t* view_out) {
-    if (!acquire_view(source, section->offset, section->size, view_out)) {
+    if (!acquire_view(source, section->offset, section->size, allow_mapping, view_out)) {
         return false;
     }
     const uint32_t actual_hash = fnv1a32(view_out->data, section->size);
@@ -1060,7 +1061,7 @@ bool micropixel_validate_component_package(const micropixel_bundle_source_t* sou
         }
         /* One font at a time: the cbin envelope check needs the section addressable. */
         micropixel_bundle_mapping_t view;
-        valid = acquire_verified_section(source, section, &view);
+        valid = acquire_verified_section(source, section, true, &view);
         if (!valid) {
             break;
         }
@@ -1177,7 +1178,7 @@ bool micropixel_open_launch_asset(const micropixel_bundle_source_t* source,
     }
 
     micropixel_bundle_mapping_t view;
-    if (!acquire_verified_section(source, &launch_section, &view)) {
+    if (!acquire_verified_section(source, &launch_section, true, &view)) {
         return false;
     }
     mapping_out->asset.data = view.data;
@@ -1230,14 +1231,19 @@ bool micropixel_open_aot_package(const micropixel_bundle_source_t* source, micro
     package_out->payload = payload;
     package_out->payload_size = sections[aot_index].size;
     package_out->source = *source;
+    // Keep the whole-file lease alive between transient texture loads. A failed
+    // whole-file attempt selects read-copy mode for this entire package lifetime.
+    if (!micropixel_bundle_source_map(source, 0U, header.bundle_size, &package_out->bundle_mapping)) {
+        memset(&package_out->bundle_mapping, 0, sizeof(package_out->bundle_mapping));
+    }
     package_out->sections = sections;
     package_out->section_count = header.section_count;
     package_out->launch_asset_id = header.launch_asset_id;
     package_out->aot_flags = sections[aot_index].flags;
     memcpy(package_out->app_id, header.app_id, header.app_id_length);
-    ESP_LOGI(TAG, "Bundle opened: app=%s bytes=%" PRIu32 " sections=%" PRIu32 " aot=%" PRIu32 " bytes, sections %s",
+    ESP_LOGI(TAG, "Bundle opened: app=%s bytes=%" PRIu32 " sections=%" PRIu32 " aot=%" PRIu32 " bytes, resources=%s",
              package_out->app_id, header.bundle_size, header.section_count, package_out->payload_size,
-             micropixel_bundle_source_can_map(source) ? "mapped on demand" : "copied on demand");
+             package_out->bundle_mapping.data != NULL ? "whole-bundle-mapped" : "ram-copy");
     return true;
 }
 
@@ -1248,6 +1254,7 @@ void micropixel_close_aot_package(micropixel_aot_package_t* package) {
     if (package->payload != NULL) {
         free((void*)package->payload);
     }
+    micropixel_bundle_mapping_release(&package->bundle_mapping);
     free((void*)package->sections);
     memset(package, 0, sizeof(*package));
 }
@@ -1263,7 +1270,7 @@ bool micropixel_bundle_open_asset(const micropixel_aot_package_t* package, uint3
         return false;
     }
     micropixel_bundle_mapping_t view;
-    if (!acquire_verified_section(&package->source, section, &view)) {
+    if (!acquire_verified_section(&package->source, section, package->bundle_mapping.data != NULL, &view)) {
         return false;
     }
     mapping_out->asset.data = view.data;
@@ -1288,7 +1295,7 @@ bool micropixel_bundle_open_font(const micropixel_aot_package_t* package, uint32
         return false;
     }
     micropixel_bundle_mapping_t view;
-    if (!acquire_verified_section(&package->source, section, &view)) {
+    if (!acquire_verified_section(&package->source, section, package->bundle_mapping.data != NULL, &view)) {
         return false;
     }
     mapping_out->font.data = view.data;

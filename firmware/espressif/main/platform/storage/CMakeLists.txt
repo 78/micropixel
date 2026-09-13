@@ -2,4 +2,5 @@
 # and external media that boards may publish as their App store.
 list(APPEND micropixel_sources
     "platform/storage/partition_block_storage.cpp"
+    "platform/storage/flash_page_mapping_cache.cpp"
 )

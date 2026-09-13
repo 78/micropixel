@@ -7,13 +7,12 @@
 
 #include "device/contracts/block_storage.hpp"
 #include "esp_partition.h"
+#include "platform/storage/flash_page_mapping_cache.hpp"
 
 namespace micropixel::platform::storage {
 
 // XIP NOR data partition exposed as BlockStorage. Erase and program go through
-// esp_partition; Map() stitches discontiguous 64 KiB data blocks into one
-// virtual range with spi_flash_mmap_pages, exactly like the BundleFS mmap
-// path did before storage became pluggable.
+// esp_partition; Map() leases an ordered MMU-page window from the cache.
 class PartitionBlockStorage final : public device::BlockStorage {
    public:
     // Looks up the labelled data partition; present() is false when missing.
@@ -37,6 +36,7 @@ class PartitionBlockStorage final : public device::BlockStorage {
 
     const esp_partition_t* partition_{};
     device::BlockStorageGeometry geometry_{};
+    FlashPageMappingCache mapping_cache_;
 };
 
 }  // namespace micropixel::platform::storage

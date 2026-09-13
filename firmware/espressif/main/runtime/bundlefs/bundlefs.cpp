@@ -1298,9 +1298,8 @@ bundlefs_error_t BundleFs::Map(const bundlefs_file_t& file, uint32_t offset, uin
         return error;
     }
     const uint32_t block_size = geometry_.data_block_size;
-    const uint32_t first_block = offset / block_size;
-    const uint32_t within_first = offset % block_size;
-    const uint32_t block_count = BlocksFor(block_size, within_first + size);
+    // One immutable file has one mapping identity, regardless of the requested section.
+    const uint32_t block_count = BlocksFor(block_size, state.size);
     ScopedBytes offsets(block_count * static_cast<uint32_t>(sizeof(uint64_t)));
     if (!offsets.valid()) {
         return BUNDLEFS_ERR_UNAVAILABLE;
@@ -1309,7 +1308,7 @@ bundlefs_error_t BundleFs::Map(const bundlefs_file_t& file, uint32_t offset, uin
     for (uint32_t block_index = 0U; block_index < block_count; ++block_index) {
         uint32_t physical = 0U;
         uint32_t file_size = 0U;
-        const bundlefs_error_t resolve_error = ResolveBlockLocked(file, first_block + block_index, physical, file_size);
+        const bundlefs_error_t resolve_error = ResolveBlockLocked(file, block_index, physical, file_size);
         if (resolve_error != BUNDLEFS_OK) {
             return resolve_error;
         }
@@ -1322,7 +1321,7 @@ bundlefs_error_t BundleFs::Map(const bundlefs_file_t& file, uint32_t offset, uin
         return BUNDLEFS_ERR_UNAVAILABLE;
     }
     mapping_out = bundlefs_mapping_t{
-        .data = static_cast<const uint8_t*>(mapping->data) + within_first,
+        .data = static_cast<const uint8_t*>(mapping->data) + offset,
         .mapping = mapping->data,
         .size = size,
         .mapping_handle = mapping->handle,

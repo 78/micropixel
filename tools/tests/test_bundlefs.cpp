@@ -36,6 +36,8 @@ esp_partition_t test_partition{.address = kPartitionAddress, .size = kPartitionS
 std::vector<uint8_t> test_flash(kPartitionSize, UINT8_MAX);
 std::array<uint32_t, MICROPIXEL_BUNDLEFS_BANK_COUNT> bank_erase_counts{};
 std::array<void*, 64U> mappings{};
+uint32_t backend_map_calls{};
+size_t backend_page_count{};
 bool fail_next_commit_marker = false;
 uint32_t checks = 0U;
 // The store under test; NOR tests point it at a BundleFs over the esp_partition stubs.
@@ -264,7 +266,18 @@ void TestReadMapReplaceAndRemove(const BundleFsGeometry& geometry) {
     Check(mapping.size == cross_block.size() &&
               std::equal(mapping.data, mapping.data + mapping.size, first.begin() + read_offset),
           "mmap must expose contiguous virtual bytes");
+    Check(backend_page_count == 2U * block_size / SPI_FLASH_MMU_PAGE_SIZE,
+          "a section maps the complete file, including pages outside its range");
+    const auto calls = backend_map_calls;
+    bundlefs_mapping_t prefix{};
+    Check(store->Map(file, 0U, 16U, prefix) == BUNDLEFS_OK, "another section borrows the whole-file mapping");
+    Check(backend_map_calls == calls && prefix.mapping == mapping.mapping &&
+              prefix.mapping_handle != mapping.mapping_handle && prefix.data + read_offset == mapping.data,
+          "all sections share one backend window with independent leases");
     store->Unmap(mapping);
+    Check(std::equal(prefix.data, prefix.data + prefix.size, first.begin()),
+          "closing one section preserves another section's bytes");
+    store->Unmap(prefix);
 
     std::vector<uint8_t> second(4000U, 0x5aU);
     Replace("demo", second);
@@ -676,6 +689,8 @@ esp_err_t esp_partition_erase_range(const esp_partition_t* partition, size_t sta
 
 esp_err_t spi_flash_mmap_pages(const int* pages, size_t page_count, uint32_t memory, const void** mapped_pointer,
                                spi_flash_mmap_handle_t* handle) {
+    ++backend_map_calls;
+    backend_page_count = page_count;
     if (pages == nullptr || page_count == 0U || memory != SPI_FLASH_MMAP_FLAG_DATA || mapped_pointer == nullptr ||
         handle == nullptr) {
         return ESP_FAIL;
