@@ -30,6 +30,7 @@ done
 mkdir -p "$test_output_dir"
 python3 "$workspace_root/tools/tests/build_host_test.py" "$cc" \
     -std=c17 \
+    -D_POSIX_C_SOURCE=200809L \
     -Wall -Wextra -Werror \
     -I "$cjson_dir" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
