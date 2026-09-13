@@ -505,3 +505,9 @@ MICROPIXEL_EXPECT_DISPLAY_NAME="Fixture Fonts" \
 MICROPIXEL_EXPECT_METADATA_SCHEMA=1 \
 MICROPIXEL_EXPECT_PACKAGE_TYPE=component \
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$component_output_dir/fonts.bundle.bin"
+
+# Blocks timing and difficulty are pure Guest model logic.
+build_and_run blocks_model \
+    -DMICROPIXEL_MODEL_TESTING \
+    "$workspace_root/guest/apps/blocks/blocks_model.cpp" \
+    "$workspace_root/guest/apps/blocks/blocks_model_test.cpp"

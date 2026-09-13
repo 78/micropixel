@@ -31,7 +31,7 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
 void BlocksGame::StartNewGame() {
     model_.Reset(app_.random().U32());
     screen_ = Screen::kPlaying;
-    gravity_accumulated_us_ = 0U;
+    model_.ResetFallTimer();
     clear_effect_remaining_us_ = 0U;
     clear_rows_mask_ = 0U;
     clear_points_ = 0U;
@@ -49,7 +49,7 @@ void BlocksGame::EnterPause() {
 
 void BlocksGame::ResumeGame() {
     screen_ = Screen::kPlaying;
-    gravity_accumulated_us_ = 0U;
+    model_.ResetFallTimer();
     ResetGesture();
     PlayStartSound();
     Render();
@@ -72,7 +72,8 @@ void BlocksGame::HandleOutcome(const LockOutcome& outcome) {
     if (!outcome.locked) {
         return;
     }
-    gravity_accumulated_us_ = 0U;
+    ResetGesture();
+    model_.ResetFallTimer();
     if (outcome.cleared_lines != 0U) {
         clear_rows_mask_ = outcome.cleared_rows_mask;
         clear_points_ = outcome.points_gained;
@@ -103,21 +104,12 @@ void BlocksGame::OnTimer(const micropixel::TimerEvent& tick) {
         return;
     }
 
-    gravity_accumulated_us_ += delta_us;
-    const uint64_t period_us = model_.drop_period_us();
-    if (gravity_accumulated_us_ >= period_us) {
-        gravity_accumulated_us_ -= period_us;
-        if (gravity_accumulated_us_ >= period_us) {
-            gravity_accumulated_us_ = 0U;
-        }
-        const LockOutcome outcome = model_.Tick();
-        HandleOutcome(outcome);
-        if (outcome.locked) {
-            Render();
-        } else if (outcome.moved) {
-            SyncPlayfield();
-        }
-        return;
+    const LockOutcome outcome = model_.AdvanceTime(delta_us);
+    HandleOutcome(outcome);
+    if (outcome.locked) {
+        Render();
+    } else if (outcome.moved) {
+        SyncPlayfield();
     }
 }
 
@@ -224,7 +216,7 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
         visual_changed = outcome.moved || outcome.locked;
     } else if (!was_moved && total_dy <= -70 && AbsoluteValue(total_dy) > AbsoluteValue(total_dx)) {
         if (model_.Hold()) {
-            gravity_accumulated_us_ = 0U;
+            model_.ResetFallTimer();
             PlayHoldSound();
             interface_changed = true;
             visual_changed = true;
@@ -235,7 +227,7 @@ void BlocksGame::HandlePlayGesture(const micropixel::TouchEvent& touch) {
             return;
         }
         if (started_in_hold && model_.Hold()) {
-            gravity_accumulated_us_ = 0U;
+            model_.ResetFallTimer();
             PlayHoldSound();
             interface_changed = true;
             visual_changed = true;

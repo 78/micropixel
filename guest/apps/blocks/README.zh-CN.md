@@ -31,11 +31,19 @@ python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 触控操作覆盖整个 720×720 逻辑屏幕：任意位置点击旋转、水平拖动、慢速下拖软降、快速下划硬降、上划换块；
 轻点 HOLD 换块，轻点左上角标题所在的顶部 HUD 区域暂停。暂停热区覆盖完整标题，但不侵入棋盘；从 HOLD 或标题区域起手的滑动仍按游戏手势处理，不会被按钮截断。
 按住并向下拖动时，方块只按手指位移逐格软降，不会在 Move 阶段提前硬降。只有松手时，手势同时满足
-150 ms 内完成、向下至少移动 80 个逻辑像素且纵向位移占优，才执行硬降。
+200 ms 内完成、向下至少移动 80 个逻辑像素且纵向位移占优，才执行硬降。
 
 游戏每消除 10 行提升一级，最高为 99 级。自动下落周期在四个速度点之间线性变化：
-1 级 750 ms、12 级 240 ms、20 级 200 ms 和 99 级 100 ms。到达 99 级后等级和下落周期都不再变化。
-内部使用微秒精度，软降和硬降仍允许熟练玩家主动加快节奏。
+1 级 1000 ms、10 级 200 ms、50 级 100 ms 和 99 级 10 ms。到达 99 级后等级和下落周期都不再变化。
+内部使用微秒精度，一次更新可以下落多格，软降和硬降仍允许熟练玩家主动加快节奏。
+
+方块接触底部或堆叠后，累计停留 500 ms 才自动锁定，期间可以横移，但不能旋转；空中旋转保持正常。
+离开支撑面时暂停落地计时，再次接触时继续累计；移动与旋转不重置已消耗的停留时间，防止无限拖延。软降遇到底部不会
+提前锁定，快速下滑松手仍立即硬降并锁定。
+
+锁定后立即生成下一块，不额外加入出块等待。锁定时结束当前触摸手势，剩余移动和松手事件不能
+作用于下一块，须重新按下才能操作。新方块不继承旧方块的剩余更新时间或落地时间；Hold 换入的
+方块也重新计时。暂停时不推进落地时间。消行动画保留 240 ms，期间不推进自动下落。
 
 棋盘使用静态背景 Sprite 和固定容量 200 的 `SpriteBatch`，每个格子对应一个稳定槽位。
 Guest 保留 visual-cell code 缓存，活动块、Ghost、落定方块和消行闪烁只更新变化格子的 atlas source
@@ -82,8 +90,5 @@ python3 tools/micropixel --transport usb --port /dev/cu.usbmodem1101 \
 性能验收同时比较 Guest 提交、Host 合成分段和最终画面；不能沿用旧 offscreen surface 的 PPA 命中率基线。
 
 ```sh
-clang++ -std=c++23 -O1 -g -fsanitize=address,undefined -DMICROPIXEL_MODEL_TESTING \
-  -Iguest guest/apps/blocks/blocks_model.cpp guest/apps/blocks/blocks_model_test.cpp \
-  -o build/blocks_model_test
-ASAN_OPTIONS=detect_leaks=0 build/blocks_model_test
+bash tools/tests/test_firmware_host.sh
 ```

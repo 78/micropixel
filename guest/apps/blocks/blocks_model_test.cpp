@@ -92,20 +92,106 @@ void TestCappedDifficultyCurve() {
         uint32_t period_us;
     };
     constexpr ExpectedPeriod kExpected[] = {
-        {1U, 750000U}, {12U, 240000U}, {20U, 200000U}, {99U, 100000U}, {100U, 100000U}, {200U, 100000U},
+        {1U, 1000000U}, {10U, 200000U}, {50U, 100000U}, {99U, 10000U}, {100U, 10000U}, {200U, 10000U},
     };
     for (const ExpectedPeriod expected : kExpected) {
         model.SetLevelForTesting(expected.level);
         assert(model.drop_period_us() == expected.period_us);
     }
 
-    uint32_t previous_period_us = 750000U;
+    uint32_t previous_period_us = 1000000U;
     for (uint32_t level = 1U; level <= 99U; ++level) {
         model.SetLevelForTesting(level);
         const uint32_t period_us = model.drop_period_us();
         assert(period_us < previous_period_us || level == 1U);
         previous_period_us = period_us;
     }
+}
+
+void TestGroundedRotationIsRejected() {
+    blocks::BlocksModel model;
+    model.Reset(4U);
+    model.SetActiveForTesting({blocks::Tetromino::kT, 0U, 3, 0});
+    assert(model.RotateClockwise());
+    model.SetActiveForTesting({blocks::Tetromino::kT, 0U, 3, 18});
+    assert(!model.RotateClockwise());
+    assert(model.active().rotation == 0U);
+    assert(model.active().y == 18);
+    assert(model.MoveHorizontal(1));
+    assert(!model.AdvanceTime(499999U).locked);
+    assert(!model.RotateClockwise());
+    assert(model.AdvanceTime(1U).locked);
+    assert(model.active().y == -1);
+
+    model.Reset(4U);
+    model.SetCellForTesting(4U, 10U, 1U);
+    model.SetActiveForTesting({blocks::Tetromino::kT, 0U, 3, 8});
+    assert(!model.RotateClockwise());
+    assert(model.MoveHorizontal(1));
+    assert(model.MoveHorizontal(1));
+    assert(model.RotateClockwise());
+}
+
+void TestTimedLanding() {
+    blocks::BlocksModel model;
+    model.Reset(4U);
+    model.SetActiveForTesting({blocks::Tetromino::kO, 0U, 3, 18});
+    assert(!model.SoftDrop().locked);
+    assert(!model.AdvanceTime(400000U).locked);
+    assert(model.MoveHorizontal(1));
+    assert(!model.AdvanceTime(99999U).locked);
+    assert(model.AdvanceTime(1U).locked);
+    // The new piece gets its own full gravity interval.
+    const int32_t spawn_y = model.active().y;
+    assert(!model.AdvanceTime(999999U).moved);
+    assert(model.active().y == spawn_y);
+    assert(model.AdvanceTime(1U).moved);
+
+    model.Reset(4U);
+    model.SetActiveForTesting({blocks::Tetromino::kO, 0U, 3, 18});
+    assert(!model.AdvanceTime(499999U).locked);
+    assert(model.Hold());
+    model.SetActiveForTesting({blocks::Tetromino::kO, 0U, 3, 18});
+    assert(!model.AdvanceTime(499999U).locked);
+    assert(model.AdvanceTime(1U).locked);
+}
+
+void TestLeavingSupportPreservesLockBudget() {
+    blocks::BlocksModel model;
+    model.Reset(4U);
+    model.SetCellForTesting(4U, 19U, 1U);
+    model.SetActiveForTesting({blocks::Tetromino::kO, 0U, 3, 17});
+    assert(!model.AdvanceTime(400000U).locked);
+    assert(model.MoveHorizontal(1));
+    // Airborne time does not consume the remaining 100 ms lock budget.
+    assert(!model.AdvanceTime(900000U).locked);
+    assert(model.active().y == 17);
+    assert(model.AdvanceTime(100000U).moved);
+    assert(model.active().y == 18);
+    assert(!model.AdvanceTime(99999U).locked);
+    assert(model.AdvanceTime(1U).locked);
+}
+
+void TestFastGravityAndLockBoundary() {
+    blocks::BlocksModel model;
+    model.Reset(4U);
+    model.SetLevelForTesting(99U);
+    model.SetActiveForTesting({blocks::Tetromino::kO, 0U, 3, 0});
+    assert(model.AdvanceTime(16667U).moved);
+    assert(model.active().y == 1);
+    assert(model.AdvanceTime(16667U).moved);
+    assert(model.active().y == 3);
+    // 180 ms reaches the floor, followed by exactly 500 ms to lock.
+    assert(!model.AdvanceTime(646665U).locked);
+    assert(model.active().y == 18);
+    assert(model.AdvanceTime(1U).locked);
+
+    model.Reset(4U);
+    model.SetLevelForTesting(99U);
+    assert(model.AdvanceTime(10000000U).locked);
+    assert(model.active().y == -1);
+    assert(!model.AdvanceTime(9999U).moved);
+    assert(model.AdvanceTime(1U).moved);
 }
 
 uint32_t NextRandom(uint32_t& state) {
@@ -137,7 +223,7 @@ void TestRandomPlayAndRenderRunBound() {
                     (void)model.SoftDrop();
                     break;
                 case 5U:
-                    (void)model.Tick();
+                    (void)model.AdvanceTime(16667U);
                     break;
                 default:
                     (void)model.HardDrop();
@@ -176,6 +262,10 @@ int main() {
     TestSingleLineClearAndScoring();
     TestHoldIsLimitedUntilLock();
     TestCappedDifficultyCurve();
+    TestGroundedRotationIsRejected();
+    TestTimedLanding();
+    TestLeavingSupportPreservesLockBudget();
+    TestFastGravityAndLockBoundary();
     TestRandomPlayAndRenderRunBound();
     return 0;
 }

@@ -13,6 +13,8 @@ class BlocksModel final {
     [[nodiscard]] bool RotateClockwise();
     [[nodiscard]] LockOutcome SoftDrop();
     [[nodiscard]] LockOutcome Tick();
+    [[nodiscard]] LockOutcome AdvanceTime(uint64_t delta_us);
+    void ResetFallTimer() { gravity_accumulated_us_ = 0U; }
     [[nodiscard]] LockOutcome HardDrop();
     [[nodiscard]] bool Hold();
 
@@ -44,6 +46,7 @@ class BlocksModel final {
     void SpawnNext();
     void SpawnType(Tetromino type);
     [[nodiscard]] bool Fits(const ActivePiece& piece) const;
+    [[nodiscard]] bool grounded() const;
     [[nodiscard]] LockOutcome StepDown(bool award_soft_drop);
     [[nodiscard]] LockOutcome LockActive();
     [[nodiscard]] uint32_t ClearCompletedRows(uint32_t& cleared_rows_mask);
@@ -59,6 +62,8 @@ class BlocksModel final {
     uint32_t lines_{};
     uint32_t level_{1U};
     uint32_t combo_{};
+    uint64_t gravity_accumulated_us_{};
+    uint64_t grounded_elapsed_us_{};
     bool has_hold_{};
     bool hold_used_{};
     bool alive_{};

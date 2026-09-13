@@ -79,6 +79,8 @@ Tetromino BlocksModel::TakeFromBag() {
 }
 
 void BlocksModel::SpawnType(Tetromino type) {
+    gravity_accumulated_us_ = 0U;
+    grounded_elapsed_us_ = 0U;
     active_ = ActivePiece{type, 0U, 3, -1};
     if (!Fits(active_)) {
         alive_ = false;
@@ -125,8 +127,11 @@ bool BlocksModel::MoveHorizontal(int32_t direction) {
 }
 
 bool BlocksModel::RotateClockwise() {
-    if (!alive_ || active_.type == Tetromino::kO) {
-        return alive_;
+    if (!alive_ || grounded()) {
+        return false;
+    }
+    if (active_.type == Tetromino::kO) {
+        return true;
     }
     ActivePiece rotated = active_;
     rotated.rotation = static_cast<uint8_t>((rotated.rotation + 1U) % 4U);
@@ -158,12 +163,48 @@ LockOutcome BlocksModel::StepDown(bool award_soft_drop) {
         score_ += points;
         return LockOutcome{.points_gained = points, .moved = true};
     }
-    return LockActive();
+    return {};
 }
 
 LockOutcome BlocksModel::SoftDrop() { return StepDown(true); }
 
 LockOutcome BlocksModel::Tick() { return StepDown(false); }
+
+bool BlocksModel::grounded() const {
+    ActivePiece moved = active_;
+    ++moved.y;
+    return !Fits(moved);
+}
+
+LockOutcome BlocksModel::AdvanceTime(uint64_t delta_us) {
+    if (!alive_) {
+        return LockOutcome{.game_over = true};
+    }
+    LockOutcome outcome{};
+    // Grounded time is cumulative per piece: moving cannot postpone locking forever.
+    constexpr uint64_t kLockDelayUs = 500000U;
+    // At most one board's descent; never spend leftover time on the next piece.
+    for (uint32_t step = 0U; step <= kBoardRows + 4U; ++step) {
+        if (grounded()) {
+            gravity_accumulated_us_ = 0U;
+            if (delta_us >= kLockDelayUs - grounded_elapsed_us_) {
+                return LockActive();
+            }
+            grounded_elapsed_us_ += delta_us;
+            return outcome;
+        }
+        const uint64_t remaining_us = drop_period_us() - gravity_accumulated_us_;
+        if (delta_us < remaining_us) {
+            gravity_accumulated_us_ += delta_us;
+            return outcome;
+        }
+        delta_us -= remaining_us;
+        gravity_accumulated_us_ = 0U;
+        const LockOutcome step_outcome = Tick();
+        outcome.moved = outcome.moved || step_outcome.moved;
+    }
+    return outcome;
+}
 
 LockOutcome BlocksModel::HardDrop() {
     if (!alive_) {
@@ -298,13 +339,13 @@ int32_t BlocksModel::ghost_y() const {
 
 uint32_t BlocksModel::drop_period_us() const {
     const uint32_t capped_level = level_ > kMaximumLevel ? kMaximumLevel : level_;
-    if (capped_level <= 12U) {
-        return 750000U - (capped_level - 1U) * 510000U / 11U;
+    if (capped_level <= 10U) {
+        return 1000000U - (capped_level - 1U) * 800000U / 9U;
     }
-    if (capped_level <= 20U) {
-        return 240000U - (capped_level - 12U) * 40000U / 8U;
+    if (capped_level <= 50U) {
+        return 200000U - (capped_level - 10U) * 100000U / 40U;
     }
-    return 200000U - (capped_level - 20U) * 100000U / 79U;
+    return 100000U - (capped_level - 50U) * 90000U / 49U;
 }
 
 }  // namespace blocks

@@ -83,7 +83,6 @@ class BlocksGame final {
     uint32_t best_score_{};
     uint32_t clear_rows_mask_{};
     uint32_t clear_points_{};
-    uint64_t gravity_accumulated_us_{};
     uint64_t clear_effect_remaining_us_{};
     uint64_t gesture_started_us_{};
     GestureAxis gesture_axis_{GestureAxis::kUndecided};
