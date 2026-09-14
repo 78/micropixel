@@ -718,7 +718,11 @@ int32_t AudioServiceEndpoint::Call(uint32_t method_id, const uint8_t* request, u
     }
     if (method_id == MICROPIXEL_AUDIO_METHOD_PCM_STREAM_WRITE) {
         micropixel_audio_pcm_stream_write_request_t wire{};
-        if (!ReadRequest(request, request_size, wire) || wire.size != request_size) {
+        // Variable-size: the header is followed by frame_count * channels int16
+        // samples, so request_size is always larger than sizeof(wire). The
+        // fixed-size ReadRequest() rejects exactly that and made every non-empty
+        // Guest write fail with INVALID_ARGUMENT.
+        if (!ReadVariableRequest(request, request_size, wire) || wire.size != request_size || wire.reserved0 != 0U) {
             return MICROPIXEL_STATUS_INVALID_ARGUMENT;
         }
         // The payload is only 2-byte aligned relative to the request start, so
