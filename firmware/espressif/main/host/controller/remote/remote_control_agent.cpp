@@ -1500,6 +1500,8 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
     auto reject = [&](const char* error) {
         if (install_activity_started) {
             controls_.EndInstallActivity(control::ControlSource::kRemote, command_id);
+        } else if (name != nullptr && std::strcmp(name, "app.install") == 0) {
+            controls_.RejectStoreUpdateRequest(JsonString(cJSON_GetObjectItemCaseSensitive(root, "params"), "appId"));
         }
         cJSON* result = cJSON_CreateObject();
         if (result != nullptr) {
@@ -2836,7 +2838,7 @@ void RemoteControlAgent::TaskMain() {
                 response.status == 202;
             cJSON_free(encoded);
             cJSON_Delete(body);
-            controls_.SetStoreCheckState(queued ? 2U : 3U);
+            controls_.CompleteStoreUpdateRequest(queued);
             if (queued) controls_.RequestStoreCheck();
         }
         if (controls_.ConsumeStoreCheck()) {

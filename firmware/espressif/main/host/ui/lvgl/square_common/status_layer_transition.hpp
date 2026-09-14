@@ -9,6 +9,9 @@
 
 namespace micropixel::host_ui::lvgl::square_common {
 
+// Shared snapshot compositor for status dialogs and system action sheets.
+// Geometry supplies either a top or bottom off-screen position. Transient
+// sheets finish with keep_buffers=false; status dialogs retain for dismissal.
 class StatusLayerTransition {
    public:
     virtual ~StatusLayerTransition() = default;

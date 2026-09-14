@@ -9,6 +9,7 @@ namespace micropixel::host_ui::lvgl::square_common {
 
 class SquareSystemUi final : public host_ui::SystemUi {
    public:
+    void PresentPendingActionSheet() override { state_.action_sheets.Present(); }
     SquareSystemUi(SquareSystemUiState& state, SquarePresentation& presentation);
     ~SquareSystemUi() override;
 

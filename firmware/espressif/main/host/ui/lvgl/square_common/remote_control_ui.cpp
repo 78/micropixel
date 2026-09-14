@@ -106,6 +106,7 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     if (remote_control_off_confirmation_visible_) {
         DrawRemoteControlOffConfirmationLocked();
     }
+    remote_control_confirmation_rendered_ = remote_control_off_confirmation_visible_;
     lv_obj_update_layout(scroll);
     lv_obj_scroll_to_y(scroll, remote_control_scroll_offset_, LV_ANIM_OFF);
     remote_control_scroll_gesture_active_ = false;
@@ -208,8 +209,9 @@ void SystemDetailUi::QueueRemoteControlRender() {
 }
 
 void SystemDetailUi::DrawRemoteControlOffConfirmationLocked() {
-    lv_obj_t* sheet =
-        CreateActionSheet(layout_, root_, RemoteControlConfirmationCancelEvent, this, theme::kDangerBorder);
+    lv_obj_t* sheet = CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_,
+                                        RemoteControlConfirmationCancelEvent, this, theme::kDangerBorder, nullptr,
+                                        !remote_control_confirmation_rendered_);
     (void)Label(sheet, "Turn Off Remote Control?", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* detail = Label(sheet, "Remote access and active connection codes will stop.",
                              platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);

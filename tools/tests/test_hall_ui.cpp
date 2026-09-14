@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 
+#include "host/ui/app_management_model.hpp"
 #include "host/ui/hall_install_model.hpp"
 #include "host/ui/lvgl/square_common/hall_carousel.hpp"
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
@@ -12,6 +13,7 @@
 #include "host/ui/lvgl/square_common/profiles/landscape_320_layout.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_480_layout.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_720_layout.hpp"
+#include "platform/lvgl/display/dialog_snapshot_layout.hpp"
 
 namespace {
 
@@ -29,6 +31,71 @@ void Check(bool condition, const char* message) {
         std::cerr << "FAIL: " << message << '\n';
         std::exit(1);
     }
+}
+
+void DialogSnapshotStride() {
+    using micropixel::platform::lvgl::PlanDialogSnapshot;
+    const auto sheet = PlanDialogSnapshot(640U, 304U, 2592U);
+    Check(sheet.has_value() && sheet->pitch_pixels == 648U && sheet->buffer_bytes == 787968U,
+          "640px sheets must allocate LVGL's 48-byte-aligned rows and pass their pitch to PPA");
+    const auto status = PlanDialogSnapshot(648U, 300U, 2592U);
+    Check(status.has_value() && status->pitch_pixels == 648U && status->buffer_bytes == 777600U,
+          "already aligned status snapshots retain their existing PPA layout");
+    Check(!PlanDialogSnapshot(640U, 304U, 2556U).has_value() && !PlanDialogSnapshot(640U, 304U, 2593U).has_value(),
+          "short rows and fractional PPA pixel pitches must be rejected");
+    Check(!PlanDialogSnapshot(1U, UINT32_MAX, 4U).has_value() && !PlanDialogSnapshot(UINT32_MAX, 1U, 4U).has_value() &&
+              !PlanDialogSnapshot(0U, 304U, 0U).has_value(),
+          "invalid dimensions and allocation overflow must be rejected");
+}
+
+void AppUninstallRequestLatch() {
+    host_ui::AppManagementModel model{};
+    model.app_count = 2;
+    Check(!host_ui::BeginAppUninstall(model, 0), "unavailable uninstall must be rejected");
+    model.uninstall_available = true;
+    Check(!host_ui::BeginAppUninstall(model, 2), "out-of-range uninstall must be rejected");
+    model.update_request_state = micropixel::host::StoreUpdateRequestState::kRequesting;
+    Check(!host_ui::BeginAppUninstall(model, 0), "installation and uninstall must not overlap");
+    model.update_request_state = micropixel::host::StoreUpdateRequestState::kIdle;
+    Check(host_ui::BeginAppUninstall(model, 1), "first uninstall must latch");
+    Check(host_ui::AppManagementBusy(model), "pending uninstall must block other actions");
+    Check(!host_ui::BeginAppUninstall(model, 1) && !host_ui::BeginAppUninstall(model, 0),
+          "repeat taps must not enqueue either the same or another app");
+    Check(model.uninstall_app_index == 1, "duplicates must not replace the uninstall target");
+    model.uninstall_state = host_ui::AppUninstallState::kFailed;
+    Check(!host_ui::AppManagementBusy(model), "failure must restore user actions");
+    Check(host_ui::BeginAppUninstall(model, 1), "failed uninstall must be retryable");
+}
+
+void AppActionSheetRefresh() {
+    host_ui::AppManagementModel model{};
+    model.app_count = 1U;
+    model.action_app_index = 0U;
+    model.apps[0].app_id = "first";
+    model.apps[0].display_name = "First";
+    auto refreshed = model;
+    refreshed.store_check_state = 2U;
+    Check(host_ui::AppManagementActionSheetMatches(model, refreshed),
+          "background check completion must preserve the open sheet and its animation");
+    refreshed.apps[0].update_version[0] = '2';
+    Check(!host_ui::AppManagementActionSheetMatches(model, refreshed),
+          "a newly available update must refresh the sheet actions");
+    refreshed = model;
+    refreshed.update_request_state = micropixel::host::StoreUpdateRequestState::kRequesting;
+    Check(!host_ui::AppManagementActionSheetMatches(model, refreshed),
+          "install feedback must replace the sheet content");
+    refreshed = model;
+    refreshed.apps[0].app_id = "replacement";
+    Check(!host_ui::AppManagementActionSheetMatches(model, refreshed),
+          "a changed catalog identity must not retain the old app sheet");
+    refreshed = model;
+    refreshed.launch_available = true;
+    Check(!host_ui::AppManagementActionSheetMatches(model, refreshed),
+          "changed action availability must refresh the sheet");
+    refreshed = model;
+    refreshed.action_app_index = host_ui::kMaxHallApps;
+    Check(!host_ui::AppManagementActionSheetMatches(model, refreshed),
+          "the full management page must retain its separate refresh path");
 }
 
 void CapacityAndGeometry() {
@@ -354,6 +421,9 @@ void InstallationPlacement() {
 }  // namespace
 
 int main() {
+    DialogSnapshotStride();
+    AppUninstallRequestLatch();
+    AppActionSheetRefresh();
     InstallationPlacement();
     CapacityAndGeometry();
     Square480Geometry();

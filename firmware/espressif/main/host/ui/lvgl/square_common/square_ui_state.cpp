@@ -13,6 +13,7 @@
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
 #include "sdkconfig.h"
+#include "src/core/lv_refr_private.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include "src/misc/cache/instance/lv_image_header_cache.h"
 
@@ -77,7 +78,9 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
                                          StatusLayerTransition& transition,
                                          const SquareSystemUiProfile& selected_profile)
     : profile(selected_profile),
-      system_detail_ui(profile.system_page),
+      action_sheets(transition),
+      system_detail_ui(profile.system_page, action_sheets),
+      wifi_settings_ui(action_sheets),
       input_router(physical_input, static_cast<uint16_t>(profile.square.width),
                    static_cast<uint16_t>(profile.square.height)),
       hall_cover_cache({.target_size = profile.square.hall_card_width,
@@ -415,6 +418,7 @@ void SquareSystemUiState::UnbindPageInput(void* action_context) {
     UnbindHostPointerTouchSink();
     input_router.ClearSystemActionSink(action_context);
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
+        action_sheets.CancelLocked();
         SetHostPointerEnabledLocked(false);
         esp_lv_adapter_unlock();
     }
@@ -650,12 +654,20 @@ std::expected<void, host_ui::SystemUiError> SquareSystemUiState::ShowAppManageme
     }
     SetHostPointerEnabledLocked(false);
     hall_retained_for_status = false;
-    lv_obj_t* page_root = model.action_app_index < model.app_count ? root : PrepareSystemPageRootLocked();
+    lv_obj_t* page_root = (model.action_app_index < model.app_count || system_detail_ui.AppManagementVisible())
+                              ? root
+                              : PrepareSystemPageRootLocked();
     auto result =
         page_root == nullptr
             ? std::expected<void, host_ui::SystemUiError>(std::unexpected(host_ui::SystemUiError::kRenderFailed))
             : system_detail_ui.ShowAppManagementLocked(page_root, model, action_sink, action_context);
-    SetHostPointerEnabledLocked(result.has_value());
+    const bool uninstalling = model.uninstall_state == host_ui::AppUninstallState::kPending;
+    SetHostPointerEnabledLocked(result.has_value() && !uninstalling);
+    if (result.has_value() && uninstalling) {
+        // Storage mutation starts only after the busy frame has been submitted.
+        lv_refr_now(display);
+        ESP_LOGI("system_details", "uninstall pending frame presented");
+    }
     esp_lv_adapter_unlock();
     if (!result.has_value()) {
         system_detail_ui.LeaveAppManagement();

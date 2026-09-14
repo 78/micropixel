@@ -160,6 +160,11 @@ void ControlDispatcher::AddStoreUpdate(const char* app_id, const char* version, 
                                        const std::array<uint8_t, 32U>& digest) {
     std::lock_guard lock(snapshot_mutex_);
     if (app_id == nullptr || version == nullptr || store_update_count_ >= store_updates_.size()) return;
+    if (store_update_request_state_ == host::StoreUpdateRequestState::kQueued &&
+        std::strcmp(store_update_requested_.data(), app_id) == 0 && state != nullptr &&
+        (std::strcmp(state, "failed") == 0 || std::strcmp(state, "available") == 0)) {
+        store_update_request_state_ = host::StoreUpdateRequestState::kFailed;
+    }
     auto& update = store_updates_[store_update_count_++];
     update.baseline_sha256 = digest;
     std::snprintf(update.app_id.data(), update.app_id.size(), "%s", app_id);
@@ -174,16 +179,41 @@ StoreAppUpdate ControlDispatcher::FindStoreUpdate(const char* app_id) const {
 }
 void ControlDispatcher::RequestStoreUpdate(const char* app_id) {
     std::lock_guard lock(snapshot_mutex_);
-    std::snprintf(store_update_requested_.data(), store_update_requested_.size(), "%s",
-                  app_id != nullptr ? app_id : "");
-    store_check_state_.store(1U);
+    if (app_id == nullptr || app_id[0] == '\0' || std::strlen(app_id) >= store_update_requested_.size() ||
+        host::StoreUpdateRequestBusy(store_update_request_state_)) {
+        return;
+    }
+    std::snprintf(store_update_requested_.data(), store_update_requested_.size(), "%s", app_id);
+    store_update_request_state_ = host::StoreUpdateRequestState::kRequesting;
+    store_update_dispatch_pending_ = true;
 }
 bool ControlDispatcher::ConsumeStoreUpdate(std::array<char, kAppIdCapacity>& app_id) {
     std::lock_guard lock(snapshot_mutex_);
-    if (store_update_requested_[0] == '\0') return false;
+    if (!store_update_dispatch_pending_) return false;
     app_id = store_update_requested_;
-    store_update_requested_[0] = '\0';
+    store_update_dispatch_pending_ = false;
     return true;
+}
+
+void ControlDispatcher::CompleteStoreUpdateRequest(bool queued) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (store_update_request_state_ == host::StoreUpdateRequestState::kRequesting && !store_update_dispatch_pending_) {
+        store_update_request_state_ =
+            queued ? host::StoreUpdateRequestState::kQueued : host::StoreUpdateRequestState::kFailed;
+    }
+}
+
+void ControlDispatcher::RejectStoreUpdateRequest(const char* app_id) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (app_id != nullptr && std::strcmp(store_update_requested_.data(), app_id) == 0 &&
+        store_update_request_state_ == host::StoreUpdateRequestState::kQueued) {
+        store_update_request_state_ = host::StoreUpdateRequestState::kFailed;
+    }
+}
+
+host::StoreUpdateRequestState ControlDispatcher::StoreUpdateRequestState() const {
+    std::lock_guard lock(snapshot_mutex_);
+    return store_update_request_state_;
 }
 
 void ControlDispatcher::UpdateStoreSnapshot(const StoreSnapshot& snapshot) {
@@ -251,6 +281,12 @@ void ControlDispatcher::EndInstallActivity(ControlSource source, const char* com
         std::lock_guard lock(snapshot_mutex_);
         if (install_activity_.active && install_activity_.source == source && command_id != nullptr &&
             std::strcmp(install_activity_.command_id.data(), command_id) == 0) {
+            if (source == ControlSource::kRemote &&
+                std::strcmp(install_activity_.app_id.data(), store_update_requested_.data()) == 0) {
+                store_update_request_state_ = host::StoreUpdateRequestState::kIdle;
+                store_update_requested_[0] = '\0';
+                store_update_dispatch_pending_ = false;
+            }
             const uint32_t generation = install_activity_.generation + 1U;
             install_activity_ = {};
             install_activity_.generation = generation;

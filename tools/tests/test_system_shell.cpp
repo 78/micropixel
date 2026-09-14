@@ -152,6 +152,8 @@ class FakeSystemUi final : public SystemUi {
 
     [[nodiscard]] bool HasSink() const { return sink_ != nullptr || context_ != nullptr; }
 
+    void PresentPendingActionSheet() override { ++present_sheet_calls; }
+    uint32_t present_sheet_calls{};
     uint32_t stop_watching_calls{};
     uint64_t status_open_trigger_us{};
     uint64_t status_close_trigger_us{};
@@ -175,6 +177,25 @@ class FakeSystemUi final : public SystemUi {
     SystemUiActionSink sink_{};
     void* context_{};
 };
+
+void ActionSheetPresentationSurvivesQueuePressure() {
+    FakeSystemUi ui;
+    SystemShell shell(ui);
+    Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
+    ui.Emit({.type = SystemUiActionType::kPresentActionSheet});
+    ui.Emit({.type = SystemUiActionType::kPresentActionSheet});
+    Check(ui.present_sheet_calls == 0U, "LVGL callback must not perform presentation");
+    Check(!shell.PollAction(0U).has_value(), "presentation wake must not escape to controller");
+    Check(ui.present_sheet_calls == 1U, "duplicate requests must coalesce on Host task");
+    for (uint32_t i = 0; i < 10; ++i) ui.Emit({.type = SystemUiActionType::kStopApp});
+    ui.Emit({.type = SystemUiActionType::kPresentActionSheet});
+    Check(shell.PollAction(0U).has_value(), "queue pressure must retain ordinary actions");
+    Check(ui.present_sheet_calls == 2U, "full queue must not lose pending presentation");
+    ui.Emit({.type = SystemUiActionType::kPresentActionSheet});
+    Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "screen change should reset queue");
+    (void)shell.PollAction(0U);
+    Check(ui.present_sheet_calls == 3U, "queue reset must not strand pending presentation");
+}
 
 void DiscreteActionsRemainOrdered() {
     FakeSystemUi ui;
@@ -553,6 +574,7 @@ void IdleTimeoutSelectsBoardActionAndRespectsActivityAndPower() {
 
 int main() {
     IdleTimeoutSelectsBoardActionAndRespectsActivityAndPower();
+    ActionSheetPresentationSurvivesQueuePressure();
     DiscreteActionsRemainOrdered();
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
@@ -567,6 +589,6 @@ int main() {
     ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 15 cases\n";
+    std::cout << "system_shell tests passed: 16 cases\n";
     return 0;
 }

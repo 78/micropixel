@@ -4,7 +4,7 @@
 #include <cinttypes>
 #include <cstdio>
 
-#include "host/ui/lvgl/square_common/system_page_layout.hpp"
+#include "host/ui/lvgl/square_common/action_sheet_presenter.hpp"
 #include "host/ui/system_ui.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -135,9 +135,10 @@ inline lv_obj_t* CreateOverlay(lv_obj_t* root, lv_event_cb_t cancel_event, void*
     return overlay;
 }
 
-inline lv_obj_t* CreateActionSheet(const SystemPageLayout& layout, lv_obj_t* root, lv_event_cb_t cancel_event,
+inline lv_obj_t* CreateActionSheet(ActionSheetPresenter& presenter, SystemUiActionSink sink, void* action_context,
+                                   const SystemPageLayout& layout, lv_obj_t* root, lv_event_cb_t cancel_event,
                                    void* context, uint32_t border_color = theme::kStrongBorder,
-                                   lv_obj_t** overlay_out = nullptr) {
+                                   lv_obj_t** overlay_out = nullptr, bool animate = true) {
     lv_obj_t* overlay = CreateOverlay(root, cancel_event, context);
     if (overlay_out != nullptr) {
         *overlay_out = overlay;
@@ -147,22 +148,10 @@ inline lv_obj_t* CreateActionSheet(const SystemPageLayout& layout, lv_obj_t* roo
     lv_obj_set_style_border_color(sheet, lv_color_hex(border_color), 0);
     lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, -layout.safe_horizontal);
-    // Translate independently of bottom alignment and content-driven height.
-    // LVGL removes animations targeting the sheet when the object is deleted.
-    lv_anim_t animation;
-    lv_anim_init(&animation);
-    lv_anim_set_var(&animation, sheet);
-    lv_anim_set_values(&animation, layout.height, 0);
-    lv_anim_set_duration(&animation, 100U);
-    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&animation, [](void* object, int32_t offset) {
-        auto* sheet = static_cast<lv_obj_t*>(object);
-        lv_obj_set_style_translate_y(sheet, offset, 0);
-        // Invalidation alone waits for the slow static-scene refresh timer.
-        // Publish every animation step, including the final resting position.
-        platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(sheet));
-    });
-    lv_anim_start(&animation);
+    if (!animate) {
+        return sheet;
+    }
+    presenter.RequestLocked(layout, sheet, sink, action_context);
     return sheet;
 }
 

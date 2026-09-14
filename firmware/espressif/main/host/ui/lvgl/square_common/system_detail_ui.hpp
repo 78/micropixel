@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <expected>
 
-#include "host/ui/lvgl/square_common/system_page_layout.hpp"
+#include "host/ui/lvgl/square_common/action_sheet_presenter.hpp"
 #include "host/ui/system_ui.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/lvgl_wakeup.hpp"
@@ -17,7 +17,8 @@ namespace micropixel::host_ui::lvgl::square_common {
 // gestures back to typed actions.
 class SystemDetailUi final {
    public:
-    explicit SystemDetailUi(const SystemPageLayout& layout) : layout_(layout) {}
+    SystemDetailUi(const SystemPageLayout& layout, ActionSheetPresenter& action_sheets)
+        : action_sheets_(action_sheets), layout_(layout) {}
     SystemDetailUi(const SystemDetailUi&) = delete;
     SystemDetailUi& operator=(const SystemDetailUi&) = delete;
 
@@ -118,7 +119,7 @@ class SystemDetailUi final {
     void DrawRemoteControlOffConfirmationLocked();
     void QueueRemoteControlRender();
     void RenderAppManagementLocked();
-    void RenderAppManagementOverlayLocked();
+    void RenderAppManagementOverlayLocked(bool animate = true);
     void DrawAppManagementActionsLocked();
     void DrawAppManagementUninstallUnavailableLocked();
     void DrawAppManagementUninstallConfirmationLocked();
@@ -133,6 +134,7 @@ class SystemDetailUi final {
     void StartAppManagementLatencyProbe();
     void ResetActiveScreen();
 
+    ActionSheetPresenter& action_sheets_;
     SystemPageLayout layout_{};
     lv_obj_t* root_{};
     host_ui::SystemInformationModel system_information_model_{};
@@ -152,6 +154,7 @@ class SystemDetailUi final {
     uint32_t app_management_selected_index_{};
     AppOverlay app_management_overlay_{AppOverlay::kNone};
     lv_obj_t* app_management_overlay_root_{};
+    bool app_management_animate_overlay_{};
     lv_display_t* app_management_probe_display_{};
     const char* app_management_probe_operation_{};
     int64_t app_management_probe_touch_us_{};
@@ -159,6 +162,7 @@ class SystemDetailUi final {
     int64_t app_management_probe_render_ready_us_{};
     bool app_management_probe_armed_{};
     bool remote_control_off_confirmation_visible_{};
+    bool remote_control_confirmation_rendered_{};
     bool remote_control_scroll_gesture_active_{};
     bool remote_control_render_pending_{};
     bool updating_{};

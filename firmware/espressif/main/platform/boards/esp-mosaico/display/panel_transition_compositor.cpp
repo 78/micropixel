@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
+#include "platform/lvgl/display/dialog_snapshot_layout.hpp"
 #include "platform/lvgl/display/scanout_stage_pool.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
 #include "src/core/lv_obj_draw_private.h"
@@ -475,21 +476,26 @@ bool PanelTransitionCompositor::CaptureStatusDialogLocked(lv_obj_t* dialog) {
         static_cast<uint32_t>(width) * 4U > UINT32_MAX / static_cast<uint32_t>(height)) {
         return false;
     }
-    const uint32_t bytes = static_cast<uint32_t>(width) * static_cast<uint32_t>(height) * 4U;
+    const auto layout =
+        lvgl::PlanDialogSnapshot(static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                                 lv_draw_buf_width_to_stride(static_cast<uint32_t>(width), LV_COLOR_FORMAT_ARGB8888));
+    if (!layout.has_value() || layout->buffer_bytes > UINT32_MAX - (kBufferAlignment - 1U)) return false;
+    const uint32_t bytes = layout->buffer_bytes;
     const uint32_t allocation_bytes = AlignBufferBytes(bytes);
     if (status_dialog_pixels_ == nullptr || status_dialog_allocation_bytes_ < allocation_bytes) {
-        heap_caps_free(status_dialog_pixels_);
-        status_dialog_pixels_ = static_cast<uint8_t*>(
+        auto* pixels = static_cast<uint8_t*>(
             heap_caps_aligned_alloc(kBufferAlignment, allocation_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        status_dialog_allocation_bytes_ = status_dialog_pixels_ != nullptr ? allocation_bytes : 0U;
-    }
-    if (status_dialog_pixels_ == nullptr) {
-        ESP_LOGE(kTag, "could not allocate RGB565 status dialog snapshot: bytes=%" PRIu32, allocation_bytes);
-        return false;
+        if (pixels == nullptr) {
+            ESP_LOGE(kTag, "could not allocate RGB565 status dialog snapshot: bytes=%" PRIu32, allocation_bytes);
+            return false;
+        }
+        heap_caps_free(status_dialog_pixels_);
+        status_dialog_pixels_ = pixels;
+        status_dialog_allocation_bytes_ = allocation_bytes;
     }
     std::memset(status_dialog_pixels_, 0, bytes);
     lv_draw_buf_t snapshot{};
-    const uint32_t stride = static_cast<uint32_t>(width) * 4U;
+    const uint32_t stride = layout->stride_bytes;
     const bool captured =
         lv_draw_buf_init(&snapshot, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
                          LV_COLOR_FORMAT_ARGB8888, stride, status_dialog_pixels_, bytes) == LV_RESULT_OK &&
@@ -501,6 +507,7 @@ bool PanelTransitionCompositor::CaptureStatusDialogLocked(lv_obj_t* dialog) {
     }
     lv_draw_buf_flush_cache(&snapshot, nullptr);
     status_dialog_width_ = static_cast<uint32_t>(width);
+    status_dialog_pitch_pixels_ = layout->pitch_pixels;
     status_dialog_height_ = static_cast<uint32_t>(height);
     status_dialog_x_ = lv_obj_get_x(dialog) - ext_draw_size;
     status_dialog_ext_draw_size_ = ext_draw_size;
@@ -545,7 +552,7 @@ bool PanelTransitionCompositor::ComposeStatusStage(const PanelTransitionRect& up
         config.in_bg.block_offset_y = destination_y;
         config.in_bg.blend_cm = PPA_BLEND_COLOR_MODE_RGB565;
         config.in_fg.buffer = status_dialog_pixels_;
-        config.in_fg.pic_w = status_dialog_width_;
+        config.in_fg.pic_w = status_dialog_pitch_pixels_;
         config.in_fg.pic_h = status_dialog_height_;
         config.in_fg.block_w = static_cast<uint32_t>(dialog_region.width);
         config.in_fg.block_h = static_cast<uint32_t>(dialog_region.height);
@@ -745,6 +752,7 @@ void PanelTransitionCompositor::ClearStatusLayerBuffers() {
     status_dialog_pixels_ = nullptr;
     status_scrim_alpha_ = nullptr;
     status_dialog_width_ = 0U;
+    status_dialog_pitch_pixels_ = 0U;
     status_dialog_height_ = 0U;
     status_dialog_allocation_bytes_ = 0U;
     status_dialog_x_ = 0;

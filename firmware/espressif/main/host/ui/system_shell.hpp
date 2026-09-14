@@ -123,6 +123,7 @@ class SystemShell final {
     std::atomic_bool time_state_change_queued_{};
     std::atomic_bool remote_command_pending_{};
     std::atomic_bool remote_command_queued_{};
+    std::atomic_bool action_sheet_pending_{};
     std::atomic_bool user_activity_pending_{};
     std::atomic_bool user_activity_queued_{};
     std::atomic<TickType_t> last_user_activity_ticks_{};

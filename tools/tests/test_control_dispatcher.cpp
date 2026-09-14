@@ -12,6 +12,7 @@ using micropixel::firmware::control::HostCommand;
 using micropixel::firmware::control::HostResult;
 using micropixel::firmware::control::HostSnapshot;
 using micropixel::firmware::control::InstallActivity;
+using micropixel::host::StoreUpdateRequestState;
 
 struct Sinks final {
     uint32_t command_ready{};
@@ -38,11 +39,50 @@ int main() {
     controls.AddStoreUpdate("app", "0.2.0", "available", {});
     assert(std::strcmp(controls.FindStoreUpdate("app").version.data(), "0.2.0") == 0);
     assert(controls.FindStoreUpdate("sideload").version[0] == '\0');
+    controls.RequestStoreUpdate(nullptr);
+    controls.RequestStoreUpdate("");
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kIdle);
     controls.RequestStoreUpdate("app");
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kRequesting);
+    controls.RequestStoreUpdate("other");
     std::array<char, micropixel::firmware::control::kAppIdCapacity> update_app{};
     assert(controls.ConsumeStoreUpdate(update_app));
     assert(std::strcmp(update_app.data(), "app") == 0);
     assert(!controls.ConsumeStoreUpdate(update_app));
+    // Consuming the request must not let another click enqueue a duplicate.
+    controls.RequestStoreUpdate("app");
+    assert(!controls.ConsumeStoreUpdate(update_app));
+    controls.RequestStoreCheck();
+    controls.SetStoreCheckState(3U);
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kRequesting);
+    controls.CompleteStoreUpdateRequest(false);
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kFailed);
+    controls.SetStoreCheckState(2U);
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kFailed);
+    controls.RequestStoreUpdate("app");
+    assert(controls.ConsumeStoreUpdate(update_app));
+    controls.CompleteStoreUpdateRequest(true);
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kQueued);
+    controls.RequestStoreUpdate("other");
+    assert(!controls.ConsumeStoreUpdate(update_app));
+    assert(controls.BeginInstallActivity(ControlSource::kRemote, "install-other", "other"));
+    controls.EndInstallActivity(ControlSource::kRemote, "install-other");
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kQueued);
+    assert(controls.BeginInstallActivity(ControlSource::kRemote, "install-app", "app"));
+    controls.EndInstallActivity(ControlSource::kRemote, "install-app");
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kIdle);
+    controls.RequestStoreUpdate("app");
+    assert(controls.ConsumeStoreUpdate(update_app));
+    controls.CompleteStoreUpdateRequest(true);
+    controls.RejectStoreUpdateRequest("other");
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kQueued);
+    controls.RejectStoreUpdateRequest("app");
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kFailed);
+    controls.RequestStoreUpdate("app");
+    assert(controls.ConsumeStoreUpdate(update_app));
+    controls.CompleteStoreUpdateRequest(true);
+    controls.AddStoreUpdate("app", "0.2.0", "failed", {});
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kFailed);
     controls.ResetStoreUpdates();
     assert(controls.FindStoreUpdate("app").version[0] == '\0');
 

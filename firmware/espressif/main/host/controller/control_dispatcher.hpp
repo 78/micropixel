@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "host/controller/control_types.hpp"
+#include "host/store_update_request.hpp"
 
 namespace micropixel::firmware::control {
 
@@ -49,6 +50,9 @@ class ControlDispatcher final {
                         const std::array<uint8_t, 32U>& digest);
     [[nodiscard]] StoreAppUpdate FindStoreUpdate(const char* app_id) const;
     void RequestStoreUpdate(const char* app_id);
+    void CompleteStoreUpdateRequest(bool queued);
+    void RejectStoreUpdateRequest(const char* app_id);
+    [[nodiscard]] host::StoreUpdateRequestState StoreUpdateRequestState() const;
     [[nodiscard]] bool ConsumeStoreUpdate(std::array<char, kAppIdCapacity>& app_id);
     void UpdateStoreSnapshot(const StoreSnapshot& snapshot);
     [[nodiscard]] StoreSnapshot CopyStoreSnapshot() const;
@@ -76,6 +80,8 @@ class ControlDispatcher final {
     std::array<StoreAppUpdate, kMaxApps> store_updates_{};
     uint32_t store_update_count_{};
     std::array<char, kAppIdCapacity> store_update_requested_{};
+    host::StoreUpdateRequestState store_update_request_state_{};
+    bool store_update_dispatch_pending_{};
     std::atomic<bool> store_check_requested_{};
     std::atomic<uint8_t> store_check_state_{};
     StaticQueue_t host_command_queue_storage_{};

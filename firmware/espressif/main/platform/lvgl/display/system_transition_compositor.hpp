@@ -120,6 +120,7 @@ class SystemTransitionCompositor final : public host_ui::lvgl::square_common::St
     uint8_t* status_scrim_alpha_pixels_{};
     uint8_t* status_dialog_pixels_{};
     uint32_t status_dialog_width_{};
+    uint32_t status_dialog_pitch_pixels_{};
     uint32_t status_dialog_height_{};
     uint32_t status_dialog_allocation_bytes_{};
     uint32_t status_scrim_rgb_{};

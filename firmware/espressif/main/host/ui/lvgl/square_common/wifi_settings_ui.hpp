@@ -5,7 +5,7 @@
 #include <expected>
 
 #include "freertos/FreeRTOS.h"
-#include "host/ui/lvgl/square_common/system_page_layout.hpp"
+#include "host/ui/lvgl/square_common/action_sheet_presenter.hpp"
 #include "host/ui/system_ui.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -15,6 +15,8 @@ namespace micropixel::host_ui::lvgl::square_common {
 // and emits typed SystemUiAction values.
 class WifiSettingsUi final {
    public:
+    explicit WifiSettingsUi(ActionSheetPresenter& action_sheets) : action_sheets_(action_sheets) {}
+
     using RaiseOverlaySink = void (*)(void* context);
 
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowLocked(
@@ -55,6 +57,7 @@ class WifiSettingsUi final {
     void EmitNetworkAction(host_ui::SystemUiActionType type, const host_ui::WifiNetworkModel& network,
                            const char* password = nullptr);
 
+    ActionSheetPresenter& action_sheets_;
     const SystemPageLayout* layout_{};
     lv_obj_t* root_{};
     lv_display_t* display_{};
@@ -75,6 +78,7 @@ class WifiSettingsUi final {
     portMUX_TYPE render_lock_ = portMUX_INITIALIZER_UNLOCKED;
     bool scan_view_{};
     bool action_sheet_visible_{};
+    bool action_sheet_rendered_{};
     bool password_visible_{};
     bool password_attempt_active_{};
     bool password_length_invalid_{};

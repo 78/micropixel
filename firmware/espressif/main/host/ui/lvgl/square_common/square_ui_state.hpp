@@ -172,8 +172,9 @@ class SquareSystemUiState final {
     StatusLayerUi status_layer_ui{};
     HallSceneUi hall_scene_ui{};
     SystemMenuUi system_menu_ui{};
+    ActionSheetPresenter action_sheets;
     SystemDetailUi system_detail_ui;
-    WifiSettingsUi wifi_settings_ui{};
+    WifiSettingsUi wifi_settings_ui;
     platform::lvgl::HostPointerRouter<kHostPointerQueueCapacity> host_pointer{};
     host_ui::SystemGestureRouter input_router;
     HallCoverCache hall_cover_cache;

@@ -19,6 +19,7 @@ void SystemDetailUi::ResetActiveScreen() {
     remote_control_scroll_gesture_active_ = false;
     remote_control_render_pending_ = false;
     remote_control_off_confirmation_visible_ = false;
+    remote_control_confirmation_rendered_ = false;
     app_management_selected_index_ = 0U;
     app_management_overlay_ = AppOverlay::kNone;
     app_management_overlay_root_ = nullptr;

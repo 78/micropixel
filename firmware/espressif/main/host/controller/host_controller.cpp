@@ -35,6 +35,7 @@
 #include "host/controller/remote/remote_control_agent.hpp"
 #include "host/logging/system_log_buffer.hpp"
 #include "host/time/system_time.hpp"
+#include "host/ui/app_management_model.hpp"
 #include "host/ui/hall_install_model.hpp"
 #include "host/ui/system_settings_store.hpp"
 #include "host/ui/system_shell.hpp"
@@ -818,6 +819,7 @@ struct RemoteCommandPump final {
     bool (*requires_periodic_poll)(void*){};
     void (*check_store)(void*){};
     uint8_t (*store_check_state)(void*){};
+    host::StoreUpdateRequestState (*store_update_request_state)(void*){};
     void (*fill_store)(void*, host_ui::AppManagementModel&){};
     void (*update_store_app)(void*, const char*){};
     void* context{};
@@ -1422,6 +1424,9 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
         model.store_check_state = command_pump->store_check_state(command_pump->context);
     if (command_pump != nullptr && command_pump->fill_store != nullptr)
         command_pump->fill_store(command_pump->context, model);
+    if (command_pump != nullptr && command_pump->store_update_request_state != nullptr) {
+        model.update_request_state = command_pump->store_update_request_state(command_pump->context);
+    }
     // Store update check runs once when the page opens; the loop only watches
     // for that one-shot result so the subtitle can clear without re-checking.
     auto show_result = shell.ShowAppManagement(model);
@@ -1433,8 +1438,12 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
         const auto action = shell.PollAction(RemoteAwareTimeout(pdMS_TO_TICKS(1000), command_pump));
         if (command_pump != nullptr && command_pump->store_check_state != nullptr) {
             const uint8_t state = command_pump->store_check_state(command_pump->context);
-            if (state != model.store_check_state) {
+            const auto request_state = command_pump->store_update_request_state != nullptr
+                                           ? command_pump->store_update_request_state(command_pump->context)
+                                           : host::StoreUpdateRequestState::kIdle;
+            if (state != model.store_check_state || request_state != model.update_request_state) {
                 model.store_check_state = state;
+                model.update_request_state = request_state;
                 if (command_pump->fill_store != nullptr) command_pump->fill_store(command_pump->context, model);
                 (void)shell.ShowAppManagement(model);
             }
@@ -1447,9 +1456,10 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             continue;
         }
         if (action->type == host_ui::SystemUiActionType::kUpdateInstalledApp && command_pump != nullptr &&
-            command_pump->update_store_app != nullptr && action->app_index < catalog.count) {
+            command_pump->update_store_app != nullptr && action->app_index < catalog.count &&
+            !host::StoreUpdateRequestBusy(model.update_request_state)) {
+            model.update_request_state = host::StoreUpdateRequestState::kRequesting;
             command_pump->update_store_app(command_pump->context, catalog.apps[action->app_index].app_id.data());
-            model.store_check_state = 1U;
             (void)shell.ShowAppManagement(model);
             continue;
         }
@@ -1457,6 +1467,9 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
             action->type == host_ui::SystemUiActionType::kSuspendToHall) {
             shell.LeaveAppManagement();
             return true;
+        }
+        if (host::StoreUpdateRequestBusy(model.update_request_state)) {
+            continue;
         }
         if (action->type == host_ui::SystemUiActionType::kLaunchInstalledApp && launch_available &&
             action->app_index < catalog.count) {
@@ -1469,10 +1482,22 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
                 ESP_LOGW(kTag, "ignored unavailable local uninstall request: index=%" PRIu32, action->app_index);
                 continue;
             }
-            shell.LeaveAppManagement();
+            if (!host_ui::BeginAppUninstall(model, action->app_index)) continue;
+            show_result = shell.ShowAppManagement(model);
+            if (!show_result) {
+                shell.LeaveAppManagement();
+                return false;
+            }
             if (!uninstall_handler->Uninstall(action->app_index)) {
                 ESP_LOGE(kTag, "local App uninstall failed: index=%" PRIu32, action->app_index);
+                model.uninstall_state = host_ui::AppUninstallState::kFailed;
+                if (!shell.ShowAppManagement(model)) {
+                    shell.LeaveAppManagement();
+                    return false;
+                }
+                continue;
             }
+            shell.LeaveAppManagement();
             if (action_app_index < host_ui::kMaxHallApps) {
                 return true;
             }
@@ -2496,6 +2521,13 @@ class ActiveHost final {
         if (ReadFirmwareUpdate(remote_control_).in_progress) {
             return true;
         }
+        // Download activity starts before the completed package reaches the
+        // command queue. Return to the Hall now so its progress is visible.
+        control::InstallActivity install_activity{};
+        controls_.CopyInstallActivity(install_activity);
+        if (install_activity.active) {
+            return true;
+        }
         if (RemoteInputSequence().active) {
             ContinueRemoteInputSequence();
             return false;
@@ -2551,6 +2583,8 @@ class ActiveHost final {
                 [](void* context) { static_cast<ActiveHost*>(context)->remote_control_.RequestStoreCheck(); },
             .store_check_state =
                 [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreCheckState(); },
+            .store_update_request_state =
+                [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreUpdateRequestState(); },
             .fill_store =
                 [](void* context, host_ui::AppManagementModel& model) {
                     auto& host = *static_cast<ActiveHost*>(context);
@@ -3000,6 +3034,8 @@ class ActiveHost final {
                 [](void* context) { static_cast<ActiveHost*>(context)->remote_control_.RequestStoreCheck(); },
             .store_check_state =
                 [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreCheckState(); },
+            .store_update_request_state =
+                [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreUpdateRequestState(); },
             .fill_store =
                 [](void* context, host_ui::AppManagementModel& model) {
                     auto& host = *static_cast<ActiveHost*>(context);

@@ -47,6 +47,9 @@ void SystemShell::UpdateHallInstallProgress(uint32_t app_index, uint8_t progress
 std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
     TickType_t receive_timeout = AutoSleepAwareTimeout(timeout);
     for (;;) {
+        if (action_sheet_pending_.exchange(false, std::memory_order_acq_rel)) {
+            ui_.PresentPendingActionSheet();
+        }
         SystemUiAction action{};
         if (action_queue_ == nullptr || xQueueReceive(action_queue_, &action, receive_timeout) != pdTRUE) {
             if (RequestAutoSleepIfDue()) {
@@ -96,6 +99,12 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
         }
         if (action.type != SystemUiActionType::kPowerOffRequested) {
             QueuePendingPowerOff();
+        }
+        if (action.type == SystemUiActionType::kPresentActionSheet) {
+            if (action_sheet_pending_.exchange(false, std::memory_order_acq_rel)) {
+                ui_.PresentPendingActionSheet();
+            }
+            return std::nullopt;
         }
         if (action.type == SystemUiActionType::kRemoteCommandReady ||
             action.type == SystemUiActionType::kUserActivity) {
@@ -522,6 +531,10 @@ void SystemShell::ResetActionQueue() {
 void SystemShell::ReceiveAction(void* context, const SystemUiAction& action) {
     auto* shell = static_cast<SystemShell*>(context);
     if (shell != nullptr && shell->action_queue_ != nullptr) {
+        if (action.type == SystemUiActionType::kPresentActionSheet &&
+            shell->action_sheet_pending_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
         if (xQueueSend(shell->action_queue_, &action, 0U) != pdTRUE) {
             ESP_LOGW(kTag, "System action queue full; dropped action=%u", static_cast<unsigned>(action.type));
         }

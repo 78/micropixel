@@ -17,6 +17,7 @@ list(APPEND micropixel_sources
     "host/ui/lvgl/square_common/square_system_ui.cpp"
     "host/ui/lvgl/square_common/status_layer_ui.cpp"
     "host/ui/lvgl/square_common/status_layer_transition.cpp"
+    "host/ui/lvgl/square_common/action_sheet_presenter.cpp"
     "host/ui/lvgl/square_common/system_detail_ui.cpp"
     "host/ui/lvgl/square_common/system_information_ui.cpp"
     "host/ui/lvgl/square_common/system_menu_ui.cpp"

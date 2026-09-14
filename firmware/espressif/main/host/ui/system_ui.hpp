@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "device/contracts/power.hpp"
+#include "host/store_update_request.hpp"
 
 namespace micropixel::host_ui {
 
@@ -374,8 +375,13 @@ struct StorageUsageModel final {
     uint32_t total_kib{};
 };
 
+enum class AppUninstallState : uint8_t { kIdle, kPending, kFailed };
+
 struct AppManagementModel final {
+    AppUninstallState uninstall_state{};
+    uint32_t uninstall_app_index{kMaxHallApps};
     uint8_t store_check_state{};
+    host::StoreUpdateRequestState update_request_state{};
     std::array<InstalledAppModel, kMaxHallApps> apps{};
     uint32_t app_count{};
     uint32_t storage_used_kib{};
@@ -479,6 +485,8 @@ enum class SystemUiActionType {
     kRemoteCommandReady,
     kUserActivity,
     kOpenAppActions,
+    // Presentation-only wake-up, consumed by SystemShell on the Host task.
+    kPresentActionSheet,
 };
 
 struct SystemUiAction final {
@@ -500,6 +508,7 @@ enum class SystemUiError {
 class SystemUi {
    public:
     virtual ~SystemUi() = default;
+    virtual void PresentPendingActionSheet() {}
     SystemUi(const SystemUi&) = delete;
     SystemUi& operator=(const SystemUi&) = delete;
 

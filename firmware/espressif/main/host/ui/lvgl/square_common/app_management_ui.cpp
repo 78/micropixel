@@ -3,6 +3,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "host/ui/app_management_model.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -93,10 +94,20 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
     // state; an open action or confirmation sheet must survive that refresh
     // as long as the App it refers to is still listed.
     const bool refresh = AppManagementVisible() && root_ == root;
+    if (model.uninstall_state != host_ui::AppUninstallState::kPending && refresh &&
+        app_management_overlay_root_ != nullptr &&
+        host_ui::AppManagementActionSheetMatches(app_management_model_, model)) {
+        app_management_model_ = model;
+        action_sink_ = action_sink;
+        action_context_ = action_context;
+        return {};
+    }
+    lv_obj_t* previous_overlay_root = refresh ? app_management_overlay_root_ : nullptr;
     const uint32_t previous_index = app_management_selected_index_;
     const AppOverlay previous_overlay = app_management_overlay_;
     ResetActiveScreen();
     root_ = root;
+    app_management_overlay_root_ = previous_overlay_root;
     app_management_model_ = model;
     app_management_selected_index_ = 0U;
     app_management_overlay_ = AppOverlay::kNone;
@@ -108,6 +119,10 @@ std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowAppManagementLoc
             app_management_selected_index_ = app_sheet ? previous_index : 0U;
             app_management_overlay_ = previous_overlay;
         }
+    }
+    if (model.uninstall_state == host_ui::AppUninstallState::kPending && model.uninstall_app_index < model.app_count) {
+        app_management_selected_index_ = model.uninstall_app_index;
+        app_management_overlay_ = AppOverlay::kUninstallConfirmation;
     }
     action_sink_ = action_sink;
     action_context_ = action_context;
@@ -135,7 +150,9 @@ void SystemDetailUi::RenderAppManagementLocked() {
     if (!AppManagementVisible() || root_ == nullptr) {
         return;
     }
+    const bool animate_sheet = app_management_overlay_root_ == nullptr;
     lv_obj_clean(root_);
+    app_management_overlay_root_ = nullptr;
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
     Header(layout_, root_, "App Management", AppManagementSubtitle(app_management_model_.store_check_state),
            AppManagementBackEvent, this);
@@ -173,7 +190,7 @@ void SystemDetailUi::RenderAppManagementLocked() {
         }
         DrawAppManagementGroupLocked(scroll, "SYSTEM STORAGE", app_management_model_.system_storage, false);
     }
-    RenderAppManagementOverlayLocked();
+    RenderAppManagementOverlayLocked(animate_sheet);
     lv_obj_move_foreground(root_);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(root_));
 }
@@ -241,10 +258,11 @@ void SystemDetailUi::DrawAppManagementRowLocked(lv_obj_t* scroll, uint32_t index
     (void)square_common::CreateSystemMoreIndicator(row, 32, 52, 6, 5);
 }
 
-void SystemDetailUi::RenderAppManagementOverlayLocked() {
+void SystemDetailUi::RenderAppManagementOverlayLocked(bool animate) {
     if (!AppManagementVisible() || root_ == nullptr) {
         return;
     }
+    app_management_animate_overlay_ = animate && app_management_overlay_root_ == nullptr;
     if (app_management_overlay_root_ != nullptr) {
         lv_obj_delete(app_management_overlay_root_);
         app_management_overlay_root_ = nullptr;
@@ -286,7 +304,8 @@ void* SystemDetailUi::AppManagementActionContext() const { return action_context
 
 void SystemDetailUi::AppManagementBackEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr && ui->action_sink_ != nullptr) {
+    if (ui != nullptr && ui->action_sink_ != nullptr &&
+        ui->app_management_model_.uninstall_state != host_ui::AppUninstallState::kPending) {
         ui->action_sink_(ui->action_context_,
                          host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kCloseAppManagement});
     }
@@ -354,7 +373,8 @@ void SystemDetailUi::QueueAppManagementRender() {
 void SystemDetailUi::AppManagementRowEvent(lv_event_t* event) {
     auto* binding = static_cast<AppBinding*>(lv_event_get_user_data(event));
     if (binding == nullptr || binding->ui == nullptr ||
-        binding->index >= binding->ui->app_management_model_.app_count) {
+        binding->index >= binding->ui->app_management_model_.app_count ||
+        host_ui::AppManagementBusy(binding->ui->app_management_model_)) {
         return;
     }
     binding->ui->app_management_selected_index_ = binding->index;
@@ -365,7 +385,7 @@ void SystemDetailUi::AppManagementRowEvent(lv_event_t* event) {
 
 void SystemDetailUi::AppManagementCancelEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr) {
+    if (ui != nullptr && ui->app_management_model_.uninstall_state != host_ui::AppUninstallState::kPending) {
         if (ui->app_management_model_.action_app_index < ui->app_management_model_.app_count) {
             AppManagementBackEvent(event);
             return;
@@ -379,17 +399,23 @@ void SystemDetailUi::AppManagementCancelEvent(lv_event_t* event) {
 void SystemDetailUi::AppManagementUpdateEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr && ui->action_sink_ != nullptr &&
-        ui->app_management_selected_index_ < ui->app_management_model_.app_count)
+        ui->app_management_selected_index_ < ui->app_management_model_.app_count &&
+        !host_ui::AppManagementBusy(ui->app_management_model_)) {
+        // Latch before posting to the Host; further input must not enqueue a
+        // second install or run the old version while the request is pending.
+        ui->app_management_model_.update_request_state = host::StoreUpdateRequestState::kRequesting;
+        ui->QueueAppManagementRender();
         ui->action_sink_(ui->action_context_,
                          host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUpdateInstalledApp,
                                                  .app_index = ui->app_management_selected_index_});
+    }
 }
 
 void SystemDetailUi::AppManagementOpenEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr && ui->action_sink_ != nullptr &&
         ui->app_management_selected_index_ < ui->app_management_model_.app_count &&
-        ui->app_management_model_.launch_available) {
+        ui->app_management_model_.launch_available && !host_ui::AppManagementBusy(ui->app_management_model_)) {
         ui->action_sink_(ui->action_context_,
                          host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchInstalledApp,
                                                  .app_index = ui->app_management_selected_index_});
@@ -398,7 +424,7 @@ void SystemDetailUi::AppManagementOpenEvent(lv_event_t* event) {
 
 void SystemDetailUi::AppManagementUninstallEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr) {
+    if (ui != nullptr && !host_ui::AppManagementBusy(ui->app_management_model_)) {
         ui->app_management_overlay_ = ui->app_management_model_.uninstall_available ? AppOverlay::kUninstallConfirmation
                                                                                     : AppOverlay::kUninstallUnavailable;
         ui->BeginAppManagementLatencyProbe("uninstall.open");
@@ -408,8 +434,13 @@ void SystemDetailUi::AppManagementUninstallEvent(lv_event_t* event) {
 
 void SystemDetailUi::AppManagementConfirmUninstallEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr && ui->action_sink_ != nullptr && ui->app_management_model_.uninstall_available &&
-        ui->app_management_selected_index_ < ui->app_management_model_.app_count) {
+    if (ui != nullptr && ui->action_sink_ != nullptr &&
+        host_ui::BeginAppUninstall(ui->app_management_model_, ui->app_management_selected_index_)) {
+        // Give immediate feedback without deleting objects in their callback.
+        lv_obj_t* button = lv_event_get_current_target_obj(event);
+        lv_obj_add_state(button, LV_STATE_DISABLED);
+        lv_label_set_text(lv_obj_get_child(button, 0), "Uninstalling...");
+        platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(button));
         ui->action_sink_(ui->action_context_,
                          host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kUninstallInstalledApp,
                                                  .app_index = ui->app_management_selected_index_});
@@ -418,7 +449,7 @@ void SystemDetailUi::AppManagementConfirmUninstallEvent(lv_event_t* event) {
 
 void SystemDetailUi::AppManagementStorageEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr) {
+    if (ui != nullptr && !host_ui::AppManagementBusy(ui->app_management_model_)) {
         ui->app_management_overlay_ = ui->app_management_model_.format_available ? AppOverlay::kFormatConfirmation
                                                                                  : AppOverlay::kFormatUnavailable;
         ui->BeginAppManagementLatencyProbe("format.open");
@@ -429,15 +460,17 @@ void SystemDetailUi::AppManagementStorageEvent(lv_event_t* event) {
 void SystemDetailUi::AppManagementConfirmFormatEvent(lv_event_t* event) {
     auto* ui = static_cast<SystemDetailUi*>(lv_event_get_user_data(event));
     if (ui != nullptr && ui->action_sink_ != nullptr && ui->app_management_model_.format_available &&
-        ui->app_management_model_.external_storage_status != host_ui::ExternalStorageStatus::kAbsent) {
+        ui->app_management_model_.external_storage_status != host_ui::ExternalStorageStatus::kAbsent &&
+        !host_ui::AppManagementBusy(ui->app_management_model_)) {
         ui->action_sink_(ui->action_context_,
                          host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kFormatExternalStorage});
     }
 }
 
 void SystemDetailUi::DrawAppManagementFormatConfirmationLocked() {
-    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kDangerBorder,
-                                        &app_management_overlay_root_);
+    lv_obj_t* sheet =
+        CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_, AppManagementCancelEvent, this,
+                          theme::kDangerBorder, &app_management_overlay_root_, app_management_animate_overlay_);
     (void)Label(sheet, "Format extension storage?", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* detail =
         Label(sheet, "Everything on it is erased and it becomes App storage. Apps on system storage are kept.",
@@ -451,8 +484,9 @@ void SystemDetailUi::DrawAppManagementFormatConfirmationLocked() {
 }
 
 void SystemDetailUi::DrawAppManagementFormatUnavailableLocked() {
-    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
-                                        &app_management_overlay_root_);
+    lv_obj_t* sheet =
+        CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_, AppManagementCancelEvent, this,
+                          theme::kStrongBorder, &app_management_overlay_root_, app_management_animate_overlay_);
     (void)Label(sheet, "Format unavailable", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* detail = Label(sheet, "Close the running App from the Hall before formatting storage.",
                              platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
@@ -464,13 +498,34 @@ void SystemDetailUi::DrawAppManagementFormatUnavailableLocked() {
 
 void SystemDetailUi::DrawAppManagementActionsLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
-                                        &app_management_overlay_root_);
+    lv_obj_t* sheet =
+        CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_, AppManagementCancelEvent, this,
+                          theme::kStrongBorder, &app_management_overlay_root_, app_management_animate_overlay_);
     AppSizeRow(sheet, app.display_name, app.bundle_size_kib, platform::lvgl::SystemFontRole::kLarge,
                theme::kPrimaryText);
     if (app_management_model_.external_storage_status != host_ui::ExternalStorageStatus::kAbsent) {
         (void)Label(sheet, app.external_storage ? "On extension storage" : "On system storage",
                     platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    }
+    if (host::StoreUpdateRequestBusy(app_management_model_.update_request_state)) {
+        const bool queued = app_management_model_.update_request_state == host::StoreUpdateRequestState::kQueued;
+        lv_obj_t* status = Label(sheet, queued ? "Waiting for download..." : "Requesting installation...",
+                                 platform::lvgl::SystemFontRole::kMedium, theme::kPrimaryText);
+        lv_obj_set_width(status, LV_PCT(100));
+        lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
+        lv_obj_t* detail = Label(sheet, "Keep the device online. You can close this sheet while waiting.",
+                                 platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+        lv_obj_set_width(detail, LV_PCT(100));
+        lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+        lv_obj_t* close = Button(layout_, sheet, "Close", theme::kSecondaryText);
+        lv_obj_add_event_cb(close, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);
+        return;
+    }
+    if (app_management_model_.update_request_state == host::StoreUpdateRequestState::kFailed) {
+        lv_obj_t* detail = Label(sheet, "Installation request failed. Check the connection and try again.",
+                                 platform::lvgl::SystemFontRole::kSmall, theme::kDanger);
+        lv_obj_set_width(detail, LV_PCT(100));
+        lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
     }
     if (app.update_version[0] != '\0' && app_management_model_.action_app_index < app_management_model_.app_count) {
         char title[80]{};
@@ -504,8 +559,9 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
 }
 
 void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
-    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kStrongBorder,
-                                        &app_management_overlay_root_);
+    lv_obj_t* sheet =
+        CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_, AppManagementCancelEvent, this,
+                          theme::kStrongBorder, &app_management_overlay_root_, app_management_animate_overlay_);
     (void)Label(sheet, "Uninstall unavailable", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* detail = Label(sheet, "Close the running App from the Hall before uninstalling Apps.",
                              platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
@@ -517,13 +573,34 @@ void SystemDetailUi::DrawAppManagementUninstallUnavailableLocked() {
 
 void SystemDetailUi::DrawAppManagementUninstallConfirmationLocked() {
     const auto& app = app_management_model_.apps[app_management_selected_index_];
-    lv_obj_t* sheet = CreateActionSheet(layout_, root_, AppManagementCancelEvent, this, theme::kDangerBorder,
-                                        &app_management_overlay_root_);
-    (void)Label(sheet, "Uninstall App?", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
+    lv_obj_t* sheet =
+        CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_, AppManagementCancelEvent, this,
+                          theme::kDangerBorder, &app_management_overlay_root_, app_management_animate_overlay_);
+    const bool pending = app_management_model_.uninstall_state == host_ui::AppUninstallState::kPending;
+    const bool failed = app_management_model_.uninstall_state == host_ui::AppUninstallState::kFailed &&
+                        app_management_model_.uninstall_app_index == app_management_selected_index_;
+    (void)Label(sheet,
+                pending  ? "Uninstalling..."
+                : failed ? "Uninstall failed"
+                         : "Uninstall App?",
+                platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* name = Label(sheet, app.display_name, platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
     lv_obj_set_width(name, LV_PCT(100));
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_t* uninstall = Button(layout_, sheet, "Uninstall", theme::kDanger);
+    if (pending) {
+        lv_obj_t* detail = Label(sheet, "Removing the app and refreshing the list. Please wait.",
+                                 platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
+        lv_obj_set_width(detail, LV_PCT(100));
+        lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+        return;
+    }
+    if (failed) {
+        lv_obj_t* detail = Label(sheet, "Could not finish uninstalling. Please try again.",
+                                 platform::lvgl::SystemFontRole::kMedium, theme::kDanger);
+        lv_obj_set_width(detail, LV_PCT(100));
+        lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
+    }
+    lv_obj_t* uninstall = Button(layout_, sheet, failed ? "Try again" : "Uninstall", theme::kDanger);
     lv_obj_add_event_cb(uninstall, AppManagementConfirmUninstallEvent, LV_EVENT_SHORT_CLICKED, this);
     lv_obj_t* cancel = Button(layout_, sheet, "Cancel");
     lv_obj_add_event_cb(cancel, AppManagementCancelEvent, LV_EVENT_SHORT_CLICKED, this);

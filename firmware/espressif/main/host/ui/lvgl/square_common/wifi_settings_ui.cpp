@@ -124,6 +124,7 @@ std::expected<void, host_ui::SystemUiError> WifiSettingsUi::ShowLocked(
     raise_overlay_context_ = raise_overlay_context;
     scan_view_ = false;
     action_sheet_visible_ = false;
+    action_sheet_rendered_ = false;
     password_visible_ = false;
     password_attempt_active_ = false;
     password_length_invalid_ = false;
@@ -222,6 +223,7 @@ void WifiSettingsUi::RenderLocked() {
     } else if (password_visible_) {
         DrawPasswordLocked();
     }
+    action_sheet_rendered_ = action_sheet_visible_;
     lv_obj_update_layout(content);
     lv_obj_scroll_to_y(content, scroll_offset_, LV_ANIM_OFF);
     lv_obj_move_foreground(root_);
@@ -259,9 +261,12 @@ void WifiSettingsUi::DrawNetworkRow(lv_obj_t* parent, const host_ui::WifiNetwork
 void WifiSettingsUi::DrawActionSheetLocked() {
     if (selected_saved_index_ >= model_.saved_network_count) {
         action_sheet_visible_ = false;
+        action_sheet_rendered_ = false;
         return;
     }
-    lv_obj_t* panel = system_detail_internal::CreateActionSheet(*layout_, root_, OverlayCancelEvent, this);
+    lv_obj_t* panel = system_detail_internal::CreateActionSheet(action_sheets_, action_sink_, action_context_, *layout_,
+                                                                root_, OverlayCancelEvent, this, theme::kStrongBorder,
+                                                                nullptr, !action_sheet_rendered_);
     const host_ui::WifiNetworkModel& network = model_.saved_networks[selected_saved_index_];
     lv_obj_t* title = CreateSystemLabel(panel, network.ssid.data(), layout_->heading_font, theme::kPrimaryText);
     lv_obj_set_width(title, LV_PCT(100));
@@ -632,6 +637,7 @@ void WifiSettingsUi::Leave() {
     password_textarea_ = nullptr;
     keyboard_ = nullptr;
     action_sheet_visible_ = false;
+    action_sheet_rendered_ = false;
     password_visible_ = false;
     password_attempt_active_ = false;
     password_length_invalid_ = false;
