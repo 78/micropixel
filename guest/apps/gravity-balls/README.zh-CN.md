@@ -60,7 +60,9 @@
   调色板 0..7 行选颜色，8..15 行为光晕、16..23 行为光斑。
 - 标题一条 `Text`（fps 等状态交给 Host 的 FPS 显示，不再画状态行），`MENU` 按钮一条 `FillRect` 加一条 `Text`；
   标题放在 `RendererInfo::safe_area()` 内（圆屏的角部 inset，逻辑坐标换算成 buffer 像素），MENU 贴 buffer 右上角；设置面板打开时再加约 30 条
-  半透明 `FillRect`/`Text`，面板矩形记入脏矩形。
+  半透明 `FillRect`/`Text`，面板矩形记入脏矩形。文字测量结果从逻辑显示坐标换算成原生字体像素；
+  Raster 文字不会随 HostSurface 的 buffer 缩小而缩小。按钮内边距和面板间距随 buffer 短边缩放，
+  MENU 至少为 48×28 buffer 像素，避免 320×240 横屏使用放大后的逻辑文字尺寸。
 
 `AdditiveSprite` 依赖 Host 的 `MICROPIXEL_GRAPHICS_CAP_RASTER_SPRITE_ADDITIVE`（Sprite `ADDITIVE` 标志，
 按 R/G/B 通道饱和相加）；旧 Host 上退回不画光晕和光斑。没有 `polygon_supported()` 时不画线框。

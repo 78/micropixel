@@ -472,35 +472,48 @@ class Demo final {
         auto label = app_.renderer().MeasureText("GRAVITY", mp::SystemFont::kMedium);
         auto value = app_.renderer().MeasureText("x1.5", mp::SystemFont::kMedium);
         auto sign = app_.renderer().MeasureText("+", mp::SystemFont::kMedium);
-        const int title_h = title ? static_cast<int>(title->height) : 24;
-        const int small_h = status ? static_cast<int>(status->height) : 18;
-        const int medium_h = label ? static_cast<int>(label->height) : 24;
-        menu_text_h_ = small_h;
-        const int menu_w = menu ? static_cast<int>(menu->width) : 40;
-        const int label_w = label ? static_cast<int>(label->width) : 90;
-        const int value_w = value ? static_cast<int>(value->width) : 48;
-        sign_w_ = sign ? static_cast<int>(sign->width) : 12;
-        sign_h_ = sign ? static_cast<int>(sign->height) : medium_h;
+        // MeasureText returns logical display pixels; RasterDrawList::Text
+        // draws the native Host font directly into the buffer, even when the
+        // surface is upscaled. Convert metrics using physical/logical size,
+        // not the touch-to-buffer scale (e.g. SZPI is 320x240 / 960x720).
+        const auto display = app_.renderer().info();
+        const auto text_width = [&](uint32_t logical) {
+            return Round(static_cast<float>(logical) * display.physical_width() / display.width());
+        };
+        const auto text_height = [&](uint32_t logical) {
+            return Round(static_cast<float>(logical) * display.physical_height() / display.height());
+        };
+        const int title_h = title ? text_height(title->height) : 24;
+        const int small_h = status ? text_height(status->height) : 18;
+        const int medium_h = label ? text_height(label->height) : 24;
+        menu_text_h_ = menu ? text_height(menu->height) : small_h;
+        menu_text_w_ = menu ? text_width(menu->width) : 40;
+        const int label_w = label ? text_width(label->width) : 90;
+        const int value_w = value ? text_width(value->width) : 48;
+        sign_w_ = sign ? text_width(sign->width) : 12;
+        sign_h_ = sign ? text_height(sign->height) : medium_h;
         // The title sits inside the safe area (round panels report corner
         // insets); the safe area arrives in logical display pixels and is
         // converted to buffer pixels here. The menu button hugs the buffer's
         // top-right corner instead, where the tab reads naturally on the
         // round screen.
-        const mp::Rect logical_safe = app_.renderer().info().safe_area();
+        const mp::Rect logical_safe = display.safe_area();
         const mp::Rect safe{Round(static_cast<float>(logical_safe.x) * touch_scale_x_),
                             Round(static_cast<float>(logical_safe.y) * touch_scale_y_),
                             Round(static_cast<float>(logical_safe.width) * touch_scale_x_),
                             Round(static_cast<float>(logical_safe.height) * touch_scale_y_)};
-        const int button_h = std::max(small_h + 24, 44);
+        const float minimum = static_cast<float>(std::min(width_, height_));
+        const float ui = std::clamp(minimum / static_cast<float>(kBaseBufferSize), 0.5F, 1.5F);
+        const int menu_pad = std::max(8, Round(16.0F * ui));
+        const int button_w = std::max(menu_text_w_ + 2 * menu_pad, 48);
+        const int button_h = std::max({menu_text_h_ + menu_pad, Round(40.0F * ui), 28});
         title_rect_ = {safe.x + 8, safe.y + 6, std::min(safe.width - 16, 260), title_h + 2};
-        menu_button_ = {width_ - menu_w - 44, 4, menu_w + 40, button_h};
+        menu_button_ = {width_ - button_w - 4, 4, button_w, button_h};
 
         // Panel: content-sized and centred, leaving at least ~10% of the
         // buffer free on each side so a tap outside can close it. Buttons and
         // padding scale with the buffer so they stay finger-sized on the panel
         // whether the buffer is upscaled or native.
-        const float minimum = static_cast<float>(std::min(width_, height_));
-        const float ui = std::clamp(minimum / static_cast<float>(kBaseBufferSize), 0.75F, 1.5F);
         const int pad = std::max(8, Round(16.0F * ui));
         const int button = std::max(medium_h + 20, Round(56.0F * ui));
         const int row_h = button + pad;
@@ -709,8 +722,9 @@ class Demo final {
         const auto button_fill = mp::Color::Rgb(34, 48, 80);
         // Always-visible button, brighter while the panel is open.
         if (!list.FillRect(menu_button_, menu_open_ ? button_fill : mp::Color::Rgb(16, 22, 38), 255) ||
-            !list.Text({menu_button_.x + 20, menu_button_.y + (menu_button_.height - menu_text_h_) / 2}, "MENU",
-                       menu_open_ ? text : dim, mp::SystemFont::kSmall))
+            !list.Text({menu_button_.x + (menu_button_.width - menu_text_w_) / 2,
+                        menu_button_.y + (menu_button_.height - menu_text_h_) / 2},
+                       "MENU", menu_open_ ? text : dim, mp::SystemFont::kSmall))
             return false;
         records_ += 2;
         dirty.rects[dirty.count++] = menu_button_;
@@ -855,7 +869,7 @@ class Demo final {
     mp::Rect title_rect_{}, menu_button_{}, panel_rect_{};
     SettingRow rows_[kSettingRows]{};
     mp::Point hint_{}, panel_title_{};
-    int menu_text_h_{}, sign_w_{}, sign_h_{};
+    int menu_text_w_{}, menu_text_h_{}, sign_w_{}, sign_h_{};
     unsigned ball_option_ = kDefaultBallOption, depth_option_ = kDefaultDepthOption,
              gravity_option_ = kDefaultGravityOption;
     bool menu_open_{};
