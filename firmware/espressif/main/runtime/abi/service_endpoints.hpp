@@ -2,11 +2,23 @@
 #define MICROPIXEL_RUNTIME_ABI_SERVICE_ENDPOINTS_HPP
 
 #include <array>
+#include <cstring>
 #include <string_view>
 
 #include "runtime/abi/service_registry.hpp"
 
 namespace micropixel::runtime {
+
+// PCM writes carry samples after the fixed header. Copy the header so the wire
+// buffer need not satisfy the alignment of the native request struct.
+inline bool ReadPcmStreamWriteRequest(const uint8_t* request, uint32_t request_size,
+                                      micropixel_audio_pcm_stream_write_request_t& wire) {
+    if (request == nullptr || request_size < sizeof(wire)) {
+        return false;
+    }
+    std::memcpy(&wire, request, sizeof(wire));
+    return wire.size == request_size && wire.reserved0 == 0U;
+}
 
 class GuestContext;
 

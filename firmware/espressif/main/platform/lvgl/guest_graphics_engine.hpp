@@ -288,6 +288,10 @@ class GuestGraphicsEngine final {
     // compositor's engine, which the presenter task may be using at the same
     // time; each engine owns its descriptors and the pool hands out channels.
     graphics::Dma2dCopyEngine raster_copy_engine_{};
+    // Staging for one CopyOpaqueBlocks() transaction. Owned by the engine, not
+    // the caller's stack: 32 blocks are ~3 KiB and the Host build caps frames at
+    // 1536 bytes. Same single-owner rule as raster_copy_engine_ (Guest task).
+    std::array<graphics::Dma2dCopyBlock, graphics::Dma2dCopyEngine::kMaxBlocks> raster_copy_blocks_{};
 #endif
     std::optional<graphics::AppSurfaceCompositor> app_surface_compositor_{};
     std::optional<graphics::GuestScene> guest_scene_{};

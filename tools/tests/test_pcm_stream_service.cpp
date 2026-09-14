@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 
+#include "runtime/abi/service_endpoints.hpp"
 #include "runtime/audio/linear_upsampler.hpp"
 #include "runtime/audio/pcm_stream_service.hpp"
 #include "runtime/event_queue.hpp"
@@ -171,6 +172,41 @@ void TestOpenValidation() {
     Require(service.Close(opened->stream_handle).error().status == MICROPIXEL_STATUS_NOT_FOUND);
 }
 
+void TestWirePayloadWrites() {
+    using micropixel::runtime::ReadPcmStreamWriteRequest;
+    for (uint16_t channels : {1U, 2U}) {
+        for (uint32_t frames : {1U, 64U, 128U, 256U, 512U}) {
+            FakeAudio audio{};
+            micropixel::device::AudioService audio_service{audio};
+            micropixel::runtime::EventQueue events{};
+            micropixel::runtime::PcmStreamService service{audio_service, events, 0};
+            auto opened = service.Open(OpenRequest(kMixRate, channels, 1024U, 0U));
+            Require(opened.has_value());
+            const uint32_t bytes = frames * channels * sizeof(int16_t);
+            auto header = WriteRequest(opened->stream_handle, frames, bytes);
+            // Deliberately avoid native header alignment.
+            std::vector<uint8_t> storage(header.size + 1U, 0U);
+            uint8_t* request = storage.data() + 1U;
+            std::memcpy(request, &header, sizeof(header));
+            micropixel_audio_pcm_stream_write_request_t decoded{};
+            Require(ReadPcmStreamWriteRequest(request, header.size, decoded));
+            auto result = service.Write(decoded, reinterpret_cast<const int16_t*>(request + sizeof(header)), bytes);
+            Require(result && result->accepted_frames == frames);
+            Require(!ReadPcmStreamWriteRequest(nullptr, header.size, decoded));
+            Require(!ReadPcmStreamWriteRequest(request, sizeof(header) - 1U, decoded));
+            Require(!ReadPcmStreamWriteRequest(request, header.size - 1U, decoded));
+            Require(!ReadPcmStreamWriteRequest(request, header.size + 1U, decoded));
+            header.reserved0 = 1U;
+            std::memcpy(request, &header, sizeof(header));
+            Require(!ReadPcmStreamWriteRequest(request, header.size, decoded));
+            header.reserved0 = 0U;
+            header.size = sizeof(header);
+            std::memcpy(request, &header, sizeof(header));
+            Require(!ReadPcmStreamWriteRequest(request, sizeof(header) + bytes, decoded));
+        }
+    }
+}
+
 void TestWriteBackpressureAndPassThrough() {
     FakeAudio audio{};
     micropixel::device::AudioService audio_service{audio};
@@ -283,6 +319,7 @@ void TestUpsampledStereoAndLowWater() {
 int main() {
     TestUpsampler();
     TestOpenValidation();
+    TestWirePayloadWrites();
     TestWriteBackpressureAndPassThrough();
     TestUpsampledStereoAndLowWater();
     return 0;

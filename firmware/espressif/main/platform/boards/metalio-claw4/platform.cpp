@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 
 #include "device/contracts/graphics.hpp"
 #include "draw/lv_draw_buf_private.h"
@@ -462,7 +463,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
             return capture_error;
         }
         audio_output_.Configure(state_.board_io.IoExpander(), state_.i2c_executor);
-        BoardRegistration registration{{
+        BoardRegistration& registration = registration_.emplace(device::BoardInfo{
             .board = "Metalio-Claw4",
             .host_chip = "ESP32-P4",
             .firmware_target = "metalio-claw4",
@@ -478,7 +479,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
                     .refresh_rate_hz = 60U,
                 },
             .graphics_acceleration = "PPA + DMA2D",
-        }};
+        });
         registration.SetGraphics(graphics_);
         registration.SetInput(state_.ui.Input());
         registration.SetAudioOutput(audio_output_, audio_output_.SampleRate());
@@ -532,6 +533,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
 
    private:
     board_detail::MetalioClaw4BoardState state_{};
+    std::optional<BoardRegistration> registration_{};
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
     metalio_claw4::I2sAudioSink audio_output_{};

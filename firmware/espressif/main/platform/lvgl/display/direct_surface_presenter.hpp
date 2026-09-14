@@ -438,6 +438,8 @@ class DirectSurfacePresenter final {
     // Presenter-task-only DMA2D engine for App Surface -> DPI framebuffer
     // copies; the compositor's engine belongs to the Guest task.
     graphics::Dma2dCopyEngine framebuffer_copy_{};
+    // Presenter-task-only workspace; the board owns this object in PSRAM.
+    graphics::Dma2dCopyBlock framebuffer_copy_blocks_[FramebufferRectList::kCapacity]{};
 #endif
 };
 

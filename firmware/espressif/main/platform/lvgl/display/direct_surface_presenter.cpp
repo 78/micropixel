@@ -816,7 +816,7 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
                 .stride = stride,
                 .format = graphics::SurfacePixelFormat::kBgr888,
             };
-            graphics::Dma2dCopyBlock blocks[FramebufferRectList::kCapacity]{};
+            auto& blocks = framebuffer_copy_blocks_;
             for (uint32_t index = 0U; index < rect_count; ++index) {
                 const graphics::SurfaceRect area{.x = static_cast<int32_t>(rects[index].x),
                                                  .y = static_cast<int32_t>(rects[index].y),
