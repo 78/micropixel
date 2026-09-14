@@ -65,6 +65,8 @@ App Hall 只为可见卡片及预取窗口创建 UI 和提交封面任务；
 Bus 不依赖具体 Driver；纯 Driver 不实现 Device contract，不依赖 Host UI 或 LVGL。
 外设既可来自 MCU 内部，也可来自板上器件。物理 channel 和显示名称不作为公开 DeviceId。
 显示层提供截图像素，传输层调用并封装协议；Board 只组合两者。
+P4 双缓冲直绘时，截图选择已提交的面板缓冲；LVGL 活动绘图缓冲是下一帧的后台缓冲，
+不能作为静态页面截图来源。选择和复制期间持有 LVGL 锁。
 类型使用明确角色名，不使用泛化的 Backend、Provider 或 Hardware 后缀。
 
 ## 3. Session 与事件模型

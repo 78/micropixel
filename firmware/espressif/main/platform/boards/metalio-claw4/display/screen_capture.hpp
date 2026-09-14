@@ -24,8 +24,8 @@ namespace micropixel::platform::metalio_claw4 {
 
 // Synchronous Host-task screenshot. While a Direct Surface or system
 // transition owns dummy draw the displayed DPI framebuffer is encoded by the
-// ESP32-P4 JPEG peripheral into PSRAM; otherwise the LVGL draw buffer is the
-// screen content and the generic locked capture is used.
+// ESP32-P4 JPEG peripheral into PSRAM. Under LVGL double-direct rendering,
+// capture the completed panel buffer, not the next off-screen draw buffer.
 [[nodiscard]] std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(
     lv_display_t* display, esp_lcd_panel_handle_t panel, uint32_t width, uint32_t height);
 

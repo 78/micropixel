@@ -39,6 +39,13 @@ uint8_t* DisplayedFrameBuffer(lv_display_t* display, esp_lcd_panel_handle_t pane
         return nullptr;
     }
     auto* free_frame_buffer = static_cast<uint8_t*>(esp_lv_adapter_dummy_draw_get_free_buf_preserve(display));
+    if (free_frame_buffer == nullptr && lv_display_get_render_mode(display) == LV_DISPLAY_RENDER_MODE_DIRECT &&
+        lv_display_is_double_buffered(display)) {
+        // LVGL swaps buf_act after flushing. It is the next off-screen draw
+        // buffer, whose dirty areas are only synchronized at the next refresh.
+        const lv_draw_buf_t* active = lv_display_get_buf_active(display);
+        if (active != nullptr) free_frame_buffer = static_cast<uint8_t*>(active->data);
+    }
     if (free_frame_buffer == panel_frame_buffers[0]) {
         return static_cast<uint8_t*>(panel_frame_buffers[1]);
     }
@@ -64,12 +71,27 @@ std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg(
     if (display == nullptr || panel == nullptr || width == 0U || height == 0U || height > UINT32_MAX / width / 3U) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
-    // While LVGL owns the panel its draw buffer is the screen content and the
-    // generic locked capture reads it; toggling dummy draw here would race the
-    // LVGL task from whichever task requested the screenshot.
-    if (esp_lv_adapter_dummy_draw_get_free_buf_preserve(display) == nullptr) {
-        return lvgl::CaptureScreenJpeg(display, width, height);
+    // Select and copy the completed direct-mode frame while LVGL cannot swap
+    // buffers. The adapter lock is recursive; the generic capture takes a
+    // stable PSRAM copy under that same lock before encoding it.
+    if (esp_lv_adapter_lock(-1) != ESP_OK) {
+        return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    if (esp_lv_adapter_dummy_draw_get_free_buf_preserve(display) == nullptr) {
+        const uint8_t* displayed = DisplayedFrameBuffer(display, panel);
+        static constexpr bool kReady = true;
+        auto result = displayed != nullptr
+                          ? lvgl::CaptureScreenJpeg(display, width, height,
+                                                    {.pixels = displayed,
+                                                     .stride = width * 3U,
+                                                     .format = lvgl::DisplayCapturePixelFormat::kRgb888,
+                                                     .ready = &kReady})
+                          : std::expected<host_ui::ScreenCapture, host_ui::SystemUiError>(
+                                std::unexpected(host_ui::SystemUiError::kUnavailable));
+        esp_lv_adapter_unlock();
+        return result;
+    }
+    esp_lv_adapter_unlock();
     const uint32_t frame_bytes = width * height * 3U;
     jpeg_encode_memory_alloc_cfg_t output_memory_config{
         .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER,
