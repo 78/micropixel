@@ -1,6 +1,7 @@
 #include "platform/platform.hpp"
 
 #include <cstdint>
+#include <optional>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -114,7 +115,7 @@ class Esp32S3Box3Board final : public Board {
 
         ESP_LOGI(board_detail::kTag, "BOX-3 P4 ready: panel=%s touch=%s 320x240 RGB565 SPI=40MHz Wi-Fi=native audio=%s",
                  state_.panel_name, state_.touch_name, audio_config_status == ESP_OK ? "ES8311" : "unavailable");
-        BoardRegistration registration{{
+        BoardRegistration& registration = registration_.emplace(device::BoardInfo{
             .board = "ESP32-S3-BOX-3 (P4)",
             .host_chip = "ESP32-S3",
             .firmware_target = "esp-box-3",
@@ -129,7 +130,7 @@ class Esp32S3Box3Board final : public Board {
                     .height_pixels = board_detail::kHeight,
                 },
             .graphics_acceleration = "CPU only; SPI DMA transport",
-        }};
+        });
         registration.SetInput(state_.ui.Input());
         registration.SetGraphics(graphics_);
         if (audio_config_status == ESP_OK) {
@@ -164,6 +165,7 @@ class Esp32S3Box3Board final : public Board {
     }
 
    private:
+    std::optional<BoardRegistration> registration_{};
     esp32_s3_box_3::BoardHardware hardware_{};
     board_detail::Box3BoardState state_{};
     lvgl::GuestGraphicsOperationsContext graphics_context_{};

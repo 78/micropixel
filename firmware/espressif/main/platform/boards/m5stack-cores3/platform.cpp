@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <expected>
+#include <optional>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -109,7 +110,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
             kTag, "start USB development control failed");
         ESP_RETURN_ON_ERROR(hardware_.SetBrightness(80), kTag, "set startup brightness failed");
 
-        BoardRegistration registration{{
+        BoardRegistration& registration = registration_.emplace(device::BoardInfo{
             .board = "M5Stack CoreS3",
             .host_chip = "ESP32-S3",
             .firmware_target = "m5stack-cores3",
@@ -124,7 +125,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
                     .height_pixels = common::kHeight,
                 },
             .graphics_acceleration = "CPU only; SPI DMA transport",
-        }};
+        });
         if (touch_available) {
             registration.SetInput(state_.ui.Input());
         }
@@ -177,6 +178,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
     }
 
    private:
+    std::optional<BoardRegistration> registration_{};
     common::Landscape320State state_{};
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
