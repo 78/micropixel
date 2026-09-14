@@ -153,54 +153,57 @@ void SystemDetailUi::RenderFirmwareUpdateLocked() {
     lv_obj_set_width(version_label, LV_PCT(100));
     lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, 0);
 
-    if (system_information_model_.firmware_release_notes[0] != '\0') {
-        Label(panel, "What's new", layout_.heading_font, theme::kPrimaryText);
-        lv_obj_t* notes = Label(panel, system_information_model_.firmware_release_notes.data(), layout_.detail_font,
-                                theme::kSecondaryText);
-        lv_obj_set_width(notes, LV_PCT(100));
-        lv_label_set_long_mode(notes, LV_LABEL_LONG_WRAP);
+    if (in_progress) {
+        const uint8_t progress = std::min<uint8_t>(system_information_model_.firmware_progress_percent, 100U);
+        char percent[16]{};
+        std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
+        lv_obj_t* percent_label = Label(panel, percent, platform::lvgl::SystemFontRole::kTitle, theme::kPrimaryText);
+        lv_obj_set_width(percent_label, LV_PCT(100));
+        lv_obj_set_style_text_align(percent_label, LV_TEXT_ALIGN_CENTER, 0);
+
+        lv_obj_t* progress_bar = lv_bar_create(panel);
+        lv_obj_set_size(progress_bar, LV_PCT(100), std::max<int32_t>(12, layout_.control_height / 4));
+        lv_obj_set_style_radius(progress_bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(progress_bar, lv_color_hex(theme::kDivider), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(progress_bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(progress_bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(progress_bar, lv_color_hex(theme::kControlAccent), LV_PART_INDICATOR);
+        lv_bar_set_range(progress_bar, 0, 100);
+        lv_bar_set_value(progress_bar, progress, LV_ANIM_OFF);
+
+        lv_obj_t* progress_row = lv_obj_create(panel);
+        StyleTransparentContainer(progress_row);
+        lv_obj_set_size(progress_row, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(progress_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(progress_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+        lv_obj_set_style_pad_column(progress_row, layout_.panel_gap, 0);
+        lv_obj_t* message =
+            Label(progress_row, DisplayText(system_information_model_.firmware_update_message.data(), stage),
+                  layout_.detail_font, theme::kSecondaryText);
+        lv_obj_set_width(message, 0);
+        lv_obj_set_flex_grow(message, 1);
+        lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_LEFT, 0);
+        lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
+
+        if (system_information_model_.firmware_size_bytes != 0U) {
+            char size[64]{};
+            const uint32_t shown_bytes = std::min(system_information_model_.firmware_processed_bytes,
+                                                  system_information_model_.firmware_size_bytes);
+            const uint32_t shown_tenths =
+                static_cast<uint32_t>((static_cast<uint64_t>(shown_bytes) * 10U) / (1024U * 1024U));
+            const uint32_t total_tenths = static_cast<uint32_t>(
+                (static_cast<uint64_t>(system_information_model_.firmware_size_bytes) * 10U) / (1024U * 1024U));
+            std::snprintf(size, sizeof(size), "%" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB",
+                          shown_tenths / 10U, shown_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
+            lv_obj_t* size_label = Label(progress_row, size, layout_.detail_font, theme::kSecondaryText);
+            lv_obj_set_style_text_align(size_label, LV_TEXT_ALIGN_RIGHT, 0);
+        }
+    } else if (system_information_model_.firmware_update_state == host_ui::FirmwareUpdateState::kFailed) {
+        lv_obj_t* error = Label(panel, system_information_model_.firmware_update_message.data(), layout_.detail_font,
+                                theme::kDangerSoft);
+        lv_obj_set_width(error, LV_PCT(100));
+        lv_label_set_long_mode(error, LV_LABEL_LONG_WRAP);
     }
-
-    const uint8_t progress = std::min<uint8_t>(system_information_model_.firmware_progress_percent, 100U);
-    char percent[16]{};
-    std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
-    lv_obj_t* percent_label = Label(panel, percent, platform::lvgl::SystemFontRole::kTitle, theme::kPrimaryText);
-    lv_obj_set_width(percent_label, LV_PCT(100));
-    lv_obj_set_style_text_align(percent_label, LV_TEXT_ALIGN_CENTER, 0);
-
-    lv_obj_t* progress_bar = lv_bar_create(panel);
-    lv_obj_set_size(progress_bar, LV_PCT(100), std::max<int32_t>(12, layout_.control_height / 4));
-    lv_obj_set_style_radius(progress_bar, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(progress_bar, lv_color_hex(theme::kDivider), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(progress_bar, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(progress_bar, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(progress_bar, lv_color_hex(theme::kControlAccent), LV_PART_INDICATOR);
-    lv_bar_set_range(progress_bar, 0, 100);
-    lv_bar_set_value(progress_bar, progress, LV_ANIM_OFF);
-
-    if (system_information_model_.firmware_size_bytes != 0U) {
-        char size[64]{};
-        const uint32_t shown_bytes =
-            std::min(system_information_model_.firmware_processed_bytes, system_information_model_.firmware_size_bytes);
-        const uint32_t shown_tenths =
-            static_cast<uint32_t>((static_cast<uint64_t>(shown_bytes) * 10U) / (1024U * 1024U));
-        const uint32_t total_tenths = static_cast<uint32_t>(
-            (static_cast<uint64_t>(system_information_model_.firmware_size_bytes) * 10U) / (1024U * 1024U));
-        std::snprintf(size, sizeof(size), "%" PRIu32 ".%" PRIu32 " / %" PRIu32 ".%" PRIu32 " MB", shown_tenths / 10U,
-                      shown_tenths % 10U, total_tenths / 10U, total_tenths % 10U);
-        lv_obj_t* size_label = Label(panel, size, layout_.detail_font, theme::kSecondaryText);
-        lv_obj_set_width(size_label, LV_PCT(100));
-        lv_obj_set_style_text_align(size_label, LV_TEXT_ALIGN_CENTER, 0);
-    }
-
-    lv_obj_t* message =
-        Label(panel, DisplayText(system_information_model_.firmware_update_message.data(), stage), layout_.detail_font,
-              system_information_model_.firmware_update_state == host_ui::FirmwareUpdateState::kFailed
-                  ? theme::kDangerSoft
-                  : theme::kSecondaryText);
-    lv_obj_set_width(message, LV_PCT(100));
-    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(message, LV_LABEL_LONG_WRAP);
 
     if (!in_progress && system_information_model_.firmware_update_installable) {
         const char* button_text =
@@ -210,6 +213,14 @@ void SystemDetailUi::RenderFirmwareUpdateLocked() {
         lv_obj_t* update = Button(layout_, panel, button_text, theme::kPositive);
         lv_obj_add_event_cb(update, SystemInformationUpdateEvent, LV_EVENT_SHORT_CLICKED, this);
     }
+    if (system_information_model_.firmware_release_notes[0] != '\0') {
+        Label(panel, "What's new", layout_.heading_font, theme::kPrimaryText);
+        lv_obj_t* notes = Label(panel, system_information_model_.firmware_release_notes.data(), layout_.detail_font,
+                                theme::kSecondaryText);
+        lv_obj_set_width(notes, LV_PCT(100));
+        lv_label_set_long_mode(notes, LV_LABEL_LONG_WRAP);
+    }
+
     lv_obj_move_foreground(root_);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(root_));
 }
