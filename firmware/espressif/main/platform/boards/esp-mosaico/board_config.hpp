@@ -7,16 +7,20 @@
 #include "device/contracts/peripheral_channel.hpp"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_err.h"
+#include "platform/boards/esp-mosaico/hardware_config.hpp"
 
 namespace micropixel::platform::esp_mosaico::board {
+
+// Called once by the composition root before any revision-dependent GPIO setup.
+[[nodiscard]] esp_err_t DetectHardware();
+[[nodiscard]] const HardwareConfig& Hardware();
 
 inline constexpr int32_t kDisplayWidth = 480;
 inline constexpr int32_t kDisplayHeight = 480;
 inline constexpr spi_host_device_t kDisplaySpiHost = SPI2_HOST;
-inline constexpr gpio_num_t kDisplayReset = GPIO_NUM_42;
 inline constexpr gpio_num_t kDisplayTe = GPIO_NUM_43;
 inline constexpr gpio_num_t kDisplayChipSelect = GPIO_NUM_50;
-inline constexpr gpio_num_t kDisplayClock = GPIO_NUM_44;
 inline constexpr gpio_num_t kDisplayData0 = GPIO_NUM_36;
 inline constexpr gpio_num_t kDisplayData1 = GPIO_NUM_51;
 inline constexpr gpio_num_t kDisplayData2 = GPIO_NUM_35;
@@ -26,9 +30,10 @@ inline constexpr uint32_t kDisplayDataWidth = 4U;
 inline constexpr uint32_t kDisplayBitsPerPixel = 16U;
 
 inline constexpr gpio_num_t kTouchInterrupt = GPIO_NUM_6;
-inline constexpr gpio_num_t kI2cData = GPIO_NUM_0;
-inline constexpr gpio_num_t kI2cClock = GPIO_NUM_1;
-inline constexpr gpio_num_t kStatusLed = GPIO_NUM_3;
+// Expansion I2C stays on GPIO0/1: shared with onboard I2C on v1.0, separate
+// on v1.1/v1.2. Reserved until module discovery owns a second bus instance.
+inline constexpr gpio_num_t kExpansionI2cData = GPIO_NUM_0;
+inline constexpr gpio_num_t kExpansionI2cClock = GPIO_NUM_1;
 inline constexpr gpio_num_t kFunctionButton = GPIO_NUM_7;
 
 inline constexpr gpio_num_t kPeripheralPower = GPIO_NUM_60;
@@ -68,7 +73,6 @@ inline constexpr gpio_num_t kAudioAmplifierEnable = GPIO_NUM_45;
 inline constexpr gpio_num_t kAudioWordSelect = GPIO_NUM_49;
 inline constexpr gpio_num_t kAudioDataIn = GPIO_NUM_40;
 inline constexpr gpio_num_t kAudioMasterClock = GPIO_NUM_54;
-inline constexpr gpio_num_t kAudioCodecPower = GPIO_NUM_56;
 inline constexpr uint8_t kAudioCodecI2cAddress = 0x19U;
 // Mix/output rate. 32 kHz keeps the ES8311 MCLK at 256*fs = 8.192 MHz and
 // halves the aliasing headroom problem of 16 kHz for Guest PCM; Opus clips

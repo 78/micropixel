@@ -7,12 +7,13 @@
 namespace micropixel::platform::esp_mosaico {
 
 esp_err_t StatusLed::Initialize() {
-    if (initialized_) {
+    if (board::Hardware().status_led < 0 || initialized_) {
         return ESP_OK;
     }
-    ESP_RETURN_ON_ERROR(gpio_set_level(board::kStatusLed, 1), "mosaico_led", "preset status LED failed");
+    ESP_RETURN_ON_ERROR(gpio_set_level(static_cast<gpio_num_t>(board::Hardware().status_led), 1), "mosaico_led",
+                        "preset status LED failed");
     gpio_config_t config{};
-    config.pin_bit_mask = BIT64(board::kStatusLed);
+    config.pin_bit_mask = BIT64(board::Hardware().status_led);
     config.mode = GPIO_MODE_OUTPUT;
     config.pull_up_en = GPIO_PULLUP_DISABLE;
     config.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -23,10 +24,13 @@ esp_err_t StatusLed::Initialize() {
 }
 
 esp_err_t StatusLed::Set(bool enabled) {
+    if (board::Hardware().status_led < 0) {
+        return ESP_OK;
+    }
     if (!initialized_) {
         return ESP_ERR_INVALID_STATE;
     }
-    const esp_err_t status = gpio_set_level(board::kStatusLed, enabled ? 0 : 1);
+    const esp_err_t status = gpio_set_level(static_cast<gpio_num_t>(board::Hardware().status_led), enabled ? 0 : 1);
     if (status == ESP_OK) {
         enabled_ = enabled;
     }
@@ -34,19 +38,19 @@ esp_err_t StatusLed::Set(bool enabled) {
 }
 
 int32_t StatusLed::GetInfo(device::PeripheralChannelId channel, micropixel_gpio_info_t& info_out) const {
-    if (channel != kChannel) {
+    if (board::Hardware().status_led < 0 || channel != kChannel) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     info_out = {};
     info_out.size = sizeof(info_out);
-    info_out.line_number = static_cast<uint16_t>(board::kStatusLed);
+    info_out.line_number = static_cast<uint16_t>(board::Hardware().status_led);
     info_out.capabilities = MICROPIXEL_GPIO_CAP_OUTPUT;
     return MICROPIXEL_STATUS_OK;
 }
 
 int32_t StatusLed::Open(device::PeripheralChannelId channel, uint16_t mode, uint16_t pull, uint16_t edge,
                         uint32_t initial_value, uint32_t pwm_frequency_hz, device::GpioPeripheralEdgeSink, void*) {
-    if (channel != kChannel) {
+    if (board::Hardware().status_led < 0 || channel != kChannel) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     if (!initialized_ || active_) {
@@ -64,7 +68,7 @@ int32_t StatusLed::Open(device::PeripheralChannelId channel, uint16_t mode, uint
 }
 
 int32_t StatusLed::Read(device::PeripheralChannelId channel, bool& value_out) const {
-    if (channel != kChannel) {
+    if (board::Hardware().status_led < 0 || channel != kChannel) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     if (!active_) {
@@ -75,7 +79,7 @@ int32_t StatusLed::Read(device::PeripheralChannelId channel, bool& value_out) co
 }
 
 int32_t StatusLed::Write(device::PeripheralChannelId channel, bool value) {
-    if (channel != kChannel) {
+    if (board::Hardware().status_led < 0 || channel != kChannel) {
         return MICROPIXEL_STATUS_NOT_FOUND;
     }
     if (!active_) {
@@ -85,7 +89,8 @@ int32_t StatusLed::Write(device::PeripheralChannelId channel, bool value) {
 }
 
 int32_t StatusLed::SetPwmDuty(device::PeripheralChannelId channel, uint16_t) {
-    return channel == kChannel ? MICROPIXEL_STATUS_UNSUPPORTED : MICROPIXEL_STATUS_NOT_FOUND;
+    return board::Hardware().status_led >= 0 && channel == kChannel ? MICROPIXEL_STATUS_UNSUPPORTED
+                                                                    : MICROPIXEL_STATUS_NOT_FOUND;
 }
 
 void StatusLed::Close(device::PeripheralChannelId channel) {

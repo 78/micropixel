@@ -442,6 +442,7 @@ bool SameRemoteControlModel(const host_ui::RemoteControlModel& left, const host_
            left.pairing_code_available == right.pairing_code_available &&
            left.latest_firmware_version == right.latest_firmware_version &&
            left.firmware_update_message == right.firmware_update_message &&
+           left.firmware_release_notes_revision == right.firmware_release_notes_revision &&
            left.firmware_size_bytes == right.firmware_size_bytes &&
            left.firmware_processed_bytes == right.firmware_processed_bytes &&
            left.firmware_progress_percent == right.firmware_progress_percent &&
@@ -453,6 +454,7 @@ bool SameRemoteControlModel(const host_ui::RemoteControlModel& left, const host_
 bool SameFirmwareUpdate(const host_ui::RemoteControlModel& left, const host_ui::RemoteControlModel& right) {
     return left.latest_firmware_version == right.latest_firmware_version &&
            left.firmware_update_message == right.firmware_update_message &&
+           left.firmware_release_notes_revision == right.firmware_release_notes_revision &&
            left.firmware_size_bytes == right.firmware_size_bytes &&
            left.firmware_processed_bytes == right.firmware_processed_bytes &&
            left.firmware_progress_percent == right.firmware_progress_percent &&
@@ -564,10 +566,9 @@ const char* ResetReasonText(esp_reset_reason_t reason) {
     }
 }
 
-host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::RemoteControlModel& remote_control,
-                                                           const device::BoardInfo& board_info,
-                                                           bool firmware_update_view = false) {
-    host_ui::SystemInformationModel model{};
+void FillSystemInformationModel(host_ui::SystemInformationModel& model,
+                                const host_ui::RemoteControlModel& remote_control, const device::BoardInfo& board_info,
+                                bool firmware_update_view = false) {
     const esp_app_desc_t* description = esp_app_get_description();
     if (description != nullptr) {
         CopySystemInformationText(model.firmware_version, description->version);
@@ -636,7 +637,6 @@ host_ui::SystemInformationModel MakeSystemInformationModel(const host_ui::Remote
     model.firmware_update_available = remote_control.firmware_update_available;
     model.firmware_update_installable = remote_control.firmware_update_installable;
     model.firmware_update_view = firmware_update_view;
-    return model;
 }
 
 host_ui::ExternalStorageStatus ExternalStorageStatusOf(runtime::ExternalStorageState state) {
@@ -1118,8 +1118,12 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::Wifi& wifi, host_ui::S
 bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control,
                        RemoteCommandPump* command_pump) {
     host_ui::RemoteControlModel remote_model = remote_control.Snapshot();
-    const auto show_result =
-        shell.ShowSystemInformation(MakeSystemInformationModel(remote_model, remote_control.BoardInfo(), true));
+    auto information = MakePsramObject<host_ui::SystemInformationModel>();
+    if (!information) return false;
+    FillSystemInformationModel(*information, remote_model, remote_control.BoardInfo(), true);
+    remote_control.CopyFirmwareReleaseNotes(information->firmware_release_notes,
+                                            remote_model.firmware_release_notes_revision);
+    const auto show_result = shell.ShowSystemInformation(*information);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show Firmware Update: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1131,7 +1135,10 @@ bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteContro
         if (!SameFirmwareUpdate(remote_model, latest)) {
             remote_model = latest;
             request_pending = FirmwareUpdateInProgress(remote_model.firmware_update_state);
-            shell.UpdateSystemInformation(MakeSystemInformationModel(remote_model, remote_control.BoardInfo(), true));
+            FillSystemInformationModel(*information, remote_model, remote_control.BoardInfo(), true);
+            remote_control.CopyFirmwareReleaseNotes(information->firmware_release_notes,
+                                                    remote_model.firmware_release_notes_revision);
+            shell.UpdateSystemInformation(*information);
         }
         if (shell.PowerOffRequested()) {
             if (request_pending || FirmwareUpdateInProgress(remote_model.firmware_update_state)) {
@@ -1191,8 +1198,12 @@ bool RunFirmwareUpdate(host_ui::SystemShell& shell, remote_control::RemoteContro
 bool RunSystemInformation(host_ui::SystemShell& shell, remote_control::RemoteControlAgent& remote_control,
                           RemoteCommandPump* command_pump) {
     host_ui::RemoteControlModel remote_model = remote_control.Snapshot();
-    const auto show_result =
-        shell.ShowSystemInformation(MakeSystemInformationModel(remote_model, remote_control.BoardInfo()));
+    auto information = MakePsramObject<host_ui::SystemInformationModel>();
+    if (!information) return false;
+    FillSystemInformationModel(*information, remote_model, remote_control.BoardInfo());
+    remote_control.CopyFirmwareReleaseNotes(information->firmware_release_notes,
+                                            remote_model.firmware_release_notes_revision);
+    const auto show_result = shell.ShowSystemInformation(*information);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show System Information: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
@@ -1210,7 +1221,10 @@ bool RunSystemInformation(host_ui::SystemShell& shell, remote_control::RemoteCon
         }
         if (!SameFirmwareUpdate(remote_model, latest)) {
             remote_model = latest;
-            shell.UpdateSystemInformation(MakeSystemInformationModel(remote_model, remote_control.BoardInfo()));
+            FillSystemInformationModel(*information, remote_model, remote_control.BoardInfo());
+            remote_control.CopyFirmwareReleaseNotes(information->firmware_release_notes,
+                                                    remote_model.firmware_release_notes_revision);
+            shell.UpdateSystemInformation(*information);
         }
         if (!action.has_value()) {
             continue;

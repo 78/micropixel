@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <span>
 
 #include "device/contracts/board_info.hpp"
 #include "device/contracts/input.hpp"
@@ -47,6 +48,7 @@ class RemoteControlAgent final {
     [[nodiscard]] bool CancelPairingCode();
     [[nodiscard]] bool RequestFirmwareUpdate();
     [[nodiscard]] host_ui::RemoteControlModel Snapshot() const;
+    void CopyFirmwareReleaseNotes(std::span<char> destination, uint32_t revision) const;
     [[nodiscard]] device::BoardInfo BoardInfo() const;
     void UpdateInstalledApps(const control::CatalogSnapshot& catalog);
     void UpdateAppLifecycle(const char* app_id, const char* lifecycle);

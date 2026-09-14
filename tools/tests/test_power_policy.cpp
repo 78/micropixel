@@ -6,6 +6,7 @@
 #include "host/controller/host_power_state.hpp"
 #include "platform/boards/esp-mosaico/battery_power_policy.hpp"
 #include "platform/boards/esp-mosaico/battery_profile.hpp"
+#include "platform/boards/esp-mosaico/hardware_config.hpp"
 
 namespace {
 
@@ -80,6 +81,33 @@ void TestMosaicoBatteryPowerPolicy() {
     static_assert(drivers::Bq27220Checksum(profile_write) == 0x7eU);
 }
 
+void TestMosaicoHardwareRevisions() {
+    using micropixel::platform::esp_mosaico::board::DecodeHardwareConfig;
+    constexpr auto legacy = DecodeHardwareConfig(0x0100U);
+    static_assert(legacy && legacy->display_reset == 42 && legacy->display_clock == 44);
+    static_assert(legacy->i2c_data == 0 && legacy->i2c_clock == 1);
+    static_assert(legacy->codec_power == 56 && legacy->status_led == 3);
+    for (uint32_t version = 0U; version <= 0xffffU; ++version) {
+        const auto config = DecodeHardwareConfig(static_cast<uint16_t>(version));
+        Check(config.has_value() == (version >= 0x0100U && version <= 0x0102U),
+              "only documented eFuse revisions may configure hardware");
+        if (!config) {
+            continue;
+        }
+        Check(config->display_reset != config->display_clock, "LCD reset must not share the QSPI clock");
+        Check(config->codec_power != config->i2c_data && config->status_led != config->i2c_clock,
+              "power and LED outputs must not drive onboard I2C pins");
+    }
+    for (const uint16_t version : {0x0101U, 0x0102U}) {
+        const auto config = DecodeHardwareConfig(version);
+        Check(config && config->display_reset == 44 && config->display_clock == 42,
+              "v1.1/v1.2 must swap LCD reset and clock");
+        Check(config->i2c_data == 56 && config->i2c_clock == 3, "v1.1/v1.2 must move all onboard I2C");
+        Check(config->codec_power == -1 && config->status_led == -1,
+              "v1.1/v1.2 must remove codec rail and LED controls");
+    }
+}
+
 void TestHallBatteryPolicy() {
     using micropixel::firmware::hall_battery_policy::ShowCharging;
 
@@ -99,5 +127,6 @@ int main() {
     ShutdownIsTerminalFromAwakeOnly();
     TestMosaicoBatteryPowerPolicy();
     TestHallBatteryPolicy();
+    TestMosaicoHardwareRevisions();
     return 0;
 }

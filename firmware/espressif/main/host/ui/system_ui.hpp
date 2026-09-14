@@ -30,6 +30,7 @@ constexpr uint32_t kMaxSavedWifiNetworks = 8U;
 constexpr uint32_t kMaxVisibleWifiNetworks = 16U;
 constexpr uint32_t kFirmwareVersionTextCapacity = 64U;
 constexpr uint32_t kFirmwareUpdateMessageCapacity = 96U;
+constexpr uint32_t kFirmwareReleaseNotesCapacity = 2048U;
 
 enum class FirmwareUpdateState : uint8_t {
     kUnknown,
@@ -291,6 +292,7 @@ struct RemoteControlModel final {
     std::array<char, kRemoteControlStatusTextCapacity> status_message{};
     std::array<char, kFirmwareVersionTextCapacity> latest_firmware_version{};
     std::array<char, kRemoteControlStatusTextCapacity> firmware_update_message{};
+    uint32_t firmware_release_notes_revision{};
     uint32_t pairing_expires_seconds{};
     uint32_t firmware_size_bytes{};
     uint32_t firmware_processed_bytes{};
@@ -314,6 +316,7 @@ struct MemoryStatisticsModel final {
 };
 
 struct SystemInformationModel final {
+    std::array<char, kFirmwareReleaseNotesCapacity> firmware_release_notes{};
     std::array<char, kSystemInformationTextCapacity> firmware_version{};
     std::array<char, kSystemInformationTextCapacity> latest_firmware_version{};
     std::array<char, kRemoteControlStatusTextCapacity> firmware_update_message{};

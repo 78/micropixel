@@ -33,8 +33,8 @@ esp_err_t PowerController::Initialize() {
     // Deep-sleep pad holds survive reset. Program safe inactive levels into the
     // output latches before releasing a retained state, matching the board BSP.
     esp_err_t status = ConfigureOutput(board::kPeripheralPower, 1);
-    if (status == ESP_OK) {
-        status = ConfigureOutput(board::kAudioCodecPower, 0);
+    if (status == ESP_OK && board::Hardware().codec_power >= 0) {
+        status = ConfigureOutput(static_cast<gpio_num_t>(board::Hardware().codec_power), 0);
     }
     if (status == ESP_OK) {
         status = ConfigureOutput(board::kPowerSwitch, 1, GPIO_MODE_OUTPUT_OD);
@@ -42,8 +42,8 @@ esp_err_t PowerController::Initialize() {
     if (status == ESP_OK) {
         status = gpio_hold_dis(board::kPeripheralPower);
     }
-    if (status == ESP_OK) {
-        status = gpio_hold_dis(board::kAudioCodecPower);
+    if (status == ESP_OK && board::Hardware().codec_power >= 0) {
+        status = gpio_hold_dis(static_cast<gpio_num_t>(board::Hardware().codec_power));
     }
     if (status == ESP_OK) {
         status = gpio_hold_dis(board::kPowerSwitch);
@@ -121,7 +121,12 @@ esp_err_t PowerController::SetCodecPower(bool enabled) {
     if (!initialized_) {
         return ESP_ERR_INVALID_STATE;
     }
-    ESP_RETURN_ON_ERROR(gpio_set_level(board::kAudioCodecPower, enabled ? 1 : 0), kTag, "set codec power failed");
+    if (board::Hardware().codec_power < 0) {
+        // The codec rail is hardwired on v1.1/v1.2; GPIO56 is now I2C SDA.
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(gpio_set_level(static_cast<gpio_num_t>(board::Hardware().codec_power), enabled ? 1 : 0), kTag,
+                        "set codec power failed");
     codec_power_enabled_ = enabled;
     ESP_LOGI(kTag, "codec 3V3 rail %s", enabled ? "on" : "off");
     return ESP_OK;
@@ -129,7 +134,7 @@ esp_err_t PowerController::SetCodecPower(bool enabled) {
 
 esp_err_t PowerController::PowerOnAudio() {
     ESP_RETURN_ON_ERROR(SetPeripheralPower(true), kTag, "ensure shared 3V3 rail is on failed");
-    if (codec_power_enabled_) {
+    if (board::Hardware().codec_power < 0 || codec_power_enabled_) {
         return ESP_OK;
     }
     ESP_RETURN_ON_ERROR(SetCodecPower(true), kTag, "enable codec 3V3 rail failed");

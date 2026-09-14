@@ -34,6 +34,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "host/controller/remote/firmware_release_notes.hpp"
 #include "host/controller/remote/remote_control_defaults.hpp"
 #include "host/controller/remote/remote_pairing_policy.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
@@ -486,6 +487,8 @@ Http3Client& ClientFrom(void* client) { return *static_cast<Http3Client*>(client
 }  // namespace
 
 struct RemoteControlAgent::ColdState final {
+    // Protected by model_mutex_; keep text out of by-value status snapshots.
+    std::array<char, host_ui::kFirmwareReleaseNotesCapacity> firmware_release_notes{};
     control::CatalogSnapshot installed_apps{};
     std::array<TaskRuntimeSample, kTaskDiagnosticCapacity> previous_task_runtime{};
     std::array<char, kControlLineCapacity> control_line{};
@@ -699,6 +702,16 @@ bool RemoteControlAgent::RequestFirmwareUpdate() {
 host_ui::RemoteControlModel RemoteControlAgent::Snapshot() const {
     std::lock_guard<std::mutex> lock(model_mutex_);
     return model_;
+}
+
+void RemoteControlAgent::CopyFirmwareReleaseNotes(std::span<char> destination, uint32_t revision) const {
+    std::lock_guard<std::mutex> lock(model_mutex_);
+    if (destination.empty()) return;
+    destination[0] = '\0';
+    if (cold_state_ != nullptr && revision == model_.firmware_release_notes_revision) {
+        FirmwareReleaseNotesBuilder builder(destination);
+        builder.Append(cold_state_->firmware_release_notes.data());
+    }
 }
 
 void RemoteControlAgent::UpdateInstalledApps(const control::CatalogSnapshot& catalog) {
@@ -1815,6 +1828,15 @@ bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
         JsonUint(root, "sizeBytes", kMaxFirmwareBytes, size) && size != 0U && ParseSha256(sha256, digest);
     if (valid) {
         std::lock_guard<std::mutex> lock(model_mutex_);
+        FirmwareReleaseNotesBuilder notes(cold_state_->firmware_release_notes);
+        const cJSON* release_notes = cJSON_GetObjectItemCaseSensitive(root, "releaseNotes");
+        if (cJSON_IsArray(release_notes)) {
+            const cJSON* note = nullptr;
+            cJSON_ArrayForEach(note, release_notes) {
+                if (cJSON_IsString(note) && note->valuestring != nullptr) notes.Append(note->valuestring);
+            }
+        }
+        ++model_.firmware_release_notes_revision;
         CopyText(model_.latest_firmware_version, version);
         model_.firmware_size_bytes = size;
         model_.firmware_update_available = available && FirmwareVersionNewer(version, current->version);
@@ -1906,6 +1928,10 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
 
     {
         std::lock_guard<std::mutex> lock(model_mutex_);
+        if (std::strcmp(model_.latest_firmware_version.data(), version) != 0 && cold_state_ != nullptr) {
+            cold_state_->firmware_release_notes[0] = '\0';
+            ++model_.firmware_release_notes_revision;
+        }
         CopyText(model_.latest_firmware_version, version);
         model_.firmware_size_bytes = size;
         model_.firmware_update_state = host_ui::FirmwareUpdateState::kDownloading;

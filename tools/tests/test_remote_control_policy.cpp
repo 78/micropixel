@@ -1,8 +1,11 @@
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
+#include "host/controller/remote/firmware_release_notes.hpp"
 #include "host/controller/remote/remote_control_defaults.hpp"
 #include "host/controller/remote/remote_pairing_policy.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
@@ -62,7 +65,35 @@ void TestPairingConsumedPolicy() {
 
 }  // namespace
 
+void TestFirmwareReleaseNotes() {
+    using micropixel::firmware::remote_control::FirmwareReleaseNotesBuilder;
+    std::array<char, 16> text{};
+    FirmwareReleaseNotesBuilder notes(text);
+    notes.Append("");
+    notes.Append("Fix one");
+    notes.Append("Fix two");
+    assert(std::string(text.data()) == "Fix one\nFix two");
+    notes.Append("extra");
+    assert(std::string(text.data()) == "Fix one\nFix ...");
+    notes.Append("ignored");
+    assert(std::string(text.data()) == "Fix one\nFix ...");
+    FirmwareReleaseNotesBuilder utf8(text);
+    utf8.Append("修复显示错误与问题");
+    assert(std::string(text.data()) == "修复显示...");
+    FirmwareReleaseNotesBuilder reset(text);
+    assert(text[0] == '\0');
+    reset.Append("012345678901234");
+    assert(std::string(text.data()) == "012345678901234");
+    std::array<char, 1> tiny{'x'};
+    FirmwareReleaseNotesBuilder small(tiny);
+    small.Append("修复");
+    assert(tiny[0] == '\0');
+    FirmwareReleaseNotesBuilder empty({});
+    empty.Append("ignored");
+}
+
 int main() {
+    TestFirmwareReleaseNotes();
     TestRemoteControlDefaults();
     TestRemoteControlReconnectPolicy();
     TestPairingConsumedPolicy();

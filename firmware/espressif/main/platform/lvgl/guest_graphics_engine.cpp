@@ -1173,7 +1173,7 @@ int32_t GuestGraphicsEngine::CopyOpaqueBlocks(const device::PixelTarget& target,
         .stride = target.pitch,
         .format = format,
     };
-    std::array<graphics::Dma2dCopyBlock, graphics::Dma2dCopyEngine::kMaxBlocks>& copies = raster_copy_blocks_;
+    auto& copies = raster_copy_blocks_;
     for (uint32_t index = 0U; index < count; ++index) {
         const device::OpaqueCopyBlock& block = blocks[index];
         if (block.source_pixels == nullptr || block.width == 0U || block.height == 0U ||

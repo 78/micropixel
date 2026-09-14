@@ -80,6 +80,19 @@ bash tools/p4.sh fullclean-host
 
 ## ESP32-S31 / ESP-Mosaico
 
+同一 Host 镜像通过 eFuse `USER_DATA` 的前 16 位识别硬件版本（高字节 major、低字节 minor），
+遵循[官方 BSP](https://github.com/esp-mosaico/esp-mosaico-bsp/blob/master/components/esp-mosaico-bsp/onboard/esp_mosaico.c)
+的版本规则，在初始化板级 GPIO 前完成识别。未知或未写入的版本拒绝启动，不猜测引脚，也不写 eFuse。
+
+| 硬件版本 | LCD RST / CLK | 板载 I²C SDA / SCL | codec 电源控制 | 状态 LED |
+| --- | --- | --- | --- | --- |
+| v1.0 (`0x0100`) | 42 / 44 | 0 / 1 | GPIO56 | GPIO3 |
+| v1.1 / v1.2 (`0x0101` / `0x0102`) | 44 / 42 | 56 / 3 | 无独立控制 | 不注册 |
+
+触摸、BMI270、两颗 BMM150、BQ27220 和 ES8311 共用对应版本的板载 I²C。
+扩展口 SDA0/SCL1 保持保留：v1.0 与板载共用，v1.1/v1.2 是独立布线；当前未初始化扩展 I²C 总线，
+也不把这两个引脚公开为 Guest GPIO。System Information 显示实际识别到的版本。
+
 ESP-Mosaico 使用 ESP32-S31 target 和独立 build 目录。工具自动传入当前 ESP-IDF 要求的
 `--preview` 参数；该参数不表示 MicroPixel 板型支持等级。
 
@@ -112,7 +125,7 @@ ROM，随后按同一 USB 物理位置等待 ROM 产品名并在同一个 esptoo
 在 macOS 真机验证；首次烧录、应用固件损坏或应用 CDC 未启动时，仍需按板卡说明手动进入 ROM 下载模式。
 
 当前 `esp-mosaico` 第一阶段 profile 已接入 CO5300 显示、`78/esp_lcd_touch_cst92xx` 中断触摸组件、ES8311 音频、
-BMI270、双 BMM150、BQ27220 主动刷新、GPIO57 关机输出/Function Button、状态 LED、白名单扩展 GPIO、板级 3V3
+BMI270、双 BMM150、BQ27220 主动刷新、GPIO57 关机输出/Function Button、v1.0 状态 LED、白名单扩展 GPIO、板级 3V3
 电源、共用 Runtime、BundleFS、native Wi-Fi、共享 App Hall/Status Layer 和 PPA/DMA2D
 转场；RGB565/QSPI 只作为板级 presentation boundary，正常刷新和转场不使用 CPU 整图逐像素换序。
 外部 128 MiB SPI NAND 作为第二个 BundleFS 承载下载的 App：NOR `app_store` 只保留系统组件和出厂 App，
@@ -130,8 +143,8 @@ Extension 两个存储分组列出 App 并分别显示容量。麦克风采集�
 Power Management 显示 Auto power off，默认 5 分钟，可选 1/5/10/30 分钟或关闭；原有超时设置继续使用，
 外接供电或供电状态未知时不自动关机，OTA 期间拒绝关机并重置计时。GPIO57 是开漏关机输出，
 正常运行保持高阻，不注册按键中断或作为休眠唤醒源；Demo Input 页中 Function Button 产生 Confirm
-down/up 且 pressed/released 状态同步；Demo Devices 页选择 `Orange status LED` 后，TOGGLE 可点亮/熄灭且
-退出页面恢复熄灭；插拔 Type-C/VIN 时电池与外部供电状态在 2 秒级更新；逐根检查公开 GPIO 不与显示、
+down/up 且 pressed/released 状态同步；v1.0 的 Demo Devices 页选择 `Orange status LED` 后，TOGGLE 可点亮/熄灭且
+退出页面恢复熄灭，v1.1/v1.2 不应列出该 LED；插拔 Type-C/VIN 时电池与外部供电状态在 2 秒级更新；逐根检查公开 GPIO 不与显示、
 触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 

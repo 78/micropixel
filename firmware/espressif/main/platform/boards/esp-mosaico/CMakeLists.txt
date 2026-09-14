@@ -1,4 +1,5 @@
 list(APPEND micropixel_sources
+    "platform/boards/esp-mosaico/board_config.cpp"
     "platform/boards/esp-mosaico/i2s_audio_sink.cpp"
     "platform/boards/esp-mosaico/battery_peripheral.cpp"
     "platform/boards/esp-mosaico/display/brightness_controller.cpp"
@@ -23,4 +24,4 @@ list(APPEND micropixel_sources
 )
 
 # spi_nand_flash: on-board GD5F1GM7 NAND published as the downloaded-App store.
-list(APPEND micropixel_requires esp_codec_dev esp_lcd_co5300 spi_nand_flash)
+list(APPEND micropixel_requires efuse esp_codec_dev esp_lcd_co5300 spi_nand_flash)

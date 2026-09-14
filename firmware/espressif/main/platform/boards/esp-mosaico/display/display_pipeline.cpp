@@ -71,7 +71,7 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
     spi_bus_config_t bus_config{};
     bus_config.data0_io_num = board::kDisplayData0;
     bus_config.data1_io_num = board::kDisplayData1;
-    bus_config.sclk_io_num = board::kDisplayClock;
+    bus_config.sclk_io_num = static_cast<gpio_num_t>(board::Hardware().display_clock);
     bus_config.data2_io_num = board::kDisplayData2;
     bus_config.data3_io_num = board::kDisplayData3;
     bus_config.data4_io_num = -1;
@@ -82,9 +82,9 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
                                  static_cast<int32_t>(board::kDisplayBitsPerPixel) / 8;
     ESP_RETURN_ON_ERROR(spi_bus_initialize(board::kDisplaySpiHost, &bus_config, SPI_DMA_CH_AUTO), kTag,
                         "initialize CO5300 QSPI bus failed");
-    constexpr gpio_num_t kBusPins[]{board::kDisplayClock, board::kDisplayData0, board::kDisplayData1,
-                                    board::kDisplayData2, board::kDisplayData3};
-    for (gpio_num_t pin : kBusPins) {
+    const gpio_num_t bus_pins[]{static_cast<gpio_num_t>(board::Hardware().display_clock), board::kDisplayData0,
+                                board::kDisplayData1, board::kDisplayData2, board::kDisplayData3};
+    for (gpio_num_t pin : bus_pins) {
         ESP_RETURN_ON_ERROR(
             gpio_set_drive_capability(pin, static_cast<gpio_drive_cap_t>(CONFIG_MICROPIXEL_MOSAICO_LCD_QSPI_DRIVE_CAP)),
             kTag, "set QSPI GPIO%d drive capability failed", static_cast<int>(pin));
@@ -109,7 +109,7 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
     vendor_config.init_cmds_size = std::size(kVendorInit);
     vendor_config.flags.use_qspi_interface = true;
     esp_lcd_panel_dev_config_t panel_config{};
-    panel_config.reset_gpio_num = board::kDisplayReset;
+    panel_config.reset_gpio_num = static_cast<gpio_num_t>(board::Hardware().display_reset);
     panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
     panel_config.bits_per_pixel = board::kDisplayBitsPerPixel;
     panel_config.vendor_config = &vendor_config;

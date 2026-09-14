@@ -1,5 +1,6 @@
 #include <cinttypes>
 #include <cstdio>
+#include <memory>
 
 #include "esp_log.h"
 #include "host/ui/lvgl/square_common/system_detail_ui.hpp"
@@ -152,6 +153,14 @@ void SystemDetailUi::RenderFirmwareUpdateLocked() {
     lv_obj_set_width(version_label, LV_PCT(100));
     lv_obj_set_style_text_align(version_label, LV_TEXT_ALIGN_CENTER, 0);
 
+    if (system_information_model_.firmware_release_notes[0] != '\0') {
+        Label(panel, "What's new", layout_.heading_font, theme::kPrimaryText);
+        lv_obj_t* notes = Label(panel, system_information_model_.firmware_release_notes.data(), layout_.detail_font,
+                                theme::kSecondaryText);
+        lv_obj_set_width(notes, LV_PCT(100));
+        lv_label_set_long_mode(notes, LV_LABEL_LONG_WRAP);
+    }
+
     const uint8_t progress = std::min<uint8_t>(system_information_model_.firmware_progress_percent, 100U);
     char percent[16]{};
     std::snprintf(percent, sizeof(percent), "%u%%", static_cast<unsigned>(progress));
@@ -215,7 +224,8 @@ void SystemDetailUi::UpdateSystemInformationLocked(const host_ui::SystemInformat
 
 void SystemDetailUi::LeaveSystemInformation() {
     if (SystemInformationVisible()) {
-        system_information_model_ = {};
+        std::destroy_at(&system_information_model_);
+        std::construct_at(&system_information_model_);
         ResetActiveScreen();
     }
 }

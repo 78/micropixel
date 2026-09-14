@@ -2,6 +2,7 @@
 # Board-owned drivers are selected later; this list contains only target-wide
 # ESP-IDF facilities required by the MicroPixel platform implementation.
 list(APPEND micropixel_requires
+    efuse
     bosch_sensorapi
     esp_hw_support
     esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_jpeg esp_driver_ledc

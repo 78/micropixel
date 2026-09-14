@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <optional>
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -110,8 +111,8 @@ esp_err_t InitializeSharedI2c(board_detail::MosaicoBoardState& state) {
     i2c_master_bus_config_t bus_config{};
     bus_config.i2c_port = I2C_NUM_0;
     bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
-    bus_config.sda_io_num = esp_mosaico::board::kI2cData;
-    bus_config.scl_io_num = esp_mosaico::board::kI2cClock;
+    bus_config.sda_io_num = static_cast<gpio_num_t>(esp_mosaico::board::Hardware().i2c_data);
+    bus_config.scl_io_num = static_cast<gpio_num_t>(esp_mosaico::board::Hardware().i2c_clock);
     bus_config.flags.enable_internal_pullup = true;
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &state.i2c_bus), board_detail::kTag,
                         "initialize shared Mosaico I2C bus failed");
@@ -171,6 +172,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_RETURN_ON_ERROR(InitializeUsbCdcConsole(), board_detail::kTag, "initialize Type-C USB CDC console failed");
         ESP_LOGI(board_detail::kTag, "initializing ESP-Mosaico with CO5300 and CST92xx drivers");
+        ESP_RETURN_ON_ERROR(esp_mosaico::board::DetectHardware(), board_detail::kTag, "detect Mosaico hardware failed");
         ESP_RETURN_ON_ERROR(power_.Initialize(), board_detail::kTag, "initialize Mosaico power control failed");
         ESP_RETURN_ON_ERROR(status_led_.Initialize(), board_detail::kTag, "initialize Mosaico status LED failed");
         ESP_RETURN_ON_ERROR(status_led_.Set(true), board_detail::kTag, "turn on Mosaico startup status LED failed");
@@ -251,8 +253,9 @@ class EspMosaicoBoard final : public Board, public device::Power {
                             board_detail::kTag, "start USB screen capture/local control failed");
         ESP_LOGI(board_detail::kTag,
                  "Mosaico HMI ready: 480x480 QSPI display, interrupt-driven touch, shared Guest renderer");
-        BoardRegistration registration{{
-            .board = "ESP-Mosaico V1.0",
+        // Construct in the board's PSRAM storage, without a stack-sized registry copy.
+        BoardRegistration& registration = registration_.emplace(device::BoardInfo{
+            .board = esp_mosaico::board::Hardware().name,
             .host_chip = "ESP32-S31",
             .firmware_target = "esp-mosaico",
             .wifi_coprocessor = "Native ESP32-S31",
@@ -282,7 +285,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
 #else
             .graphics_acceleration = "PPA + DMA2D",
 #endif
-        }};
+        });
         registration.SetGraphics(graphics_);
         registration.SetInput(state_.ui.Input());
         registration.SetAudioOutput(audio_output_, audio_output_.SampleRate(), &power_);
@@ -315,8 +318,10 @@ class EspMosaicoBoard final : public Board, public device::Power {
                                                 "BMM150 magnetometer #3") &&
                          registered;
         }
-        registered =
-            registration.AddGpio(status_led_, esp_mosaico::StatusLed::kChannel, "Orange status LED") && registered;
+        if (esp_mosaico::board::Hardware().status_led >= 0) {
+            registered =
+                registration.AddGpio(status_led_, esp_mosaico::StatusLed::kChannel, "Orange status LED") && registered;
+        }
         for (device::PeripheralChannelId line : esp_mosaico::board::kApplicationGpioLines) {
             char name[16]{};
             (void)std::snprintf(name, sizeof(name), "GPIO%u", static_cast<unsigned>(line));
@@ -359,6 +364,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
     [[noreturn]] void PowerOff() override { power_.PowerOff(); }
 
    private:
+    std::optional<BoardRegistration> registration_{};
     board_detail::MosaicoBoardState state_{};
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
