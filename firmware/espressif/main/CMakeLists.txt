@@ -223,3 +223,7 @@ set_property(SOURCE host/controller/local/local_control_agent.cpp APPEND PROPERT
 set_property(SOURCE host/ui/lvgl/square_common/hall_cover_cache.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=1792)
 set_property(SOURCE platform/transports/usb_serial_jtag_local_control.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2176)
 set_property(SOURCE platform/boards/szpi-esp32s3/platform.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2304)
+# Same migration ceilings for the RISC-V P4 build, whose frames differ from the
+# Xtensa ones the list above was calibrated against.
+set_property(SOURCE platform/lvgl/display/direct_surface_presenter.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3840)
+set_property(SOURCE platform/boards/metalio-claw4/platform.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2432)
