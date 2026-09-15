@@ -14,6 +14,7 @@
 #include "esp_memory_utils.h"
 #include "runtime/memory/guest_psram.hpp"
 #include "runtime/wamr/diagnostics.h"
+#include "runtime/wamr/linear_memory_policy.hpp"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -21,10 +22,8 @@ namespace {
 
 constexpr uint32_t kExecStackSize = 8U * 1024U;
 constexpr uint32_t kGuestAppHeapSize = 0U;
-constexpr uint32_t kWasmPageBytes = 64U * 1024U;
 constexpr uint32_t kGuestLinearMemoryMaxPages = CONFIG_MICROPIXEL_GUEST_LINEAR_MEMORY_MAX_PAGES;
 constexpr uint32_t kGuestLinearMemoryMinimumPages = 2U;
-constexpr size_t kGuestLinearMemoryAllocationOverhead = 64U;
 // Keep small, latency-sensitive WAMR metadata in internal SRAM.  Module-load
 // buffers are larger and must not depend on finding a contiguous internal
 // block after the Host UI and a previous Guest have fragmented that heap.
@@ -35,6 +34,7 @@ constexpr uint32_t kAotTargetInfoSize = 48U;
 constexpr uint32_t kAotFeatureMultiThread = 1U << 2U;
 constexpr char kTag[] = "micropixel_wamr";
 bool guest_memory_placement_logged;
+bool guest_memory_growth_failure_logged;
 
 uint32_t ReadLittleEndian32(const uint8_t* bytes) {
     return static_cast<uint32_t>(bytes[0]) | static_cast<uint32_t>(bytes[1]) << 8U |
@@ -115,21 +115,6 @@ bool ValidateMemoryCheckDeclaration(const AotPackage& package, char* error_buf, 
 #endif
 }
 
-constexpr uint32_t EffectiveGuestLinearMemoryPages(size_t largest_psram_block) {
-    constexpr size_t kReservedBytes =
-        CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES + kGuestLinearMemoryAllocationOverhead;
-    const uint32_t available_pages =
-        largest_psram_block > kReservedBytes
-            ? static_cast<uint32_t>((largest_psram_block - kReservedBytes) / kWasmPageBytes)
-            : 0U;
-    return std::min(kGuestLinearMemoryMaxPages, available_pages);
-}
-
-static_assert(EffectiveGuestLinearMemoryPages(CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES) == 0U);
-static_assert(EffectiveGuestLinearMemoryPages(CONFIG_MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES +
-                                              kGuestLinearMemoryAllocationOverhead + kWasmPageBytes) == 1U);
-static_assert(EffectiveGuestLinearMemoryPages(32U * 1024U * 1024U) == kGuestLinearMemoryMaxPages);
-
 struct WamrAllocationHeader {
     void* origin;
     unsigned size;
@@ -142,6 +127,20 @@ void LogAllocationFailure(const char* operation, unsigned size) {
              operation, size, heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM), heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+}
+
+void LogMemoryGrowthFailure(uint32_t additional_pages, uint64_t current_bytes, uint32_t memory_index,
+                            enlarge_memory_error_reason_t reason, wasm_module_inst_t, wasm_exec_env_t, void*) {
+    if (guest_memory_growth_failure_logged) {
+        return;
+    }
+    guest_memory_growth_failure_logged = true;
+    const GuestPsramState psram = CurrentGuestPsramState();
+    ESP_LOGE(kTag,
+             "Guest memory.grow failed: memory=%" PRIu32 " current=%" PRIu64 " additional-pages=%" PRIu32
+             " reason=%s psram-free=%zu psram-largest=%zu",
+             memory_index, current_bytes, additional_pages, reason == MAX_SIZE_REACHED ? "limit" : "allocation",
+             psram.free_bytes, psram.largest_free_block);
 }
 
 void WamrFree(void* memory);
@@ -242,14 +241,17 @@ WamrFailure MakeFailure(WamrError code, const char* message) {
 
 wasm_module_inst_t InstantiateGuest(wasm_module_t module, bool pinned_memory, char* error_buf,
                                     uint32_t error_buf_size) {
+    guest_memory_growth_failure_logged = false;
     const size_t internal_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t psram_before = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-    const uint32_t effective_max_pages = EffectiveGuestLinearMemoryPages(psram_largest);
+    const GuestPsramState psram = CurrentGuestPsramState();
+    const size_t psram_before = psram.free_bytes;
+    const size_t psram_largest = psram.largest_free_block;
+    const uint32_t effective_max_pages =
+        GuestLinearMemoryPageLimit(psram, GuestPsramReserveBytes(), kGuestLinearMemoryMaxPages);
     if (effective_max_pages < kGuestLinearMemoryMinimumPages) {
         std::snprintf(error_buf, error_buf_size,
-                      "insufficient contiguous PSRAM for Guest linear memory: largest=%zu reserve=%zu", psram_largest,
-                      GuestPsramReserveBytes());
+                      "insufficient PSRAM for Guest linear memory: free=%zu largest=%zu reserve=%zu", psram_before,
+                      psram_largest, GuestPsramReserveBytes());
         return nullptr;
     }
     const uint64_t effective_max_bytes = static_cast<uint64_t>(effective_max_pages) * kWasmPageBytes;
@@ -285,8 +287,8 @@ wasm_module_inst_t InstantiateGuest(wasm_module_t module, bool pinned_memory, ch
     // Per session: the pinning policy differs between Bundles.
     ESP_LOGI(kTag,
              "guest linear memory: base=%p, initial=%" PRIu64 ", host-max=%" PRIu64 " (%" PRIu32
-             " pages), largest-before=%zu, region=PSRAM, %s",
-             linear_base, linear_size, effective_max_bytes, effective_max_pages, psram_largest,
+             " pages), free-before=%zu, largest-before=%zu, region=PSRAM, %s",
+             linear_base, linear_size, effective_max_bytes, effective_max_pages, psram_before, psram_largest,
              pinned_memory ? "pinned at host-max" : "grows on demand");
     if (!guest_memory_placement_logged) {
         const size_t internal_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -328,6 +330,7 @@ std::expected<WamrRuntime, WamrFailure> WamrRuntime::Initialize() {
     if (!runtime.initialized_) {
         return std::unexpected(MakeFailure(WamrError::kInitialization, "wasm_runtime_full_init failed"));
     }
+    wasm_runtime_set_enlarge_mem_error_callback(LogMemoryGrowthFailure, nullptr);
     return runtime;
 }
 

@@ -68,6 +68,7 @@ lines.append('static const struct { const char* current; const char* candidate; 
 Path(sys.argv[2]).write_text('\n'.join(lines)+'\n')
 PYFIXTURE
 build_and_run guest_failure_detail "$workspace_root/tools/tests/test_guest_failure_detail.cpp"
+build_and_run linear_memory_policy "$workspace_root/tools/tests/test_linear_memory_policy.cpp"
 
 build_and_run_c app_requirements -I "$test_output_dir" "$workspace_root/tools/tests/test_app_requirements.c"
 
