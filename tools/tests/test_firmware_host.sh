@@ -76,6 +76,11 @@ build_and_run maze_touch_controls \
     "$workspace_root/tools/tests/test_maze_touch_controls.cpp" \
     "$workspace_root/guest/apps/maze-evil/input/touch_controls.cpp"
 
+build_and_run ft6336_report \
+    -I "$workspace_root/tools/tests/touch_stubs" \
+    "$workspace_root/tools/tests/test_ft6336_report.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/input/ft6336_report.cpp"
+
 build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physics_test.cpp"
 
 build_and_run frame_timing \

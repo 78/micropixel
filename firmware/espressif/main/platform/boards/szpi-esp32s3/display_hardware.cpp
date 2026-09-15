@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "platform/boards/esp32-s3-common/landscape_320_state.hpp"
 #include "platform/boards/szpi-esp32s3/board_hardware.hpp"
+#include "platform/input/ft6336_report.hpp"
 
 namespace micropixel::platform::szpi_esp32s3 {
 namespace {
@@ -131,6 +132,7 @@ esp_err_t InitializeTouch(BoardHardware& hardware, esp32_s3_common::Landscape320
                         "create FT6336 panel IO failed");
     ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_ft5x06(state.touch_io, &touch_config, &state.touch), kTag,
                         "initialize FT6336 failed");
+    state.touch->read_data = input::ReadFt6336Report;
     state.touch_name = "FT6336";
     return ESP_OK;
 }

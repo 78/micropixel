@@ -6,6 +6,7 @@ list(APPEND micropixel_sources
     "platform/boards/szpi-esp32s3/sensor_peripheral.cpp"
     "platform/drivers/sensors/qmi8658.cpp"
     "platform/input/esp_lcd_touch_input.cpp"
+    "platform/input/ft6336_report.cpp"
     "platform/input/gpio_key_input.cpp"
     "platform/sensors/polled_inertial_sensor_peripheral.cpp"
     "platform/transports/development_display_control.cpp"
