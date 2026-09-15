@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.chinese-demo",
+  "version": "0.2.0",
+  "threading": "none",
+  "title": {
+    "default": "en",
+    "values": {
+      "en": "Multilingual Demo",
+      "zh-CN": "多语言测试",
+      "zh-TW": "多語言測試",
+      "ja-JP": "多言語デモ",
+      "ko-KR": "다국어 데모"
+    }
+  },
+  "sources": [
+    "main.cpp"
+  ],
+  "requirements": {
+    "schema_version": 1,
+    "display": {
+      "layouts": [
+        "square",
+        "landscape"
+      ],
+      "min_width": 720,
+      "min_height": 720
+    },
+    "required": [],
+    "optional": [],
+    "any_of": [],
+    "services": {}
+  },
+  "localization": {
+    "default": "en",
+    "translations": {
+      "en": "i18n/en.json",
+      "zh-CN": "i18n/zh-CN.json",
+      "zh-TW": "i18n/zh-TW.json",
+      "ja-JP": "i18n/ja-JP.json",
+      "ko-KR": "i18n/ko-KR.json"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.font-benchmark",
+  "version": "0.1.0",
+  "threading": "none",
+  "title": "Font Benchmark",
+  "sources": ["main.cpp"],
+  "requirements": {
+    "schema_version": 1,
+    "display": {"layouts": ["square"], "min_width": 720, "min_height": 720},
+    "required": [],
+    "optional": [],
+    "any_of": [],
+    "services": {}
+  }
+}

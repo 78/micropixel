@@ -1,0 +1,12 @@
+{
+  "app.title": "多语言测试",
+  "greeting": "你好，世界！",
+  "sample.small": "小号：春夏秋冬，风雨雷电。",
+  "sample.medium": "中号：欢迎使用多语言界面。",
+  "sample.large": "大号：山川湖海，星辰日月。",
+  "shared_font": "跟随系统语言，共用系统字体。",
+  "switch_hint": "切换系统语言后，再次打开此应用。",
+  "counter.prefix": "运行计数：",
+  "counter.suffix": " 秒",
+  "locale.prefix": "系统语言："
+}

@@ -1,0 +1,12 @@
+{
+  "app.title": "다국어 데모",
+  "greeting": "안녕하세요, 세계!",
+  "sample.small": "작게: 봄, 여름, 가을, 겨울.",
+  "sample.medium": "중간: 다국어 화면에 오신 것을 환영합니다.",
+  "sample.large": "크게: 산과 바다, 달과 별.",
+  "shared_font": "시스템 언어와 글꼴을 함께 사용합니다.",
+  "switch_hint": "시스템 언어를 바꾼 후 다시 열어 주세요.",
+  "counter.prefix": "실행 시간: ",
+  "counter.suffix": "초",
+  "locale.prefix": "시스템 언어: "
+}

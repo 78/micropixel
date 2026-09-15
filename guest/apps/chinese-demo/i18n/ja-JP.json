@@ -1,0 +1,12 @@
+{
+  "app.title": "多言語デモ",
+  "greeting": "こんにちは、世界！",
+  "sample.small": "小：春、夏、秋、冬。",
+  "sample.medium": "中：多言語の世界へようこそ。",
+  "sample.large": "大：山と海、月と星。",
+  "shared_font": "システム言語とフォントを使います。",
+  "switch_hint": "言語を変更したら、もう一度開いてください。",
+  "counter.prefix": "経過：",
+  "counter.suffix": " 秒",
+  "locale.prefix": "システム言語："
+}

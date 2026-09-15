@@ -1,0 +1,12 @@
+{
+  "app.title": "Multilingual Demo",
+  "greeting": "Hello, world!",
+  "sample.small": "Small: Spring, summer, autumn, winter.",
+  "sample.medium": "Medium: Welcome to your language.",
+  "sample.large": "Large: Mountains and seas.",
+  "shared_font": "Shared system fonts, in your language.",
+  "switch_hint": "Change the system language, then reopen.",
+  "counter.prefix": "Running: ",
+  "counter.suffix": " s",
+  "locale.prefix": "System language: "
+}
