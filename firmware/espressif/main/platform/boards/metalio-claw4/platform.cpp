@@ -56,6 +56,7 @@
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/memory/graphics_buffer_alignment.hpp"
+#include "platform/memory/internal_ram.hpp"
 #include "platform/platform.hpp"
 #include "platform/random/system_random.hpp"
 #include "platform/wifi/esp_hosted_radio.hpp"
@@ -422,7 +423,8 @@ std::expected<void, device::PowerError> EnterLowPowerImpl(board_detail::MetalioC
 class MetalioClaw4Board final : public Board, public device::Power {
    public:
     MetalioClaw4Board()
-        : graphics_context_{
+        : state_(TaskState(i2c_executor_, gpio_, touch_input_)),
+          graphics_context_{
               .engine = &state_.guest_graphics,
               .hooks = state_.ui.GraphicsHooks(),
           },
@@ -448,6 +450,8 @@ class MetalioClaw4Board final : public Board, public device::Power {
     }
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
+        ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, board_detail::kTag,
+                            "Board control objects must reside in internal RAM");
         state_.audio_engine = &context.AudioEngine();
         const esp_err_t initialize_error = InitializePlatformImpl(state_);
         if (initialize_error != ESP_OK) {
@@ -532,7 +536,17 @@ class MetalioClaw4Board final : public Board, public device::Power {
     [[noreturn]] void PowerOff() override { state_.power_key.PowerOff(); }
 
    private:
-    board_detail::MetalioClaw4BoardState state_{};
+    static board_detail::MetalioClaw4BoardState& TaskState(buses::I2cExecutor& executor,
+                                                           metalio_claw4::GpioPeripheral& gpio,
+                                                           input::Gt911Input& touch) {
+        static MICROPIXEL_EXT_RAM_BSS board_detail::MetalioClaw4BoardState state(executor, gpio, touch);
+        return state;
+    }
+
+    buses::I2cExecutor i2c_executor_{};
+    metalio_claw4::GpioPeripheral gpio_{};
+    input::Gt911Input touch_input_{board_detail::kWidth, board_detail::kHeight, metalio_claw4::board::kTouchInterrupt};
+    board_detail::MetalioClaw4BoardState& state_;
     std::optional<BoardRegistration> registration_{};
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
@@ -546,7 +560,7 @@ class MetalioClaw4Board final : public Board, public device::Power {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MICROPIXEL_EXT_RAM_BSS MetalioClaw4Board board;
+    static MetalioClaw4Board board;
     return board;
 }
 

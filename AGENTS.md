@@ -51,6 +51,9 @@ Host paths below are relative to `firmware/espressif/main/`. Detailed design gui
 - Use move-only RAII or an explicit shutdown protocol. Destructors perform best-effort cleanup. Do not use raw
   new/delete for real-time resource ownership. Exceptions and RTTI are disabled.
 - ISRs record minimal POD state and wake tasks; they never call WAMR, Guest code, or LVGL.
+  Board singletons and their input/control members stay in internal SRAM; move large task-only state to
+  separate PSRAM storage, never mark the entire Board with `MICROPIXEL_EXT_RAM_BSS`. IRAM-safe handlers
+  require the complete call chain and every dereferenced object (including queue storage) to be cache-safe.
   Avoid large synchronous logs on Guest hot paths.
 - The Host owns App Hall, status overlays, system gestures, brightness, and device master volume.
   Guests must not add app-wide master attenuation. Define game sound parameters only in `audio/sfx.json`.

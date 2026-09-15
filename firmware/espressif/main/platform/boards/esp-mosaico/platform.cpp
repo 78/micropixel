@@ -43,6 +43,7 @@
 #include "platform/lvgl/host_pointer_router.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
+#include "platform/memory/internal_ram.hpp"
 #include "platform/random/system_random.hpp"
 #include "platform/storage/spi_nand_block_storage.hpp"
 #include "platform/transports/tinyusb_cdc_local_control.hpp"
@@ -152,7 +153,8 @@ esp_err_t InitializeTouch(board_detail::MosaicoBoardState& state) {
 class EspMosaicoBoard final : public Board, public device::Power {
    public:
     EspMosaicoBoard()
-        : graphics_context_{
+        : state_(TaskState(i2c_executor_, touch_input_)),
+          graphics_context_{
               .engine = &state_.guest_graphics,
               .hooks = state_.ui.GraphicsHooks(),
           },
@@ -171,6 +173,8 @@ class EspMosaicoBoard final : public Board, public device::Power {
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_RETURN_ON_ERROR(InitializeUsbCdcConsole(), board_detail::kTag, "initialize Type-C USB CDC console failed");
+        ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, board_detail::kTag,
+                            "Board control objects must reside in internal RAM");
         ESP_LOGI(board_detail::kTag, "initializing ESP-Mosaico with CO5300 and CST92xx drivers");
         ESP_RETURN_ON_ERROR(esp_mosaico::board::DetectHardware(), board_detail::kTag, "detect Mosaico hardware failed");
         ESP_RETURN_ON_ERROR(power_.Initialize(), board_detail::kTag, "initialize Mosaico power control failed");
@@ -365,7 +369,14 @@ class EspMosaicoBoard final : public Board, public device::Power {
 
    private:
     std::optional<BoardRegistration> registration_{};
-    board_detail::MosaicoBoardState state_{};
+    static board_detail::MosaicoBoardState& TaskState(buses::I2cExecutor& executor, input::EspLcdTouchInput& touch) {
+        static MICROPIXEL_EXT_RAM_BSS board_detail::MosaicoBoardState state(executor, touch);
+        return state;
+    }
+
+    buses::I2cExecutor i2c_executor_{};
+    input::EspLcdTouchInput touch_input_{board_detail::kWidth, board_detail::kHeight, ESP_LCD_TOUCH_CST92XX_MAX_POINTS};
+    board_detail::MosaicoBoardState& state_;
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
     esp_mosaico::I2sAudioSink audio_output_{};
@@ -386,7 +397,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MICROPIXEL_EXT_RAM_BSS EspMosaicoBoard board;
+    static EspMosaicoBoard board;
     return board;
 }
 

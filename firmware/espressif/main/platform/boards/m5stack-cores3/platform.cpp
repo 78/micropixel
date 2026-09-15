@@ -22,6 +22,7 @@
 #include "platform/drivers/sensors/bmi270.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
+#include "platform/memory/internal_ram.hpp"
 #include "platform/sensors/polled_inertial_sensor_peripheral.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
@@ -36,7 +37,8 @@ constexpr char kTag[] = "m5stack_cores3";
 class M5StackCoreS3Board final : public Board, public device::Power {
    public:
     M5StackCoreS3Board()
-        : graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
+        : state_(TaskState(input_state_)),
+          graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
           graphics_(lvgl::MakeGuestGraphicsOperations(graphics_context_)),
           acceleration_(inertial_, drivers::Bmi270::Kind::kAcceleration),
           angular_velocity_(inertial_, drivers::Bmi270::Kind::kAngularVelocity),
@@ -58,6 +60,8 @@ class M5StackCoreS3Board final : public Board, public device::Power {
     }
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
+        ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, kTag,
+                            "Board control objects must reside in internal RAM");
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_LOGI(kTag, "initializing M5Stack CoreS3");
         ESP_RETURN_ON_ERROR(board_detail::InitializeDisplayHardware(hardware_, state_), kTag,
@@ -178,8 +182,14 @@ class M5StackCoreS3Board final : public Board, public device::Power {
     }
 
    private:
+    static common::Landscape320State& TaskState(common::Landscape320InputState& input) {
+        static MICROPIXEL_EXT_RAM_BSS common::Landscape320State state(input);
+        return state;
+    }
+
     std::optional<BoardRegistration> registration_{};
-    common::Landscape320State state_{};
+    common::Landscape320InputState input_state_{};
+    common::Landscape320State& state_;
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
     board_detail::BoardHardware hardware_{};
@@ -198,7 +208,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MICROPIXEL_EXT_RAM_BSS M5StackCoreS3Board board;
+    static M5StackCoreS3Board board;
     return board;
 }
 

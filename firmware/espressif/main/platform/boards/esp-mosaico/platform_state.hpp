@@ -51,7 +51,12 @@ inline constexpr bool kEnableLvglAdapterPpaAccel = true;
 #endif
 
 struct MosaicoBoardState final {
-    buses::I2cExecutor i2c_executor{};
+    MosaicoBoardState(buses::I2cExecutor& executor, input::EspLcdTouchInput& input)
+        : i2c_executor(executor), touch_input(input) {}
+
+    // Large task-only state lives in PSRAM. The Board owns input controls and
+    // the executor (including its queues) in internal RAM.
+    buses::I2cExecutor& i2c_executor;
     i2c_master_bus_handle_t i2c_bus{};
     MosaicoDisplayPipeline display_pipeline{kWidth, kHeight};
     esp_lcd_panel_io_handle_t touch_io{};
@@ -66,7 +71,7 @@ struct MosaicoBoardState final {
     // the CPU because of the format.
     lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts, graphics::SurfacePixelFormat::kRgb565};
     PanelTransitionCompositor panel_transition{};
-    input::EspLcdTouchInput touch_input{kWidth, kHeight, ESP_LCD_TOUCH_CST92XX_MAX_POINTS};
+    input::EspLcdTouchInput& touch_input;
     host_ui::lvgl::square_common::SquareSystemUiState ui{touch_input, guest_graphics, panel_transition,
                                                          ui_profile::kSystemUiProfile};
     transports::TinyUsbCdcLocalControl local_control{};

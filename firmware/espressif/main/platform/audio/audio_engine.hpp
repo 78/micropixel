@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "device/contracts/audio.hpp"
+#include "esp_attr.h"
 #include "esp_err.h"
 
 namespace micropixel::platform::audio {
@@ -19,8 +20,9 @@ class AudioEngine : public device::Audio {
                                        AudioPowerController* power_controller = nullptr);
     virtual void SetMasterVolumePercent(uint8_t percent);
     // Board-owned switches may mute the Host mix independently of the saved
-    // master-volume setting. This is intentionally outside the Guest contract.
-    void SetHardwareMuted(bool muted);
+    // master-volume setting. ISR-safe: only stores a flag in internal RAM;
+    // the audio task applies it to samples. Outside the Guest contract.
+    void IRAM_ATTR SetHardwareMuted(bool muted);
 
     [[nodiscard]] int32_t GetInfo(micropixel_audio_info_t& info) override;
     [[nodiscard]] int32_t PlayTone(const micropixel_audio_tone_t& tone) override;

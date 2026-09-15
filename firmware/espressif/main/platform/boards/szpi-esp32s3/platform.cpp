@@ -20,6 +20,7 @@
 #include "platform/input/gpio_key_input.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
+#include "platform/memory/internal_ram.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
 #include "work/task_policy.hpp"
@@ -34,7 +35,8 @@ constexpr char kTag[] = "szpi_esp32s3";
 class SzpiEsp32S3Board final : public Board {
    public:
     SzpiEsp32S3Board()
-        : graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
+        : state_(TaskState(input_state_)),
+          graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
           graphics_(lvgl::MakeGuestGraphicsOperations(graphics_context_)),
           audio_output_(hardware_),
           presentation_(
@@ -45,12 +47,13 @@ class SzpiEsp32S3Board final : public Board {
                       controllers::VisibleBrightnessPercent(safe_percent));
               },
               &hardware_),
-          system_ui_(state_.ui, presentation_),
-          gpio_(board_detail::board::kApplicationGpioLines) {
+          system_ui_(state_.ui, presentation_) {
         state_.guest_graphics.SetPresentationHooks(state_.ui.GuestFrameHooks());
     }
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
+        ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, kTag,
+                            "Board control objects must reside in internal RAM");
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_LOGI(kTag, "initializing LCKFB SZPI ESP32-S3");
         ESP_RETURN_ON_ERROR(board_detail::InitializeDisplayHardware(hardware_, state_), kTag,
@@ -148,7 +151,13 @@ class SzpiEsp32S3Board final : public Board {
     }
 
    private:
-    common::Landscape320State state_{};
+    static common::Landscape320State& TaskState(common::Landscape320InputState& input) {
+        static MICROPIXEL_EXT_RAM_BSS common::Landscape320State state(input);
+        return state;
+    }
+
+    common::Landscape320InputState input_state_{};
+    common::Landscape320State& state_;
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
     board_detail::BoardHardware hardware_{};
@@ -156,7 +165,7 @@ class SzpiEsp32S3Board final : public Board {
     board_detail::SensorPeripheral sensors_{};
     common::Landscape320Presentation presentation_;
     host_ui::lvgl::square_common::SquareSystemUi system_ui_;
-    gpio::EspGpioPeripheral gpio_;
+    gpio::EspGpioPeripheral gpio_{board_detail::board::kApplicationGpioLines};
     input::GpioKeyInput boot_button_{{.pin = board_detail::board::kBootButton,
                                       .code = device::KeyCode::kConfirm,
                                       .log_tag = "szpi_button",
@@ -169,7 +178,7 @@ class SzpiEsp32S3Board final : public Board {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MICROPIXEL_EXT_RAM_BSS SzpiEsp32S3Board board;
+    static SzpiEsp32S3Board board;
     return board;
 }
 

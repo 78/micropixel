@@ -28,15 +28,25 @@ inline constexpr uint8_t kMaxTouchPoints = micropixel::device::kMaxTouchPoints;
 inline constexpr int kLvglTaskCore = task_policy::kSystemCore;
 inline constexpr graphics::SurfacePixelFormat kGuestSurfaceFormat = graphics::SurfacePixelFormat::kRgb565;
 
+// Board-owned input control stays in internal RAM, including polled panels.
+struct Landscape320InputState final {
+    buses::I2cExecutor i2c_executor{};
+    input::EspLcdTouchInput touch_input{kWidth, kHeight, kMaxTouchPoints};
+};
+
+// Large task-only state lives in PSRAM and references Board-owned input controls.
 struct Landscape320State final {
+    explicit Landscape320State(Landscape320InputState& input)
+        : i2c_executor(input.i2c_executor), touch_input(input.touch_input) {}
+
     esp_lcd_panel_handle_t panel{};
     esp_lcd_panel_io_handle_t panel_io{};
     esp_lcd_panel_io_handle_t touch_io{};
     esp_lcd_touch_handle_t touch{};
     lv_display_t* display{};
     DisplayShadow display_shadow{kWidth, kHeight};
-    buses::I2cExecutor i2c_executor{};
-    input::EspLcdTouchInput touch_input{kWidth, kHeight, kMaxTouchPoints};
+    buses::I2cExecutor& i2c_executor;
+    input::EspLcdTouchInput& touch_input;
     lvgl::FontRegistry fonts{};
     lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts, kGuestSurfaceFormat};
     host_ui::lvgl::square_common::StaticStatusLayerTransition status_transition{};

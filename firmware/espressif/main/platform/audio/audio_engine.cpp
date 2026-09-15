@@ -33,6 +33,10 @@ constexpr uint32_t kAudioTaskStackSize = 4096U;
 constexpr BaseType_t kAudioTaskCore = task_policy::kSystemCore;
 constexpr uint32_t kAudioIdleGraceMs = 10000U;
 
+// The BOX-3 mute GPIO ISR writes only this gate. It must not enter State(),
+// follow board pointers, initialize objects, or touch mixer/PSRAM buffers.
+DRAM_ATTR std::atomic<bool> hardware_muted{};
+
 enum class EngineState : uint8_t {
     kStopped,
     kInitializing,
@@ -55,7 +59,6 @@ struct AudioEngineState final {
     std::atomic<EngineState> engine_state{EngineState::kStopped};
     std::atomic<bool> suspended{};
     std::atomic<bool> app_foreground{};
-    std::atomic<bool> hardware_muted{};
     std::atomic<uint16_t> master_volume_per_ten_thousand{static_cast<uint16_t>(VolumeOutputPerTenThousand(70U))};
     std::atomic<TaskHandle_t> task{};
     SemaphoreHandle_t voices_mutex{};
@@ -181,7 +184,7 @@ AudioChunkState FillAudioChunk(AudioTaskBuffers& buffers) {
                 }
             }
             mixed = ApplyHostOutputGain(mixed, State().master_volume_per_ten_thousand.load(std::memory_order_relaxed),
-                                        State().hardware_muted.load(std::memory_order_relaxed));
+                                        hardware_muted.load(std::memory_order_relaxed));
             if (mixed > 32767) {
                 mixed = 32767;
             } else if (mixed < -32768) {
@@ -359,7 +362,7 @@ void AudioEngine::SetMasterVolumePercent(uint8_t percent) {
     State().master_volume_per_ten_thousand.store(perceptual_output, std::memory_order_relaxed);
 }
 
-void AudioEngine::SetHardwareMuted(bool muted) { State().hardware_muted.store(muted, std::memory_order_relaxed); }
+void AudioEngine::SetHardwareMuted(bool muted) { hardware_muted.store(muted, std::memory_order_relaxed); }
 
 int32_t AudioEngine::GetInfo(micropixel_audio_info_t& info) {
     EngineState state = State().engine_state.load(std::memory_order_acquire);

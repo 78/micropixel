@@ -20,7 +20,7 @@ struct Sequence final {
     std::atomic<bool> blocker_entered{};
     std::atomic<bool> release_blocker{};
     std::atomic<uint32_t> count{};
-    uint32_t values[4]{};
+    uint32_t values[16]{};
 };
 
 esp_err_t Block(void* context) {
@@ -29,14 +29,16 @@ esp_err_t Block(void* context) {
     while (!sequence.release_blocker.load()) {
         std::this_thread::yield();
     }
-    sequence.values[sequence.count.fetch_add(1U)] = 0U;
+    sequence.values[sequence.count.load()] = 0U;
+    sequence.count.fetch_add(1U);
     return ESP_OK;
 }
 
 template <uint32_t Value>
 esp_err_t Record(void* context) {
     auto& sequence = *static_cast<Sequence*>(context);
-    sequence.values[sequence.count.fetch_add(1U)] = Value;
+    sequence.values[sequence.count.load()] = Value;
+    sequence.count.fetch_add(1U);
     return ESP_OK;
 }
 
@@ -98,5 +100,36 @@ int main() {
     Nested nested{&executor};
     Require(executor.Invoke(I2cExecutor::Priority::kNormal, InvokeNested, &nested) == ESP_OK);
     Require(nested.inner_called);
+
+    // Hold the worker while IRQ producers fill its high-priority queue. The
+    // ISR only copies the opaque context; all operations must wait for the
+    // worker, and a full queue must reject the job without blocking.
+    Sequence from_isr;
+    Require(executor.Post(I2cExecutor::Priority::kHigh, Block, &from_isr));
+    const auto isr_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!from_isr.blocker_entered.load() && std::chrono::steady_clock::now() < isr_deadline) {
+        std::this_thread::yield();
+    }
+    Require(from_isr.blocker_entered.load());
+    BaseType_t woken = pdFALSE;
+    Require(!executor.PostFromIsr(I2cExecutor::Priority::kHigh, nullptr, &from_isr, &woken));
+    Require(!executor.PostFromIsr(static_cast<I2cExecutor::Priority>(3), Record<1U>, &from_isr, &woken));
+    for (uint32_t index = 0U; index < 8U; ++index) {
+        Require(executor.PostFromIsr(I2cExecutor::Priority::kHigh, Record<1U>, &from_isr, &woken));
+    }
+    Require(!executor.PostFromIsr(I2cExecutor::Priority::kHigh, Record<9U>, &from_isr, &woken));
+    Require(executor.PostFromIsr(I2cExecutor::Priority::kLow, Record<3U>, &from_isr, &woken));
+    Require(executor.PostFromIsr(I2cExecutor::Priority::kNormal, Record<2U>, &from_isr, &woken));
+    Require(from_isr.count.load() == 0U);
+    from_isr.release_blocker.store(true);
+    while (from_isr.count.load() != 11U && std::chrono::steady_clock::now() < isr_deadline) {
+        std::this_thread::yield();
+    }
+    Require(from_isr.count.load() == 11U);
+    Require(from_isr.values[0] == 0U);
+    for (uint32_t index = 1U; index <= 8U; ++index) {
+        Require(from_isr.values[index] == 1U);
+    }
+    Require(from_isr.values[9] == 2U && from_isr.values[10] == 3U);
     return 0;
 }

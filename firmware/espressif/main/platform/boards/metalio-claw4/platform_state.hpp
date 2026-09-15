@@ -49,16 +49,18 @@ inline constexpr bool kEnablePpaAccel = true;
 inline constexpr esp_lv_adapter_tear_avoid_mode_t kTearAvoidMode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_DIRECT;
 inline constexpr const char* kTearAvoidModeName = "double-direct";
 
-// Board-owned objects live together so presentation callbacks never reach
-// through process-global board aliases. This is the private Board composition
-// boundary exposed upward only through BoardRegistration.
+// Large task-only state lives in PSRAM. Input/GPIO controls and the executor
+// remain owned by the internal-RAM Board; cache-off ISR paths cannot access it.
 struct MetalioClaw4BoardState final {
+    MetalioClaw4BoardState(buses::I2cExecutor& executor, GpioPeripheral& gpio_control, input::Gt911Input& touch)
+        : i2c_executor(executor), gpio(gpio_control), touch_input(touch) {}
+
     BoardIo board_io{kWidth, kHeight};
     MetalioClaw4DisplayPipeline display_pipeline{board_io, kWidth, kHeight};
-    buses::I2cExecutor i2c_executor{};
+    buses::I2cExecutor& i2c_executor;
     BatteryPeripheral battery{};
     SensorPeripheral sensors{};
-    GpioPeripheral gpio{};
+    GpioPeripheral& gpio;
     haptics::TimedHapticsPeripheral haptics{ConfiguredHapticActuator(), MICROPIXEL_HAPTICS_CAP_VARIABLE_STRENGTH};
     audio::AudioEngine* audio_engine{};
     lv_display_t* display{};
@@ -66,7 +68,7 @@ struct MetalioClaw4BoardState final {
     lvgl::GuestGraphicsEngine guest_graphics{kWidth, kHeight, fonts};
     lvgl::SystemTransitionCompositor system_transition{};
     Tca9555PowerKey power_key{};
-    input::Gt911Input touch_input{kWidth, kHeight, board::kTouchInterrupt};
+    input::Gt911Input& touch_input;
     host_ui::lvgl::square_common::SquareSystemUiState ui{touch_input, guest_graphics, system_transition,
                                                          ui_profile::kSystemUiProfile};
     uint8_t* guest_snapshot_pixels{};

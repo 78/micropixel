@@ -115,6 +115,10 @@ build_and_run i2c_executor \
     "$workspace_root/tools/tests/test_i2c_executor.cpp" \
     "$workspace_root/firmware/espressif/main/platform/buses/i2c_executor.cpp"
 
+build_and_run internal_ram \
+    -DMICROPIXEL_TEST_INTERNAL_RAM \
+    "$workspace_root/tools/tests/test_internal_ram.cpp"
+
 build_and_run_c watchdog_timer \
     -pthread \
     "$workspace_root/tools/tests/test_watchdog_timer.c" \

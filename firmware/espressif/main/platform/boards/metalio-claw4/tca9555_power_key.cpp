@@ -341,7 +341,9 @@ esp_err_t Tca9555PowerKey::ConfigureInterrupt() {
     if (status != ESP_OK && status != ESP_ERR_INVALID_STATE) {
         return status;
     }
-    status = gpio_isr_handler_add(board::kIoExpanderInterrupt, InterruptEntry, this);
+    // The ISR only wakes the button library through its internal-RAM timer
+    // state. DriverContext/owner are consumed later by the timer task.
+    status = gpio_isr_handler_add(board::kIoExpanderInterrupt, InterruptEntry, nullptr);
     if (status != ESP_OK) {
         return status;
     }

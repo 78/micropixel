@@ -176,6 +176,24 @@ Host API 与非拥有视图优先使用 `std::string_view` 和 `std::span`，避
 存储落在 PSRAM；进程寿命的固定大小对象使用 `MICROPIXEL_EXT_RAM_BSS`
 （[ext_ram_bss.hpp](../../firmware/espressif/main/platform/memory/ext_ram_bss.hpp)），
 有 PSRAM BSS 时落入外部 RAM，无 PSRAM 的编译目标宏为空。实时路径仍用固定容量容器。
+
+允许在 cache 关闭期间执行的 ISR 是例外：从入口到唤醒任务的代码及其解引用的数据必须分别位于
+IRAM 和内部 SRAM；仅给函数加 `IRAM_ATTR` 不够。计数器、pending 标记、队列控制块、队列存储和
+被通知的任务控制块都在此范围内。ISR 可以传递 PSRAM 上下文指针，但只能由恢复执行后的任务解引用。
+
+所有板型的 `ConfiguredBoard()` 默认使用内部 SRAM 静态对象，不给整个 Board 标记
+`MICROPIXEL_EXT_RAM_BSS`。Board 直接拥有触摸、I²C 执行器、GPIO 和按键等控制对象；体积大的
+显示、UI、图形等任务状态由私有 `TaskState()` 单独存放在 PSRAM，通过引用连接内部控制对象。
+固定大小、进程寿命的任务状态仍用 `MICROPIXEL_EXT_RAM_BSS`，按需缓冲显式申请 PSRAM。
+启用硬件前验证 Board 全部字节位于内部 RAM；指针指向的对象仍需逐项检查，不能因 Board 位于
+SRAM 就认为整条调用链安全。新增板型沿用此分配方式，cache 关闭期间的 ISR 不得经 Board 引用
+访问 PSRAM 任务状态。
+BOX-3 硬件静音中断只写内部 SRAM 原子标记，音频任务负责读取标记并应用静音。
+P4 电源键 ISR 只唤醒内部定时器，PSRAM 上的按键对象由定时器任务访问。
+DMA2D、LCD 和 USB 串口回调是否能访问 PSRAM 取决于驱动的中断分配标志；当前 DMA2D / LCD DSI
+未开启 ISR IRAM-safe 配置，SPI 显示和 USB 串口也未以 `ESP_INTR_FLAG_IRAM` 分配中断。
+改为 cache 关闭期间继续执行前，必须重新审核回调代码与上下文，不能仅添加 `IRAM_ATTR`。
+
 `PsramBuffer` 用于可失败、容量显式的 trivially-copyable 缓冲。
 第三方同步 API 仍可能要求 `std::string`，只在该边界构造一次。
 

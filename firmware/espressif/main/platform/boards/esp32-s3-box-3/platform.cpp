@@ -22,6 +22,7 @@
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
+#include "platform/memory/internal_ram.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
 
@@ -53,7 +54,8 @@ esp_err_t InitializeTouch(esp32_s3_box_3::BoardHardware& hardware, board_detail:
 class Esp32S3Box3Board final : public Board {
    public:
     Esp32S3Box3Board()
-        : graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
+        : state_(TaskState(input_state_)),
+          graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
           graphics_(lvgl::MakeGuestGraphicsOperations(graphics_context_)),
           presentation_(
               state_, board_detail::kTag,
@@ -66,6 +68,8 @@ class Esp32S3Box3Board final : public Board {
     }
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
+        ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, board_detail::kTag,
+                            "Board control objects must reside in internal RAM");
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_LOGI(board_detail::kTag, "initializing ESP32-S3-BOX-3 P4 with native board support");
         ESP_RETURN_ON_ERROR(hardware_.Initialize(), board_detail::kTag, "initialize board hardware failed");
@@ -167,7 +171,13 @@ class Esp32S3Box3Board final : public Board {
    private:
     std::optional<BoardRegistration> registration_{};
     esp32_s3_box_3::BoardHardware hardware_{};
-    board_detail::Box3BoardState state_{};
+    static board_detail::Box3BoardState& TaskState(esp32_s3_common::Landscape320InputState& input) {
+        static MICROPIXEL_EXT_RAM_BSS board_detail::Box3BoardState state(input);
+        return state;
+    }
+
+    esp32_s3_common::Landscape320InputState input_state_{};
+    board_detail::Box3BoardState& state_;
     lvgl::GuestGraphicsOperationsContext graphics_context_{};
     adapters::GraphicsAdapter graphics_;
     esp32_s3_box_3::I2sAudioSink audio_output_{};
@@ -183,7 +193,7 @@ class Esp32S3Box3Board final : public Board {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MICROPIXEL_EXT_RAM_BSS Esp32S3Box3Board board;
+    static Esp32S3Box3Board board;
     return board;
 }
 

@@ -53,7 +53,7 @@ class NullBoard final : public Board {
 }  // namespace
 
 Board& ConfiguredBoard() {
-    static MICROPIXEL_EXT_RAM_BSS NullBoard board;
+    static NullBoard board;
     return board;
 }
 
