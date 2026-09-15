@@ -19,6 +19,11 @@ int main(void) {
     assert(!micropixel_app_same_major_update("1.2.0", "1.2.0"));
     assert(!micropixel_app_same_major_update("1.0.0.", "1.1.0"));
     assert(!micropixel_app_same_major_update("1.0.0", "1.01.0"));
+    assert(micropixel_app_version_update("1.9.9", "2.0.0", false));
+    assert(!micropixel_app_version_update("2.0.0", "1.9.9", false));
+    assert(!micropixel_app_version_update("1.0.0", "1.0.0", false));
+    assert(!micropixel_app_version_update("1.0.0", "2.00.0", false));
+    assert(micropixel_app_version_update("99999999999999999999.0.0", "100000000000000000000.0.0", false));
     micropixel_app_requirements_t requirement = {.core_abi = 131072,
                                                  .min_width = 320,
                                                  .min_height = 320,
@@ -48,5 +53,13 @@ int main(void) {
     environment.services[1] = 0;
     assert(!micropixel_app_runtime_compatible(&requirement, &environment));
     assert(!micropixel_app_runtime_compatible(&requirement, NULL));
+    assert(micropixel_app_font_compatible(&requirement, "en"));
+    strcpy(requirement.system_font, "zh-CN");
+    assert(micropixel_app_font_compatible(&requirement, "zh-CN"));
+    assert(!micropixel_app_font_compatible(&requirement, "en"));
+    assert(!micropixel_app_font_compatible(&requirement, "zh-TW"));
+    assert(!micropixel_app_font_compatible(&requirement, NULL));
+    strcpy(requirement.system_font, "en");
+    assert(micropixel_app_font_compatible(&requirement, "ko-KR"));
     return 0;
 }

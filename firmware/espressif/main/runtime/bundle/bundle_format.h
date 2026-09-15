@@ -36,6 +36,7 @@ typedef enum micropixel_bundle_section_format {
     MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 = 8,
     MICROPIXEL_BUNDLE_FORMAT_OGG_OPUS = 9,
     MICROPIXEL_BUNDLE_FORMAT_RAW_RGB565 = 10,
+    MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF = 11,
 } micropixel_bundle_section_format_t;
 
 typedef enum micropixel_bundle_package_type {

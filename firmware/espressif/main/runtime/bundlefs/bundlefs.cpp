@@ -983,6 +983,10 @@ BundleFs::BundleFs(device::BlockStorage& storage, uint32_t data_block_size)
 }
 
 BundleFs::~BundleFs() {
+    for (auto& lease : mappings_) {
+        if (lease.id != 0U) storage_.Unmap(lease.mapping);
+        heap_caps_free(lease.offsets.bytes);
+    }
     heap_caps_free(catalog_.bytes);
     heap_caps_free(writer_blocks_.bytes);
 }
@@ -1075,6 +1079,9 @@ bundlefs_error_t BundleFs::Mount() {
 
 bundlefs_error_t BundleFs::Format() {
     const std::lock_guard lock(mutex_);
+    for (const auto& lease : mappings_) {
+        if (lease.id != 0U) return BUNDLEFS_ERR_BUSY;
+    }
     if (writer_active_) {
         return BUNDLEFS_ERR_BUSY;
     }
@@ -1314,25 +1321,35 @@ bundlefs_error_t BundleFs::Map(const bundlefs_file_t& file, uint32_t offset, uin
         }
         block_offsets[block_index] = BlockOffset(geometry_, physical);
     }
+    auto lease = std::find_if(mappings_.begin(), mappings_.end(), [](const auto& item) { return item.id == 0U; });
+    if (lease == mappings_.end() || next_mapping_id_ == UINT32_MAX) return BUNDLEFS_ERR_UNAVAILABLE;
     auto mapping = storage_.Map(std::span<const uint64_t>(block_offsets, block_count), block_size);
     if (!mapping) {
         ESP_LOGE(kTag, "Storage mapping failed: blocks=%" PRIu32 " bytes=%" PRIu32 " error=%u", block_count, size,
                  static_cast<unsigned>(mapping.error()));
         return BUNDLEFS_ERR_UNAVAILABLE;
     }
+    lease->id = ++next_mapping_id_;
+    lease->mapping = *mapping;
+    lease->offsets = Buffer{.bytes = offsets.release(), .size = block_count * static_cast<uint32_t>(sizeof(uint64_t))};
     mapping_out = bundlefs_mapping_t{
         .data = static_cast<const uint8_t*>(mapping->data) + offset,
         .mapping = mapping->data,
         .size = size,
-        .mapping_handle = mapping->handle,
+        .mapping_handle = lease->id,
     };
     return BUNDLEFS_OK;
 }
 
 void BundleFs::Unmap(bundlefs_mapping_t& mapping) {
-    if (mapping.mapping != nullptr) {
-        device::BlockStorageMapping storage_mapping{.data = mapping.mapping, .handle = mapping.mapping_handle};
-        storage_.Unmap(storage_mapping);
+    const std::lock_guard lock(mutex_);
+    for (auto& lease : mappings_) {
+        if (lease.id != 0U && lease.id == mapping.mapping_handle && lease.mapping.data == mapping.mapping) {
+            storage_.Unmap(lease.mapping);
+            heap_caps_free(lease.offsets.bytes);
+            lease = {};
+            break;
+        }
     }
     mapping = {};
 }
@@ -1374,6 +1391,13 @@ bundlefs_error_t BundleFs::BeginReplace(const char* name, uint32_t size, bundlef
     const uint32_t* block_map = record.block_map();
     for (uint32_t index = 0U; index < header.block_map_count; ++index) {
         used_bits.bytes[block_map[index] / 8U] |= static_cast<uint8_t>(1U << (block_map[index] % 8U));
+    }
+    for (const auto& lease : mappings_) {
+        const auto* offsets = reinterpret_cast<const uint64_t*>(lease.offsets.bytes);
+        for (uint32_t i = 0U; i < lease.offsets.size / sizeof(uint64_t); ++i) {
+            const uint32_t block = (offsets[i] - geometry_.data_offset) / geometry_.data_block_size;
+            used_bits.bytes[block / 8U] |= static_cast<uint8_t>(1U << (block % 8U));
+        }
     }
     auto* allocated_blocks = reinterpret_cast<uint32_t*>(blocks.bytes);
     uint32_t allocated = 0U;

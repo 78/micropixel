@@ -1,6 +1,7 @@
 #ifndef MICROPIXEL_RUNTIME_BUNDLEFS_BUNDLEFS_HPP
 #define MICROPIXEL_RUNTIME_BUNDLEFS_BUNDLEFS_HPP
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 
@@ -94,6 +95,14 @@ class BundleFs final : public BundleStore {
                                                   uint32_t size);
     [[nodiscard]] bundlefs_error_t CommitRecordLocked(Buffer& next);
     void ReleaseWriterLocked();
+
+    struct MappingLease final {
+        uint32_t id{};
+        device::BlockStorageMapping mapping{};
+        Buffer offsets{};  // uint64_t physical byte offsets, retained until Unmap
+    };
+    std::array<MappingLease, 256U> mappings_{};
+    uint32_t next_mapping_id_{};
 
     device::BlockStorage& storage_;
     uint32_t requested_block_size_{};

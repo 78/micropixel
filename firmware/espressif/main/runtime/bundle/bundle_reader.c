@@ -453,26 +453,41 @@ static bool parse_component_metadata(const cJSON* root, micropixel_bundle_metada
     const cJSON* font_bundle = cJSON_GetObjectItemCaseSensitive(root, "font_bundle");
     const cJSON* charset = cJSON_GetObjectItemCaseSensitive(root, "charset");
     const cJSON* fonts = cJSON_GetObjectItemCaseSensitive(root, "fonts");
+    const cJSON* ttf = cJSON_GetObjectItemCaseSensitive(root, "font");
     if (!cJSON_IsString(package_type) || strcmp(package_type->valuestring, "component") != 0 ||
         !cJSON_IsString(component_type) || strcmp(component_type->valuestring, "font") != 0 ||
         !cJSON_IsString(version) || !valid_semver(version->valuestring) || !cJSON_IsArray(languages) ||
         !cJSON_IsString(font_bundle) || !valid_component_identifier(font_bundle->valuestring) ||
-        !cJSON_IsString(charset) || !valid_component_identifier(charset->valuestring) || !cJSON_IsObject(fonts) ||
-        !unique_object_keys(fonts) || cJSON_GetArraySize(languages) <= 0 ||
+        !cJSON_IsString(charset) || !valid_component_identifier(charset->valuestring) ||
+        cJSON_GetArraySize(languages) <= 0 ||
         cJSON_GetArraySize(languages) > (int)MICROPIXEL_BUNDLE_METADATA_MAX_LOCALES) {
         return false;
     }
-    const char* roles[MICROPIXEL_BUNDLE_FONT_ROLE_COUNT] = {"small", "medium", "large", "title"};
-    if (cJSON_GetArraySize(fonts) != (int)MICROPIXEL_BUNDLE_FONT_ROLE_COUNT) {
-        return false;
-    }
-    for (uint32_t index = 0U; index < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++index) {
-        if (!parse_font_role(fonts, roles[index], &metadata_out->font_asset_ids[index])) {
+    if (ttf != NULL) {
+        const cJSON* asset = cJSON_GetObjectItemCaseSensitive(ttf, "asset");
+        const cJSON* format = cJSON_GetObjectItemCaseSensitive(ttf, "format");
+        if (fonts != NULL || !cJSON_IsObject(ttf) || !unique_object_keys(ttf) || cJSON_GetArraySize(ttf) != 2 ||
+            !cJSON_IsString(asset) || !valid_component_identifier(asset->valuestring) || !cJSON_IsString(format) ||
+            strcmp(format->valuestring, "ttf") != 0)
+            return false;
+        metadata_out->font_asset_ids[0] = fnv1a32((const uint8_t*)asset->valuestring, strlen(asset->valuestring));
+        if (metadata_out->font_asset_ids[0] == 0U) return false;
+        metadata_out->font_format = MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF;
+    } else {
+        if (!cJSON_IsObject(fonts) || !unique_object_keys(fonts)) return false;
+        metadata_out->font_format = MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1;
+        const char* roles[MICROPIXEL_BUNDLE_FONT_ROLE_COUNT] = {"small", "medium", "large", "title"};
+        if (cJSON_GetArraySize(fonts) != (int)MICROPIXEL_BUNDLE_FONT_ROLE_COUNT) {
             return false;
         }
-        for (uint32_t previous = 0U; previous < index; ++previous) {
-            if (metadata_out->font_asset_ids[previous] == metadata_out->font_asset_ids[index]) {
+        for (uint32_t index = 0U; index < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++index) {
+            if (!parse_font_role(fonts, roles[index], &metadata_out->font_asset_ids[index])) {
                 return false;
+            }
+            for (uint32_t previous = 0U; previous < index; ++previous) {
+                if (metadata_out->font_asset_ids[previous] == metadata_out->font_asset_ids[index]) {
+                    return false;
+                }
             }
         }
     }
@@ -520,7 +535,16 @@ static bool requirement_names(const cJSON* array, const char* const* names, uint
 static bool parse_app_requirements(const cJSON* root, micropixel_app_requirements_t* output) {
     const cJSON* source = cJSON_GetObjectItemCaseSensitive(root, "requirements");
     if (source == NULL) return true;
-    if (!unique_object_keys(source) || cJSON_GetArraySize(source) != 6 ||
+    const cJSON* font = cJSON_GetObjectItemCaseSensitive(source, "system_font");
+    if (font != NULL) {
+        if (!cJSON_IsString(font) ||
+            (strcmp(font->valuestring, "en") != 0 && strcmp(font->valuestring, "zh-CN") != 0 &&
+             strcmp(font->valuestring, "zh-TW") != 0 && strcmp(font->valuestring, "ja-JP") != 0 &&
+             strcmp(font->valuestring, "ko-KR") != 0))
+            return false;
+        memcpy(output->system_font, font->valuestring, strlen(font->valuestring) + 1U);
+    }
+    if (!unique_object_keys(source) || cJSON_GetArraySize(source) != (font == NULL ? 6 : 7) ||
         !requirement_number(root, "core_abi", UINT32_MAX, &output->core_abi))
         return false;
     uint32_t schema = 0, width = 0, height = 0;
@@ -1023,6 +1047,29 @@ static bool valid_font_cbin_envelope(const uint8_t* data, uint32_t size) {
            memcmp(digest, data + MICROPIXEL_FONT_CBIN_OFFSET_PAYLOAD_SHA256, sizeof(digest)) == 0;
 }
 
+static uint32_t ttf_u32(const uint8_t* p) {
+    return ((uint32_t)p[0] << 24U) | ((uint32_t)p[1] << 16U) | ((uint32_t)p[2] << 8U) | p[3];
+}
+
+static bool valid_static_ttf(const uint8_t* data, uint32_t size) {
+    if (size < 12U || ttf_u32(data) != 0x00010000U) return false;
+    const uint32_t count = ((uint32_t)data[4] << 8U) | data[5];
+    if (count == 0U || count > (size - 12U) / 16U) return false;
+    const uint32_t required[] = {0x676c7966U, 0x6c6f6361U, 0x68656164U, 0x68686561U,
+                                 0x686d7478U, 0x6d617870U, 0x636d6170U};
+    uint32_t found = 0U;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t* table = data + 12U + i * 16U;
+        const uint32_t tag = ttf_u32(table), offset = ttf_u32(table + 8U), length = ttf_u32(table + 12U);
+        if (tag == 0x66766172U || offset > size || length > size - offset) return false;
+        for (uint32_t previous = 0; previous < i; ++previous)
+            if (ttf_u32(data + 12U + previous * 16U) == tag) return false;
+        for (uint32_t j = 0; j < sizeof(required) / sizeof(required[0]); ++j)
+            if (tag == required[j]) found |= 1U << j;
+    }
+    return found == 127U;
+}
+
 bool micropixel_validate_component_package(const micropixel_bundle_source_t* source,
                                            micropixel_bundle_metadata_t* metadata_out) {
     micropixel_bundle_header_t header;
@@ -1039,6 +1086,8 @@ bool micropixel_validate_component_package(const micropixel_bundle_source_t* sou
     bool valid = true;
     bool metadata_found = false;
     bool font_found[MICROPIXEL_BUNDLE_FONT_ROLE_COUNT] = {false};
+    const uint32_t font_count =
+        metadata.font_format == MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF ? 1U : MICROPIXEL_BUNDLE_FONT_ROLE_COUNT;
     for (uint32_t index = 0U; valid && index < header.section_count; ++index) {
         const micropixel_bundle_section_t* section = &sections[index];
         valid = valid_section_placement(&header, sections, index) && section->flags == 0U && section->reserved0 == 0U;
@@ -1054,7 +1103,7 @@ bool micropixel_validate_component_package(const micropixel_bundle_source_t* sou
             continue;
         }
         if (section->kind != MICROPIXEL_BUNDLE_SECTION_FONT || section->id == 0U ||
-            section->format != MICROPIXEL_BUNDLE_FORMAT_LVGL_CBIN_V1 || section->width != 0U || section->height != 0U ||
+            section->format != metadata.font_format || section->width != 0U || section->height != 0U ||
             section->stride != 0U) {
             valid = false;
             break;
@@ -1065,10 +1114,12 @@ bool micropixel_validate_component_package(const micropixel_bundle_source_t* sou
         if (!valid) {
             break;
         }
-        valid = valid_font_cbin_envelope(view.data, section->size);
+        valid = metadata.font_format == MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF
+                    ? valid_static_ttf(view.data, section->size)
+                    : valid_font_cbin_envelope(view.data, section->size);
         micropixel_bundle_mapping_release(&view);
         bool matched = false;
-        for (uint32_t role = 0U; valid && role < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++role) {
+        for (uint32_t role = 0U; valid && role < font_count; ++role) {
             if (metadata.font_asset_ids[role] == section->id) {
                 valid = !font_found[role];
                 font_found[role] = valid;
@@ -1080,7 +1131,7 @@ bool micropixel_validate_component_package(const micropixel_bundle_source_t* sou
     }
     free(sections);
     valid = valid && metadata_found;
-    for (uint32_t role = 0U; valid && role < MICROPIXEL_BUNDLE_FONT_ROLE_COUNT; ++role) {
+    for (uint32_t role = 0U; valid && role < font_count; ++role) {
         valid = font_found[role];
     }
     if (!valid) {
@@ -1303,6 +1354,34 @@ bool micropixel_bundle_open_font(const micropixel_aot_package_t* package, uint32
     mapping_out->font.content_hash = section->hash;
     mapping_out->mapping = view;
     return true;
+}
+
+bool micropixel_bundle_open_component_font(const micropixel_bundle_source_t* source,
+                                           micropixel_bundle_metadata_t* metadata_out,
+                                           micropixel_bundle_font_mapping_t* mapping_out) {
+    if (metadata_out == NULL || mapping_out == NULL || !micropixel_bundle_source_can_map(source)) return false;
+    memset(mapping_out, 0, sizeof(*mapping_out));
+    if (!micropixel_validate_component_package(source, metadata_out) ||
+        metadata_out->font_format != MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF)
+        return false;
+    micropixel_bundle_header_t header;
+    if (!read_logical(source, 0U, &header, sizeof(header))) return false;
+    for (uint32_t i = 0U; i < header.section_count; ++i) {
+        micropixel_bundle_section_t section;
+        if (!read_logical(source, header.toc_offset + i * sizeof(section), &section, sizeof(section))) return false;
+        if (section.kind != MICROPIXEL_BUNDLE_SECTION_FONT) continue;
+        if (!micropixel_bundle_source_map(source, section.offset, section.size, &mapping_out->mapping)) return false;
+        const uint8_t* data = mapping_out->mapping.data;
+        if (fnv1a32(data, section.size) != section.hash || !valid_static_ttf(data, section.size)) {
+            micropixel_close_font_mapping(mapping_out);
+            return false;
+        }
+        mapping_out->font.data = data;
+        mapping_out->font.size = section.size;
+        mapping_out->font.content_hash = section.hash;
+        return true;
+    }
+    return false;
 }
 
 void micropixel_close_font_mapping(micropixel_bundle_font_mapping_t* mapping) {

@@ -23,6 +23,7 @@ typedef struct {
     uint8_t any_of[8];
     uint8_t layouts;
     bool declared;
+    char system_font[6];
 } micropixel_app_requirements_t;
 
 typedef struct {
@@ -45,8 +46,15 @@ static inline void micropixel_app_set_logical_display(micropixel_app_environment
     environment->height = (uint32_t)(((uint64_t)height * 720U + short_edge / 2U) / short_edge);
 }
 
+// Latin is always embedded. Other fonts are active only with their system locale.
+static inline bool micropixel_app_font_compatible(const micropixel_app_requirements_t* requirements,
+                                                  const char* effective_locale) {
+    return requirements->system_font[0] == '\0' || strcmp(requirements->system_font, "en") == 0 ||
+           (effective_locale != NULL && strcmp(requirements->system_font, effective_locale) == 0);
+}
+
 // Canonical numeric SemVer without overflow, including 0.x minor updates.
-static inline bool micropixel_app_same_major_update(const char* current, const char* candidate) {
+static inline bool micropixel_app_version_update(const char* current, const char* candidate, bool same_major) {
     if (current == NULL || candidate == NULL || strlen(current) > 31U || strlen(candidate) > 31U) return false;
     int comparison = 0;
     for (unsigned part = 0; part < 3U; ++part) {
@@ -55,7 +63,7 @@ static inline bool micropixel_app_same_major_update(const char* current, const c
         while (candidate[b] >= '0' && candidate[b] <= '9') ++b;
         if (a == 0U || b == 0U || (a > 1U && current[0] == '0') || (b > 1U && candidate[0] == '0')) return false;
         int order = a == b ? strncmp(candidate, current, a) : b > a ? 1 : -1;
-        if (part == 0U && order != 0) return false;
+        if (same_major && part == 0U && order != 0) return false;
         if (comparison == 0) comparison = order;
         if (current[a] != (part == 2U ? '\0' : '.') || candidate[b] != (part == 2U ? '\0' : '.')) return false;
         if (part < 2U) {
@@ -64,6 +72,10 @@ static inline bool micropixel_app_same_major_update(const char* current, const c
         }
     }
     return comparison > 0;
+}
+
+static inline bool micropixel_app_same_major_update(const char* current, const char* candidate) {
+    return micropixel_app_version_update(current, candidate, true);
 }
 
 static inline bool micropixel_app_runtime_compatible(const micropixel_app_requirements_t* requirements,

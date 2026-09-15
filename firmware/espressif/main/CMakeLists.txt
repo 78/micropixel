@@ -214,7 +214,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
 # task-stack budgets. Do not add entries merely to silence a new regression.
 set_property(SOURCE runtime/app_session.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3072)
 set_property(SOURCE runtime/app_runtime.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=2304)
-set_property(SOURCE runtime/bundle/app_store.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=4608)
+set_property(SOURCE runtime/bundle/app_store.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3072)
 set_property(SOURCE runtime/audio/audio_playback_service.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=4096)
 set_property(SOURCE runtime/bundlefs/bundlefs.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=1792)
 set_property(SOURCE host/controller/control_dispatcher.cpp APPEND PROPERTY COMPILE_OPTIONS -Werror=frame-larger-than=3072)

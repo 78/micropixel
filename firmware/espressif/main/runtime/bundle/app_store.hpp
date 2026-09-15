@@ -33,17 +33,31 @@ struct AppInstallRequest final {
     size_t size{};
     const char* expected_app_id{};
     std::array<uint8_t, 32U> expected_sha256{};
-    // Set only after a future trusted publisher signature verifier succeeds.
-    // Current remote/local App install paths leave this false.
+    // Set only after a trusted App Store component signature verifier succeeds.
+    // Unsigned local and ordinary App install paths leave this false.
     bool trusted_component_signature{};
     const micropixel_app_environment_t* environment{};
     const char* expected_version{};
+    // Host write progress; callback must not block or re-enter the store.
+    void (*progress)(void*, uint8_t){};
+    void* progress_context{};
+    // Trusted components only: prepare from verified staged NOR bytes before
+    // replacing the committed file. Caller releases any acquired mapping on failure.
+    bool (*prepare_component)(void*, const micropixel_bundle_source_t&){};
+    void* prepare_context{};
 };
 
 struct AppInstallResult final {
     InstalledApp app{};
     uint32_t package_type{MICROPIXEL_BUNDLE_PACKAGE_APP};
     bool changed{};
+};
+
+struct AppInstallCapacity final {
+    uint64_t required_bytes{};
+    uint64_t free_bytes{};
+
+    [[nodiscard]] bool sufficient() const { return required_bytes <= free_bytes; }
 };
 
 // Host-owned App Store policy over one or two Bundle stores. The system store
@@ -85,6 +99,10 @@ class AppStore final {
     // Apps are listed before factory Apps; each store lists newest first.
     [[nodiscard]] std::expected<void, AppStoreError> LoadCatalog(InstalledAppCatalog& catalog_out,
                                                                  std::string_view effective_locale = "en");
+    // Host supervisor only. Queries the current download destination without
+    // allocating or writing; an identical installed digest needs no new space.
+    [[nodiscard]] std::expected<AppInstallCapacity, AppStoreError> CheckAppInstallCapacity(
+        const char* app_id, size_t size, const std::array<uint8_t, 32U>& sha256);
     // Replacement retains the old Bundle until the new Catalog commits. Requires
     // enough free space for the new Bundle; failure leaves the old App installed.
     // The caller must ensure no AppSession is running.
@@ -110,6 +128,9 @@ class AppStore final {
     [[nodiscard]] std::expected<LocatedFile, AppStoreError> Locate(const char* name);
     [[nodiscard]] std::expected<micropixel_bundle_metadata_t, AppStoreError> ReadInstalledMetadata(
         const char* package_id, std::string_view effective_locale);
+    [[nodiscard]] std::expected<void, AppStoreError> ReadInstalledMetadata(const char* package_id,
+                                                                           std::string_view effective_locale,
+                                                                           micropixel_bundle_metadata_t& metadata);
     [[nodiscard]] std::expected<InstalledApp, AppStoreError> OpenInstalledApp(const char* app_id,
                                                                               std::string_view effective_locale);
     [[nodiscard]] std::expected<void, AppStoreError> LoadStoreCatalog(BundleStore& store, AppStorage storage,

@@ -206,3 +206,16 @@ These proprietary Microsoft components are covered by the
 and [distributable list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution),
 not MicroPixel's Apache-2.0 license. The package retains a dedicated Microsoft notice.
 MicroPixel updates must also deliver updates to this app-local runtime.
+
+## System language fonts
+
+Downloaded system language packs are subsets of Noto Sans, Noto Sans SC/TC/JP/KR, licensed under the
+SIL Open Font License 1.1. Copyright and complete license texts are retained in
+[`tools/fonts/licenses/NotoSans-OFL.txt`](tools/fonts/licenses/NotoSans-OFL.txt) and
+[`tools/fonts/licenses/NotoCJK-OFL.txt`](tools/fonts/licenses/NotoCJK-OFL.txt), and distributed alongside the fonts.
+Sources: [Noto CJK](https://github.com/notofonts/noto-cjk) and [Noto Sans](https://github.com/notofonts/latin-greek-cyrillic).
+The subset generator reads the pinned [DeepSeek-V4-Flash tokenizer](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash)
+(MIT) to extract Unicode character sets. Model weights and tokenizer files are not included in firmware.
+
+The bounded CJK rasterizer includes the existing LVGL dependency's `stb_truetype_htcw.h` implementation
+under its upstream MIT/public-domain license; no copy of the third-party implementation is maintained here.

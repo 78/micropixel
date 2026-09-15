@@ -11,6 +11,14 @@ from tools import build_app_bundle as bundle
 
 
 class PackageMetadataTests(unittest.TestCase):
+    def test_system_font_requirement(self):
+        value = {"schema_version": 1, "display": {"layouts": ["square"], "min_width": 320, "min_height": 320},
+                 "required": [], "optional": [], "any_of": [], "services": {}, "system_font": "zh-CN"}
+        self.assertEqual(bundle.validate_requirements(value)["system_font"], "zh-CN")
+        for invalid in ("zh", "xx", [], None, 1):
+            with self.assertRaises(ValueError):
+                bundle.validate_requirements({**value, "system_font": invalid})
+
     @staticmethod
     def png_chunk(kind: bytes, payload: bytes) -> bytes:
         return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
@@ -260,6 +268,26 @@ class PackageMetadataTests(unittest.TestCase):
             self.assertEqual(payload["schema_version"], 1)
             self.assertEqual(payload["package_type"], "component")
             self.assertNotIn("metadata_version", payload)
+
+    def test_static_ttf_component_has_one_font_and_no_app_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.json"
+            value = {
+                "schema_version": 1, "package_type": "component", "component_type": "font",
+                "id": "fonts.zh-cn", "title": {"default": "en", "values": {"en": "Chinese Fonts"}},
+                "version": "1.0.0", "languages": ["zh-CN"], "font_bundle": "noto-sc",
+                "charset": "deepseek-basic-v1", "font": {"asset": "regular", "format": "ttf"},
+            }
+            path.write_text(json.dumps(value), encoding="utf-8")
+            manifest = bundle.load_package_manifest(path)
+            payload = json.loads(bundle.serialize_component_metadata(manifest))
+            self.assertEqual(payload["font"], value["font"])
+            self.assertNotIn("fonts", payload)
+            self.assertNotIn("requirements", payload)
+            value["fonts"] = {}
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                bundle.load_package_manifest(path)
 
     def test_raw_pixel_assets_are_supported_but_rejected_as_launch_cover(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

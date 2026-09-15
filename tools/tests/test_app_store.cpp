@@ -18,6 +18,24 @@
 #include "sdkconfig.h"
 
 namespace {
+bool fail_next_heap_allocation{};
+size_t live_heap_allocations{};
+}  // namespace
+void* micropixel_test_psram_allocate(size_t size) {
+    if (fail_next_heap_allocation) {
+        fail_next_heap_allocation = false;
+        return nullptr;
+    }
+    void* result = std::malloc(size);
+    if (result != nullptr) ++live_heap_allocations;
+    return result;
+}
+void micropixel_test_psram_free(void* memory) {
+    if (memory != nullptr) --live_heap_allocations;
+    std::free(memory);
+}
+
+namespace {
 
 constexpr uint32_t kMatchingTarget = CONFIG_IDF_TARGET_ESP32S3 ? MICROPIXEL_BUNDLE_AOT_TARGET_MASK_XTENSA_ESP32S3
                                                                : MICROPIXEL_BUNDLE_AOT_TARGET_MASK_RISCV32_ILP32F;
@@ -63,6 +81,7 @@ class FakeStore final : public micropixel::runtime::BundleStore {
     FakeFile staged{};
     bool writer_active = false;
     bool fail_next_write = false;
+    bool fail_next_commit = false;
     uint32_t removals = 0U;
 
     // Pre-populate a committed file, e.g. a factory App on the system store.
@@ -86,6 +105,8 @@ class FakeStore final : public micropixel::runtime::BundleStore {
     bundlefs_error_t mount_error = BUNDLEFS_OK;
     bundlefs_error_t format_error = BUNDLEFS_OK;
     uint32_t formats = 0U;
+    uint32_t data_block_size = MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT;
+    bundlefs_error_t info_error = BUNDLEFS_OK;
 
     [[nodiscard]] bool mappable() const override { return mappable_; }
     [[nodiscard]] bundlefs_error_t Mount() override { return mount_error; }
@@ -102,13 +123,14 @@ class FakeStore final : public micropixel::runtime::BundleStore {
     }
 
     [[nodiscard]] bundlefs_error_t GetStoreInfo(bundlefs_store_info_t& info_out) override {
+        if (info_error != BUNDLEFS_OK) return info_error;
         uint32_t bundle_bytes = 0U;
         for (uint32_t index = 0U; index < file_count; ++index) {
             bundle_bytes += files[index].data.size();
         }
         const uint32_t used = MICROPIXEL_BUNDLEFS_METADATA_SIZE + bundle_bytes;
         info_out = {
-            .data_block_size = MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT,
+            .data_block_size = data_block_size,
             .total_bytes = capacity_bytes_,
             .used_bytes = used,
             .free_bytes = capacity_bytes_ - used,
@@ -252,6 +274,10 @@ class FakeStore final : public micropixel::runtime::BundleStore {
                                           const uint8_t expected_sha256[BUNDLEFS_SHA256_SIZE]) override {
         if (!ValidWriter(writer) || expected_sha256 == nullptr) {
             return BUNDLEFS_ERR_INVALID_ARGUMENT;
+        }
+        if (fail_next_commit) {
+            fail_next_commit = false;
+            return BUNDLEFS_ERR_IO;
         }
         const auto digest = Hash(staged.data);
         if (!std::equal(digest.begin(), digest.end(), expected_sha256)) {
@@ -439,6 +465,69 @@ void TestReplacementRetainsOldVersionWhenFull() {
           "oversized replacement must preserve the old version");
 }
 
+void TestInstallWorkspaceAllocationFailure() {
+    FakeStore fake(kNorCapacity);
+    micropixel::runtime::AppStore store(fake);
+    const auto first = MakeBundle("oom", 0x11U);
+    const auto replacement = MakeBundle("oom", 0x22U);
+    Check(store.Install(Request(first, "oom")).has_value(), "install before workspace OOM");
+    Check(live_heap_allocations == 0U, "successful install releases its PSRAM workspace");
+    fail_next_heap_allocation = true;
+    auto result = store.Install(Request(replacement, "oom"));
+    Check(!result && result.error() == micropixel::runtime::AppStoreError::kUnavailable && fake.file_count == 1U &&
+              fake.files[0].data == first && !fake.writer_active && fake.removals == 0U && live_heap_allocations == 0U,
+          "workspace allocation failure preserves the installed app and does not begin writing");
+    Check(store.Install(Request(replacement, "oom")).has_value() && live_heap_allocations == 0U,
+          "installation succeeds after workspace memory becomes available");
+}
+
+void TestInstallCapacityPreflight() {
+    const auto bundle = MakeBundle("capacity", 0x11U);
+    const auto digest = Hash(bundle);
+    const uint32_t size = bundle.size();
+    const uint32_t block = MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT;
+    FakeStore fake(MICROPIXEL_BUNDLEFS_METADATA_SIZE + size + block);
+    micropixel::runtime::AppStore store(fake);
+    auto capacity = store.CheckAppInstallCapacity("capacity", size, digest);
+    Check(capacity && capacity->sufficient() && capacity->required_bytes == size + block &&
+              capacity->free_bytes == size + block,
+          "preflight accepts exact capacity including reserve");
+    fake.data_block_size = 2U * block;
+    capacity = store.CheckAppInstallCapacity("capacity", size, digest);
+    Check(capacity && !capacity->sufficient() && capacity->required_bytes - capacity->free_bytes == block,
+          "preflight uses destination geometry, not a fixed reserve");
+    fake.Seed("capacity", bundle);
+    capacity = store.CheckAppInstallCapacity("capacity", size, digest);
+    Check(capacity && capacity->sufficient() && capacity->required_bytes == 0U,
+          "identical digest needs no replacement space even on a full store");
+    auto replacement_digest = digest;
+    replacement_digest[0] ^= 1U;
+    capacity = store.CheckAppInstallCapacity("capacity", size, replacement_digest);
+    Check(capacity && !capacity->sufficient() && fake.file_count == 1U && !fake.writer_active && fake.removals == 0U &&
+              fake.files[0].data == bundle,
+          "rejected preflight must not reclaim or modify the old app");
+    Check(!store.CheckAppInstallCapacity("capacity", 0U, digest) &&
+              !store.CheckAppInstallCapacity("capacity", size + 1U, digest),
+          "invalid package sizes cannot pass preflight");
+    fake.info_error = BUNDLEFS_ERR_IO;
+    Check(store.CheckAppInstallCapacity("capacity", size, digest).error() ==
+              micropixel::runtime::AppStoreError::kUnavailable,
+          "unreadable capacity is rejected");
+
+    FakeStore system(kNorCapacity, true, 2U);
+    FakeStore external(MICROPIXEL_BUNDLEFS_METADATA_SIZE + block, false, 3U);
+    micropixel::runtime::AppStore split(system, &external);
+    micropixel::runtime::InstalledAppCatalog catalog{};
+    Check(split.LoadCatalog(catalog).has_value(), "mount split stores before preflight");
+    capacity = split.CheckAppInstallCapacity("capacity", size, digest);
+    Check(capacity && !capacity->sufficient() && capacity->free_bytes == block,
+          "free system space cannot hide a full download destination");
+    external.mount_error = BUNDLEFS_ERR_NOT_FORMATTED;
+    Check(split.LoadCatalog(catalog).has_value(), "unavailable external store falls back to system");
+    capacity = split.CheckAppInstallCapacity("capacity", size, digest);
+    Check(capacity && capacity->sufficient(), "preflight follows system-store fallback");
+}
+
 void TestIdentityAndCapacityErrors() {
     FakeStore fake(kNorCapacity);
     micropixel::runtime::AppStore store(fake);
@@ -493,6 +582,40 @@ void TestNewestInstallIsListedFirst() {
           "atomic replacement preserves the existing catalog order");
 }
 
+void TestCompletePackageInventory() {
+    FakeStore system(kNorCapacity, true, 1U), external(kNorCapacity, false, 2U);
+    for (unsigned i = 0; i < BUNDLEFS_MAX_FILES; ++i) {
+        char id[65];
+        std::snprintf(id, sizeof(id), "fonts.component%u", i);
+        system.Seed(id, MakeBundle(id, 0x41U));
+        std::snprintf(id, sizeof(id), "app%u", i);
+        external.Seed(id, MakeBundle(id, 0x53U));
+    }
+    micropixel::runtime::AppStore store(system, &external);
+    micropixel::runtime::InstalledAppCatalog catalog{};
+    Check(store.LoadCatalog(catalog).has_value() && catalog.count == 50U && catalog.component_count == 50U &&
+              catalog.inventory.count == 100U,
+          "both full stores fit the common inventory independently of the launchable App limit");
+    Check(std::string_view(catalog.inventory.packages[0].app_id.data()).starts_with("app") &&
+              std::string_view(catalog.inventory.packages[99].app_id.data()).starts_with("fonts."),
+          "inventory includes both ordinary and system packages");
+    for (uint32_t i = 0; i < catalog.inventory.count; ++i) {
+        const auto& package = catalog.inventory.packages[i];
+        Check(package.component == (i >= 50U) && package.external_storage == (i < 50U) &&
+                  package.bundle_size == MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT &&
+                  std::string_view(package.display_name.data()) == "Test App",
+              "package details retain component identity, medium, size and display name");
+    }
+    FakeStore duplicate_system(kNorCapacity, true, 1U), duplicate_external(kNorCapacity, false, 2U);
+    const auto old = MakeBundle("duplicate", 0x51U), replacement = MakeBundle("duplicate", 0x52U);
+    duplicate_system.Seed("duplicate", old);
+    duplicate_external.Seed("duplicate", replacement);
+    micropixel::runtime::AppStore duplicate_store(duplicate_system, &duplicate_external);
+    Check(duplicate_store.LoadCatalog(catalog).has_value() && catalog.inventory.count == 1U &&
+              catalog.inventory.packages[0].sha256 == Hash(replacement),
+          "inventory uses the same external-store precedence as the launch catalog");
+}
+
 void TestComponentTrustVisibilityAndProtection() {
     FakeStore fake(kNorCapacity);
     micropixel::runtime::AppStore store(fake);
@@ -508,6 +631,18 @@ void TestComponentTrustVisibilityAndProtection() {
     micropixel::runtime::InstalledAppCatalog catalog{};
     Check(store.LoadCatalog(catalog).has_value() && catalog.count == 0U && catalog.component_count == 1U,
           "Component must count toward Storage without appearing in the App catalog");
+    Check(catalog.inventory.count == 1U &&
+              std::string_view(catalog.inventory.packages[0].app_id.data()) == "fonts.fixture" &&
+              std::string_view(catalog.inventory.packages[0].version.data()) == "1.0.0" &&
+              catalog.inventory.packages[0].sha256 == Hash(component),
+          "component ID, version and digest are retained in the common update inventory");
+    Check(catalog.inventory.packages[0].component && !catalog.inventory.packages[0].external_storage &&
+              catalog.inventory.packages[0].bundle_size == component.size() &&
+              catalog.system_storage.used_bytes == component.size() + MICROPIXEL_BUNDLEFS_METADATA_SIZE,
+          "component-only storage keeps package size separate from metadata-inclusive used space");
+    fake.Seed("regular", MakeBundle("regular", 0x53U));
+    Check(store.LoadCatalog(catalog).has_value() && catalog.count == 1U && catalog.inventory.count == 2U,
+          "ordinary App and hidden component share one update inventory");
     Check(store.UninstallApp("fonts.fixture").error() == micropixel::runtime::AppStoreError::kNotFound,
           "App uninstall path must not remove a Component");
     Check(store.UninstallComponent("fonts.fixture", "fonts.fixture").error() ==
@@ -673,6 +808,13 @@ bool micropixel_read_bundle_metadata(const micropixel_bundle_source_t* source,
     if (std::strncmp(reinterpret_cast<const char*>(metadata_out->app_id), "fonts.", 6U) == 0) {
         metadata_out->package_type = MICROPIXEL_BUNDLE_PACKAGE_COMPONENT;
         metadata_out->component_type = MICROPIXEL_BUNDLE_COMPONENT_FONT;
+        metadata_out->font_format = MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF;
+        metadata_out->language_count = 1U;
+        std::memcpy(metadata_out->languages[0], "zh-CN", 6U);
+        // Distinct fixture payloads retain their versions across store reopen.
+        uint8_t marker{};
+        if (!micropixel_bundle_source_read(source, size - 1U, &marker, 1U)) return false;
+        std::memcpy(metadata_out->package_version, marker == 0x42U ? "1.1.0" : "1.0.0", 6U);
     }
     constexpr char kDisplayName[] = "Test App";
     std::memcpy(metadata_out->display_name, kDisplayName, sizeof(kDisplayName));
@@ -704,12 +846,34 @@ bool micropixel_validate_component_package(const micropixel_bundle_source_t* sou
 
 }  // extern "C"
 
+void TestSystemFontFiles() {
+    FakeStore fake(kNorCapacity);
+    micropixel::runtime::AppStore store(fake);
+    fake.Seed(".font.zh-CN", {0, 1, 2, 3});
+    micropixel::runtime::InstalledAppCatalog catalog{};
+    Check(store.LoadCatalog(catalog).has_value() && catalog.count == 0 && catalog.component_count == 0,
+          "known system font cache is not parsed as a Bundle");
+    auto bundle = MakeBundle(".font.zh-CN", 0x55U);
+    Check(!store.Install(Request(bundle, ".font.zh-CN")) && !fake.writer_active,
+          "App install cannot overwrite a Host language font");
+    Check(!store.UninstallApp(".font.zh-CN") && fake.FindFile(".font.zh-CN") >= 0,
+          "App uninstall cannot remove a Host language font");
+    Check(!store.UninstallComponent(".font.zh-CN"), "Component uninstall cannot remove a Host language font");
+    fake.Seed(".font.unknown", {0, 1, 2, 3});
+    Check(store.LoadCatalog(catalog).error() == micropixel::runtime::AppStoreError::kCatalogCorrupt,
+          "unknown files retain normal catalog validation");
+}
+
 int main() {
+    TestSystemFontFiles();
     TestEmptyInstallUpdateAndRemove();
     TestReplacementRetainsOldVersionWhenFull();
+    TestInstallWorkspaceAllocationFailure();
+    TestInstallCapacityPreflight();
     TestIdentityAndCapacityErrors();
     TestNewestInstallIsListedFirst();
     TestComponentTrustVisibilityAndProtection();
+    TestCompletePackageInventory();
     TestSplitStoresRouteByPackageType();
     std::printf("App Store tests passed (%u checks).\n", checks);
     return 0;

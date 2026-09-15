@@ -41,6 +41,7 @@ typedef struct {
     uint32_t display_profile;
     uint32_t component_type;
     uint32_t language_count;
+    uint32_t font_format;
     uint32_t font_asset_ids[MICROPIXEL_BUNDLE_FONT_ROLE_COUNT];
     uint8_t app_id[MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U];
     uint8_t display_name[MICROPIXEL_BUNDLE_DISPLAY_NAME_MAX_LENGTH + 1U];
@@ -112,6 +113,11 @@ bool micropixel_bundle_open_asset(const micropixel_aot_package_t* package, uint3
                                   micropixel_bundle_asset_mapping_t* mapping_out);
 bool micropixel_bundle_open_font(const micropixel_aot_package_t* package, uint32_t resource_id,
                                  micropixel_bundle_font_mapping_t* mapping_out);
+/* System TTF only: refuses a non-mappable source or mapping allocation failure.
+ * The caller keeps the mapping alive until all font instances are released. */
+bool micropixel_bundle_open_component_font(const micropixel_bundle_source_t* source,
+                                           micropixel_bundle_metadata_t* metadata_out,
+                                           micropixel_bundle_font_mapping_t* mapping_out);
 void micropixel_close_font_mapping(micropixel_bundle_font_mapping_t* mapping);
 
 #ifdef __cplusplus

@@ -1450,8 +1450,9 @@ def run_publish(args: argparse.Namespace) -> None:
     if manifest is None:
         raise CliError("publish requires a project containing app.json")
     project = load_project_manifest(manifest)
-    if project.package_type != "app" or "requirements" not in project.value:
-        raise CliError("Publishing requires an App with explicit requirements in app.json")
+    component = project.package_type == "component"
+    if not component and "requirements" not in project.value:
+        raise CliError("Publishing an App requires explicit requirements in app.json")
     app_version = validate_app_version(project.value.get("version"))
     notes = Path(args.notes_file).read_text(encoding="utf-8") if args.notes_file else ""
     if len(notes.encode("utf-8")) > 3000:
@@ -1459,11 +1460,11 @@ def run_publish(args: argparse.Namespace) -> None:
     _run_bundle_builder(["--app-manifest", str(manifest), "--validate-publication"])
     token = None if args.dry_run else publisher_token()
     if token:
-        store_request("/api/v1/store/apps/preflight", "POST", {"appId": project.package_id, "version": app_version, "requirements": project.value["requirements"]}, token)
+        store_request("/api/v1/store/apps/preflight", "POST", {"appId": project.package_id, "version": app_version, "packageType": project.package_type, "componentType": project.value.get("component_type"), "requirements": project.value.get("requirements")}, token)
     publications = []
     # Build and validate every architecture before uploading any release.
-    for target in AOT_TARGET_FLAGS:
-        bundle = package_project(project, "release", project_output_directory(project, args.output_dir) / target, None, target, False, args.force)
+    for target in (["any"] if component else AOT_TARGET_FLAGS):
+        bundle = package_project(project, "release", project_output_directory(project, args.output_dir) / target, None, None if component else target, False, args.force)
         info = validate_bundle(bundle)
         data = bundle.read_bytes()
         header = BUNDLE_HEADER.unpack_from(data)
@@ -1478,11 +1479,11 @@ def run_publish(args: argparse.Namespace) -> None:
                 validate_publication_aot(data[section[2]:section[2] + section[3]], section[9], section[10])
             if section[0] == 3 and section[5] == 7:
                 metadata = json.loads(data[section[2]:section[2] + section[3]])
-        if aot_count != 1 or metadata is None or metadata.get("version") != app_version or metadata.get("requirements") != project.value["requirements"]:
+        if aot_count != (0 if component else 1) or metadata is None or metadata.get("version") != app_version or metadata.get("requirements") != project.value.get("requirements"):
             raise CliError("Bundle publication metadata does not match app.json; rebuild with --force")
         if len(data) > 8 * 1024 * 1024:
             raise CliError("Public App Bundles must not exceed 8 MiB")
-        summary = {"target": target, "appId": info["appId"], "version": app_version, "sha256": hashlib.sha256(data).hexdigest(), "sizeBytes": len(data), "requirements": metadata["requirements"], "testedDevices": args.tested_device, "releaseNotes": notes}
+        summary = {"target": target, "appId": info["appId"], "version": app_version, "sha256": hashlib.sha256(data).hexdigest(), "sizeBytes": len(data), "packageType": project.package_type, "requirements": metadata.get("requirements"), "testedDevices": args.tested_device, "releaseNotes": notes}
         publications.append((summary, data))
     if args.dry_run:
         print_json({"appId": project.package_id, "version": app_version, "releases": [summary for summary, _ in publications]})

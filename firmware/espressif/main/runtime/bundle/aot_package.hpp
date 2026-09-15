@@ -9,6 +9,7 @@
 
 #include "runtime/bundle/bundle_reader.h"
 #include "runtime/bundle/bundle_source.h"
+#include "runtime/bundle/package_inventory.hpp"
 #include "runtime/bundlefs/bundlefs.h"
 
 namespace micropixel::runtime {
@@ -56,6 +57,7 @@ struct StorageUsage final {
 };
 
 struct InstalledAppCatalog final {
+    PackageInventory inventory{};
     std::array<InstalledApp, kMaxInstalledApps> apps{};
     uint32_t count{};
     uint32_t component_count{};

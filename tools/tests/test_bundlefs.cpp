@@ -296,6 +296,28 @@ void TestReadMapReplaceAndRemove(const BundleFsGeometry& geometry) {
           "removed file blocks must become reusable");
 }
 
+void TestMappedBlocksSurviveCatalogRemoval(const BundleFsGeometry& geometry) {
+    ResetFlash();
+    Check(store->Mount() == BUNDLEFS_OK, "mount for mapped block lifetime test");
+    const auto bytes = Pattern(geometry.data_block_size, 5U);
+    Replace("font", bytes);
+    bundlefs_file_t file{};
+    bundlefs_mapping_t mapping{};
+    Check(store->Open("font", file) == BUNDLEFS_OK && store->Map(file, 0U, bytes.size(), mapping) == BUNDLEFS_OK,
+          "map old font");
+    Check(store->Format() == BUNDLEFS_ERR_BUSY, "format rejected while a mapping is active");
+    Check(store->Remove("font") == BUNDLEFS_OK, "remove mapped file from catalog");
+    Replace("fill", std::vector<uint8_t>((geometry.data_block_count - 1U) * geometry.data_block_size, 0x99U));
+    Check(std::equal(bytes.begin(), bytes.end(), test_flash.begin() + geometry.data_offset),
+          "allocator never erases the physically pinned old font block");
+    bundlefs_writer_t writer{};
+    Check(store->BeginReplace("last", 32U, writer) == BUNDLEFS_ERR_NO_SPACE,
+          "pinned block is unavailable even after catalog removal");
+    store->Unmap(mapping);
+    Check(store->BeginReplace("last", 32U, writer) == BUNDLEFS_OK, "last mapping release makes old blocks reusable");
+    store->Abort(writer);
+}
+
 void TestStagedReadsAndAbort() {
     ResetFlash();
     Check(store->Mount() == BUNDLEFS_OK, "mount before staged read test must succeed");
@@ -319,7 +341,13 @@ void TestStagedReadsAndAbort() {
           "the committed file must stay readable while its replacement is staged");
     bundlefs_writer_t second{};
     Check(store->BeginReplace("other", 1U, second) == BUNDLEFS_ERR_BUSY, "only one writer may be active");
+    bundlefs_mapping_t staged_mapping{};
+    Check(store->Map(staged, 0U, staged_bytes.size(), staged_mapping) == BUNDLEFS_OK,
+          "font preparation maps staged NOR bytes before commit");
+    Check(std::memcmp(staged_mapping.data, staged_bytes.data(), staged_bytes.size()) == 0,
+          "staged mapping exposes the prepared font bytes");
     store->Abort(writer);
+    store->Unmap(staged_mapping);
     Check(store->Read(staged, 0U, readback.data(), 16U) == BUNDLEFS_ERR_NOT_FOUND,
           "an aborted staged handle must stop reading");
     Check(ListFiles() == std::vector<std::string>({"keep"}), "abort must leave the Catalog unchanged");
@@ -742,6 +770,7 @@ int main() {
     TestEmptyMountAndGeometry(geometry);
     TestUnsupportedGeometryIsDistinctFromCorruption(geometry);
     TestReadMapReplaceAndRemove(geometry);
+    TestMappedBlocksSurviveCatalogRemoval(geometry);
     TestStagedReadsAndAbort();
     TestNewestInstallIsFirstAndUpdateKeepsPosition();
     TestLegacyMigration(nor_storage, MICROPIXEL_BUNDLEFS_V1_FORMAT_VERSION, MICROPIXEL_BUNDLEFS_V1_BANK_SIZE,

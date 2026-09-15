@@ -337,9 +337,9 @@ app_store_sources=(
     -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
 )
 
-build_and_run app_store "${app_store_sources[@]}"
+build_and_run app_store -DMICROPIXEL_TEST_TRACK_HEAP "${app_store_sources[@]}"
 
-build_and_run app_store_s3 \
+build_and_run app_store_s3 -DMICROPIXEL_TEST_TRACK_HEAP \
     -DCONFIG_IDF_TARGET_ESP32P4=0 -DCONFIG_IDF_TARGET_ESP32S3=1 \
     "${app_store_sources[@]}"
 
@@ -443,10 +443,23 @@ for name, version in [("versioned", "0.1.0"), ("trailing-dot", "1.2.3."),
                 "--aot-target", "riscv32-ilp32f", "--app-manifest", str(root / "app.json"),
                 "--output", str(root / f"{name}.bundle.bin")]
     builder.main()
+for name, font in [("font-required", "zh-CN"), ("font-unknown", "zh"), ("font-type", ["zh-CN"])]:
+    def serialize_fixture(manifest):
+        payload = json.loads(serialize(manifest))
+        payload["core_abi"] = builder.CORE_ABI_VERSION
+        payload["requirements"] = {"schema_version": 1, "display": {"layouts": ["square"], "min_width": 320, "min_height": 320},
+                                   "required": [], "optional": [], "any_of": [], "services": {}, "system_font": font}
+        return json.dumps(payload, separators=(",", ":")).encode()
+    builder.serialize_package_metadata = serialize_fixture
+    sys.argv = ["build_app_bundle.py", "--aot", str(root / "tiny.aot"), "--aot-target", "riscv32-ilp32f",
+                "--app-manifest", str(root / "app.json"), "--output", str(root / f"{name}.bundle.bin")]
+    builder.main()
+
 PY
 MICROPIXEL_EXPECT_PACKAGE_VERSION=0.1.0 \
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/versioned.bundle.bin"
-for invalid_version in trailing-dot leading-zero prerelease empty numeric null oversized; do
+MICROPIXEL_EXPECT_SYSTEM_FONT=zh-CN bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/font-required.bundle.bin"
+for invalid_version in trailing-dot leading-zero prerelease empty numeric null oversized font-unknown font-type; do
     MICROPIXEL_EXPECT_INVALID_METADATA=1 \
         bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$metadata_output_dir/$invalid_version.bundle.bin"
 done
@@ -506,6 +519,25 @@ MICROPIXEL_EXPECT_DISPLAY_NAME="Fixture Fonts" \
 MICROPIXEL_EXPECT_METADATA_SCHEMA=1 \
 MICROPIXEL_EXPECT_PACKAGE_TYPE=component \
     bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$component_output_dir/fonts.bundle.bin"
+
+# A static TTF component contains one font and no executable AOT.
+python3 - "$component_output_dir" "$workspace_root" <<'PYTTF'
+import json, shutil, sys
+from pathlib import Path
+root, workspace = map(Path, sys.argv[1:])
+manifest = json.loads((root / 'component.json').read_text())
+manifest.pop('fonts')
+manifest['font'] = {'asset': 'regular', 'format': 'ttf'}
+(root / 'ttf.json').write_text(json.dumps(manifest))
+shutil.copyfile(workspace / 'firmware/espressif/managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf', root / 'regular.ttf')
+(root / 'ttf-assets.json').write_text(json.dumps({'schema_version': 1, 'assets': [{'name': 'regular', 'format': 'font_ttf', 'path': 'regular.ttf'}]}))
+PYTTF
+python3 "$workspace_root/tools/build_app_bundle.py" --app-manifest "$component_output_dir/ttf.json" \
+    --asset-manifest "$component_output_dir/ttf-assets.json" --prepare-resource-pack "$component_output_dir/ttf.pack" \
+    --emit-cpp-header "$component_output_dir/ttf.hpp" --cpp-namespace fixture_ttf
+python3 "$workspace_root/tools/build_app_bundle.py" --app-manifest "$component_output_dir/ttf.json" \
+    --resource-pack "$component_output_dir/ttf.pack" --output "$component_output_dir/ttf.bundle.bin"
+MICROPIXEL_EXPECT_PACKAGE_TYPE=component bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$component_output_dir/ttf.bundle.bin"
 
 # Blocks timing and difficulty are pure Guest model logic.
 build_and_run blocks_model \

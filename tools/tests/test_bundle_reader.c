@@ -148,7 +148,10 @@ static bool validate_bundle(bool mappable) {
     const char* expected_version = getenv("MICROPIXEL_EXPECT_METADATA_SCHEMA");
     const char* expected_type = getenv("MICROPIXEL_EXPECT_PACKAGE_TYPE");
     const char* expected_package_version = getenv("MICROPIXEL_EXPECT_PACKAGE_VERSION");
+    const char* expected_font = getenv("MICROPIXEL_EXPECT_SYSTEM_FONT");
     if (!check(metadata_valid, "Bundle metadata must validate") ||
+        !check(expected_font == NULL || strcmp(metadata.requirements.system_font, expected_font) == 0,
+               "system font requirement must survive metadata decoding") ||
         !check(metadata.bundle_size == test_bundle_size, "metadata must expose the Bundle logical size") ||
         !check(expected_package_version == NULL ||
                    strcmp((const char*)metadata.package_version, expected_package_version) == 0,
@@ -174,6 +177,18 @@ static bool validate_bundle(bool mappable) {
             !check(validated.component_type == MICROPIXEL_BUNDLE_COMPONENT_FONT && validated.language_count > 0U,
                    "validated font Component must expose its type and languages")) {
             return false;
+        }
+        if (validated.font_format == MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF) {
+            micropixel_bundle_font_mapping_t font = {0};
+            bool opened = micropixel_bundle_open_component_font(&file, &validated, &font);
+            if (!check(opened == (mappable && !reject_mappings),
+                       "TTF requires actual NOR mapping without RAM fallback"))
+                return false;
+            if (opened && (!check(in_test_bundle(font.font.data), "TTF bytes alias NOR source") ||
+                           !check(active_mappings == 1U, "active TTF holds exactly one mapping")))
+                return false;
+            micropixel_close_font_mapping(&font);
+            micropixel_close_font_mapping(&font);
         }
         micropixel_aot_package_t component_aot;
         return check(!micropixel_open_aot_package(&file, &component_aot),

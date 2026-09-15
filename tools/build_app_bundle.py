@@ -55,10 +55,11 @@ FORMATS = {
     "png": 4,
     "raw_argb8888": 5,
     "font_cbin": 8,
+    "font_ttf": 11,
     "ogg_opus": 9,
     "raw_rgb565": 10,
 }
-ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"], FORMATS["font_cbin"]}
+ASSET_FORMAT_IDS = frozenset(FORMATS.values()) - {FORMATS["aot"], FORMATS["font_cbin"], FORMATS["font_ttf"]}
 PNG_TO_RAW_RGB888 = "png_to_raw_rgb888"
 PNG_TO_RAW_RGB565 = "png_to_raw_rgb565"
 LAUNCH_FORMATS = frozenset({FORMATS["jpeg"], FORMATS["png"]})
@@ -143,6 +144,7 @@ class PackageManifest:
     font_bundle: str = ""
     charset: str = ""
     font_roles: dict[str, dict[str, object]] | None = None
+    ttf_asset: str = ""
 
 
 def align(value: int, alignment: int) -> int:
@@ -534,6 +536,10 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
     elif format_name == "font_cbin":
         if width != 0 or height != 0 or len(data) < 160 or not data.startswith(b"MPXFCBN\0"):
             raise ValueError("font_cbin must be a wrapped MicroPixel font cbin with zero dimensions")
+    elif format_name == "font_ttf":
+        if width != 0 or height != 0:
+            raise ValueError("font_ttf must use zero dimensions")
+        validate_static_ttf(data)
     elif format_name == "ogg_opus":
         if width != 0 or height != 0:
             raise ValueError("ogg_opus assets must use zero dimensions")
@@ -547,8 +553,24 @@ def parse_asset(spec: str, background: tuple[int, int, int] | None = None) -> In
         if output_format_name == "raw_rgb565"
         else 0
     )
-    kind = KIND_FONT if output_format_name == "font_cbin" else KIND_ASSET
+    kind = KIND_FONT if output_format_name in ("font_cbin", "font_ttf") else KIND_ASSET
     return InputSection(kind, section_id, FORMATS[output_format_name], width, height, stride, data)
+
+
+def validate_static_ttf(data: bytes) -> None:
+    if len(data) < 12 or data[:4] != b"\x00\x01\x00\x00":
+        raise ValueError("font_ttf requires static TrueType outlines")
+    count = int.from_bytes(data[4:6], "big")
+    if count == 0 or 12 + count * 16 > len(data):
+        raise ValueError("invalid TrueType directory")
+    tags = set()
+    for index in range(count):
+        tag, checksum, offset, size = struct.unpack_from(">4sIII", data, 12 + index * 16)
+        if tag in tags or offset > len(data) or size > len(data) - offset:
+            raise ValueError("invalid TrueType table")
+        tags.add(tag)
+    if not {b"glyf", b"loca", b"head", b"hhea", b"hmtx", b"maxp", b"cmap"} <= tags or b"fvar" in tags:
+        raise ValueError("font_ttf requires a complete static glyf font")
 
 
 def validate_asset_name(value: object, index: int) -> str:
@@ -753,7 +775,9 @@ def validate_requirements(value: object) -> dict:
         return items
 
     require(isinstance(value, dict), "expected object")
-    require(set(value) == {"schema_version", "display", "required", "optional", "any_of", "services"}, "invalid fields")
+    require(set(value) - {"system_font"} == {"schema_version", "display", "required", "optional", "any_of", "services"}, "invalid fields")
+    if "system_font" in value:
+        require(isinstance(value["system_font"], str) and value["system_font"] in {"en", "zh-CN", "zh-TW", "ja-JP", "ko-KR"}, "invalid system font locale")
     require(type(value["schema_version"]) is int and value["schema_version"] == 1, "unsupported schema")
     display = value["display"]
     require(isinstance(display, dict) and set(display) == {"layouts", "min_width", "min_height"}, "invalid display")
@@ -864,6 +888,14 @@ def load_package_manifest(path: Path) -> PackageManifest:
             languages.append(locale)
         font_bundle = validate_component_identifier(value["font_bundle"], "font_bundle")
         charset = validate_component_identifier(value["charset"], "charset")
+        if "font" in value:
+            font = value["font"]
+            if "fonts" in value or not isinstance(font, dict) or set(font) != {"asset", "format"} or font["format"] != "ttf":
+                raise ValueError("TTF component requires only font.asset and font.format=ttf")
+            asset = validate_asset_name(font["asset"], 0)
+            return PackageManifest(package_id, titles, "", package_type="component", component_type="font",
+                                   version=version, languages=tuple(languages), font_bundle=font_bundle,
+                                   charset=charset, ttf_asset=asset)
         raw_fonts = value["fonts"]
         role_names = ("small", "medium", "large", "title")
         if not isinstance(raw_fonts, dict) or set(raw_fonts) != set(role_names):
@@ -894,7 +926,7 @@ def load_package_manifest(path: Path) -> PackageManifest:
 
 
 def serialize_component_metadata(manifest: PackageManifest) -> bytes:
-    if manifest.package_type != "component" or manifest.component_type != "font" or manifest.font_roles is None:
+    if manifest.package_type != "component" or manifest.component_type != "font" or (manifest.font_roles is None and not manifest.ttf_asset):
         raise ValueError("component metadata requires a validated font component manifest")
     payload = {
         "schema_version": PACKAGE_METADATA_VERSION,
@@ -910,6 +942,9 @@ def serialize_component_metadata(manifest: PackageManifest) -> bytes:
         "charset": manifest.charset,
         "fonts": manifest.font_roles,
     }
+    if manifest.ttf_asset:
+        del payload["fonts"]
+        payload["font"] = {"asset": manifest.ttf_asset, "format": "ttf"}
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
@@ -1014,7 +1049,7 @@ def load_resource_pack(path: Path) -> ResourcePack:
             or section_id == 0
             or size == 0
             or (kind == KIND_ASSET and format_id not in ASSET_FORMAT_IDS)
-            or (kind == KIND_FONT and format_id != FORMATS["font_cbin"])
+            or (kind == KIND_FONT and format_id not in (FORMATS["font_cbin"], FORMATS["font_ttf"]))
             or (kind == KIND_FONT and (width != 0 or height != 0 or stride != 0))
         ):
             raise ValueError("resource pack contains an invalid section")
@@ -1311,7 +1346,7 @@ def main() -> None:
         manifest_launch_asset = ""
         package_manifest = PackageManifest(app_id_text, titles, "")
     if args.validate_publication:
-        if package_manifest.package_type != "app" or not package_manifest.version or package_manifest.requirements is None:
+        if not package_manifest.version or (package_manifest.package_type == "app" and package_manifest.requirements is None):
             raise SystemExit("Public Apps require version and requirements")
         print("Publication manifest valid")
         return
@@ -1429,14 +1464,19 @@ def main() -> None:
     elif launch_asset:
         raise SystemExit("app manifest names a launch asset but no --resource-pack was supplied")
     if package_manifest.package_type == "component":
-        if args.resource_pack is None or package_manifest.font_roles is None:
+        if args.resource_pack is None:
             raise SystemExit("font Component Packages require a prepared resource pack")
-        expected_font_ids = {
-            fnv1a32(str(record["asset"]).encode("ascii")) for record in package_manifest.font_roles.values()
-        }
-        actual_font_ids = {section.section_id for section in resource_pack.sections if section.kind == KIND_FONT}
+        if package_manifest.ttf_asset:
+            expected_font_ids = {fnv1a32(package_manifest.ttf_asset.encode("ascii"))}
+            expected_format = FORMATS["font_ttf"]
+        else:
+            expected_font_ids = {fnv1a32(str(record["asset"]).encode("ascii"))
+                                 for record in package_manifest.font_roles.values()}
+            expected_format = FORMATS["font_cbin"]
+        actual_font_ids = {section.section_id for section in resource_pack.sections
+                           if section.kind == KIND_FONT and section.format == expected_format}
         if expected_font_ids != actual_font_ids or len(resource_pack.sections) != len(actual_font_ids):
-            raise SystemExit("font Component resource pack must contain exactly its four declared font_cbin assets")
+            raise SystemExit("font Component resources must match exactly its declared fonts and format")
 
     toc_offset = HEADER.size
     cursor = align(toc_offset + len(sections) * SECTION.size, 64)
