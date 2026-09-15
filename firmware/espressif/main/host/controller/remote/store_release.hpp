@@ -59,7 +59,7 @@ inline const char* StoreString(const cJSON* object, const char* name) {
     return cJSON_IsString(value) ? value->valuestring : "";
 }
 inline bool VerifyStoreRelease(const char* envelope, const char* release_id, control::HostCommand& command,
-                               StoreReleaseWorkspace& workspace) {
+                               StoreReleaseWorkspace& workspace, bool font_component = false) {
     if (!StoreTrustConfigured() || envelope == nullptr || std::strlen(envelope) > 1800U) return false;
     const std::string_view text(envelope);
     const size_t first = text.find('.'), second = first == text.npos ? text.npos : text.find('.', first + 1U);
@@ -131,9 +131,12 @@ inline bool VerifyStoreRelease(const char* envelope, const char* release_id, con
                        std::strcmp(StoreString(payload, "releaseId"), release_id) == 0 &&
                        StoreString(payload, "publisherId")[0] != '\0' &&
                        std::strcmp(StoreString(payload, "sha256"), expected_digest.data()) == 0 &&
-                       std::strcmp(StoreString(payload, "target"), StoreAotTarget()) == 0 && cJSON_IsNumber(size) &&
-                       size->valuedouble == static_cast<double>(command.package_size) && std::strlen(version) > 0U &&
-                       std::strlen(version) < command.store_version.size();
+                       (font_component ? std::strcmp(StoreString(payload, "target"), "any") == 0 &&
+                                             std::strcmp(StoreString(payload, "packageType"), "component") == 0 &&
+                                             std::strcmp(StoreString(payload, "componentType"), "font") == 0
+                                       : std::strcmp(StoreString(payload, "target"), StoreAotTarget()) == 0) &&
+                       cJSON_IsNumber(size) && size->valuedouble == static_cast<double>(command.package_size) &&
+                       std::strlen(version) > 0U && std::strlen(version) < command.store_version.size();
     if (valid) {
         std::snprintf(command.store_version.data(), command.store_version.size(), "%s", version);
         command.store_verified = true;

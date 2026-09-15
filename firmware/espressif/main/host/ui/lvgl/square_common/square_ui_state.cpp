@@ -10,6 +10,7 @@
 #include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
+#include "platform/lvgl/fonts/system_fonts.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
 #include "sdkconfig.h"
@@ -79,6 +80,7 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
                                          const SquareSystemUiProfile& selected_profile)
     : profile(selected_profile),
       action_sheets(transition),
+      system_menu_ui(profile.system_page, action_sheets),
       system_detail_ui(profile.system_page, action_sheets),
       wifi_settings_ui(action_sheets),
       input_router(physical_input, static_cast<uint16_t>(profile.square.width),
@@ -131,6 +133,11 @@ esp_err_t SquareSystemUiState::InitializeLocked(lv_display_t* initialized_displa
         return ESP_ERR_INVALID_STATE;
     }
     display = initialized_display;
+    const esp_err_t font_status = platform::lvgl::InitializeSystemFonts();
+    if (font_status != ESP_OK) {
+        display = nullptr;
+        return font_status;
+    }
     if (!theme::Install(display)) {
         display = nullptr;
         return ESP_ERR_NO_MEM;

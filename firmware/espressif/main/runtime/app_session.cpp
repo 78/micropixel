@@ -242,6 +242,8 @@ std::expected<void, AppSessionFailure> AppSession::Run() {
 
 const char* AppSessionErrorCode(AppSessionError error) {
     switch (error) {
+        case AppSessionError::kRequiredFont:
+            return "required_font_missing";
         case AppSessionError::kPackageLoad:
             return "package_load_failed";
         case AppSessionError::kLaunchBitmap:
@@ -274,6 +276,7 @@ const char* AppSessionErrorCode(AppSessionError error) {
 
 const char* AppSessionErrorPhase(AppSessionError error) {
     switch (error) {
+        case AppSessionError::kRequiredFont:
         case AppSessionError::kPackageLoad:
         case AppSessionError::kLaunchBitmap:
             return "package";

@@ -70,6 +70,7 @@ class FontRegistry final {
     SystemFontSet active_{};
     std::array<DynamicFontSlot, kMaxDynamicFonts> dynamic_{};
     uint32_t generation_{1U};
+    bool builtin_{true};
 };
 
 }  // namespace micropixel::platform::lvgl

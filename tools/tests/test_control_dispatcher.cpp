@@ -52,6 +52,17 @@ int main() {
     // Consuming the request must not let another click enqueue a duplicate.
     controls.RequestStoreUpdate("app");
     assert(!controls.ConsumeStoreUpdate(update_app));
+    const auto revision = controls.StoreUpdatesRevision();
+    controls.AddStoreUpdate("fonts.zh-cn", "1.1.0", "available", {}, "1.0.0");
+    assert(controls.StoreUpdatesRevision() == revision);
+    controls.SetStoreCheckState(2U);
+    assert(controls.StoreUpdatesRevision() == revision + 1U);
+    const auto font_update = controls.FindStoreUpdate("fonts.zh-cn");
+    assert(std::strcmp(font_update.current_version.data(), "1.0.0") == 0);
+    assert(std::strcmp(font_update.version.data(), "1.1.0") == 0);
+    controls.SetStoreCheckState(3U);
+    assert(controls.StoreUpdatesRevision() == revision + 1U);
+    assert(controls.FindStoreUpdate("fonts.zh-cn").version == font_update.version);
     controls.RequestStoreCheck();
     controls.SetStoreCheckState(3U);
     assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kRequesting);
@@ -172,5 +183,48 @@ int main() {
     HostResult delivered{};
     assert(controls.PollRemoteResult(delivered));
     assert(std::strcmp(delivered.command_id.data(), "remote-8") == 0);
+    // Preflight is owned by one installation; stale completions cannot unblock a retry.
+    using micropixel::firmware::control::InstallPreflight;
+    std::array<uint8_t, 32U> digest{};
+    digest[0] = 42U;
+    controls.RequestStoreUpdate("app");
+    assert(controls.ConsumeStoreUpdate(update_app));
+    controls.CompleteStoreUpdateRequest(true);
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kQueued);
+    assert(controls.BeginInstallActivity(ControlSource::kRemote, "check-1", "app", 65536U, digest));
+    controls.CopyInstallActivity(install);
+    assert(install.preflight == InstallPreflight::kPending && install.package_size == 65536U);
+    assert(install.package_sha256 == digest);
+    controls.CompleteInstallPreflight(ControlSource::kLocal, "check-1", 131072U, 65536U, "app_store_full");
+    controls.CompleteInstallPreflight(ControlSource::kRemote, "stale", 131072U, 65536U, "app_store_full");
+    controls.CopyInstallActivity(install);
+    assert(install.preflight == InstallPreflight::kPending);
+    controls.CompleteInstallPreflight(ControlSource::kRemote, "check-1", 131072U, 65536U, "app_store_full");
+    controls.CopyInstallActivity(install);
+    assert(install.active && install.preflight == InstallPreflight::kFailed);
+    controls.EndInstallActivity(ControlSource::kRemote, "check-1", "app_store_full");
+    // The failure is shown only by the dialog; reopening the upgrade sheet
+    // must not describe this completed installation as a failed request.
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kIdle);
+    controls.CopyInstallActivity(install);
+    assert(!install.active && install.required_bytes - install.free_bytes == 65536U);
+    assert(std::strcmp(install.error.data(), "app_store_full") == 0);
+    controls.DismissInstallFailure();
+    controls.CopyInstallActivity(install);
+    assert(!install.active && install.error[0] == '\0');
+    assert(controls.StoreUpdateRequestState() == StoreUpdateRequestState::kIdle);
+    assert(controls.BeginInstallActivity(ControlSource::kRemote, "check-2", "app", 65536U, digest));
+    controls.CompleteInstallPreflight(ControlSource::kRemote, "check-1", 0U, 0U, "app_store_full");
+    controls.CopyInstallActivity(install);
+    assert(install.preflight == InstallPreflight::kPending && install.error[0] == '\0');
+    controls.CompleteInstallPreflight(ControlSource::kRemote, "check-2", 131072U, 131072U, nullptr);
+    controls.CopyInstallActivity(install);
+    assert(install.preflight == InstallPreflight::kReady && install.active);
+    controls.DismissInstallFailure();
+    controls.CopyInstallActivity(install);
+    assert(install.active);
+    controls.EndInstallActivity(ControlSource::kRemote, "check-2");
+    controls.CopyInstallActivity(install);
+    assert(!install.active && install.error[0] == '\0');
     return 0;
 }

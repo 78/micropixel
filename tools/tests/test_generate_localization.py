@@ -106,10 +106,15 @@ class GenerateLocalizationTest(unittest.TestCase):
                 )
 
             (root / "i18n/en.json").write_text(
-                json.dumps({"game.title": "bad\ntext"}), encoding="utf-8"
+                json.dumps({"game.title": "bad\ttext"}), encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "control"):
                 generate_localization.load_catalogs(source)
+
+    def test_multiline_text_has_escaped_cpp_literal(self):
+        value = "1 minute\n5 minutes"
+        self.assertEqual(generate_localization.validate_text("menu.options", value, Path("en.json")), value)
+        self.assertEqual(generate_localization.cpp_string(value), '\"1 minute\\n5 minutes\"')
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 #include "device/contracts/input.hpp"
 #include "freertos/FreeRTOS.h"
 #include "runtime/bundle/app_requirements.h"
+#include "runtime/bundle/package_inventory.hpp"
 
 namespace micropixel::firmware::control {
 
@@ -28,6 +29,7 @@ struct AppDescriptor final {
 };
 
 struct CatalogSnapshot final {
+    runtime::PackageInventory inventory{};
     std::array<AppDescriptor, kMaxApps> apps{};
     uint32_t count{};
     uint64_t store_total_bytes{};
@@ -44,6 +46,7 @@ struct AppDiagnostic final {
 };
 
 struct StoreAppUpdate final {
+    std::array<char, 32U> current_version{};
     std::array<uint8_t, 32U> baseline_sha256{};
     std::array<char, kAppIdCapacity> app_id{};
     std::array<char, 32U> version{};
@@ -83,6 +86,8 @@ enum class ControlSource : uint8_t {
 // Transient Host-only state used by App Hall while a package is transferred
 // and committed. It is deliberately separate from the installed catalog: an
 // app can be visible here before its Bundle has entered App Store.
+enum class InstallPreflight : uint8_t { kNone, kPending, kReady, kFailed };
+
 struct InstallActivity final {
     std::array<char, kCommandIdCapacity> command_id{};
     std::array<char, kAppIdCapacity> app_id{};
@@ -90,6 +95,12 @@ struct InstallActivity final {
     uint32_t generation{};
     uint8_t progress_percent{};
     bool active{};
+    InstallPreflight preflight{};
+    size_t package_size{};
+    std::array<uint8_t, 32U> package_sha256{};
+    uint64_t required_bytes{};
+    uint64_t free_bytes{};
+    std::array<char, 48U> error{};
 };
 
 enum class SequenceOperationType : uint8_t {

@@ -497,6 +497,7 @@ struct RemoteControlAgent::ColdState final {
 
 struct RemoteControlAgent::TaskContext final {
     StoreReleaseWorkspace store_release_workspace{};
+    std::array<char, 4097U> font_response{};
     Identity identity{};
     std::array<uint8_t, 1024U> control_read_buffer{};
     std::array<uint8_t, 4096U> firmware_response_bytes{};
@@ -702,6 +703,11 @@ bool RemoteControlAgent::RequestFirmwareUpdate() {
 host_ui::RemoteControlModel RemoteControlAgent::Snapshot() const {
     std::lock_guard<std::mutex> lock(model_mutex_);
     return model_;
+}
+
+void RemoteControlAgent::CopySnapshot(host_ui::RemoteControlModel& destination) const {
+    std::lock_guard<std::mutex> lock(model_mutex_);
+    destination = model_;
 }
 
 void RemoteControlAgent::CopyFirmwareReleaseNotes(std::span<char> destination, uint32_t revision) const {
@@ -1499,7 +1505,7 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
     };
     auto reject = [&](const char* error) {
         if (install_activity_started) {
-            controls_.EndInstallActivity(control::ControlSource::kRemote, command_id);
+            controls_.EndInstallActivity(control::ControlSource::kRemote, command_id, error);
         } else if (name != nullptr && std::strcmp(name, "app.install") == 0) {
             controls_.RejectStoreUpdateRequest(JsonString(cJSON_GetObjectItemCaseSensitive(root, "params"), "appId"));
         }
@@ -1578,10 +1584,14 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         if (command.automatic) return reject("automatic_installation_disabled");
 
         install_activity_started =
-            controls_.BeginInstallActivity(control::ControlSource::kRemote, command_id, command.app_id.data());
+            controls_.BeginInstallActivity(control::ControlSource::kRemote, command_id, command.app_id.data(),
+                                           command.package_size, command.package_sha256);
         if (!install_activity_started) {
             return reject("install_busy");
         }
+        // The supervisor reads the actual destination store before any package
+        // allocation or GET. It alone owns AppStore and its mutable state.
+        if (const char* error = AwaitInstallPreflight(command); error != nullptr) return reject(error);
         uint8_t last_progress = 0U;
         publish_install_progress("downloading", 0U);
         if (!DownloadPackage(
@@ -1687,10 +1697,38 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
     return true;
 }
 
+const char* RemoteControlAgent::AwaitInstallPreflight(const control::HostCommand& command) {
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(5000U);
+    control::InstallActivity activity{};
+    for (;;) {
+        controls_.CopyInstallActivity(activity);
+        const bool owned =
+            activity.active && activity.source == command.source && activity.command_id == command.command_id;
+        const char* error = nullptr;
+        if (!owned)
+            error = "install_cancelled";
+        else if (activity.preflight == control::InstallPreflight::kFailed)
+            error = activity.error.data();
+        else if (DeadlineReached(command.deadline_ticks) || DeadlineReached(deadline))
+            error = "command_expired";
+        else if (activity.preflight == control::InstallPreflight::kReady)
+            return nullptr;
+        if (error != nullptr) {
+            ESP_LOGW(kTag, "Install preflight failed: app=%s error=%s required=%llu free=%llu", command.app_id.data(),
+                     error, static_cast<unsigned long long>(activity.required_bytes),
+                     static_cast<unsigned long long>(activity.free_bytes));
+            CopyText(task_context_->host_result.message, error);
+            return task_context_->host_result.message.data();
+        }
+        vTaskDelay(pdMS_TO_TICKS(20U));
+    }
+}
+
 bool RemoteControlAgent::DownloadPackage(void* client, const Identity& identity, const char* path, size_t size,
                                          uint8_t*& data_out, bool report_firmware_progress,
                                          const FirmwareStatusPublisher& publish_status,
-                                         const PackageProgressPublisher& publish_package_progress) {
+                                         const PackageProgressPublisher& publish_package_progress,
+                                         const std::atomic<bool>* cancelled) {
     data_out = nullptr;
     if (client == nullptr || path == nullptr || size == 0U || size > kMaxPackageBytes) {
         return false;
@@ -1713,6 +1751,10 @@ bool RemoteControlAgent::DownloadPackage(void* client, const Identity& identity,
     size_t received = 0U;
     uint32_t last_logged_percent = 0U;
     while (received < size) {
+        if (cancelled && cancelled->load()) {
+            heap_caps_free(bytes);
+            return false;
+        }
         constexpr size_t kReadChunkBytes = 16U * 1024U;
         const size_t chunk = std::min(kReadChunkBytes, size - received);
         const int count = stream->Read(bytes + received, chunk, kPackageDownloadTimeoutMs);
@@ -1749,6 +1791,137 @@ bool RemoteControlAgent::DownloadPackage(void* client, const Identity& identity,
     }
     data_out = bytes;
     return true;
+}
+
+void RemoteControlAgent::CheckStoreUpdates(void* client, const Identity& identity) {
+    const std::string path = DevicePath(identity.device_id.data(), "/store/check");
+    Http3Response response{};
+    auto& inventory = task_context_->catalog_snapshot.inventory;
+    {
+        std::lock_guard lock(diagnostics_mutex_);
+        inventory = cold_state_->installed_apps.inventory;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON* packages = body ? cJSON_AddArrayToObject(body, "packages") : nullptr;
+    bool complete = packages != nullptr && inventory.count <= inventory.packages.size();
+    for (uint32_t i = 0; complete && i < inventory.count; ++i) {
+        const auto& package = inventory.packages[i];
+        cJSON* item = cJSON_CreateObject();
+        std::array<char, 65U> digest{};
+        control::FormatSha256Hex(package.sha256, digest);
+        complete = item && cJSON_AddStringToObject(item, "appId", package.app_id.data()) &&
+                   cJSON_AddStringToObject(item, "version", package.version.data()) &&
+                   cJSON_AddStringToObject(item, "sha256", digest.data()) && cJSON_AddItemToArray(packages, item);
+        if (!complete) cJSON_Delete(item);
+    }
+    char* encoded = complete ? cJSON_PrintUnformatted(body) : nullptr;
+    bool checked = encoded &&
+                   ClientFrom(client).Post(path, JsonHeaders(identity.credential.data()),
+                                           reinterpret_cast<const uint8_t*>(encoded), std::strlen(encoded), response,
+                                           kRequestTimeoutMs) &&
+                   response.status == 200;
+    cJSON_free(encoded);
+    cJSON_Delete(body);
+    cJSON* root = checked ? cJSON_ParseWithLength(response.body.data(), response.body.size()) : nullptr;
+    const cJSON* updates = root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "updates") : nullptr;
+    checked = checked && cJSON_IsArray(updates);
+    if (checked) {
+        controls_.ResetStoreUpdates();
+        const int count = std::min(cJSON_GetArraySize(updates), static_cast<int>(runtime::kMaxInstalledPackages));
+        for (int i = 0; i < count; ++i) {
+            const cJSON* item = cJSON_GetArrayItem(updates, i);
+            std::array<uint8_t, 32U> baseline{};
+            if (ParseSha256(JsonString(item, "sha256"), baseline))
+                controls_.AddStoreUpdate(JsonString(item, "appId"), JsonString(item, "version"),
+                                         JsonString(item, "state"), baseline, JsonString(item, "currentVersion"));
+        }
+    }
+    ESP_LOGI(kTag, "store update check %s: packages=%lu updates=%d, task minimum free stack: %u",
+             checked ? "ready" : "failed", static_cast<unsigned long>(inventory.count),
+             checked ? cJSON_GetArraySize(updates) : 0, static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    cJSON_Delete(root);
+    controls_.SetStoreCheckState(checked ? 2U : 3U);
+}
+
+void RemoteControlAgent::DownloadFont(void* client, const Identity& identity, host::fonts::FontDownload& job) {
+    using State = host::fonts::FontDownload::State;
+    auto expected = State::kDownloadRequested;
+    if (job.state.compare_exchange_strong(expected, State::kDownloading)) {
+        const bool valid = !job.cancelled.load() &&
+                           DownloadPackage(
+                               client, identity, job.path.data(), job.size, job.bytes, false, {},
+                               [&job](uint8_t percent) { job.progress.store(percent * 70U / 100U); }, &job.cancelled);
+        const bool ready = valid && !job.cancelled.load();
+        if (!ready) {
+            heap_caps_free(job.bytes);
+            job.bytes = nullptr;
+        }
+        ESP_LOGI(kTag, "font QUIC download %s, task minimum free stack: %u", ready ? "ready" : "failed",
+                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+        job.state.store(ready ? State::kReady : State::kFailed, std::memory_order_release);
+        return;
+    }
+    expected = State::kRequested;
+    if (!job.state.compare_exchange_strong(expected, State::kResolving)) return;
+    const std::string path = DevicePath(identity.device_id.data(), "/fonts/locales/") + job.locale.data();
+    Http3Request request{};
+    request.method = "GET";
+    request.path = path;
+    request.headers = JsonHeaders(identity.credential.data());
+    auto stream = ClientFrom(client).Open(request);
+    bool valid = !job.cancelled.load() && stream && stream->GetStatus(kRequestTimeoutMs) == 200;
+    auto& body = task_context_->font_response;
+    size_t received = 0U;
+    while (valid && received < body.size()) {
+        const int count =
+            stream->Read(reinterpret_cast<uint8_t*>(body.data()) + received, body.size() - received, kRequestTimeoutMs);
+        if (count < 0) {
+            valid = false;
+            break;
+        }
+        if (count == 0) break;
+        received += static_cast<size_t>(count);
+    }
+    stream.reset();
+    valid = valid && received > 0U && received < body.size();
+    cJSON* root = valid ? cJSON_ParseWithLength(body.data(), received) : nullptr;
+    const char* url = StoreString(root, "url");
+    const char* id = StoreString(root, "id");
+    const std::string expected_path = DevicePath(identity.device_id.data(), "/fonts/releases/") + id;
+    // Reuse the signed release verifier and its task-owned fixed workspace.
+    auto& command = task_context_->host_command;
+    std::destroy_at(&command);
+    std::construct_at(&command);
+    const cJSON* size = root ? cJSON_GetObjectItemCaseSensitive(root, "sizeBytes") : nullptr;
+    const char* app_id = StoreString(root, "appId");
+    valid = valid && root && std::strlen(id) == 36U && expected_path == url && std::strlen(url) < job.path.size() &&
+            std::strcmp(StoreString(root, "locale"), job.locale.data()) == 0 && std::strlen(app_id) > 0U &&
+            std::strlen(app_id) < command.app_id.size() && cJSON_IsNumber(size) && size->valuedouble > 0 &&
+            size->valuedouble <= kMaxPackageBytes &&
+            size->valuedouble == static_cast<double>(static_cast<size_t>(size->valuedouble));
+    if (valid) {
+        std::snprintf(command.app_id.data(), command.app_id.size(), "%s", app_id);
+        command.package_size = static_cast<size_t>(size->valuedouble);
+        valid = ParseSha256(StoreString(root, "sha256"), command.package_sha256) &&
+                VerifyStoreRelease(StoreString(root, "storeRelease"), id, command,
+                                   task_context_->store_release_workspace, true);
+    }
+    if (valid) {
+        job.size = command.package_size;
+        job.sha256 = command.package_sha256;
+        std::snprintf(job.app_id.data(), job.app_id.size(), "%s", command.app_id.data());
+        std::snprintf(job.version.data(), job.version.size(), "%s", command.store_version.data());
+        std::snprintf(job.path.data(), job.path.size(), "%s", url);
+    }
+    cJSON_Delete(root);
+    if (!valid || job.cancelled.load()) {
+        heap_caps_free(job.bytes);
+        job.bytes = nullptr;
+        valid = false;
+    }
+    ESP_LOGI(kTag, "font QUIC discovery %s, task minimum free stack: %u", valid ? "ready" : "failed",
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    job.state.store(valid ? State::kResolved : State::kFailed, std::memory_order_release);
 }
 
 bool RemoteControlAgent::RefreshFirmwareRelease(void* client) {
@@ -2133,7 +2306,8 @@ void RemoteControlAgent::DrainHostResults(void* client, const Identity& identity
         }
         const uint32_t count =
             std::min(host_result.artifact_count, static_cast<uint32_t>(host_result.artifacts.size()));
-        ESP_LOGI(kTag, "Draining Host result: ok=%u artifacts=%" PRIu32, host_result.ok ? 1U : 0U, count);
+        ESP_LOGI(kTag, "Draining Host result: ok=%u artifacts=%" PRIu32 " message=%s", host_result.ok ? 1U : 0U, count,
+                 host_result.message.data());
         for (uint32_t index = 0U; index < count; ++index) {
             if (!UploadArtifact(client, identity, host_result.artifacts[index], artifacts)) {
                 ESP_LOGW(kTag, "Screen artifact upload failed: bytes=%zu", host_result.artifacts[index].size);
@@ -2707,6 +2881,20 @@ void RemoteControlAgent::TaskMain() {
             client = std::make_unique<Http3Client>(*async_client);
         }
 
+        if (font_download_ &&
+            (font_download_->state.load(std::memory_order_acquire) == host::fonts::FontDownload::State::kRequested ||
+             font_download_->state.load(std::memory_order_acquire) ==
+                 host::fonts::FontDownload::State::kDownloadRequested)) {
+            if (identity.device_id[0] == '\0') (void)Bootstrap(client.get(), identity);
+            if (identity.device_id[0] != '\0') {
+                if (!credential_refresh_attempted) {
+                    credential_refresh_attempted = true;
+                    (void)RefreshCredential(client.get(), identity);
+                }
+                DownloadFont(client.get(), identity, *font_download_);
+            } else
+                font_download_->state.store(host::fonts::FontDownload::State::kFailed, std::memory_order_release);
+        }
         if (!snapshot.enabled) {
             const TickType_t now_ticks = xTaskGetTickCount();
             if (next_firmware_check_ticks == 0U || static_cast<int32_t>(now_ticks - next_firmware_check_ticks) >= 0) {
@@ -2841,31 +3029,7 @@ void RemoteControlAgent::TaskMain() {
             controls_.CompleteStoreUpdateRequest(queued);
             if (queued) controls_.RequestStoreCheck();
         }
-        if (controls_.ConsumeStoreCheck()) {
-            const std::string path = DevicePath(identity.device_id.data(), "/store/check");
-            Http3Response response{};
-            const char* body = "{}";
-            bool checked =
-                client->Post(path, JsonHeaders(identity.credential.data()), reinterpret_cast<const uint8_t*>(body),
-                             std::strlen(body), response, kRequestTimeoutMs) &&
-                response.status == 200;
-            cJSON* root = checked ? cJSON_ParseWithLength(response.body.data(), response.body.size()) : nullptr;
-            const cJSON* updates = root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "updates") : nullptr;
-            checked = checked && cJSON_IsArray(updates);
-            if (checked) {
-                controls_.ResetStoreUpdates();
-                const int count = std::min(cJSON_GetArraySize(updates), static_cast<int>(control::kMaxApps));
-                for (int i = 0; i < count; ++i) {
-                    const cJSON* item = cJSON_GetArrayItem(updates, i);
-                    std::array<uint8_t, 32U> baseline{};
-                    if (ParseSha256(JsonString(item, "sha256"), baseline))
-                        controls_.AddStoreUpdate(JsonString(item, "appId"), JsonString(item, "version"),
-                                                 JsonString(item, "state"), baseline);
-                }
-            }
-            cJSON_Delete(root);
-            controls_.SetStoreCheckState(checked ? 2U : 3U);
-        }
+        if (controls_.ConsumeStoreCheck()) CheckStoreUpdates(client.get(), identity);
 
         bool control_stream_closed = false;
         while (true) {

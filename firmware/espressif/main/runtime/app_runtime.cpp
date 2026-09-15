@@ -136,6 +136,12 @@ AppRunOutcome AppRuntime::RunApp(const InstalledApp& app,
         ESP_LOGE(kTag, "rejected a second concurrent AppSession");
         return outcome;
     }
+    if (!micropixel_app_font_compatible(&metadata.requirements, effective_locale_.data())) {
+        GiveSessionLock();
+        outcome.error = AppSessionError::kRequiredFont;
+        (void)std::snprintf(outcome.detail.data(), outcome.detail.size(), "%s", metadata.requirements.system_font);
+        return outcome;
+    }
     session_active_ = true;
     stop_requested_ = false;
     GiveSessionLock();

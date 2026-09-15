@@ -43,11 +43,17 @@ class ControlDispatcher final {
         store_check_requested_.store(true);
     }
     [[nodiscard]] bool ConsumeStoreCheck() { return store_check_requested_.exchange(false); }
-    void SetStoreCheckState(uint8_t state) { store_check_state_.store(state); }
+    void SetStoreCheckState(uint8_t state) {
+        if (state == 2U) store_updates_revision_.fetch_add(1U, std::memory_order_release);
+        store_check_state_.store(state);
+    }
+    [[nodiscard]] uint32_t StoreUpdatesRevision() const {
+        return store_updates_revision_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] uint8_t StoreCheckState() const { return store_check_state_.load(); }
     void ResetStoreUpdates();
     void AddStoreUpdate(const char* app_id, const char* version, const char* state,
-                        const std::array<uint8_t, 32U>& digest);
+                        const std::array<uint8_t, 32U>& digest, const char* current_version = nullptr);
     [[nodiscard]] StoreAppUpdate FindStoreUpdate(const char* app_id) const;
     void RequestStoreUpdate(const char* app_id);
     void CompleteStoreUpdateRequest(bool queued);
@@ -56,9 +62,13 @@ class ControlDispatcher final {
     [[nodiscard]] bool ConsumeStoreUpdate(std::array<char, kAppIdCapacity>& app_id);
     void UpdateStoreSnapshot(const StoreSnapshot& snapshot);
     [[nodiscard]] StoreSnapshot CopyStoreSnapshot() const;
-    [[nodiscard]] bool BeginInstallActivity(ControlSource source, const char* command_id, const char* app_id);
+    [[nodiscard]] bool BeginInstallActivity(ControlSource source, const char* command_id, const char* app_id,
+                                            size_t package_size = 0U, const std::array<uint8_t, 32U>& sha256 = {});
+    void CompleteInstallPreflight(ControlSource source, const char* command_id, uint64_t required_bytes,
+                                  uint64_t free_bytes, const char* error);
+    void DismissInstallFailure();
     void UpdateInstallProgress(ControlSource source, const char* command_id, uint8_t progress_percent);
-    void EndInstallActivity(ControlSource source, const char* command_id);
+    void EndInstallActivity(ControlSource source, const char* command_id, const char* error = nullptr);
     void CopyInstallActivity(InstallActivity& activity) const;
 
     void SetCommandReadySink(CommandReadySink sink, void* context);
@@ -77,13 +87,14 @@ class ControlDispatcher final {
     HostSnapshot* snapshot_{};
     InstallActivity install_activity_{};
     StoreSnapshot store_snapshot_{};
-    std::array<StoreAppUpdate, kMaxApps> store_updates_{};
+    std::array<StoreAppUpdate, runtime::kMaxInstalledPackages> store_updates_{};
     uint32_t store_update_count_{};
     std::array<char, kAppIdCapacity> store_update_requested_{};
     host::StoreUpdateRequestState store_update_request_state_{};
     bool store_update_dispatch_pending_{};
     std::atomic<bool> store_check_requested_{};
     std::atomic<uint8_t> store_check_state_{};
+    std::atomic<uint32_t> store_updates_revision_{};
     StaticQueue_t host_command_queue_storage_{};
     uint8_t* host_command_queue_bytes_{};
     QueueHandle_t host_command_queue_{};

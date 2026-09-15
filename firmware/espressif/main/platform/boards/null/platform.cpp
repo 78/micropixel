@@ -40,7 +40,7 @@ SmokeSystemUi& SelfTestSystemUi() {
 class NullBoard final : public Board {
    public:
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
-        BoardRegistration registration{{.board = "Null board"}};
+        static MICROPIXEL_EXT_RAM_BSS BoardRegistration registration{{.board = "Null board"}};
 #if CONFIG_MICROPIXEL_SMOKE_AUTORUN_FIRST_APP
         registration.SetSystemUi(SelfTestSystemUi());
         ESP_LOGI(kTag, "Null smoke board initialized; waiting for one AOT App");

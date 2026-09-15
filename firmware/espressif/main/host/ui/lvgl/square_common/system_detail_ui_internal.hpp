@@ -6,6 +6,7 @@
 
 #include "host/ui/lvgl/square_common/action_sheet_presenter.hpp"
 #include "host/ui/system_ui.hpp"
+#include "host/ui/ui_text.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
@@ -27,23 +28,23 @@ inline bool FirmwareUpdateInProgress(host_ui::FirmwareUpdateState state) {
 inline const char* FirmwareUpdateStageText(host_ui::FirmwareUpdateState state) {
     switch (state) {
         case host_ui::FirmwareUpdateState::kChecking:
-            return "Checking for update";
+            return UiText(host_strings::Id::kUiCheckingForUpdate);
         case host_ui::FirmwareUpdateState::kDownloading:
-            return "Downloading firmware";
+            return UiText(host_strings::Id::kUiDownloadingFirmware);
         case host_ui::FirmwareUpdateState::kVerifying:
-            return "Verifying package";
+            return UiText(host_strings::Id::kUiVerifyingPackage);
         case host_ui::FirmwareUpdateState::kInstalling:
-            return "Installing firmware";
+            return UiText(host_strings::Id::kUiInstallingFirmware);
         case host_ui::FirmwareUpdateState::kCurrent:
-            return "Firmware is up to date";
+            return UiText(host_strings::Id::kUiFirmwareIsUpToDate);
         case host_ui::FirmwareUpdateState::kAvailable:
-            return "Ready to update";
+            return UiText(host_strings::Id::kUiReadyToUpdate);
         case host_ui::FirmwareUpdateState::kFailed:
-            return "Update failed";
+            return UiText(host_strings::Id::kUiUpdateFailed);
         case host_ui::FirmwareUpdateState::kUnknown:
-            return "Firmware update";
+            return UiText(host_strings::Id::kUiFirmwareUpdateCaps);
     }
-    return "Firmware update";
+    return UiText(host_strings::Id::kUiFirmwareUpdateCaps);
 }
 
 inline lv_obj_t* Label(lv_obj_t* parent, const char* text, platform::lvgl::SystemFontRole role, uint32_t color) {
@@ -88,19 +89,19 @@ inline void FormatSize(uint32_t kib, char* output, size_t capacity) {
 inline const char* RemoteState(host_ui::RemoteControlConnectionState state) {
     switch (state) {
         case host_ui::RemoteControlConnectionState::kDisabled:
-            return "Off";
+            return UiText(host_strings::Id::kUiOff);
         case host_ui::RemoteControlConnectionState::kWaitingForNetwork:
-            return "Waiting for network";
+            return UiText(host_strings::Id::kUiWaitingForNetwork);
         case host_ui::RemoteControlConnectionState::kConnecting:
-            return "Connecting";
+            return UiText(host_strings::Id::kUiConnectingCaps);
         case host_ui::RemoteControlConnectionState::kConnected:
-            return "Connected";
+            return UiText(host_strings::Id::kUiConnected);
         case host_ui::RemoteControlConnectionState::kBackoff:
-            return "Retrying";
+            return UiText(host_strings::Id::kUiRetrying);
         case host_ui::RemoteControlConnectionState::kAuthenticationError:
-            return "Authentication error";
+            return UiText(host_strings::Id::kUiAuthenticationError);
     }
-    return "Unknown";
+    return UiText(host_strings::Id::kUiUnknown);
 }
 
 inline uint32_t RemoteStateColor(host_ui::RemoteControlConnectionState state) {

@@ -10,6 +10,7 @@
 #include "host/ui/lvgl/square_common/default_keyboard.hpp"
 #include "host/ui/lvgl/square_common/symbols.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
+#include "host/ui/ui_text.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -19,23 +20,23 @@ constexpr char kTag[] = "wifi_settings_ui";
 
 const char* SignalText(int8_t rssi) {
     if (rssi >= -55) {
-        return "Excellent";
+        return UiText(host_strings::Id::kUiExcellent);
     }
     if (rssi >= -67) {
-        return "Good";
+        return UiText(host_strings::Id::kUiGood);
     }
     if (rssi >= -75) {
-        return "Fair";
+        return UiText(host_strings::Id::kUiFair);
     }
-    return "Weak";
+    return UiText(host_strings::Id::kUiWeak);
 }
 
 const char* ConnectionText(const host_ui::WifiNetworkModel& network) {
     if (network.connected) {
-        return "Connected";
+        return UiText(host_strings::Id::kUiConnected);
     }
     if (network.saved) {
-        return "Saved";
+        return UiText(host_strings::Id::kUiSaved);
     }
     return SignalText(network.rssi);
 }
@@ -152,8 +153,10 @@ void WifiSettingsUi::RenderLocked() {
     bindings_ = {};
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
-    (void)CreateSystemHeader(root_, layout, scan_view_ ? "Available Networks" : "Wi-Fi",
-                             scan_view_ ? "Choose a network" : "Wireless network settings", BackEvent, this);
+    (void)CreateSystemHeader(
+        root_, layout, scan_view_ ? UiText(host_strings::Id::kUiAvailableNetworks) : "Wi-Fi",
+        scan_view_ ? UiText(host_strings::Id::kUiChooseANetwork) : UiText(host_strings::Id::kUiWirelessNetworkSettings),
+        BackEvent, this);
     lv_obj_t* content = CreateSystemScrollColumn(root_, layout, ScrollEvent, this);
     scroll_content_ = content;
 
@@ -166,10 +169,10 @@ void WifiSettingsUi::RenderLocked() {
         lv_obj_set_width(wifi_text, 0);
         lv_obj_set_flex_grow(wifi_text, 1);
         (void)CreateSystemLabel(wifi_text, "Wi-Fi", layout.heading_font, theme::kPrimaryText);
-        const char* status = !model_.available  ? "Not available"
-                             : !model_.enabled  ? "Off"
-                             : model_.connected ? "Connected"
-                                                : "Not connected";
+        const char* status = !model_.available  ? UiText(host_strings::Id::kUiNotAvailable)
+                             : !model_.enabled  ? UiText(host_strings::Id::kUiOff)
+                             : model_.connected ? UiText(host_strings::Id::kUiConnected)
+                                                : UiText(host_strings::Id::kUiNotConnected);
         (void)CreateSystemLabel(wifi_text, status, layout.detail_font, theme::kSecondaryText);
         lv_obj_t* toggle = lv_switch_create(wifi_panel);
         lv_obj_set_size(toggle, layout.control_height + 12, layout.control_height * 3 / 5);
@@ -184,16 +187,20 @@ void WifiSettingsUi::RenderLocked() {
 
     if (!model_.enabled) {
         lv_obj_t* hint = CreateSystemPanel(content, layout);
-        (void)CreateSystemLabel(
-            hint,
-            layout.width <= 320 ? "Enable Wi-Fi to view networks." : "Turn on Wi-Fi to view and connect to networks.",
-            layout.body_font, theme::kSecondaryText);
+        (void)CreateSystemLabel(hint,
+                                layout.width <= 320 ? UiText(host_strings::Id::kUiEnableWiFiToViewNetworks)
+                                                    : UiText(host_strings::Id::kUiTurnOnWiFiToViewAndConnectToNetworks),
+                                layout.body_font, theme::kSecondaryText);
     } else if (scan_view_) {
-        (void)CreateSystemLabel(content, model_.scanning ? "SCANNING..." : "AVAILABLE NETWORKS", layout.detail_font,
-                                theme::kSecondaryText);
+        (void)CreateSystemLabel(content,
+                                model_.scanning ? UiText(host_strings::Id::kUiScanning)
+                                                : UiText(host_strings::Id::kUiAvailableNetworksCaps),
+                                layout.detail_font, theme::kSecondaryText);
         if (model_.available_network_count == 0U) {
             lv_obj_t* empty = CreateSystemPanel(content, layout);
-            (void)CreateSystemLabel(empty, model_.scanning ? "Looking for networks..." : "No networks found",
+            (void)CreateSystemLabel(empty,
+                                    model_.scanning ? UiText(host_strings::Id::kUiLookingForNetworks)
+                                                    : UiText(host_strings::Id::kUiNoNetworksFound),
                                     layout.body_font, theme::kSecondaryText);
         }
         for (uint32_t index = 0U; index < model_.available_network_count && index < host_ui::kMaxVisibleWifiNetworks;
@@ -203,12 +210,15 @@ void WifiSettingsUi::RenderLocked() {
             DrawNetworkRow(content, model_.available_networks[index], binding);
         }
     } else {
-        lv_obj_t* scan = CreateSystemActionButton(content, layout, "Connect to New Wi-Fi", theme::kAccent);
+        lv_obj_t* scan =
+            CreateSystemActionButton(content, layout, UiText(host_strings::Id::kUiConnectToNewWiFi), theme::kAccent);
         lv_obj_add_event_cb(scan, OpenScanEvent, LV_EVENT_SHORT_CLICKED, this);
-        (void)CreateSystemLabel(content, "SAVED NETWORKS", layout.detail_font, theme::kSecondaryText);
+        (void)CreateSystemLabel(content, UiText(host_strings::Id::kUiSavedNetworks), layout.detail_font,
+                                theme::kSecondaryText);
         if (model_.saved_network_count == 0U) {
             lv_obj_t* empty = CreateSystemPanel(content, layout);
-            (void)CreateSystemLabel(empty, "No saved networks", layout.body_font, theme::kSecondaryText);
+            (void)CreateSystemLabel(empty, UiText(host_strings::Id::kUiNoSavedNetworks), layout.body_font,
+                                    theme::kSecondaryText);
         }
         for (uint32_t index = 0U; index < model_.saved_network_count && index < host_ui::kMaxSavedWifiNetworks;
              ++index) {
@@ -271,12 +281,16 @@ void WifiSettingsUi::DrawActionSheetLocked() {
     lv_obj_t* title = CreateSystemLabel(panel, network.ssid.data(), layout_->heading_font, theme::kPrimaryText);
     lv_obj_set_width(title, LV_PCT(100));
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_t* connect = CreateSystemActionButton(panel, *layout_, network.connected ? "Disconnect" : "Connect",
-                                                 network.connected ? theme::kDangerSoft : theme::kAccent);
+    lv_obj_t* connect = CreateSystemActionButton(
+        panel, *layout_,
+        network.connected ? UiText(host_strings::Id::kUiDisconnect) : UiText(host_strings::Id::kUiConnect),
+        network.connected ? theme::kDangerSoft : theme::kAccent);
     lv_obj_add_event_cb(connect, SheetConnectEvent, LV_EVENT_SHORT_CLICKED, this);
-    lv_obj_t* forget = CreateSystemActionButton(panel, *layout_, "Forget Network", theme::kDangerSoft);
+    lv_obj_t* forget =
+        CreateSystemActionButton(panel, *layout_, UiText(host_strings::Id::kUiForgetNetwork), theme::kDangerSoft);
     lv_obj_add_event_cb(forget, SheetForgetEvent, LV_EVENT_SHORT_CLICKED, this);
-    lv_obj_t* cancel = CreateSystemActionButton(panel, *layout_, "Cancel", theme::kSecondaryText);
+    lv_obj_t* cancel =
+        CreateSystemActionButton(panel, *layout_, UiText(host_strings::Id::kUiCancel), theme::kSecondaryText);
     lv_obj_add_event_cb(cancel, OverlayCancelEvent, LV_EVENT_SHORT_CLICKED, this);
 }
 
@@ -285,7 +299,8 @@ void WifiSettingsUi::DrawPasswordLocked() {
     lv_obj_t* dialog = CreateSystemPanel(overlay, *layout_);
     lv_obj_set_width(dialog, layout_->width - layout_->safe_horizontal * 2);
     lv_obj_align(dialog, LV_ALIGN_TOP_MID, 0, layout_->safe_horizontal);
-    (void)CreateSystemLabel(dialog, "Wi-Fi Password", layout_->heading_font, theme::kPrimaryText);
+    (void)CreateSystemLabel(dialog, UiText(host_strings::Id::kUiWiFiPassword), layout_->heading_font,
+                            theme::kPrimaryText);
     lv_obj_t* ssid =
         CreateSystemLabel(dialog, password_network_.ssid.data(), layout_->detail_font, theme::kSecondaryText);
     lv_obj_set_width(ssid, LV_PCT(100));
@@ -294,32 +309,32 @@ void WifiSettingsUi::DrawPasswordLocked() {
     const char* status = nullptr;
     uint32_t status_color = theme::kSecondaryText;
     if (password_length_invalid_) {
-        status = "Password must be at least 8 characters";
+        status = UiText(host_strings::Id::kUiPasswordMustBeAtLeast8Characters);
         status_color = theme::kWifiError;
     } else {
         switch (password_connection_state_) {
             case host_ui::WifiConnectionState::kConnecting:
-                status = "Connecting...";
+                status = UiText(host_strings::Id::kUiConnecting);
                 status_color = theme::kAccent;
                 break;
             case host_ui::WifiConnectionState::kAuthenticationFailed:
-                status = "Incorrect password. Try again.";
+                status = UiText(host_strings::Id::kUiIncorrectPasswordTryAgain);
                 status_color = theme::kWifiError;
                 break;
             case host_ui::WifiConnectionState::kAuthenticationTimedOut:
-                status = "Authentication timed out. Try again.";
+                status = UiText(host_strings::Id::kUiAuthenticationTimedOutTryAgain);
                 status_color = theme::kWifiWarning;
                 break;
             case host_ui::WifiConnectionState::kHandshakeTimedOut:
-                status = "Security handshake timed out. Try again.";
+                status = UiText(host_strings::Id::kUiSecurityHandshakeTimedOutTryAgain);
                 status_color = theme::kWifiWarning;
                 break;
             case host_ui::WifiConnectionState::kNetworkNotFound:
-                status = "Network not found. Try again.";
+                status = UiText(host_strings::Id::kUiNetworkNotFoundTryAgain);
                 status_color = theme::kWifiWarning;
                 break;
             case host_ui::WifiConnectionState::kFailed:
-                status = "Connection failed. Try again.";
+                status = UiText(host_strings::Id::kUiConnectionFailedTryAgain);
                 status_color = theme::kWifiWarning;
                 break;
             case host_ui::WifiConnectionState::kDisconnected:
@@ -336,18 +351,20 @@ void WifiSettingsUi::DrawPasswordLocked() {
     lv_textarea_set_one_line(password_textarea_, true);
     lv_textarea_set_password_mode(password_textarea_, false);
     lv_textarea_set_max_length(password_textarea_, host_ui::kMaxWifiPasswordLength);
-    lv_textarea_set_placeholder_text(password_textarea_, "Password");
+    lv_textarea_set_placeholder_text(password_textarea_, UiText(host_strings::Id::kUiPassword));
     if (password_[0] != '\0') {
         lv_textarea_set_text(password_textarea_, password_.data());
     }
     lv_obj_set_style_text_font(password_textarea_, platform::lvgl::BuiltinLatinFont(layout_->body_font), 0);
     lv_obj_t* actions = CreateSystemColumn(dialog, layout_->panel_gap);
     lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
-    lv_obj_t* cancel = CreateSystemActionButton(actions, *layout_, "Cancel", theme::kSecondaryText);
+    lv_obj_t* cancel =
+        CreateSystemActionButton(actions, *layout_, UiText(host_strings::Id::kUiCancel), theme::kSecondaryText);
     lv_obj_set_width(cancel, 0);
     lv_obj_set_flex_grow(cancel, 1);
     lv_obj_add_event_cb(cancel, OverlayCancelEvent, LV_EVENT_SHORT_CLICKED, this);
-    lv_obj_t* connect = CreateSystemActionButton(actions, *layout_, "Connect", theme::kAccent);
+    lv_obj_t* connect =
+        CreateSystemActionButton(actions, *layout_, UiText(host_strings::Id::kUiConnect), theme::kAccent);
     lv_obj_set_width(connect, 0);
     lv_obj_set_flex_grow(connect, 1);
     lv_obj_add_event_cb(connect, PasswordConnectEvent, LV_EVENT_SHORT_CLICKED, this);

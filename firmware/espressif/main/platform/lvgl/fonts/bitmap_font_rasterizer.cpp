@@ -5,9 +5,25 @@
 #include <cstring>
 
 #include "device/contracts/graphics.hpp"
+#include "esp_lv_adapter.h"
+#include "platform/lvgl/fonts/glyph_bitmap.hpp"
 
 namespace micropixel::platform::lvgl {
 namespace {
+
+// Scene composition can execute outside the display lock. Font caches are
+// shared with the Host UI; take the same recursive lock for all text access.
+class FontLock final {
+   public:
+    FontLock() : locked_(esp_lv_adapter_lock(-1) == ESP_OK) {}
+    ~FontLock() {
+        if (locked_) esp_lv_adapter_unlock();
+    }
+    [[nodiscard]] bool locked() const { return locked_; }
+
+   private:
+    bool locked_;
+};
 
 struct Rgb final {
     uint8_t red{};
@@ -126,26 +142,6 @@ uint8_t BlendChannel(uint8_t foreground, uint8_t background, uint8_t opacity) {
         255U);
 }
 
-uint8_t Coverage(const uint8_t* bitmap, const lv_font_glyph_dsc_t& glyph, uint32_t x, uint32_t y) {
-    const uint32_t bits_per_pixel = static_cast<uint32_t>(glyph.format);
-    if (bits_per_pixel == 0U || bits_per_pixel > 8U) {
-        return 0U;
-    }
-    const uint64_t bit_offset = glyph.stride == 0U ? (static_cast<uint64_t>(y) * glyph.box_w + x) * bits_per_pixel
-                                                   : static_cast<uint64_t>(y) * glyph.stride * 8U + x * bits_per_pixel;
-    const uint64_t total_bits = glyph.stride == 0U ? static_cast<uint64_t>(glyph.box_w) * glyph.box_h * bits_per_pixel
-                                                   : static_cast<uint64_t>(glyph.stride) * glyph.box_h * 8U;
-    const uint64_t total_bytes = (total_bits + 7U) / 8U;
-    const uint32_t byte_offset = static_cast<uint32_t>(bit_offset / 8U);
-    const uint32_t intra_byte = static_cast<uint32_t>(bit_offset & 7U);
-    const uint16_t window = static_cast<uint16_t>(bitmap[byte_offset]) << 8U |
-                            (byte_offset + 1U < total_bytes ? bitmap[byte_offset + 1U] : 0U);
-    const uint32_t shift = 16U - intra_byte - bits_per_pixel;
-    const uint32_t mask = (1U << bits_per_pixel) - 1U;
-    const uint32_t value = (window >> shift) & mask;
-    return static_cast<uint8_t>((value * 255U + mask / 2U) / mask);
-}
-
 bool DrawGlyph(graphics::PixelSurface destination, int32_t x, int32_t y, Rgb foreground, const lv_font_t* font,
                lv_font_glyph_dsc_t& glyph) {
     if (glyph.box_w == 0U || glyph.box_h == 0U) {
@@ -174,7 +170,7 @@ bool DrawGlyph(graphics::PixelSurface destination, int32_t x, int32_t y, Rgb for
             if (destination_x < 0 || destination_x >= static_cast<int32_t>(destination.width)) {
                 continue;
             }
-            const uint8_t opacity = Coverage(bitmap, glyph, column, row);
+            const uint8_t opacity = GlyphCoverage(bitmap, glyph, column, row);
             if (opacity == 0U) {
                 continue;
             }
@@ -200,6 +196,8 @@ bool DrawGlyph(graphics::PixelSurface destination, int32_t x, int32_t y, Rgb for
 
 bool BitmapFontRasterizer::Measure(micropixel_font_handle_t font_handle, const char* text, uint16_t text_length,
                                    graphics::RasterTextMetrics& metrics) const {
+    FontLock lock;
+    if (!lock.locked()) return false;
     const lv_font_t* font = fonts_.ResolveRetainedHandle(font_handle);
     char terminated[micropixel::device::graphics_limits::kMaxTextBytes + 1U]{};
     if (font == nullptr || !CopyTerminated(text, text_length, terminated)) {
@@ -221,6 +219,8 @@ bool BitmapFontRasterizer::Draw(graphics::PixelSurface destination, int32_t x, i
 
 bool BitmapFontRasterizer::DrawWithFont(graphics::PixelSurface destination, int32_t x, int32_t y, uint32_t rgb888,
                                         const lv_font_t* font, const char* text, uint16_t text_length) const {
+    FontLock lock;
+    if (!lock.locked()) return false;
     if (!ValidDestination(destination) || font == nullptr || text == nullptr || text_length == 0U ||
         text_length > micropixel::device::graphics_limits::kMaxTextBytes || (rgb888 & 0xff000000U) != 0U) {
         return false;

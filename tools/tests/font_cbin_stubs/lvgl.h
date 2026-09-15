@@ -13,6 +13,40 @@ typedef struct lv_font_t lv_font_t;
 typedef struct lv_font_glyph_dsc_t lv_font_glyph_dsc_t;
 typedef struct lv_draw_buf_t lv_draw_buf_t;
 
+typedef struct lv_cache_entry_t {
+    unsigned references;
+} lv_cache_entry_t;
+typedef enum {
+    LV_FONT_GLYPH_FORMAT_NONE = 0,
+    LV_FONT_GLYPH_FORMAT_A1 = 1,
+    LV_FONT_GLYPH_FORMAT_A2 = 2,
+    LV_FONT_GLYPH_FORMAT_A3 = 3,
+    LV_FONT_GLYPH_FORMAT_A4 = 4,
+    LV_FONT_GLYPH_FORMAT_A8 = 8
+} lv_font_glyph_format_t;
+typedef enum { LV_FONT_KERNING_NORMAL, LV_FONT_KERNING_NONE } lv_font_kerning_t;
+struct lv_draw_buf_t {
+    struct {
+        uint32_t stride;
+    } header;
+    uint8_t* data;
+};
+struct lv_font_glyph_dsc_t {
+    const lv_font_t* resolved_font;
+    uint16_t adv_w, box_w, box_h;
+    int16_t ofs_x, ofs_y;
+    uint16_t stride;
+    lv_font_glyph_format_t format;
+    uint8_t is_placeholder : 1;
+    uint8_t req_raw_bitmap : 1;
+    int32_t outline_stroke_width;
+    union {
+        uint32_t index;
+        const void* src;
+    } gid;
+    lv_cache_entry_t* entry;
+};
+
 typedef struct {
     uint32_t bitmap_index;
     uint32_t adv_w;
@@ -92,4 +126,18 @@ struct lv_font_t {
 bool lv_font_get_glyph_dsc_fmt_txt(const lv_font_t*, lv_font_glyph_dsc_t*, uint32_t, uint32_t);
 const void* lv_font_get_bitmap_fmt_txt(lv_font_glyph_dsc_t*, lv_draw_buf_t*);
 
+typedef enum { LV_RESULT_OK, LV_RESULT_INVALID } lv_result_t;
+#define LV_COLOR_FORMAT_A8 1
+static inline lv_result_t lv_draw_buf_init(lv_draw_buf_t* buffer, uint32_t width, uint32_t height, int format,
+                                           uint32_t stride, void* data, uint32_t capacity) {
+    (void)format;
+    if (stride < width || (uint64_t)height * stride > capacity) return LV_RESULT_INVALID;
+    buffer->header.stride = stride;
+    buffer->data = (uint8_t*)data;
+    return LV_RESULT_OK;
+}
+static inline void lv_draw_buf_flush_cache(lv_draw_buf_t* buffer, const void* area) {
+    (void)buffer;
+    (void)area;
+}
 #endif

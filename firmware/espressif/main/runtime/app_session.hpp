@@ -40,6 +40,7 @@ enum class AppSessionError {
     kGuestExit,
     kSessionAlreadyActive,
     kRuntimeSynchronization,
+    kRequiredFont,
 };
 
 struct AppSessionFailure final {

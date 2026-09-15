@@ -106,7 +106,7 @@ def validate_profile(profile: dict) -> list[dict]:
 
 def validate_host_catalog_coverage(path: Path, requested: set[int]) -> dict:
     report = load_json(path)
-    catalog_codepoints = report.get("requested_codepoints")
+    catalog_codepoints = report.get("catalogs", {}).get(report.get("default_locale", "en"), {}).get("requested_codepoints", report.get("requested_codepoints"))
     if not isinstance(catalog_codepoints, list) or not all(isinstance(value, int) for value in catalog_codepoints):
         raise ValueError("Host localization report has no requested_codepoints list")
     missing = set(catalog_codepoints) - requested

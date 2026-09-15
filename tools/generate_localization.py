@@ -121,7 +121,7 @@ def validate_text(key: str, value: object, path: Path) -> str:
         raise ValueError(f"translation {key!r} in {path} must not be empty")
     for character in value:
         codepoint = ord(character)
-        if codepoint == 0 or codepoint == 0x7F or codepoint < 0x20:
+        if codepoint == 0 or codepoint == 0x7F or (codepoint < 0x20 and codepoint != 0x0A):
             raise ValueError(
                 f"translation {key!r} in {path} contains unsupported control U+{codepoint:04X}"
             )
@@ -160,8 +160,7 @@ def enum_name(key: str) -> str:
 
 
 def cpp_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    return json.dumps(value, ensure_ascii=False)
 
 
 def symbol_name(locale: str) -> str:
@@ -342,7 +341,7 @@ def make_report(
     locale_reports = {}
     requested_union: set[int] = set()
     for locale, catalog in catalogs.items():
-        codepoints = sorted({ord(character) for value in catalog.values() for character in value})
+        codepoints = sorted({ord(character) for value in catalog.values() for character in value if ord(character) >= 32})
         requested_union.update(codepoints)
         source_digest = file_sha256(source.catalogs[locale])
         digest.update(locale.encode("ascii"))

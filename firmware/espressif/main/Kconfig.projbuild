@@ -471,3 +471,11 @@ config MICROPIXEL_STORE_PREVIOUS_PUBLIC_KEY_DER_BASE64
     string "Previous ES256 public key in base64 DER"
     default ""
 endmenu
+
+config MICROPIXEL_SYSTEM_TTF
+    bool
+    default y
+    select LV_USE_TINY_TTF
+    help
+        System and Guest fonts share Tiny TTF. Downloaded Noto language packs
+        are signed App Store components downloaded over Control QUIC and mapped from NOR.

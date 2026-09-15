@@ -10,10 +10,14 @@
 #include "host/controller/host_controller.hpp"
 #include "host/controller/local/local_control_agent.hpp"
 #include "host/controller/remote/remote_control_agent.hpp"
+#include "host/fonts/language_packs.hpp"
 #include "host/logging/system_log_buffer.hpp"
 #include "host/time/network_time.hpp"
 #include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
+#if !CONFIG_MICROPIXEL_BOARD_NULL
+#include "platform/lvgl/fonts/system_fonts.hpp"
+#endif
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/platform.hpp"
 #include "platform/storage/partition_block_storage.hpp"
@@ -131,6 +135,16 @@ void FirmwareApp::Run() {
         ESP_LOGE(kTag, "app_store partition is missing; the App Store is unavailable");
     }
     static MICROPIXEL_EXT_RAM_BSS runtime::AppStore app_store(system_store, external_store);
+#if !CONFIG_MICROPIXEL_BOARD_NULL
+    static MICROPIXEL_EXT_RAM_BSS host::fonts::LanguagePacks language_packs(
+        app_store, platform::lvgl::PrepareSystemLanguageFont, platform::lvgl::CommitSystemLanguageFont,
+        platform::lvgl::AbortSystemLanguageFont);
+    remote_control.BindFontDownload(language_packs.download());
+    language_packs.BindWake(
+        [](void* context) { static_cast<remote_control::RemoteControlAgent*>(context)->NotifyFontDownload(); },
+        &remote_control);
+    shell.BindLanguagePacks(language_packs);
+#endif
     HostController(devices, app_store, *services.battery, *services.wifi, *services.power, shell, controls, system_logs,
                    remote_control, background_executor)
         .Run();

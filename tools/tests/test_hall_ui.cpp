@@ -50,6 +50,10 @@ void DialogSnapshotStride() {
 
 void AppUninstallRequestLatch() {
     host_ui::AppManagementModel model{};
+    model.component_count = host_ui::kMaxManagedComponents;
+    model.uninstall_available = true;
+    Check(!host_ui::BeginAppUninstall(model, 0), "read-only components never receive App action indices");
+    model.uninstall_available = false;
     model.app_count = 2;
     Check(!host_ui::BeginAppUninstall(model, 0), "unavailable uninstall must be rejected");
     model.uninstall_available = true;
@@ -341,6 +345,11 @@ void HallResumePolicy() {
     Check(host_ui::lvgl::square_common::HallResumeModelMatches(model, visible_count, signature, visible_count,
                                                                signature, retained_running, true, false),
           "identical Hall state must reuse its retained scene");
+    model.status = host_ui::HallStatus::kAppFailed;
+    Check(!host_ui::lvgl::square_common::HallResumeModelMatches(model, visible_count, signature, visible_count,
+                                                                signature, retained_running, true, false),
+          "an installation failure must show its dialog instead of reusing the retained Hall");
+    model.status = host_ui::HallStatus::kReady;
     model.apps[1].running = false;
     Check(!host_ui::lvgl::square_common::HallResumeModelMatches(model, visible_count, signature, visible_count,
                                                                 signature, retained_running, true, false),
@@ -391,6 +400,30 @@ void TestHallCoverMask() {
     CheckStride(135U, 432U, 15U);
 }
 
+void ManagementUpdateOrder() {
+    host_ui::AppManagementModel model{};
+    model.app_count = 6;
+    for (unsigned i = 0; i < model.app_count; ++i) model.apps[i].external_storage = i % 2;
+    std::strcpy(model.apps[2].update_version.data(), "1.1.0");
+    std::strcpy(model.apps[5].update_version.data(), "1.2.0");
+    std::array<uint32_t, 6> order{};
+    host_ui::BuildAppManagementOrder(model, order);
+    Check(order == std::array<uint32_t, 6>{2, 5, 0, 1, 3, 4}, "updates are stable and retain original catalog indices");
+    std::array<uint32_t, 3> nor{}, nand{};
+    unsigned n = 0, d = 0;
+    for (auto index : order) {
+        if (model.apps[index].external_storage)
+            nand[d++] = index;
+        else
+            nor[n++] = index;
+    }
+    Check(nor == std::array<uint32_t, 3>{2, 0, 4} && nand == std::array<uint32_t, 3>{5, 1, 3},
+          "each storage shows updates first without dropping or duplicating apps");
+    std::array<uint32_t, 2> short_order{};
+    host_ui::BuildAppManagementOrder(model, short_order);
+    Check(short_order == std::array<uint32_t, 2>{2, 5}, "ordering respects output capacity");
+}
+
 void InstallationPlacement() {
     host_ui::HallModel model{};
     model.app_count = 2U;
@@ -425,6 +458,7 @@ int main() {
     AppUninstallRequestLatch();
     AppActionSheetRefresh();
     InstallationPlacement();
+    ManagementUpdateOrder();
     CapacityAndGeometry();
     Square480Geometry();
     Landscape320Geometry();

@@ -221,6 +221,35 @@ build_and_run system_locale \
     "$workspace_root/firmware/espressif/main/host/ui/system_locale.cpp" \
     "$workspace_root/firmware/espressif/main/host/time/system_time.cpp"
 
+build_and_run glyph_bitmap \
+    -I "$workspace_root/tools/tests/font_cbin_stubs" \
+    "$workspace_root/tools/tests/test_glyph_bitmap.cpp"
+
+build_and_run font_fallback \
+    -I "$workspace_root/tools/tests/font_cbin_stubs" \
+    "$workspace_root/tools/tests/test_font_fallback.cpp"
+
+build_and_run tiny_ttf_font_cache \
+    -DMICROPIXEL_TEST_TRACK_PSRAM=1 \
+    -I "$workspace_root/tools/tests/font_cbin_stubs" \
+    "$workspace_root/tools/tests/test_tiny_ttf_font_cache.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/tiny_ttf_font_cache.cpp"
+
+build_and_run language_packs \
+    "$workspace_root/tools/tests/test_language_packs.cpp" \
+    "$workspace_root/firmware/espressif/main/host/fonts/language_packs.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundle_store_source.cpp" \
+    -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
+
+build_and_run bounded_ttf_font \
+    -DMICROPIXEL_TEST_TRACK_HEAP \
+    -DMICROPIXEL_TEST_FONT=\"${MICROPIXEL_TEST_LANGUAGE_FONT:-$workspace_root/firmware/espressif/managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf}\" \
+    -I "$workspace_root/tools/tests/font_cbin_stubs" \
+    -I "$workspace_root/firmware/espressif/managed_components/lvgl__lvgl" \
+    "$workspace_root/tools/tests/test_bounded_ttf_font.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/lvgl/fonts/bounded_ttf_font.cpp"
+
 build_and_run font_registry \
     "$workspace_root/tools/tests/test_font_registry.cpp" \
     -I "$workspace_root/guest" \
@@ -544,3 +573,11 @@ build_and_run blocks_model \
     -DMICROPIXEL_MODEL_TESTING \
     "$workspace_root/guest/apps/blocks/blocks_model.cpp" \
     "$workspace_root/guest/apps/blocks/blocks_model_test.cpp"
+
+# Exercise real LVGL flex layout and scrolling, including the compact 320x240 Hall.
+cmake -S "$workspace_root/tools/tests/lvgl_ui" -B "$test_output_dir/lvgl-ui" \
+    -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_menu_test --parallel 4
+(cd "$test_output_dir/lvgl-ui" && ./hall_error_dialog_test)
+
+(cd "$test_output_dir/lvgl-ui" && ./system_menu_test)

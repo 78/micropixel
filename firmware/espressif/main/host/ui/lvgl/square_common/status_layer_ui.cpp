@@ -10,6 +10,7 @@
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
+#include "host/ui/ui_text.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "src/core/lv_obj_draw_private.h"
@@ -585,20 +586,26 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
 
 void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model) {
     const bool compact = layout_ != nullptr && layout_->screen_width <= 320;
-    const char* unavailable = compact ? "N/A" : "UNAVAILABLE";
-    const char* wifi_detail = !model.wifi_available ? unavailable
-                                                    : (model.wifi_connected    ? "CONNECTED"
-                                                       : model.wifi_connecting ? "CONNECTING"
-                                                       : model.wifi_enabled    ? "ON"
-                                                                               : "OFF");
+    const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
+    const char* wifi_detail = !model.wifi_available
+                                  ? unavailable
+                                  : (model.wifi_connected    ? UiText(host_strings::Id::kUiConnectedCaps)
+                                     : model.wifi_connecting ? UiText(host_strings::Id::kUiConnectingCaps)
+                                     : model.wifi_enabled    ? UiText(host_strings::Id::kUiOn)
+                                                             : UiText(host_strings::Id::kUiOffCaps));
     const char* cellular_detail =
-        !model.cellular_available ? unavailable
-                                  : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
+        !model.cellular_available
+            ? unavailable
+            : (model.cellular_connected
+                   ? UiText(host_strings::Id::kUiConnectedCaps)
+                   : (model.cellular_enabled ? UiText(host_strings::Id::kUiOn) : UiText(host_strings::Id::kUiOffCaps)));
     UpdateQuickCardLocked(TouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
     UpdateQuickCardLocked(TouchTarget::kCellular, cellular_detail, model.cellular_enabled, model.cellular_available);
     UpdateQuickCardLocked(TouchTarget::kPerformance,
-                          compact ? (model.performance_overlay_enabled ? "CPU ON" : "CPU OFF")
-                                  : (model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF"),
+                          compact ? (model.performance_overlay_enabled ? UiText(host_strings::Id::kUiCpuOn)
+                                                                       : UiText(host_strings::Id::kUiCpuOff))
+                                  : (model.performance_overlay_enabled ? UiText(host_strings::Id::kUiFpsCpuOn)
+                                                                       : UiText(host_strings::Id::kUiFpsCpuOff)),
                           model.performance_overlay_enabled, true);
     UpdateSliderLocked(TouchTarget::kBrightness, model.brightness_percent);
     UpdateSliderLocked(TouchTarget::kVolume, model.volume_percent);
@@ -643,26 +650,34 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     lv_obj_set_style_border_color(status_dialog_, lv_color_hex(theme::kStatusDialogBorder), 0);
 
     const bool compact = layout_->screen_width <= 320;
-    const char* unavailable = compact ? "N/A" : "UNAVAILABLE";
-    const char* wifi_detail = !model.wifi_available ? unavailable
-                                                    : (model.wifi_connected    ? "CONNECTED"
-                                                       : model.wifi_connecting ? "CONNECTING"
-                                                       : model.wifi_enabled    ? "ON"
-                                                                               : "OFF");
+    const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
+    const char* wifi_detail = !model.wifi_available
+                                  ? unavailable
+                                  : (model.wifi_connected    ? UiText(host_strings::Id::kUiConnectedCaps)
+                                     : model.wifi_connecting ? UiText(host_strings::Id::kUiConnectingCaps)
+                                     : model.wifi_enabled    ? UiText(host_strings::Id::kUiOn)
+                                                             : UiText(host_strings::Id::kUiOffCaps));
     const char* cellular_detail =
-        !model.cellular_available ? unavailable
-                                  : (model.cellular_connected ? "CONNECTED" : (model.cellular_enabled ? "ON" : "OFF"));
+        !model.cellular_available
+            ? unavailable
+            : (model.cellular_connected
+                   ? UiText(host_strings::Id::kUiConnectedCaps)
+                   : (model.cellular_enabled ? UiText(host_strings::Id::kUiOn) : UiText(host_strings::Id::kUiOffCaps)));
     DrawQuickCard(status_dialog_, TouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled, model.wifi_available);
     DrawQuickCard(status_dialog_, TouchTarget::kCellular, "4G", cellular_detail, model.cellular_enabled,
                   model.cellular_available);
     DrawQuickCard(status_dialog_, TouchTarget::kPerformance, "FPS",
-                  compact ? (model.performance_overlay_enabled ? "CPU ON" : "CPU OFF")
-                          : (model.performance_overlay_enabled ? "FPS + CPU ON" : "FPS + CPU OFF"),
+                  compact ? (model.performance_overlay_enabled ? UiText(host_strings::Id::kUiCpuOn)
+                                                               : UiText(host_strings::Id::kUiCpuOff))
+                          : (model.performance_overlay_enabled ? UiText(host_strings::Id::kUiFpsCpuOn)
+                                                               : UiText(host_strings::Id::kUiFpsCpuOff)),
                   model.performance_overlay_enabled, true);
 
-    DrawSlider(status_dialog_, TouchTarget::kBrightness, compact ? "BRIGHT" : "BRIGHTNESS", model.brightness_percent,
+    DrawSlider(status_dialog_, TouchTarget::kBrightness,
+               compact ? UiText(host_strings::Id::kUiBright) : UiText(host_strings::Id::kUiBrightness),
+               model.brightness_percent, theme::kStatusControl);
+    DrawSlider(status_dialog_, TouchTarget::kVolume, UiText(host_strings::Id::kUiVolume), model.volume_percent,
                theme::kStatusControl);
-    DrawSlider(status_dialog_, TouchTarget::kVolume, "VOLUME", model.volume_percent, theme::kStatusControl);
 
     char memory[24]{};
     char storage[24]{};
@@ -677,8 +692,10 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     const uint8_t storage_percent = model.storage_total_kib > 0U
                                         ? static_cast<uint8_t>(model.storage_used_kib * 100U / model.storage_total_kib)
                                         : 0U;
-    (void)DrawMetric(status_dialog_, 0U, "STORAGE", storage, storage_percent, theme::kStatusControl);
-    (void)DrawMetric(status_dialog_, 1U, "MEMORY", memory, memory_percent, theme::kStatusControl);
+    (void)DrawMetric(status_dialog_, 0U, UiText(host_strings::Id::kUiStorage), storage, storage_percent,
+                     theme::kStatusControl);
+    (void)DrawMetric(status_dialog_, 1U, UiText(host_strings::Id::kUiMemory), memory, memory_percent,
+                     theme::kStatusControl);
     MetricObjects sram_metric = DrawMetric(status_dialog_, 2U, "SRAM", "", 0U, theme::kStatusControl);
     sram_value_label_ = sram_metric.value_label;
     sram_bar_ = sram_metric.bar;

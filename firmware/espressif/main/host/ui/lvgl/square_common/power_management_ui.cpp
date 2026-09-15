@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "host/ui/lvgl/square_common/system_detail_ui.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
+#include "host/ui/ui_text.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -37,7 +38,9 @@ void SystemDetailUi::RenderPowerManagementLocked() {
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
     const bool power_off = power_management_model_.idle_power_action == device::IdlePowerAction::kPowerOff;
-    Header(layout_, root_, "Power Management", power_off ? "Idle and automatic power off" : "Idle and automatic sleep",
+    Header(layout_, root_, UiText(host_strings::Id::kUiPowerManagement),
+           power_off ? UiText(host_strings::Id::kUiIdleAndAutomaticPowerOff)
+                     : UiText(host_strings::Id::kUiIdleAndAutomaticSleep),
            PowerManagementBackEvent, this);
     lv_obj_t* content = Scroll(layout_, root_, ScrollEvent, this);
 
@@ -48,19 +51,24 @@ void SystemDetailUi::RenderPowerManagementLocked() {
     lv_obj_t* automatic_text = square_common::CreateSystemColumn(automatic, 2);
     lv_obj_set_width(automatic_text, 0);
     lv_obj_set_flex_grow(automatic_text, 1);
-    (void)Label(automatic_text, power_off ? "Auto power off" : "Auto sleep", platform::lvgl::SystemFontRole::kLarge,
-                theme::kPrimaryText);
-    (void)Label(automatic_text, power_off ? "Power off when the device is idle" : "Sleep when the device is idle",
+    (void)Label(automatic_text,
+                power_off ? UiText(host_strings::Id::kUiAutoPowerOff) : UiText(host_strings::Id::kUiAutoSleep),
+                platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
+    (void)Label(automatic_text,
+                power_off ? UiText(host_strings::Id::kUiPowerOffWhenTheDeviceIsIdle)
+                          : UiText(host_strings::Id::kUiSleepWhenTheDeviceIsIdle),
                 platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
     power_switch_ = lv_switch_create(automatic);
     lv_obj_set_size(power_switch_, 64, 36);
     lv_obj_add_event_cb(power_switch_, PowerManagementSwitchEvent, LV_EVENT_VALUE_CHANGED, this);
 
     lv_obj_t* timeout = Panel(layout_, content);
-    (void)Label(timeout, "Idle timeout", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    (void)Label(timeout, "Choose how long to wait", platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    (void)Label(timeout, UiText(host_strings::Id::kUiIdleTimeout), platform::lvgl::SystemFontRole::kLarge,
+                theme::kPrimaryText);
+    (void)Label(timeout, UiText(host_strings::Id::kUiChooseHowLongToWait), platform::lvgl::SystemFontRole::kSmall,
+                theme::kSecondaryText);
     power_timeout_ = lv_dropdown_create(timeout);
-    lv_dropdown_set_options(power_timeout_, "1 minute\n5 minutes\n10 minutes\n30 minutes");
+    lv_dropdown_set_options(power_timeout_, UiText(host_strings::Id::kUi1Minute5Minutes10Minutes30Minutes));
     lv_obj_set_size(power_timeout_, LV_PCT(100), layout_.control_height);
     lv_obj_set_style_text_font(power_timeout_,
                                platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium), 0);
@@ -69,8 +77,10 @@ void SystemDetailUi::RenderPowerManagementLocked() {
     lv_obj_add_event_cb(power_timeout_, PowerManagementTimeoutEvent, LV_EVENT_VALUE_CHANGED, this);
     lv_obj_t* note = Label(
         content,
-        power_off ? "Press POWER to turn on again. Apps restart after power off. External power pauses the idle timer."
-                  : "External power pauses the idle timer. Unplugging starts a fresh countdown.",
+        power_off
+            ? UiText(
+                  host_strings::Id::kUiPressPowerToTurnOnAgainAppsRestartAfterPowerOffExternalPowerPausesTheIdleTimer)
+            : UiText(host_strings::Id::kUiExternalPowerPausesTheIdleTimerUnpluggingStartsAFreshCountdown),
         layout_.detail_font, theme::kMutedText);
     lv_obj_set_width(note, LV_PCT(100));
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);

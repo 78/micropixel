@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 
 namespace micropixel::host_ui {
 namespace {
+
+std::atomic<const char*> g_display_locale{"en"};
 
 struct ParsedLocale final {
     std::string_view language{};
@@ -95,6 +98,18 @@ std::string_view BufferView(const LocaleTagBuffer& buffer) {
 }
 
 }  // namespace
+
+void SetDisplayLocale(std::string_view tag) {
+    static constexpr std::array<const char*, 5> locales{"en", "zh-CN", "zh-TW", "ja-JP", "ko-KR"};
+    for (const auto* locale : locales) {
+        if (tag == locale) {
+            g_display_locale.store(locale);
+            return;
+        }
+    }
+    g_display_locale.store("en");
+}
+const char* DisplayLocale() { return g_display_locale.load(); }
 
 bool NormalizeLocaleTag(std::string_view input, LocaleTagBuffer& output) {
     if (input.empty() || input.size() > MICROPIXEL_LOCALE_TAG_MAX_BYTES || input.front() == '-' ||
@@ -228,16 +243,16 @@ const char* LocaleDisplayName(std::string_view tag) {
     if (tag == "en") {
         return "English";
     }
-    if (tag == "zh-Hans") {
+    if (tag == "zh-Hans" || tag == "zh-CN") {
         return "Simplified Chinese";
     }
-    if (tag == "zh-Hant") {
+    if (tag == "zh-Hant" || tag == "zh-TW") {
         return "Traditional Chinese";
     }
-    if (tag == "ja") {
+    if (tag == "ja" || tag == "ja-JP") {
         return "Japanese";
     }
-    if (tag == "ko") {
+    if (tag == "ko" || tag == "ko-KR") {
         return "Korean";
     }
     return "English";

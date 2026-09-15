@@ -129,6 +129,7 @@ class SystemDetailUi final {
     void DrawAppManagementGroupLocked(lv_obj_t* scroll, const char* title, const host_ui::StorageUsageModel& usage,
                                       bool external_storage);
     void DrawAppManagementRowLocked(lv_obj_t* scroll, uint32_t index);
+    void DrawAppManagementComponentLocked(lv_obj_t* scroll, const host_ui::InstalledComponentModel& component);
     void QueueAppManagementRender();
     void BeginAppManagementLatencyProbe(const char* operation);
     void StartAppManagementLatencyProbe();
@@ -151,6 +152,7 @@ class SystemDetailUi final {
     int32_t remote_control_scroll_offset_{};
     platform::lvgl::AnimatedDisplayRefresh power_animation_refresh_{};
     std::array<AppBinding, host_ui::kMaxHallApps> app_bindings_{};
+    std::array<uint32_t, host_ui::kMaxHallApps> app_order_{};
     uint32_t app_management_selected_index_{};
     AppOverlay app_management_overlay_{AppOverlay::kNone};
     lv_obj_t* app_management_overlay_root_{};

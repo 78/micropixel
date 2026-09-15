@@ -188,6 +188,7 @@ struct HallModel final {
     uint64_t transition_trigger_us{};
     bool firmware_update_available{};
     bool install_active{};
+    uint64_t install_missing_bytes{};
 };
 
 enum class SystemThemeMode : uint8_t {
@@ -245,7 +246,34 @@ enum class SystemMenuItem : uint32_t {
     kManageApps,
 };
 
+enum class LanguageDownloadState : uint8_t {
+    kIdle,
+    kDownloading,
+    kFailed,
+    kApplying,
+    kAppRunning,
+    kNoSpace,
+    kChecking,
+    kConfirm,
+    kCurrent
+};
+
 struct SystemMenuModel final {
+    bool language_view{};
+    bool language_sheet{};
+    bool language_updating{};
+    bool font_update_available{};
+    bool app_updates_available{};
+    const char* font_current_version{};
+    const char* font_update_version{};
+    uint32_t language_selected{};
+    uint32_t language_download_bytes{};
+    uint32_t language_required_bytes{};
+    uint32_t language_free_bytes{};
+    uint8_t (*language_progress_reader)(void*){};
+    void* language_progress_context{};
+    uint8_t language_progress{};
+    LanguageDownloadState language_state{};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     const char* locale{"en"};
     const char* language{"English"};
@@ -377,12 +405,24 @@ struct StorageUsageModel final {
 
 enum class AppUninstallState : uint8_t { kIdle, kPending, kFailed };
 
+// Read-only package details have no launch/update/uninstall action index.
+struct InstalledComponentModel final {
+    const char* version{};
+    const char* app_id{};
+    const char* display_name{};
+    uint32_t bundle_size_kib{};
+    bool external_storage{};
+};
+inline constexpr uint32_t kMaxManagedComponents = 2U * kMaxHallApps;
+
 struct AppManagementModel final {
     AppUninstallState uninstall_state{};
     uint32_t uninstall_app_index{kMaxHallApps};
     uint8_t store_check_state{};
     host::StoreUpdateRequestState update_request_state{};
     std::array<InstalledAppModel, kMaxHallApps> apps{};
+    std::array<InstalledComponentModel, kMaxManagedComponents> components{};
+    uint32_t component_count{};
     uint32_t app_count{};
     uint32_t storage_used_kib{};
     uint32_t storage_total_kib{};
@@ -446,6 +486,9 @@ enum class SystemUiActionType {
     kOpenFirmwareUpdate,
     kCloseSystemMenu,
     kSelectSystemMenuItem,
+    kSelectLanguage,
+    kConfirmLanguage,
+    kCancelLanguage,
     kCloseSystemInformation,
     kInstallFirmwareUpdate,
     kClosePowerManagement,
@@ -487,6 +530,8 @@ enum class SystemUiActionType {
     kOpenAppActions,
     // Presentation-only wake-up, consumed by SystemShell on the Host task.
     kPresentActionSheet,
+    kDismissAppError,
+    kUpdateLanguageFont,
 };
 
 struct SystemUiAction final {

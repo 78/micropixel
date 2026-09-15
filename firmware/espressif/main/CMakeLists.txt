@@ -72,26 +72,23 @@ idf_component_register(
     REQUIRES ${micropixel_requires}
 )
 
-# LVGL's ESP-IDF Kconfig choice can only select one of LVGL's bundled fonts as
-# LV_FONT_DEFAULT. Make the generated builtin-latin-v1 small font the actual
-# framework default as well, so Montserrat 14 is not retained as a second Latin
-# glyph set. The custom declaration is visible to LVGL and all of its users.
+# A stable mutable font proxy is populated after lv_init and before widgets.
+# Host UI and Guest system handles share the same Tiny TTF implementation.
 idf_component_get_property(micropixel_lvgl_lib lvgl__lvgl COMPONENT_LIB)
-if(CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO)
-    target_compile_definitions(
-        ${micropixel_lvgl_lib} PUBLIC
+if(CONFIG_MICROPIXEL_BOARD_NULL)
+    # The dependency-direction compile gate has no display or font service.
+    target_compile_definitions(${micropixel_lvgl_lib} PUBLIC
         "LV_FONT_MONTSERRAT_14=0"
         "LV_FONT_CUSTOM_DECLARE=LV_FONT_DECLARE(font_builtin_latin_14)"
-        "LV_FONT_DEFAULT=&font_builtin_latin_14"
-    )
-elseif(NOT CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3 AND NOT CONFIG_MICROPIXEL_BOARD_SZPI_ESP32S3 AND
-       NOT CONFIG_MICROPIXEL_BOARD_M5STACK_CORES3)
-    target_compile_definitions(
-        ${micropixel_lvgl_lib} PUBLIC
-        "LV_FONT_MONTSERRAT_14=0"
-        "LV_FONT_CUSTOM_DECLARE=LV_FONT_DECLARE(font_builtin_latin_14)"
-        "LV_FONT_DEFAULT=&font_builtin_latin_14"
-    )
+        "LV_FONT_DEFAULT=&font_builtin_latin_14")
+else()
+    if(NOT CONFIG_LV_USE_TINY_TTF)
+        message(FATAL_ERROR "System fonts require Tiny TTF with its allocating kerning cache disabled")
+    endif()
+    target_compile_options(${micropixel_lvgl_lib} PUBLIC
+        "-include${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/system_font_config.h")
+    target_add_binary_data(${COMPONENT_LIB}
+        "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf" BINARY)
 endif()
 if(CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3 OR CONFIG_MICROPIXEL_BOARD_SZPI_ESP32S3 OR
    CONFIG_MICROPIXEL_BOARD_M5STACK_CORES3)

@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <cstring>
 
+#include "host/ui/lvgl/square_common/hall_error_dialog.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/lvgl/square_common/icons/wifi_status_icons.hpp"
+#include "host/ui/ui_text.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
 namespace {
@@ -42,19 +45,19 @@ lv_obj_t* CreateLabel(lv_obj_t* parent, const char* text, const lv_font_t* font,
 const char* HallStatusText(host_ui::HallStatus status) {
     switch (status) {
         case host_ui::HallStatus::kReady:
-            return "Choose an app";
+            return UiText(host_strings::Id::kUiChooseAnApp);
         case host_ui::HallStatus::kNoApps:
-            return "No installed apps";
+            return UiText(host_strings::Id::kUiNoInstalledApps);
         case host_ui::HallStatus::kAppExited:
-            return "App closed - choose another";
+            return UiText(host_strings::Id::kUiAppClosedChooseAnother);
         case host_ui::HallStatus::kAppFailed:
-            return "App failed";
+            return UiText(host_strings::Id::kUiAppFailed);
         case host_ui::HallStatus::kRuntimeUnavailable:
-            return "Runtime unavailable";
+            return UiText(host_strings::Id::kUiRuntimeUnavailable);
         case host_ui::HallStatus::kHostFailure:
-            return "Host could not start the app";
+            return UiText(host_strings::Id::kUiHostCouldNotStartTheApp);
     }
-    return "Unavailable";
+    return UiText(host_strings::Id::kUiUnavailable);
 }
 
 uint32_t HallStatusColor(host_ui::HallStatus status) {
@@ -177,21 +180,24 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     StyleContainer(brand, layout.brand, layout.brand_radius, theme::kBrandAccent);
     lv_obj_remove_flag(brand, LV_OBJ_FLAG_CLICKABLE);
 
-    (void)CreateLabel(root, "App Hall", platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kTitle),
-                      theme::kPrimaryText, layout.title);
-    char app_count_text[24]{};
-    (void)std::snprintf(app_count_text, sizeof(app_count_text),
-                        model.install_active ? "APPS (%" PRIu32 ")" : "INSTALLED APPS (%" PRIu32 ")", visible_count);
+    (void)CreateLabel(root, UiText(host_strings::Id::kUiAppHall),
+                      platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kTitle), theme::kPrimaryText,
+                      layout.title);
+    char app_count_text[64]{};
+    (void)std::snprintf(app_count_text, sizeof(app_count_text), UiText(host_strings::Id::kUiInstalledCount),
+                        static_cast<unsigned>(visible_count));
     (void)CreateLabel(root, app_count_text, platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium),
                       theme::kSecondaryText, layout.section);
 
-    settings_button_ = CreateHeaderButton(root, layout.settings_button, layout.header_button_radius,
-                                          theme::kStrongBorder, theme::kPanelBackground, theme::kPrimaryText,
-                                          LV_SYMBOL_SETTINGS, "Settings", layout, true, HeaderButtonEvent, this);
+    settings_button_ =
+        CreateHeaderButton(root, layout.settings_button, layout.header_button_radius, theme::kStrongBorder,
+                           theme::kPanelBackground, theme::kPrimaryText, LV_SYMBOL_SETTINGS,
+                           UiText(host_strings::Id::kUiSettings), layout, true, HeaderButtonEvent, this);
     if (model.firmware_update_available) {
-        update_button_ = CreateHeaderButton(root, layout.update_button, layout.header_button_radius,
-                                            theme::kUpdateBorder, theme::kUpdateBackground, theme::kUpdateText,
-                                            LV_SYMBOL_REFRESH, "Update", layout, false, HeaderButtonEvent, this);
+        update_button_ =
+            CreateHeaderButton(root, layout.update_button, layout.header_button_radius, theme::kUpdateBorder,
+                               theme::kUpdateBackground, theme::kUpdateText, LV_SYMBOL_REFRESH,
+                               UiText(host_strings::Id::kUiUpdate), layout, false, HeaderButtonEvent, this);
         lv_obj_t* update_dot = lv_obj_create(update_button_);
         StyleContainer(update_dot, {.x = layout.update_button.width - 19, .y = 8, .width = 10, .height = 10},
                        LV_RADIUS_CIRCLE, theme::kNotification);
@@ -240,44 +246,12 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     }
 
     if (visible_count == 0U) {
-        (void)CreateLabel(root, "No readable Bundle in App Store",
+        (void)CreateLabel(root, UiText(host_strings::Id::kUiNoReadableBundleInAppStore),
                           platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge), theme::kPrimaryText,
                           layout.empty_message);
     }
 
-    if (model.status == host_ui::HallStatus::kAppFailed) {
-        (void)CreateLabel(root, HallStatusText(model.status),
-                          platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium),
-                          HallStatusColor(model.status), layout.failure_status);
-        if (model.status_app_id != nullptr && model.status_app_id[0] != '\0') {
-            lv_obj_t* label = CreateLabel(root, model.status_app_id,
-                                          platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall),
-                                          theme::kSecondaryText, layout.failure_app_id);
-            lv_obj_set_width(label, layout.status_text_width);
-            lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-        }
-        char identity[128]{};
-        const char* phase = model.status_error_phase != nullptr ? model.status_error_phase : "unknown";
-        const char* code = model.status_error_code != nullptr ? model.status_error_code : "app_failed";
-        if (model.status_has_exit_code) {
-            (void)std::snprintf(identity, sizeof(identity), "%s / %s / exit=%" PRId32, phase, code,
-                                model.status_exit_code);
-        } else {
-            (void)std::snprintf(identity, sizeof(identity), "%s / %s", phase, code);
-        }
-        lv_obj_t* identity_label =
-            CreateLabel(root, identity, platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall),
-                        theme::kHallErrorDetail, layout.failure_identity);
-        lv_obj_set_width(identity_label, layout.status_text_width);
-        lv_label_set_long_mode(identity_label, LV_LABEL_LONG_DOT);
-        if (model.status_error_detail != nullptr && model.status_error_detail[0] != '\0') {
-            lv_obj_t* detail = CreateLabel(root, model.status_error_detail,
-                                           platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall),
-                                           theme::kDetailText, layout.failure_detail);
-            lv_obj_set_width(detail, layout.status_text_width);
-            lv_label_set_long_mode(detail, LV_LABEL_LONG_DOT);
-        }
-    } else {
+    if (model.status != host_ui::HallStatus::kAppFailed && model.status != host_ui::HallStatus::kAppExited) {
         if (model.status != host_ui::HallStatus::kReady) {
             (void)CreateLabel(root, HallStatusText(model.status),
                               platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium),
@@ -362,6 +336,56 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     lv_obj_set_width(objects_.battery_percent_label, status.battery_percent_width);
     lv_obj_set_style_text_align(objects_.battery_percent_label, LV_TEXT_ALIGN_RIGHT, 0);
     UpdateStatusBarLocked(model.status_bar);
+    if (model.status == host_ui::HallStatus::kAppFailed) DrawFailureLocked(root, model);
+}
+
+void HallSceneUi::DrawFailureLocked(lv_obj_t* root, const host_ui::HallModel& model) {
+    char identity[128]{};
+    char instruction[256]{};
+    const char* phase = model.status_error_phase != nullptr ? model.status_error_phase : "unknown";
+    const char* code = model.status_error_code != nullptr ? model.status_error_code : "app_failed";
+    const char* detail = model.status_error_detail;
+    const bool installing = std::strcmp(phase, "install") == 0;
+    if (installing && std::strcmp(code, "app_store_full") == 0) {
+        (void)std::snprintf(identity, sizeof(identity), "%s", UiText(host_strings::Id::kUiInstallStorageFull));
+        if (model.install_missing_bytes != 0U) {
+            (void)std::snprintf(instruction, sizeof(instruction), UiText(host_strings::Id::kUiInstallFreeSpace),
+                                static_cast<unsigned long long>((model.install_missing_bytes + 1023U) / 1024U));
+            detail = instruction;
+        } else {
+            detail = UiText(host_strings::Id::kUiInstallManageStorage);
+        }
+    } else if (installing) {
+        (void)std::snprintf(identity, sizeof(identity), "%s", code);
+        detail = UiText(host_strings::Id::kUiInstallRetry);
+    } else if (std::strcmp(code, "required_font_missing") == 0) {
+        const char* language = UiLocaleName(detail != nullptr ? detail : "en");
+        (void)std::snprintf(identity, sizeof(identity), UiText(host_strings::Id::kUiRequiredFont), language);
+        (void)std::snprintf(instruction, sizeof(instruction), UiText(host_strings::Id::kUiRequiredFontMissing),
+                            language);
+        detail = instruction;
+    } else if (model.status_has_exit_code) {
+        (void)std::snprintf(identity, sizeof(identity), "%s / %s / exit=%" PRId32, phase, code, model.status_exit_code);
+    } else {
+        (void)std::snprintf(identity, sizeof(identity), "%s / %s", phase, code);
+    }
+    (void)DrawHallErrorDialog(
+        root, layout_->width, layout_->height,
+        {.title = installing ? UiText(host_strings::Id::kUiInstallFailed) : HallStatusText(model.status),
+         .app_id = model.status_app_id,
+         .identity = identity,
+         .detail = detail,
+         .close = UiText(host_strings::Id::kUiClose)},
+        platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge),
+        platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kSmall), DismissFailureEvent, this);
+}
+
+void HallSceneUi::DismissFailureEvent(lv_event_t* event) {
+    auto* scene = static_cast<HallSceneUi*>(lv_event_get_user_data(event));
+    if (scene != nullptr && scene->events_.action_sink != nullptr) {
+        scene->events_.action_sink(scene->events_.action_context,
+                                   host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kDismissAppError});
+    }
 }
 
 void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model) {

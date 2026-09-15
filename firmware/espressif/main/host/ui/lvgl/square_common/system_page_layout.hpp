@@ -192,8 +192,10 @@ inline lv_obj_t* CreateSystemInformationRow(lv_obj_t* parent, const SystemPageLa
 }
 
 inline lv_obj_t* CreateSystemActionButton(lv_obj_t* parent, const SystemPageLayout& layout, const char* text,
-                                          uint32_t color = theme::kPrimaryText) {
+                                          uint32_t color = theme::kPrimaryText, bool inherit_theme = true) {
     lv_obj_t* button = lv_button_create(parent);
+    // Snapshot-animated buttons can opt out of theme transitions and recolor layers.
+    if (!inherit_theme) lv_obj_remove_style_all(button);
     lv_obj_set_size(button, LV_PCT(100), layout.control_height);
     lv_obj_set_style_pad_all(button, 0, 0);
     lv_obj_set_style_radius(button, layout.panel_radius - 2, 0);

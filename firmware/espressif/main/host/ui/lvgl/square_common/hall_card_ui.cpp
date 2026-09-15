@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
+#include "host/ui/ui_text.hpp"
 #include "src/misc/cache/instance/lv_image_cache.h"
 #include "src/misc/cache/instance/lv_image_header_cache.h"
 
@@ -16,7 +17,7 @@ const char* AppDisplayName(const HallCardPresentation& app) {
         return app.display_name;
     }
     if (app.app_id == nullptr || app.app_id[0] == '\0') {
-        return "APP";
+        return UiText(host_strings::Id::kUiApp);
     }
     const char* separator = std::strrchr(app.app_id, '.');
     return separator != nullptr && separator[1] != '\0' ? separator + 1 : app.app_id;
@@ -130,7 +131,7 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
         lv_obj_set_style_bg_opa(running, LV_OPA_90, 0);
         lv_obj_remove_flag(running, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_t* running_label = lv_label_create(running);
-        lv_label_set_text(running_label, "PAUSED");
+        lv_label_set_text(running_label, UiText(host_strings::Id::kUiPaused));
         lv_obj_set_style_text_font(running_label, platform::lvgl::BuiltinLatinFont(layout.badge_font), 0);
         lv_obj_set_style_text_color(running_label, lv_color_hex(theme::kSuccess), 0);
         lv_obj_center(running_label);

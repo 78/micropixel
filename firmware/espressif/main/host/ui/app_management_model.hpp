@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <span>
 #include <string_view>
 
 #include "host/ui/system_ui.hpp"
 
 namespace micropixel::host_ui {
+
+// Render order only: callbacks retain catalog indices for launch/update/uninstall.
+inline void BuildAppManagementOrder(const AppManagementModel& model, std::span<uint32_t> order) {
+    size_t next = 0;
+    for (bool updated : {true, false})
+        for (uint32_t i = 0; i < model.app_count && i < model.apps.size(); ++i)
+            if ((model.apps[i].update_version[0] != '\0') == updated && next < order.size()) order[next++] = i;
+}
 
 inline bool AppManagementBusy(const AppManagementModel& model) {
     return model.uninstall_state == AppUninstallState::kPending ||

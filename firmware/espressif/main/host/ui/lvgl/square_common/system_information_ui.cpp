@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "host/ui/lvgl/square_common/system_detail_ui.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
+#include "host/ui/ui_text.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -50,11 +51,13 @@ void SystemDetailUi::RenderSystemInformationLocked() {
         RenderFirmwareUpdateLocked();
         return;
     }
-    Header(layout_, root_, "System Information", "Device, firmware and memory", SystemInformationBackEvent, this);
+    Header(layout_, root_, UiText(host_strings::Id::kUiSystemInformation),
+           UiText(host_strings::Id::kUiDeviceFirmwareAndMemory), SystemInformationBackEvent, this);
     lv_obj_t* scroll = Scroll(layout_, root_, ScrollEvent, this);
 
     lv_obj_t* firmware = Panel(layout_, scroll);
-    (void)Label(firmware, "MICROPIXEL FIRMWARE", platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
+    (void)Label(firmware, UiText(host_strings::Id::kUiMicropixelFirmware), platform::lvgl::SystemFontRole::kSmall,
+                theme::kSecondaryText);
     (void)Label(firmware, system_information_model_.firmware_version.data(), platform::lvgl::SystemFontRole::kLarge,
                 theme::kPrimaryText);
     char build[144]{};
@@ -63,8 +66,10 @@ void SystemDetailUi::RenderSystemInformationLocked() {
     lv_obj_t* build_label = Label(firmware, build, platform::lvgl::SystemFontRole::kSmall, theme::kAccent);
     lv_obj_set_width(build_label, LV_PCT(100));
     lv_label_set_long_mode(build_label, LV_LABEL_LONG_DOT);
-    const char* update_status = DisplayText(system_information_model_.firmware_update_message.data(),
-                                            "Connect to Control to check for updates");
+    const char* update_status =
+        system_information_model_.firmware_update_state == host_ui::FirmwareUpdateState::kUnknown
+            ? UiText(host_strings::Id::kUiConnectToControlToCheckForUpdates)
+            : system_detail_internal::FirmwareUpdateStageText(system_information_model_.firmware_update_state);
     lv_obj_t* update_status_label =
         Label(firmware, update_status, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
     lv_obj_set_width(update_status_label, LV_PCT(100));
@@ -72,55 +77,66 @@ void SystemDetailUi::RenderSystemInformationLocked() {
     if (system_information_model_.firmware_update_installable) {
         char update_action[96]{};
         std::snprintf(update_action, sizeof(update_action),
-                      system_information_model_.firmware_update_available ? "Update to %s" : "Reinstall %s",
+                      system_information_model_.firmware_update_available ? UiText(host_strings::Id::kUiUpdateToS)
+                                                                          : UiText(host_strings::Id::kUiReinstallS),
                       DisplayText(system_information_model_.latest_firmware_version.data(),
                                   system_information_model_.firmware_version.data()));
         lv_obj_t* update = Button(layout_, firmware, update_action, theme::kAccent);
         lv_obj_add_event_cb(update, SystemInformationUpdateEvent, LV_EVENT_SHORT_CLICKED, this);
     }
 
-    SectionLabel(scroll, "HARDWARE");
+    SectionLabel(scroll, UiText(host_strings::Id::kUiHardware));
     lv_obj_t* hardware = Panel(layout_, scroll, 0);
-    InformationRow(layout_, hardware, "Host chip", system_information_model_.host_chip.data());
+    InformationRow(layout_, hardware, UiText(host_strings::Id::kUiHostChip),
+                   system_information_model_.host_chip.data());
     InformationRow(layout_, hardware, "CPU", system_information_model_.cpu.data());
-    InformationRow(layout_, hardware, "Wi-Fi coprocessor", system_information_model_.wifi_coprocessor.data());
+    InformationRow(layout_, hardware, UiText(host_strings::Id::kUiWiFiCoprocessor),
+                   system_information_model_.wifi_coprocessor.data());
     InformationRow(layout_, hardware, "Wi-Fi MAC", system_information_model_.wifi_mac.data());
-    InformationRow(layout_, hardware, "Flash", system_information_model_.flash_capacity.data());
+    InformationRow(layout_, hardware, UiText(host_strings::Id::kUiFlash),
+                   system_information_model_.flash_capacity.data());
 
-    SectionLabel(scroll, "DISPLAY");
+    SectionLabel(scroll, UiText(host_strings::Id::kUiDisplay));
     lv_obj_t* display = Panel(layout_, scroll, 0);
-    InformationRow(layout_, display, "Panel", system_information_model_.panel.data());
-    InformationRow(layout_, display, "Interface", system_information_model_.display_interface.data());
-    InformationRow(layout_, display, "Resolution", system_information_model_.resolution.data());
-    InformationRow(layout_, display, "2D acceleration", system_information_model_.graphics_acceleration.data());
-    InformationRow(layout_, display, "Touch", system_information_model_.touch_controller.data());
+    InformationRow(layout_, display, UiText(host_strings::Id::kUiPanel), system_information_model_.panel.data());
+    InformationRow(layout_, display, UiText(host_strings::Id::kUiInterface),
+                   system_information_model_.display_interface.data());
+    InformationRow(layout_, display, UiText(host_strings::Id::kUiResolution),
+                   system_information_model_.resolution.data());
+    InformationRow(layout_, display, UiText(host_strings::Id::kUi2dAcceleration),
+                   system_information_model_.graphics_acceleration.data());
+    InformationRow(layout_, display, UiText(host_strings::Id::kUiTouch),
+                   system_information_model_.touch_controller.data());
 
-    SectionLabel(scroll, "MEMORY");
+    SectionLabel(scroll, UiText(host_strings::Id::kUiMemory));
     lv_obj_t* memory = Panel(layout_, scroll, 0);
     char sram_total[24]{}, sram_free[24]{}, psram_total[24]{}, psram_free[24]{};
     FormatSize(system_information_model_.internal_sram.total_kib, sram_total, sizeof(sram_total));
     FormatSize(system_information_model_.internal_sram.free_kib, sram_free, sizeof(sram_free));
     FormatSize(system_information_model_.psram.total_kib, psram_total, sizeof(psram_total));
     FormatSize(system_information_model_.psram.free_kib, psram_free, sizeof(psram_free));
-    InformationRow(layout_, memory, "SRAM total", sram_total);
-    InformationRow(layout_, memory, "SRAM free", sram_free);
-    InformationRow(layout_, memory, "PSRAM total", psram_total);
-    InformationRow(layout_, memory, "PSRAM free", psram_free);
+    InformationRow(layout_, memory, UiText(host_strings::Id::kUiSramTotal), sram_total);
+    InformationRow(layout_, memory, UiText(host_strings::Id::kUiSramFree), sram_free);
+    InformationRow(layout_, memory, UiText(host_strings::Id::kUiPsramTotal), psram_total);
+    InformationRow(layout_, memory, UiText(host_strings::Id::kUiPsramFree), psram_free);
 
-    SectionLabel(scroll, "RUNTIME");
+    SectionLabel(scroll, UiText(host_strings::Id::kUiRuntime));
     lv_obj_t* runtime = Panel(layout_, scroll, 0);
     InformationRow(layout_, runtime, "ESP-IDF", system_information_model_.idf_version.data());
-    InformationRow(layout_, runtime, "Uptime", system_information_model_.uptime.data());
-    InformationRow(layout_, runtime, "Last reset", system_information_model_.last_reset.data());
-    InformationRow(layout_, runtime, "Build date", system_information_model_.build_date.data());
+    InformationRow(layout_, runtime, UiText(host_strings::Id::kUiUptime), system_information_model_.uptime.data());
+    InformationRow(layout_, runtime, UiText(host_strings::Id::kUiLastReset),
+                   system_information_model_.last_reset.data());
+    InformationRow(layout_, runtime, UiText(host_strings::Id::kUiBuildDate),
+                   system_information_model_.build_date.data());
     lv_obj_move_foreground(root_);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(root_));
 }
 
 void SystemDetailUi::RenderFirmwareUpdateLocked() {
     const bool in_progress = FirmwareUpdateInProgress(system_information_model_.firmware_update_state);
-    lv_obj_t* header = CreateSystemHeader(root_, layout_, "Firmware Update", "Keep the device powered on",
-                                          SystemInformationBackEvent, this);
+    lv_obj_t* header =
+        CreateSystemHeader(root_, layout_, UiText(host_strings::Id::kUiFirmwareUpdate),
+                           UiText(host_strings::Id::kUiKeepTheDevicePoweredOn), SystemInformationBackEvent, this);
     if (in_progress) {
         lv_obj_t* back = lv_obj_get_child(header, 0);
         if (back != nullptr) {
@@ -177,9 +193,7 @@ void SystemDetailUi::RenderFirmwareUpdateLocked() {
         lv_obj_set_flex_flow(progress_row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(progress_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
         lv_obj_set_style_pad_column(progress_row, layout_.panel_gap, 0);
-        lv_obj_t* message =
-            Label(progress_row, DisplayText(system_information_model_.firmware_update_message.data(), stage),
-                  layout_.detail_font, theme::kSecondaryText);
+        lv_obj_t* message = Label(progress_row, stage, layout_.detail_font, theme::kSecondaryText);
         lv_obj_set_width(message, 0);
         lv_obj_set_flex_grow(message, 1);
         lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_LEFT, 0);
@@ -207,14 +221,16 @@ void SystemDetailUi::RenderFirmwareUpdateLocked() {
 
     if (!in_progress && system_information_model_.firmware_update_installable) {
         const char* button_text =
-            system_information_model_.firmware_update_state == host_ui::FirmwareUpdateState::kFailed ? "Retry update"
-            : system_information_model_.firmware_update_available ? "Download and install"
-                                                                  : "Reinstall current version";
+            system_information_model_.firmware_update_state == host_ui::FirmwareUpdateState::kFailed
+                ? UiText(host_strings::Id::kUiRetryUpdate)
+            : system_information_model_.firmware_update_available
+                ? UiText(host_strings::Id::kUiDownloadAndInstall)
+                : UiText(host_strings::Id::kUiReinstallCurrentVersion);
         lv_obj_t* update = Button(layout_, panel, button_text, theme::kPositive);
         lv_obj_add_event_cb(update, SystemInformationUpdateEvent, LV_EVENT_SHORT_CLICKED, this);
     }
     if (system_information_model_.firmware_release_notes[0] != '\0') {
-        Label(panel, "What's new", layout_.heading_font, theme::kPrimaryText);
+        Label(panel, UiText(host_strings::Id::kUiWhatSNew), layout_.heading_font, theme::kPrimaryText);
         lv_obj_t* notes = Label(panel, system_information_model_.firmware_release_notes.data(), layout_.detail_font,
                                 theme::kSecondaryText);
         lv_obj_set_width(notes, LV_PCT(100));

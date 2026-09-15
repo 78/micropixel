@@ -61,10 +61,6 @@ struct HallSceneLayout final {
     HallSceneRect scroll_track{};
     int32_t scroll_min_thumb_width{};
     HallScenePoint empty_message{};
-    HallScenePoint failure_status{};
-    HallScenePoint failure_app_id{};
-    HallScenePoint failure_identity{};
-    HallScenePoint failure_detail{};
     HallScenePoint simple_status{};
     HallScenePoint simple_app_id{};
     int32_t status_text_width{};
@@ -112,6 +108,8 @@ class HallSceneUi final {
     [[nodiscard]] const HallSceneObjects& objects() const { return objects_; }
 
    private:
+    void DrawFailureLocked(lv_obj_t* root, const host_ui::HallModel& model);
+    static void DismissFailureEvent(lv_event_t* event);
     static void HeaderButtonEvent(lv_event_t* event);
     void HandleHeaderButtonEvent(lv_event_t* event);
 

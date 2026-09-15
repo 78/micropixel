@@ -18,6 +18,7 @@
 #include "host/controller/control_dispatcher.hpp"
 #include "host/controller/remote/remote_control_protocol.hpp"
 #include "host/controller/remote/remote_identity_store.hpp"
+#include "host/fonts/font_download.hpp"
 #include "host/logging/system_log_buffer.hpp"
 #include "host/ui/system_ui.hpp"
 
@@ -48,11 +49,14 @@ class RemoteControlAgent final {
     [[nodiscard]] bool CancelPairingCode();
     [[nodiscard]] bool RequestFirmwareUpdate();
     [[nodiscard]] host_ui::RemoteControlModel Snapshot() const;
+    void CopySnapshot(host_ui::RemoteControlModel& destination) const;
     void CopyFirmwareReleaseNotes(std::span<char> destination, uint32_t revision) const;
     [[nodiscard]] device::BoardInfo BoardInfo() const;
     void UpdateInstalledApps(const control::CatalogSnapshot& catalog);
     void UpdateAppLifecycle(const char* app_id, const char* lifecycle);
     void NotifyNetworkChanged();
+    void BindFontDownload(host::fonts::FontDownload& download) { font_download_ = &download; }
+    void NotifyFontDownload() { NotifyTask(kWorkCommand); }
     void RequestStoreCheck();
     void RequestStoreAppUpdate(const char* app_id);
 
@@ -107,6 +111,8 @@ class RemoteControlAgent final {
     static void InstalledAppsChanged(void* context, const control::CatalogSnapshot& catalog);
     static void AppLifecycleChanged(void* context, const char* app_id, const char* lifecycle);
     void TaskMain();
+    void CheckStoreUpdates(void* client, const Identity& identity);
+    void DownloadFont(void* client, const Identity& identity, host::fonts::FontDownload& job);
     void NotifyTask(uint32_t work_bits);
     [[nodiscard]] uint32_t WaitForWork(TickType_t timeout);
     [[nodiscard]] bool AllocateTaskContext();
@@ -148,10 +154,12 @@ class RemoteControlAgent final {
     void DrainHostResults(void* client, const Identity& identity);
     [[nodiscard]] bool UploadArtifact(void* client, const Identity& identity, const control::Artifact& artifact,
                                       cJSON* artifacts);
+    [[nodiscard]] const char* AwaitInstallPreflight(const control::HostCommand& command);
     [[nodiscard]] bool DownloadPackage(void* client, const Identity& identity, const char* path, size_t size,
                                        uint8_t*& data_out, bool report_firmware_progress = false,
                                        const FirmwareStatusPublisher& publish_status = {},
-                                       const PackageProgressPublisher& publish_package_progress = {});
+                                       const PackageProgressPublisher& publish_package_progress = {},
+                                       const std::atomic<bool>* cancelled = nullptr);
     void HandleControlBytes(void* client, const Identity& identity, const uint8_t* bytes, size_t size,
                             const FirmwareStatusPublisher& publish_status);
     void HandleControlLine(void* client, const Identity& identity, const char* line,
@@ -160,6 +168,7 @@ class RemoteControlAgent final {
     [[nodiscard]] bool ReplayCommandState(void* client, const Identity& identity, const char* command_id);
     void CacheCompletedResult(const char* command_id, const uint8_t* body, size_t body_size);
 
+    host::fonts::FontDownload* font_download_{};
     control::ControlDispatcher& controls_;
     device::Wifi& wifi_;
     const device::BoardInfo& board_info_;

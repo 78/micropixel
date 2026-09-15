@@ -1,6 +1,7 @@
 #include "esp_log.h"
 #include "host/ui/lvgl/square_common/system_detail_ui.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
+#include "host/ui/ui_text.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -40,7 +41,8 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     remote_control_scroll_ = nullptr;
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
-    Header(layout_, root_, "Remote Control", "Service and temporary connection code", RemoteControlBackEvent, this);
+    Header(layout_, root_, UiText(host_strings::Id::kUiRemoteControl),
+           UiText(host_strings::Id::kUiServiceAndTemporaryConnectionCode), RemoteControlBackEvent, this);
     lv_obj_t* scroll = Scroll(layout_, root_, ScrollEvent, this);
     remote_control_scroll_ = scroll;
 
@@ -61,19 +63,21 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     (void)Label(status_heading, RemoteState(remote_control_model_.connection_state),
                 platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* service_row = square_common::CreateSystemInformationRow(
-        status, layout_, "Service",
-        remote_control_model_.service[0] != '\0' ? remote_control_model_.service.data() : "Not configured");
+        status, layout_, UiText(host_strings::Id::kUiService),
+        remote_control_model_.service[0] != '\0' ? remote_control_model_.service.data()
+                                                 : UiText(host_strings::Id::kUiNotConfigured));
     lv_obj_set_style_border_width(service_row, 0, 0);
 
     lv_obj_t* pairing = Panel(layout_, scroll);
-    (void)Label(pairing, "Connect this device", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
+    (void)Label(pairing, UiText(host_strings::Id::kUiConnectThisDevice), platform::lvgl::SystemFontRole::kLarge,
+                theme::kPrimaryText);
     if (remote_control_model_.pairing_code_available) {
         lv_obj_t* code = Label(pairing, remote_control_model_.pairing_code.data(),
                                platform::lvgl::SystemFontRole::kTitle, theme::kPositive);
         lv_obj_set_width(code, LV_PCT(100));
         lv_obj_set_style_text_align(code, LV_TEXT_ALIGN_CENTER, 0);
         char expiry[48]{};
-        std::snprintf(expiry, sizeof(expiry), "Expires in %02" PRIu32 ":%02" PRIu32,
+        std::snprintf(expiry, sizeof(expiry), UiText(host_strings::Id::kUiCodeExpires),
                       remote_control_model_.pairing_expires_seconds / 60U,
                       remote_control_model_.pairing_expires_seconds % 60U);
         lv_obj_t* expiry_label = Label(pairing, expiry, platform::lvgl::SystemFontRole::kSmall, theme::kSecondaryText);
@@ -84,9 +88,10 @@ void SystemDetailUi::RenderRemoteControlLocked() {
             remote_control_model_.enabled &&
             remote_control_model_.connection_state == host_ui::RemoteControlConnectionState::kConnected &&
             !remote_control_model_.pairing_code_pending;
-        const char* text = remote_control_model_.pairing_code_pending ? "Getting connection code..."
-                           : available                                ? "Generate Connection Code"
-                                                                      : "Control service unavailable";
+        const char* text = remote_control_model_.pairing_code_pending
+                               ? UiText(host_strings::Id::kUiGettingConnectionCode)
+                           : available ? UiText(host_strings::Id::kUiGenerateConnectionCode)
+                                       : UiText(host_strings::Id::kUiControlServiceUnavailable);
         lv_obj_t* generate = Button(layout_, pairing, text, available ? theme::kPositive : theme::kSecondaryText);
         if (available) {
             lv_obj_add_event_cb(generate, RemoteControlPairingEvent, LV_EVENT_SHORT_CLICKED, this);
@@ -94,14 +99,15 @@ void SystemDetailUi::RenderRemoteControlLocked() {
             lv_obj_remove_flag(generate, LV_OBJ_FLAG_CLICKABLE);
         }
     }
-    lv_obj_t* note = Label(pairing, "Codes are single-use and expire after 5 minutes",
+    lv_obj_t* note = Label(pairing, UiText(host_strings::Id::kUiCodesAreSingleUseAndExpireAfter5Minutes),
                            platform::lvgl::SystemFontRole::kSmall, theme::kMutedText);
     lv_obj_set_width(note, LV_PCT(100));
     lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
 
-    lv_obj_t* toggle =
-        Button(layout_, scroll, remote_control_model_.enabled ? "Turn Remote Control Off" : "Turn Remote Control On",
-               remote_control_model_.enabled ? theme::kDanger : theme::kAccent);
+    lv_obj_t* toggle = Button(layout_, scroll,
+                              remote_control_model_.enabled ? UiText(host_strings::Id::kUiTurnRemoteControlOff)
+                                                            : UiText(host_strings::Id::kUiTurnRemoteControlOn),
+                              remote_control_model_.enabled ? theme::kDanger : theme::kAccent);
     lv_obj_add_event_cb(toggle, RemoteControlToggleEvent, LV_EVENT_SHORT_CLICKED, this);
     if (remote_control_off_confirmation_visible_) {
         DrawRemoteControlOffConfirmationLocked();
@@ -212,14 +218,15 @@ void SystemDetailUi::DrawRemoteControlOffConfirmationLocked() {
     lv_obj_t* sheet = CreateActionSheet(action_sheets_, action_sink_, action_context_, layout_, root_,
                                         RemoteControlConfirmationCancelEvent, this, theme::kDangerBorder, nullptr,
                                         !remote_control_confirmation_rendered_);
-    (void)Label(sheet, "Turn Off Remote Control?", platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
-    lv_obj_t* detail = Label(sheet, "Remote access and active connection codes will stop.",
+    (void)Label(sheet, UiText(host_strings::Id::kUiTurnOffRemoteControl), platform::lvgl::SystemFontRole::kLarge,
+                theme::kPrimaryText);
+    lv_obj_t* detail = Label(sheet, UiText(host_strings::Id::kUiRemoteAccessAndActiveConnectionCodesWillStop),
                              platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
     lv_obj_set_width(detail, LV_PCT(100));
     lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
-    lv_obj_t* turn_off = Button(layout_, sheet, "Turn Off", theme::kDanger);
+    lv_obj_t* turn_off = Button(layout_, sheet, UiText(host_strings::Id::kUiTurnOff), theme::kDanger);
     lv_obj_add_event_cb(turn_off, RemoteControlConfirmOffEvent, LV_EVENT_SHORT_CLICKED, this);
-    lv_obj_t* cancel = Button(layout_, sheet, "Cancel");
+    lv_obj_t* cancel = Button(layout_, sheet, UiText(host_strings::Id::kUiCancel));
     lv_obj_add_event_cb(cancel, RemoteControlConfirmationCancelEvent, LV_EVENT_SHORT_CLICKED, this);
 }
 

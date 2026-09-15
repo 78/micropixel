@@ -10,6 +10,10 @@
 #include "freertos/queue.h"
 #include "host/ui/system_ui.hpp"
 
+namespace micropixel::host::fonts {
+class LanguagePacks;
+}
+
 namespace micropixel::host_ui {
 
 // Runs on the Host supervisor task. Returns whether external-power state is
@@ -23,6 +27,8 @@ class SystemShell final {
     SystemShell(const SystemShell&) = delete;
     SystemShell& operator=(const SystemShell&) = delete;
     ~SystemShell();
+    void BindLanguagePacks(host::fonts::LanguagePacks& packs) { language_packs_ = &packs; }
+    [[nodiscard]] host::fonts::LanguagePacks* language_packs() const { return language_packs_; }
 
     [[nodiscard]] std::expected<void, SystemUiError> ShowHall(const HallModel& model);
     void UpdateHallStatusBar(const HallStatusBarModel& model);
@@ -88,6 +94,7 @@ class SystemShell final {
     void NotifyPowerCycleCompleted();
 
    private:
+    host::fonts::LanguagePacks* language_packs_{};
     static constexpr UBaseType_t kActionQueueCapacity = 10U;
 
     static void ReceiveAction(void* context, const SystemUiAction& action);

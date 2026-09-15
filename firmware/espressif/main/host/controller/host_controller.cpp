@@ -33,12 +33,14 @@
 #include "host/controller/hall_battery_policy.hpp"
 #include "host/controller/host_power_coordinator.hpp"
 #include "host/controller/remote/remote_control_agent.hpp"
+#include "host/fonts/language_packs.hpp"
 #include "host/logging/system_log_buffer.hpp"
 #include "host/time/system_time.hpp"
 #include "host/ui/app_management_model.hpp"
 #include "host/ui/hall_install_model.hpp"
 #include "host/ui/system_settings_store.hpp"
 #include "host/ui/system_shell.hpp"
+#include "platform/memory/ext_ram_bss.hpp"
 #include "runtime/app_runtime.hpp"
 #include "runtime/bundle/app_environment.hpp"
 #include "runtime/bundle/app_store.hpp"
@@ -59,7 +61,7 @@ constexpr int64_t kWifiScanRefreshDelayUs = 10LL * 1000LL * 1000LL;
 constexpr int64_t kWifiScanRetryDelayUs = 1000LL * 1000LL;
 constexpr TickType_t kPowerSuspendTimeout = pdMS_TO_TICKS(500U);
 constexpr TickType_t kShutdownRemoteStopTimeout = pdMS_TO_TICKS(500U);
-constexpr std::array<std::string_view, 1U> kBuiltinLocales{"en"};
+constexpr std::array<std::string_view, 5U> kBuiltinLocales{"en", "zh-CN", "zh-TW", "ja-JP", "ko-KR"};
 
 template <typename T>
 struct HeapCapsObjectDeleter final {
@@ -256,6 +258,18 @@ void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog
     if (install_active) {
         host_ui::ApplyHallInstallation(model, install_activity->app_id.data(), install_activity->progress_percent);
     }
+    model.install_missing_bytes = 0U;
+    if (install_activity != nullptr && !install_active && install_activity->error[0] != '\0') {
+        model.status = host_ui::HallStatus::kAppFailed;
+        model.status_app_id = install_activity->app_id.data();
+        model.status_error_phase = "install";
+        model.status_error_code = install_activity->error.data();
+        model.status_error_detail = nullptr;
+        model.status_has_exit_code = false;
+        model.install_missing_bytes = install_activity->required_bytes > install_activity->free_bytes
+                                          ? install_activity->required_bytes - install_activity->free_bytes
+                                          : 0U;
+    }
 }
 
 std::expected<runtime::AppRunOutcome, AppControllerError> StopApp(AppController& controller) {
@@ -313,6 +327,16 @@ void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::WifiSnaps
     model.wifi_enabled = snapshot.enabled;
     model.wifi_connected = snapshot.connected;
     model.wifi_connecting = snapshot.connection_state == device::WifiConnectionState::kConnecting;
+}
+
+void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::Wifi& wifi) {
+    // Only the Host task uses this scratch snapshot. Construct the returned value
+    // directly in PSRAM; assignment would materialize the network lists on the
+    // caller's stack for the entire menu loop, including nested font installation.
+    static MICROPIXEL_EXT_RAM_BSS device::WifiSnapshot snapshot;
+    std::destroy_at(&snapshot);
+    new (static_cast<void*>(&snapshot)) device::WifiSnapshot(wifi.Snapshot());
+    RefreshWifiStatus(model, snapshot);
 }
 
 host_ui::WifiBand HostWifiBand(device::WifiBand band) {
@@ -416,7 +440,7 @@ host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& st
     return host_ui::SystemMenuModel{
         .idle_power_action = status.idle_power_action,
         .locale = effective_locale,
-        .language = "English",
+        .language = host_ui::LocaleDisplayName(effective_locale),
         .installed_app_count = catalog.count,
         .auto_sleep_timeout_minutes = status.auto_sleep_timeout_minutes,
         .theme_mode = status.theme_mode,
@@ -496,7 +520,7 @@ struct FirmwareUpdateSummary {
     if (!agent.Start(settings.enabled)) {
         ESP_LOGW(kTag, "Remote Control agent is unavailable for this boot");
     }
-    RefreshWifiStatus(status, wifi.Snapshot());
+    RefreshWifiStatus(status, wifi);
 }
 
 TickType_t DeadlineWaitTimeout(int64_t deadline_us) {
@@ -690,10 +714,23 @@ void FillAppManagementModel(host_ui::AppManagementModel& model, const runtime::I
             .external_storage = source.storage == runtime::AppStorage::kExternal,
         };
     }
+    static_assert(host_ui::kMaxManagedComponents >= runtime::kMaxInstalledPackages);
+    for (uint32_t i = 0U; i < catalog.inventory.count; ++i) {
+        const auto& package = catalog.inventory.packages[i];
+        if (!package.component) continue;
+        model.components[model.component_count++] = host_ui::InstalledComponentModel{
+            .version = package.version.data(),
+            .app_id = package.app_id.data(),
+            .display_name = package.display_name.data(),
+            .bundle_size_kib = package.bundle_size / 1024U,
+            .external_storage = package.external_storage,
+        };
+    }
 }
 
 void FillControlCatalog(const runtime::InstalledAppCatalog& catalog, control::CatalogSnapshot& snapshot) {
-    snapshot = {};
+    std::construct_at(&snapshot);
+    snapshot.inventory = catalog.inventory;
     snapshot.count = std::min(catalog.count, static_cast<uint32_t>(snapshot.apps.size()));
     snapshot.store_total_bytes = catalog.store_total_bytes;
     snapshot.store_used_bytes = catalog.store_used_bytes;
@@ -816,8 +853,10 @@ void AddAppDiagnostic(control::HostResult& result, const runtime::AppRunOutcome&
 
 struct RemoteCommandPump final {
     bool (*poll)(void*){};
+    bool (*poll_modal)(void*){};
     bool (*requires_periodic_poll)(void*){};
     void (*check_store)(void*){};
+    bool (*has_app_updates)(void*){};
     uint8_t (*store_check_state)(void*){};
     host::StoreUpdateRequestState (*store_update_request_state)(void*){};
     void (*fill_store)(void*, host_ui::AppManagementModel&){};
@@ -825,7 +864,11 @@ struct RemoteCommandPump final {
     void* context{};
     bool unwind_requested{};
 
-    [[nodiscard]] bool Process() {
+    [[nodiscard]] bool Process(bool modal = false) {
+        if (modal) {
+            if (poll_modal) (void)poll_modal(context);
+            return false;
+        }
         if (!unwind_requested && poll != nullptr) {
             unwind_requested = poll(context);
         }
@@ -842,6 +885,9 @@ struct RemoteCommandPump final {
 struct AppManagementUninstallHandler final {
     bool (*uninstall)(void*, uint32_t){};
     bool (*format_external)(void*){};
+    bool (*set_locale)(void*, const char*){};
+    bool (*stop_for_language)(void*){};
+    void (*locale_applied)(void*){};
     void* context{};
     bool available{};
 
@@ -876,7 +922,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
         shell.StopWatchingGuestActions();
     }
     RefreshStatusMetrics(model, catalog, battery);
-    RefreshWifiStatus(model, wifi.Snapshot());
+    RefreshWifiStatus(model, wifi);
     auto show_result = shell.ShowStatusLayer(model, trigger_timestamp_us);
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show status layer: error=%u", static_cast<unsigned>(show_result.error()));
@@ -955,7 +1001,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
                 controls_changed = true;
                 break;
             case host_ui::SystemUiActionType::kWifiStateChanged:
-                RefreshWifiStatus(model, wifi.Snapshot());
+                RefreshWifiStatus(model, wifi);
                 controls_changed = true;
                 break;
             case host_ui::SystemUiActionType::kBatteryStateChanged:
@@ -1547,11 +1593,53 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                    bool launch_available, const AppManagementUninstallHandler* uninstall_handler,
                    std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump,
                    const char* effective_locale = "en") {
-    RefreshWifiStatus(status_model, wifi.Snapshot());
-    host_ui::RemoteControlModel remote_control_model = remote_control.Snapshot();
-    const auto make_model = [&]() {
-        return MakeSystemMenuModel(status_model, catalog, remote_control_model, effective_locale);
+    RefreshWifiStatus(status_model, wifi);
+    struct MenuSnapshots {
+        host_ui::RemoteControlModel current{};
+        host_ui::RemoteControlModel latest{};
     };
+    auto snapshots = MakePsramObject<MenuSnapshots>();
+    if (!snapshots) return false;
+    auto& remote_control_model = snapshots->current;
+    auto& latest_remote_control = snapshots->latest;
+    remote_control.CopySnapshot(remote_control_model);
+    std::array<char, 32U> menu_locale{};
+    std::snprintf(menu_locale.data(), menu_locale.size(), "%s", effective_locale);
+    bool language_view = false;
+    bool language_pending = false;
+    bool language_sheet = false;
+    bool language_updating = false;
+    uint32_t language_selected = 0U;
+    auto language_state = host_ui::LanguageDownloadState::kIdle;
+    auto* language_packs = shell.language_packs();
+    const auto make_model = [&]() {
+        auto model = MakeSystemMenuModel(status_model, catalog, remote_control_model, menu_locale.data());
+        model.language_view = language_view;
+        model.language_sheet = language_sheet;
+        model.language_updating = language_updating;
+        model.app_updates_available =
+            command_pump && command_pump->has_app_updates && command_pump->has_app_updates(command_pump->context);
+        model.language_selected = language_selected;
+        if (language_packs) {
+            model.font_update_available = language_packs->update_available();
+            model.font_current_version = language_packs->active_version();
+            model.font_update_version =
+                language_updating ? language_packs->offered_version() : language_packs->update_version();
+            model.language_download_bytes = language_packs->download_size();
+            model.language_required_bytes = language_packs->required_space();
+            model.language_free_bytes = language_packs->free_space();
+            model.language_progress_reader = [](void* context) {
+                return static_cast<host::fonts::LanguagePacks*>(context)->progress();
+            };
+            model.language_progress_context = language_packs;
+        }
+        model.language_state = language_state;
+        model.language_progress = language_packs ? language_packs->progress() : 0U;
+        return model;
+    };
+    bool shown_app_updates =
+        command_pump && command_pump->has_app_updates && command_pump->has_app_updates(command_pump->context);
+    bool shown_font_updates = language_packs && language_packs->update_available();
     auto show_result = shell.ShowSystemMenu(make_model());
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show System Settings: error=%u", static_cast<unsigned>(show_result.error()));
@@ -1567,7 +1655,10 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                                        ? DeadlineWaitTimeout(next_performance_sample_us)
                                        : pdMS_TO_TICKS(250U);
         const auto action = shell.PollAction(RemoteAwareTimeout(timeout, command_pump));
-        if (command_pump != nullptr && command_pump->Process()) {
+        const bool language_busy = language_sheet && (language_state == host_ui::LanguageDownloadState::kDownloading ||
+                                                      language_state == host_ui::LanguageDownloadState::kApplying);
+        if (command_pump != nullptr && command_pump->Process(language_busy)) {
+            if (language_pending && language_packs) language_packs->Cancel();
             shell.LeaveSystemMenu();
             return true;
         }
@@ -1576,25 +1667,159 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
             shell.UpdatePerformanceOverlay(true, cpu_sampler.Sample());
             next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
         }
-        const host_ui::RemoteControlModel latest_remote_control = remote_control.Snapshot();
+        remote_control.CopySnapshot(latest_remote_control);
         if (!SameRemoteControlModel(remote_control_model, latest_remote_control)) {
             remote_control_model = latest_remote_control;
+            shell.UpdateSystemMenu(make_model());
+        }
+        if (language_pending && language_packs) {
+            using Status = host::fonts::LanguagePacks::Status;
+            const auto status = language_packs->status();
+            if (status == Status::kAwaitingConfirmation) {
+                language_state = host_ui::LanguageDownloadState::kConfirm;
+            } else if (status == Status::kChecking) {
+                language_state = host_ui::LanguageDownloadState::kChecking;
+            } else if (status == Status::kReady) {
+                const auto& pack = host::fonts::kPacks[language_packs->selected()];
+                struct SettingContext {
+                    const AppManagementUninstallHandler* handler;
+                    host_ui::SystemSettingsStore* settings;
+                    const char* locale;
+                    bool updating;
+                } context{uninstall_handler, &settings_store, pack.locale, language_updating};
+                language_state = host_ui::LanguageDownloadState::kApplying;
+                shell.UpdateSystemMenu(make_model());
+                const bool applied = language_packs->Apply(
+                    [](void* opaque) {
+                        const auto& context = *static_cast<SettingContext*>(opaque);
+                        if (context.updating) return true;
+                        if (context.handler && context.handler->set_locale)
+                            return context.handler->set_locale(context.handler->context, context.locale);
+                        host_ui::SystemLocaleState requested;
+                        return requested.SetRequested(context.locale) && context.settings->SaveLocale(requested);
+                    },
+                    &context);
+                language_pending = false;
+                language_state =
+                    applied ? host_ui::LanguageDownloadState::kIdle : host_ui::LanguageDownloadState::kFailed;
+                if (applied) {
+                    host_ui::SetDisplayLocale(pack.locale);
+                    language_sheet = false;
+                    std::snprintf(menu_locale.data(), menu_locale.size(), "%s", pack.locale);
+                    if (uninstall_handler && uninstall_handler->locale_applied)
+                        uninstall_handler->locale_applied(uninstall_handler->context);
+                    shell.LeaveSystemMenu();
+                    if (!shell.ShowSystemMenu(make_model())) return false;
+                    ESP_LOGI(kTag, "language activated without reboot: %s", pack.locale);
+                }
+            } else if (status == Status::kCurrent) {
+                language_state = host_ui::LanguageDownloadState::kCurrent;
+                language_pending = false;
+            } else if (status == Status::kFailed || status == Status::kCancelled || status == Status::kNoSpace) {
+                language_state = status == Status::kNoSpace ? host_ui::LanguageDownloadState::kNoSpace
+                                                            : host_ui::LanguageDownloadState::kFailed;
+                language_pending = false;
+            }
+            shell.UpdateSystemMenu(make_model());
+        }
+        const bool app_updates =
+            command_pump && command_pump->has_app_updates && command_pump->has_app_updates(command_pump->context);
+        const bool font_updates = language_packs && language_packs->update_available();
+        if (app_updates != shown_app_updates || font_updates != shown_font_updates) {
+            shown_app_updates = app_updates;
+            shown_font_updates = font_updates;
             shell.UpdateSystemMenu(make_model());
         }
         if (!action.has_value()) {
             continue;
         }
+        if (language_busy && action->type != host_ui::SystemUiActionType::kWifiStateChanged) continue;
+        if (language_sheet && action->type != host_ui::SystemUiActionType::kConfirmLanguage &&
+            action->type != host_ui::SystemUiActionType::kCancelLanguage &&
+            action->type != host_ui::SystemUiActionType::kWifiStateChanged)
+            continue;
         switch (action->type) {
+            case host_ui::SystemUiActionType::kCancelLanguage:
+                if (!language_sheet || language_busy) break;
+                if (language_packs) language_packs->Cancel();
+                language_sheet = false;
+                language_pending = false;
+                language_state = host_ui::LanguageDownloadState::kIdle;
+                shell.UpdateSystemMenu(make_model());
+                break;
+            case host_ui::SystemUiActionType::kConfirmLanguage:
+                if (!language_sheet || language_state != host_ui::LanguageDownloadState::kConfirm) break;
+                if (uninstall_handler && uninstall_handler->stop_for_language &&
+                    !uninstall_handler->stop_for_language(uninstall_handler->context)) {
+                    language_state = host_ui::LanguageDownloadState::kAppRunning;
+                    language_pending = false;
+                    if (language_packs) language_packs->Cancel();
+                    shell.UpdateSystemMenu(make_model());
+                    break;
+                }
+                if (language_packs && language_packs->Confirm()) {
+                    language_pending = true;
+                    language_state = host_ui::LanguageDownloadState::kDownloading;
+                } else {
+                    language_pending = false;
+                    language_state =
+                        language_packs && language_packs->status() == host::fonts::LanguagePacks::Status::kNoSpace
+                            ? host_ui::LanguageDownloadState::kNoSpace
+                            : host_ui::LanguageDownloadState::kFailed;
+                }
+                shell.UpdateSystemMenu(make_model());
+                break;
             case host_ui::SystemUiActionType::kCloseSystemMenu:
+                if (language_view) {
+                    if (language_pending && language_packs) language_packs->Cancel();
+                    language_view = false;
+                    language_pending = false;
+                    language_state = host_ui::LanguageDownloadState::kIdle;
+                    shell.LeaveSystemMenu();
+                    if (!shell.ShowSystemMenu(make_model())) return false;
+                    break;
+                }
+                [[fallthrough]];
             case host_ui::SystemUiActionType::kSuspendToHall:
+                if (language_pending && language_packs) language_packs->Cancel();
                 shell.LeaveSystemMenu();
                 return true;
+            case host_ui::SystemUiActionType::kUpdateLanguageFont:
+                if (!language_view || language_pending || !language_packs || !language_packs->update_available()) break;
+                language_updating = true;
+                language_sheet = true;
+                if (language_packs->StartUpdate()) {
+                    language_selected = language_packs->selected();
+                    language_pending = true;
+                    language_state = host_ui::LanguageDownloadState::kChecking;
+                } else
+                    language_state = host_ui::LanguageDownloadState::kFailed;
+                shell.UpdateSystemMenu(make_model());
+                break;
+            case host_ui::SystemUiActionType::kSelectLanguage:
+                if (!language_view || language_pending || action->value >= host::fonts::kPacks.size()) break;
+                if (std::string_view(menu_locale.data()) == host::fonts::kPacks[action->value].locale) break;
+                language_updating = false;
+                language_selected = action->value;
+                language_sheet = true;
+                if (language_packs && language_packs->Start(action->value)) {
+                    language_pending = true;
+                    language_state = host_ui::LanguageDownloadState::kChecking;
+                } else
+                    language_state = host_ui::LanguageDownloadState::kFailed;
+                shell.UpdateSystemMenu(make_model());
+                break;
             case host_ui::SystemUiActionType::kWifiStateChanged:
-                RefreshWifiStatus(status_model, wifi.Snapshot());
+                RefreshWifiStatus(status_model, wifi);
                 shell.UpdateSystemMenu(make_model());
                 break;
             case host_ui::SystemUiActionType::kSelectSystemMenuItem:
-                if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kWifi)) {
+                if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kLanguage)) {
+                    language_view = true;
+                    language_state = host_ui::LanguageDownloadState::kIdle;
+                    shell.LeaveSystemMenu();
+                    if (!shell.ShowSystemMenu(make_model())) return false;
+                } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kWifi)) {
                     shell.LeaveSystemMenu();
                     if (!RunWifiSettings(shell, wifi, status_model, command_pump)) {
                         return false;
@@ -1602,7 +1827,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi.Snapshot());
+                    RefreshWifiStatus(status_model, wifi);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Wi-Fi: error=%u",
@@ -1618,8 +1843,8 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi.Snapshot());
-                    remote_control_model = remote_control.Snapshot();
+                    RefreshWifiStatus(status_model, wifi);
+                    remote_control.CopySnapshot(remote_control_model);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Remote Control: error=%u",
@@ -1627,6 +1852,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                         return false;
                     }
                 } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kPowerManagement)) {
+                    if (status_model.idle_power_action == device::IdlePowerAction::kDisabled) break;
                     shell.LeaveSystemMenu();
                     if (!RunPowerManagement(shell, status_model, settings_store, command_pump)) {
                         return false;
@@ -1662,7 +1888,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi.Snapshot());
+                    RefreshWifiStatus(status_model, wifi);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after System Information: error=%u",
@@ -1681,7 +1907,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (launch_request.has_value()) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi.Snapshot());
+                    RefreshWifiStatus(status_model, wifi);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after App Management: error=%u",
@@ -1694,6 +1920,8 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                 }
                 break;
             case host_ui::SystemUiActionType::kOpenStatusLayer:
+                if (language_pending && language_packs) language_packs->Cancel();
+                language_pending = false;
                 shell.LeaveSystemMenu();
                 if (!RunStatusLayer(shell, nullptr, battery, wifi, status_model, catalog, settings_store, command_pump,
                                     action->timestamp_us)) {
@@ -1702,7 +1930,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                 if (command_pump != nullptr && command_pump->unwind_requested) {
                     return true;
                 }
-                RefreshWifiStatus(status_model, wifi.Snapshot());
+                RefreshWifiStatus(status_model, wifi);
                 show_result = shell.ShowSystemMenu(make_model());
                 if (!show_result) {
                     ESP_LOGE(kTag, "failed to restore System Settings after status layer: error=%u",
@@ -1899,6 +2127,7 @@ class ActiveHost final {
           settings_store_(settings_store),
           controls_(controls),
           remote_control_(remote_control),
+          app_runtime_(runtime),
           hall_status_(catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady) {
         std::snprintf(effective_locale_.data(), effective_locale_.size(), "%.*s",
                       static_cast<int>(effective_locale.size()), effective_locale.data());
@@ -2027,6 +2256,7 @@ class ActiveHost final {
             return true;
         }
         const bool structural_change = current.active != hall_install_activity_.active ||
+                                       current.error != hall_install_activity_.error ||
                                        current.source != hall_install_activity_.source ||
                                        std::strcmp(current.app_id.data(), hall_install_activity_.app_id.data()) != 0;
         hall_install_activity_ = current;
@@ -2043,6 +2273,33 @@ class ActiveHost final {
                 break;
             }
         }
+        return true;
+    }
+
+    [[nodiscard]] bool StopForLanguage() {
+        if (app_controller_.state() == AppLifecycleState::kNotRunning) return true;
+        auto result = StopApp(app_controller_);
+        if (!result) return false;
+        controls_.UpdateAppLifecycle(nullptr, "not_running");
+        suspended_index_.reset();
+        outcome_ = nullptr;
+        shell_.ReleaseGuestSnapshot();
+        suspended_snapshot_ = {};
+        hall_status_ = host_ui::HallStatus::kReady;
+        hall_detail_ = 0U;
+        return true;
+    }
+
+    [[nodiscard]] bool SetLanguage(const char* tag) {
+        if (app_controller_.state() != AppLifecycleState::kNotRunning) return false;
+        host_ui::SystemLocaleState requested;
+        if (!requested.SetRequested(tag) || !app_runtime_.SetEffectiveLocale(tag)) return false;
+        if (!settings_store_.SaveLocale(requested)) {
+            (void)app_runtime_.SetEffectiveLocale(effective_locale_.data());
+            return false;
+        }
+        std::snprintf(effective_locale_.data(), effective_locale_.size(), "%s", tag);
+        host_ui::SetDisplayLocale(tag);
         return true;
     }
 
@@ -2288,13 +2545,13 @@ class ActiveHost final {
         result.source = command.source;
         if (command.deadline_ticks != 0U && static_cast<int32_t>(xTaskGetTickCount() - command.deadline_ticks) >= 0) {
             heap_caps_free(command.package_data);
-            controls_.EndInstallActivity(command.source, command.command_id.data());
+            controls_.EndInstallActivity(command.source, command.command_id.data(), "command_expired");
             SubmitRemoteResult(result, false, "command_expired");
             return false;
         }
         if (app_controller_.state() != AppLifecycleState::kNotRunning) {
             heap_caps_free(command.package_data);
-            controls_.EndInstallActivity(command.source, command.command_id.data());
+            controls_.EndInstallActivity(command.source, command.command_id.data(), "stop_active_app_before_install");
             SubmitRemoteResult(result, false, "stop_active_app_before_install");
             return false;
         }
@@ -2305,7 +2562,8 @@ class ActiveHost final {
                 !micropixel_app_same_major_update(catalog_.apps[*current].version.data(),
                                                   command.store_version.data())) {
                 heap_caps_free(command.package_data);
-                controls_.EndInstallActivity(command.source, command.command_id.data());
+                controls_.EndInstallActivity(command.source, command.command_id.data(),
+                                             "automatic_install_state_changed");
                 SubmitRemoteResult(result, false, "automatic_install_state_changed");
                 return false;
             }
@@ -2314,12 +2572,12 @@ class ActiveHost final {
         bool changed = false;
         if (const char* install_error = CommitInstallPackage(command, changed); install_error != nullptr) {
             shell_.ResumeHallCoverLoading();
-            controls_.EndInstallActivity(command.source, command.command_id.data());
+            controls_.EndInstallActivity(command.source, command.command_id.data(), install_error);
             SubmitRemoteResult(result, false, install_error);
             return false;
         }
         if (!ReloadAppCatalog()) {
-            controls_.EndInstallActivity(command.source, command.command_id.data());
+            controls_.EndInstallActivity(command.source, command.command_id.data(), "catalog_refresh_failed");
             shell_.ResumeHallCoverLoading();
             SubmitRemoteResult(result, false, "catalog_refresh_failed");
             return false;
@@ -2485,8 +2743,26 @@ class ActiveHost final {
         return false;
     }
 
+    [[nodiscard]] bool HasAppUpdates() const {
+        for (uint32_t i = 0; i < catalog_.count; ++i) {
+            const auto update = controls_.FindStoreUpdate(catalog_.apps[i].app_id.data());
+            if (update.version[0] && update.baseline_sha256 == catalog_.apps[i].sha256) return true;
+        }
+        return false;
+    }
+
     void UpdateStoreState(bool system_ui = false) {
         control::StoreSnapshot snapshot{};
+        const auto revision = controls_.StoreUpdatesRevision();
+        if (revision != store_updates_revision_) {
+            store_updates_revision_ = revision;
+            if (auto* packs = shell_.language_packs()) {
+                const auto update = controls_.FindStoreUpdate(packs->active_id());
+                packs->SetUpdateVersion(packs->active_id(),
+                                        update.version[0] ? update.current_version.data() : packs->active_version(),
+                                        update.version.data());
+            }
+        }
         snapshot.environment = runtime::AppEnvironment(devices_);
         snapshot.idle_ms = shell_.UserIdleMs();
         snapshot.busy = system_ui || app_controller_.state() != AppLifecycleState::kNotRunning ||
@@ -2494,8 +2770,23 @@ class ActiveHost final {
         controls_.UpdateStoreSnapshot(snapshot);
     }
 
+    void ProcessInstallPreflight() {
+        control::InstallActivity activity{};
+        controls_.CopyInstallActivity(activity);
+        if (!activity.active || activity.preflight != control::InstallPreflight::kPending) return;
+        const auto capacity =
+            app_store_.CheckAppInstallCapacity(activity.app_id.data(), activity.package_size, activity.package_sha256);
+        controls_.CompleteInstallPreflight(activity.source, activity.command_id.data(),
+                                           capacity ? capacity->required_bytes : 0U,
+                                           capacity ? capacity->free_bytes : 0U,
+                                           !capacity                ? AppStoreErrorText(capacity.error())
+                                           : capacity->sufficient() ? nullptr
+                                                                    : "app_store_full");
+    }
+
     [[nodiscard]] bool ProcessRemoteCommands() {
         UpdateStoreState();
+        ProcessInstallPreflight();
         if (RemoteInputSequence().active) {
             ContinueRemoteInputSequence();
             return false;
@@ -2513,19 +2804,20 @@ class ActiveHost final {
         return false;
     }
 
-    [[nodiscard]] bool ProcessRemoteCommandsInSystemUi() {
+    [[nodiscard]] bool ProcessRemoteCommandsInSystemUi(bool modal = false) {
         UpdateStoreState(true);
-        if (shell_.PowerTransitionRequested()) {
+        ProcessInstallPreflight();
+        if (!modal && shell_.PowerTransitionRequested()) {
             return true;
         }
-        if (ReadFirmwareUpdate(remote_control_).in_progress) {
+        if (!modal && ReadFirmwareUpdate(remote_control_).in_progress) {
             return true;
         }
         // Download activity starts before the completed package reaches the
         // command queue. Return to the Hall now so its progress is visible.
         control::InstallActivity install_activity{};
         controls_.CopyInstallActivity(install_activity);
-        if (install_activity.active) {
+        if (!modal && (install_activity.active || install_activity.error[0] != '\0')) {
             return true;
         }
         if (RemoteInputSequence().active) {
@@ -2536,7 +2828,7 @@ class ActiveHost final {
         while (controls_.PeekHostCommand(command)) {
             if (command.type != control::HostCommandType::kCaptureScreen &&
                 command.type != control::HostCommandType::kInputSequence) {
-                return true;
+                return !modal;
             }
             if (!controls_.PollHostCommand(command)) {
                 return false;
@@ -2577,10 +2869,13 @@ class ActiveHost final {
 
         RemoteCommandPump command_pump{
             .poll = [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(); },
+            .poll_modal =
+                [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(true); },
             .requires_periodic_poll =
                 [](void* context) { return static_cast<ActiveHost*>(context)->RemoteInputSequence().active; },
             .check_store =
                 [](void* context) { static_cast<ActiveHost*>(context)->remote_control_.RequestStoreCheck(); },
+            .has_app_updates = [](void* context) { return static_cast<ActiveHost*>(context)->HasAppUpdates(); },
             .store_check_state =
                 [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreCheckState(); },
             .store_update_request_state =
@@ -2675,6 +2970,15 @@ class ActiveHost final {
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
+            if (action.type == host_ui::SystemUiActionType::kDismissAppError) {
+                if (hall_model_.status == host_ui::HallStatus::kAppFailed) {
+                    controls_.DismissInstallFailure();
+                    hall_status_ = catalog_.count == 0U ? host_ui::HallStatus::kNoApps : host_ui::HallStatus::kReady;
+                    outcome_ = nullptr;
+                    if (!ShowCurrentHall()) return false;
+                }
+                continue;
+            }
             if (action.type == host_ui::SystemUiActionType::kLaunchApp && action.app_index < catalog_.count &&
                 CanLaunch()) {
                 ActivateSelectedApp(action.app_index);
@@ -2731,6 +3035,14 @@ class ActiveHost final {
                         },
                     .format_external =
                         [](void* context) { return static_cast<ActiveHost*>(context)->FormatExternalStorage(); },
+                    .set_locale =
+                        [](void* context, const char* locale) {
+                            return static_cast<ActiveHost*>(context)->SetLanguage(locale);
+                        },
+                    .stop_for_language =
+                        [](void* context) { return static_cast<ActiveHost*>(context)->StopForLanguage(); },
+                    .locale_applied =
+                        [](void* context) { (void)static_cast<ActiveHost*>(context)->ReloadAppCatalog(); },
                     .context = this,
                     .available = app_controller_.state() == AppLifecycleState::kNotRunning,
                 };
@@ -2998,7 +3310,7 @@ class ActiveHost final {
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kWifiStateChanged) {
-                RefreshWifiStatus(status_model_, wifi_.Snapshot());
+                RefreshWifiStatus(status_model_, wifi_);
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kTimeStateChanged) {
@@ -3028,10 +3340,13 @@ class ActiveHost final {
         controls_.UpdateAppLifecycle(catalog_.apps[foreground_index_].app_id.data(), "suspending");
         RemoteCommandPump command_pump{
             .poll = [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(); },
+            .poll_modal =
+                [](void* context) { return static_cast<ActiveHost*>(context)->ProcessRemoteCommandsInSystemUi(true); },
             .requires_periodic_poll =
                 [](void* context) { return static_cast<ActiveHost*>(context)->RemoteInputSequence().active; },
             .check_store =
                 [](void* context) { static_cast<ActiveHost*>(context)->remote_control_.RequestStoreCheck(); },
+            .has_app_updates = [](void* context) { return static_cast<ActiveHost*>(context)->HasAppUpdates(); },
             .store_check_state =
                 [](void* context) { return static_cast<ActiveHost*>(context)->controls_.StoreCheckState(); },
             .store_update_request_state =
@@ -3305,6 +3620,7 @@ class ActiveHost final {
     host_ui::SystemSettingsStore& settings_store_;
     control::ControlDispatcher& controls_;
     remote_control::RemoteControlAgent& remote_control_;
+    runtime::AppRuntime& app_runtime_;
     std::array<char, MICROPIXEL_BUNDLE_LOCALE_MAX_LENGTH + 1U> effective_locale_{};
     State state_{State::kHall};
     runtime::AppRunOutcome last_outcome_{};
@@ -3318,6 +3634,7 @@ class ActiveHost final {
     uint64_t hall_transition_trigger_us_{};
     bool ready_logged_{};
     bool hall_firmware_update_available_{};
+    uint32_t store_updates_revision_{};
     // ActiveHost itself is allocated in PSRAM. Keep the large Remote Control
     // protocol workspaces here instead of creating process-lifetime SRAM
     // statics for each command-processing path.
@@ -3411,12 +3728,18 @@ void HostController::Run() {
         ESP_LOGW(kTag, "requested Locale could not be restored; using %s", host_ui::kDefaultLocale.data());
     }
     locale.ResolveEffective(kBuiltinLocales);
+    if (locale.effective() != "en" &&
+        (!shell_.language_packs() || !shell_.language_packs()->Restore(locale.effective()))) {
+        constexpr std::array<std::string_view, 1> fallback{"en"};
+        locale.ResolveEffective(fallback);
+    }
     if (locale.requested() != locale.effective()) {
         ESP_LOGW(kTag, "requested Locale %s is unavailable; effective Locale is %s", locale.requested_c_str(),
                  locale.effective_c_str());
     } else {
         ESP_LOGI(kTag, "effective Locale: %s", locale.effective_c_str());
     }
+    host_ui::SetDisplayLocale(locale.effective());
     shell_.ConfigureAutoSleep(
         status_model.auto_sleep_timeout_minutes,
         [](void* context, bool& connected) {

@@ -36,8 +36,8 @@ template <typename RunningStates>
                                           uint64_t catalog_signature, uint32_t retained_app_count,
                                           uint64_t retained_catalog_signature, const RunningStates& retained_running,
                                           bool retained_launch_enabled, bool retained_firmware_update_available) {
-    if (visible_count != retained_app_count || catalog_signature != retained_catalog_signature ||
-        model.launch_enabled != retained_launch_enabled ||
+    if (model.status == host_ui::HallStatus::kAppFailed || visible_count != retained_app_count ||
+        catalog_signature != retained_catalog_signature || model.launch_enabled != retained_launch_enabled ||
         model.firmware_update_available != retained_firmware_update_available) {
         return false;
     }

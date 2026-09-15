@@ -8,6 +8,8 @@
 
 #include "freertos/FreeRTOS.h"
 
+inline unsigned uxTaskGetStackHighWaterMark(void*) { return 8192U; }
+
 inline void vTaskDelay(TickType_t ticks) { std::this_thread::sleep_for(std::chrono::milliseconds(ticks)); }
 
 // Optional deterministic clock for tests running on the calling thread.

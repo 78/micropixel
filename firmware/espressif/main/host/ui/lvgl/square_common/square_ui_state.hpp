@@ -171,8 +171,8 @@ class SquareSystemUiState final {
     GuestGestureHintUi guest_gesture_hint_ui{};
     StatusLayerUi status_layer_ui{};
     HallSceneUi hall_scene_ui{};
-    SystemMenuUi system_menu_ui{};
     ActionSheetPresenter action_sheets;
+    SystemMenuUi system_menu_ui;
     SystemDetailUi system_detail_ui;
     WifiSettingsUi wifi_settings_ui;
     platform::lvgl::HostPointerRouter<kHostPointerQueueCapacity> host_pointer{};

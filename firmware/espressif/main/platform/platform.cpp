@@ -21,6 +21,9 @@ class UnavailablePower final : public device::Power {
    public:
     void SetPowerButtonSink(device::PowerButtonSink, void*) override {}
     void SetPowerOffButtonSink(device::PowerOffButtonSink, void*) override {}
+    [[nodiscard]] device::IdlePowerAction GetIdlePowerAction() const override {
+        return device::IdlePowerAction::kDisabled;
+    }
     [[nodiscard]] std::expected<void, device::PowerError> EnterLowPower() override {
         return std::unexpected(device::PowerError::kUnavailable);
     }

@@ -3,6 +3,7 @@
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
+#include "host/ui/ui_text.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -32,25 +33,25 @@ theme::Mode PaletteMode(host_ui::SystemThemeMode mode) {
 const char* ThemeName(host_ui::SystemThemeMode mode) {
     switch (mode) {
         case host_ui::SystemThemeMode::kPureBlack:
-            return "Pure Black";
+            return UiText(host_strings::Id::kUiPureBlack);
         case host_ui::SystemThemeMode::kDeepBlue:
-            return "Deep Blue";
+            return UiText(host_strings::Id::kUiDeepBlue);
         case host_ui::SystemThemeMode::kSoftIvory:
-            return "Soft Ivory";
+            return UiText(host_strings::Id::kUiSoftIvory);
     }
-    return "Pure Black";
+    return UiText(host_strings::Id::kUiPureBlack);
 }
 
 const char* ThemeDescription(host_ui::SystemThemeMode mode) {
     switch (mode) {
         case host_ui::SystemThemeMode::kPureBlack:
-            return "True black canvas optimized for OLED";
+            return UiText(host_strings::Id::kUiTrueBlackCanvasOptimizedForOled);
         case host_ui::SystemThemeMode::kDeepBlue:
-            return "Deep navy surfaces with cool blue accents";
+            return UiText(host_strings::Id::kUiDeepNavySurfacesWithCoolBlueAccents);
         case host_ui::SystemThemeMode::kSoftIvory:
-            return "Warm ivory canvas for comfortable daytime use";
+            return UiText(host_strings::Id::kUiWarmIvoryCanvasForComfortableDaytimeUse);
     }
-    return "True black canvas optimized for OLED";
+    return UiText(host_strings::Id::kUiTrueBlackCanvasOptimizedForOled);
 }
 
 lv_obj_t* Swatch(lv_obj_t* parent, uint32_t color, uint32_t border_color) {
@@ -92,7 +93,8 @@ void SystemDetailUi::RenderAppearanceLocked() {
     appearance_options_ = {};
     lv_obj_clean(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(theme::kMenuBackground), 0);
-    Header(layout_, root_, "Appearance", "Choose a theme", AppearanceBackEvent, this);
+    Header(layout_, root_, UiText(host_strings::Id::kUiAppearance), UiText(host_strings::Id::kUiChooseATheme),
+           AppearanceBackEvent, this);
     lv_obj_t* content = Scroll(layout_, root_, ScrollEvent, this);
 
     for (size_t index = 0U; index < kThemeModes.size(); ++index) {
@@ -133,8 +135,8 @@ void SystemDetailUi::RenderAppearanceLocked() {
         (void)Swatch(preview, palette.control_accent, palette.control_accent);
     }
 
-    lv_obj_t* note = Label(content, "The selected theme is saved and restored after restart.", layout_.detail_font,
-                           theme::kMutedText);
+    lv_obj_t* note = Label(content, UiText(host_strings::Id::kUiTheSelectedThemeIsSavedAndRestoredAfterRestart),
+                           layout_.detail_font, theme::kMutedText);
     lv_obj_set_width(note, LV_PCT(100));
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
     lv_obj_move_foreground(root_);

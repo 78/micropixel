@@ -179,6 +179,26 @@ FPS 提升。P4 高分辨率场景与 S31 原尺寸输出应分别测量。
 改变数据驻留位置也可能改变访存的代码生成成本，必须用对照测量分离变量；
 不能仅凭查表耗时推断 cache miss 是主因。
 
+### 系统字体缓存
+
+使用 [Font Benchmark](../../guest/apps/font-benchmark/README.zh-CN.md) 分别测试 Scene 的动态数字脏区和
+Raster 的整屏文字重绘。字模缓存命中仍可能包含字符描述查找、字距计算、布局测量和像素混合；
+仅预热字模不能保证 TTF 与 CBIN 性能相同。
+
+`platform/lvgl/fonts/tiny_ttf_font_cache.hpp` 提供默认系统字体使用的 Tiny TTF 拉丁字符缓存层。系统在发布字体前调用 `Initialize`，保留字符描述和源 A8 字模的引用，使用固定容量、
+四路组相联的字距缓存保存源字体返回的精确 advance。缓存淘汰只增加重新计算，不改变字距或抗锯齿。
+软件绘制通过 `glyph_bitmap.hpp` 直接读取 A8 coverage，避免走通用打包位图的逐像素解码。
+字符表必须有序且唯一；不在表中的字符交给 LVGL fallback，不在绘制中按需生成。
+
+源字体必须专供该缓存使用，字号和 kerning 配置保持不变；Tiny TTF 字符和字模缓存容量须容纳完整
+预备字符集，并设置 `CONFIG_LV_TINY_TTF_CACHE_KERNING_CNT=0`，避免源字距缓存未命中时分配内存。
+缓存元数据与固定字距表在初始化时分配到 PSRAM，不复制源字模。所有访问与释放使用同一 LVGL adapter
+锁，尤其注意 Scene 合成可能位于锁外；先停止消费者并 `Reset`，再销毁源字体。初始化失败释放已持有
+的引用和缓存存储，不能发布半成品。
+
+这适合已知的常用字符工作集。CJK fallback 使用 `bounded_ttf_font.hpp` 的固定槽与共享临时区，在缓存未命中时生成字模，
+不申请堆内存；不把整份 CJK 字体在所有字号下永久预热。参见[语言字体](language-fonts.zh-CN.md)。记录首次准备耗时、固定内存成本和热态性能，分别判断取舍。
+
 ## 7. 回归与基线维护
 
 每条性能基线必须带板型、Host/Bundle 版本、构建 profile、分辨率/缩放、HUD/音频状态、场景和采样窗口。

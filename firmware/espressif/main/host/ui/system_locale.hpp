@@ -40,6 +40,10 @@ class SystemLocaleState final {
 // extensions and private-use subtags until matching semantics are specified.
 [[nodiscard]] bool NormalizeLocaleTag(std::string_view input, LocaleTagBuffer& output);
 
+// The Host publishes only a locale whose font activation has succeeded.
+void SetDisplayLocale(std::string_view tag);
+[[nodiscard]] const char* DisplayLocale();
+
 [[nodiscard]] const char* LocaleDisplayName(std::string_view tag);
 
 }  // namespace micropixel::host_ui

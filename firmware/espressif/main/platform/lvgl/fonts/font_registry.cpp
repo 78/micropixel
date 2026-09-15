@@ -5,6 +5,9 @@
 
 #include "abi/micropixel_abi.h"
 #include "platform/lvgl/fonts/font_cbin_loader.hpp"
+#if CONFIG_LV_USE_TINY_TTF
+#include "platform/lvgl/fonts/system_fonts.hpp"
+#endif
 
 extern "C" {
 extern const lv_font_t font_builtin_latin_10;
@@ -81,13 +84,20 @@ SystemFontSet BuiltinFontSet() {
 
 }  // namespace
 
-const lv_font_t* BuiltinLatinFont(SystemFontRole role) { return ProfileFont(role); }
+const lv_font_t* BuiltinLatinFont(SystemFontRole role) {
+#if CONFIG_LV_USE_TINY_TTF
+    return SystemFont(role, ProfileFont(role));
+#else
+    return ProfileFont(role);
+#endif
+}
 
 FontRegistry::FontRegistry() : active_(BuiltinFontSet()) {}
 
 FontRegistry::~FontRegistry() = default;
 
 const lv_font_t* FontRegistry::Resolve(SystemFontRole role) const {
+    if (builtin_) return BuiltinLatinFont(role);
     const size_t index = RoleIndex(role);
     return index < active_.fonts.size() ? active_.fonts[index] : active_.fonts[RoleIndex(SystemFontRole::kSmall)];
 }
@@ -235,11 +245,13 @@ bool FontRegistry::Activate(const SystemFontSet& candidate) {
         return false;
     }
     active_ = candidate;
+    builtin_ = false;
     ++generation_;
     return true;
 }
 
 void FontRegistry::ResetToBuiltin() {
+    builtin_ = true;
     active_ = BuiltinFontSet();
     ++generation_;
 }

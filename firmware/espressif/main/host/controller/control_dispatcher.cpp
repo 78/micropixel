@@ -157,7 +157,7 @@ void ControlDispatcher::ResetStoreUpdates() {
     store_update_count_ = 0U;
 }
 void ControlDispatcher::AddStoreUpdate(const char* app_id, const char* version, const char* state,
-                                       const std::array<uint8_t, 32U>& digest) {
+                                       const std::array<uint8_t, 32U>& digest, const char* current_version) {
     std::lock_guard lock(snapshot_mutex_);
     if (app_id == nullptr || version == nullptr || store_update_count_ >= store_updates_.size()) return;
     if (store_update_request_state_ == host::StoreUpdateRequestState::kQueued &&
@@ -167,6 +167,8 @@ void ControlDispatcher::AddStoreUpdate(const char* app_id, const char* version, 
     }
     auto& update = store_updates_[store_update_count_++];
     update.baseline_sha256 = digest;
+    std::snprintf(update.current_version.data(), update.current_version.size(), "%s",
+                  current_version ? current_version : "");
     std::snprintf(update.app_id.data(), update.app_id.size(), "%s", app_id);
     std::snprintf(update.version.data(), update.version.size(), "%s", version);
     std::snprintf(update.state.data(), update.state.size(), "%s", state != nullptr ? state : "available");
@@ -231,7 +233,8 @@ void ControlDispatcher::CopySnapshot(HostSnapshot& snapshot) const {
     snapshot = *snapshot_;
 }
 
-bool ControlDispatcher::BeginInstallActivity(ControlSource source, const char* command_id, const char* app_id) {
+bool ControlDispatcher::BeginInstallActivity(ControlSource source, const char* command_id, const char* app_id,
+                                             size_t package_size, const std::array<uint8_t, 32U>& sha256) {
     if (command_id == nullptr || command_id[0] == '\0' || app_id == nullptr || app_id[0] == '\0') {
         return false;
     }
@@ -247,6 +250,9 @@ bool ControlDispatcher::BeginInstallActivity(ControlSource source, const char* c
         install_activity_.source = source;
         install_activity_.generation = generation;
         install_activity_.active = true;
+        install_activity_.package_size = package_size;
+        install_activity_.package_sha256 = sha256;
+        install_activity_.preflight = package_size == 0U ? InstallPreflight::kNone : InstallPreflight::kPending;
     }
     const CommandReadySink sink = command_ready_sink_.load(std::memory_order_acquire);
     if (sink != nullptr) {
@@ -275,7 +281,30 @@ void ControlDispatcher::UpdateInstallProgress(ControlSource source, const char* 
     }
 }
 
-void ControlDispatcher::EndInstallActivity(ControlSource source, const char* command_id) {
+void ControlDispatcher::CompleteInstallPreflight(ControlSource source, const char* command_id, uint64_t required_bytes,
+                                                 uint64_t free_bytes, const char* error) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (!install_activity_.active || install_activity_.source != source || command_id == nullptr ||
+        std::strcmp(install_activity_.command_id.data(), command_id) != 0 ||
+        install_activity_.preflight != InstallPreflight::kPending)
+        return;
+    install_activity_.required_bytes = required_bytes;
+    install_activity_.free_bytes = free_bytes;
+    std::snprintf(install_activity_.error.data(), install_activity_.error.size(), "%s", error != nullptr ? error : "");
+    install_activity_.preflight = error != nullptr ? InstallPreflight::kFailed : InstallPreflight::kReady;
+    ++install_activity_.generation;
+}
+
+void ControlDispatcher::DismissInstallFailure() {
+    std::lock_guard lock(snapshot_mutex_);
+    if (!install_activity_.active && install_activity_.error[0] != '\0') {
+        const uint32_t generation = install_activity_.generation + 1U;
+        install_activity_ = {};
+        install_activity_.generation = generation;
+    }
+}
+
+void ControlDispatcher::EndInstallActivity(ControlSource source, const char* command_id, const char* error) {
     bool changed = false;
     {
         std::lock_guard lock(snapshot_mutex_);
@@ -283,12 +312,20 @@ void ControlDispatcher::EndInstallActivity(ControlSource source, const char* com
             std::strcmp(install_activity_.command_id.data(), command_id) == 0) {
             if (source == ControlSource::kRemote &&
                 std::strcmp(install_activity_.app_id.data(), store_update_requested_.data()) == 0) {
+                // The request reached the installer. Its outcome belongs to
+                // InstallActivity's dialog, not the action sheet's request error.
                 store_update_request_state_ = host::StoreUpdateRequestState::kIdle;
                 store_update_requested_[0] = '\0';
                 store_update_dispatch_pending_ = false;
             }
             const uint32_t generation = install_activity_.generation + 1U;
-            install_activity_ = {};
+            if (error == nullptr) {
+                install_activity_ = {};
+            } else {
+                install_activity_.active = false;
+                install_activity_.preflight = InstallPreflight::kFailed;
+                std::snprintf(install_activity_.error.data(), install_activity_.error.size(), "%s", error);
+            }
             install_activity_.generation = generation;
             changed = true;
         }
