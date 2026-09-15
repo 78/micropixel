@@ -72,7 +72,6 @@ CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS=8192
 CONFIG_LV_COLOR_DEPTH_24=y
 # The Host shell, status panel and the Guest App Surface image share LVGL's
 # fixed pool. Do not rely on run-time pool expansion in the display task.
-CONFIG_LV_MEM_SIZE_KILOBYTES=1024
 CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0
 # CONFIG_LV_USE_LODEPNG is not set
 # main/CMakeLists.txt overrides LVGL's built-in default font with generated

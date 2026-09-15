@@ -5,6 +5,7 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -77,6 +78,32 @@ class FirmwareProfileTest(unittest.TestCase):
         defaults = next(item for item in command if item.startswith("SDKCONFIG_DEFAULTS="))
         self.assertIn("sdkconfig.p4.defaults", defaults)
         self.assertEqual(command[-1], "build")
+
+    def test_p4_config_uses_shared_lvgl_pool_for_fresh_and_existing_builds(self) -> None:
+        script = (firmware.FIRMWARE_DIR.parents[1] / "tools/p4.sh").read_text()
+        prepare = script.split("prepare_host_config() {", 1)[1].split("\nidf_host() {", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "sdkconfig.defaults").write_text("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n")
+            command = """set -euo pipefail
+firmware_dir="$1"
+host_build_dir="$1/build"
+sdkconfig_path="$host_build_dir/sdkconfig.release"
+sdkconfig_defaults="$firmware_dir/sdkconfig.defaults"
+host_config_prepared=false
+common_max_task_name_len=32
+""" + "prepare_host_config() {" + prepare + "\nprepare_host_config\n"
+            config = root / "build/sdkconfig.release"
+            for existing in (False, True):
+                with self.subTest(existing=existing):
+                    if existing:
+                        config.write_text("CONFIG_LV_MEM_SIZE_KILOBYTES=96\n")
+                    subprocess.run(["bash", "-c", command, "test", temporary], check=True,
+                                   env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+                    generated = (root / "build/sdkconfig.env.defaults").read_text()
+                    self.assertIn("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n", generated)
+                    if existing:
+                        self.assertIn("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n", config.read_text())
 
     def test_every_profile_layers_shared_defaults_first(self) -> None:
         shared_defaults = firmware.FIRMWARE_DIR / "sdkconfig.defaults"
