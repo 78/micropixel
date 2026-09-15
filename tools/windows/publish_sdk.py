@@ -68,10 +68,11 @@ def main():
 无需另装 Git 或 ESP-IDF。其余 JSON、manager ZIP 和校验文件供安装与更新流程使用，无需手动下载。
 GitHub 自动生成的 Source code 是仓库源码，不是 SDK。
 
-本版新增 AdditiveSprite 加法混合精灵与能力查询，使用该功能需要固件 0.8.0；兼容旧固件时先检查能力位。
+本版新增静态 TTF 字体组件打包与发布、system_font 语言声明和多行本地化；SDK Demo 提供多语言字体与文字渲染示例。
+Guest C++ API 和 Service ABI 不变；系统字体组件与语言切换需要固件 0.9.0，已有能力保留原有固件要求。
 已有项目保持版本锁，升级和回退需显式执行。从 0.16.0 升级仍需运行新安装包，以修复 Ctrl-C 启动层。
 Windows 安装包未签名；Windows 11 与 S31/S3 部分验收已完成，Windows 10 和剩余人工项目继续跟踪。
-自动安装、双架构编译及升级回退验证通过。验收材料单独保存，不属于普通用户安装内容。
+自动安装生命周期与双架构编译验证通过。验收材料单独保存，不属于普通用户安装内容。
 """, encoding='utf-8')
         run('gh', 'release', 'create', tag, '--draft', '--prerelease=' + str(preview).lower(), '--latest=false', '--target', os.environ['GITHUB_SHA'],
             '--title', f'SDK {version}{label}', '--notes-file', notes)

@@ -56,6 +56,10 @@ micropixel --transport usb screenshot --output store/02-playing.jpg
 
 ## 2. 核对应用清单
 
+SDK 0.18.0 支持可选的 `requirements.system_font`：`en`、`zh-CN`、`zh-TW`、`ja-JP` 或
+`ko-KR`。系统字体组件需要固件 0.9.0；Guest C++ API 和 Service ABI 不变，已有应用保留原有能力要求。
+CLI 也支持将字体组件发布为不区分架构的 Bundle，商店仍会校验发布者信任资格。本地化字符串允许换行。
+
 `init` 创建的新项目默认版本 `0.1.0`，并为 Hello World 生成基本能力声明。
 增加触摸、音频、传感器或布局限制后，应更新 `requirements`，不要照搬初始声明。
 

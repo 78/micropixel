@@ -8,6 +8,12 @@ Bundles must use AOT v6, a single thread, and memory checks, and must not exceed
 
 ## Upload
 
+SDK 0.18.0 supports an optional `requirements.system_font` locale: `en`, `zh-CN`, `zh-TW`,
+`ja-JP`, or `ko-KR`. System font components require firmware 0.9.0. Guest C++ APIs and the
+Service ABI are unchanged; existing apps retain their prior capability requirements.
+The CLI also publishes font component packages as architecture-independent Bundles; the
+store still validates publisher trust. Localization strings may contain line breaks.
+
 ```sh
 micropixel publish --dry-run
 micropixel auth github

@@ -191,7 +191,12 @@ prepare_host_config() {
     local remote_port="${MICROPIXEL_REMOTE_CONTROL_PORT:-8443}"
     local allow_unverified="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-y}"
     local trusted_ca="${MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64:-}"
-    local lv_mem_size_kib="96"
+    local lv_mem_size_kib
+    lv_mem_size_kib="$(sed -n 's/^CONFIG_LV_MEM_SIZE_KILOBYTES=//p' "$firmware_dir/sdkconfig.defaults")"
+    if [[ ! "$lv_mem_size_kib" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Shared defaults must define a positive LVGL memory pool size." >&2
+        exit 2
+    fi
     if [[ -n "$remote_host" && ! "$remote_host" =~ ^[A-Za-z0-9._:-]+$ ]]; then
         echo "MICROPIXEL_REMOTE_CONTROL_HOST contains unsupported characters: $remote_host" >&2
         exit 2
