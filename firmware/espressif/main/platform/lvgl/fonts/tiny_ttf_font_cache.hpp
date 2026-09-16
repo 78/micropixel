@@ -18,6 +18,11 @@ namespace micropixel::platform::lvgl {
 // kerning cache to zero so pair misses compute without allocating during draw.
 class TinyTtfFontCache final {
    public:
+    struct Statistics {
+        uint64_t hits{}, misses{}, evictions{};
+        size_t pair_capacity{}, pairs_used{}, pair_bytes{}, glyph_bytes{}, bitmap_bytes{};
+    };
+    [[nodiscard]] Statistics GetStatistics() const;
     enum class Error { kInvalidArgument, kAlreadyInitialized, kNoMemory, kGlyphUnavailable };
 
     TinyTtfFontCache() = default;
@@ -54,6 +59,7 @@ class TinyTtfFontCache final {
     memory::PsramBuffer<Pair> pairs_{};
     std::array<uint16_t, 256> latin_{};
     uint32_t replacement_{};
+    Statistics statistics_{};
 };
 
 }  // namespace micropixel::platform::lvgl

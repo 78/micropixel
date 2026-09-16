@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "platform/lvgl/fonts/bounded_ttf_font.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -12,15 +13,19 @@ namespace {
 struct Scratch {
     micropixel::platform::memory::PsramBuffer<uint8_t> bytes;
     size_t used{};
+    size_t peak{};
+    uint32_t failures{};
     bool failed{};
     void* Allocate(size_t size) {
         const size_t aligned = (size + 15U) & ~size_t{15U};
         if (aligned < size || aligned > bytes.size() - used) {
             failed = true;
+            ++failures;
             return nullptr;
         }
         auto* result = bytes.View().data() + used;
         used += aligned;
+        peak = std::max(peak, used);
         return result;
     }
 };
@@ -45,7 +50,7 @@ namespace micropixel::platform::lvgl {
 namespace {
 constexpr size_t kGlyphSlots = 128U;
 constexpr size_t kMetricsSlots = 512U;
-constexpr size_t kScratchBytes = 512U * 1024U;
+constexpr size_t kScratchBytes = 64U * 1024U;
 constexpr size_t kAlignment = 128U;
 uint32_t Read32(const uint8_t* p) {
     return (uint32_t{p[0]} << 24U) | (uint32_t{p[1]} << 16U) | (uint32_t{p[2]} << 8U) | p[3];
@@ -77,14 +82,19 @@ struct BoundedTtfFont::State {
         uint32_t glyph{};
         uint32_t used{};
         uint16_t pins{};
+        uint32_t pixel_bytes{};
         lv_draw_buf_t buffer{};
     };
     lv_font_t font{};
     stbtt_fontinfo info{};
     float scale{};
-    uint32_t side{};
+    uint32_t width{};
+    uint32_t height{};
+    uint32_t stride{};
     uint32_t slot_bytes{};
     uint32_t sequence{};
+    uint32_t pinned{};
+    Statistics statistics{};
     memory::PsramBuffer<uint8_t> pixels{};
     std::array<Metric, kMetricsSlots> metrics{};
     std::array<BitmapSlot, kGlyphSlots> bitmaps{};
@@ -101,6 +111,17 @@ void BoundedTtfFont::Deleter::operator()(State* state) const {
 void BoundedTtfFont::Reset() { state_.reset(); }
 const lv_font_t* BoundedTtfFont::font() const { return state_ ? &state_->font : nullptr; }
 
+BoundedTtfFont::Statistics BoundedTtfFont::GetStatistics() const {
+    Statistics result = state_ ? state_->statistics : Statistics{};
+    result.glyph_capacity = kGlyphSlots;
+    result.bitmap_capacity_bytes = state_ ? state_->pixels.size() : 0U;
+    result.metadata_bytes = state_ ? sizeof(State) : 0U;
+    result.scratch_capacity_bytes = scratch.bytes.size();
+    result.scratch_peak_bytes = scratch.peak;
+    result.scratch_failures = scratch.failures;
+    return result;
+}
+
 bool BoundedTtfFont::Initialize(std::span<const uint8_t> bytes, uint32_t size) {
     if (state_ || size < 8U || size > 32U || !StaticTrueType(bytes)) return false;
     std::unique_ptr<State, Deleter> candidate;
@@ -111,8 +132,24 @@ bool BoundedTtfFont::Initialize(std::span<const uint8_t> bytes, uint32_t size) {
     auto& state = *candidate;
     if (!stbtt_InitFont(&state.info, bytes.data(), 0)) return false;
     state.scale = stbtt_ScaleForMappingEmToPixels(&state.info, static_cast<float>(size));
-    state.side = (size * 2U + 15U) & ~15U;
-    state.slot_bytes = state.side * state.side;
+    if (!std::isfinite(state.scale) || state.scale <= 0.0f) return false;
+    // Inspect the verified font once, before publishing it. Retain the previous
+    // two-em glyph ceiling, but size every slot for the largest supported glyph
+    // instead of reserving a two-em square. Drawing never resizes the cache.
+    const uint32_t maximum_side = (size * 2U + 15U) & ~15U;
+    state.width = state.height = 1U;
+    for (int glyph = 0; glyph < state.info.numGlyphs; ++glyph) {
+        int x1, y1, x2, y2;
+        stbtt_GetGlyphBitmapBox(&state.info, glyph, state.scale, state.scale, &x1, &y1, &x2, &y2);
+        const int width = x2 - x1 + 1, height = y2 - y1 + 1;
+        if (width < 0 || height < 0 || width > static_cast<int>(maximum_side) ||
+            height > static_cast<int>(maximum_side))
+            continue;
+        state.width = std::max(state.width, static_cast<uint32_t>(width));
+        state.height = std::max(state.height, static_cast<uint32_t>(height));
+    }
+    state.stride = (state.width + 15U) & ~15U;
+    state.slot_bytes = (state.stride * state.height + kAlignment - 1U) & ~(kAlignment - 1U);
     if (!state.pixels.Allocate(state.slot_bytes * kGlyphSlots + kAlignment)) return false;
     int ascent, descent, gap;
     stbtt_GetFontVMetrics(&state.info, &ascent, &descent, &gap);
@@ -134,24 +171,30 @@ bool BoundedTtfFont::Descriptor(const lv_font_t* font, lv_font_glyph_dsc_t* out,
     auto& state = *const_cast<State*>(static_cast<const State*>(font->dsc));
     auto& metric = state.metrics[(cp * 2654435761U) % kMetricsSlots];
     if (metric.codepoint != cp) {
+        ++state.statistics.metric_misses;
         const int glyph = stbtt_FindGlyphIndex(&state.info, static_cast<int>(cp));
         if (!glyph) return false;
         int x1, y1, x2, y2, advance, bearing;
         stbtt_GetGlyphBitmapBox(&state.info, glyph, state.scale, state.scale, &x1, &y1, &x2, &y2);
         stbtt_GetGlyphHMetrics(&state.info, glyph, &advance, &bearing);
         const int width = x2 - x1 + 1, height = y2 - y1 + 1;
-        if (width < 0 || height < 0 || width > static_cast<int>(state.side) || height > static_cast<int>(state.side))
+        if (width < 0 || height < 0 || width > static_cast<int>(state.width) || height > static_cast<int>(state.height))
             return false;
+        if (metric.codepoint == 0U) ++state.statistics.metrics_used;
+        state.statistics.max_width = std::max(state.statistics.max_width, static_cast<uint32_t>(width));
+        state.statistics.max_height = std::max(state.statistics.max_height, static_cast<uint32_t>(height));
         metric.glyph = {};
         metric.glyph.adv_w = static_cast<uint16_t>(state.scale * advance + 0.5f);
         metric.glyph.box_w = width;
         metric.glyph.box_h = height;
         metric.glyph.ofs_x = x1;
         metric.glyph.ofs_y = -y2;
-        metric.glyph.stride = state.side;
+        metric.glyph.stride = state.stride;
         metric.glyph.gid.index = glyph;
         metric.glyph.format = LV_FONT_GLYPH_FORMAT_A8;
         metric.codepoint = cp;
+    } else {
+        ++state.statistics.metric_hits;
     }
     *out = metric.glyph;
     return true;
@@ -167,27 +210,50 @@ const void* BoundedTtfFont::Bitmap(lv_font_glyph_dsc_t* glyph, lv_draw_buf_t*) {
         }
         if (!entry.pins && (!slot || entry.used < slot->used)) slot = &entry;
     }
-    if (!slot || slot->pins == UINT16_MAX) return nullptr;
+    if (!slot || slot->pins == UINT16_MAX) {
+        ++state.statistics.bitmap_failures;
+        return nullptr;
+    }
     if (slot->glyph != glyph->gid.index) {
-        if (slot->pins) return nullptr;
+        ++state.statistics.bitmap_misses;
+        if (slot->pins) {
+            ++state.statistics.bitmap_failures;
+            return nullptr;
+        }
         const size_t index = slot - state.bitmaps.data();
         auto address = reinterpret_cast<uintptr_t>(state.pixels.View().data());
         address = (address + kAlignment - 1U) & ~(kAlignment - 1U);
         auto* pixels = reinterpret_cast<uint8_t*>(address) + index * state.slot_bytes;
-        if (lv_draw_buf_init(&slot->buffer, glyph->box_w, glyph->box_h, LV_COLOR_FORMAT_A8, state.side, pixels,
+        if (lv_draw_buf_init(&slot->buffer, glyph->box_w, glyph->box_h, LV_COLOR_FORMAT_A8, state.stride, pixels,
                              state.slot_bytes) != LV_RESULT_OK)
             return nullptr;
+        if (slot->glyph != 0U) {
+            ++state.statistics.evictions;
+            --state.statistics.glyphs_used;
+            state.statistics.pixel_bytes -= slot->pixel_bytes;
+        }
         std::memset(pixels, 0, state.slot_bytes);
         scratch.used = 0U;
         scratch.failed = false;
-        stbtt_MakeGlyphBitmap(&state.info, pixels, glyph->box_w, glyph->box_h, state.side, state.scale, state.scale,
+        stbtt_MakeGlyphBitmap(&state.info, pixels, glyph->box_w, glyph->box_h, state.stride, state.scale, state.scale,
                               glyph->gid.index);
         if (scratch.failed) {
+            ++state.statistics.bitmap_failures;
             slot->glyph = 0U;
             return nullptr;
         }
         slot->glyph = glyph->gid.index;
+        slot->pixel_bytes = glyph->box_w * glyph->box_h;
+        ++state.statistics.glyphs_used;
+        state.statistics.pixel_bytes += slot->pixel_bytes;
+        state.statistics.peak_pixel_bytes = std::max(state.statistics.peak_pixel_bytes, state.statistics.pixel_bytes);
         lv_draw_buf_flush_cache(&slot->buffer, nullptr);
+    } else {
+        ++state.statistics.bitmap_hits;
+    }
+    if (slot->pins == 0U) {
+        ++state.pinned;
+        state.statistics.peak_pins = std::max(state.statistics.peak_pins, state.pinned);
     }
     ++slot->pins;
     slot->used = ++state.sequence;
@@ -197,7 +263,13 @@ const void* BoundedTtfFont::Bitmap(lv_font_glyph_dsc_t* glyph, lv_draw_buf_t*) {
 
 void BoundedTtfFont::Release(const lv_font_t*, lv_font_glyph_dsc_t* glyph) {
     auto* slot = reinterpret_cast<State::BitmapSlot*>(glyph->entry);
-    if (slot && slot->pins) --slot->pins;
+    if (slot && slot->pins) {
+        --slot->pins;
+        if (slot->pins == 0U) {
+            auto& state = *const_cast<State*>(static_cast<const State*>(glyph->resolved_font->dsc));
+            --state.pinned;
+        }
+    }
     glyph->entry = nullptr;
 }
 

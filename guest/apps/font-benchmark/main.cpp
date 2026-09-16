@@ -70,19 +70,33 @@ class Benchmark {
    public:
     int Run() {
         const auto info = app_.renderer().info();
-        Assert(info.physical_width() == 480 && info.physical_height() == 480,
-               "Font benchmark currently uses a 480 x 480 physical layout");
+        compact_ = info.physical_width() == 320 && info.physical_height() == 240;
+        Assert(compact_ || (info.physical_width() == info.physical_height() &&
+                            (info.physical_width() == 480 || info.physical_width() == 720)), "Unsupported display");
+        width_ = info.physical_width();
+        height_ = info.physical_height();
+        logical_width_ = info.width();
+        logical_height_ = info.height();
+        row_count_ = compact_ ? 12U : kRows.size();
         const auto locale = app_.localization().CurrentLocale();
         chinese_ = std::string_view(locale.tag()) == "zh-CN";
         uint32_t static_chars = 0;
-        for (size_t i = 0; i < kRows.size(); ++i) static_chars += std::strlen(Label(i));
+        for (size_t i = 0; i < row_count_; ++i) static_chars += std::strlen(Label(i));
         FixedString<192> message;
-        message.Append("FONTBENCH config rows=15 dynamic_chars=90 static_utf8_bytes=");
+        message.Append("FONTBENCH config rows=");
+        message.AppendUint(row_count_);
+        message.Append(" dynamic_chars=");
+        message.AppendUint(row_count_ * 6U);
+        message.Append(" static_utf8_bytes=");
         message.AppendUint(static_chars);
         message.Append(" warmup=");
         message.AppendUint(kWarmupFrames);
         message.Append(" samples=");
         message.AppendUint(kMeasuredFrames);
+        message.Append(" physical_width=");
+        message.AppendUint(width_);
+        message.Append(" physical_height=");
+        message.AppendUint(height_);
         message.Append(chinese_ ? " labels=zh-CN" : " labels=en");
         app_.log().Info(message.c_str());
         if (!RunScene()) return 0;
@@ -94,7 +108,18 @@ class Benchmark {
     }
 
    private:
-    const char* Label(size_t index) const { return chinese_ ? kChineseLabels[index] : kRows[index].text; }
+    size_t RowIndex(size_t index) const {
+        constexpr std::array<size_t, 12> indices{0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14};
+        return compact_ ? indices[index] : index;
+    }
+    int32_t RowY(size_t index) const {
+        constexpr std::array<int32_t, 12> positions{32, 44, 56, 70, 84, 98, 114, 130, 146, 165, 185, 205};
+        return compact_ ? positions[index] : kRows[index].y;
+    }
+    const char* Label(size_t index) const {
+        index = RowIndex(index);
+        return chinese_ ? kChineseLabels[index] : kRows[index].text;
+    }
     uint64_t Now() const { return app_.clock().Now().microseconds(); }
 
     bool Handle(const Event& event) {
@@ -123,7 +148,7 @@ class Benchmark {
     }
 
     void Values(uint32_t frame) {
-        for (size_t i = 0; i < kRows.size(); ++i) {
+        for (size_t i = 0; i < row_count_; ++i) {
             const unsigned value = (frame * 37U + static_cast<unsigned>(i) * 691U) % 100000U;
             auto& text = values_[i];
             text[0] = static_cast<char>('0' + value / 10000U);
@@ -174,25 +199,37 @@ class Benchmark {
         app_.log().Info(message.c_str());
     }
 
-    // Scene coordinates are logical (720); Raster coordinates are physical (480).
-    static Point Logical(int32_t x, int32_t y) { return {x * 3 / 2, y * 3 / 2}; }
+    // Scale the square layout once and share its physical positions in both modes.
+    Point Physical(int32_t x, int32_t y) const {
+        return compact_ ? Point{x, y} : Point{x * width_ / 480, y * height_ / 480};
+    }
+    Point Logical(int32_t x, int32_t y) const {
+        const auto point = Physical(x, y);
+        return {point.x * logical_width_ / width_, point.y * logical_height_ / height_};
+    }
 
     bool RunScene() {
         auto created = app_.renderer().CreateScene(kBackground);
         Assert(created.has_value(), "CreateScene failed");
         auto scene = std::move(*created);
-        Assert(scene.CreateLabel(Logical(18, 34), "FONT BENCH / SCENE", kValue, SystemFont::kLarge).has_value(),
+        Assert(scene
+                   .CreateLabel(Logical(compact_ ? 8 : 18, compact_ ? 14 : 34), "FONT BENCH / SCENE", kValue,
+                                SystemFont::kLarge)
+                   .has_value(),
                "Create scene heading failed");
-        Assert(scene.CreateLabel(Logical(18, 461), "15 static labels + 15 changing values", kStatic, SystemFont::kSmall)
+        Assert(scene
+                   .CreateLabel(Logical(compact_ ? 8 : 18, compact_ ? 228 : 461),
+                                compact_ ? "12 labels + 12 changing values" : "15 static labels + 15 changing values",
+                                kStatic, SystemFont::kSmall)
                    .has_value(),
                "Create scene footer failed");
         std::array<LabelNode, kRows.size()> labels;
         Values(0);
-        for (size_t i = 0; i < kRows.size(); ++i) {
-            const auto& row = kRows[i];
-            Assert(scene.CreateLabel(Logical(18, row.y), Label(i), kStatic, row.font).has_value(),
+        for (size_t i = 0; i < row_count_; ++i) {
+            const auto& row = kRows[RowIndex(i)];
+            Assert(scene.CreateLabel(Logical(compact_ ? 8 : 18, RowY(i)), Label(i), kStatic, row.font).has_value(),
                    "Create static label failed");
-            auto label = scene.CreateLabel(Logical(350, row.y), values_[i].data(), kValue, row.font);
+            auto label = scene.CreateLabel(Logical(compact_ ? 250 : 350, RowY(i)), values_[i].data(), kValue, row.font);
             Assert(label.has_value(), "Create dynamic label failed");
             labels[i] = *label;
         }
@@ -205,7 +242,7 @@ class Benchmark {
             if (frame == kWarmupFrames) interrupted_ = false;
             const auto before_prepare = Now();
             Values(frame);
-            for (size_t i = 0; i < kRows.size(); ++i) labels[i].SetText(values_[i].data());
+            for (size_t i = 0; i < row_count_; ++i) labels[i].SetText(values_[i].data());
             const auto before_draw = Now();
             Assert(app_.renderer().Present(scene).has_value(), "Scene Present failed");
             const auto end = Now();
@@ -235,14 +272,16 @@ class Benchmark {
             const auto before_draw = Now();
             bool drawn = true;
             const auto updated = surface_.Update(index, [&](RasterDrawList& list) {
-                drawn &= list.FillRect({0, 0, 480, 480}, kBackground);
-                drawn &= list.Text({18, 34}, "FONT BENCH / RASTER", kValue, SystemFont::kLarge);
-                for (size_t i = 0; i < kRows.size(); ++i) {
-                    const auto& row = kRows[i];
-                    drawn &= list.Text({18, row.y}, Label(i), kStatic, row.font);
-                    drawn &= list.Text({350, row.y}, values_[i].data(), kValue, row.font);
+                drawn &= list.FillRect({0, 0, width_, height_}, kBackground);
+                drawn &= list.Text(Physical(compact_ ? 8 : 18, compact_ ? 14 : 34), "FONT BENCH / RASTER", kValue,
+                                   SystemFont::kLarge);
+                for (size_t i = 0; i < row_count_; ++i) {
+                    const auto& row = kRows[RowIndex(i)];
+                    drawn &= list.Text(Physical(compact_ ? 8 : 18, RowY(i)), Label(i), kStatic, row.font);
+                    drawn &= list.Text(Physical(compact_ ? 250 : 350, RowY(i)), values_[i].data(), kValue, row.font);
                 }
-                drawn &= list.Text({18, 461}, "Full redraw / same text and values", kStatic, SystemFont::kSmall);
+                drawn &= list.Text(Physical(compact_ ? 8 : 18, compact_ ? 228 : 461), "Full redraw / same text and values",
+                                   kStatic, SystemFont::kSmall);
             });
             Assert(drawn && updated.has_value(), "Raster Update failed");
             const auto before_present = Now();
@@ -259,6 +298,9 @@ class Benchmark {
     std::array<std::array<char, 8>, kRows.size()> values_{};
     bool interrupted_{};
     bool chinese_{};
+    bool compact_{};
+    int32_t width_{480}, height_{480}, logical_width_{720}, logical_height_{720};
+    size_t row_count_{15};
 };
 }  // namespace
 

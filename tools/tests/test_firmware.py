@@ -79,12 +79,13 @@ class FirmwareProfileTest(unittest.TestCase):
         self.assertIn("sdkconfig.p4.defaults", defaults)
         self.assertEqual(command[-1], "build")
 
-    def test_p4_config_uses_shared_lvgl_pool_for_fresh_and_existing_builds(self) -> None:
+    def test_p4_config_uses_target_lvgl_pool_for_fresh_and_existing_builds(self) -> None:
         script = (firmware.FIRMWARE_DIR.parents[1] / "tools/p4.sh").read_text()
         prepare = script.split("prepare_host_config() {", 1)[1].split("\nidf_host() {", 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "sdkconfig.defaults").write_text("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n")
+            (root / "sdkconfig.defaults").write_text("")
+            (root / "sdkconfig.p4.defaults").write_text("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n")
             command = """set -euo pipefail
 firmware_dir="$1"
 host_build_dir="$1/build"
@@ -104,6 +105,14 @@ common_max_task_name_len=32
                     self.assertIn("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n", generated)
                     if existing:
                         self.assertIn("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n", config.read_text())
+
+    def test_lvgl_capacity_matches_chip_family(self) -> None:
+        for name, profile in self.profiles.items():
+            with self.subTest(profile=name):
+                values = [line.split("=", 1)[1] for path in profile.sdkconfig_defaults
+                          for line in path.read_text().splitlines()
+                          if line.startswith("CONFIG_LV_MEM_SIZE_KILOBYTES=")]
+                self.assertEqual(values, ["1024" if profile.target == "esp32p4" else "768"])
 
     def test_every_profile_layers_shared_defaults_first(self) -> None:
         shared_defaults = firmware.FIRMWARE_DIR / "sdkconfig.defaults"

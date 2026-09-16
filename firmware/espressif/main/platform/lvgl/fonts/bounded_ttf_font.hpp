@@ -13,6 +13,14 @@ namespace micropixel::platform::lvgl {
 // only firmware-pinned, SHA-256 verified static TrueType packs are accepted.
 class BoundedTtfFont final {
    public:
+    struct Statistics {
+        uint64_t bitmap_hits{}, bitmap_misses{}, evictions{}, metric_hits{}, metric_misses{};
+        size_t bitmap_capacity_bytes{}, pixel_bytes{}, peak_pixel_bytes{}, metadata_bytes{};
+        size_t scratch_capacity_bytes{}, scratch_peak_bytes{};
+        uint32_t glyph_capacity{}, glyphs_used{}, metrics_used{}, peak_pins{};
+        uint32_t max_width{}, max_height{}, bitmap_failures{}, scratch_failures{};
+    };
+    [[nodiscard]] Statistics GetStatistics() const;
     BoundedTtfFont();
     ~BoundedTtfFont();
     BoundedTtfFont(const BoundedTtfFont&) = delete;

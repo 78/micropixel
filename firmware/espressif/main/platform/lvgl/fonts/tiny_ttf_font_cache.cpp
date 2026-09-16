@@ -26,6 +26,7 @@ std::expected<void, TinyTtfFontCache::Error> TinyTtfFontCache::Initialize(lv_fon
         Reset();
         return std::unexpected(Error::kNoMemory);
     }
+    statistics_ = {};
     source_ = &source;
     for (size_t i = 0U; i < charset.size(); ++i) {
         auto& record = glyphs_.View()[i];
@@ -46,6 +47,7 @@ std::expected<void, TinyTtfFontCache::Error> TinyTtfFontCache::Initialize(lv_fon
                 return std::unexpected(Error::kGlyphUnavailable);
             }
             glyph.stride = record.bitmap->header.stride;
+            statistics_.bitmap_bytes += glyph.stride * glyph.box_h;
         }
         if (charset[i] < latin_.size()) latin_[charset[i]] = static_cast<uint16_t>(i + 1U);
     }
@@ -55,6 +57,14 @@ std::expected<void, TinyTtfFontCache::Error> TinyTtfFontCache::Initialize(lv_fon
     font_.get_glyph_bitmap = Bitmap;
     font_.release_glyph = Release;
     return {};
+}
+
+TinyTtfFontCache::Statistics TinyTtfFontCache::GetStatistics() const {
+    auto result = statistics_;
+    result.pair_capacity = pairs_.size();
+    result.pair_bytes = pairs_.size() * sizeof(Pair);
+    result.glyph_bytes = glyphs_.size() * sizeof(Glyph);
+    return result;
 }
 
 void TinyTtfFontCache::Reset() {
@@ -68,6 +78,7 @@ void TinyTtfFontCache::Reset() {
     pairs_.Reset();
     latin_.fill(0U);
     replacement_ = 0U;
+    statistics_ = {};
     font_ = {};
 }
 
@@ -91,13 +102,21 @@ uint16_t TinyTtfFontCache::Advance(uint16_t first, uint16_t next) {
     auto entries = pairs_.View().subspan(bucket, 4U);
     Pair* empty = nullptr;
     for (auto& entry : entries) {
-        if (entry.key == key) return entry.advance;
+        if (entry.key == key) {
+            ++statistics_.hits;
+            return entry.advance;
+        }
         if (entry.key == 0U) empty = &entry;
     }
+    ++statistics_.misses;
     lv_font_glyph_dsc_t measured{};
     if (!source_->get_glyph_dsc(source_, &measured, record.codepoint, glyphs_.View()[next - 1U].codepoint)) {
         return record.descriptor.adv_w;
     }
+    if (empty != nullptr)
+        ++statistics_.pairs_used;
+    else
+        ++statistics_.evictions;
     auto& target = empty != nullptr ? *empty : entries[replacement_++ & 3U];
     target = {.key = key, .advance = measured.adv_w};
     return target.advance;

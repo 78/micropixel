@@ -42,6 +42,7 @@ CONFIG_MICROPIXEL_BOARD_NULL=y
 # but the Null compile gate creates no display or draw buffers.
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1
+CONFIG_LV_MEM_SIZE_KILOBYTES=768
 
 # Signed App Store installation, shared by all S3 boards.
 CONFIG_MICROPIXEL_STORE_SIGNING_KID="store-v1"

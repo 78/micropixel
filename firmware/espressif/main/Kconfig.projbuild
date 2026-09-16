@@ -23,7 +23,7 @@ menu "WAMR application quotas"
     config MICROPIXEL_GUEST_PSRAM_RESERVE_BYTES
         int "PSRAM safety reserve protected from Guest allocations"
         range 262144 8388608
-        default 2097152
+        default 1048576
         help
             Minimum free PSRAM retained for Host display, audio, system UI and
             transient work. WAMR linear-memory allocations and growth are
@@ -80,7 +80,7 @@ menu "WAMR application quotas"
     config WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS
         int "Default guest continuous-computation budget (ms)"
         range 10 60000
-        default 1000
+        default 3000
         help
             Terminate a guest cluster after this much continuous execution
             without a Host ABI checkpoint. Blocking event waits pause the

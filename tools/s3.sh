@@ -75,6 +75,7 @@ fi
 
 firmware_dir="$workspace_root/firmware/espressif"
 common_max_task_name_len="$(sed -n 's/^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=//p' "$firmware_dir/sdkconfig.defaults")"
+lv_mem_size_kib="$(sed -n 's/^CONFIG_LV_MEM_SIZE_KILOBYTES=//p' "$firmware_dir/sdkconfig.s3.defaults")"
 apps_output_dir="${S3_APPS_OUTPUT_DIR:-$workspace_root/build/esp32s3-apps}"
 apps_store="$apps_output_dir/app-store.bin"
 host_build_dir="${S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-box-3}"
@@ -219,13 +220,20 @@ build_profile() {
     if [[ -f "$sdkconfig_path" ]]; then
         local updated
         updated="$(mktemp "${sdkconfig_path}.XXXXXX")"
-        awk -v remote_host="$remote_host" -v remote_port="$remote_port" \
+        awk -v lv_mem_size_kib="$lv_mem_size_kib" \
+            -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
             -v max_task_name_len="$common_max_task_name_len" \
             -v partial_buffer_height="$partial_buffer_height" '
             BEGIN {
+                saw_lv_mem_size = 0
                 saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0
                 saw_max_task_name_len = 0; saw_partial_buffer_height = 0
+            }
+            /^CONFIG_LV_MEM_SIZE_KILOBYTES=/ {
+                print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
+                saw_lv_mem_size = 1
+                next
             }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
                 print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
@@ -265,6 +273,7 @@ build_profile() {
             }
             { print }
             END {
+                if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 if (!saw_port) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=" remote_port
                 if (!saw_tls) {

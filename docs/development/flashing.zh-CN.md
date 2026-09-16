@@ -189,7 +189,11 @@ bash tools/s3.sh monitor cores3 /dev/cu.usbmodemXXXX --reset
 挂起而没有明确错误。三款 S3 共享 `build/esp32s3-apps/app-store.bin`，`flash-apps` 不区分板型。
 
 五板固件发布使用同一 `PROJECT_VER`，逐个生成 OTA `micropixel.bin` 与浏览器完整镜像
-`micropixel-full.bin`：
+`micropixel-full.bin`。
+
+正式发布的 Remote Control endpoint 为 `quic.micropixel.ai`，发布 CI 显式注入该地址。本地发布构建需在
+根目录 `.env` 或环境变量中设置 `MICROPIXEL_REMOTE_CONTROL_HOST=quic.micropixel.ai`；端口和 TLS 配置仍
+通过原有环境变量提供。构建命令：
 
 ```sh
 bash tools/p4.sh build-release
