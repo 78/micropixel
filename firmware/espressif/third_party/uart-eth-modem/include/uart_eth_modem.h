@@ -10,7 +10,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
-#include "nt26_tx_pool.h"
+#include "nt26_task_workspace.h"
 #include "nt26_at_response.h"
 #include "nt26_frame.h"
 
@@ -239,7 +239,10 @@ private:
     using FrameHeader = micropixel::nt26::FrameHeader;
 
     using TxFrame = micropixel::nt26::TxPool::Slot;
-    micropixel::nt26::TxPool tx_pool_;
+    struct TaskWorkspaceDeleter {
+        void operator()(micropixel::nt26::TaskWorkspace* workspace) const;
+    };
+    std::unique_ptr<micropixel::nt26::TaskWorkspace, TaskWorkspaceDeleter> task_workspace_;
     std::mutex tx_mutex_;
     std::array<StaticSemaphore_t, micropixel::nt26::TxPool::kCapacity> tx_done_storage_{};
     std::array<SemaphoreHandle_t, micropixel::nt26::TxPool::kCapacity> tx_done_{};
@@ -391,7 +394,6 @@ private:
     std::mutex response_mutex_;
     std::mutex info_mutex_;
     int RegistrationStatus();
-    micropixel::nt26::AtResponse at_response_;
     bool waiting_for_at_response_ = false;
 
     // Callback
@@ -444,3 +446,6 @@ private:
 
     static constexpr const char* kTag = "UartEthModem";
 };
+
+// Large task buffers belong in PSRAM, not in the ISR-visible board object.
+static_assert(sizeof(UartEthModem) < 8192);

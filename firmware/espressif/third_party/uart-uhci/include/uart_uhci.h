@@ -12,6 +12,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <cstdint>
 #include <cstddef>
 
@@ -99,6 +100,8 @@ public:
     // 停止 DMA 接收并释放 PM 锁
     esp_err_t StopReceive();
 
+    // Task context only: serialize with StartReceive/StopReceive and other returns.
+    // ISR callbacks must transfer ownership to a task (including queue-full recovery).
     // Return a buffer back to the pool after processing
     // Must be called for each buffer received via RxCallback
     // 处理完成后将缓冲区归还到池中
@@ -131,6 +134,12 @@ private:
     // Initialize RX buffer pool
     esp_err_t InitRxBufferPool(const BufferPoolConfig& config);
     void DeinitRxBufferPool();
+
+    struct MountWorkspace;
+    struct MountWorkspaceDeleter {
+        void operator()(MountWorkspace* workspace) const;
+    };
+    std::unique_ptr<MountWorkspace, MountWorkspaceDeleter> mount_workspace_;
 
     // Re-mount all buffers and restart DMA (used for initial start and overflow recovery)
     // flush_uart_fifo: if true, flush UART RX FIFO before restarting (for overflow recovery)

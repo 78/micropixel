@@ -13,7 +13,12 @@ sleep commands. `nt26_frame.h` extracts the original wire layout for Host tests.
 Local changes:
 
 - ESP-IDF 6.1 UART configuration and explicit component dependencies.
-- A 32-slot, 1600-byte TX pool replaces per-send payload allocations and stack
+- A start-time PSRAM workspace owns the AT command/response buffers and the
+  32-slot, 1600-byte TX pool. Allocation failure aborts startup; shutdown joins
+  workers and AT callers before release, and a stop timeout retains the workspace.
+  Semaphore storage and ISR-visible control state stay in internal RAM. A size
+  assertion guards against embedding large buffers in the board object again.
+- The TX pool replaces per-send payload allocations and stack
   completion pointers. Timeout releases only the caller's reference; the worker
   retains the slot until completion. Queue-full sends return an error immediately.
 - AT responses use a synchronized 4096-byte buffer, preserve fragmented results,
@@ -44,8 +49,9 @@ The GPIO ISR service and ESP-NETIF/default event loop must be initialized by the
 
 Current integration: the Claw4 `CellularController` starts this driver when the
 saved network mode is cellular and owns power, signal queries and shutdown.
-The Host UI requests factory-style mode switching with restart. No new Guest ABI
-is introduced. See `main/platform/boards/README.md` for the integration and target
+The Host UI requests factory-style mode switching with restart. ESP-NETIF selects the default interface automatically through iot_eth start,
+link and DHCP events, and removes it on destruction. No manual default-route
+override is needed. No new Guest ABI is introduced. See `../../main/platform/boards/README.zh-CN.md` for the integration and target
 acceptance requirements.
 
 Validation: `tools/tests/test_firmware_host.sh` exercises the actual wire header,

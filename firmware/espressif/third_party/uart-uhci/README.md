@@ -48,19 +48,16 @@ esp_err_t err = uhci.Init(config);
 
 2. **Register callbacks (must happen before `StartReceive`)**
 
-```cpp
-// Invoked whenever a buffer is completed (ISR context, return quickly)
-bool on_rx(const UartUhci::RxEventData& data, void* user_data) {
-    // Process the data via data.buffer->data and data.recv_size.
-    // The buffer MUST be returned to the pool when you are done with it:
-    uhci.ReturnBuffer(data.buffer);
-    return false; // Return true to request a yield
-}
-uhci.SetRxCallback(on_rx, nullptr);
+`RxCallback` runs in ISR context. Transfer the buffer pointer to the owning task
+using a bounded queue or per-buffer pending slots, then wake that task. If the queue
+is full, retain the pointer for task-side recovery; do not return it from the ISR.
+The task processes the data and calls `ReturnBuffer`. See the NT26 integration's
+`UhciRxCallbackStatic` and `MainTaskRun` for this pattern.
 
+```cpp
 // Optional: invoked when DMA pauses because the buffer pool is exhausted (ISR context)
 bool on_overflow(void* user_data) {
-    // Return outstanding buffers as quickly as possible, or simply record the event
+    // Record the event and wake the owning task; do not call ReturnBuffer here
     return false; // Return true to request a yield
 }
 uhci.SetOverflowCallback(on_overflow, nullptr);
@@ -98,7 +95,7 @@ uhci.Deinit();
 ## Notes
 
 - **Pool size**: `buffer_count` must be at least 2. A small pool makes overflow easy to hit when the consumer is slightly slow (all buffers are held by the CPU and the DMA pauses).
-- **Callback context**: both `RxCallback` and `OverflowCallback` run inside an ISR, so avoid blocking or heavy logic and return the buffer via `ReturnBuffer` as soon as possible.
+- **Callback context**: both callbacks run inside an ISR and must only record work and wake the owning task. `ReturnBuffer`, start/stop and overflow recovery are task-only and must be serialized.
 - **Always return buffers**: every buffer delivered via `RxCallback` must be released with `ReturnBuffer(buffer)`, otherwise the pool will eventually be exhausted and the DMA will stop.
 - **Overflow recovery**: after an overflow, once every buffer has been returned, the component flushes the UART RX FIFO and re-mounts the DMA buffers automatically; no extra call is required.
 - **UART setup**: the baud rate, pin assignment, and other UART parameters must be configured beforehand through `uart_driver_install` or the equivalent driver API. This component only handles UHCI/GDMA reception and writes TX data into an already configured UART.

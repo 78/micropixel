@@ -1,15 +1,30 @@
 #include <array>
 #include <cassert>
+#include <memory>
 #include <string>
 
 #include "nt26_at_response.h"
 #include "nt26_frame.h"
+#include "nt26_task_workspace.h"
 #include "nt26_tx_pool.h"
 
 using micropixel::nt26::AtResponse;
 using micropixel::nt26::TxPool;
 
 int main() {
+    auto workspace = std::make_unique<micropixel::nt26::TaskWorkspace>();
+    assert(workspace->PrepareCommand("").empty());
+    const auto command = workspace->PrepareCommand("AT+CSQ");
+    assert(std::string_view(reinterpret_cast<const char*>(command.data()), command.size()) == "AT+CSQ\r");
+    const auto terminated = workspace->PrepareCommand("AT\r");
+    assert(terminated.data() == command.data() && terminated.size() == 3);
+    assert(terminated[2] == '\r');
+    const size_t maximum = TxPool::kFrameSize - sizeof(micropixel::nt26::FrameHeader) - 1;
+    const auto full = workspace->PrepareCommand(std::string(maximum, 'x'));
+    assert(full.size() == maximum + 1 && full.back() == '\r');
+    assert(workspace->PrepareCommand(std::string(maximum + 1, 'x')).empty());
+    assert(workspace->PrepareCommand("AT").size() == 3);
+
     micropixel::nt26::FrameHeader header{};
     header.SetPayloadLength(12);
     header.SetSequence(0);

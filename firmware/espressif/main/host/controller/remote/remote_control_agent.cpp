@@ -498,6 +498,12 @@ struct RemoteControlAgent::ColdState final {
 
 struct RemoteControlAgent::TaskContext final {
     std::array<uint8_t, control::ControlDispatcher::kInstallChunkBytes> install_chunk{};
+    struct NetworkSnapshot final {
+        esp_netif_ip_info_t ip{};
+        esp_netif_dns_info_t dns{};
+        std::array<char, 256U> hostname{};
+        bool has_dns{};
+    } network_snapshot{};
     StoreReleaseWorkspace store_release_workspace{};
     std::array<char, 4097U> font_response{};
     Identity identity{};
@@ -1326,9 +1332,28 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
                           station_mac[2], station_mac[3], station_mac[4], station_mac[5]);
             (void)cJSON_AddStringToObject(network, "macAddress", mac_text);
         }
-        esp_netif_t* station = esp_netif_get_default_netif();
-        esp_netif_ip_info_t ip_info{};
-        if (station != nullptr && esp_netif_get_ip_info(station, &ip_info) == ESP_OK) {
+        auto& snapshot = task_context_->network_snapshot;
+        snapshot = {};
+        // Default-route selection and netif destruction run in TCP/IP context.
+        // Copy all values there so sleep/reconnect cannot invalidate a borrowed pointer.
+        const esp_err_t network_status = esp_netif_tcpip_exec(
+            [](void* context) -> esp_err_t {
+                auto& snapshot = *static_cast<TaskContext::NetworkSnapshot*>(context);
+                esp_netif_t* station = esp_netif_get_default_netif();
+                if (station == nullptr) return ESP_ERR_NOT_FOUND;
+                const esp_err_t status = esp_netif_get_ip_info(station, &snapshot.ip);
+                if (status != ESP_OK) return status;
+                const char* hostname = nullptr;
+                if (esp_netif_get_hostname(station, &hostname) == ESP_OK && hostname != nullptr) {
+                    CopyText(snapshot.hostname, hostname);
+                }
+                snapshot.has_dns = esp_netif_get_dns_info(station, ESP_NETIF_DNS_MAIN, &snapshot.dns) == ESP_OK &&
+                                   snapshot.dns.ip.type == ESP_IPADDR_TYPE_V4;
+                return ESP_OK;
+            },
+            &snapshot);
+        if (network_status == ESP_OK) {
+            const auto& ip_info = snapshot.ip;
             char ip_address[16]{};
             char gateway[16]{};
             char netmask[16]{};
@@ -1338,13 +1363,11 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
             (void)cJSON_AddStringToObject(network, "ipAddress", ip_address);
             (void)cJSON_AddStringToObject(network, "gateway", gateway);
             (void)cJSON_AddStringToObject(network, "netmask", netmask);
-            const char* hostname = nullptr;
-            if (esp_netif_get_hostname(station, &hostname) == ESP_OK && hostname != nullptr) {
-                (void)cJSON_AddStringToObject(network, "hostname", hostname);
+            if (snapshot.hostname[0] != '\0') {
+                (void)cJSON_AddStringToObject(network, "hostname", snapshot.hostname.data());
             }
-            esp_netif_dns_info_t dns{};
-            if (esp_netif_get_dns_info(station, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK &&
-                dns.ip.type == ESP_IPADDR_TYPE_V4) {
+            if (snapshot.has_dns) {
+                const auto& dns = snapshot.dns;
                 char dns_address[16]{};
                 std::snprintf(dns_address, sizeof(dns_address), IPSTR, IP2STR(&dns.ip.u_addr.ip4));
                 (void)cJSON_AddStringToObject(network, "dns", dns_address);

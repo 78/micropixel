@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include <array>
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_attr.h"
@@ -47,6 +48,17 @@ static struct {
     _lock_t mutex;
     void* controllers[UHCI_LL_NUM];
 } s_platform = {};
+
+struct UartUhci::MountWorkspace {
+    std::array<gdma_buffer_mount_config_t, 32> configs{};
+};
+
+void UartUhci::MountWorkspaceDeleter::operator()(MountWorkspace* workspace) const {
+    if (workspace) {
+        std::destroy_at(workspace);
+        heap_caps_free(workspace);
+    }
+}
 
 UartUhci::UartUhci() = default;
 
@@ -232,6 +244,10 @@ esp_err_t UartUhci::InitRxBufferPool(const BufferPoolConfig& config) {
     rx_buffer_size_ = aligned_size;
     rx_cache_line_ = int_mem_cache_line_;
 
+    void* workspace = heap_caps_malloc(sizeof(MountWorkspace), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ESP_RETURN_ON_FALSE(workspace, ESP_ERR_NO_MEM, kTag, "failed to allocate mount workspace");
+    mount_workspace_.reset(std::construct_at(static_cast<MountWorkspace*>(workspace)));
+
     // Allocate buffer descriptor array
     rx_buffer_pool_ = static_cast<RxBuffer*>(heap_caps_calloc(rx_pool_size_, sizeof(RxBuffer), MALLOC_CAP_INTERNAL));
     ESP_RETURN_ON_FALSE(rx_buffer_pool_, ESP_ERR_NO_MEM, kTag, "failed to allocate buffer pool descriptors");
@@ -265,6 +281,7 @@ void UartUhci::DeinitRxBufferPool() {
         rx_buffer_pool_ = nullptr;
     }
 
+    mount_workspace_.reset();
     rx_pool_size_ = 0;
     rx_buffer_size_ = 0;
 }
@@ -280,6 +297,7 @@ void UartUhci::SetOverflowCallback(OverflowCallback callback, void* user_data) {
 }
 
 void UartUhci::RemountAndRestartDma(bool flush_uart_fifo) {
+    configASSERT(!xPortInIsrContext());
     // Re-mount all buffers to DMA link list and restart
     // This is used both for initial start and recovery from overflow
 
@@ -290,7 +308,7 @@ void UartUhci::RemountAndRestartDma(bool flush_uart_fifo) {
         uart_ll_rxfifo_rst(hw);
     }
 
-    std::array<gdma_buffer_mount_config_t, 32> mount_configs{};
+    auto& mount_configs = mount_workspace_->configs;
     for (size_t i = 0; i < rx_pool_size_; i++) {
         RxBuffer* buf = &rx_buffer_pool_[i];
         buf->size = 0;
@@ -352,6 +370,7 @@ esp_err_t UartUhci::StopReceive() {
 }
 
 void UartUhci::ReturnBuffer(RxBuffer* buffer) {
+    configASSERT(!xPortInIsrContext());
     if (!buffer || buffer->index >= rx_pool_size_) {
         return;
     }

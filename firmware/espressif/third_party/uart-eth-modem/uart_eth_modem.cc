@@ -9,6 +9,7 @@
 
 #include <esp_check.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_mac.h>
 #include <esp_timer.h>
 #include <esp_rom_sys.h>
@@ -21,6 +22,13 @@
 // Static member definitions
 constexpr uint8_t UartEthModem::kHandshakeRequest[];
 constexpr uint8_t UartEthModem::kHandshakeAck[];
+
+void UartEthModem::TaskWorkspaceDeleter::operator()(micropixel::nt26::TaskWorkspace* workspace) const {
+    if (workspace) {
+        std::destroy_at(workspace);
+        heap_caps_free(workspace);
+    }
+}
 
 UartEthModem::UartEthModem(const Config& config) : config_(config) {
     // Generate MAC address
@@ -136,12 +144,16 @@ esp_err_t UartEthModem::Start(bool flight_mode) {
     tx_queue_ = xQueueCreate(kTxQueueDepth, sizeof(TxFrame*));
     if (!tx_queue_) return FailStart(ESP_ERR_NO_MEM);
 
+    void* workspace = heap_caps_malloc(sizeof(micropixel::nt26::TaskWorkspace), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!workspace) return FailStart(ESP_ERR_NO_MEM);
+    task_workspace_.reset(std::construct_at(static_cast<micropixel::nt26::TaskWorkspace*>(workspace)));
+
     esp_err_t ret = InitUart();
     if (ret != ESP_OK) return FailStart(ret);
     ret = InitGpio();
     if (ret != ESP_OK) return FailStart(ret);
 
-    reassembly_buffer_ = static_cast<uint8_t*>(heap_caps_malloc(kMaxFrameSize, MALLOC_CAP_INTERNAL));
+    reassembly_buffer_ = static_cast<uint8_t*>(heap_caps_malloc(kMaxFrameSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!reassembly_buffer_) return FailStart(ESP_ERR_NO_MEM);
     reassembly_size_ = 0;
     reassembly_expected_ = 0;
@@ -283,18 +295,15 @@ esp_err_t UartEthModem::SendAtCommon(const std::string& cmd, std::string& respon
     if (stop_flag_ || !event_queue_ || (!handshake_done_ && !initializing_ && !initialized_)) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (cmd.empty() || cmd.size() > kMaxFrameSize - sizeof(FrameHeader) - 1) return ESP_ERR_INVALID_ARG;
+    const auto command = task_workspace_->PrepareCommand(cmd);
+    if (command.empty()) return ESP_ERR_INVALID_ARG;
     {
         std::lock_guard<std::mutex> lock(response_mutex_);
-        if (!at_response_.Begin(marker)) return ESP_ERR_INVALID_ARG;
+        if (!task_workspace_->at_response.Begin(marker)) return ESP_ERR_INVALID_ARG;
         xEventGroupClearBits(event_group_, kEventAtResponse);
         waiting_for_at_response_ = true;
     }
-    std::array<uint8_t, kMaxFrameSize> command{};
-    memcpy(command.data(), cmd.data(), cmd.size());
-    size_t length = cmd.size();
-    if (command[length - 1] != '\r') command[length++] = '\r';
-    esp_err_t result = SendFrame(command.data(), length, FrameType::kAtCommand);
+    esp_err_t result = SendFrame(command.data(), command.size(), FrameType::kAtCommand);
     if (result == ESP_OK) {
         const auto bits = xEventGroupWaitBits(event_group_, kEventAtResponse | kEventStop,
                                                pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
@@ -303,11 +312,11 @@ esp_err_t UartEthModem::SendAtCommon(const std::string& cmd, std::string& respon
     }
     std::lock_guard<std::mutex> lock(response_mutex_);
     waiting_for_at_response_ = false;
-    response.assign(at_response_.text());
+    response.assign(task_workspace_->at_response.text());
     if (result != ESP_OK) return result;
     using Status = micropixel::nt26::AtResponse::Status;
-    if (at_response_.status() == Status::kOverflow) return ESP_ERR_INVALID_SIZE;
-    return at_response_.status() == Status::kOk ? ESP_OK : ESP_FAIL;
+    if (task_workspace_->at_response.status() == Status::kOverflow) return ESP_ERR_INVALID_SIZE;
+    return task_workspace_->at_response.status() == Status::kOk ? ESP_OK : ESP_FAIL;
 }
 
 void UartEthModem::SetNetworkEventCallback(UartEthModemEventCallback callback) {
@@ -1255,8 +1264,8 @@ exit:
 void UartEthModem::CompleteTx(TxFrame* frame, esp_err_t result) {
     if (!frame) return;
     std::lock_guard<std::mutex> lock(tx_mutex_);
-    tx_pool_.Complete(*frame, result);
-    if (frame->waiter) xSemaphoreGive(tx_done_[tx_pool_.Index(*frame)]);
+    task_workspace_->tx_pool.Complete(*frame, result);
+    if (frame->waiter) xSemaphoreGive(tx_done_[task_workspace_->tx_pool.Index(*frame)]);
 }
 
 esp_err_t UartEthModem::EnqueueTxFrame(const uint8_t* data, size_t length) {
@@ -1274,9 +1283,9 @@ esp_err_t UartEthModem::SubmitFrame(const uint8_t* data, size_t length, FrameTyp
     {
         std::lock_guard<std::mutex> lock(tx_mutex_);
         if (stop_flag_ || !tx_queue_) return ESP_ERR_INVALID_STATE;
-        frame = tx_pool_.Acquire(length + sizeof(FrameHeader), wait);
+        frame = task_workspace_->tx_pool.Acquire(length + sizeof(FrameHeader), wait);
         if (!frame) return ESP_ERR_NO_MEM;
-        done = tx_done_[tx_pool_.Index(*frame)];
+        done = tx_done_[task_workspace_->tx_pool.Index(*frame)];
         xSemaphoreTake(done, 0); // Drain a completion from a previous use.
         FrameHeader header{};
         header.SetPayloadLength(length);
@@ -1287,8 +1296,8 @@ esp_err_t UartEthModem::SubmitFrame(const uint8_t* data, size_t length, FrameTyp
         memcpy(frame->data.data(), &header, sizeof(header));
         memcpy(frame->data.data() + sizeof(header), data, length);
         if (xQueueSend(tx_queue_, &frame, 0) != pdTRUE) {
-            tx_pool_.Complete(*frame, ESP_ERR_NO_MEM);
-            tx_pool_.ReleaseWaiter(*frame);
+            task_workspace_->tx_pool.Complete(*frame, ESP_ERR_NO_MEM);
+            task_workspace_->tx_pool.ReleaseWaiter(*frame);
             return ESP_ERR_NO_MEM;
         }
     }
@@ -1296,7 +1305,7 @@ esp_err_t UartEthModem::SubmitFrame(const uint8_t* data, size_t length, FrameTyp
     const bool signaled = xSemaphoreTake(done, pdMS_TO_TICKS(2000)) == pdTRUE;
     std::lock_guard<std::mutex> lock(tx_mutex_);
     const esp_err_t result = signaled ? frame->result : ESP_ERR_TIMEOUT;
-    tx_pool_.ReleaseWaiter(*frame);
+    task_workspace_->tx_pool.ReleaseWaiter(*frame);
     return result;
 }
 
@@ -1378,7 +1387,7 @@ void UartEthModem::HandleAtResponse(const char* data, size_t length) {
     ParseAtResponse(std::string_view(data, length));
     std::lock_guard<std::mutex> lock(response_mutex_);
     if (!waiting_for_at_response_) return;
-    if (at_response_.Append(std::string_view(data, length)) != micropixel::nt26::AtResponse::Status::kPending) {
+    if (task_workspace_->at_response.Append(std::string_view(data, length)) != micropixel::nt26::AtResponse::Status::kPending) {
         xEventGroupSetBits(event_group_, kEventAtResponse);
     }
 }
@@ -1928,6 +1937,9 @@ void UartEthModem::CleanupResources(bool cleanup_iot_eth) {
         vQueueDelete(event_queue_);
         event_queue_ = nullptr;
     }
+
+    // All workers and synchronous AT callers have finished before releasing PSRAM.
+    task_workspace_.reset();
 
     // Cleanup UART
     DeinitUart();

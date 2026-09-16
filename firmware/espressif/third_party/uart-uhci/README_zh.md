@@ -48,19 +48,14 @@ esp_err_t err = uhci.Init(config);
 
 2. **注册回调（必须在 StartReceive 之前）**
 
-```cpp
-// 每块缓冲区接收完成时调用（在 ISR 上下文，需尽快返回）
-bool on_rx(const UartUhci::RxEventData& data, void* user_data) {
-    // 使用 data.buffer->data, data.recv_size 处理数据
-    // 处理完后必须归还：
-    uhci.ReturnBuffer(data.buffer);
-    return false; // 返回 true 表示需要 yield
-}
-uhci.SetRxCallback(on_rx, nullptr);
+`RxCallback` 在 ISR 中执行，只把缓冲区指针交给有界队列或按缓冲区索引的待处理槽位，
+并唤醒所属任务。队列满时仍须保留指针，交由任务恢复，不能在 ISR 中归还。
+任务处理数据后调用 `ReturnBuffer`；可参考 NT26 集成的 `UhciRxCallbackStatic` 和 `MainTaskRun`。
 
+```cpp
 // 可选：缓冲区耗尽导致 DMA 暂停时调用（在 ISR 上下文）
 bool on_overflow(void* user_data) {
-    // 尽快处理并归还缓冲区，或仅记录溢出事件
+    // 只记录事件并唤醒所属任务，不要在这里调用 ReturnBuffer
     return false; // 返回 true 表示需要 yield
 }
 uhci.SetOverflowCallback(on_overflow, nullptr);
@@ -98,7 +93,7 @@ uhci.Deinit();
 ## 注意事项
 
 - **缓冲区数量**：`buffer_count` 至少为 2；过小在数据处理稍慢时容易触发溢出（所有缓冲区被 CPU 占用，DMA 暂停）。
-- **回调上下文**：`RxCallback` 与 `OverflowCallback` 都在 ISR 中执行，应避免阻塞和复杂逻辑，处理完后尽快 `ReturnBuffer`。
+- **回调上下文**：两类回调都在 ISR 中执行，只记录工作并唤醒所属任务。`ReturnBuffer`、启动/停止和溢出恢复只允许在任务上下文串行调用。
 - **必须归还**：每块通过 `RxCallback` 拿到的缓冲区都必须调用 `ReturnBuffer(buffer)`，否则会导致缓冲区耗尽和 DMA 暂停。
 - **溢出恢复**：发生溢出后，当所有缓冲区都被归还时，组件会清空 UART RX FIFO 并重新挂载 DMA，无需额外调用。
 - **UART 初始化**：波特率、引脚等需在外部用 `uart_driver_install` / 驱动接口先配置好；本组件只负责 UHCI/GDMA 接收与发送数据到已有 UART。
