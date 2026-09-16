@@ -330,6 +330,19 @@ void StatusLayerUi::ShowCellularDialogLocked() {
     (void)CreateSystemHeader(cellular_dialog_, layout, "4G / SIM", UiText(host_strings::Id::kCellularSubtitle),
                              CellularBackEvent, this);
     auto* content = CreateSystemScrollColumn(cellular_dialog_, layout, CellularScrollEvent, this);
+    auto* cellular_panel = CreateSystemPanel(content, layout);
+    lv_obj_set_flex_flow(cellular_panel, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cellular_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(cellular_panel, layout.panel_gap, 0);
+    auto* cellular_text = CreateSystemColumn(cellular_panel, 2);
+    lv_obj_set_width(cellular_text, 0);
+    lv_obj_set_flex_grow(cellular_text, 1);
+    (void)CreateSystemLabel(cellular_text, "4G", layout.heading_font, theme::kPrimaryText);
+    cellular_mode_label_ = CreateSystemLabel(cellular_text, "", layout.detail_font, theme::kSecondaryText);
+    cellular_mode_ = lv_switch_create(cellular_panel);
+    lv_obj_set_size(cellular_mode_, layout.control_height + 12, layout.control_height * 3 / 5);
+    lv_obj_add_event_cb(cellular_mode_, CellularEvent, LV_EVENT_VALUE_CHANGED, this);
+
     auto* status = CreateSystemPanel(content, layout);
     auto* heading = CreateSystemColumn(status);
     lv_obj_set_flex_flow(heading, LV_FLEX_FLOW_ROW);
@@ -395,9 +408,6 @@ void StatusLayerUi::ShowCellularDialogLocked() {
         CreateSystemLabel(mode, UiText(host_strings::Id::kCellularModeNote), layout.body_font, theme::kSecondaryText);
     lv_obj_set_width(mode_note, LV_PCT(100));
     lv_label_set_long_mode(mode_note, LV_LABEL_LONG_WRAP);
-    cellular_mode_ = CreateSystemActionButton(mode, layout, "", theme::kAccent);
-    cellular_mode_label_ = lv_obj_get_child(cellular_mode_, 0);
-    lv_obj_add_event_cb(cellular_mode_, CellularEvent, LV_EVENT_SHORT_CLICKED, this);
     UpdateCellularDialogLocked();
 }
 
@@ -427,8 +437,15 @@ void StatusLayerUi::UpdateCellularDialogLocked() {
                                            : details.incomplete    ? UiText(host_strings::Id::kCellularIncomplete)
                                            : details.sampled       ? UiText(host_strings::Id::kCellularFreshness)
                                                                    : UiText(host_strings::Id::kCellularWaiting));
-    lv_label_set_text(cellular_mode_label_, cellular_enabled_ ? UiText(host_strings::Id::kCellularUseWifi)
-                                                              : UiText(host_strings::Id::kCellularEnable));
+    const char* mode_status = !cellular_available_  ? UiText(host_strings::Id::kUiNotAvailable)
+                              : !cellular_enabled_  ? UiText(host_strings::Id::kUiOff)
+                              : cellular_connected_ ? UiText(host_strings::Id::kUiConnected)
+                                                    : UiText(host_strings::Id::kUiNotConnected);
+    lv_label_set_text(cellular_mode_label_, mode_status);
+    if (cellular_enabled_)
+        lv_obj_add_state(cellular_mode_, LV_STATE_CHECKED);
+    else
+        lv_obj_remove_state(cellular_mode_, LV_STATE_CHECKED);
     const bool busy = cellular_switching_ || cellular_sim_pending_;
     const auto enabled = [](lv_obj_t* object, bool value) {
         if (value)
@@ -521,7 +538,8 @@ void StatusLayerUi::CellularEvent(lv_event_t* event) {
     const auto* target = lv_event_get_target_obj(event);
     if (ui->cellular_switching_ || ui->cellular_sim_pending_) return;
     if (target == ui->cellular_mode_) {
-        ui->EmitAction(host_ui::SystemUiActionType::kSetCellularEnabled, ui->cellular_enabled_ ? 0U : 1U);
+        const bool enabled = lv_obj_has_state(ui->cellular_mode_, LV_STATE_CHECKED);
+        ui->EmitAction(host_ui::SystemUiActionType::kSetCellularEnabled, enabled ? 1U : 0U);
     } else if (target == ui->cellular_refresh_) {
         ui->EmitAction(host_ui::SystemUiActionType::kRefreshCellularSim);
     } else if (ui->cellular_enabled_) {
