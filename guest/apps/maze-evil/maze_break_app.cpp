@@ -68,7 +68,7 @@ constexpr uint32_t kUpscaleThresholdWidth = 480U;
     return panel_width > kUpscaleThresholdWidth && panel_width % 2U == 0U && panel_height % 2U == 0U ? 2U : 1U;
 }
 
-// SDK touch events are in the 720-short-edge logical space. DirectSurface
+// SDK touch events use the configured logical space. DirectSurface
 // raster and the stick overlay are panel / buffer pixels.
 [[nodiscard]] int MapCoord(int value, uint32_t dst_extent, uint32_t src_extent) {
     if (src_extent == 0U) {
@@ -489,6 +489,7 @@ void MazeBreakApp::PublishStats(uint64_t now_us) {
 }
 
 int MazeBreakApp::Run() {
+    app_.renderer().ConfigureDisplay({}).value();  // Native screen coordinates.
     options_ = ParseOptions(app_.launch_arguments());
 
     // Host-owned buffers: the App never maps a frame, so it needs no pinned

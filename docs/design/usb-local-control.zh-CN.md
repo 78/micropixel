@@ -57,8 +57,9 @@ Bundle chunk 当前最大为 3072 字节，逐块响应下一个 offset，因此
 施加背压。单个 Bundle 上限与 Remote Control 一致，为 8 MiB。设备对安装请求重新校验长度、App ID、
 SHA-256、Bundle header、AOT 和资源边界；CLI 提供的字段不能替代设备验证。
 
-当前实现先把完整 Bundle 暂存在 PSRAM，再进入既有 `AppStore::InstallApp`。USB 会话 120 秒无活动后释放
-暂存缓冲。后续可把相同协议后端改为直接写 BundleFS staging writer，而不改变 CLI 或 MPX1 命令语义。
+USB chunk 通过有界 mailbox 交给 supervisor，直接写入 BundleFS staging writer，不在 PSRAM 暂存整包。
+提交时校验 Bundle 与 SHA-256，成功后发布新 Catalog；失败、取消或会话超时会中止 staging，保留旧包。
+会话 120 秒无活动后取消。CLI 和 MPX1 命令语义不变。
 
 USB 请求同步等待 Host 结果，不创建云端 Job，也不需要 API Token。`auth`、`artifact upload` 和 `job wait` 是
 Control API 的分发/存储机制，不是设备能力；本地安装直接传 Bundle。`firmware update` 仍使用设备现有的

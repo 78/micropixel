@@ -514,7 +514,31 @@ void DynamicTextureReferencesAdvanceOnlyWithAcceptedFrames() {
     runtime::ForgetDynamicTexture(42);
 }
 
+void AspectFitAddsViewportClipAndPreservesItAcrossPatches() {
+    using namespace micropixel;
+    SceneState state;
+    assert(state.Reset({.logical_width = 8, .logical_height = 8}));
+    state.display = detail::MakeDisplayTransform(480, 480, {{320, 240}, DisplayScaleMode::kAspectFit});
+    const auto id = state.AllocateNode({}).value();
+    ConfigureShape(state, id, 0);
+    Present(state);
+    assert(SubmittedHeader().container_count == 1);
+    size_t offset = sizeof(micropixel_graphics_scene_header_t) + sizeof(micropixel_graphics_scene_background_record_t);
+    micropixel_graphics_scene_container_record_t clip{};
+    std::memcpy(&clip, submitted_scene.data() + offset, sizeof(clip));
+    assert(clip.container_id == 1 && clip.parent_container_id == 0 && clip.clip_x == 0 && clip.clip_y == 60 &&
+           clip.clip_width == 480 && clip.clip_height == 360 && clip.visible == 1);
+    offset += sizeof(clip) + sizeof(micropixel_graphics_scene_rect_record_t);
+    micropixel_graphics_scene_node_link_record_t parent{};
+    std::memcpy(&parent, submitted_scene.data() + offset, sizeof(parent));
+    assert(parent.parent_container_id == 1);
+    state.background_dirty = true;
+    assert(EncodeAndSubmit(state, false) == MICROPIXEL_STATUS_OK);
+    assert(SubmittedHeader().kind == MICROPIXEL_GRAPHICS_SCENE_PATCH && SubmittedHeader().container_count == 1);
+}
+
 int main() {
+    AspectFitAddsViewportClipAndPreservesItAcrossPatches();
     LabelTextLivesInAGrowingArena();
     DynamicTextureReferencesAdvanceOnlyWithAcceptedFrames();
     FactoryFailurePreservesSceneAndReleasedBudgets();

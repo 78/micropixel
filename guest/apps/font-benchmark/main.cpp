@@ -69,10 +69,14 @@ struct Samples {
 class Benchmark {
    public:
     int Run() {
+        app_.renderer()
+            .ConfigureDisplay({.logical_size = {720U, 720U}, .scale_mode = DisplayScaleMode::kExpand})
+            .value();
         const auto info = app_.renderer().info();
         compact_ = info.physical_width() == 320 && info.physical_height() == 240;
         Assert(compact_ || (info.physical_width() == info.physical_height() &&
-                            (info.physical_width() == 480 || info.physical_width() == 720)), "Unsupported display");
+                            (info.physical_width() == 480 || info.physical_width() == 720)),
+               "Unsupported display");
         width_ = info.physical_width();
         height_ = info.physical_height();
         logical_width_ = info.width();
@@ -280,8 +284,8 @@ class Benchmark {
                     drawn &= list.Text(Physical(compact_ ? 8 : 18, RowY(i)), Label(i), kStatic, row.font);
                     drawn &= list.Text(Physical(compact_ ? 250 : 350, RowY(i)), values_[i].data(), kValue, row.font);
                 }
-                drawn &= list.Text(Physical(compact_ ? 8 : 18, compact_ ? 228 : 461), "Full redraw / same text and values",
-                                   kStatic, SystemFont::kSmall);
+                drawn &= list.Text(Physical(compact_ ? 8 : 18, compact_ ? 228 : 461),
+                                   "Full redraw / same text and values", kStatic, SystemFont::kSmall);
             });
             Assert(drawn && updated.has_value(), "Raster Update failed");
             const auto before_present = Now();

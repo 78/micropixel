@@ -102,6 +102,7 @@ struct BallDraw final {
 class Demo final {
    public:
     int Run() {
+        app_.renderer().ConfigureDisplay({}).value();  // Native screen coordinates.
         const auto display = app_.renderer().info();
         if (!display.raster_supported()) {
             app_.log().Error("gravity-balls: Host raster kernels required");
@@ -115,8 +116,6 @@ class Demo final {
         resources_ = *resources;
         width_ = static_cast<int>(surface_.buffer_width());
         height_ = static_cast<int>(surface_.buffer_height());
-        touch_scale_x_ = static_cast<float>(width_) / static_cast<float>(std::max(1U, display.width()));
-        touch_scale_y_ = static_cast<float>(height_) / static_cast<float>(std::max(1U, display.height()));
         polygons_ = display.polygon_supported();
         additive_ = display.additive_sprite_supported();
         const float minimum = static_cast<float>(std::min(width_, height_));
@@ -208,8 +207,8 @@ class Demo final {
         }
         if (auto* touch = event.touch(); touch && touch->phase() == mp::TouchPhase::kDown) {
             // Touch arrives in logical display pixels; the UI lives in buffer pixels.
-            OnTap(Round(static_cast<float>(touch->x()) * touch_scale_x_),
-                  Round(static_cast<float>(touch->y()) * touch_scale_y_));
+            const auto point = surface_.ToBuffer(mp::Point{touch->x(), touch->y()});
+            OnTap(point.x, point.y);
         }
         return true;
     }
@@ -475,7 +474,7 @@ class Demo final {
         // MeasureText returns logical display pixels; RasterDrawList::Text
         // draws the native Host font directly into the buffer, even when the
         // surface is upscaled. Convert metrics using physical/logical size,
-        // not the touch-to-buffer scale (e.g. SZPI is 320x240 / 960x720).
+        // not the surface buffer scale.
         const auto display = app_.renderer().info();
         const auto text_width = [&](uint32_t logical) {
             return Round(static_cast<float>(logical) * display.physical_width() / display.width());
@@ -498,10 +497,7 @@ class Demo final {
         // top-right corner instead, where the tab reads naturally on the
         // round screen.
         const mp::Rect logical_safe = display.safe_area();
-        const mp::Rect safe{Round(static_cast<float>(logical_safe.x) * touch_scale_x_),
-                            Round(static_cast<float>(logical_safe.y) * touch_scale_y_),
-                            Round(static_cast<float>(logical_safe.width) * touch_scale_x_),
-                            Round(static_cast<float>(logical_safe.height) * touch_scale_y_)};
+        const mp::Rect safe = surface_.ToBuffer(logical_safe);
         const float minimum = static_cast<float>(std::min(width_, height_));
         const float ui = std::clamp(minimum / static_cast<float>(kBaseBufferSize), 0.5F, 1.5F);
         const int menu_pad = std::max(8, Round(16.0F * ui));
@@ -877,7 +873,7 @@ class Demo final {
     unsigned diameters_[kSizeCount]{};
     unsigned wire_count_{}, blob_offset_{};
     int width_{}, height_{};
-    float focal_{}, touch_scale_x_{1.0F}, touch_scale_y_{1.0F};
+    float focal_{};
     bool polygons_{}, additive_{}, imu_live_{};
     float accumulator_{};
     uint64_t last_frame_us_{}, simulated_us_{}, last_accel_us_{}, last_accel_received_us_{}, last_gyro_us_{},

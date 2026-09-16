@@ -142,6 +142,9 @@ build_and_run hall_cover_cache \
     "$workspace_root/tools/tests/test_hall_cover_cache.cpp" \
     "$workspace_root/firmware/espressif/main/host/ui/lvgl/square_common/hall_cover_cache.cpp"
 
+build_and_run guest_display_configuration \
+    "$workspace_root/tools/tests/test_guest_display_configuration.cpp"
+
 build_and_run guest_display_transform \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_guest_display_transform.cpp"

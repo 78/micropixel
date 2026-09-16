@@ -44,11 +44,11 @@ uint32_t Fnv1a32(const uint8_t* data, size_t size) {
     return value;
 }
 
-std::expected<void, AppStoreError> PreflightAotTarget(const AppInstallRequest& request,
+std::expected<void, AppStoreError> PreflightAotTarget(const micropixel_bundle_source_t& source, size_t size,
                                                       const micropixel_bundle_header_t& header) {
     if (header.header_size != sizeof(header) || header.toc_offset != sizeof(header) || header.section_count == 0U ||
         header.section_count > MICROPIXEL_BUNDLE_MAX_SECTIONS ||
-        header.section_count > (request.size - header.toc_offset) / sizeof(micropixel_bundle_section_t) ||
+        header.section_count > (size - header.toc_offset) / sizeof(micropixel_bundle_section_t) ||
         header.framework_abi_version != MICROPIXEL_BUNDLE_FRAMEWORK_ABI_VERSION || header.reserved0 != 0U ||
         header.reserved1 != 0U || header.reserved2 != 0U || header.reserved3 != 0U || header.reserved4 != 0U) {
         return std::unexpected(AppStoreError::kInvalidPackage);
@@ -64,7 +64,9 @@ std::expected<void, AppStoreError> PreflightAotTarget(const AppInstallRequest& r
     uint32_t aot_target_mask = MICROPIXEL_BUNDLE_AOT_TARGET_MASK_NONE;
     for (uint32_t index = 0U; index < header.section_count; ++index) {
         micropixel_bundle_section_t section{};
-        std::memcpy(&section, request.data + header.toc_offset + index * sizeof(section), sizeof(section));
+        if (!micropixel_bundle_source_read(&source, header.toc_offset + index * sizeof(section), &section,
+                                           sizeof(section)))
+            return std::unexpected(AppStoreError::kInvalidPackage);
         if (section.kind == MICROPIXEL_BUNDLE_SECTION_AOT) {
             ++aot_sections;
             aot_target_mask = section.reserved0;
@@ -247,6 +249,7 @@ bool AppStore::RefreshExternalState() {
 }
 
 std::expected<void, AppStoreError> AppStore::FormatExternalStore() {
+    if (staging_store_) return std::unexpected(AppStoreError::kCommitFailed);
     if (external_store_ == nullptr) {
         return std::unexpected(AppStoreError::kUnavailable);
     }
@@ -437,7 +440,7 @@ std::expected<void, AppStoreError> AppStore::LoadCatalog(InstalledAppCatalog& ca
 }
 
 std::expected<AppInstallCapacity, AppStoreError> AppStore::CheckAppInstallCapacity(
-    const char* app_id, size_t size, const std::array<uint8_t, 32U>& sha256) {
+    const char* app_id, size_t size, const std::array<uint8_t, 32U>& sha256, bool allow_unchanged) {
     if (!ValidAppId(app_id) || size == 0U || size > UINT32_MAX || size % MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT != 0U) {
         return std::unexpected(AppStoreError::kInvalidPackage);
     }
@@ -448,27 +451,82 @@ std::expected<AppInstallCapacity, AppStoreError> AppStore::CheckAppInstallCapaci
         return std::unexpected(AppStoreError::kUnavailable);
     }
     const bool unchanged =
-        existing && std::equal(existing->info.sha256, existing->info.sha256 + BUNDLEFS_SHA256_SIZE, sha256.begin());
+        allow_unchanged && existing &&
+        std::equal(existing->info.sha256, existing->info.sha256 + BUNDLEFS_SHA256_SIZE, sha256.begin());
     return AppInstallCapacity{.required_bytes = unchanged ? 0U : size + static_cast<uint64_t>(info.data_block_size),
                               .free_bytes = info.free_bytes};
 }
 
+std::expected<void, AppStoreError> AppStore::BeginAppInstall(const char* app_id, size_t size) {
+    if (staging_store_ != nullptr) return std::unexpected(AppStoreError::kCommitFailed);
+    if (!ValidAppId(app_id) || size < sizeof(micropixel_bundle_header_t) || size > UINT32_MAX ||
+        size % MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT != 0U)
+        return std::unexpected(AppStoreError::kInvalidPackage);
+    auto& target = app_store();
+    const auto error = target.BeginReplace(app_id, static_cast<uint32_t>(size), staging_writer_);
+    if (error != BUNDLEFS_OK) return std::unexpected(MapBundleFsError(error));
+    staging_store_ = &target;
+    staging_size_ = size;
+    staging_received_ = 0U;
+    std::snprintf(staging_app_id_.data(), staging_app_id_.size(), "%s", app_id);
+    return {};
+}
+
+std::expected<void, AppStoreError> AppStore::WriteAppInstall(size_t offset, std::span<const uint8_t> bytes) {
+    if (!staging_store_ || offset != staging_received_ || bytes.empty() ||
+        bytes.size() > staging_size_ - staging_received_)
+        return std::unexpected(AppStoreError::kInvalidPackage);
+    const auto error = staging_store_->Write(staging_writer_, bytes.data(), static_cast<uint32_t>(bytes.size()));
+    if (error != BUNDLEFS_OK) {
+        AbortAppInstall();
+        return std::unexpected(MapBundleFsError(error));
+    }
+    staging_received_ += bytes.size();
+    return {};
+}
+
+void AppStore::AbortAppInstall() {
+    if (staging_store_) staging_store_->Abort(staging_writer_);
+    staging_store_ = nullptr;
+    staging_size_ = staging_received_ = 0U;
+}
+
 std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstallRequest& request,
                                                                  std::string_view effective_locale) {
-    if (request.data == nullptr || request.size < sizeof(micropixel_bundle_header_t) || request.size > UINT32_MAX ||
+    if (request.data && staging_store_) return std::unexpected(AppStoreError::kCommitFailed);
+    auto result = InstallImpl(request, effective_locale);
+    if (!request.data) AbortAppInstall();
+    return result;
+}
+
+std::expected<AppInstallResult, AppStoreError> AppStore::InstallImpl(const AppInstallRequest& request,
+                                                                     std::string_view effective_locale) {
+    if (request.size < sizeof(micropixel_bundle_header_t) || request.size > UINT32_MAX ||
         (request.size % MICROPIXEL_BUNDLE_EXTENT_ALIGNMENT) != 0U || !ValidAppId(request.expected_app_id)) {
         return std::unexpected(AppStoreError::kInvalidPackage);
     }
-    auto actual_sha256 = Sha256Memory(request.data, request.size);
-    if (!actual_sha256) {
-        return std::unexpected(actual_sha256.error());
+    const bool streaming = request.data == nullptr;
+    auto payload_workspace = MakePsramObject<micropixel_bundle_source_t>();
+    if (!payload_workspace) return std::unexpected(AppStoreError::kUnavailable);
+    auto& payload = *payload_workspace;
+    if (streaming) {
+        if (!staging_store_ || staging_size_ != request.size || staging_received_ != request.size ||
+            std::strcmp(staging_app_id_.data(), request.expected_app_id) != 0)
+            return std::unexpected(AppStoreError::kInvalidPackage);
+        bundlefs_file_t file{};
+        if (staging_store_->OpenStaged(staging_writer_, file) != BUNDLEFS_OK ||
+            !MakeBundleSource(*staging_store_, file, payload))
+            return std::unexpected(AppStoreError::kUnavailable);
+    } else {
+        auto actual_sha256 = Sha256Memory(request.data, request.size);
+        if (!actual_sha256) return std::unexpected(actual_sha256.error());
+        if (*actual_sha256 != request.expected_sha256) return std::unexpected(AppStoreError::kHashMismatch);
+        if (!micropixel_memory_bundle_source(request.data, static_cast<uint32_t>(request.size), &payload))
+            return std::unexpected(AppStoreError::kInvalidPackage);
     }
-    if (*actual_sha256 != request.expected_sha256) {
-        return std::unexpected(AppStoreError::kHashMismatch);
-    }
-
     micropixel_bundle_header_t header{};
-    std::memcpy(&header, request.data, sizeof(header));
+    if (!micropixel_bundle_source_read(&payload, 0U, &header, sizeof(header)))
+        return std::unexpected(AppStoreError::kInvalidPackage);
     std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> header_app_id{};
     if (std::memcmp(header.magic, MICROPIXEL_BUNDLE_MAGIC, sizeof(header.magic)) != 0 ||
         header.version != MICROPIXEL_BUNDLE_VERSION || header.bundle_size != request.size ||
@@ -479,15 +537,13 @@ std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstal
     if (std::strcmp(header_app_id.data(), request.expected_app_id) != 0) {
         return std::unexpected(AppStoreError::kAppIdMismatch);
     }
-    auto target_preflight = PreflightAotTarget(request, header);
+    auto target_preflight = PreflightAotTarget(payload, request.size, header);
     if (!target_preflight) {
         return std::unexpected(target_preflight.error());
     }
 
-    // The payload is already in RAM, so its package type decides the target
-    // store before any flash is touched: Components always live in the system
-    // store, Apps go to the App store.
-    micropixel_bundle_source_t payload{};
+    // Only the memory path accepts trusted Components and routes them to NOR.
+    // Streaming Apps have already reserved their destination before transfer.
     // Reuse one fallible PSRAM workspace across RAM, installed and staged
     // metadata reads. Keeping these structs/return temporaries on the Host
     // stack exhausts its budget when nested inside Bundle metadata parsing.
@@ -495,20 +551,19 @@ std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstal
     if (!metadata_workspace) return std::unexpected(AppStoreError::kUnavailable);
     auto& metadata = *metadata_workspace;
     const auto locale = LocaleBuffer(effective_locale);
-    if (!micropixel_memory_bundle_source(request.data, static_cast<uint32_t>(request.size), &payload) ||
-        !micropixel_read_bundle_metadata_for_locale(&payload, locale.data(), &metadata)) {
+    if (!micropixel_read_bundle_metadata_for_locale(&payload, locale.data(), &metadata)) {
         return std::unexpected(AppStoreError::kInvalidPackage);
     }
     if (std::strcmp(reinterpret_cast<const char*>(metadata.app_id), request.expected_app_id) != 0) {
         return std::unexpected(AppStoreError::kAppIdMismatch);
     }
     const bool component = metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT;
-    if (component && !request.trusted_component_signature) {
+    if (component && (streaming || !request.trusted_component_signature)) {
         return std::unexpected(AppStoreError::kUntrustedComponent);
     }
     if (component && metadata.font_format == MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF && !system_store_.mappable())
         return std::unexpected(AppStoreError::kUnavailable);
-    BundleStore& target = component ? system_store_ : app_store();
+    BundleStore& target = streaming ? *staging_store_ : (component ? system_store_ : app_store());
     if (!component && external_store_ != nullptr && !ExternalReady()) {
         ESP_LOGW(kTag, "external store is not ready (state %u); installing App to the system store",
                  static_cast<unsigned>(external_state_));
@@ -518,8 +573,9 @@ std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstal
     if (!existing && existing.error() != AppStoreError::kNotFound) {
         return std::unexpected(existing.error());
     }
-    if (existing && std::equal(existing->info.sha256, existing->info.sha256 + BUNDLEFS_SHA256_SIZE,
-                               request.expected_sha256.begin())) {
+    if (!streaming && existing &&
+        std::equal(existing->info.sha256, existing->info.sha256 + BUNDLEFS_SHA256_SIZE,
+                   request.expected_sha256.begin())) {
         auto installed_metadata = ReadInstalledMetadata(request.expected_app_id, effective_locale, metadata);
         if (!installed_metadata) {
             return std::unexpected(installed_metadata.error());
@@ -544,19 +600,21 @@ std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstal
         return std::unexpected(AppStoreError::kUnavailable);
     }
     // Keep the committed file alive until the replacement transaction commits.
-    if (request.size + static_cast<uint64_t>(store_info.data_block_size) > store_info.free_bytes) {
+    if (!streaming && request.size + static_cast<uint64_t>(store_info.data_block_size) > store_info.free_bytes) {
         return std::unexpected(AppStoreError::kNoSpace);
     }
 
-    bundlefs_writer_t writer{};
-    bundlefs_error_t error = target.BeginReplace(request.expected_app_id, static_cast<uint32_t>(request.size), writer);
+    bundlefs_writer_t writer = streaming ? staging_writer_ : bundlefs_writer_t{};
+    bundlefs_error_t error =
+        streaming ? BUNDLEFS_OK
+                  : target.BeginReplace(request.expected_app_id, static_cast<uint32_t>(request.size), writer);
     if (error != BUNDLEFS_OK) {
         return std::unexpected(MapBundleFsError(error));
     }
     const auto abort_install = [&target, &writer]() { target.Abort(writer); };
 
     uint8_t reported_progress = 0U;
-    for (size_t consumed = 0U; consumed < request.size; consumed += kWriteChunkSize) {
+    for (size_t consumed = 0U; !streaming && consumed < request.size; consumed += kWriteChunkSize) {
         const size_t chunk = std::min(kWriteChunkSize, request.size - consumed);
         error = target.Write(writer, request.data + consumed, static_cast<uint32_t>(chunk));
         if (error != BUNDLEFS_OK) {
@@ -623,6 +681,8 @@ std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstal
         return std::unexpected(MapBundleFsError(error));
     }
 
+    if (streaming) staging_store_ = nullptr;
+
     // An older copy in the other store (for example an App installed before
     // the board gained its NAND App store) is retired only after the new one
     // is committed, so failure never leaves the App missing.
@@ -655,6 +715,7 @@ std::expected<AppInstallResult, AppStoreError> AppStore::Install(const AppInstal
 }
 
 std::expected<void, AppStoreError> AppStore::UninstallApp(const char* app_id) {
+    if (staging_store_) return std::unexpected(AppStoreError::kCommitFailed);
     if (!ValidAppId(app_id)) {
         return std::unexpected(AppStoreError::kNotFound);
     }
@@ -676,6 +737,7 @@ std::expected<void, AppStoreError> AppStore::UninstallApp(const char* app_id) {
 
 std::expected<void, AppStoreError> AppStore::UninstallComponent(const char* component_id,
                                                                 std::string_view active_component_id) {
+    if (staging_store_) return std::unexpected(AppStoreError::kCommitFailed);
     if (!ValidAppId(component_id)) {
         return std::unexpected(AppStoreError::kNotFound);
     }

@@ -17,7 +17,10 @@ void Check(bool condition, const char* message) {
 }  // namespace
 
 int main() {
+    using micropixel::DisplayConfiguration;
+    using micropixel::DisplayScaleMode;
     using micropixel::detail::MakeDisplayTransform;
+    constexpr DisplayConfiguration legacy{.logical_size = {720U, 720U}, .scale_mode = DisplayScaleMode::kExpand};
     using micropixel::detail::MapPhysicalInsets;
     using micropixel::detail::MapRect;
     using micropixel::detail::MapSceneRect;
@@ -30,7 +33,7 @@ int main() {
                             std::pair{481U, 723U}, std::pair{0U, 480U}}) {
         micropixel_app_environment_t environment{};
         micropixel_app_set_logical_display(&environment, size.first, size.second);
-        const auto guest = MakeDisplayTransform(size.first, size.second);
+        const auto guest = MakeDisplayTransform(size.first, size.second, legacy);
         Check(environment.width == guest.logical_width && environment.height == guest.logical_height,
               "store compatibility must match the Guest logical display, including Mosaico");
         micropixel_app_requirements_t requirement{};
@@ -42,13 +45,13 @@ int main() {
               "720-unit apps must accept supported physical screens and reject an unknown display");
     }
 
-    const auto square_720 = MakeDisplayTransform(720U, 720U);
+    const auto square_720 = MakeDisplayTransform(720U, 720U, legacy);
     Check(square_720.logical_width == 720U && square_720.logical_height == 720U,
           "720 square must use the identity design space");
     Check(square_720.scale_numerator == 720U && square_720.scale_denominator == 720U,
           "720 square texture scale must be 1:1");
 
-    const auto square_480 = MakeDisplayTransform(480U, 480U);
+    const auto square_480 = MakeDisplayTransform(480U, 480U, legacy);
     Check(square_480.logical_width == 720U && square_480.logical_height == 720U,
           "480 square must retain the 720 design space");
     Check(square_480.scale_numerator == 480U && square_480.scale_denominator == 720U,
@@ -79,18 +82,53 @@ int main() {
               atlas_lower_half.height == 21,
           "adaptive atlas source rectangles must not round past the decoded far edge");
 
-    const auto landscape = MakeDisplayTransform(1280U, 720U);
+    const auto landscape = MakeDisplayTransform(1280U, 720U, legacy);
     Check(landscape.logical_width == 1280U && landscape.logical_height == 720U,
           "a landscape display must keep a 720 logical short edge");
     Check(landscape.physical_width == 1280U && landscape.physical_height == 720U && landscape.offset_x == 0 &&
               landscape.offset_y == 0,
           "the SDK must expose the complete physical display without a manifest viewport");
 
-    const auto portrait = MakeDisplayTransform(720U, 1280U);
+    const auto portrait = MakeDisplayTransform(720U, 1280U, legacy);
     Check(portrait.logical_width == 720U && portrait.logical_height == 1280U,
           "a portrait display must keep a 720 logical short edge");
 
-    Check(MakeDisplayTransform(0U, 720U).scale_denominator == 0U, "zero-sized displays must be rejected");
+    Check(MakeDisplayTransform(0U, 720U, legacy).scale_denominator == 0U, "zero-sized displays must be rejected");
+    const auto native = MakeDisplayTransform(320, 240);
+    Check(native.logical_width == 320 && native.logical_height == 240 && native.scale_numerator == 1 &&
+              native.scale_denominator == 1,
+          "unconfigured display must use native pixels");
+    const auto fit = MakeDisplayTransform(480, 480, {{320, 240}, DisplayScaleMode::kAspectFit});
+    Check(fit.logical_width == 320 && fit.logical_height == 240 && fit.viewport_width == 480 &&
+              fit.viewport_height == 360 && fit.offset_y == 60,
+          "fit centers a fixed canvas with letterboxing");
+    const auto fit_rect = MapSceneRect(fit, 0, 0, 320, 240);
+    Check(fit_rect.x == 0 && fit_rect.y == 60 && fit_rect.width == 480 && fit_rect.height == 360,
+          "fit maps the full scene to its viewport");
+    Check(MapSceneVectorX(fit, 20) == 30, "vectors must not include letterbox offsets");
+    Check(ScaleCoordinate(60 - fit.offset_y, fit.logical_height, fit.viewport_height) == 0 &&
+              ScaleCoordinate(30 - fit.offset_y, fit.logical_height, fit.viewport_height) == -20,
+          "touch inverse maps viewport origin and leaves letterbox touches outside the canvas");
+    const auto fit_safe = MapPhysicalInsets(fit, 24, 24, 24, 24);
+    Check(fit_safe.top == 0 && fit_safe.bottom == 0 && fit_safe.left == 16 && fit_safe.right == 16,
+          "letterboxing absorbs physical safe insets");
+    const auto fill = MakeDisplayTransform(480, 480, {{320, 240}, DisplayScaleMode::kAspectFill});
+    Check(fill.viewport_width == 640 && fill.viewport_height == 480 && fill.offset_x == -80,
+          "fill centers and crops the larger viewport");
+    const auto fill_safe = MapPhysicalInsets(fill, 0, 0, 0, 0);
+    Check(fill_safe.left == 40 && fill_safe.right == 40, "cropped content lies outside the safe logical area");
+    const auto expand = MakeDisplayTransform(480, 480, {{320, 240}, DisplayScaleMode::kExpand});
+    Check(expand.logical_width == 320 && expand.logical_height == 320 && expand.offset_y == 0,
+          "expand grows the design canvas without letterboxing");
+    const auto portrait_fit = MakeDisplayTransform(240, 320, {{320, 240}, DisplayScaleMode::kAspectFit});
+    Check(portrait_fit.viewport_height == 180 && portrait_fit.offset_y == 70,
+          "portrait fit retains authored orientation");
+    Check(MakeDisplayTransform(480, 480, {{0, 240}, DisplayScaleMode::kAspectFit}).logical_width == 0 &&
+              MakeDisplayTransform(480, 480, {{320, 0}, DisplayScaleMode::kExpand}).logical_width == 0 &&
+              MakeDisplayTransform(480, 480, {{320, 240}, DisplayScaleMode::kNative}).logical_width == 0 &&
+              MakeDisplayTransform(480, 480, {{320, 240}, static_cast<DisplayScaleMode>(255)}).logical_width == 0 &&
+              MakeDisplayTransform(480, 480, {{1, 32767}, DisplayScaleMode::kAspectFill}).logical_width == 0,
+          "invalid and unrepresentable configurations must fail");
     std::cout << "guest display transform tests passed\n";
     return 0;
 }

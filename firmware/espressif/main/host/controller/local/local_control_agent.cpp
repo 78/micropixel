@@ -763,7 +763,7 @@ void LocalControlAgent::HandleInstallBegin(uint32_t request_id, std::string_view
         (void)QueueResponse(request_id, "ERROR", "invalid_install_request");
         return;
     }
-    uint8_t* data = static_cast<uint8_t*>(heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    uint8_t* data = static_cast<uint8_t*>(heap_caps_malloc(kMaximumChunkBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (data == nullptr) {
         (void)QueueResponse(request_id, "ERROR", "out_of_memory");
         return;
@@ -783,11 +783,28 @@ void LocalControlAgent::HandleInstallBegin(uint32_t request_id, std::string_view
     }
     std::array<char, control::kCommandIdCapacity> command_id{};
     std::snprintf(command_id.data(), command_id.size(), "usb:%" PRIu32, request_id);
-    if (!controls_.BeginInstallActivity(control::ControlSource::kLocal, command_id.data(), install_.app_id.data())) {
+    if (!controls_.BeginInstallActivity(control::ControlSource::kLocal, command_id.data(), install_.app_id.data(), size,
+                                        sha256)) {
         AbortInstall();
         (void)QueueResponse(request_id, "ERROR", "install_busy");
         return;
     }
+    control::InstallActivity activity{};
+    const auto deadline = xTaskGetTickCount() + pdMS_TO_TICKS(60000U);
+    for (;;) {
+        controls_.CopyInstallActivity(activity);
+        if (!activity.active || activity.source != control::ControlSource::kLocal ||
+            activity.command_id != command_id || activity.preflight == control::InstallPreflight::kFailed ||
+            static_cast<int32_t>(xTaskGetTickCount() - deadline) >= 0) {
+            AbortInstall();
+            (void)QueueResponse(request_id, "ERROR",
+                                activity.error[0] ? activity.error.data() : "install_preflight_failed");
+            return;
+        }
+        if (activity.preflight == control::InstallPreflight::kReady) break;
+        vTaskDelay(pdMS_TO_TICKS(10U));
+    }
+    install_.install_token = activity.install_token;
     (void)QueueResponse(request_id, "OK", "INSTALL_READY 3072");
 }
 
@@ -806,11 +823,15 @@ void LocalControlAgent::HandleInstallChunk(uint32_t request_id, std::string_view
     }
     size_t decoded_size = 0U;
     const size_t remaining = install_.size - install_.received;
-    const int status =
-        mbedtls_base64_decode(install_.data + install_.received, std::min(remaining, kMaximumChunkBytes), &decoded_size,
-                              reinterpret_cast<const unsigned char*>(encoded.data()), encoded.size());
+    const int status = mbedtls_base64_decode(install_.data, std::min(remaining, kMaximumChunkBytes), &decoded_size,
+                                             reinterpret_cast<const unsigned char*>(encoded.data()), encoded.size());
     if (status != 0 || decoded_size == 0U || decoded_size > remaining) {
         (void)QueueResponse(request_id, "ERROR", "invalid_install_chunk");
+        return;
+    }
+    if (!controls_.WriteInstallChunk(install_.install_token, install_.received, {install_.data, decoded_size})) {
+        AbortInstall();
+        (void)QueueResponse(request_id, "ERROR", "install_write_failed");
         return;
     }
     install_.received += decoded_size;
@@ -845,7 +866,7 @@ void LocalControlAgent::HandleInstallCommit(uint32_t request_id, std::string_vie
     command.type = control::HostCommandType::kInstallApp;
     command.deadline_ticks = xTaskGetTickCount() + kHostCommandTimeout;
     command.app_id = install_.app_id;
-    command.package_data = install_.data;
+    command.install_token = install_.install_token;
     command.package_size = install_.size;
     command.package_sha256 = install_.sha256;
     if (!controls_.QueueLocalCommand(command)) {
@@ -854,6 +875,7 @@ void LocalControlAgent::HandleInstallCommit(uint32_t request_id, std::string_vie
     }
     controls_.UpdateInstallProgress(control::ControlSource::kLocal, command.command_id.data(), 99U);
     DisarmInstallTimeout();
+    heap_caps_free(install_.data);
     install_ = {};
 }
 

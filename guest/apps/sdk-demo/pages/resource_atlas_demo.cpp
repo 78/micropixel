@@ -148,7 +148,7 @@ DemoAtlasTextures LoadDemoAtlases(micropixel::Application& app) {
     DemoAtlasTextures textures{};
     for (uint32_t index = 0U; index < kDemoAtlasSheetCount; ++index) {
         const demo_assets::Atlas& atlas = demo_assets::sprite_atlases[index];
-        auto result = app.resources().LoadTexture(atlas.asset, micropixel::TextureScale::kDisplay);
+        auto result = app.resources().LoadTexture(atlas.asset);
         if (!result.has_value()) {
             return DemoAtlasTextures{};
         }

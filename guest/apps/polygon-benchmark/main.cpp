@@ -562,6 +562,7 @@ class Benchmark final {
 
 int main() {
     micropixel::Application app;
+    app.renderer().ConfigureDisplay({}).value();  // Native pixels; DirectSurface remains independent.
     // The benchmark state (texture, palette, room, polygon pool) is well over
     // the WAMR call stack budget; keep it on the heap.
     auto benchmark = std::make_unique<Benchmark>(app);

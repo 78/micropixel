@@ -6,6 +6,7 @@
 #include <span>
 #include <type_traits>
 
+#include "sdk/display.hpp"
 #include "sdk/event.hpp"
 #include "sdk/geometry.hpp"
 #include "sdk/result.hpp"
@@ -22,6 +23,7 @@ class SpriteNode;
 class LabelNode;
 class SpriteBatch;
 struct SceneDescriptor;
+struct TextureLoadOptions;
 class Texture;
 class DirectSurface;
 class HostSurface;
@@ -211,6 +213,14 @@ class DirectSurface {
     [[nodiscard]] constexpr bool rgb565_byte_swapped() const { return rgb565_byte_swapped_; }
     [[nodiscard]] constexpr bool direct_scanout() const { return direct_scanout_; }
     [[nodiscard]] constexpr uint16_t max_full_frame_fps() const { return max_full_frame_fps_; }
+
+    // Convert using the same ConfigureDisplay viewport as Scene and touch.
+    // Raw Raster commands and Buffer() remain in buffer pixels. Invalid surfaces
+    // return empty geometry / an invalid texture ratio.
+    [[nodiscard]] Point ToBuffer(Point logical) const;
+    [[nodiscard]] Rect ToBuffer(Rect logical) const;
+    [[nodiscard]] Point ToLogical(Point buffer) const;
+    [[nodiscard]] TextureLoadOptions texture_scale() const;
 
     [[nodiscard]] bool Busy(uint32_t index) const;
     // Lowest-numbered buffer the Host does not hold. False when every buffer is
@@ -581,6 +591,9 @@ class Renderer final {
     constexpr Renderer(const Renderer&) noexcept = default;
     constexpr Renderer& operator=(const Renderer&) noexcept = default;
 
+    // Configure before querying layout, loading textures, creating scenes, or
+    // translating input. Once used, the display coordinate space is immutable.
+    [[nodiscard]] Result<void> ConfigureDisplay(const DisplayConfiguration& configuration) const;
     [[nodiscard]] RendererInfo info() const;
     [[nodiscard]] Result<Scene> CreateScene(Color background = Color::Black()) const;
     // Publishes pending Scene changes. Failure preserves both the displayed

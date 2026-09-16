@@ -46,7 +46,8 @@ Sensor 句柄表保留在设备模块内。内部头只服务于 Runtime，不�
 `shared-memory`；不再声明屏幕 profile 或重复的单数 `source`。当前 SDK 与集成 App 均使用 `none`，
 生成非共享 Wasm linear memory，使 WAMR 通过 `memory.grow` 按需扩展。Bundle 会携带该声明，Host 在加载时
 将它与 AOT target-info 的 multi-thread 特征交叉校验。
-SDK 初始化时根据物理屏幕建立短边为 720 的逻辑坐标；App 通过 `RendererInfo` 判断当前宽高和方向，
+SDK 默认使用物理屏幕像素作为逻辑坐标；App 可通过 `ConfigureDisplay` 显式声明设计尺寸与适配方式，
+通过 `RendererInfo` 判断当前逻辑宽高和方向，
 并对不支持的布局显式 `Assert`。`localization`、
 `asset_manifest` 和 `audio/sfx.json` 是生成 Catalog、资源绑定、音效 profile、Wasm/AOT 与 Bundle 的
 唯一输入，不需要为每个 App 编写 build 脚本：

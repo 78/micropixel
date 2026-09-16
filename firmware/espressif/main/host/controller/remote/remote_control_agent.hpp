@@ -154,7 +154,10 @@ class RemoteControlAgent final {
     void DrainHostResults(void* client, const Identity& identity);
     [[nodiscard]] bool UploadArtifact(void* client, const Identity& identity, const control::Artifact& artifact,
                                       cJSON* artifacts);
-    [[nodiscard]] const char* AwaitInstallPreflight(const control::HostCommand& command);
+    [[nodiscard]] const char* AwaitInstallPreflight(control::HostCommand& command);
+    [[nodiscard]] bool DownloadAppPackage(void* client, const Identity& identity, const char* path,
+                                          const control::HostCommand& command,
+                                          const PackageProgressPublisher& progress);
     [[nodiscard]] bool DownloadPackage(void* client, const Identity& identity, const char* path, size_t size,
                                        uint8_t*& data_out, bool report_firmware_progress = false,
                                        const FirmwareStatusPublisher& publish_status = {},

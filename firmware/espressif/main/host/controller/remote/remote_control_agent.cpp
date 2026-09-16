@@ -496,6 +496,7 @@ struct RemoteControlAgent::ColdState final {
 };
 
 struct RemoteControlAgent::TaskContext final {
+    std::array<uint8_t, control::ControlDispatcher::kInstallChunkBytes> install_chunk{};
     StoreReleaseWorkspace store_release_workspace{};
     std::array<char, 4097U> font_response{};
     Identity identity{};
@@ -1594,25 +1595,17 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
         if (const char* error = AwaitInstallPreflight(command); error != nullptr) return reject(error);
         uint8_t last_progress = 0U;
         publish_install_progress("downloading", 0U);
-        if (!DownloadPackage(
-                client, identity, path, command.package_size, command.package_data, false, {}, [&](uint8_t percent) {
-                    if (percent >= last_progress + 10U) {
-                        last_progress = percent;
-                        publish_install_progress("downloading", static_cast<uint8_t>(percent * 80U / 100U));
-                    }
-                    controls_.UpdateInstallProgress(control::ControlSource::kRemote, command_id,
-                                                    static_cast<uint8_t>(percent * 99U / 100U));
-                })) {
+        if (!DownloadAppPackage(client, identity, path, command, [&](uint8_t percent) {
+                if (percent >= last_progress + 10U) {
+                    last_progress = percent;
+                    publish_install_progress("downloading", static_cast<uint8_t>(percent * 80U / 100U));
+                }
+                controls_.UpdateInstallProgress(control::ControlSource::kRemote, command_id,
+                                                static_cast<uint8_t>(percent * 99U / 100U));
+            })) {
             return reject("package_download_failed");
         }
         publish_install_progress("verifying", 85U);
-        std::array<uint8_t, 32U> digest{};
-        if (mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), command.package_data, command.package_size,
-                       digest.data()) != 0 ||
-            digest != command.package_sha256) {
-            control::ReleaseHostCommand(command);
-            return reject("package_hash_mismatch");
-        }
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "requireInstallAuthorization"))) {
             Http3Request authorization{};
             authorization.method = "GET";
@@ -1722,8 +1715,9 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
     return true;
 }
 
-const char* RemoteControlAgent::AwaitInstallPreflight(const control::HostCommand& command) {
-    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(5000U);
+const char* RemoteControlAgent::AwaitInstallPreflight(control::HostCommand& command) {
+    // Preflight now reserves and erases the replacement extents, including on NOR.
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(60000U);
     control::InstallActivity activity{};
     for (;;) {
         controls_.CopyInstallActivity(activity);
@@ -1736,8 +1730,10 @@ const char* RemoteControlAgent::AwaitInstallPreflight(const control::HostCommand
             error = activity.error.data();
         else if (DeadlineReached(command.deadline_ticks) || DeadlineReached(deadline))
             error = "command_expired";
-        else if (activity.preflight == control::InstallPreflight::kReady)
+        else if (activity.preflight == control::InstallPreflight::kReady) {
+            command.install_token = activity.install_token;
             return nullptr;
+        }
         if (error != nullptr) {
             ESP_LOGW(kTag, "Install preflight failed: app=%s error=%s required=%llu free=%llu", command.app_id.data(),
                      error, static_cast<unsigned long long>(activity.required_bytes),
@@ -1747,6 +1743,31 @@ const char* RemoteControlAgent::AwaitInstallPreflight(const control::HostCommand
         }
         vTaskDelay(pdMS_TO_TICKS(20U));
     }
+}
+
+bool RemoteControlAgent::DownloadAppPackage(void* client, const Identity& identity, const char* path,
+                                            const control::HostCommand& command,
+                                            const PackageProgressPublisher& progress) {
+    Http3Request request{};
+    request.method = "GET";
+    request.path = path;
+    request.headers = {{"authorization", AuthorizationValue(identity.credential.data())}};
+    auto stream = ClientFrom(client).Open(request);
+    if (!stream || stream->GetStatus(kRequestTimeoutMs) != 200) return false;
+    auto& chunk = task_context_->install_chunk;
+    size_t received = 0U;
+    while (received < command.package_size) {
+        if (DeadlineReached(command.deadline_ticks)) return false;
+        const int count = stream->Read(chunk.data(), std::min(chunk.size(), command.package_size - received),
+                                       kPackageDownloadTimeoutMs);
+        if (count <= 0 ||
+            !controls_.WriteInstallChunk(command.install_token, received, {chunk.data(), static_cast<size_t>(count)}))
+            return false;
+        received += static_cast<size_t>(count);
+        if (progress) progress(static_cast<uint8_t>(received * 100U / command.package_size));
+    }
+    uint8_t extra = 0U;
+    return stream->Read(&extra, sizeof(extra), kRequestTimeoutMs) == 0;
 }
 
 bool RemoteControlAgent::DownloadPackage(void* client, const Identity& identity, const char* path, size_t size,

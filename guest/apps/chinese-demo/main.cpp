@@ -8,6 +8,9 @@ using namespace micropixel::literals;
 
 int main() {
     Application app;
+    app.renderer()
+        .ConfigureDisplay({.logical_size = {720U, 720U}, .scale_mode = micropixel::DisplayScaleMode::kExpand})
+        .value();
     const auto locale = app.localization().CurrentLocale();
     const auto strings = chinese_demo_strings::ForLocale(locale);
     using Id = chinese_demo_strings::Id;
