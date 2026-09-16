@@ -803,6 +803,8 @@ uint16_t WireSiblingOrder(const SceneState& state, uint32_t child_order) {
 
 int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
     keyframe = keyframe || displayed_scene != &state || state.texture_revision != runtime::texture_revision;
+    const uint16_t viewport_container = state.display.offset_x > 0 || state.display.offset_y > 0 ? 1U : 0U;
+    if (state.container_count >= UINT16_MAX - viewport_container) return MICROPIXEL_STATUS_BUFFER_TOO_SMALL;
     SceneWriter writer;
     // Scratch was reserved when the arrays it indexes grew; assign() only traps
     // if that contract is broken.
@@ -819,7 +821,8 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
     }
     if (keyframe) {
         for (uint16_t wire_index = 0U; wire_index < ordered_container_count; ++wire_index) {
-            container_wire_ids[ordered_container_slots[wire_index]] = static_cast<uint16_t>(wire_index + 1U);
+            container_wire_ids[ordered_container_slots[wire_index]] =
+                static_cast<uint16_t>(wire_index + 1U + viewport_container);
         }
     }
     if (keyframe || state.background_dirty) {
@@ -831,6 +834,27 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
             })) {
             return MICROPIXEL_STATUS_BUFFER_TOO_SMALL;
         }
+    }
+    if (keyframe && viewport_container != 0U) {
+        if (!writer.Add(micropixel_graphics_scene_container_record_t{
+                .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_CONTAINER,
+                           .size = sizeof(micropixel_graphics_scene_container_record_t)},
+                .container_id = viewport_container,
+                .parent_container_id = 0U,
+                .property_mask = kContainerMask,
+                .clip_x = state.display.offset_x,
+                .clip_y = state.display.offset_y,
+                .clip_width = static_cast<int32_t>(detail::ViewportWidth(state.display)),
+                .clip_height = static_cast<int32_t>(detail::ViewportHeight(state.display)),
+                .translate_x = 0,
+                .translate_y = 0,
+                .z_order = 0,
+                .opacity = 255U,
+                .visible = 1U,
+                .sibling_order = 0U,
+                .flags = 0U,
+            }))
+            return MICROPIXEL_STATUS_BUFFER_TOO_SMALL;
     }
     const uint16_t container_records = keyframe ? state.container_count : state.undo_container_count;
     for (uint16_t record_index = 0U; record_index < container_records; ++record_index) {
@@ -850,7 +874,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         const uint16_t wire_id = keyframe ? container_wire_ids[id] : container.wire_id;
         const uint16_t parent_wire_id =
             container.parent_id == 0U
-                ? 0U
+                ? viewport_container
                 : (keyframe ? container_wire_ids[container.parent_id] : state.containers[container.parent_id].wire_id);
         if (wire_id == 0U || wire_id == UINT16_MAX || parent_wire_id == UINT16_MAX ||
             !writer.Add(micropixel_graphics_scene_container_record_t{
@@ -979,7 +1003,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         }
         if (keyframe) {
             const uint16_t parent_wire_id =
-                node.parent_container_id == 0U ? 0U : container_wire_ids[node.parent_container_id];
+                node.parent_container_id == 0U ? viewport_container : container_wire_ids[node.parent_container_id];
             if (!writer.Add(micropixel_graphics_scene_node_link_record_t{
                     .record = {.opcode = MICROPIXEL_GRAPHICS_SCENE_OP_NODE_LINK,
                                .size = sizeof(micropixel_graphics_scene_node_link_record_t)},
@@ -1087,7 +1111,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         .revision = next_revision,
         .record_count = writer.records_,
         .node_count = state.node_count,
-        .container_count = state.container_count,
+        .container_count = static_cast<uint16_t>(state.container_count + viewport_container),
         .batch_instance_count = state.batch_instance_count,
     };
     Copy(SceneWriter::scene_wire, &header, sizeof(header));
@@ -1107,7 +1131,7 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
         if (keyframe) {
             for (uint16_t wire_index = 0U; wire_index < ordered_container_count; ++wire_index) {
                 SceneContainerData& container = state.containers[ordered_container_slots[wire_index]];
-                container.wire_id = static_cast<uint16_t>(wire_index + 1U);
+                container.wire_id = static_cast<uint16_t>(wire_index + 1U + viewport_container);
                 container.dirty = 0U;
             }
             for (uint16_t wire_id = 0U; wire_id < ordered_node_count; ++wire_id) {

@@ -100,16 +100,28 @@ class Font final {
     friend class Resources;
 };
 
-// Native preserves authored pixels for shared Scene/Raster sampling. Display
-// scales to the panel (the logical-canvas adaptation 2D UI uses). Surface
-// scales to the App's live Direct Surface buffers (display scale divided by
-// the surface's integer upscale) so unscaled Image records copy rows verbatim;
-// it fails with InvalidArgument when no surface exists.
-enum class TextureScale : uint8_t { kNative, kDisplay, kSurface };
+// Configured follows ConfigureDisplay; without configuration it is native.
+// Surface is a compatibility convenience: configured scale / live surface upscale.
+enum class TextureScale : uint8_t { kNative, kDisplay, kSurface, kConfigured };
+
+struct TextureLoadOptions final {
+    uint32_t scale_numerator{1U};
+    uint32_t scale_denominator{1U};
+
+    [[nodiscard]] static constexpr TextureLoadOptions Ratio(uint32_t numerator, uint32_t denominator) {
+        return {numerator, denominator};
+    }
+    // The reference is the design canvas short edge, not the atlas dimensions.
+    [[nodiscard]] static constexpr TextureLoadOptions ForShortEdge(uint32_t reference, uint32_t width,
+                                                                   uint32_t height) {
+        return {width < height ? width : height, reference};
+    }
+};
 
 class Resources final {
    public:
-    [[nodiscard]] Result<Texture> LoadTexture(AssetId asset, TextureScale scale = TextureScale::kNative) const;
+    [[nodiscard]] Result<Texture> LoadTexture(AssetId asset, TextureScale scale = TextureScale::kConfigured) const;
+    [[nodiscard]] Result<Texture> LoadTexture(AssetId asset, TextureLoadOptions options) const;
     [[nodiscard]] Result<Font> LoadFont(AssetId asset) const;
     [[nodiscard]] Result<Texture> CreateDynamicTexture(Size size, PixelFormat format,
                                                        std::span<const uint8_t> pixels = {}, uint32_t pitch = 0) const;

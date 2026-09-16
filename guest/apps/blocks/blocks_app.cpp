@@ -21,6 +21,9 @@ uint32_t ReadBest(micropixel::KVStore storage) {
 
 int BlocksAppMain() {
     micropixel::Application app;
+    app.renderer()
+        .ConfigureDisplay({.logical_size = {720U, 720U}, .scale_mode = micropixel::DisplayScaleMode::kExpand})
+        .value();
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
     micropixel::Assert(display.width() >= kScreenWidth && display.height() >= kScreenHeight,

@@ -89,10 +89,13 @@ def main():
     write_json(out / 'channel-entry.json', {'schema_version': 1, 'version': version, 'verification_base': support_base, 'entry': entries[version], 'manager': manager,
                                           'installer': json.loads((out / 'windows-installer.json').read_text())})
     write_json(out / 'release-notes.json', {'schema_version': 1, 'sdk_version': version, 'channel': policy['channel'],
-        'summary': ['Adds static TTF font component packaging and publication, system_font requirements, and multiline localization.',
-        'Updates SDK Demo with multilingual system-font and text-rendering examples. Guest C++ APIs and Service ABI are unchanged.'],
+        'summary': ['Adds explicit display configuration, configured-default texture loading, and DirectSurface coordinate conversion.',
+        'Migrates examples and removes the mandatory 720 design baseline. Service ABI and existing Bundles are unchanged.'],
         'performance': [], 'migration': ['Existing unmanaged projects must explicitly select an SDK before managed builds.',
         'Source migration and real-device acceptance remain separate from SDK switching.',
+        'Recompiled 720-based apps must configure a 720x720 canvas with kExpand; native art must explicitly select kNative.',
+        'Unconfigured apps now use native pixels. Texture loading follows the configured scale; DirectSurface buffers remain physical pixels.',
+        'Firmware 0.9.1 streams App installation to BundleFS. PNG still decodes at full resolution before scaling.',
         'System font components and language switching require firmware 0.9.0; existing Guest APIs retain their prior firmware requirements.',
         'Run the new Windows installer when upgrading from 0.16.0 to replace its Ctrl-C bootstrap; manager or SDK updates alone do not replace it.'],
         'compatibility': manifest['compatibility'], 'windows_acceptance': policy['windows_acceptance'], 'code_signing': policy['code_signing'], 'release_policy': policy['policy']})

@@ -118,13 +118,12 @@ void BlocksGame::InitializeScene() {
                 {.clip = {0, 0, static_cast<int32_t>(kScreenWidth), static_cast<int32_t>(kScreenHeight)},
                  .translation = {ContentOffsetX(renderer_info_.width()), ContentOffsetY(renderer_info_.height())}})
             .value();
-    auto atlas = app_.resources().LoadTexture(blocks_assets::playfield_atlas, micropixel::TextureScale::kDisplay);
+    auto atlas = app_.resources().LoadTexture(blocks_assets::playfield_atlas);
     micropixel::Assert(atlas.has_value(), "blocks: playfield atlas load failed");
     playfield_atlas_ = static_cast<micropixel::Texture&&>(atlas.value());
     const uint32_t stroke = LogicalStrokeWidth(renderer_info_.width(), renderer_info_.physical_width());
-    auto background = app_.resources().LoadTexture(
-        stroke > 1U ? blocks_assets::playfield_background_thick : blocks_assets::playfield_background_thin,
-        micropixel::TextureScale::kDisplay);
+    auto background = app_.resources().LoadTexture(stroke > 1U ? blocks_assets::playfield_background_thick
+                                                               : blocks_assets::playfield_background_thin);
     micropixel::Assert(background.has_value(), "blocks: playfield background load failed");
     playfield_background_ = static_cast<micropixel::Texture&&>(background.value());
     (void)root_container_

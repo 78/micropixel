@@ -98,9 +98,9 @@ visibility、opacity、translation 和 clip 沿父链生效。
 首次、场景切换和结构变化提交 keyframe；其他帧合并净变化。旧 `Scene::Update` 已移除。
 基础节点工厂返回 `Result<节点类型>`；容量不足时不会创建半个节点。
 
-布局依据 RendererInfo 的逻辑 width/height 与 safe area。SDK 使用短边 720 的逻辑画布，序列化时统一
-转换为物理值；physical width/height 用于物理素材选择等明确需要原生像素的场景。Touch 属于 Scene
-坐标，跨 Container 使用 ToLocal/ToScene，高层控件自动转换。
+布局依据 RendererInfo 的逻辑 width/height 与 safe area。通过 `ConfigureDisplay` 声明设计尺寸和
+适配方式；未配置时逻辑坐标等于屏幕像素。序列化时统一转换为物理值，Touch 使用对应逆变换，
+跨 Container 使用 ToLocal/ToScene，高层控件自动转换。physical width/height 始终是实际屏幕尺寸。
 
 Sprite 适合独立图像，SpriteBatch 适合蛇身、方块和粒子；Shape/RoundedRect 保存形状属性，不各自
 分配像素 surface。Label 使用 Small/Medium/Large/Title 语义字体，具体字号由 Host profile 决定。
@@ -119,10 +119,100 @@ Label 文本存放在按需增长的 text arena 中，单条文本上限由 Host
 
 ### Texture 与 atlas
 
-使用生成的 AssetId 加载资源，不手写 TOC 数字。`LoadTexture(asset)` 保留素材像素尺寸，
-`LoadTexture(asset, TextureScale::kDisplay)` 显式适配 2D 逻辑画布，`TextureScale::kSurface` 按当前
-DirectSurface 的 buffer 分辨率（面板比例再除以整数 upscale）解码，让不缩放的 `Image` 记录逐行原样拷贝；
-没有 surface 时返回 InvalidArgument。
+使用生成的 AssetId 加载资源，不手写 TOC 数字。纹理的加载比例与绘制时的目标矩形是两件事：
+把图片画小不会自动减少已加载纹理的像素内存。
+
+#### 显示配置与默认加载（SDK 0.19.0）
+
+在读取 renderer.info、创建 Scene、加载纹理或接收触摸之前配置：
+
+```cpp
+app.renderer().ConfigureDisplay({
+    .logical_size = {320U, 240U},
+    .scale_mode = micropixel::DisplayScaleMode::kAspectFit,
+}).value();
+auto scene = app.renderer().CreateScene().value();
+auto texture = app.resources().LoadTexture(atlas_asset).value();
+```
+
+| DisplayScaleMode | 行为 |
+| --- | --- |
+| `kNative`（默认） | 逻辑坐标等于屏幕像素；logical_size 必须为空 |
+| `kAspectFit` | 等比完整显示指定画布，居中留边；内容裁剪到画布，背景色填充留边 |
+| `kAspectFill` | 等比铺满屏幕，居中裁切指定画布 |
+| `kExpand` | 等比完整容纳设计尺寸，扩展逻辑画布以匹配屏幕比例 |
+
+非 Native 模式必须提供非零宽高。逻辑尺寸和缩放后的 viewport 边长不得超过 32767。
+配置在首次使用布局、纹理或触摸转换后冻结；之后调用返回 `kInvalidState`，已有对象不会被隐式重建。
+配置失败不改变原配置。`CreateScene()` 使用当前画布，SceneDescriptor 的非零尺寸必须与该画布一致。
+
+Touch 使用配置后的逻辑坐标。留边内的触摸可能落在画布外，不会被夹到边缘；应用应使用逻辑矩形
+做命中判断。safe area 会扣除留边并计入裁切部分。系统字体仍由 Host 提供物理字号，MeasureText
+将测量结果转换到当前逻辑坐标，不承诺字体跟随设计画布等比缩放。
+
+`LoadTexture(asset)` 默认使用 `TextureScale::kConfigured`：跟随配置后的显示比例；未配置为 1:1。
+显式参数覆盖默认值：
+
+| 参数 | 加载比例 |
+| --- | --- |
+| `kConfigured`（默认）、`kDisplay` | 当前显示配置比例 |
+| `kNative` | 1:1，保留素材像素 |
+| `kSurface`（兼容入口） | 当前显示比例 / 活动 DirectSurface 的 upscale；无 Surface 时失败 |
+| `TextureLoadOptions::Ratio(n, d)` | 显式 n/d，与显示配置无关 |
+
+比例按原始素材尺寸应用，不是把每张图拉伸为屏幕大小；大于 1 会放大，不自动根据剩余内存调整。
+显式比例必须非零，约分后的分子和分母分别不超过 4096（现有 Host 契约）。
+Texture::width()/height() 和 Scene Sprite/SpriteBatch 的 source rect 始终使用原始素材坐标；
+SDK 转换到实际存储像素，不要再次手工乘加载比例。
+
+#### DirectSurface
+
+DirectSurface 缓冲区始终为物理屏幕尺寸 / upscale，绘制命令和直接像素写入都使用缓冲区像素。
+ConfigureDisplay 不改变缓冲区，不自动转换 Raster 命令。创建 Surface 也不改变默认纹理加载比例。
+需要按 Surface 尺寸加载时，可使用显式比例，不需要 mapping 对象：
+
+```cpp
+auto surface = app.renderer().CreateHostSurface(2U, 2U).value();
+auto scale = micropixel::TextureLoadOptions::ForShortEdge(
+    320U, surface.buffer_width(), surface.buffer_height());
+auto texture = app.resources().LoadTexture(atlas_asset, scale).value();
+```
+
+这里 320 是素材设计画布的短边，不是 atlas 尺寸。480×480 屏幕、upscale=2 对应 240×240
+缓冲区，加载比例为 240/320。素材已经按缓冲区像素制作时显式使用 kNative。
+upscale 必须整除屏幕物理宽高。重建 Surface 不会重新加载纹理。
+
+如果配置了逻辑画布，Touch 仍是应用逻辑坐标；应用需转换为缓冲区坐标后用于 Raster 交互。
+SDK 提供 `surface.ToBuffer(Point/Rect)` 与 `surface.ToLogical(Point)`，使用同一份显示配置，
+包含留边、裁切偏移和 upscale，不必手写换算。无效 Surface 返回空几何；转换不自动裁剪坐标。
+纹理可传 `surface.texture_scale()`，其比例来自当前显示配置再除以 upscale；无效 Surface 返回无效比例，加载失败。
+这些接口不创建额外 mapping 对象。
+参考 [Maze Break](../apps/maze-evil/maze_break_app.cpp) 和 [Tomb Explorer](../apps/tomb-explorer/main.cpp)。
+
+#### 从 0.18 迁移
+
+已发布 Bundle 包含旧 Guest Runtime，不受新 SDK 默认值影响，ABI 不变。重新编译源码时：
+
+- 使用旧 720 设计画布的 Scene 应用，在初始化时明确配置 `{720, 720}` 与 `kExpand`。
+- 原有 kDisplay 调用可省略，使用配置后的默认加载；需要原图的调用显式传 kNative。
+- Surface 应用检查输入和绘制的转换，避免把旧 720 换算再叠加到原生坐标上。
+- manifest 的显示兼容性声明是安装筛选契约，不设置运行时逻辑画布；现有筛选语义不变。
+
+参考 [Snake](../apps/snake/snake_app.cpp)、[Tilt 原生素材选择](../apps/tilt/tilt_app.cpp) 和
+[Resource/Atlas Demo](../apps/sdk-demo/pages/resource_atlas_demo.cpp)。720 现在是这些示例的设计选择。
+
+#### PNG 缩放与内存峰值
+
+当前 Host 先完整解码 PNG，再分配目标纹理并缩放；虽然 libpng 逐行读取和解码，解码结果仍存入
+完整原图缓冲区。因此设置 `kDisplay` 或 `kSurface` 可以减少缩小后纹理的常驻内存，
+**不能消除完整原图的解码峰值**。缩放期间原图和目标缓冲区还会同时存在。
+
+透明 PNG 的完整输出通常需要 `width × height × 4` 字节；宽高都减半后，最终像素数据约为原来的
+四分之一，另需考虑 stride 对齐和解码工作区。压缩包大小和 Flash 剩余空间不代表可用的解码内存。
+当前版本应通过拆小图集、按场景加载和及时释放资源控制峰值；边解码边缩放尚未实现，不能作为现有保证。
+
+#### 动态纹理与生命周期
+
 `resources.CreateDynamicTexture(size, format, pixels, pitch)` 返回同一种 `Result<Texture>`。
 `texture.Update(rect, pixels, pitch)` 准备完整的新像素版本，下一次 Present 生效；失败保留旧像素。
 已有节点和材质引用自动跟随更新，不需要每次重新绑定。普通素材 Texture 的 Update 返回 Unsupported。
@@ -243,7 +333,8 @@ if (!plane.Draw(list)) {
 `RowExtent()` 返回含端点的裁剪后像素范围。Plane 不维护 Z-buffer。
 Span 的纹理坐标和步进使用有符号 16.16，整数部分表示重复 tile，小数映射到纹理尺寸。
 
-先创建 DirectSurface，再用 `TextureScale::kSurface` 加载适配纹理；surface 重建不会自动重载纹理。
+先创建 DirectSurface，再用 `surface.texture_scale()` 加载跟随显示配置及 Surface 分辨率的纹理；
+surface 重建不会自动重载纹理。
 它不把任意素材拉伸到整个 buffer。源和目标尺寸相同可避免缩放采样。
 P4/S31 可将连续、不透明、同字节序的 RGB565 Image 合批交给 DMA2D：裁剪后宽至少 32 像素、
 面积至少 4096 像素，每批最多 32 块。执行顺序不变，硬件失败则由 CPU 重画；S3 使用 CPU。

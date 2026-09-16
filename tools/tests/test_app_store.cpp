@@ -864,7 +864,81 @@ void TestSystemFontFiles() {
           "unknown files retain normal catalog validation");
 }
 
+void TestStreamingInstall() {
+    using namespace micropixel::runtime;
+    FakeStore nor(kNorCapacity), nand(kNandCapacity, false, 2U);
+    AppStore store(nor, &nand);
+    InstalledAppCatalog catalog{};
+    Check(store.LoadCatalog(catalog).has_value(), "mount streaming destination");
+    const auto old = MakeBundle("stream", 0x21U);
+    const auto replacement = MakeBundle("stream", 0x22U);
+    Check(store.Install(Request(old, "stream")).has_value(), "install baseline");
+    const auto original_hash = Hash(old);
+    const auto check_old = [&] {
+        std::array<uint8_t, 32U> actual{};
+        Check(nand.GetFileSha256("stream", actual.data()) == BUNDLEFS_OK && actual == original_hash,
+              "failed streaming replacement retains old digest");
+        Check(!nand.writer_active, "failed streaming replacement releases writer");
+    };
+    const auto begin = [&] { Check(store.BeginAppInstall("stream", replacement.size()).has_value(), "begin stream"); };
+    const auto write = [&] {
+        for (size_t offset = 0; offset < replacement.size();) {
+            const auto count = std::min<size_t>(3072, replacement.size() - offset);
+            Check(store.WriteAppInstall(offset, {replacement.data() + offset, count}).has_value(),
+                  "write unaligned chunks");
+            offset += count;
+        }
+    };
+    begin();
+    Check(!store.BeginAppInstall("another", replacement.size()), "reject overlapping transaction");
+    Check(!store.UninstallApp("stream"), "cannot remove committed version during a stream");
+    Check(!store.FormatExternalStore(), "cannot format during a stream");
+    Check(!store.Install(Request(old, "stream")), "memory install cannot replace an active streaming transaction");
+    Check(!store.WriteAppInstall(1, {replacement.data(), 16}), "reject out-of-order chunk");
+    Check(store.WriteAppInstall(0, {replacement.data(), 16}).has_value(), "write partial download");
+    auto request = Request(replacement, "stream");
+    request.data = nullptr;
+    Check(!store.Install(request), "reject truncated download");
+    check_old();
+    begin();
+    store.AbortAppInstall();
+    check_old();
+    begin();
+    nand.fail_next_write = true;
+    Check(!store.WriteAppInstall(0, {replacement.data(), 16}), "write error aborts transaction");
+    check_old();
+    begin();
+    write();
+    request.expected_sha256[0] ^= 1U;
+    Check(store.Install(request).error() == AppStoreError::kHashMismatch, "reject bad whole-file hash");
+    check_old();
+    request.expected_sha256 = Hash(replacement);
+    begin();
+    write();
+    request.expected_version = "999.0.0";
+    Check(!store.Install(request), "reject wrong signed version");
+    check_old();
+    request.expected_version = nullptr;
+    begin();
+    write();
+    nand.fail_next_commit = true;
+    Check(!store.Install(request), "commit failure aborts replacement");
+    check_old();
+    begin();
+    write();
+    Check(store.Install(request).has_value(), "complete stream commits from non-mappable NAND");
+    Check(!nand.writer_active && nor.file_count == 0, "stream leaves no staging or NOR copy");
+    const auto incompatible = MakeBundle("stream", 0x23U, kOtherTarget);
+    Check(store.BeginAppInstall("stream", incompatible.size()).has_value(), "begin wrong target");
+    Check(store.WriteAppInstall(0, incompatible).has_value(), "stage wrong target");
+    auto bad_request = Request(incompatible, "stream");
+    bad_request.data = nullptr;
+    Check(store.Install(bad_request).error() == AppStoreError::kIncompatibleAotTarget, "stream validates AOT target");
+    Check(!nand.writer_active, "target rejection aborts transaction");
+}
+
 int main() {
+    TestStreamingInstall();
     TestSystemFontFiles();
     TestEmptyInstallUpdateAndRemove();
     TestReplacementRetainsOldVersionWhenFull();

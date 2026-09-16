@@ -38,6 +38,38 @@ int32_t OpenResourceService() {
 
 namespace micropixel {
 
+Result<void> Renderer::ConfigureDisplay(const DisplayConfiguration& configuration) const {
+    return runtime::ConfigureDisplayContext(configuration);
+}
+
+Point DirectSurface::ToBuffer(Point logical) const {
+    if (!valid()) return {};
+    const auto& display = LoadDisplayContext();
+    const auto physical = detail::MapSceneRect(display, logical.x, logical.y, 0, 0);
+    return {ScaleCoordinate(physical.x, buffer_width_, width_), ScaleCoordinate(physical.y, buffer_height_, height_)};
+}
+
+Rect DirectSurface::ToBuffer(Rect logical) const {
+    if (!valid()) return {};
+    const auto& display = LoadDisplayContext();
+    const auto physical = detail::MapSceneRect(display, logical.x, logical.y, logical.width, logical.height);
+    const auto buffer = detail::MapRect(physical.x, physical.y, physical.width, physical.height, width_, height_,
+                                        buffer_width_, buffer_height_);
+    return {buffer.x, buffer.y, buffer.width, buffer.height};
+}
+
+Point DirectSurface::ToLogical(Point buffer) const {
+    if (!valid()) return {};
+    return runtime::ToLogical(
+        {ScaleCoordinate(buffer.x, width_, buffer_width_), ScaleCoordinate(buffer.y, height_, buffer_height_)});
+}
+
+TextureLoadOptions DirectSurface::texture_scale() const {
+    if (!valid() || buffer_width_ == 0U) return {0U, 0U};
+    const auto& display = LoadDisplayContext();
+    return {display.scale_numerator, display.scale_denominator * (width_ / buffer_width_)};
+}
+
 RendererInfo Renderer::info() const {
     const micropixel_graphics_info_t& raw = LoadPhysicalGraphicsInfo();
     const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
@@ -102,9 +134,10 @@ Result<TextMetrics> MeasureTextWithHandle(const char* text, uint32_t font_handle
     }
     const auto& display = LoadDisplayContext();
     return TextMetrics{
-        static_cast<uint32_t>(ScaleCoordinate(response.width, display.logical_width, display.physical_width)),
-        static_cast<uint32_t>(ScaleCoordinate(response.height, display.logical_height, display.physical_height)),
-        ScaleCoordinate(response.baseline, display.logical_height, display.physical_height)};
+        static_cast<uint32_t>(ScaleCoordinate(response.width, display.logical_width, detail::ViewportWidth(display))),
+        static_cast<uint32_t>(
+            ScaleCoordinate(response.height, display.logical_height, detail::ViewportHeight(display))),
+        ScaleCoordinate(response.baseline, display.logical_height, detail::ViewportHeight(display))};
 }
 
 }  // namespace
@@ -309,28 +342,48 @@ Result<void> Texture::Update(Rect dirty, std::span<const uint8_t> pixels, uint32
 }
 
 Result<Texture> Resources::LoadTexture(AssetId asset, TextureScale scale) const {
-    if (scale != TextureScale::kNative && scale != TextureScale::kDisplay && scale != TextureScale::kSurface) {
+    if (scale != TextureScale::kConfigured && scale != TextureScale::kNative && scale != TextureScale::kDisplay &&
+        scale != TextureScale::kSurface) {
         return unexpected(Error{ErrorCode::kInvalidArgument});
     }
     const uint32_t surface_upscale = scale == TextureScale::kSurface ? runtime::ActiveSurfaceUpscale() : 1U;
     if (surface_upscale == 0U) {
         return unexpected(Error{ErrorCode::kInvalidArgument});
     }
-    int32_t status = OpenResourceService();
-    if (status != MICROPIXEL_STATUS_OK) {
-        return unexpected(ErrorFromStatus(status));
+    const auto& display = LoadDisplayContext();
+    return LoadTexture(asset, TextureLoadOptions{
+                                  .scale_numerator = scale == TextureScale::kNative ? 1U : display.scale_numerator,
+                                  .scale_denominator =
+                                      scale == TextureScale::kNative ? 1U : display.scale_denominator * surface_upscale,
+                              });
+}
+
+Result<Texture> Resources::LoadTexture(AssetId asset, TextureLoadOptions options) const {
+    if (options.scale_numerator == 0U || options.scale_denominator == 0U) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
     }
-    const bool display_scaled = scale != TextureScale::kNative;
+    uint32_t a = options.scale_numerator;
+    uint32_t b = options.scale_denominator;
+    while (b != 0U) {
+        const uint32_t remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    options.scale_numerator /= a;
+    options.scale_denominator /= a;
+    if (options.scale_numerator > 4096U || options.scale_denominator > 4096U) {
+        return unexpected(Error{ErrorCode::kInvalidArgument});
+    }
+    // Even explicitly scaled textures freeze configuration before any resource is loaded.
+    (void)LoadDisplayContext();
+    int32_t status = OpenResourceService();
+    if (status != MICROPIXEL_STATUS_OK) return unexpected(ErrorFromStatus(status));
+    const bool display_scaled = options.scale_numerator != options.scale_denominator;
     micropixel_texture_load_request_t request{};
     request.size = sizeof(request);
     request.asset_id = asset.value();
-    request.scale_numerator = 1U;
-    request.scale_denominator = 1U;
-    if (display_scaled) {
-        const micropixel::detail::DisplayTransform& display = LoadDisplayContext();
-        request.scale_numerator = display.scale_numerator;
-        request.scale_denominator = display.scale_denominator * surface_upscale;
-    }
+    request.scale_numerator = options.scale_numerator;
+    request.scale_denominator = options.scale_denominator;
     micropixel_texture_info_t response{};
     uint32_t response_size = 0U;
     status = CallService(resource_service, MICROPIXEL_RESOURCE_METHOD_TEXTURE_LOAD, &request, sizeof(request),

@@ -37,20 +37,27 @@ LoadedArt LoadArt(micropixel::Application& app, const micropixel::RendererInfo& 
     const bool native_720 = display.physical_width() == 720U && display.physical_height() == 720U;
     if (native_480) {
         art.board_base =
-            RequireTexture(resources.LoadTexture(tilt_assets::board_base_p480), "tilt: native 480 board base failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::board_base_p480, micropixel::TextureScale::kNative),
+                           "tilt: native 480 board base failed");
         art.board_frame =
-            RequireTexture(resources.LoadTexture(tilt_assets::board_frame_p480), "tilt: native 480 board frame failed");
-        art.board_tiles = RequireTexture(resources.LoadTexture(tilt_assets::board_tiles_p480),
-                                         "tilt: native 480 board tile atlas failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::board_frame_p480, micropixel::TextureScale::kNative),
+                           "tilt: native 480 board frame failed");
+        art.board_tiles =
+            RequireTexture(resources.LoadTexture(tilt_assets::board_tiles_p480, micropixel::TextureScale::kNative),
+                           "tilt: native 480 board tile atlas failed");
         art.objects =
-            RequireTexture(resources.LoadTexture(tilt_assets::objects_p480), "tilt: native 480 object texture failed");
-        art.fans = RequireTexture(resources.LoadTexture(tilt_assets::fans_p480), "tilt: native 480 fan texture failed");
-        art.mechanics = RequireTexture(resources.LoadTexture(tilt_assets::mechanics_p480),
-                                       "tilt: native 480 mechanic texture failed");
-        art.title =
-            RequireTexture(resources.LoadTexture(tilt_assets::title_p480), "tilt: native 480 title texture failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::objects_p480, micropixel::TextureScale::kNative),
+                           "tilt: native 480 object texture failed");
+        art.fans = RequireTexture(resources.LoadTexture(tilt_assets::fans_p480, micropixel::TextureScale::kNative),
+                                  "tilt: native 480 fan texture failed");
+        art.mechanics =
+            RequireTexture(resources.LoadTexture(tilt_assets::mechanics_p480, micropixel::TextureScale::kNative),
+                           "tilt: native 480 mechanic texture failed");
+        art.title = RequireTexture(resources.LoadTexture(tilt_assets::title_p480, micropixel::TextureScale::kNative),
+                                   "tilt: native 480 title texture failed");
         art.hud_icons =
-            RequireTexture(resources.LoadTexture(tilt_assets::hud_icons_p480), "tilt: native 480 HUD texture failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::hud_icons_p480, micropixel::TextureScale::kNative),
+                           "tilt: native 480 HUD texture failed");
         art.object_frame_pixels = 64U;
         art.board_tile_frame_pixels = 64U;
         art.fan_frame_pixels = 64U;
@@ -60,20 +67,27 @@ LoadedArt LoadArt(micropixel::Application& app, const micropixel::RendererInfo& 
     }
     if (native_720) {
         art.board_base =
-            RequireTexture(resources.LoadTexture(tilt_assets::board_base_p720), "tilt: native 720 board base failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::board_base_p720, micropixel::TextureScale::kNative),
+                           "tilt: native 720 board base failed");
         art.board_frame =
-            RequireTexture(resources.LoadTexture(tilt_assets::board_frame_p720), "tilt: native 720 board frame failed");
-        art.board_tiles = RequireTexture(resources.LoadTexture(tilt_assets::board_tiles_p720),
-                                         "tilt: native 720 board tile atlas failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::board_frame_p720, micropixel::TextureScale::kNative),
+                           "tilt: native 720 board frame failed");
+        art.board_tiles =
+            RequireTexture(resources.LoadTexture(tilt_assets::board_tiles_p720, micropixel::TextureScale::kNative),
+                           "tilt: native 720 board tile atlas failed");
         art.objects =
-            RequireTexture(resources.LoadTexture(tilt_assets::objects_p720), "tilt: native 720 object texture failed");
-        art.fans = RequireTexture(resources.LoadTexture(tilt_assets::fans_p720), "tilt: native 720 fan texture failed");
-        art.mechanics = RequireTexture(resources.LoadTexture(tilt_assets::mechanics_p720),
-                                       "tilt: native 720 mechanic texture failed");
-        art.title =
-            RequireTexture(resources.LoadTexture(tilt_assets::title_p720), "tilt: native 720 title texture failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::objects_p720, micropixel::TextureScale::kNative),
+                           "tilt: native 720 object texture failed");
+        art.fans = RequireTexture(resources.LoadTexture(tilt_assets::fans_p720, micropixel::TextureScale::kNative),
+                                  "tilt: native 720 fan texture failed");
+        art.mechanics =
+            RequireTexture(resources.LoadTexture(tilt_assets::mechanics_p720, micropixel::TextureScale::kNative),
+                           "tilt: native 720 mechanic texture failed");
+        art.title = RequireTexture(resources.LoadTexture(tilt_assets::title_p720, micropixel::TextureScale::kNative),
+                                   "tilt: native 720 title texture failed");
         art.hud_icons =
-            RequireTexture(resources.LoadTexture(tilt_assets::hud_icons_p720), "tilt: native 720 HUD texture failed");
+            RequireTexture(resources.LoadTexture(tilt_assets::hud_icons_p720, micropixel::TextureScale::kNative),
+                           "tilt: native 720 HUD texture failed");
         art.object_frame_pixels = 96U;
         art.board_tile_frame_pixels = 96U;
         art.fan_frame_pixels = 96U;
@@ -83,26 +97,19 @@ LoadedArt LoadArt(micropixel::Application& app, const micropixel::RendererInfo& 
     }
     app.log().Info("tilt: no native art profile; adapting 720 assets");
     art.board_base =
-        RequireTexture(resources.LoadTexture(tilt_assets::board_base_p720, micropixel::TextureScale::kDisplay),
-                       "tilt: adaptive board base failed");
+        RequireTexture(resources.LoadTexture(tilt_assets::board_base_p720), "tilt: adaptive board base failed");
     art.board_frame =
-        RequireTexture(resources.LoadTexture(tilt_assets::board_frame_p720, micropixel::TextureScale::kDisplay),
-                       "tilt: adaptive board frame failed");
+        RequireTexture(resources.LoadTexture(tilt_assets::board_frame_p720), "tilt: adaptive board frame failed");
     art.board_tiles =
-        RequireTexture(resources.LoadTexture(tilt_assets::board_tiles_p720, micropixel::TextureScale::kDisplay),
-                       "tilt: adaptive board tile atlas failed");
-    art.objects = RequireTexture(resources.LoadTexture(tilt_assets::objects_p720, micropixel::TextureScale::kDisplay),
-                                 "tilt: adaptive object texture failed");
-    art.fans = RequireTexture(resources.LoadTexture(tilt_assets::fans_p720, micropixel::TextureScale::kDisplay),
-                              "tilt: adaptive fan texture failed");
+        RequireTexture(resources.LoadTexture(tilt_assets::board_tiles_p720), "tilt: adaptive board tile atlas failed");
+    art.objects =
+        RequireTexture(resources.LoadTexture(tilt_assets::objects_p720), "tilt: adaptive object texture failed");
+    art.fans = RequireTexture(resources.LoadTexture(tilt_assets::fans_p720), "tilt: adaptive fan texture failed");
     art.mechanics =
-        RequireTexture(resources.LoadTexture(tilt_assets::mechanics_p720, micropixel::TextureScale::kDisplay),
-                       "tilt: adaptive mechanic texture failed");
-    art.title = RequireTexture(resources.LoadTexture(tilt_assets::title_p720, micropixel::TextureScale::kDisplay),
-                               "tilt: adaptive title texture failed");
+        RequireTexture(resources.LoadTexture(tilt_assets::mechanics_p720), "tilt: adaptive mechanic texture failed");
+    art.title = RequireTexture(resources.LoadTexture(tilt_assets::title_p720), "tilt: adaptive title texture failed");
     art.hud_icons =
-        RequireTexture(resources.LoadTexture(tilt_assets::hud_icons_p720, micropixel::TextureScale::kDisplay),
-                       "tilt: adaptive HUD texture failed");
+        RequireTexture(resources.LoadTexture(tilt_assets::hud_icons_p720), "tilt: adaptive HUD texture failed");
     art.object_frame_pixels = 96U;
     art.board_tile_frame_pixels = 96U;
     art.fan_frame_pixels = 96U;
@@ -170,6 +177,9 @@ ProgressData ReadProgress(micropixel::KVStore storage) {
 
 int TiltAppMain() {
     micropixel::Application app;
+    app.renderer()
+        .ConfigureDisplay({.logical_size = {720U, 720U}, .scale_mode = micropixel::DisplayScaleMode::kExpand})
+        .value();
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
     micropixel::Assert(display.width() >= kScreenWidth && display.height() >= kScreenHeight,

@@ -13,6 +13,7 @@ micropixel_graphics_info_t cached_graphics_info{};
 bool graphics_info_loaded{};
 micropixel::detail::DisplayTransform cached_display_context{};
 bool display_context_loaded{};
+bool display_context_configured{};
 micropixel_input_info_t cached_input_info{};
 bool input_info_loaded{};
 }  // namespace
@@ -66,7 +67,9 @@ const GraphicsLimits& LoadGraphicsLimits() {
 const micropixel::detail::DisplayTransform& LoadDisplayContext() {
     const micropixel_graphics_info_t& physical = LoadPhysicalGraphicsInfo();
     if (!display_context_loaded) {
-        cached_display_context = micropixel::detail::MakeDisplayTransform(physical.width, physical.height);
+        if (!display_context_configured) {
+            cached_display_context = micropixel::detail::MakeDisplayTransform(physical.width, physical.height);
+        }
         if (cached_display_context.logical_width == 0U || cached_display_context.logical_height == 0U) {
             // A display with no usable dimensions cannot define the shared
             // logical coordinate space exposed through RendererInfo.
@@ -77,14 +80,24 @@ const micropixel::detail::DisplayTransform& LoadDisplayContext() {
     return cached_display_context;
 }
 
+Result<void> ConfigureDisplayContext(const DisplayConfiguration& configuration) {
+    if (display_context_loaded) return unexpected(Error{ErrorCode::kInvalidState});
+    const auto& physical = LoadPhysicalGraphicsInfo();
+    const auto transform = detail::MakeDisplayTransform(physical.width, physical.height, configuration);
+    if (transform.logical_width == 0U) return unexpected(Error{ErrorCode::kInvalidArgument});
+    cached_display_context = transform;
+    display_context_configured = true;
+    return {};
+}
+
 int32_t ScaleCoordinate(int32_t value, uint32_t numerator, uint32_t denominator) {
     return micropixel::detail::ScaleCoordinate(value, numerator, denominator);
 }
 
 micropixel::Point ToLogical(micropixel::Point point) {
     const auto& context = LoadDisplayContext();
-    return {ScaleCoordinate(point.x - context.offset_x, context.logical_width, context.physical_width),
-            ScaleCoordinate(point.y - context.offset_y, context.logical_height, context.physical_height)};
+    return {ScaleCoordinate(point.x - context.offset_x, context.logical_width, detail::ViewportWidth(context)),
+            ScaleCoordinate(point.y - context.offset_y, context.logical_height, detail::ViewportHeight(context))};
 }
 
 const micropixel_input_info_t& LoadInputInfo() {

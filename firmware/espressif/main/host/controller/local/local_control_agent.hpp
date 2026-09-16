@@ -46,6 +46,7 @@ class LocalControlAgent final {
     };
 
     struct InstallSession final {
+        uint32_t install_token{};
         uint8_t* data{};
         size_t size{};
         size_t received{};

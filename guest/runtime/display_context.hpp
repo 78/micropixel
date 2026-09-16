@@ -5,6 +5,7 @@
 #include "runtime/graphics_limits.hpp"
 #include "runtime/service_binding.hpp"
 #include "sdk/geometry.hpp"
+#include "sdk/result.hpp"
 
 namespace micropixel::runtime {
 
@@ -12,6 +13,7 @@ namespace micropixel::runtime {
 ServiceCache& GraphicsService();
 const micropixel_graphics_info_t& LoadPhysicalGraphicsInfo();
 const detail::DisplayTransform& LoadDisplayContext();
+Result<void> ConfigureDisplayContext(const DisplayConfiguration& configuration);
 const micropixel_input_info_t& LoadInputInfo();
 Point ToLogical(Point point);
 int32_t ScaleCoordinate(int32_t value, uint32_t numerator, uint32_t denominator);

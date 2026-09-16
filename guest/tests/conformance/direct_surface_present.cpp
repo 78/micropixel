@@ -45,6 +45,9 @@ bool FillFrame(bool raster_supported, micropixel::HostSurface& surface, uint32_t
 
 int main() {
     micropixel::Application app;
+    if (!app.renderer().ConfigureDisplay(
+            {.logical_size = {320U, 240U}, .scale_mode = micropixel::DisplayScaleMode::kAspectFit}))
+        return 47;
     const micropixel::RendererInfo info = app.renderer().info();
 
     // Guest-written buffers need a pinned linear memory, which this Bundle
@@ -66,6 +69,11 @@ int main() {
         surface.rgb565_byte_swapped() != info.rgb565_byte_swapped()) {
         return 31;
     }
+    const auto center = surface.ToBuffer(micropixel::Point{160, 120});
+    if (center.x != static_cast<int32_t>(surface.buffer_width() / 2U) ||
+        center.y != static_cast<int32_t>(surface.buffer_height() / 2U) ||
+        surface.ToLogical(center) != micropixel::Point{160, 120} || app.renderer().ConfigureDisplay({}).has_value())
+        return 48;
     for (uint32_t index = 0U; index < kBufferCount; ++index) {
         if (surface.Busy(index)) {
             return 33;

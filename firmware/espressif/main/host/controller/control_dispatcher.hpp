@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <span>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -71,6 +72,13 @@ class ControlDispatcher final {
     void EndInstallActivity(ControlSource source, const char* command_id, const char* error = nullptr);
     void CopyInstallActivity(InstallActivity& activity) const;
 
+    static constexpr size_t kInstallChunkBytes = 16U * 1024U;
+    // One owned slot. Producer waits for received_bytes before reusing it;
+    // only the supervisor touches the store. Pending bytes survive cancellation.
+    [[nodiscard]] bool WriteInstallChunk(uint32_t token, size_t offset, std::span<const uint8_t> bytes);
+    [[nodiscard]] bool QueueInstallChunk(uint32_t token, size_t offset, std::span<const uint8_t> bytes);
+    [[nodiscard]] bool PollInstallChunk(uint32_t& token, size_t& offset, std::span<const uint8_t>& bytes);
+    void CompleteInstallChunk(uint32_t token, size_t received, const char* error);
     void SetCommandReadySink(CommandReadySink sink, void* context);
     void SetRemoteResultReadySink(ResultReadySink sink, void* context);
     void SetLocalResultSink(LocalResultSink sink, void* context);
@@ -86,6 +94,12 @@ class ControlDispatcher final {
     mutable std::mutex snapshot_mutex_;
     HostSnapshot* snapshot_{};
     InstallActivity install_activity_{};
+    uint8_t* install_chunk_{};
+    bool install_chunk_pending_{};
+    uint32_t install_chunk_token_{};
+    size_t install_chunk_offset_{};
+    size_t install_chunk_size_{};
+    uint32_t next_install_token_{};
     StoreSnapshot store_snapshot_{};
     std::array<StoreAppUpdate, runtime::kMaxInstalledPackages> store_updates_{};
     uint32_t store_update_count_{};

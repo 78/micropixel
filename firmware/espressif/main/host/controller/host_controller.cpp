@@ -2175,7 +2175,7 @@ class ActiveHost final {
 
     [[nodiscard]] bool CanLaunch() const {
         const AppLifecycleState lifecycle = app_controller_.state();
-        return catalog_.count != 0U &&
+        return staged_install_token_ == 0U && catalog_.count != 0U &&
                (lifecycle == AppLifecycleState::kNotRunning || lifecycle == AppLifecycleState::kSuspended);
     }
 
@@ -2530,6 +2530,7 @@ class ActiveHost final {
             .expected_version = command.store_verified ? command.store_version.data() : nullptr,
         };
         auto install_result = app_store_.Install(request, effective_locale_.data());
+        staged_install_token_ = 0U;
         heap_caps_free(command.package_data);
         if (!install_result) {
             return AppStoreErrorText(install_result.error());
@@ -2567,6 +2568,18 @@ class ActiveHost final {
                 SubmitRemoteResult(result, false, "automatic_install_state_changed");
                 return false;
             }
+        }
+        control::InstallActivity activity{};
+        controls_.CopyInstallActivity(activity);
+        if (command.package_data == nullptr &&
+            (!activity.active || command.install_token == 0U || command.install_token != staged_install_token_ ||
+             command.install_token != activity.install_token || command.source != activity.source ||
+             command.command_id != activity.command_id || command.app_id != activity.app_id ||
+             command.package_size != activity.package_size || command.package_sha256 != activity.package_sha256 ||
+             activity.received_bytes != activity.package_size ||
+             activity.preflight != control::InstallPreflight::kReady)) {
+            SubmitRemoteResult(result, false, "install_cancelled");
+            return false;
         }
         shell_.PauseHallCoverLoading();
         bool changed = false;
@@ -2770,18 +2783,50 @@ class ActiveHost final {
         controls_.UpdateStoreSnapshot(snapshot);
     }
 
+    uint32_t staged_install_token_{};
+
     void ProcessInstallPreflight() {
         control::InstallActivity activity{};
         controls_.CopyInstallActivity(activity);
-        if (!activity.active || activity.preflight != control::InstallPreflight::kPending) return;
-        const auto capacity =
-            app_store_.CheckAppInstallCapacity(activity.app_id.data(), activity.package_size, activity.package_sha256);
-        controls_.CompleteInstallPreflight(activity.source, activity.command_id.data(),
-                                           capacity ? capacity->required_bytes : 0U,
-                                           capacity ? capacity->free_bytes : 0U,
-                                           !capacity                ? AppStoreErrorText(capacity.error())
-                                           : capacity->sufficient() ? nullptr
-                                                                    : "app_store_full");
+        if (staged_install_token_ != 0U && (!activity.active || activity.install_token != staged_install_token_ ||
+                                            activity.preflight == control::InstallPreflight::kFailed)) {
+            app_store_.AbortAppInstall();
+            staged_install_token_ = 0U;
+            shell_.ResumeHallCoverLoading();
+        }
+        if (activity.active && activity.preflight == control::InstallPreflight::kPending) {
+            const auto capacity = app_store_.CheckAppInstallCapacity(activity.app_id.data(), activity.package_size,
+                                                                     activity.package_sha256, false);
+            const char* error = !capacity ? AppStoreErrorText(capacity.error()) : nullptr;
+            if (!error && !capacity->sufficient()) error = "app_store_full";
+            if (!error && app_controller_.state() != AppLifecycleState::kNotRunning)
+                error = "stop_active_app_before_install";
+            if (!error) {
+                shell_.PauseHallCoverLoading();
+                auto begun = app_store_.BeginAppInstall(activity.app_id.data(), activity.package_size);
+                if (!begun) {
+                    error = AppStoreErrorText(begun.error());
+                    shell_.ResumeHallCoverLoading();
+                } else
+                    staged_install_token_ = activity.install_token;
+            }
+            controls_.CompleteInstallPreflight(activity.source, activity.command_id.data(),
+                                               capacity ? capacity->required_bytes : 0U,
+                                               capacity ? capacity->free_bytes : 0U, error);
+        }
+        uint32_t token = 0U;
+        size_t offset = 0U;
+        std::span<const uint8_t> bytes;
+        if (controls_.PollInstallChunk(token, offset, bytes)) {
+            controls_.CopyInstallActivity(activity);
+            const char* error = "install_cancelled";
+            if (activity.active && activity.install_token == token && staged_install_token_ == token &&
+                activity.preflight == control::InstallPreflight::kReady) {
+                auto written = app_store_.WriteAppInstall(offset, bytes);
+                error = written ? nullptr : AppStoreErrorText(written.error());
+            }
+            controls_.CompleteInstallChunk(token, offset + bytes.size(), error);
+        }
     }
 
     [[nodiscard]] bool ProcessRemoteCommands() {

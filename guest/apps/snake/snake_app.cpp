@@ -19,7 +19,7 @@ uint32_t ReadU32OrDefault(micropixel::KVStore storage, const char* key, uint32_t
 }
 
 micropixel::Texture LoadPackageTexture(micropixel::Application& app, micropixel::AssetId asset) {
-    auto result = app.resources().LoadTexture(asset, micropixel::TextureScale::kDisplay);
+    auto result = app.resources().LoadTexture(asset);
     micropixel::Assert(result.has_value(), "snake: critical texture resource failed");
     return static_cast<micropixel::Texture&&>(result.value());
 }
@@ -56,6 +56,9 @@ bool HasLaunchFlag(const micropixel::LaunchArguments& args, const char* name) {
 
 int SnakeAppMain() {
     micropixel::Application app;
+    app.renderer()
+        .ConfigureDisplay({.logical_size = {720U, 720U}, .scale_mode = micropixel::DisplayScaleMode::kExpand})
+        .value();
     micropixel::Renderer renderer = app.renderer();
     micropixel::RendererInfo display = renderer.info();
     micropixel::Assert(display.width() >= static_cast<uint32_t>(kScreenWidth) &&

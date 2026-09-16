@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <span>
 #include <string_view>
 
 #include "runtime/bundle/aot_package.hpp"
@@ -75,6 +76,7 @@ class AppStore final {
           external_store_(external_store),
           external_state_(external_store != nullptr ? ExternalStorageState::kUnavailable
                                                     : ExternalStorageState::kAbsent) {}
+    ~AppStore() { AbortAppInstall(); }
     AppStore(const AppStore&) = delete;
     AppStore& operator=(const AppStore&) = delete;
 
@@ -100,19 +102,32 @@ class AppStore final {
     [[nodiscard]] std::expected<void, AppStoreError> LoadCatalog(InstalledAppCatalog& catalog_out,
                                                                  std::string_view effective_locale = "en");
     // Host supervisor only. Queries the current download destination without
-    // allocating or writing; an identical installed digest needs no new space.
+    // allocating or writing. Streaming callers disable the identical-digest shortcut
+    // because they reserve replacement storage before receiving any bytes.
     [[nodiscard]] std::expected<AppInstallCapacity, AppStoreError> CheckAppInstallCapacity(
-        const char* app_id, size_t size, const std::array<uint8_t, 32U>& sha256);
+        const char* app_id, size_t size, const std::array<uint8_t, 32U>& sha256, bool allow_unchanged = true);
     // Replacement retains the old Bundle until the new Catalog commits. Requires
     // enough free space for the new Bundle; failure leaves the old App installed.
     // The caller must ensure no AppSession is running.
     [[nodiscard]] std::expected<AppInstallResult, AppStoreError> Install(const AppInstallRequest& request,
                                                                          std::string_view effective_locale = "en");
+    // Supervisor-owned streaming transaction. Install with data == nullptr finalizes
+    // the staged App. Every failure/abort retains the previous committed version.
+    [[nodiscard]] std::expected<void, AppStoreError> BeginAppInstall(const char* app_id, size_t size);
+    [[nodiscard]] std::expected<void, AppStoreError> WriteAppInstall(size_t offset, std::span<const uint8_t> bytes);
+    void AbortAppInstall();
     [[nodiscard]] std::expected<void, AppStoreError> UninstallApp(const char* app_id);
     [[nodiscard]] std::expected<void, AppStoreError> UninstallComponent(const char* component_id,
                                                                         std::string_view active_component_id = {});
 
    private:
+    [[nodiscard]] std::expected<AppInstallResult, AppStoreError> InstallImpl(const AppInstallRequest& request,
+                                                                             std::string_view effective_locale);
+    BundleStore* staging_store_{};
+    bundlefs_writer_t staging_writer_{};
+    size_t staging_size_{};
+    size_t staging_received_{};
+    std::array<char, MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH + 1U> staging_app_id_{};
     struct LocatedFile final {
         BundleStore* store{};
         bundlefs_file_t file{};

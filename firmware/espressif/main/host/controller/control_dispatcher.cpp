@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "esp_heap_caps.h"
+#include "freertos/task.h"
 
 namespace micropixel::firmware::control {
 namespace {
@@ -24,6 +25,7 @@ void SetSink(std::atomic<Sink>& destination, std::atomic<void*>& destination_con
 
 ControlDispatcher::ControlDispatcher(GuestLogLifecycleSink guest_log_lifecycle_sink, void* guest_log_lifecycle_context)
     : guest_log_lifecycle_sink_(guest_log_lifecycle_sink), guest_log_lifecycle_context_(guest_log_lifecycle_context) {
+    install_chunk_ = static_cast<uint8_t*>(heap_caps_malloc(kInstallChunkBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     snapshot_ =
         static_cast<HostSnapshot*>(heap_caps_calloc(1U, sizeof(HostSnapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     host_command_queue_bytes_ = static_cast<uint8_t*>(
@@ -60,10 +62,12 @@ ControlDispatcher::~ControlDispatcher() {
     heap_caps_free(host_command_queue_bytes_);
     heap_caps_free(remote_result_queue_bytes_);
     heap_caps_free(snapshot_);
+    heap_caps_free(install_chunk_);
 }
 
 bool ControlDispatcher::valid() const {
-    return snapshot_ != nullptr && host_command_queue_ != nullptr && remote_result_queue_ != nullptr;
+    return install_chunk_ != nullptr && snapshot_ != nullptr && host_command_queue_ != nullptr &&
+           remote_result_queue_ != nullptr;
 }
 
 bool ControlDispatcher::QueueCommand(const HostCommand& command, bool local) {
@@ -240,13 +244,15 @@ bool ControlDispatcher::BeginInstallActivity(ControlSource source, const char* c
     }
     {
         std::lock_guard lock(snapshot_mutex_);
-        if (install_activity_.active) {
+        if (install_activity_.active || install_chunk_pending_) {
             return false;
         }
         const uint32_t generation = install_activity_.generation + 1U;
         install_activity_ = {};
         std::snprintf(install_activity_.command_id.data(), install_activity_.command_id.size(), "%s", command_id);
         std::snprintf(install_activity_.app_id.data(), install_activity_.app_id.size(), "%s", app_id);
+        if (++next_install_token_ == 0U) ++next_install_token_;
+        install_activity_.install_token = next_install_token_;
         install_activity_.source = source;
         install_activity_.generation = generation;
         install_activity_.active = true;
@@ -259,6 +265,61 @@ bool ControlDispatcher::BeginInstallActivity(ControlSource source, const char* c
         sink(command_ready_context_.load(std::memory_order_acquire));
     }
     return true;
+}
+
+bool ControlDispatcher::WriteInstallChunk(uint32_t token, size_t offset, std::span<const uint8_t> bytes) {
+    if (!QueueInstallChunk(token, offset, bytes)) return false;
+    const auto deadline = xTaskGetTickCount() + pdMS_TO_TICKS(30000U);
+    InstallActivity activity{};
+    for (;;) {
+        CopyInstallActivity(activity);
+        if (!activity.active || activity.install_token != token || activity.preflight != InstallPreflight::kReady)
+            return false;
+        if (activity.received_bytes == offset + bytes.size()) return true;
+        if (static_cast<int32_t>(xTaskGetTickCount() - deadline) >= 0) return false;
+        vTaskDelay(1U);
+    }
+}
+
+bool ControlDispatcher::QueueInstallChunk(uint32_t token, size_t offset, std::span<const uint8_t> bytes) {
+    {
+        std::lock_guard lock(snapshot_mutex_);
+        if (!install_chunk_ || install_chunk_pending_ || !install_activity_.active ||
+            install_activity_.install_token != token || install_activity_.preflight != InstallPreflight::kReady ||
+            offset != install_activity_.received_bytes || bytes.empty() || bytes.size() > kInstallChunkBytes ||
+            offset > install_activity_.package_size || bytes.size() > install_activity_.package_size - offset)
+            return false;
+        std::memcpy(install_chunk_, bytes.data(), bytes.size());
+        install_chunk_token_ = token;
+        install_chunk_offset_ = offset;
+        install_chunk_size_ = bytes.size();
+        install_chunk_pending_ = true;
+    }
+    const auto sink = command_ready_sink_.load(std::memory_order_acquire);
+    if (sink) sink(command_ready_context_.load(std::memory_order_acquire));
+    return true;
+}
+
+bool ControlDispatcher::PollInstallChunk(uint32_t& token, size_t& offset, std::span<const uint8_t>& bytes) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (!install_chunk_pending_) return false;
+    token = install_chunk_token_;
+    offset = install_chunk_offset_;
+    bytes = {install_chunk_, install_chunk_size_};
+    return true;
+}
+
+void ControlDispatcher::CompleteInstallChunk(uint32_t token, size_t received, const char* error) {
+    std::lock_guard lock(snapshot_mutex_);
+    if (!install_chunk_pending_ || token != install_chunk_token_) return;
+    install_chunk_pending_ = false;
+    if (!install_activity_.active || install_activity_.install_token != token) return;
+    if (error) {
+        std::snprintf(install_activity_.error.data(), install_activity_.error.size(), "%s", error);
+        install_activity_.preflight = InstallPreflight::kFailed;
+    } else {
+        install_activity_.received_bytes = received;
+    }
 }
 
 void ControlDispatcher::UpdateInstallProgress(ControlSource source, const char* command_id, uint8_t progress_percent) {

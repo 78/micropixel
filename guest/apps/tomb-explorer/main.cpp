@@ -431,6 +431,7 @@ int TombApp::Run() {
 
 int main() {
     micropixel::Application app;
+    app.renderer().ConfigureDisplay({}).value();  // Native pixels; DirectSurface remains independent.
     // Level-independent state (polygon pool, palette, character) is far larger
     // than the WAMR call stack budget; keep it on the heap.
     auto tomb = std::make_unique<tomb::TombApp>(app);

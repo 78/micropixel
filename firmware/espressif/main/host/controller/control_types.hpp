@@ -97,6 +97,8 @@ struct InstallActivity final {
     bool active{};
     InstallPreflight preflight{};
     size_t package_size{};
+    uint32_t install_token{};
+    size_t received_bytes{};
     std::array<uint8_t, 32U> package_sha256{};
     uint64_t required_bytes{};
     uint64_t free_bytes{};
@@ -126,6 +128,7 @@ struct HostCommand final {
     micropixel_system_launch_arguments_response_t launch_arguments{};
     std::array<SequenceOperation, kMaxSequenceOperations> operations{};
     uint32_t operation_count{};
+    uint32_t install_token{};
     uint8_t* package_data{};
     size_t package_size{};
     std::array<uint8_t, 32U> package_sha256{};
