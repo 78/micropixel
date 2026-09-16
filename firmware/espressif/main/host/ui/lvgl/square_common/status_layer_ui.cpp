@@ -954,7 +954,7 @@ std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host
     DrawLayerLocked(model);
     cellular_settings_page_ = model.open_cellular_settings;
     if (cellular_settings_page_) ShowCellularDialogLocked();
-    SetTransitionProgressLocked(0U);
+    SetTransitionProgressLocked(cellular_settings_page_ ? kTransitionComplete : 0U);
     action_sink_ = action_sink;
     action_context_ = action_context;
     updating_controls_ = false;

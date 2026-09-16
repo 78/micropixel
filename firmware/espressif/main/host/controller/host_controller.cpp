@@ -220,9 +220,9 @@ host_ui::HallStatusBarModel MakeHallStatusBarModel(const device::WifiSnapshot& w
 }
 
 void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog& catalog,
-                   const device::WifiSnapshot& wifi, device::Cellular& cellular, const device::BatterySnapshot& battery, host_ui::HallStatus status,
-                   const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U, bool launch_enabled = true,
-                   const std::optional<uint32_t>& suspended_index = std::nullopt,
+                   const device::WifiSnapshot& wifi, device::Cellular& cellular, const device::BatterySnapshot& battery,
+                   host_ui::HallStatus status, const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U,
+                   bool launch_enabled = true, const std::optional<uint32_t>& suspended_index = std::nullopt,
                    const host_ui::HallCoverModel* suspended_snapshot = nullptr, uint64_t transition_trigger_us = 0U,
                    bool firmware_update_available = false, const control::InstallActivity* install_activity = nullptr) {
     const bool install_active = install_activity != nullptr && install_activity->active;
@@ -1638,11 +1638,11 @@ bool RunAppManagement(host_ui::SystemShell& shell, const runtime::InstalledAppCa
 }
 
 bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device::Wifi& wifi,
-                   device::Cellular& cellular, host_ui::StatusLayerModel& status_model, const runtime::InstalledAppCatalog& catalog,
-                   host_ui::SystemSettingsStore& settings_store, remote_control::RemoteControlAgent& remote_control,
-                   bool launch_available, const AppManagementUninstallHandler* uninstall_handler,
-                   std::optional<uint32_t>& launch_request, RemoteCommandPump* command_pump,
-                   const char* effective_locale = "en") {
+                   device::Cellular& cellular, host_ui::StatusLayerModel& status_model,
+                   const runtime::InstalledAppCatalog& catalog, host_ui::SystemSettingsStore& settings_store,
+                   remote_control::RemoteControlAgent& remote_control, bool launch_available,
+                   const AppManagementUninstallHandler* uninstall_handler, std::optional<uint32_t>& launch_request,
+                   RemoteCommandPump* command_pump, const char* effective_locale = "en") {
     RefreshWifiStatus(status_model, wifi, cellular);
     struct MenuSnapshots {
         host_ui::RemoteControlModel current{};
@@ -2247,8 +2247,8 @@ class ActiveHost final {
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control_.Snapshot();
         hall_firmware_update_available_ = remote_control_snapshot.firmware_update_available;
         controls_.CopyInstallActivity(hall_install_activity_);
-        FillHallModel(hall_model_, catalog_, wifi_snapshot, cellular_, battery_.Snapshot(), hall_status_, outcome_, hall_detail_,
-                      CanLaunch(), suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
+        FillHallModel(hall_model_, catalog_, wifi_snapshot, cellular_, battery_.Snapshot(), hall_status_, outcome_,
+                      hall_detail_, CanLaunch(), suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
                       hall_firmware_update_available_, &hall_install_activity_);
     }
 
@@ -3756,8 +3756,9 @@ class ActiveHost final {
 }  // namespace
 
 HostController::HostController(device::DeviceServices& devices, runtime::AppStore& app_store, device::Battery& battery,
-                               device::Wifi& wifi, device::Cellular& cellular, device::Power& power, host_ui::SystemShell& shell,
-                               control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
+                               device::Wifi& wifi, device::Cellular& cellular, device::Power& power,
+                               host_ui::SystemShell& shell, control::ControlDispatcher& controls,
+                               logging::SystemLogBuffer& system_logs,
                                remote_control::RemoteControlAgent& remote_control,
                                work::BackgroundExecutor& background_executor)
     : devices_(devices),
@@ -3901,8 +3902,8 @@ void HostController::Run() {
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
     auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_store_, app_runtime, devices_, shell_,
-                                                   battery_, wifi_, cellular_, power_, power_state_, status_model, settings_store,
-                                                   controls_, remote_control_, locale.effective());
+                                                   battery_, wifi_, cellular_, power_, power_state_, status_model,
+                                                   settings_store, controls_, remote_control_, locale.effective());
     if (active_host == nullptr) {
         ESP_LOGE(kTag, "failed to allocate ActiveHost state");
         RunUnavailableHall(shell_, battery_, wifi_, cellular_, power_, power_state_, *catalog,

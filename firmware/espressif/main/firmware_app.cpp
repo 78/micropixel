@@ -158,8 +158,8 @@ void FirmwareApp::Run() {
         &remote_control);
     shell.BindLanguagePacks(language_packs);
 #endif
-    HostController(devices, app_store, *services.battery, *services.wifi, *services.cellular, *services.power, shell, controls, system_logs,
-                   remote_control, background_executor)
+    HostController(devices, app_store, *services.battery, *services.wifi, *services.cellular, *services.power, shell,
+                   controls, system_logs, remote_control, background_executor)
         .Run();
 }
 
