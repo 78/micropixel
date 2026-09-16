@@ -46,7 +46,8 @@ canonical RGB565 与面板线序分开处理。换字节序仍有成本，但不
 透明资源保留 BGRA8888，直接混合到 RGB565 目标；缩放和旋转避免全尺寸 RGB888 临时帧。
 资源可在打包期转为 RGB565，保留的压缩图片在加载时解码。
 
-BOX-3 当前使用 40MHz SPI、40 行 PSRAM double draw buffer，直接从 PSRAM 做 SPI DMA。
+BOX-3 当前使用 40MHz SPI、40 行内部 SRAM double draw buffer 和内部 SRAM RGB565 传输缓冲，
+禁止直接从 PSRAM 做 SPI LCD DMA。所有 ESP32-S3 板型统一采用 40 行内部 SRAM 配置。
 双缓冲让 CPU 绘制与传输重叠；整屏单缓冲会失去这种并行能力，不能仅以 flush 次数判断性能。
 提高 SPI 时钟需验证显示稳定性，不能仅凭理论带宽修改默认值。
 具体参数以 [BOX-3 defaults](../../firmware/espressif/sdkconfig.s3-box-3.defaults)和

@@ -76,16 +76,20 @@ class AppSession final {
     [[nodiscard]] const char* app_id() const;  // NOLINT(readability-identifier-naming)
 
    private:
+    struct ContextDeleter {
+        void operator()(GuestContext* context) const;
+    };
+    using ContextPtr = std::unique_ptr<GuestContext, ContextDeleter>;
+
     AppSession(device::DeviceServices& devices, AotPackage package, LoadedModule module, GuestInstance guest,
-               wasm_function_inst_t entry, std::unique_ptr<GuestContext> context,
-               std::unique_ptr<GuestContextBinding> context_binding);
+               wasm_function_inst_t entry, ContextPtr context, std::unique_ptr<GuestContextBinding> context_binding);
 
     device::DeviceServices& devices_;
     AotPackage package_;
     LoadedModule module_;
     GuestInstance guest_;
     wasm_function_inst_t entry_{};
-    std::unique_ptr<GuestContext> context_;
+    ContextPtr context_;
     std::unique_ptr<GuestContextBinding> context_binding_;
     std::atomic<bool> stop_requested_{};
 };

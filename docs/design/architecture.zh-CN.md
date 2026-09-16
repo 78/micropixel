@@ -201,6 +201,10 @@ DMA2D、LCD 和 USB 串口回调是否能访问 PSRAM 取决于驱动的中断�
 Scene 与 Raster 仅在提交或上传入口按需显式分配，失败保留原状态，绘制期间不分配。应用资源随
 Session 释放，显示缓冲按显示生命周期管理；具体资源契约见 [ABI](../../guest/abi/README.zh-CN.md)。
 
+GuestContext 的任务侧服务工作区显式分配在 PSRAM，随 Session 析构释放。S3 的 WAMR 分配从
+4 KiB 起使用 PSRAM，较小元数据保留内部 SRAM；这包括执行环境工作区，不改变原生 pthread 栈的
+内部 SRAM 放置。其他芯片保持 16 KiB 的 WAMR 分配阈值。
+
 Guest 线性内存位于 PSRAM，按需增长，当前策略上限为 8 MiB，并受最大连续块与 Host 安全水位约束。
 实例化时先取“总空闲减 Host 预留”与“最大连续空闲块”的较小值，再扣除分配开销并向下取整到 Wasm 页。
 Host 默认预留 1 MiB，可以分布在其他空闲块中，不要求与 Guest 线性内存处于同一连续块。

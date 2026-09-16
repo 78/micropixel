@@ -150,7 +150,7 @@ down/up 且 pressed/released 状态同步；v1.0 的 Demo Devices 页选择 `Ora
 
 ## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI 与 M5Stack CoreS3
 
-BOX-3 配置固定使用 40 MHz SPI、40 行 PSRAM partial buffer 和双缓冲：
+BOX-3 配置固定使用 40 MHz SPI、40 行内部 SRAM partial buffer 和双缓冲：
 
 ```sh
 bash tools/s3.sh build-host box3
@@ -163,7 +163,7 @@ bash tools/s3.sh monitor box3 /dev/cu.usbmodemXXXX --reset
 四个 Xtensa AOT App。`flash-all` 烧录 Host 和对应的 8 MiB `app_store` 内容。烧录入口会先确认端口连接的是
 ESP32-S3，默认使用原生 USB Serial/JTAG。
 
-立创 SZPI ESP32-S3 使用同一套 40 行 PSRAM 双缓冲和 Xtensa Guest 基线，板级显示、触控与传感器接线
+立创 SZPI ESP32-S3 使用同一套 40 行内部 SRAM 双缓冲和 Xtensa Guest 基线，板级显示、触控与传感器接线
 由独立 profile 提供：
 
 ```sh
@@ -172,7 +172,10 @@ bash tools/s3.sh flash-host szpi /dev/cu.usbmodemXXXX
 bash tools/s3.sh monitor szpi /dev/cu.usbmodemXXXX --reset
 ```
 
-M5Stack CoreS3 使用 Quad PSRAM、ILI9342C/FT6336U、AW88298 和 AXP2101/AW9523 板级组合：
+M5Stack CoreS3 使用 Quad PSRAM、ILI9342C/FT6336U、AW88298 和 AXP2101/AW9523 板级组合。
+显示使用 40 行内部 SRAM 双缓冲及内部 SRAM RGB565 传输缓冲，禁止直接从 PSRAM 做 SPI LCD DMA。
+这是对 Quad PSRAM DMA underflow 的板级规避；SPI LCD 的错误事务回收仍需要底层驱动正确处理，
+不能通过增大 LVGL 锁超时解决。远程安装验收需同时覆盖下载、安装写入、取消和断线后重新开机：
 
 ```sh
 bash tools/s3.sh build-host cores3

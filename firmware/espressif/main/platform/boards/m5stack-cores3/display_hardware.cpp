@@ -70,7 +70,7 @@ esp_err_t InitializeDisplayHardware(BoardHardware& hardware, esp32_s3_common::La
     io_config.trans_queue_depth = kPanelIoQueueDepth;
     io_config.lcd_cmd_bits = 8;
     io_config.lcd_param_bits = 8;
-    io_config.flags.psram_dma_direct = 1;
+    io_config.flags.psram_dma_direct = 0;
     status = esp_lcd_new_panel_io_spi(static_cast<esp_lcd_spi_bus_handle_t>(kLcdSpiHost), &io_config, &state.panel_io);
     if (status != ESP_OK) {
         ReleaseDisplayHardware(state, true);
@@ -105,7 +105,7 @@ esp_err_t InitializeDisplayHardware(BoardHardware& hardware, esp32_s3_common::La
         return status;
     }
     state.panel_name = "ILI9342C";
-    ESP_LOGI(kTag, "ILI9342C panel uses direct PSRAM SPI DMA: block=%d bytes clock=%lu MHz", transfer_bytes,
+    ESP_LOGI(kTag, "ILI9342C panel uses internal SRAM SPI DMA: block=%d bytes clock=%lu MHz", transfer_bytes,
              static_cast<unsigned long>(kLcdPixelClockHz / 1000000U));
     return ESP_OK;
 }

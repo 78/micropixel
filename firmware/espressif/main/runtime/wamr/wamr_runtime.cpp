@@ -27,7 +27,14 @@ constexpr uint32_t kGuestLinearMemoryMinimumPages = 2U;
 // Keep small, latency-sensitive WAMR metadata in internal SRAM.  Module-load
 // buffers are larger and must not depend on finding a contiguous internal
 // block after the Host UI and a previous Guest have fragmented that heap.
+#if CONFIG_IDF_TARGET_ESP32S3
+// S3 keeps three LCD buffers in SRAM. WAMR's execution-environment workspace
+// is task-only memory, not the native pthread stack; place it and medium-size
+// module tables in PSRAM while retaining small metadata in internal memory.
+constexpr unsigned kPsramAllocationThreshold = 4U * 1024U;
+#else
 constexpr unsigned kPsramAllocationThreshold = 16U * 1024U;
+#endif
 constexpr uintptr_t kWamrAllocationAlignment = 8U;
 constexpr uint32_t kAotTargetInfoSection = 0U;
 constexpr uint32_t kAotTargetInfoSize = 48U;

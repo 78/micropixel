@@ -9,6 +9,7 @@
 
 #include "conformance/guest_test_hooks.hpp"
 #include "device/device_services.hpp"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "runtime/guest_context.hpp"
@@ -46,7 +47,7 @@ AppSessionFailure MakeFailure(AppSessionError code, const micropixel_aot_package
 }  // namespace
 
 AppSession::AppSession(device::DeviceServices& devices, AotPackage package, LoadedModule module, GuestInstance guest,
-                       wasm_function_inst_t entry, std::unique_ptr<GuestContext> context,
+                       wasm_function_inst_t entry, ContextPtr context,
                        std::unique_ptr<GuestContextBinding> context_binding)
     : devices_(devices),
       package_(std::move(package)),
@@ -67,6 +68,13 @@ AppSession::AppSession(AppSession&& other) noexcept
       stop_requested_(other.stop_requested_.load(std::memory_order_acquire)) {}
 
 AppSession::~AppSession() = default;
+
+void AppSession::ContextDeleter::operator()(GuestContext* context) const {
+    if (context != nullptr) {
+        std::destroy_at(context);
+        heap_caps_free(context);
+    }
+}
 
 std::expected<AppSession, AppSessionFailure> AppSession::Create(
     device::DeviceServices& devices, work::BackgroundExecutor& background_executor,
@@ -125,8 +133,14 @@ std::expected<AppSession, AppSessionFailure> AppSession::Create(
                                            "AOT module does not export __micropixel_start"));
     }
 
-    auto context = std::unique_ptr<GuestContext>(new (std::nothrow) GuestContext(
-        package.raw(), devices, background_executor, effective_locale, launch_arguments, log_sink));
+    // Service state is only accessed by tasks. Keep its fixed workspace out of
+    // the internal heap reserved for native stacks, interrupts and LCD DMA.
+    auto* context_storage =
+        static_cast<GuestContext*>(heap_caps_malloc(sizeof(GuestContext), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    ContextPtr context(context_storage == nullptr
+                           ? nullptr
+                           : std::construct_at(context_storage, package.raw(), devices, background_executor,
+                                               effective_locale, launch_arguments, log_sink));
     if (context == nullptr || !context->valid()) {
         ESP_LOGE(kTag, "unable to initialize bounded Guest services");
         return std::unexpected(

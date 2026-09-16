@@ -1613,6 +1613,31 @@ bool RemoteControlAgent::QueueHostCommand(void* client, const Identity& identity
             control::ReleaseHostCommand(command);
             return reject("package_hash_mismatch");
         }
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(params, "requireInstallAuthorization"))) {
+            Http3Request authorization{};
+            authorization.method = "GET";
+            authorization.path = DevicePath(identity.device_id.data(), "/store/commands/") + command_id;
+            authorization.headers = {{"authorization", AuthorizationValue(identity.credential.data())}};
+            const auto stream = ClientFrom(client).Open(authorization);
+            const int status = stream ? stream->GetStatus(kRequestTimeoutMs) : -1;
+            // Consume FIN on both success and denial before destroying the
+            // stream. Headers alone do not complete even an empty 204 response.
+            std::array<uint8_t, 128U> response_body{};
+            bool complete = false;
+            bool empty = true;
+            for (uint32_t chunk = 0U; stream && status > 0 && chunk < 8U; ++chunk) {
+                const int count = stream->Read(response_body.data(), response_body.size(), kRequestTimeoutMs);
+                if (count <= 0) {
+                    complete = count == 0;
+                    break;
+                }
+                empty = false;
+            }
+            if (status != 204 || !complete || !empty) {
+                control::ReleaseHostCommand(command);
+                return reject("install_cancelled");
+            }
+        }
         publish_install_progress("installing", 90U);
     } else if (std::strcmp(name, "app.uninstall") == 0) {
         const char* app_id = params != nullptr ? JsonString(params, "appId") : nullptr;
