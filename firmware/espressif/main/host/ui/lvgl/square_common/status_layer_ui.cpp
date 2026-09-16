@@ -349,7 +349,7 @@ void StatusLayerUi::ShowCellularDialogLocked() {
     lv_label_set_long_mode(cellular_freshness_, LV_LABEL_LONG_WRAP);
 
     auto* sim_panel = CreateSystemPanel(content, layout);
-    if (!cellular_enabled_) lv_obj_add_flag(sim_panel, LV_OBJ_FLAG_HIDDEN);
+
     (void)CreateSystemLabel(sim_panel, UiText(host_strings::Id::kCellularSimCard), layout.heading_font,
                             theme::kPrimaryText);
     auto* choices = CreateSystemColumn(sim_panel, layout.panel_gap);
@@ -371,7 +371,7 @@ void StatusLayerUi::ShowCellularDialogLocked() {
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 
     auto* details = CreateSystemPanel(content, layout, 0);
-    if (!cellular_enabled_) lv_obj_add_flag(details, LV_OBJ_FLAG_HIDDEN);
+
     (void)CreateSystemLabel(details, UiText(host_strings::Id::kCellularDetails), layout.heading_font,
                             theme::kPrimaryText);
     const char* names[]{UiText(host_strings::Id::kCellularSimStatus),

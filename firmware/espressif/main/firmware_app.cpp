@@ -90,12 +90,9 @@ void FirmwareApp::Run() {
         if (!cellular_result) {
             ESP_LOGW(kTag, "cellular initialization failed: error=%u", static_cast<unsigned>(cellular_result.error()));
         }
-        // Factory mode selection is exclusive and persists across restart.
-        if (!services.cellular->Snapshot().enabled) {
-            const auto wifi_result = services.wifi->Initialize();
-            if (!wifi_result)
-                ESP_LOGW(kTag, "Wi-Fi is unavailable: error=%u", static_cast<unsigned>(wifi_result.error()));
-        }
+        // Independent persisted switches: Wi-Fi remains available with cellular enabled.
+        const auto wifi_result = services.wifi->Initialize();
+        if (!wifi_result) ESP_LOGW(kTag, "Wi-Fi is unavailable: error=%u", static_cast<unsigned>(wifi_result.error()));
         const esp_err_t time_error = network_time::Initialize(
             [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyTimeStateChanged(); }, &shell);
         if (time_error != ESP_OK) ESP_LOGW(kTag, "network time unavailable: %s", esp_err_to_name(time_error));

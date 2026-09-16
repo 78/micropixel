@@ -197,7 +197,7 @@ WifiManager::~WifiManager() {
         wifi_event_instance_ = nullptr;
     }
     if (ip_event_instance_ != nullptr) {
-        (void)esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_instance_);
+        (void)esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, ip_event_instance_);
         ip_event_instance_ = nullptr;
     }
     (void)ReleaseDriver();
@@ -353,7 +353,7 @@ esp_err_t WifiManager::InitializeDriver() {
                                                      &wifi_event_instance_);
     }
     if (status == ESP_OK && ip_event_instance_ == nullptr) {
-        status = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, WifiEventHandler, this,
+        status = esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, WifiEventHandler, this,
                                                      &ip_event_instance_);
     }
     if (status != ESP_OK) {
@@ -776,6 +776,11 @@ void WifiManager::WifiEventHandler(void* context, esp_event_base_t event_base, i
         manager->HandleWifiEvent(event_id, event_data);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         manager->HandleGotIp();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        ScopedLock lock(manager->mutex_);
+        manager->Cold().snapshot.connected = false;
+        manager->Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
+        manager->RebuildSnapshotLocked();
     }
 }
 

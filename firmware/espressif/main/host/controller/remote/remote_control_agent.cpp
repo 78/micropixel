@@ -1324,9 +1324,9 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
             }
         }
         (void)cJSON_AddStringToObject(network, "transport",
-                                      cellular.connected ? "cellular" : (wifi.connected ? "wifi" : "none"));
+                                      wifi.connected ? "wifi" : (cellular.connected ? "cellular" : "none"));
         uint8_t station_mac[6]{};
-        if (!cellular.enabled && esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
+        if (wifi.connected && esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
             char mac_text[18]{};
             std::snprintf(mac_text, sizeof(mac_text), "%02X:%02X:%02X:%02X:%02X:%02X", station_mac[0], station_mac[1],
                           station_mac[2], station_mac[3], station_mac[4], station_mac[5]);
@@ -2676,6 +2676,7 @@ void RemoteControlAgent::TaskMain() {
     TickType_t next_firmware_check_ticks = 0U;
     bool credential_refresh_attempted = false;
     ReconnectBackoff reconnect_backoff;
+    uint8_t network_path = 0;  // 0 offline, 1 Wi-Fi, 2 cellular.
 
     auto ticks_until = [](TickType_t deadline_ticks) {
         const int32_t remaining_ticks = static_cast<int32_t>(deadline_ticks - xTaskGetTickCount());
@@ -2929,7 +2930,13 @@ void RemoteControlAgent::TaskMain() {
         }
         task_context.wifi_snapshot = wifi_.Snapshot();
         const device::WifiSnapshot& wifi = task_context.wifi_snapshot;
-        if (!wifi.connected && !cellular_.Snapshot().connected) {
+        const uint8_t preferred_path = wifi.connected ? 1U : (cellular_.Snapshot().connected ? 2U : 0U);
+        if (network_path != preferred_path) {
+            close_transport();
+            network_path = preferred_path;
+            reconnect_backoff.Reset();
+        }
+        if (preferred_path == 0U) {
             close_transport();
             if (snapshot.enabled) {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kWaitingForNetwork, "Waiting for network");

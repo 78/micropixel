@@ -58,14 +58,24 @@ and verify charging/key inputs.
 
 `CellularController` manages the factory NT26 UART Ethernet driver: UART1 at
 2,000,000 baud, TX28/RX29, MRDY13/SRDY4 and TCA9555 P0.7 power/reset. The default
-PDP context is the factory `IP` / `eapn1.net`; an APN editor and SIM-slot controls
-are not yet implemented.
+PDP context is the factory `IP` / `eapn1.net`. SIM selection is exposed by the
+4G settings page; an APN editor is not implemented.
 
-The status-layer 4G card explicitly offers a restart to the other network mode.
-The board saves `network/type` (0 Wi-Fi, 1 cellular) in `runtime_nvs`, waits one
-second and restarts, matching the factory selection policy. A failed write does
-not restart. Default/absent settings select Wi-Fi and disable the NT26 rail.
-There is no automatic Wi-Fi fallback when cellular registration fails.
+Wi-Fi and cellular have independent persisted switches and may both be enabled,
+or both disabled. Wi-Fi is always initialized, even on devices previously saved
+in cellular-only mode. The existing `network/type` key is retained as the cellular
+enable flag (0 off, 1 on); `host_wifi/state` continues to store the Wi-Fi switch.
+Absent cellular settings leave it off. Switching either radio does not reboot.
+Cellular start/stop runs on the existing background executor; persistence or driver
+failures leave a retryable error, and a failed stop never cuts power to live workers.
+SIM-slot changes still follow the factory restart procedure.
+
+ESP-NETIF automatically chooses Wi-Fi STA (priority 100) over cellular Ethernet
+(priority 50), falls back when Wi-Fi disconnects, and returns to Wi-Fi after DHCP.
+The Claw4 profile enables per-interface DNS so resolvers follow the default route.
+Remote Control rebuilds its QUIC connection when the preferred transport changes;
+ongoing requests may need retrying. This is link/IP failover, not an Internet
+health check: a Wi-Fi AP with working DHCP but a broken WAN remains preferred.
 
 The Host reads cellular availability, mode, IP connection and measured CSQ bars.
 CSQ uses factory thresholds (0–9, 10–14, 15–19, 20–31; unknown is no bars) and is
@@ -79,8 +89,8 @@ cellular mode again. A failed stop rejects sleep instead of releasing live drive
 storage. Physical power-key wake remains the board's explicit-sleep policy.
 
 Host tests use fake UART, NVS and I2C dependencies to exercise the real board
-controller. Target acceptance remains pending: cold boot in both modes, mode
-persistence, actual SIM/APN registration, DHCP, signal changes, remote/store/OTA
+controller. Target acceptance remains pending: cold boot with either/both radios, independent switch
+persistence, Wi-Fi loss/recovery with 4G connected, both-off behavior, actual SIM/APN registration, DHCP, signal changes, remote/store/OTA
 over 4G, no-SIM recovery, and shutdown/sleep during traffic. Neither build success
 nor the controller tests prove modem or power timing on hardware.
 

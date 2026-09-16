@@ -146,6 +146,7 @@ std::expected<void, device::CellularError> CellularController::SetEnabled(bool e
         return std::unexpected(device::CellularError::kBusy);
     if (enabled == snapshot_.enabled) return {};
     requested_mode_ = enabled;
+    switch_cancelled_ = false;
     snapshot_.switching = true;
     snapshot_.switch_failed = false;
     if (!background_->Submit(SwitchMode, this)) {
@@ -351,35 +352,78 @@ void CellularController::SwitchSim(void* context) {
 void CellularController::SwitchMode(void* context) {
     auto& self = *static_cast<CellularController*>(context);
     std::lock_guard operation(self.operation_mutex_);
-    if (self.stopping_) return;
-    bool mode;
+    bool enabled;
+    bool previous;
     {
         std::lock_guard lock(self.snapshot_mutex_);
-        mode = self.requested_mode_;
-    }
-    nvs_handle_t settings{};
-    esp_err_t status = nvs_open_from_partition("runtime_nvs", kNamespace, NVS_READWRITE, &settings);
-    if (status == ESP_OK) {
-        status = nvs_set_i32(settings, kModeKey, mode ? 1 : 0);
-        if (status == ESP_OK) status = nvs_commit(settings);
-        nvs_close(settings);
-    }
-    if (status != ESP_OK) {
-        {
-            std::lock_guard lock(self.snapshot_mutex_);
+        if (self.stopping_ || self.switch_cancelled_) {
             self.snapshot_.switching = false;
             self.snapshot_.switch_failed = true;
             if (self.sink_ != nullptr) self.sink_(self.sink_context_);
+            return;
         }
-        ESP_LOGE(kTag, "network mode was not saved: %s", esp_err_to_name(status));
-        return;
+        enabled = self.requested_mode_;
+        previous = self.snapshot_.enabled;
     }
-    // Factory behavior: show the selected mode for one second, then restart.
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    if (self.stopping_) return;
-    status = self.modem_.Stop();
-    if (status != ESP_OK) ESP_LOGW(kTag, "modem stop before restart: %s", esp_err_to_name(status));
-    if (!self.stopping_) esp_restart();
+    // Keep the old key for upgrades, but it now controls only the cellular radio.
+    const auto save = [](bool value) {
+        nvs_handle_t settings{};
+        esp_err_t status = nvs_open_from_partition("runtime_nvs", kNamespace, NVS_READWRITE, &settings);
+        if (status == ESP_OK) {
+            status = nvs_set_i32(settings, kModeKey, value ? 1 : 0);
+            if (status == ESP_OK) status = nvs_commit(settings);
+            nvs_close(settings);
+        }
+        return status;
+    };
+    esp_err_t status = save(enabled);
+    if (status == ESP_OK) {
+        // Publish the desired state before Start/Stop can emit asynchronous events.
+        {
+            std::lock_guard lock(self.snapshot_mutex_);
+            self.snapshot_.enabled = enabled;
+        }
+        if (enabled) {
+            status = self.StartModem();
+        } else {
+            self.sim_cancelled_ = true;
+            status = self.modem_.Stop();
+            if (status == ESP_OK) {
+                self.paused_ = true;
+                status = self.SetPower(false);
+            }
+        }
+        if (status != ESP_OK) {
+            // Restore the previous persisted switch; a failed stop never cuts power.
+            const esp_err_t saved = save(previous);
+            if (saved != ESP_OK) ESP_LOGE(kTag, "cellular setting rollback failed: %s", esp_err_to_name(saved));
+            if (enabled) {
+                if (self.modem_.Stop() == ESP_OK) {
+                    self.paused_ = true;
+                    (void)self.SetPower(false);
+                }
+            } else if (self.paused_) {
+                (void)self.StartModem();
+            }
+        }
+    }
+    {
+        std::lock_guard lock(self.snapshot_mutex_);
+        self.snapshot_.enabled = status == ESP_OK ? enabled : previous;
+        self.snapshot_.switching = false;
+        self.snapshot_.switch_failed = status != ESP_OK;
+        if (status == ESP_OK && !enabled) {
+            self.snapshot_.connected = false;
+            self.snapshot_.state = device::CellularState::kOff;
+            self.snapshot_.signal_bars = 0;
+            self.snapshot_.diagnostics = {};
+            self.snapshot_.sim_slot = device::CellularSimSlot::kUnknown;
+        } else if (status != ESP_OK) {
+            self.snapshot_.state = device::CellularState::kFailed;
+        }
+        if (self.sink_ != nullptr) self.sink_(self.sink_context_);
+    }
+    if (status != ESP_OK) ESP_LOGW(kTag, "cellular switch failed: %s", esp_err_to_name(status));
 }
 
 void CellularController::OnModemEvent(UartEthModem::UartEthModemEvent event) {
@@ -443,6 +487,7 @@ esp_err_t CellularController::Pause() {
         // Resume does not clear cancellation; only a new accepted request does.
         paused_ = true;
         sim_cancelled_ = true;
+        switch_cancelled_ = true;
         snapshot_.diagnostics = {};
     }
     const esp_err_t status = modem_.Stop();

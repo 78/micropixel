@@ -535,6 +535,7 @@ esp_err_t UartEthModem::InitIotEth() {
     esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_ETH();
     // Copy base config to modify flags (original is const)
     esp_netif_inherent_config_t base_cfg = *netif_cfg.base;
+    base_cfg.route_prio = 50; // Wi-Fi station (100) wins; cellular stays connected as backup.
     base_cfg.flags = static_cast<esp_netif_flags_t>(base_cfg.flags & ~ESP_NETIF_FLAG_GARP);
     netif_cfg.base = &base_cfg;
     eth_netif_ = esp_netif_new(&netif_cfg);

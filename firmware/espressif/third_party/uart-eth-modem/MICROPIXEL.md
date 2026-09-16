@@ -48,8 +48,9 @@ destroying the object. Destruction with live workers is a fatal contract violati
 The GPIO ISR service and ESP-NETIF/default event loop must be initialized by the board.
 
 Current integration: the Claw4 `CellularController` starts this driver when the
-saved network mode is cellular and owns power, signal queries and shutdown.
-The Host UI requests factory-style mode switching with restart. ESP-NETIF selects the default interface automatically through iot_eth start,
+saved cellular switch is enabled and owns power, signal queries and shutdown.
+The Host UI switches cellular independently of Wi-Fi without rebooting. Cellular
+route priority is 50, below the default Wi-Fi station priority of 100. ESP-NETIF selects the default interface automatically through iot_eth start,
 link and DHCP events, and removes it on destruction. No manual default-route
 override is needed. No new Guest ABI is introduced. See `../../main/platform/boards/README.zh-CN.md` for the integration and target
 acceptance requirements.

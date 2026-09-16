@@ -58,6 +58,7 @@ class CellularController final : public device::Cellular {
     std::atomic<bool> stopping_{};
     std::atomic<bool> paused_{true};
     std::atomic<bool> sim_cancelled_{};
+    std::atomic<bool> switch_cancelled_{};
     device::CellularSimSlot requested_sim_{device::CellularSimSlot::kUnknown};
     bool firmware_update_active_{};  // Protected by snapshot_mutex_.
     bool requested_mode_{};

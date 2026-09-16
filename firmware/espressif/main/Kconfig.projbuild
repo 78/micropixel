@@ -145,6 +145,7 @@ menu "MicroPixel board backends"
     config MICROPIXEL_BOARD_METALIO_CLAW4
         bool "Metalio-Claw4"
         depends on IDF_TARGET_ESP32P4
+        select ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF
         help
             Bring up the verified 720x720 RGB888 MIPI-DSI panel and GT911
             touch controller before WAMR starts. LVGL remains a Host-only

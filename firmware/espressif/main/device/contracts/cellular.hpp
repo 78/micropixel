@@ -43,8 +43,8 @@ struct CellularSnapshot final {
 
 using CellularStateChangeSink = void (*)(void* context);
 
-// Host-only cellular control. The board retains its factory network selection
-// policy: SetEnabled persists the selected mode and restarts the device.
+// Host-only cellular control. SetEnabled asynchronously persists and applies the
+// cellular switch independently of Wi-Fi, without restarting the device.
 class Cellular {
    public:
     virtual ~Cellular() = default;

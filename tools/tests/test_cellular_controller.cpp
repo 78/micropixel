@@ -83,7 +83,39 @@ int main() {
         fail_commit = false;
         assert(controller.SetEnabled(true));
         background.Run();
-        assert(restarts == 1 && stored_mode == 1 && wakeups > 0);
+        assert(restarts == 0 && stored_mode == 1 && wakeups > 0);
+        assert(controller.Snapshot().enabled && !controller.Snapshot().switching);
+        UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Connected);
+        background.Run();
+        UartEthModem::stop_result = ESP_FAIL;
+        assert(controller.SetEnabled(false));
+        background.Run();
+        assert(controller.Snapshot().enabled && controller.Snapshot().switch_failed);
+        assert(output_port == 0xff && stored_mode == 1 && restarts == 0);
+        UartEthModem::stop_result = ESP_OK;
+        assert(controller.SetEnabled(false));
+        background.Run();
+        assert(!controller.Snapshot().enabled && !controller.Snapshot().connected);
+        assert(output_port == 0x7f && stored_mode == 0 && restarts == 0);
+        const int starts_before_sleep = UartEthModem::starts;
+        assert(controller.SetEnabled(true));
+        assert(controller.Pause() == ESP_OK);
+        assert(controller.Resume() == ESP_OK);
+        background.Run();
+        assert(!controller.Snapshot().enabled && !controller.Snapshot().switching);
+        assert(UartEthModem::starts == starts_before_sleep && output_port == 0x7f);
+        UartEthModem::start_result = ESP_FAIL;
+        assert(controller.SetEnabled(true));
+        background.Run();
+        assert(!controller.Snapshot().enabled && controller.Snapshot().switch_failed);
+        assert(output_port == 0x7f && stored_mode == 0 && restarts == 0);
+        UartEthModem::start_result = ESP_OK;
+        assert(controller.SetEnabled(true));
+        background.Run();
+        assert(controller.Snapshot().enabled && !controller.Snapshot().switch_failed);
+        assert(stored_mode == 1 && output_port == 0xff && restarts == 0);
+        controller.Shutdown();
+        UartEthModem::starts = 0;
     }
     mode_present = true;
     {
@@ -118,7 +150,7 @@ int main() {
         assert(controller.SetEnabled(false));
         controller.Shutdown();
         background.Run();
-        assert(restarts == 1);  // A queued mode change cannot restart during power-off.
+        assert(restarts == 0);  // A queued switch cannot start the radio during power-off.
         assert(controller.Resume() == ESP_OK && output_port == 0x7f);
         assert(!controller.SetEnabled(false));
     }
