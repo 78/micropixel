@@ -395,6 +395,12 @@ int main() {
                0);
         assert(std::strcmp(DescribeCellularConnection(true, true, CellularState::kConnected, details).title,
                            "Connected") == 0);
+        const auto chinese = host_strings::ForTag("zh-CN");
+        assert(std::strcmp(DescribeCellularConnection(true, true, CellularState::kConnected, details, chinese).title,
+                           "已连接") == 0);
+        assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kConnecting, details, chinese).title,
+                           "已注册，未连接移动数据") == 0);
+        assert(std::strcmp(micropixel::host_ui::CellularRegistrationText(5, chinese), "已注册（漫游）") == 0);
         UartEthModem::failed_command.clear();
         UartEthModem::responses.clear();
     }

@@ -327,7 +327,8 @@ void StatusLayerUi::ShowCellularDialogLocked() {
     StyleFullscreenContainer(cellular_dialog_, theme::kMenuBackground, layout.width, layout.height);
     lv_obj_add_flag(cellular_dialog_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_GESTURE_BUBBLE);
-    (void)CreateSystemHeader(cellular_dialog_, layout, "4G / SIM", "Mobile network settings", CellularBackEvent, this);
+    (void)CreateSystemHeader(cellular_dialog_, layout, "4G / SIM", UiText(host_strings::Id::kCellularSubtitle),
+                             CellularBackEvent, this);
     auto* content = CreateSystemScrollColumn(cellular_dialog_, layout, CellularScrollEvent, this);
     auto* status = CreateSystemPanel(content, layout);
     auto* heading = CreateSystemColumn(status);
@@ -349,7 +350,8 @@ void StatusLayerUi::ShowCellularDialogLocked() {
 
     auto* sim_panel = CreateSystemPanel(content, layout);
     if (!cellular_enabled_) lv_obj_add_flag(sim_panel, LV_OBJ_FLAG_HIDDEN);
-    (void)CreateSystemLabel(sim_panel, "SIM card", layout.heading_font, theme::kPrimaryText);
+    (void)CreateSystemLabel(sim_panel, UiText(host_strings::Id::kCellularSimCard), layout.heading_font,
+                            theme::kPrimaryText);
     auto* choices = CreateSystemColumn(sim_panel, layout.panel_gap);
     lv_obj_set_flex_flow(choices, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(choices, layout.panel_gap, 0);
@@ -363,27 +365,34 @@ void StatusLayerUi::ShowCellularDialogLocked() {
         lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_STATE_DISABLED);
         lv_obj_add_event_cb(button, CellularEvent, LV_EVENT_SHORT_CLICKED, this);
     }
-    auto* note = CreateSystemLabel(sim_panel, "Changing the SIM restarts this device.", layout.detail_font,
+    auto* note = CreateSystemLabel(sim_panel, UiText(host_strings::Id::kCellularSimRestart), layout.detail_font,
                                    theme::kSecondaryText);
     lv_obj_set_width(note, LV_PCT(100));
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 
     auto* details = CreateSystemPanel(content, layout, 0);
     if (!cellular_enabled_) lv_obj_add_flag(details, LV_OBJ_FLAG_HIDDEN);
-    (void)CreateSystemLabel(details, "Network details", layout.heading_font, theme::kPrimaryText);
-    const char* names[]{"SIM status", "Signal",        "Registration", "Operator",
-                        "Radio",      "Data attached", "APN",          "PDP address"};
+    (void)CreateSystemLabel(details, UiText(host_strings::Id::kCellularDetails), layout.heading_font,
+                            theme::kPrimaryText);
+    const char* names[]{UiText(host_strings::Id::kCellularSimStatus),
+                        UiText(host_strings::Id::kCellularSignal),
+                        UiText(host_strings::Id::kCellularRegistration),
+                        UiText(host_strings::Id::kCellularOperator),
+                        UiText(host_strings::Id::kCellularRadio),
+                        UiText(host_strings::Id::kCellularAttached),
+                        "APN",
+                        UiText(host_strings::Id::kCellularPdpAddress)};
     for (unsigned i = 0; i < 8; ++i) {
-        auto* row = CreateSystemInformationRow(details, layout, names[i], "Unknown");
+        auto* row = CreateSystemInformationRow(details, layout, names[i], UiText(host_strings::Id::kCellularUnknown));
         cellular_detail_values_[i] = lv_obj_get_child(row, 1);
         lv_obj_set_height(row, LV_SIZE_CONTENT);
         lv_obj_set_style_min_height(row, layout.row_height, 0);
         lv_label_set_long_mode(cellular_detail_values_[i], LV_LABEL_LONG_WRAP);
     }
     auto* mode = CreateSystemPanel(content, layout);
-    (void)CreateSystemLabel(mode, "Network mode", layout.heading_font, theme::kPrimaryText);
-    auto* mode_note = CreateSystemLabel(mode, "Wi-Fi and 4G are used separately. Changing mode restarts this device.",
-                                        layout.body_font, theme::kSecondaryText);
+    (void)CreateSystemLabel(mode, UiText(host_strings::Id::kCellularMode), layout.heading_font, theme::kPrimaryText);
+    auto* mode_note =
+        CreateSystemLabel(mode, UiText(host_strings::Id::kCellularModeNote), layout.body_font, theme::kSecondaryText);
     lv_obj_set_width(mode_note, LV_PCT(100));
     lv_label_set_long_mode(mode_note, LV_LABEL_LONG_WRAP);
     cellular_mode_ = CreateSystemActionButton(mode, layout, "", theme::kAccent);
@@ -395,27 +404,31 @@ void StatusLayerUi::ShowCellularDialogLocked() {
 void StatusLayerUi::UpdateCellularDialogLocked() {
     if (cellular_dialog_ == nullptr) return;
     const auto& details = cellular_diagnostics_;
-    auto message = DescribeCellularConnection(cellular_enabled_, cellular_connected_, cellular_state_, details);
+    auto message = DescribeCellularConnection(cellular_enabled_, cellular_connected_, cellular_state_, details,
+                                              host_strings::ForTag(DisplayLocale()));
     char countdown[64]{};
-    if (cellular_switch_failed_) message = {"Could not save network mode", "Refresh the status and try again."};
+    if (cellular_switch_failed_)
+        message = {UiText(host_strings::Id::kCellularSaveFailed), UiText(host_strings::Id::kCellularRetry)};
     if (cellular_sim_failed_)
-        message = {"SIM operation failed", "Could not confirm the SIM selection. Refresh to read the actual slot."};
-    if (cellular_switching_) message = {"Restarting...", "Saving the selected network mode."};
+        message = {UiText(host_strings::Id::kCellularSimFailed), UiText(host_strings::Id::kCellularSimFailedHint)};
+    if (cellular_switching_)
+        message = {UiText(host_strings::Id::kCellularRestarting), UiText(host_strings::Id::kCellularSaving)};
     if (cellular_sim_restart_seconds_ != 0) {
-        (void)std::snprintf(countdown, sizeof(countdown), "Restarting in %u...",
+        (void)std::snprintf(countdown, sizeof(countdown), UiText(host_strings::Id::kCellularCountdown),
                             static_cast<unsigned>(cellular_sim_restart_seconds_));
-        message = {countdown, "The modem saved the selected SIM."};
+        message = {countdown, UiText(host_strings::Id::kCellularSimSaved)};
     }
     lv_label_set_text(cellular_status_, message.title);
     lv_label_set_text(cellular_hint_, message.hint);
     lv_obj_set_style_text_color(cellular_status_,
                                 lv_color_hex(cellular_connected_ ? theme::kSuccess : theme::kPrimaryText), 0);
-    lv_label_set_text(cellular_freshness_, !cellular_enabled_      ? "Select 4G mode below to read the modem."
-                                           : cellular_sim_pending_ ? "Updating status..."
-                                           : details.incomplete    ? "Some readings unavailable. Tap refresh to retry."
-                                           : details.sampled ? "Modem readings. Tap refresh for the latest status."
-                                                             : "Waiting for modem readings...");
-    lv_label_set_text(cellular_mode_label_, cellular_enabled_ ? "Use Wi-Fi instead" : "Enable 4G");
+    lv_label_set_text(cellular_freshness_, !cellular_enabled_      ? UiText(host_strings::Id::kCellularSelectMode)
+                                           : cellular_sim_pending_ ? UiText(host_strings::Id::kCellularUpdating)
+                                           : details.incomplete    ? UiText(host_strings::Id::kCellularIncomplete)
+                                           : details.sampled       ? UiText(host_strings::Id::kCellularFreshness)
+                                                                   : UiText(host_strings::Id::kCellularWaiting));
+    lv_label_set_text(cellular_mode_label_, cellular_enabled_ ? UiText(host_strings::Id::kCellularUseWifi)
+                                                              : UiText(host_strings::Id::kCellularEnable));
     const bool busy = cellular_switching_ || cellular_sim_pending_;
     const auto enabled = [](lv_obj_t* object, bool value) {
         if (value)
@@ -429,52 +442,61 @@ void StatusLayerUi::UpdateCellularDialogLocked() {
         const bool selected = static_cast<unsigned>(cellular_sim_slot_) == i;
         auto* button = cellular_sim_buttons_[i];
         enabled(button, !busy && cellular_enabled_);
-        lv_label_set_text(cellular_sim_labels_[i], i == 0 ? (selected ? "External  " LV_SYMBOL_OK : "External SIM")
-                                                          : (selected ? "Internal  " LV_SYMBOL_OK : "Internal SIM"));
+        lv_label_set_text_fmt(
+            cellular_sim_labels_[i], "%s%s",
+            UiText(i == 0 ? host_strings::Id::kCellularExternal : host_strings::Id::kCellularInternal),
+            selected ? "  " LV_SYMBOL_OK : "");
         lv_obj_set_style_border_color(button, lv_color_hex(selected ? theme::kAccent : theme::kBorder), 0);
         lv_obj_set_style_border_width(button, selected ? 2 : 1, 0);
     }
     using Sim = device::CellularSimStatus;
-    const char* sim = details.sim_status == Sim::kReady         ? "Ready"
-                      : details.sim_status == Sim::kPinRequired ? "PIN required"
-                      : details.sim_status == Sim::kPukRequired ? "PUK required"
-                      : details.sim_status == Sim::kAbsent      ? "No SIM detected"
-                      : details.sim_status == Sim::kNotReady    ? "Not ready"
-                                                                : "Unknown";
+    const char* sim = details.sim_status == Sim::kReady         ? UiText(host_strings::Id::kCellularReady)
+                      : details.sim_status == Sim::kPinRequired ? UiText(host_strings::Id::kCellularPin)
+                      : details.sim_status == Sim::kPukRequired ? UiText(host_strings::Id::kCellularPuk)
+                      : details.sim_status == Sim::kAbsent      ? UiText(host_strings::Id::kCellularAbsent)
+                      : details.sim_status == Sim::kNotReady    ? UiText(host_strings::Id::kCellularNotReady)
+                                                                : UiText(host_strings::Id::kCellularUnknown);
     char signal[48]{};
     if (details.signal_csq >= 0 && details.signal_csq <= 31) {
-        const char* strength = details.signal_csq < 10   ? "Weak"
-                               : details.signal_csq < 15 ? "Fair"
-                               : details.signal_csq < 20 ? "Good"
-                                                         : "Strong";
+        const char* strength = details.signal_csq < 10   ? UiText(host_strings::Id::kCellularWeak)
+                               : details.signal_csq < 15 ? UiText(host_strings::Id::kCellularFair)
+                               : details.signal_csq < 20 ? UiText(host_strings::Id::kCellularGood)
+                                                         : UiText(host_strings::Id::kCellularStrong);
         (void)std::snprintf(signal, sizeof(signal), "%s (CSQ %d/31)", strength, details.signal_csq);
     } else {
         (void)std::snprintf(signal, sizeof(signal), "%s",
-                            details.signal_csq == 99 ? "Unknown (CSQ 99)" : "Unavailable");
+                            details.signal_csq == 99 ? UiText(host_strings::Id::kCellularUnknownCsq)
+                                                     : UiText(host_strings::Id::kCellularUnavailable));
     }
     char registration[80]{};
     if (details.registration >= 0)
         (void)std::snprintf(registration, sizeof(registration), "%s (%d)",
-                            CellularRegistrationText(details.registration), details.registration);
+                            CellularRegistrationText(details.registration, host_strings::ForTag(DisplayLocale())),
+                            details.registration);
     else
-        (void)std::snprintf(registration, sizeof(registration), "Unavailable");
-    const char* radio = details.radio_function == 1   ? "On"
-                        : details.radio_function == 4 ? "Flight mode"
-                        : details.radio_function == 0 ? "Off"
-                                                      : "Unknown";
-    const char* attached = details.attached == 1 ? "Yes" : details.attached == 0 ? "No" : "Unknown";
-    const char* address = details.pdp_address[0] == '\0' ? "Not reported" : details.pdp_address.data();
-    if (std::strcmp(address, "0.0.0.0") == 0) address = "Not assigned";
-    const char* values[]{sim,
-                         signal,
-                         registration,
-                         details.operator_name[0] ? details.operator_name.data() : "Not reported",
-                         radio,
-                         attached,
-                         details.apn[0] ? details.apn.data() : "Unknown",
-                         address};
+        (void)std::snprintf(registration, sizeof(registration), "%s", UiText(host_strings::Id::kCellularUnavailable));
+    const char* radio = details.radio_function == 1   ? UiText(host_strings::Id::kCellularOn)
+                        : details.radio_function == 4 ? UiText(host_strings::Id::kCellularFlight)
+                        : details.radio_function == 0 ? UiText(host_strings::Id::kCellularOff)
+                                                      : UiText(host_strings::Id::kCellularUnknown);
+    const char* attached = details.attached == 1   ? UiText(host_strings::Id::kCellularYes)
+                           : details.attached == 0 ? UiText(host_strings::Id::kCellularNo)
+                                                   : UiText(host_strings::Id::kCellularUnknown);
+    const char* address =
+        details.pdp_address[0] == '\0' ? UiText(host_strings::Id::kCellularNotReported) : details.pdp_address.data();
+    if (std::strcmp(address, "0.0.0.0") == 0) address = UiText(host_strings::Id::kCellularNotAssigned);
+    const char* values[]{
+        sim,
+        signal,
+        registration,
+        details.operator_name[0] ? details.operator_name.data() : UiText(host_strings::Id::kCellularNotReported),
+        radio,
+        attached,
+        details.apn[0] ? details.apn.data() : UiText(host_strings::Id::kCellularUnknown),
+        address};
     for (unsigned i = 0; i < 8; ++i)
-        lv_label_set_text(cellular_detail_values_[i], cellular_enabled_ ? values[i] : "4G off");
+        lv_label_set_text(cellular_detail_values_[i],
+                          cellular_enabled_ ? values[i] : UiText(host_strings::Id::kCellularDisabledValue));
 }
 
 void StatusLayerUi::CellularScrollEvent(lv_event_t* event) {

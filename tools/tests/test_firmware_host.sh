@@ -90,7 +90,14 @@ build_and_run nt26_transport \
     -I "$workspace_root/firmware/espressif/third_party/uart-eth-modem/include" \
     "$workspace_root/tools/tests/test_nt26_transport.cpp"
 
+python3 "$workspace_root/tools/generate_localization.py" \
+    --catalog-dir "$workspace_root/firmware/espressif/main/host/ui/i18n" \
+    --default-locale en --cpp-namespace host_strings \
+    --output-header "$test_output_dir/host_strings.hpp" \
+    --report "$test_output_dir/host-localization-report.json"
+
 build_and_run cellular_controller \
+    -I "$test_output_dir" \
     -pthread \
     -iquote "$workspace_root/tools/tests/cellular_stubs" \
     -include "$workspace_root/tools/tests/cellular_stubs/cellular_nvs_declarations.hpp" \

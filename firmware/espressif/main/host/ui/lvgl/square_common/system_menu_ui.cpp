@@ -617,7 +617,7 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
                 strings.Get(host_strings::Id::kSystemSettingsWifi), WifiDetail(model, strings), theme::kAccent, true);
         if (model.cellular_available) {
             DrawRow(scroll_content_, 7U, host_ui::SystemMenuItem::kCellular, "4G", "4G / SIM",
-                    "Network mode and SIM selection", theme::kAccent, true);
+                    strings.Get(host_strings::Id::kCellularSettingsHint), theme::kAccent, true);
         }
         DrawRow(scroll_content_, 1U, host_ui::SystemMenuItem::kRemoteControl, LV_SYMBOL_REFRESH,
                 strings.Get(host_strings::Id::kSystemSettingsRemoteControl), RemoteControlDetail(model, strings),
