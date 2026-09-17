@@ -45,6 +45,7 @@
 #include "runtime/bundle/app_environment.hpp"
 #include "runtime/bundle/app_store.hpp"
 #include "runtime/wamr/diagnostics.h"
+#include "sdkconfig.h"
 #include "work/background_executor.hpp"
 #include "work/task_policy.hpp"
 
@@ -52,7 +53,7 @@ namespace micropixel::firmware {
 namespace {
 
 constexpr char kTag[] = "micropixel_host";
-constexpr TickType_t kCooperativeStopTimeout = pdMS_TO_TICKS(500);
+constexpr TickType_t kCooperativeStopTimeout = pdMS_TO_TICKS(CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS);
 constexpr TickType_t kForcedStopTimeout = pdMS_TO_TICKS(2500);
 constexpr int64_t kPerformanceSamplePeriodUs = 1000LL * 1000LL;
 constexpr int64_t kBatterySamplePeriodUs = 1000000;

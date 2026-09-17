@@ -82,7 +82,11 @@ Guest 默认连续执行预算为 3 秒；Host ABI checkpoint 刷新预算，阻
 
 暂停由 Host 等待 Guest 到达 `event_wait` 安全点，不向 Guest 增加 Pause 事件。暂停时冻结应用时钟、
 Timer、输入、音频和 watchdog；恢复复用原 Session，首先投递 Resume。Stop 先交给 handler，返回后
-退出事件循环。协作停止或安全点等待超过 500ms 时强制停止，保证大厅和电源控制仍能响应。
+退出事件循环。协作停止等待期限与 Guest watchdog 共用 `CONFIG_WAMR_DEFAULT_WATCHDOG_TIMEOUT_MS`
+（默认 3 秒），超时后强制停止；暂停安全点等待期限仍为 500ms。
+外部任务（Host 控制或 watchdog）请求终止时只发布异常和取消标志，不采集仍在运行的 Guest 调用栈。
+调用栈只能由对应执行环境的执行线程采集；Guest 自身异常仍保留栈信息。
+执行线程身份在 Guest 入口缓存，外部终止路径不调用要求 pthread 上下文的线程身份 API。
 
 电源状态独立于大厅/前台状态。休眠先暂停应用、释放显示，再进入平台低功耗；唤醒先恢复硬件和原
 Session，超时被停止的应用则回到大厅。选择自动休眠策略的板型中，空闲超时和电源键共用这一流程。
