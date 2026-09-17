@@ -154,7 +154,11 @@ esp_err_t BoardIo::InitializeIoExpander() {
     i2c_device_config_t config{};
     config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     config.device_address = board::kIoExpanderI2cAddress;
-    config.scl_speed_hz = 400000U;
+    // The Claw4 bus is shared by the TCA9555, BQ27220, sensors and GT911.
+    // At 400 kHz the bus occasionally remains stuck while the modem/audio
+    // peripherals are starting, which makes the IDF driver's recovery fail.
+    // Use the more tolerant standard-mode rate for the board-wide bus.
+    config.scl_speed_hz = 100000U;
     esp_err_t status = i2c_master_bus_add_device(i2c_bus_, &config, &io_expander_);
     if (status != ESP_OK) {
         return status;
