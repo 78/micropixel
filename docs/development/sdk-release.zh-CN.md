@@ -1,5 +1,7 @@
 # SDK 与 Windows 安装器发布
 
+GitHub Release 标题、正文和附件显示名称统一使用英文。
+
 SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK 使用 `sdk-v<版本>`，
 工具链使用 `toolchain-windows-x64-<摘要>`；更新检查读取 `sdk-channel` 分支的 `index.json`，
 不使用混有固件和工具链的 GitHub Latest Release。

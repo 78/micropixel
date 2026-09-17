@@ -55,31 +55,36 @@ def main():
         if not json.loads((out / 'draft-verification.json').read_text()).get('ok'):
             raise SystemExit('Installed draft verification is required')
         notes = out / 'release-notes.md'
-        notes.write_text(f"""## 开始开发：只下载与你电脑对应的一个文件
+        notes.write_text(f"""## Get started: choose one download for your computer
 
-| 你的电脑 | 下载 | 下一步 |
+| Platform | Download | Next step |
 | --- | --- | --- |
-| **Windows 10 / 11 x64** | **[Windows 安装包]({entry['installer']['url']})** | 双击安装，自动准备 Python 和编译工具链 |
-| **macOS / Linux** | **[SDK 归档](https://github.com/78/micropixel/releases/download/{tag}/micropixel-sdk-{version}.tar.gz)** | 解压后按指南配置工具链 |
+| **Windows 10 / 11 x64** | **[Windows installer]({entry['installer']['url']})** | Run the installer to set up Python and the build toolchain automatically |
+| **macOS / Linux** | **[SDK archive](https://github.com/78/micropixel/releases/download/{tag}/micropixel-sdk-{version}.tar.gz)** | Extract the archive and follow the toolchain setup guide |
 
-**[安装与 AI 使用指南](https://micropixel.ai/docs/environment/)** · **[创建第一个游戏](https://micropixel.ai/docs/quickstart/)**
+**[Setup and AI workflow guide](https://micropixel.ai/docs/environment/)** · **[Create your first game](https://micropixel.ai/docs/quickstart/)**
 
-安装完成后直接创建第一个游戏。遇到问题再查看[安装 FAQ](https://micropixel.ai/docs/environment-faq/)。
-无需另装 Git 或 ESP-IDF。其余 JSON、manager ZIP 和校验文件供安装与更新流程使用，无需手动下载。
-GitHub 自动生成的 Source code 是仓库源码，不是 SDK。
+After installation, start with your first game. See the [installation FAQ](https://micropixel.ai/docs/environment-faq/) for troubleshooting.
+You do not need a separate Git or ESP-IDF installation. JSON files, the manager ZIP and checksums support installation and updates; manual downloads are unnecessary.
+GitHub's automatically generated Source code archives contain repository sources, not the SDK distribution.
 
-本版新增 ConfigureDisplay：应用显式选择逻辑画布与适配方式，移除 SDK 固定 720 基准。纹理默认跟随显示配置；
-DirectSurface 提供共用配置的坐标转换和纹理比例，缓冲区仍使用真实像素。示例与迁移文档同步更新。
-Service ABI 不变，已有 Bundle 保持原行为。旧源码重新编译时，720 设计画布需显式配置 kExpand，原生素材需显式使用 kNative。
-配套固件 0.9.1 改用分块写入 BundleFS 安装 App；PNG 仍先完整解码，解码峰值内存不因本版缩放接口而消失。
-已有项目保持版本锁，升级和回退需显式执行。从 0.16.0 升级仍需运行新安装包，以修复 Ctrl-C 启动层。
-Windows 安装包未签名；Windows 11 与 S31/S3 部分验收已完成，Windows 10 和剩余人工项目继续跟踪。
-自动安装生命周期与双架构编译验证通过。验收材料单独保存，不属于普通用户安装内容。
+## What's new
+
+- `ConfigureDisplay` lets apps choose their logical canvas and scaling mode explicitly, removing the SDK's fixed 720 baseline. Textures follow the display configuration by default.
+- DirectSurface adds coordinate conversion and texture-scale helpers using the same display configuration, while buffers retain pixel coordinates. Examples and migration documentation have been updated.
+- The Service ABI is unchanged, and existing Bundles retain their behavior. When rebuilding older apps designed for a 720 canvas, configure `kExpand` explicitly; use `kNative` explicitly for native-resolution assets.
+- Companion firmware 0.9.1 streams App installation into BundleFS. PNG images are still fully decoded before resizing, so these scaling APIs do not eliminate peak decode memory usage.
+
+## Installation and compatibility
+
+Existing projects remain version-pinned; upgrades and rollbacks are explicit. Upgrading from 0.16.0 still requires running the new installer to fix Ctrl-C handling in the launcher.
+The Windows installer is unsigned. Windows 11 and some S31/S3 acceptance checks are complete; Windows 10 and remaining manual checks are still pending.
+Automated installation lifecycle checks and builds for both architectures passed. Verification fixtures and evidence are maintained separately from user downloads.
 """, encoding='utf-8')
         run('gh', 'release', 'create', tag, '--draft', '--prerelease=' + str(preview).lower(), '--latest=false', '--target', os.environ['GITHUB_SHA'],
             '--title', f'SDK {version}{label}', '--notes-file', notes)
         names = sorted(user_assets(entry))
-        run('gh', 'release', 'upload', tag, *[str(out / name) + '#' + display_label(entry, name) for name in names], str(out / 'sha256sums.txt') + '#下载校验（可选）')
+        run('gh', 'release', 'upload', tag, *[str(out / name) + '#' + display_label(entry, name) for name in names], str(out / 'sha256sums.txt') + '#Checksums (optional)')
         support = support_tag(version)
         support_notes = out / 'support-notes.md'
         support_notes.write_text('Maintainer-only SDK verification fixtures and evidence. Users: download the SDK or installer from ' + tag + '.\n')
