@@ -6,7 +6,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/haptics/CMakeLists.txt")
 include("${CMAKE_CURRENT_LIST_DIR}/random/CMakeLists.txt")
 include("${CMAKE_CURRENT_LIST_DIR}/storage/CMakeLists.txt")
 include("${CMAKE_CURRENT_LIST_DIR}/wifi/CMakeLists.txt")
-list(APPEND micropixel_sources "platform/platform.cpp")
+list(APPEND micropixel_sources "platform/platform.cpp" "platform/network/network_route_source.cpp")
 
 # IDF_TARGET is available during early component expansion while project
 # Kconfig values are not. Resolve the narrow SoC dependency set first, then

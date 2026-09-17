@@ -7,6 +7,7 @@
 
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "esp_timer.h"
 #include "host/ui/lvgl/square_common/default_keyboard.hpp"
 #include "host/ui/lvgl/square_common/symbols.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
@@ -115,6 +116,9 @@ std::expected<void, host_ui::SystemUiError> WifiSettingsUi::ShowLocked(
     if (root == nullptr || display == nullptr || layout.width <= 0 || layout.height <= layout.header_height) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    if (switch_guard_) lv_timer_delete(switch_guard_);
+    switch_guard_ = nullptr;
+    switch_pending_us_ = 0;
     root_ = root;
     display_ = display;
     layout_ = &layout;
@@ -169,23 +173,25 @@ void WifiSettingsUi::RenderLocked() {
         lv_obj_set_width(wifi_text, 0);
         lv_obj_set_flex_grow(wifi_text, 1);
         (void)CreateSystemLabel(wifi_text, "Wi-Fi", layout.heading_font, theme::kPrimaryText);
-        const char* status = !model_.available  ? UiText(host_strings::Id::kUiNotAvailable)
-                             : !model_.enabled  ? UiText(host_strings::Id::kUiOff)
-                             : model_.connected ? UiText(host_strings::Id::kUiConnected)
-                                                : UiText(host_strings::Id::kUiNotConnected);
+        const char* status = SwitchBusy()            ? UiText(host_strings::Id::kUiNetworkApplying)
+                             : model_.control_failed ? UiText(host_strings::Id::kCellularSaveFailed)
+                             : !model_.available     ? UiText(host_strings::Id::kUiNotAvailable)
+                             : !model_.enabled       ? UiText(host_strings::Id::kUiOff)
+                             : model_.connected      ? UiText(host_strings::Id::kUiConnected)
+                                                     : UiText(host_strings::Id::kUiNotConnected);
         (void)CreateSystemLabel(wifi_text, status, layout.detail_font, theme::kSecondaryText);
         lv_obj_t* toggle = lv_switch_create(wifi_panel);
         lv_obj_set_size(toggle, layout.control_height + 12, layout.control_height * 3 / 5);
-        if (model_.enabled) {
+        if (DisplayedEnabled()) {
             lv_obj_add_state(toggle, LV_STATE_CHECKED);
         }
-        if (!model_.available) {
+        if (!model_.available || SwitchBusy()) {
             lv_obj_add_state(toggle, LV_STATE_DISABLED);
         }
         lv_obj_add_event_cb(toggle, SwitchEvent, LV_EVENT_VALUE_CHANGED, this);
     }
 
-    if (!model_.enabled) {
+    if (!DisplayedEnabled()) {
         lv_obj_t* hint = CreateSystemPanel(content, layout);
         (void)CreateSystemLabel(hint,
                                 layout.width <= 320 ? UiText(host_strings::Id::kUiEnableWiFiToViewNetworks)
@@ -412,18 +418,34 @@ void WifiSettingsUi::BackEvent(lv_event_t* event) {
 
 void WifiSettingsUi::SwitchEvent(lv_event_t* event) {
     auto* ui = static_cast<WifiSettingsUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr && ui->action_sink_ != nullptr) {
-        const bool enabled = lv_obj_has_state(lv_event_get_target_obj(event), LV_STATE_CHECKED);
-        ui->action_sink_(ui->action_context_, host_ui::SystemUiAction{
-                                                  .type = host_ui::SystemUiActionType::kSetWifiEnabled,
-                                                  .value = enabled ? 1U : 0U,
-                                              });
+    if (ui == nullptr || ui->action_sink_ == nullptr || ui->SwitchBusy()) return;
+    auto* toggle = lv_event_get_target_obj(event);
+    ui->switch_requested_enabled_ = lv_obj_has_state(toggle, LV_STATE_CHECKED);
+    ui->switch_pending_us_ = static_cast<uint64_t>(esp_timer_get_time());
+    lv_obj_add_state(toggle, LV_STATE_DISABLED);
+    ui->switch_guard_ = lv_timer_create(SwitchGuardElapsed, 500, ui);
+    if (ui->switch_guard_) lv_timer_set_repeat_count(ui->switch_guard_, 1);
+    ui->QueueRender();
+    platform::lvgl::RequestDisplayRefresh(ui->display_);
+    ui->action_sink_(ui->action_context_, host_ui::SystemUiAction{
+                                              .type = host_ui::SystemUiActionType::kSetWifiEnabled,
+                                              .value = ui->switch_requested_enabled_ ? 1U : 0U,
+                                              .timestamp_us = ui->switch_pending_us_,
+                                          });
+}
+
+void WifiSettingsUi::SwitchGuardElapsed(lv_timer_t* timer) {
+    auto* ui = static_cast<WifiSettingsUi*>(lv_timer_get_user_data(timer));
+    ui->switch_guard_ = nullptr;
+    if (ui->visible_) {
+        ui->QueueRender();
+        platform::lvgl::RequestDisplayRefresh(ui->display_);
     }
 }
 
 void WifiSettingsUi::OpenScanEvent(lv_event_t* event) {
     auto* ui = static_cast<WifiSettingsUi*>(lv_event_get_user_data(event));
-    if (ui != nullptr && ui->action_sink_ != nullptr && ui->model_.enabled) {
+    if (ui != nullptr && ui->action_sink_ != nullptr && ui->model_.enabled && !ui->SwitchBusy()) {
         ui->scan_view_ = true;
         ui->scroll_offset_ = 0;
         ui->user_scrolled_ = false;
@@ -581,7 +603,12 @@ void WifiSettingsUi::RenderAsync(void* context) {
 void WifiSettingsUi::QueueRender() { (void)lv_async_call(RenderAsync, this); }
 
 void WifiSettingsUi::Update(const host_ui::WifiSettingsModel& model, bool pointer_busy) {
+    if (esp_lv_adapter_lock(-1) != ESP_OK) return;
+    struct Unlock {
+        ~Unlock() { esp_lv_adapter_unlock(); }
+    } unlock;
     model_ = model;
+    if (switch_pending_us_ == model.command_ack_us) switch_pending_us_ = 0;
     if (!visible_ || display_ == nullptr || action_sheet_visible_) {
         return;
     }
@@ -623,11 +650,7 @@ void WifiSettingsUi::Update(const host_ui::WifiSettingsModel& model, bool pointe
         portEXIT_CRITICAL(&render_lock_);
         return;
     }
-    if (esp_lv_adapter_lock(-1) != ESP_OK) {
-        return;
-    }
     RenderLocked();
-    esp_lv_adapter_unlock();
 }
 
 void WifiSettingsUi::PointerReleased() {
@@ -642,6 +665,14 @@ void WifiSettingsUi::PointerReleased() {
 }
 
 void WifiSettingsUi::Leave() {
+    if (esp_lv_adapter_lock(-1) != ESP_OK) return;
+    struct Unlock {
+        ~Unlock() { esp_lv_adapter_unlock(); }
+    } unlock;
+    if (switch_guard_) lv_timer_delete(switch_guard_);
+    switch_guard_ = nullptr;
+    switch_pending_us_ = 0;
+    (void)lv_async_call_cancel(RenderAsync, this);
     visible_ = false;
     action_sink_ = nullptr;
     action_context_ = nullptr;

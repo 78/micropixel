@@ -14,9 +14,12 @@
 #include "host/controller/remote/remote_control_agent.hpp"
 #include "host/fonts/language_packs.hpp"
 #include "host/logging/system_log_buffer.hpp"
+#include "host/network/async_wifi.hpp"
+#include "host/network/network_maintenance.hpp"
 #include "host/time/network_time.hpp"
 #include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
+#include "platform/network/network_route_source.hpp"
 #if !CONFIG_MICROPIXEL_BOARD_NULL
 #include "platform/lvgl/fonts/system_fonts.hpp"
 #endif
@@ -101,6 +104,15 @@ void FirmwareApp::Run() {
                  esp_err_to_name(event_status));
     }
 
+    // This stateless polymorphic adapter has a constant-initialized vptr. It
+    // cannot live in a zeroed BSS section; the larger runtime-owned state below can.
+    static platform::network::NetworkRouteSource network_routes;
+    static MICROPIXEL_EXT_RAM_BSS work::BackgroundExecutor wifi_worker("micropixel_wifi_ctl");
+    static MICROPIXEL_EXT_RAM_BSS host::network::AsyncWifi wifi(*services.wifi, wifi_worker);
+    static MICROPIXEL_EXT_RAM_BSS host::network::NetworkController network(wifi, *services.cellular, network_routes);
+    static MICROPIXEL_EXT_RAM_BSS host::network::NetworkMaintenance network_maintenance(network);
+    if (!network_maintenance.Start()) ESP_LOGE(kTag, "network maintenance timer unavailable");
+
     // These composition-root objects live for the lifetime of the firmware.
     // Keep them out of app_main's bounded stack and, on PSRAM boards, out of
     // internal SRAM: RemoteControlAgent owns several fixed-capacity protocol
@@ -115,9 +127,9 @@ void FirmwareApp::Run() {
         },
         &system_logs);
     static MICROPIXEL_EXT_RAM_BSS remote_control::RemoteControlAgent remote_control(
-        *services.wifi, *services.cellular, services.board_info, controls, system_logs, shell.SupportsScreenCapture());
+        network, services.board_info, controls, system_logs, shell.SupportsScreenCapture());
     static MICROPIXEL_EXT_RAM_BSS local_control::LocalControlAgent local_control(
-        *services.local_control, controls, system_logs, services.board_info, *services.wifi);
+        *services.local_control, controls, system_logs, services.board_info, network);
     if (!local_control.Start()) {
         ESP_LOGW(kTag, "local control is unavailable for this boot");
     }
@@ -155,8 +167,8 @@ void FirmwareApp::Run() {
         &remote_control);
     shell.BindLanguagePacks(language_packs);
 #endif
-    HostController(devices, app_store, *services.battery, *services.wifi, *services.cellular, *services.power, shell,
-                   controls, system_logs, remote_control, background_executor)
+    HostController(devices, app_store, *services.battery, network, *services.power, shell, controls, system_logs,
+                   remote_control, background_executor)
         .Run();
 }
 

@@ -176,20 +176,15 @@ components retain their complete license files.
 
 ### NT26 UART transport dependencies
 
-The ESP32-P4 build includes the factory NT26 transport prerequisites from the ESP Component Registry:
+The ESP32-P4 build uses these Apache-2.0 components from the ESP Component Registry:
 
-- `78/uart-uhci` 0.2.2: <https://github.com/78/uart-uhci>, Apache-2.0;
-- `espressif/iot_eth` 0.1.0: <https://github.com/espressif/esp-iot-solution/tree/40e383f968c13e87e709c9d52a39892eca376e25/components/iot_eth>, Apache-2.0.
+- `78/uart-uhci` 0.4.0: <https://github.com/78/uart-uhci>;
+- `78/uart-eth-modem` 0.7.0: <https://github.com/78/uart-eth-modem>;
+- `espressif/iot_eth` 1.1.0: <https://github.com/espressif/esp-iot-solution/tree/master/components/iot_eth>.
 
-The dependency declarations are recorded in `firmware/espressif/main/idf_component.yml`. The local uart-uhci copy
-in `firmware/espressif/third_party/uart-uhci` retains upstream documentation and package metadata, with an
-Apache-2.0 license copy. Its `MICROPIXEL.md` records the ESP-IDF 6.1 compatibility changes. The managed iot_eth
-component retains its license file. These prerequisites alone do not enable cellular connectivity.
-
-`firmware/espressif/third_party/uart-eth-modem` ports the factory NT26 driver from
-MetalioClaw4 revision `ca3aa3fa027ff7dad2adf0c2d03c4f24aa838950`, whose header identifies
-`78/uart-eth-modem` 0.4.2 (Copyright 2025 Terrence, Apache-2.0). Its `MICROPIXEL.md`
-records the protocol-preserving lifecycle, bounded-buffer and ESP-IDF compatibility changes.
+Exact versions are recorded in `firmware/espressif/main/idf_component.yml`. The UHCI package declares
+Apache-2.0 in its manifest; the modem and iot_eth packages also include their upstream license texts.
+MicroPixel does not maintain a copied NT26 or UHCI implementation.
 
 ## Font Awesome glyphs
 

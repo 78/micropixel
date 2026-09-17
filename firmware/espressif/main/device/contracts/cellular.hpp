@@ -35,9 +35,8 @@ struct CellularSnapshot final {
     bool switching{};
     bool switch_failed{};
     CellularSimSlot sim_slot{CellularSimSlot::kUnknown};
-    bool sim_pending{};
+    bool sim_pending{};  // An accepted SIM change, never read-only diagnostic sampling.
     bool sim_failed{};
-    uint8_t sim_restart_seconds{};
     CellularState state{CellularState::kOff};
 };
 
@@ -50,12 +49,13 @@ class Cellular {
     virtual ~Cellular() = default;
     [[nodiscard]] virtual std::expected<void, CellularError> Initialize() = 0;
     [[nodiscard]] virtual CellularSnapshot Snapshot() const = 0;
-    // Atomically reserve a stable network configuration for OTA. A successful
-    // caller must EndFirmwareUpdate on every return path; configuration changes
-    // and sleep must reject while reserved. Unsupported cellular services allow OTA.
-    [[nodiscard]] virtual bool TryBeginFirmwareUpdate() = 0;
-    virtual void EndFirmwareUpdate() = 0;
-    virtual void RequestSignalRefresh() {}
+    // Atomically hold configuration and prevent sleep. Read-only diagnostic
+    // sampling may continue; SIM switching, radio changes and recovery may not.
+    // Unsupported services accept the hold. Host owns the reason and lifetime.
+    [[nodiscard]] virtual bool TryHoldConfiguration() = 0;
+    virtual void ReleaseConfiguration() = 0;
+    // Nonblocking maintenance; the Host scheduler owns cadence, never a UI page.
+    virtual void Poll() {}
     virtual void RequestSimRefresh() {}
     [[nodiscard]] virtual std::expected<void, CellularError> SetSimSlot(CellularSimSlot) {
         return std::unexpected(CellularError::kUnavailable);

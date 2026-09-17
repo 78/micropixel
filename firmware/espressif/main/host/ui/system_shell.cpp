@@ -47,6 +47,14 @@ void SystemShell::UpdateHallInstallProgress(uint32_t app_index, uint8_t progress
 std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
     TickType_t receive_timeout = AutoSleepAwareTimeout(timeout);
     for (;;) {
+        {
+            std::lock_guard lock(network_switch_action_mutex_);
+            if (network_switch_action_overflow_) {
+                const auto action = *network_switch_action_overflow_;
+                network_switch_action_overflow_.reset();
+                return action;
+            }
+        }
         if (action_sheet_pending_.exchange(false, std::memory_order_acq_rel)) {
             ui_.PresentPendingActionSheet();
         }
@@ -72,7 +80,7 @@ std::optional<SystemUiAction> SystemShell::PollAction(TickType_t timeout) {
                 continue;
             }
             action.timestamp_us = power_off_timestamp_us_.load(std::memory_order_acquire);
-        } else if (action.type == SystemUiActionType::kWifiStateChanged) {
+        } else if (action.type == SystemUiActionType::kNetworkStateChanged) {
             wifi_state_change_pending_.store(false, std::memory_order_release);
             wifi_state_change_queued_.store(false, std::memory_order_release);
         } else if (action.type == SystemUiActionType::kBatteryStateChanged) {
@@ -309,7 +317,7 @@ bool SystemShell::ConsumePowerButtonPressed() {
     return pending;
 }
 
-void SystemShell::NotifyWifiStateChanged() {
+void SystemShell::NotifyNetworkStateChanged() {
     if (action_queue_ == nullptr) {
         return;
     }
@@ -405,7 +413,7 @@ void SystemShell::QueuePendingWifiStateChange() {
         wifi_state_change_queued_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    const SystemUiAction action{.type = SystemUiActionType::kWifiStateChanged};
+    const SystemUiAction action{.type = SystemUiActionType::kNetworkStateChanged};
     if (xQueueSend(action_queue_, &action, 0U) != pdTRUE) {
         wifi_state_change_queued_.store(false, std::memory_order_release);
     }
@@ -512,6 +520,10 @@ void SystemShell::ResetActionQueue() {
         return;
     }
     (void)xQueueReset(action_queue_);
+    {
+        std::lock_guard lock(network_switch_action_mutex_);
+        network_switch_action_overflow_.reset();
+    }
     power_button_queued_.store(false, std::memory_order_release);
     power_off_queued_.store(false, std::memory_order_release);
     wifi_state_change_queued_.store(false, std::memory_order_release);
@@ -536,6 +548,12 @@ void SystemShell::ReceiveAction(void* context, const SystemUiAction& action) {
             return;
         }
         if (xQueueSend(shell->action_queue_, &action, 0U) != pdTRUE) {
+            if (action.type == SystemUiActionType::kSetCellularEnabled ||
+                action.type == SystemUiActionType::kSetWifiEnabled) {
+                std::lock_guard lock(shell->network_switch_action_mutex_);
+                shell->network_switch_action_overflow_ = action;
+                return;
+            }
             ESP_LOGW(kTag, "System action queue full; dropped action=%u", static_cast<unsigned>(action.type));
         }
     }

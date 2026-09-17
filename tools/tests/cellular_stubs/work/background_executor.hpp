@@ -1,22 +1,31 @@
 #pragma once
+#include <deque>
 namespace micropixel::work {
 class BackgroundExecutor {
    public:
     bool accepting = true;
+    unsigned capacity = 1;
     bool Submit(void (*function)(void*), void* context) {
-        if (!accepting || pending_) return false;
-        pending_ = function;
-        context_ = context;
+        if (!accepting || pending_.size() >= capacity) return false;
+        pending_.push_back({function, context});
         return true;
     }
+    void Shutdown() {
+        while (!pending_.empty()) Run();
+        accepting = false;
+    }
     void Run() {
-        auto function = pending_;
-        pending_ = nullptr;
-        if (function) function(context_);
+        if (pending_.empty()) return;
+        const auto job = pending_.front();
+        pending_.pop_front();
+        job.function(job.context);
     }
 
    private:
-    void (*pending_)(void*){};
-    void* context_{};
+    struct Job {
+        void (*function)(void*);
+        void* context;
+    };
+    std::deque<Job> pending_;
 };
 }  // namespace micropixel::work

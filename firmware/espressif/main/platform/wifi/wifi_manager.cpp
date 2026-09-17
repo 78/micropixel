@@ -295,12 +295,11 @@ std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
         return std::unexpected(WifiErrorFor(radio_status));
     }
 
+    // STA_START may arrive before esp_wifi_start returns and must be allowed to
+    // start discovery. Expose controls only after the full startup completes.
     {
         ScopedLock lock(mutex_);
         initialized_ = true;
-        Cold().snapshot.available = true;
-        Cold().snapshot.enabled = enabled_;
-        RebuildSnapshotLocked();
     }
     if (enabled_) {
         esp_err_t status = InitializeDriver();
@@ -324,6 +323,13 @@ std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
 #endif
             return std::unexpected(WifiErrorFor(status));
         }
+    }
+    {
+        ScopedLock lock(mutex_);
+        controls_ready_ = true;
+        Cold().snapshot.available = true;
+        Cold().snapshot.enabled = enabled_;
+        RebuildSnapshotLocked();
     }
     ESP_LOGI(kTag, "Wi-Fi manager ready: radio=%s enabled=%s saved=%lu", radio_.Name(), enabled_ ? "yes" : "no",
              static_cast<unsigned long>(profile_count_));
@@ -1343,7 +1349,7 @@ void WifiManager::ProcessPendingSettingsSaves() {
 }
 
 void WifiManager::RebuildSnapshotLocked() {
-    Cold().snapshot.available = initialized_;
+    Cold().snapshot.available = initialized_ && controls_ready_;
     Cold().snapshot.enabled = enabled_;
     Cold().snapshot.saved_network_count = profile_count_;
     Cold().snapshot.available_network_count = 0U;

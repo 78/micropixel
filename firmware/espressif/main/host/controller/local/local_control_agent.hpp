@@ -8,13 +8,13 @@
 
 #include "device/contracts/board_info.hpp"
 #include "device/contracts/local_control.hpp"
-#include "device/contracts/wifi.hpp"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "host/controller/control_dispatcher.hpp"
 #include "host/logging/system_log_buffer.hpp"
+#include "host/network/network.hpp"
 
 namespace micropixel::firmware::local_control {
 
@@ -23,7 +23,8 @@ namespace micropixel::firmware::local_control {
 class LocalControlAgent final {
    public:
     LocalControlAgent(device::LocalControl& transport, control::ControlDispatcher& controls,
-                      logging::SystemLogBuffer& system_logs, const device::BoardInfo& board_info, device::Wifi& wifi);
+                      logging::SystemLogBuffer& system_logs, const device::BoardInfo& board_info,
+                      host::network::Network& network);
     ~LocalControlAgent();
     LocalControlAgent(const LocalControlAgent&) = delete;
     LocalControlAgent& operator=(const LocalControlAgent&) = delete;
@@ -89,7 +90,8 @@ class LocalControlAgent final {
     control::ControlDispatcher& controls_;
     logging::SystemLogBuffer& system_logs_;
     const device::BoardInfo& board_info_;
-    device::Wifi& wifi_;
+    host::network::Network& network_;
+    host::network::NetworkSnapshot network_workspace_{};
     StaticQueue_t response_queue_storage_{};
     uint8_t* response_queue_bytes_{};
     QueueHandle_t response_queue_{};

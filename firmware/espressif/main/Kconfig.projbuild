@@ -379,6 +379,15 @@ menu "MicroPixel board backends"
             Guest transition. Only one thumbnail can persist because only one
             Guest can be resident.
 
+    config MICROPIXEL_CELLULAR_DEBUG
+        bool "Enable NT26 modem transport diagnostics"
+        depends on MICROPIXEL_BOARD_METALIO_CLAW4
+        default n
+        help
+            Enable the modem's AT and UART handshake traces without raising
+            the global log level. Diagnostic only; logs affect timing and
+            may contain modem or SIM identifiers.
+
 endmenu
 
 menu "MicroPixel system time"

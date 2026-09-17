@@ -2,6 +2,7 @@
 #define MICROPIXEL_FIRMWARE_HOST_CONTROLLER_HPP
 
 #include "host/controller/host_power_state.hpp"
+#include "host/network/network.hpp"
 
 namespace micropixel::device {
 class Battery;
@@ -40,7 +41,7 @@ class RemoteControlAgent;
 class HostController final {
    public:
     HostController(device::DeviceServices& devices, runtime::AppStore& app_store, device::Battery& battery,
-                   device::Wifi& wifi, device::Cellular& cellular, device::Power& power, host_ui::SystemShell& shell,
+                   host::network::Network& network, device::Power& power, host_ui::SystemShell& shell,
                    control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
                    remote_control::RemoteControlAgent& remote_control, work::BackgroundExecutor& background_executor);
     ~HostController();
@@ -53,6 +54,7 @@ class HostController final {
     device::DeviceServices& devices_;
     runtime::AppStore& app_store_;
     device::Battery& battery_;
+    host::network::Network& network_;
     device::Wifi& wifi_;
     device::Cellular& cellular_;
     device::Power& power_;

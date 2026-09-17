@@ -137,6 +137,10 @@ class StatusLayerUi final {
     static void CellularBackEvent(lv_event_t* event);
     static void CellularScrollEvent(lv_event_t* event);
     static void CellularEvent(lv_event_t* event);
+    static void CellularSwitchGuardElapsed(lv_timer_t* timer);
+    [[nodiscard]] bool CellularSwitchBusy() const {
+        return cellular_switching_ || cellular_command_pending_us_ != 0 || cellular_switch_guard_ != nullptr;
+    }
     void ShowCellularDialogLocked();
     void UpdateCellularDialogLocked();
     static void SliderEvent(lv_event_t* event);
@@ -163,23 +167,22 @@ class StatusLayerUi final {
     bool cellular_available_{};
     bool cellular_enabled_{};
     bool cellular_switching_{};
+    uint64_t cellular_command_pending_us_{};
+    lv_timer_t* cellular_switch_guard_{};
     bool cellular_sim_pending_{};
     bool cellular_sim_failed_{};
-    uint8_t cellular_sim_restart_seconds_{};
     bool cellular_switch_failed_{};
     device::CellularSimSlot cellular_sim_slot_{device::CellularSimSlot::kUnknown};
     lv_obj_t* cellular_dialog_{};
-    lv_obj_t* cellular_status_{};
+    lv_obj_t* cellular_sections_{};
+    bool cellular_sections_ready_{};
     lv_obj_t* cellular_mode_{};
     lv_obj_t* cellular_mode_label_{};
     lv_obj_t* cellular_sim_buttons_[2]{};
-    lv_obj_t* cellular_refresh_{};
     const SystemPageLayout& cellular_layout_;
     device::CellularDiagnostics cellular_diagnostics_{};
     device::CellularState cellular_state_{};
     bool cellular_connected_{};
-    lv_obj_t* cellular_hint_{};
-    lv_obj_t* cellular_freshness_{};
     lv_obj_t* cellular_sim_labels_[2]{};
     lv_obj_t* cellular_detail_values_[8]{};
     lv_obj_t* quick_panels_[3]{};

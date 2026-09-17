@@ -20,6 +20,7 @@
 #include "host/controller/remote/remote_identity_store.hpp"
 #include "host/fonts/font_download.hpp"
 #include "host/logging/system_log_buffer.hpp"
+#include "host/network/network.hpp"
 #include "host/ui/system_ui.hpp"
 
 struct cJSON;
@@ -36,7 +37,7 @@ namespace micropixel::firmware::remote_control {
 // WAMR, LVGL, or board drivers from an HTTP/3 callback.
 class RemoteControlAgent final {
    public:
-    RemoteControlAgent(device::Wifi& wifi, device::Cellular& cellular, const device::BoardInfo& board_info,
+    RemoteControlAgent(host::network::Network& network, const device::BoardInfo& board_info,
                        control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
                        bool screen_capture_supported);
     RemoteControlAgent(const RemoteControlAgent&) = delete;
@@ -175,8 +176,7 @@ class RemoteControlAgent final {
 
     host::fonts::FontDownload* font_download_{};
     control::ControlDispatcher& controls_;
-    device::Wifi& wifi_;
-    device::Cellular& cellular_;
+    host::network::Network& network_;
     const device::BoardInfo& board_info_;
     RemoteIdentityStore identity_store_;
     mutable std::mutex model_mutex_;

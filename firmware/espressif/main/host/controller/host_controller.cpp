@@ -57,7 +57,7 @@ constexpr TickType_t kCooperativeStopTimeout = pdMS_TO_TICKS(500);
 constexpr TickType_t kForcedStopTimeout = pdMS_TO_TICKS(2500);
 constexpr int64_t kPerformanceSamplePeriodUs = 1000LL * 1000LL;
 constexpr int64_t kBatterySamplePeriodUs = 1000000;
-constexpr int64_t kHallStatusSamplePeriodUs = 30LL * 1000LL * 1000LL;
+constexpr int64_t kHallStatusSamplePeriodUs = 5LL * 1000LL * 1000LL;
 constexpr int64_t kWifiScanRefreshDelayUs = 10LL * 1000LL * 1000LL;
 constexpr int64_t kWifiScanRetryDelayUs = 1000LL * 1000LL;
 constexpr TickType_t kPowerSuspendTimeout = pdMS_TO_TICKS(500U);
@@ -187,18 +187,6 @@ uint64_t HallCoverKey(const runtime::InstalledApp& app) {
     return key != 0U ? key : 1U;
 }
 
-host_ui::HallWifiModel MakeHallWifiModel(const device::WifiSnapshot& wifi) {
-    host_ui::HallWifiModel model{.available = wifi.available, .enabled = wifi.enabled, .connected = wifi.connected};
-    for (uint32_t index = 0U; index < wifi.saved_network_count; ++index) {
-        if (wifi.saved_networks[index].connected) {
-            model.ssid = wifi.saved_networks[index].ssid;
-            model.rssi = wifi.saved_networks[index].rssi;
-            break;
-        }
-    }
-    return model;
-}
-
 host_ui::HallBatteryModel MakeHallBatteryModel(const device::BatterySnapshot& battery) {
     const bool charging =
         hall_battery_policy::ShowCharging(battery.charging_available, battery.charging,
@@ -206,12 +194,19 @@ host_ui::HallBatteryModel MakeHallBatteryModel(const device::BatterySnapshot& ba
     return {.percent = battery.percent, .available = battery.available, .charging = charging};
 }
 
-host_ui::HallStatusBarModel MakeHallStatusBarModel(const device::WifiSnapshot& wifi, device::Cellular& cellular_service,
+host_ui::HallStatusBarModel MakeHallStatusBarModel(host::network::Network& network,
                                                    const device::BatterySnapshot& battery) {
-    cellular_service.RequestSignalRefresh();
-    const auto cellular = cellular_service.Snapshot();
+    // Only the Host UI task builds these models; keep the copied route off its stack.
+    static MICROPIXEL_EXT_RAM_BSS host::network::NetworkSnapshot snapshot;
+    network.CopySnapshot(snapshot);
+    const auto& wifi = snapshot.wifi;
+    const auto& cellular = snapshot.cellular;
     return {.time_text = system_time::FormatBeijingClock(std::time(nullptr)),
-            .wifi = MakeHallWifiModel(wifi),
+            .wifi = {.ssid = wifi.ssid,
+                     .rssi = wifi.rssi,
+                     .available = wifi.available,
+                     .enabled = wifi.enabled,
+                     .connected = wifi.connected},
             .cellular = {.signal_bars = cellular.signal_bars,
                          .available = cellular.available,
                          .enabled = cellular.enabled,
@@ -220,9 +215,9 @@ host_ui::HallStatusBarModel MakeHallStatusBarModel(const device::WifiSnapshot& w
 }
 
 void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog& catalog,
-                   const device::WifiSnapshot& wifi, device::Cellular& cellular, const device::BatterySnapshot& battery,
-                   host_ui::HallStatus status, const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U,
-                   bool launch_enabled = true, const std::optional<uint32_t>& suspended_index = std::nullopt,
+                   host::network::Network& network, const device::BatterySnapshot& battery, host_ui::HallStatus status,
+                   const runtime::AppRunOutcome* outcome = nullptr, uint32_t detail = 0U, bool launch_enabled = true,
+                   const std::optional<uint32_t>& suspended_index = std::nullopt,
                    const host_ui::HallCoverModel* suspended_snapshot = nullptr, uint64_t transition_trigger_us = 0U,
                    bool firmware_update_available = false, const control::InstallActivity* install_activity = nullptr) {
     const bool install_active = install_activity != nullptr && install_activity->active;
@@ -245,7 +240,7 @@ void FillHallModel(host_ui::HallModel& model, const runtime::InstalledAppCatalog
     model.status_exit_code = outcome != nullptr ? outcome->exit_code : 0;
     model.status_has_exit_code = outcome != nullptr && outcome->has_exit_code;
     model.launch_enabled = launch_enabled && !install_active;
-    model.status_bar = MakeHallStatusBarModel(wifi, cellular, battery);
+    model.status_bar = MakeHallStatusBarModel(network, battery);
     model.transition_trigger_us = transition_trigger_us;
     model.firmware_update_available = firmware_update_available;
     model.install_active = install_active;
@@ -329,9 +324,8 @@ void RefreshStatusMetrics(host_ui::StatusLayerModel& model, const runtime::Insta
     (void)RefreshBatteryStatus(model, battery);
 }
 
-void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::WifiSnapshot& snapshot,
-                       device::Cellular& cellular) {
-    cellular.RequestSignalRefresh();
+void RefreshNetworkStatus(host_ui::StatusLayerModel& model, const device::WifiSnapshot& snapshot,
+                          device::Cellular& cellular) {
     const auto cell = cellular.Snapshot();
     model.cellular_diagnostics = cell.diagnostics;
     model.cellular_state = cell.state;
@@ -343,21 +337,20 @@ void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::WifiSnaps
     model.cellular_sim_slot = cell.sim_slot;
     model.cellular_sim_pending = cell.sim_pending;
     model.cellular_sim_failed = cell.sim_failed;
-    model.cellular_sim_restart_seconds = cell.sim_restart_seconds;
     model.wifi_available = snapshot.available;
     model.wifi_enabled = snapshot.enabled;
     model.wifi_connected = snapshot.connected;
     model.wifi_connecting = snapshot.connection_state == device::WifiConnectionState::kConnecting;
 }
 
-void RefreshWifiStatus(host_ui::StatusLayerModel& model, const device::Wifi& wifi, device::Cellular& cellular) {
+void RefreshNetworkStatus(host_ui::StatusLayerModel& model, const device::Wifi& wifi, device::Cellular& cellular) {
     // Only the Host task uses this scratch snapshot. Construct the returned value
     // directly in PSRAM; assignment would materialize the network lists on the
     // caller's stack for the entire menu loop, including nested font installation.
     static MICROPIXEL_EXT_RAM_BSS device::WifiSnapshot snapshot;
     std::destroy_at(&snapshot);
     new (static_cast<void*>(&snapshot)) device::WifiSnapshot(wifi.Snapshot());
-    RefreshWifiStatus(model, snapshot, cellular);
+    RefreshNetworkStatus(model, snapshot, cellular);
 }
 
 host_ui::WifiBand HostWifiBand(device::WifiBand band) {
@@ -406,7 +399,7 @@ host_ui::WifiNetworkModel MakeWifiNetworkModel(const device::WifiNetwork& networ
     };
 }
 
-host_ui::WifiSettingsModel MakeWifiSettingsModel(const device::WifiSnapshot& snapshot) {
+host_ui::WifiSettingsModel MakeWifiSettingsModel(const device::WifiSnapshot& snapshot, uint64_t command_ack_us = 0) {
     host_ui::WifiSettingsModel model{
         .saved_network_count = snapshot.saved_network_count,
         .available_network_count = snapshot.available_network_count,
@@ -414,6 +407,9 @@ host_ui::WifiSettingsModel MakeWifiSettingsModel(const device::WifiSnapshot& sna
         .enabled = snapshot.enabled,
         .connected = snapshot.connected,
         .scanning = snapshot.scanning,
+        .control_pending = snapshot.control_pending,
+        .control_failed = snapshot.control_failed,
+        .command_ack_us = command_ack_us,
         .connection_state = HostWifiConnectionState(snapshot.connection_state),
     };
     for (uint32_t index = 0U; index < snapshot.saved_network_count && index < model.saved_networks.size(); ++index) {
@@ -435,7 +431,8 @@ bool SameWifiNetwork(const device::WifiNetwork& left, const device::WifiNetwork&
 bool SameWifiSnapshot(const device::WifiSnapshot& left, const device::WifiSnapshot& right) {
     if (left.saved_network_count != right.saved_network_count ||
         left.available_network_count != right.available_network_count || left.available != right.available ||
-        left.enabled != right.enabled || left.connected != right.connected || left.scanning != right.scanning) {
+        left.enabled != right.enabled || left.connected != right.connected || left.scanning != right.scanning ||
+        left.control_pending != right.control_pending || left.control_failed != right.control_failed) {
         return false;
     }
     if (left.connection_state != right.connection_state) {
@@ -526,10 +523,9 @@ struct FirmwareUpdateSummary {
 }
 
 [[gnu::noinline]] void RefreshHallStatus(host_ui::SystemShell& shell, host_ui::StatusLayerModel& status,
-                                         device::Wifi& wifi, device::Cellular& cellular, device::Battery& battery) {
-    const auto snapshot = wifi.Snapshot();
-    RefreshWifiStatus(status, snapshot, cellular);
-    shell.UpdateHallStatusBar(MakeHallStatusBarModel(snapshot, cellular, battery.Snapshot()));
+                                         host::network::Network& network, device::Battery& battery) {
+    RefreshNetworkStatus(status, network.WifiControl(), network.CellularControl());
+    shell.UpdateHallStatusBar(MakeHallStatusBarModel(network, battery.Snapshot()));
 }
 
 [[gnu::noinline]] void InitializeHostSettings(host_ui::SystemSettingsStore& store, host_ui::StatusLayerModel& status,
@@ -543,7 +539,7 @@ struct FirmwareUpdateSummary {
     if (!agent.Start(settings.enabled)) {
         ESP_LOGW(kTag, "Remote Control agent is unavailable for this boot");
     }
-    RefreshWifiStatus(status, wifi, cellular);
+    RefreshNetworkStatus(status, wifi, cellular);
 }
 
 TickType_t DeadlineWaitTimeout(int64_t deadline_us) {
@@ -946,7 +942,7 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
         shell.StopWatchingGuestActions();
     }
     RefreshStatusMetrics(model, catalog, battery);
-    RefreshWifiStatus(model, wifi, cellular);
+    RefreshNetworkStatus(model, wifi, cellular);
     auto initial_model = model;
     initial_model.open_cellular_settings = open_cellular_settings;
     if (open_cellular_settings) cellular.RequestSimRefresh();
@@ -972,7 +968,6 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
     bool settings_changed = false;
     uint64_t close_trigger_timestamp_us = 0U;
     while (!close) {
-        cellular.RequestSignalRefresh();
         const TickType_t timeout =
             model.performance_overlay_enabled ? DeadlineWaitTimeout(next_performance_sample_us) : pdMS_TO_TICKS(250);
         const auto action = shell.PollAction(RemoteAwareTimeout(timeout, command_pump));
@@ -1028,8 +1023,8 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
                 }
                 controls_changed = true;
                 break;
-            case host_ui::SystemUiActionType::kWifiStateChanged:
-                RefreshWifiStatus(model, wifi, cellular);
+            case host_ui::SystemUiActionType::kNetworkStateChanged:
+                RefreshNetworkStatus(model, wifi, cellular);
                 controls_changed = true;
                 break;
             case host_ui::SystemUiActionType::kBatteryStateChanged:
@@ -1038,23 +1033,25 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
                 break;
             case host_ui::SystemUiActionType::kRefreshCellularSim:
                 cellular.RequestSimRefresh();
-                RefreshWifiStatus(model, wifi.Snapshot(), cellular);
+                RefreshNetworkStatus(model, wifi, cellular);
                 controls_changed = true;
                 break;
             case host_ui::SystemUiActionType::kSetCellularSimSlot: {
                 if (ReadFirmwareUpdate(remote_control).in_progress || action->value > 1U) break;
                 const auto result = cellular.SetSimSlot(static_cast<device::CellularSimSlot>(action->value));
                 if (!result) ESP_LOGW(kTag, "SIM switch rejected: error=%u", static_cast<unsigned>(result.error()));
-                RefreshWifiStatus(model, wifi.Snapshot(), cellular);
+                RefreshNetworkStatus(model, wifi, cellular);
                 controls_changed = true;
                 break;
             }
             case host_ui::SystemUiActionType::kSetCellularEnabled: {
-                if (ReadFirmwareUpdate(remote_control).in_progress) break;
+                // Acknowledge both acceptance and rejection so the UI can release
+                // its local latch even if an OTA hold rejects the request.
+                model.cellular_command_ack_us = action->timestamp_us;
                 const auto result = cellular.SetEnabled(action->value != 0);
                 if (!result)
                     ESP_LOGW(kTag, "cellular mode switch rejected: error=%u", static_cast<unsigned>(result.error()));
-                RefreshWifiStatus(model, wifi.Snapshot(), cellular);
+                RefreshNetworkStatus(model, wifi, cellular);
                 controls_changed = true;
                 break;
             }
@@ -1102,14 +1099,31 @@ bool RunStatusLayer(host_ui::SystemShell& shell, AppController* controller, devi
 
 bool RunWifiSettings(host_ui::SystemShell& shell, device::Wifi& wifi, device::Cellular& cellular,
                      host_ui::StatusLayerModel& status_model, RemoteCommandPump* command_pump) {
-    device::WifiSnapshot snapshot = wifi.Snapshot();
-    RefreshWifiStatus(status_model, snapshot, cellular);
-    auto show_result = shell.ShowWifiSettings(MakeWifiSettingsModel(snapshot));
+    struct Workspace {
+        device::WifiSnapshot snapshot;
+        device::WifiSnapshot refreshed;
+        host_ui::WifiSettingsModel model;
+    };
+    static MICROPIXEL_EXT_RAM_BSS Workspace workspace;
+    auto& snapshot = workspace.snapshot;
+    const auto read_snapshot = [&wifi](device::WifiSnapshot& destination) {
+        destination.~WifiSnapshot();
+        new (&destination) device::WifiSnapshot(wifi.Snapshot());
+    };
+    const auto make_model = [&workspace = workspace](uint64_t ack) -> const host_ui::WifiSettingsModel& {
+        workspace.model.~WifiSettingsModel();
+        new (&workspace.model) host_ui::WifiSettingsModel(MakeWifiSettingsModel(workspace.snapshot, ack));
+        return workspace.model;
+    };
+    read_snapshot(snapshot);
+    RefreshNetworkStatus(status_model, snapshot, cellular);
+    auto show_result = shell.ShowWifiSettings(make_model(0));
     if (!show_result) {
         ESP_LOGE(kTag, "failed to show Wi-Fi settings: error=%u", static_cast<unsigned>(show_result.error()));
         return false;
     }
 
+    uint64_t command_ack_us = 0;
     bool scan_view = false;
     bool scan_cycle_active = false;
     int64_t next_scan_request_us = 0;
@@ -1118,19 +1132,20 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::Wifi& wifi, device::Ce
             scan_view && snapshot.enabled ? DeadlineWaitTimeout(next_scan_request_us) : portMAX_DELAY;
         const auto action = shell.PollAction(RemoteAwareTimeout(timeout, command_pump));
         if (command_pump != nullptr && command_pump->Process()) {
-            snapshot = wifi.Snapshot();
-            RefreshWifiStatus(status_model, snapshot, cellular);
+            read_snapshot(snapshot);
+            RefreshNetworkStatus(status_model, snapshot, cellular);
             shell.LeaveWifiSettings();
             return true;
         }
         bool refresh_snapshot = false;
+        bool acknowledge_switch = false;
         if (action.has_value()) {
             std::expected<void, device::WifiError> operation{};
             switch (action->type) {
                 case host_ui::SystemUiActionType::kCloseWifiSettings:
                 case host_ui::SystemUiActionType::kSuspendToHall:
-                    snapshot = wifi.Snapshot();
-                    RefreshWifiStatus(status_model, snapshot, cellular);
+                    read_snapshot(snapshot);
+                    RefreshNetworkStatus(status_model, snapshot, cellular);
                     shell.LeaveWifiSettings();
                     return true;
                 case host_ui::SystemUiActionType::kOpenWifiNetworkScan:
@@ -1148,6 +1163,8 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::Wifi& wifi, device::Ce
                     next_scan_request_us = 0;
                     break;
                 case host_ui::SystemUiActionType::kSetWifiEnabled:
+                    command_ack_us = action->timestamp_us;
+                    acknowledge_switch = refresh_snapshot = true;
                     operation = wifi.SetEnabled(action->value != 0U);
                     break;
                 case host_ui::SystemUiActionType::kConnectSavedWifi:
@@ -1162,7 +1179,7 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::Wifi& wifi, device::Ce
                 case host_ui::SystemUiActionType::kForgetWifi:
                     operation = wifi.Forget(action->text.data());
                     break;
-                case host_ui::SystemUiActionType::kWifiStateChanged:
+                case host_ui::SystemUiActionType::kNetworkStateChanged:
                     refresh_snapshot = true;
                     break;
                 default:
@@ -1177,11 +1194,12 @@ bool RunWifiSettings(host_ui::SystemShell& shell, device::Wifi& wifi, device::Ce
         }
 
         if (refresh_snapshot) {
-            device::WifiSnapshot refreshed = wifi.Snapshot();
-            if (!SameWifiSnapshot(snapshot, refreshed)) {
+            auto& refreshed = workspace.refreshed;
+            read_snapshot(refreshed);
+            if (acknowledge_switch || !SameWifiSnapshot(snapshot, refreshed)) {
                 snapshot = refreshed;
-                RefreshWifiStatus(status_model, snapshot, cellular);
-                shell.UpdateWifiSettings(MakeWifiSettingsModel(snapshot));
+                RefreshNetworkStatus(status_model, snapshot, cellular);
+                shell.UpdateWifiSettings(make_model(command_ack_us));
             }
         }
         if (!scan_view || !snapshot.enabled) {
@@ -1643,7 +1661,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                    remote_control::RemoteControlAgent& remote_control, bool launch_available,
                    const AppManagementUninstallHandler* uninstall_handler, std::optional<uint32_t>& launch_request,
                    RemoteCommandPump* command_pump, const char* effective_locale = "en") {
-    RefreshWifiStatus(status_model, wifi, cellular);
+    RefreshNetworkStatus(status_model, wifi, cellular);
     struct MenuSnapshots {
         host_ui::RemoteControlModel current{};
         host_ui::RemoteControlModel latest{};
@@ -1783,10 +1801,10 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
         if (!action.has_value()) {
             continue;
         }
-        if (language_busy && action->type != host_ui::SystemUiActionType::kWifiStateChanged) continue;
+        if (language_busy && action->type != host_ui::SystemUiActionType::kNetworkStateChanged) continue;
         if (language_sheet && action->type != host_ui::SystemUiActionType::kConfirmLanguage &&
             action->type != host_ui::SystemUiActionType::kCancelLanguage &&
-            action->type != host_ui::SystemUiActionType::kWifiStateChanged)
+            action->type != host_ui::SystemUiActionType::kNetworkStateChanged)
             continue;
         switch (action->type) {
             case host_ui::SystemUiActionType::kCancelLanguage:
@@ -1859,8 +1877,8 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     language_state = host_ui::LanguageDownloadState::kFailed;
                 shell.UpdateSystemMenu(make_model());
                 break;
-            case host_ui::SystemUiActionType::kWifiStateChanged:
-                RefreshWifiStatus(status_model, wifi, cellular);
+            case host_ui::SystemUiActionType::kNetworkStateChanged:
+                RefreshNetworkStatus(status_model, wifi, cellular);
                 shell.UpdateSystemMenu(make_model());
                 break;
             case host_ui::SystemUiActionType::kSelectSystemMenuItem:
@@ -1876,7 +1894,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                                         command_pump, remote_control, action->timestamp_us, true))
                         return false;
                     if (command_pump != nullptr && command_pump->unwind_requested) return true;
-                    RefreshWifiStatus(status_model, wifi, cellular);
+                    RefreshNetworkStatus(status_model, wifi, cellular);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) return false;
                 } else if (action->value == static_cast<uint32_t>(host_ui::SystemMenuItem::kWifi)) {
@@ -1887,7 +1905,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi, cellular);
+                    RefreshNetworkStatus(status_model, wifi, cellular);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after Wi-Fi: error=%u",
@@ -1903,7 +1921,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi, cellular);
+                    RefreshNetworkStatus(status_model, wifi, cellular);
                     remote_control.CopySnapshot(remote_control_model);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
@@ -1948,7 +1966,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (command_pump != nullptr && command_pump->unwind_requested) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi, cellular);
+                    RefreshNetworkStatus(status_model, wifi, cellular);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after System Information: error=%u",
@@ -1967,7 +1985,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                     if (launch_request.has_value()) {
                         return true;
                     }
-                    RefreshWifiStatus(status_model, wifi, cellular);
+                    RefreshNetworkStatus(status_model, wifi, cellular);
                     show_result = shell.ShowSystemMenu(make_model());
                     if (!show_result) {
                         ESP_LOGE(kTag, "failed to restore System Settings after App Management: error=%u",
@@ -1990,7 +2008,7 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
                 if (command_pump != nullptr && command_pump->unwind_requested) {
                     return true;
                 }
-                RefreshWifiStatus(status_model, wifi, cellular);
+                RefreshNetworkStatus(status_model, wifi, cellular);
                 show_result = shell.ShowSystemMenu(make_model());
                 if (!show_result) {
                     ESP_LOGE(kTag, "failed to restore System Settings after status layer: error=%u",
@@ -2009,10 +2027,11 @@ bool RunSystemMenu(host_ui::SystemShell& shell, device::Battery& battery, device
     }
 }
 
-void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, device::Wifi& wifi,
-                        device::Cellular& cellular, device::Power& power, HostPowerStateMachine& power_state,
-                        const runtime::InstalledAppCatalog& catalog, host_ui::HallStatus status, uint32_t detail,
-                        host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store,
+void RunUnavailableHall(host_ui::SystemShell& shell, host::network::Network& network, device::Battery& battery,
+                        device::Wifi& wifi, device::Cellular& cellular, device::Power& power,
+                        HostPowerStateMachine& power_state, const runtime::InstalledAppCatalog& catalog,
+                        host_ui::HallStatus status, uint32_t detail, host_ui::StatusLayerModel& status_model,
+                        host_ui::SystemSettingsStore& settings_store,
                         remote_control::RemoteControlAgent& remote_control) {
     struct ReadLifetime final {
         host_ui::SystemShell& shell;
@@ -2056,12 +2075,12 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
             power_pump.unwind_requested = false;
         }
         const device::WifiSnapshot wifi_snapshot = wifi.Snapshot();
-        RefreshWifiStatus(status_model, wifi_snapshot, cellular);
+        RefreshNetworkStatus(status_model, wifi_snapshot, cellular);
         const device::BatterySnapshot battery_snapshot = battery.Snapshot();
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control.Snapshot();
         const bool firmware_update_available = remote_control_snapshot.firmware_update_available;
-        FillHallModel(*hall_model, catalog, wifi_snapshot, cellular, battery_snapshot, status, nullptr, detail, false,
-                      std::nullopt, nullptr, 0U, firmware_update_available);
+        FillHallModel(*hall_model, catalog, network, battery_snapshot, status, nullptr, detail, false, std::nullopt,
+                      nullptr, 0U, firmware_update_available);
         if (!ShowHall(shell, *hall_model)) {
             return;
         }
@@ -2085,7 +2104,7 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
                 next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
             }
             if (now_us >= next_hall_status_sample_us) {
-                shell.UpdateHallStatusBar(MakeHallStatusBarModel(wifi.Snapshot(), cellular, battery.Snapshot()));
+                shell.UpdateHallStatusBar(MakeHallStatusBarModel(network, battery.Snapshot()));
                 next_hall_status_sample_us = now_us + kHallStatusSamplePeriodUs;
             }
             const host_ui::RemoteControlModel latest_remote_control = remote_control.Snapshot();
@@ -2096,19 +2115,19 @@ void RunUnavailableHall(host_ui::SystemShell& shell, device::Battery& battery, d
             if (!action.has_value()) {
                 continue;
             }
-            if (action->type == host_ui::SystemUiActionType::kWifiStateChanged) {
+            if (action->type == host_ui::SystemUiActionType::kNetworkStateChanged) {
                 const device::WifiSnapshot refreshed_wifi = wifi.Snapshot();
-                RefreshWifiStatus(status_model, refreshed_wifi, cellular);
-                shell.UpdateHallStatusBar(MakeHallStatusBarModel(refreshed_wifi, cellular, battery.Snapshot()));
+                RefreshNetworkStatus(status_model, refreshed_wifi, cellular);
+                shell.UpdateHallStatusBar(MakeHallStatusBarModel(network, battery.Snapshot()));
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kBatteryStateChanged) {
-                shell.UpdateHallStatusBar(MakeHallStatusBarModel(wifi.Snapshot(), cellular, battery.Snapshot()));
+                shell.UpdateHallStatusBar(MakeHallStatusBarModel(network, battery.Snapshot()));
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kTimeStateChanged) {
-                shell.UpdateHallStatusBar(MakeHallStatusBarModel(wifi.Snapshot(), cellular, battery.Snapshot()));
+                shell.UpdateHallStatusBar(MakeHallStatusBarModel(network, battery.Snapshot()));
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
@@ -2170,7 +2189,7 @@ class ActiveHost final {
    public:
     ActiveHost(runtime::InstalledAppCatalog&& catalog, runtime::AppStore& app_store, runtime::AppRuntime& runtime,
                device::DeviceServices& devices, host_ui::SystemShell& shell, device::Battery& battery,
-               device::Wifi& wifi, device::Cellular& cellular, device::Power& power, HostPowerStateMachine& power_state,
+               host::network::Network& network, device::Power& power, HostPowerStateMachine& power_state,
                host_ui::StatusLayerModel& status_model, host_ui::SystemSettingsStore& settings_store,
                control::ControlDispatcher& controls, remote_control::RemoteControlAgent& remote_control,
                std::string_view effective_locale)
@@ -2180,8 +2199,9 @@ class ActiveHost final {
           devices_(devices),
           shell_(shell),
           battery_(battery),
-          wifi_(wifi),
-          cellular_(cellular),
+          network_(network),
+          wifi_(network.WifiControl()),
+          cellular_(network.CellularControl()),
           power_(power),
           power_state_(power_state),
           status_model_(status_model),
@@ -2243,12 +2263,12 @@ class ActiveHost final {
     // Snapshot scratch must be released before entering the nested LVGL render path.
     [[gnu::noinline]] void PrepareCurrentHall() {
         const device::WifiSnapshot wifi_snapshot = wifi_.Snapshot();
-        RefreshWifiStatus(status_model_, wifi_snapshot, cellular_);
+        RefreshNetworkStatus(status_model_, wifi_snapshot, cellular_);
         const host_ui::RemoteControlModel remote_control_snapshot = remote_control_.Snapshot();
         hall_firmware_update_available_ = remote_control_snapshot.firmware_update_available;
         controls_.CopyInstallActivity(hall_install_activity_);
-        FillHallModel(hall_model_, catalog_, wifi_snapshot, cellular_, battery_.Snapshot(), hall_status_, outcome_,
-                      hall_detail_, CanLaunch(), suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
+        FillHallModel(hall_model_, catalog_, network_, battery_.Snapshot(), hall_status_, outcome_, hall_detail_,
+                      CanLaunch(), suspended_index_, &suspended_snapshot_, hall_transition_trigger_us_,
                       hall_firmware_update_available_, &hall_install_activity_);
     }
 
@@ -3030,7 +3050,7 @@ class ActiveHost final {
                 next_performance_sample_us = now_us + kPerformanceSamplePeriodUs;
             }
             if (now_us >= next_hall_status_sample_us) {
-                RefreshHallStatus(shell_, status_model_, wifi_, cellular_, battery_);
+                RefreshHallStatus(shell_, status_model_, network_, battery_);
                 next_hall_status_sample_us = now_us + kHallStatusSamplePeriodUs;
             }
             const auto update = ReadFirmwareUpdate(remote_control_);
@@ -3062,17 +3082,17 @@ class ActiveHost final {
             if (action.type == host_ui::SystemUiActionType::kRemoteCommandReady) {
                 continue;
             }
-            if (action.type == host_ui::SystemUiActionType::kWifiStateChanged) {
-                RefreshHallStatus(shell_, status_model_, wifi_, cellular_, battery_);
+            if (action.type == host_ui::SystemUiActionType::kNetworkStateChanged) {
+                RefreshHallStatus(shell_, status_model_, network_, battery_);
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kBatteryStateChanged) {
-                RefreshHallStatus(shell_, status_model_, wifi_, cellular_, battery_);
+                RefreshHallStatus(shell_, status_model_, network_, battery_);
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
             if (action.type == host_ui::SystemUiActionType::kTimeStateChanged) {
-                RefreshHallStatus(shell_, status_model_, wifi_, cellular_, battery_);
+                RefreshHallStatus(shell_, status_model_, network_, battery_);
                 next_hall_status_sample_us = esp_timer_get_time() + kHallStatusSamplePeriodUs;
                 continue;
             }
@@ -3415,8 +3435,8 @@ class ActiveHost final {
             if (!action.has_value()) {
                 continue;
             }
-            if (action->type == host_ui::SystemUiActionType::kWifiStateChanged) {
-                RefreshWifiStatus(status_model_, wifi_, cellular_);
+            if (action->type == host_ui::SystemUiActionType::kNetworkStateChanged) {
+                RefreshNetworkStatus(status_model_, wifi_, cellular_);
                 continue;
             }
             if (action->type == host_ui::SystemUiActionType::kTimeStateChanged) {
@@ -3719,6 +3739,7 @@ class ActiveHost final {
     device::DeviceServices& devices_;
     host_ui::SystemShell& shell_;
     device::Battery& battery_;
+    host::network::Network& network_;
     device::Wifi& wifi_;
     device::Cellular& cellular_;
     device::Power& power_;
@@ -3756,16 +3777,16 @@ class ActiveHost final {
 }  // namespace
 
 HostController::HostController(device::DeviceServices& devices, runtime::AppStore& app_store, device::Battery& battery,
-                               device::Wifi& wifi, device::Cellular& cellular, device::Power& power,
-                               host_ui::SystemShell& shell, control::ControlDispatcher& controls,
-                               logging::SystemLogBuffer& system_logs,
+                               host::network::Network& network, device::Power& power, host_ui::SystemShell& shell,
+                               control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
                                remote_control::RemoteControlAgent& remote_control,
                                work::BackgroundExecutor& background_executor)
     : devices_(devices),
       app_store_(app_store),
       battery_(battery),
-      wifi_(wifi),
-      cellular_(cellular),
+      network_(network),
+      wifi_(network.WifiControl()),
+      cellular_(network.CellularControl()),
       power_(power),
       shell_(shell),
       controls_(controls),
@@ -3774,17 +3795,10 @@ HostController::HostController(device::DeviceServices& devices, runtime::AppStor
       background_executor_(background_executor) {
     battery_.SetStateChangeSink(
         [](void* context) { static_cast<host_ui::SystemShell*>(context)->NotifyBatteryStateChanged(); }, &shell_);
-    cellular_.SetStateChangeSink(
+    network_.SetStateChangeSink(
         [](void* context) {
             auto* controller = static_cast<HostController*>(context);
-            controller->shell_.NotifyWifiStateChanged();
-            controller->remote_control_.NotifyNetworkChanged();
-        },
-        this);
-    wifi_.SetStateChangeSink(
-        [](void* context) {
-            auto* controller = static_cast<HostController*>(context);
-            controller->shell_.NotifyWifiStateChanged();
+            controller->shell_.NotifyNetworkStateChanged();
             controller->remote_control_.NotifyNetworkChanged();
         },
         this);
@@ -3818,8 +3832,7 @@ HostController::~HostController() {
     controls_.SetCommandReadySink(nullptr, nullptr);
     remote_control_.Stop();
     battery_.SetStateChangeSink(nullptr, nullptr);
-    wifi_.SetStateChangeSink(nullptr, nullptr);
-    cellular_.SetStateChangeSink(nullptr, nullptr);
+    network_.SetStateChangeSink(nullptr, nullptr);
     power_.SetPowerButtonSink(nullptr, nullptr);
     power_.SetPowerOffButtonSink(nullptr, nullptr);
 }
@@ -3882,7 +3895,7 @@ void HostController::Run() {
         catalog->Reset();
         UpdateControlCatalog(controls_, *catalog);
         controls_.UpdateAppLifecycle(nullptr, "not_running");
-        RunUnavailableHall(shell_, battery_, wifi_, cellular_, power_, power_state_, *catalog,
+        RunUnavailableHall(shell_, network_, battery_, wifi_, cellular_, power_, power_state_, *catalog,
                            host_ui::HallStatus::kNoApps, static_cast<uint32_t>(catalog_result.error()), status_model,
                            settings_store, remote_control_);
         return;
@@ -3894,7 +3907,7 @@ void HostController::Run() {
         runtime::AppRuntime::Initialize(devices_, background_executor_, locale.effective(), &system_logs_);
     if (!runtime_result) {
         ESP_LOGE(kTag, "AppRuntime initialization failed: error=%u", static_cast<unsigned>(runtime_result.error()));
-        RunUnavailableHall(shell_, battery_, wifi_, cellular_, power_, power_state_, *catalog,
+        RunUnavailableHall(shell_, network_, battery_, wifi_, cellular_, power_, power_state_, *catalog,
                            host_ui::HallStatus::kRuntimeUnavailable, static_cast<uint32_t>(runtime_result.error()),
                            status_model, settings_store, remote_control_);
         return;
@@ -3902,11 +3915,11 @@ void HostController::Run() {
 
     runtime::AppRuntime app_runtime = std::move(*runtime_result);
     auto active_host = MakePsramObject<ActiveHost>(std::move(*catalog), app_store_, app_runtime, devices_, shell_,
-                                                   battery_, wifi_, cellular_, power_, power_state_, status_model,
+                                                   battery_, network_, power_, power_state_, status_model,
                                                    settings_store, controls_, remote_control_, locale.effective());
     if (active_host == nullptr) {
         ESP_LOGE(kTag, "failed to allocate ActiveHost state");
-        RunUnavailableHall(shell_, battery_, wifi_, cellular_, power_, power_state_, *catalog,
+        RunUnavailableHall(shell_, network_, battery_, wifi_, cellular_, power_, power_state_, *catalog,
                            host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store,
                            remote_control_);
@@ -3914,7 +3927,7 @@ void HostController::Run() {
     }
     if (!active_host->Valid()) {
         ESP_LOGE(kTag, "AppController initialization failed");
-        RunUnavailableHall(shell_, battery_, wifi_, cellular_, power_, power_state_, active_host->catalog(),
+        RunUnavailableHall(shell_, network_, battery_, wifi_, cellular_, power_, power_state_, active_host->catalog(),
                            host_ui::HallStatus::kRuntimeUnavailable,
                            static_cast<uint32_t>(AppControllerError::kUnavailable), status_model, settings_store,
                            remote_control_);

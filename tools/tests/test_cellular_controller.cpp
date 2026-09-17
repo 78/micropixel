@@ -87,12 +87,15 @@ int main() {
         assert(controller.Snapshot().enabled && !controller.Snapshot().switching);
         UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Connected);
         background.Run();
+        controller.Poll();
+        background.Run();
         UartEthModem::stop_result = ESP_FAIL;
         assert(controller.SetEnabled(false));
         background.Run();
         assert(controller.Snapshot().enabled && controller.Snapshot().switch_failed);
         assert(output_port == 0xff && stored_mode == 1 && restarts == 0);
         UartEthModem::stop_result = ESP_OK;
+        background.Run();  // Finish timed-out stop and restore the previous enabled state.
         assert(controller.SetEnabled(false));
         background.Run();
         assert(!controller.Snapshot().enabled && !controller.Snapshot().connected);
@@ -126,9 +129,13 @@ int main() {
         assert(controller.Snapshot().enabled && UartEthModem::starts == 1);
         assert(output_port == 0xff);
         assert(UartEthModem::instance->configured.baud_rate == 2000000);
+        assert(UartEthModem::instance->configured.use_psram);
+        assert(UartEthModem::instance->configured.tx_queue_depth == 32);
         assert(UartEthModem::instance->apn == "eapn1.net");
         UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Connected);
         assert(controller.Snapshot().connected);
+        background.Run();
+        controller.Poll();
         background.Run();
         assert(controller.Snapshot().signal_bars == 3);
         const int strengths[]{0, 9, 10, 14, 15, 19, 20, 31, 99, -1};
@@ -138,6 +145,8 @@ int main() {
             UartEthModem::strength = strengths[i];
             UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Connected);
             background.Run();
+            controller.Poll();
+            background.Run();
             assert(controller.Snapshot().signal_bars == bars[i]);
         }
         UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Disconnected);
@@ -146,6 +155,7 @@ int main() {
         assert(controller.Pause() != ESP_OK && output_port == 0xff);
         UartEthModem::stop_result = ESP_OK;
         assert(controller.Pause() == ESP_OK && output_port == 0x7f);
+        background.Run();  // Successful explicit pause cancels the queued recovery.
         assert(controller.Resume() == ESP_OK && output_port == 0xff && UartEthModem::starts == 2);
         assert(controller.SetEnabled(false));
         controller.Shutdown();
@@ -169,7 +179,7 @@ int main() {
         // A missing SIM does not disable the command channel or require connection.
         UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::ErrorNoSim);
         controller.RequestSimRefresh();
-        assert(controller.Snapshot().sim_pending);
+        assert(!controller.Snapshot().sim_pending);  // Reads do not disable SIM controls.
         assert(!controller.SetSimSlot(Slot::kInternal));
         assert(!controller.SetEnabled(false));
         background.Run();
@@ -185,19 +195,22 @@ int main() {
         UartEthModem::query_response = "+ECSIMCFG: \"SimSimulator\",0\r\n+ECSIMCFG: \"SimSlot\", 1 \r\nOK";
         clear_commands();
         const int restarts_before_sim = restarts;
+        const int starts_before_sim = UartEthModem::starts;
         assert(controller.SetSimSlot(Slot::kInternal));
         background.Run();
+        assert(UartEthModem::starts == starts_before_sim + 1);
         assert((UartEthModem::commands ==
                 std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG=SimSlot,1", "AT+CFUN=1", "AT+ECSIMCFG?"}));
         assert((UartEthModem::timeouts == std::vector<uint32_t>{8000, 5000, 15000, 5000}));
         assert(controller.Snapshot().sim_slot == Slot::kInternal && !controller.Snapshot().sim_failed);
-        assert(restarts == restarts_before_sim + 1);
+        assert(restarts == restarts_before_sim);
         // Selecting the known current slot must not enqueue work, drop RF or reboot.
         clear_commands();
         assert(controller.SetSimSlot(Slot::kInternal));
         assert(!controller.Snapshot().sim_pending);
         background.Run();
-        assert(UartEthModem::commands.empty() && restarts == restarts_before_sim + 1);
+        assert(UartEthModem::commands.empty() && restarts == restarts_before_sim);
+        assert(UartEthModem::starts == starts_before_sim + 1);
         // First exercise slot-write failure while the current slot is still internal.
         clear_commands();
         UartEthModem::failed_command = "AT+ECSIMCFG=SimSlot,0";
@@ -207,13 +220,15 @@ int main() {
                 std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG=SimSlot,0", "AT+CFUN=1", "AT+ECSIMCFG?"}));
         assert(UartEthModem::timeouts[2] == 10000);
         assert(controller.Snapshot().sim_failed && controller.Snapshot().sim_slot == Slot::kInternal);
-        assert(restarts == restarts_before_sim + 1);
+        assert(restarts == restarts_before_sim);
+        background.Run();  // Reinitialize after a failed SIM write to resume PDP control.
         clear_commands();
         UartEthModem::failed_command = "AT+CFUN=0";
         assert(controller.SetSimSlot(Slot::kExternal));
         background.Run();
         assert((UartEthModem::commands == std::vector<std::string>{"AT+CFUN=0", "AT+ECSIMCFG?"}));
         assert(controller.Snapshot().sim_failed);
+        background.Run();
         // Failure to restore RF is best effort after successfully selecting a different SIM.
         clear_commands();
         UartEthModem::failed_command = "AT+CFUN=1";
@@ -221,7 +236,7 @@ int main() {
         assert(controller.SetSimSlot(Slot::kExternal));
         background.Run();
         assert(!controller.Snapshot().sim_failed && controller.Snapshot().sim_slot == Slot::kExternal);
-        assert(restarts == restarts_before_sim + 2);
+        assert(restarts == restarts_before_sim);
         clear_commands();
         // Queued requests must stay cancelled even if resume finishes before the worker runs.
         assert(controller.SetSimSlot(Slot::kInternal));
@@ -230,7 +245,7 @@ int main() {
         assert(!controller.SetSimSlot(Slot::kInternal));  // Old job still owns the pending slot.
         background.Run();
         assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_pending);
-        assert(restarts == restarts_before_sim + 2);
+        assert(restarts == restarts_before_sim);
         controller.RequestSimRefresh();
         assert(controller.Pause() == ESP_OK);
         assert(controller.Resume() == ESP_OK);
@@ -287,26 +302,28 @@ int main() {
         controller.Configure(&bus, bus);
         controller.BindBackgroundExecutor(background);
         assert(controller.Initialize());
-        assert(controller.TryBeginFirmwareUpdate());
-        assert(!controller.TryBeginFirmwareUpdate());
+        assert(controller.TryHoldConfiguration());
+        assert(!controller.TryHoldConfiguration());
         assert(!controller.SetEnabled(false));
         assert(!controller.SetSimSlot(Slot::kInternal));
         controller.RequestSimRefresh();
-        assert(!controller.Snapshot().sim_pending);
+        assert(!controller.Snapshot().sim_pending);  // Read-only sampling is safe during a configuration hold.
+        background.Run();
         const int stops = UartEthModem::stops;
         assert(controller.Pause() == ESP_ERR_INVALID_STATE);
         assert(UartEthModem::stops == stops);  // Failed sleep cannot disrupt an update.
-        controller.EndFirmwareUpdate();
+        controller.ReleaseConfiguration();
         controller.RequestSimRefresh();
-        assert(controller.Snapshot().sim_pending && !controller.TryBeginFirmwareUpdate());
+        assert(!controller.Snapshot().sim_pending && controller.TryHoldConfiguration());
+        controller.ReleaseConfiguration();
         background.Run();
-        assert(controller.TryBeginFirmwareUpdate());
-        controller.EndFirmwareUpdate();
+        assert(controller.TryHoldConfiguration());
+        controller.ReleaseConfiguration();
         assert(controller.SetSimSlot(Slot::kInternal));
-        assert(!controller.TryBeginFirmwareUpdate());
+        assert(!controller.TryHoldConfiguration());
         controller.Shutdown();
         background.Run();
-        assert(!controller.TryBeginFirmwareUpdate());
+        assert(!controller.TryHoldConfiguration());
     }
     {
         // OTA over Wi-Fi must still work when the cellular modem is intentionally off.
@@ -315,13 +332,135 @@ int main() {
         controller.BindBackgroundExecutor(background);
         stored_mode = 0;
         assert(controller.Initialize());
-        assert(controller.TryBeginFirmwareUpdate());
+        assert(controller.TryHoldConfiguration());
         assert(!controller.SetEnabled(true));
-        controller.EndFirmwareUpdate();
+        controller.ReleaseConfiguration();
         assert(controller.SetEnabled(true));
-        assert(!controller.TryBeginFirmwareUpdate());
+        assert(!controller.TryHoldConfiguration());
         controller.Shutdown();
         background.Run();
+        stored_mode = 1;
+    }
+    {
+        // Timeout retains power/ownership, rejects new operations, then recovers.
+        using Event = UartEthModem::UartEthModemEvent;
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        assert(controller.Initialize());
+        const int starts = UartEthModem::starts;
+        UartEthModem::stop_result = ESP_FAIL;
+        assert(controller.Pause() != ESP_OK);
+        assert(!controller.TryHoldConfiguration());
+        assert(!controller.SetEnabled(false));
+        background.Run();
+        assert(output_port == 0xff && UartEthModem::starts == starts);
+        UartEthModem::stop_result = ESP_OK;
+        background.accepting = false;
+        controller.Poll();
+        background.accepting = true;
+        controller.Poll();
+        background.Run();
+        assert(UartEthModem::starts == starts + 1);
+        assert(controller.TryHoldConfiguration());
+        controller.ReleaseConfiguration();
+        // Modem reset cleanup must run outside the modem's event callback.
+        UartEthModem::instance->Emit(Event::ModemReset);
+        assert(UartEthModem::starts == starts + 1);
+        background.Run();
+        assert(UartEthModem::starts == starts + 2);
+        UartEthModem::instance->Emit(Event::RegistrationLost);
+        background.Run();
+        assert(UartEthModem::starts == starts + 2);
+        UartEthModem::commands.clear();
+        UartEthModem::prepare_result = ESP_FAIL;
+        assert(controller.SetSimSlot(micropixel::device::CellularSimSlot::kInternal));
+        background.Run();
+        assert(controller.Snapshot().sim_failed && UartEthModem::commands.empty());
+        UartEthModem::prepare_result = ESP_OK;
+        background.Run();
+        assert(UartEthModem::starts == starts + 3);
+        UartEthModem::stop_result = ESP_FAIL;
+        const int starts_before_timeout = UartEthModem::starts;
+        assert(controller.SetSimSlot(micropixel::device::CellularSimSlot::kInternal));
+        background.Run();
+        assert(controller.Snapshot().sim_failed && output_port == 0xff);
+        assert(UartEthModem::starts == starts_before_timeout && restarts == 0);
+        assert(!controller.TryHoldConfiguration());
+        UartEthModem::stop_result = ESP_OK;
+        background.Run();
+        assert(UartEthModem::starts == starts_before_timeout + 1);
+        UartEthModem::instance->Emit(Event::ErrorInitFailed);
+        background.Run();
+        assert(output_port == 0x7f && UartEthModem::starts == starts_before_timeout + 1);
+        controller.Shutdown();
+    }
+    {
+        // A queued diagnostic sample must not make the radio switch unusable.
+        CellularController controller;
+        controller.Configure(&bus, bus);
+        controller.BindBackgroundExecutor(background);
+        stored_mode = 1;
+        assert(controller.Initialize());
+        controller.RequestSimRefresh();
+        UartEthModem::commands.clear();
+        // Failed submission leaves the diagnostic read intact.
+        assert(!controller.SetEnabled(false));
+        background.Run();
+        assert(!UartEthModem::commands.empty());
+        background.capacity = 2;
+        controller.RequestSimRefresh();
+        UartEthModem::commands.clear();
+        assert(controller.SetEnabled(false));
+        assert(controller.Snapshot().switching);
+        background.Run();
+        assert(UartEthModem::commands.empty() && !controller.Snapshot().sim_failed);
+        background.Run();
+        assert(!controller.Snapshot().enabled && !controller.Snapshot().switching);
+        assert(output_port == 0x7f && stored_mode == 0);
+        background.capacity = 1;
+        assert(controller.SetEnabled(true));
+        background.Run();
+        // Turning off during an in-flight read skips every remaining AT query.
+        UartEthModem::commands.clear();
+        UartEthModem::instance->on_send = [&](const std::string& command) {
+            if (command == "AT+CPIN?") {
+                const int stops_before = UartEthModem::stops;
+                assert(controller.SetEnabled(false));
+                assert(UartEthModem::stops == stops_before + 1 && UartEthModem::last_stop_timeout == 0);
+            }
+        };
+        controller.RequestSimRefresh();
+        background.Run();
+        assert((UartEthModem::commands == std::vector<std::string>{"AT+ECSIMCFG?", "AT+CPIN?"}));
+        assert(!controller.Snapshot().sim_failed && controller.Snapshot().switching);
+        background.Run();
+        assert(!controller.Snapshot().enabled && !controller.Snapshot().sim_pending);
+        assert(output_port == 0x7f && stored_mode == 0 && restarts == 0);
+        UartEthModem::instance->on_send = {};
+        // An early cancellation followed by a failed NVS save must restore the
+        // previously enabled modem, not leave a stopped radio behind an on switch.
+        assert(controller.SetEnabled(true));
+        background.Run();
+        const int starts_before_rollback = UartEthModem::starts;
+        fail_commit = true;
+        assert(controller.SetEnabled(false));
+        background.Run();
+        assert(controller.Snapshot().enabled && controller.Snapshot().switch_failed);
+        fail_commit = false;
+        background.Run();
+        assert(UartEthModem::starts == starts_before_rollback + 1);
+        assert(controller.SetEnabled(false));
+        background.Run();
+        // The early initialization phase is cancellable before AT is ready too.
+        assert(controller.SetEnabled(true));
+        background.Run();
+        UartEthModem::instance->at_ready = false;
+        controller.RequestSimRefresh();
+        assert(controller.SetEnabled(false));
+        background.Run();
+        assert(!controller.Snapshot().enabled && output_port == 0x7f);
+        controller.Shutdown();
         stored_mode = 1;
     }
     // Real concurrent submissions: precisely one side may reserve the network.
@@ -337,7 +476,7 @@ int main() {
             bool switching = false;
             std::thread update([&] {
                 while (!go.load()) std::this_thread::yield();
-                updating = controller.TryBeginFirmwareUpdate();
+                updating = controller.TryHoldConfiguration();
             });
             std::thread change([&] {
                 while (!go.load()) std::this_thread::yield();
@@ -349,12 +488,13 @@ int main() {
             update.join();
             change.join();
             assert(updating != switching);
-            if (updating) controller.EndFirmwareUpdate();
+            if (updating) controller.ReleaseConfiguration();
             controller.Shutdown();
             background.Run();  // Cancel the winning configuration job without restarting.
         }
     }
     {
+        using micropixel::device::CellularSimSlot;
         using micropixel::device::CellularSimStatus;
         using micropixel::device::CellularState;
         using micropixel::host_ui::DescribeCellularConnection;
@@ -383,6 +523,48 @@ int main() {
         assert(std::strcmp(details.apn.data(), "eapn1.net") == 0);
         assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kConnecting, details).title,
                            "Searching for network") == 0);
+        // Do not race the modem's baud/SIM initialization with a diagnostic query.
+        UartEthModem::instance->at_ready = false;
+        UartEthModem::commands.clear();
+        controller.RequestSimRefresh();
+        controller.Poll();
+        background.Run();
+        assert(!controller.Snapshot().sim_pending && UartEthModem::commands.empty());
+        UartEthModem::instance->at_ready = true;
+        controller.Poll();
+        background.Run();
+        assert(!UartEthModem::commands.empty() && !controller.Snapshot().sim_failed);
+        // A read-only sample never disables selection. Accept a SIM change
+        // during the actual AT read, then retain its busy state until it runs.
+        const auto target = controller.Snapshot().sim_slot == CellularSimSlot::kExternal ? CellularSimSlot::kInternal
+                                                                                         : CellularSimSlot::kExternal;
+        bool sim_queued = false;
+        UartEthModem::instance->on_send = [&](const std::string&) {
+            if (sim_queued) return;
+            assert(!controller.Snapshot().sim_pending);
+            assert(controller.SetSimSlot(target));
+            sim_queued = true;
+            assert(controller.Snapshot().sim_pending);
+            assert(!controller.SetSimSlot(target));
+        };
+        controller.RequestSimRefresh();
+        background.Run();
+        UartEthModem::instance->on_send = {};
+        assert(sim_queued && controller.Snapshot().sim_pending);
+        UartEthModem::query_response =
+            target == CellularSimSlot::kInternal ? "+ECSIMCFG: \"SimSlot\",1\r\nOK" : "+ECSIMCFG: \"SimSlot\",0\r\nOK";
+        background.Run();
+        assert(!controller.Snapshot().sim_pending && !controller.Snapshot().sim_failed);
+        assert(controller.Snapshot().sim_slot == target);
+        // Connection completion refreshes diagnostics while the page stays open.
+        UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,1\r\nOK";
+        UartEthModem::responses["AT+CSQ"] = "+CSQ: 18,99\r\nOK";
+        UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Connected);
+        background.Run();   // Signal job occupied the bounded queue when the event arrived.
+        controller.Poll();  // The normal UI tick retries the diagnostic sample.
+        background.Run();
+        details = controller.Snapshot().diagnostics;
+        assert(details.registration == 1 && details.signal_csq == 18);
         UartEthModem::failed_command = "AT+CPIN?";
         UartEthModem::responses["AT+CPIN?"] = "+CME ERROR: 10\r\n";
         controller.RequestSimRefresh();

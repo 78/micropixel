@@ -17,8 +17,6 @@
 #include "cJSON.h"
 #include "client/http3_async_client.h"
 #include "client/http3_client.h"
-#include "device/contracts/cellular.hpp"
-#include "device/contracts/wifi.hpp"
 #include "device/text.hpp"
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
@@ -27,12 +25,10 @@
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "host/controller/remote/firmware_release_notes.hpp"
@@ -498,12 +494,7 @@ struct RemoteControlAgent::ColdState final {
 
 struct RemoteControlAgent::TaskContext final {
     std::array<uint8_t, control::ControlDispatcher::kInstallChunkBytes> install_chunk{};
-    struct NetworkSnapshot final {
-        esp_netif_ip_info_t ip{};
-        esp_netif_dns_info_t dns{};
-        std::array<char, 256U> hostname{};
-        bool has_dns{};
-    } network_snapshot{};
+    host::network::NetworkSnapshot network_snapshot{};
     StoreReleaseWorkspace store_release_workspace{};
     std::array<char, 4097U> font_response{};
     Identity identity{};
@@ -516,15 +507,13 @@ struct RemoteControlAgent::TaskContext final {
     control::HostCommand host_command{};
     control::HostResult host_result{};
     host_ui::RemoteControlModel control_snapshot{};
-    device::WifiSnapshot wifi_snapshot{};
 };
 
-RemoteControlAgent::RemoteControlAgent(device::Wifi& wifi, device::Cellular& cellular,
-                                       const device::BoardInfo& board_info, control::ControlDispatcher& controls,
-                                       logging::SystemLogBuffer& system_logs, bool screen_capture_supported)
+RemoteControlAgent::RemoteControlAgent(host::network::Network& network, const device::BoardInfo& board_info,
+                                       control::ControlDispatcher& controls, logging::SystemLogBuffer& system_logs,
+                                       bool screen_capture_supported)
     : controls_(controls),
-      wifi_(wifi),
-      cellular_(cellular),
+      network_(network),
       board_info_(board_info),
       system_logs_(system_logs),
       screen_capture_supported_(screen_capture_supported) {
@@ -696,8 +685,7 @@ bool RemoteControlAgent::CancelPairingCode() {
 
 bool RemoteControlAgent::RequestFirmwareUpdate() {
     std::lock_guard<std::mutex> lock(model_mutex_);
-    const auto cellular = cellular_.Snapshot();
-    if (cellular.switching || cellular.sim_pending || !model_.firmware_update_installable ||
+    if (!model_.firmware_update_installable ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kDownloading ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kVerifying ||
         model_.firmware_update_state == host_ui::FirmwareUpdateState::kInstalling) {
@@ -1308,71 +1296,27 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     cJSON* runtime = cJSON_GetObjectItemCaseSensitive(result, "runtime");
     if (cJSON_IsObject(runtime)) (void)cJSON_AddNumberToObject(runtime, "uptimeMs", esp_timer_get_time() / 1000);
 
-    task_context_->wifi_snapshot = wifi_.Snapshot();
-    const device::WifiSnapshot& wifi = task_context_->wifi_snapshot;
-    const auto cellular = cellular_.Snapshot();
+    auto& snapshot = task_context_->network_snapshot;
+    network_.CopySnapshot(snapshot);
     cJSON* network = cJSON_AddObjectToObject(result, "network");
     if (network != nullptr) {
-        (void)cJSON_AddBoolToObject(network, "available", wifi.available || cellular.available);
-        (void)cJSON_AddBoolToObject(network, "enabled", wifi.enabled || cellular.enabled);
-        (void)cJSON_AddBoolToObject(network, "connected", wifi.connected || cellular.connected);
-        for (uint32_t index = 0U; index < wifi.saved_network_count; ++index) {
-            if (wifi.saved_networks[index].connected) {
-                (void)cJSON_AddStringToObject(network, "ssid", wifi.saved_networks[index].ssid.data());
-                (void)cJSON_AddNumberToObject(network, "rssi", wifi.saved_networks[index].rssi);
-                break;
-            }
+        (void)cJSON_AddBoolToObject(network, "available", snapshot.available);
+        (void)cJSON_AddBoolToObject(network, "enabled", snapshot.enabled);
+        (void)cJSON_AddBoolToObject(network, "connected", snapshot.connected);
+        (void)cJSON_AddStringToObject(network, "transport", host::network::TransportName(snapshot.route.transport));
+        if (snapshot.route.transport == device::NetworkTransport::kWifi && snapshot.wifi.connected) {
+            (void)cJSON_AddStringToObject(network, "ssid", snapshot.wifi.ssid.data());
+            (void)cJSON_AddNumberToObject(network, "rssi", snapshot.wifi.rssi);
         }
-        (void)cJSON_AddStringToObject(network, "transport",
-                                      wifi.connected ? "wifi" : (cellular.connected ? "cellular" : "none"));
-        uint8_t station_mac[6]{};
-        if (wifi.connected && esp_wifi_get_mac(WIFI_IF_STA, station_mac) == ESP_OK) {
-            char mac_text[18]{};
-            std::snprintf(mac_text, sizeof(mac_text), "%02X:%02X:%02X:%02X:%02X:%02X", station_mac[0], station_mac[1],
-                          station_mac[2], station_mac[3], station_mac[4], station_mac[5]);
-            (void)cJSON_AddStringToObject(network, "macAddress", mac_text);
-        }
-        auto& snapshot = task_context_->network_snapshot;
-        snapshot = {};
-        // Default-route selection and netif destruction run in TCP/IP context.
-        // Copy all values there so sleep/reconnect cannot invalidate a borrowed pointer.
-        const esp_err_t network_status = esp_netif_tcpip_exec(
-            [](void* context) -> esp_err_t {
-                auto& snapshot = *static_cast<TaskContext::NetworkSnapshot*>(context);
-                esp_netif_t* station = esp_netif_get_default_netif();
-                if (station == nullptr) return ESP_ERR_NOT_FOUND;
-                const esp_err_t status = esp_netif_get_ip_info(station, &snapshot.ip);
-                if (status != ESP_OK) return status;
-                const char* hostname = nullptr;
-                if (esp_netif_get_hostname(station, &hostname) == ESP_OK && hostname != nullptr) {
-                    CopyText(snapshot.hostname, hostname);
-                }
-                snapshot.has_dns = esp_netif_get_dns_info(station, ESP_NETIF_DNS_MAIN, &snapshot.dns) == ESP_OK &&
-                                   snapshot.dns.ip.type == ESP_IPADDR_TYPE_V4;
-                return ESP_OK;
-            },
-            &snapshot);
-        if (network_status == ESP_OK) {
-            const auto& ip_info = snapshot.ip;
-            char ip_address[16]{};
-            char gateway[16]{};
-            char netmask[16]{};
-            std::snprintf(ip_address, sizeof(ip_address), IPSTR, IP2STR(&ip_info.ip));
-            std::snprintf(gateway, sizeof(gateway), IPSTR, IP2STR(&ip_info.gw));
-            std::snprintf(netmask, sizeof(netmask), IPSTR, IP2STR(&ip_info.netmask));
-            (void)cJSON_AddStringToObject(network, "ipAddress", ip_address);
-            (void)cJSON_AddStringToObject(network, "gateway", gateway);
-            (void)cJSON_AddStringToObject(network, "netmask", netmask);
-            if (snapshot.hostname[0] != '\0') {
-                (void)cJSON_AddStringToObject(network, "hostname", snapshot.hostname.data());
-            }
-            if (snapshot.has_dns) {
-                const auto& dns = snapshot.dns;
-                char dns_address[16]{};
-                std::snprintf(dns_address, sizeof(dns_address), IPSTR, IP2STR(&dns.ip.u_addr.ip4));
-                (void)cJSON_AddStringToObject(network, "dns", dns_address);
-            }
-        }
+        const auto add = [&](const char* key, const auto& text) {
+            if (text[0]) (void)cJSON_AddStringToObject(network, key, text.data());
+        };
+        add("macAddress", snapshot.route.mac);
+        add("ipAddress", snapshot.route.address);
+        add("gateway", snapshot.route.gateway);
+        add("netmask", snapshot.route.netmask);
+        add("hostname", snapshot.route.hostname);
+        add("dns", snapshot.route.dns);
     }
 
     return PostCommandResult(client, identity, command_id, true, result);
@@ -2139,14 +2083,14 @@ bool RemoteControlAgent::ApplyFirmwareUpdate(void* client, const Identity& ident
     };
 
     // Covers both local and remote OTA. Snapshot checks alone race SetEnabled/SetSimSlot.
-    if (!cellular_.TryBeginFirmwareUpdate()) return finish(false, "network_switch_pending");
+    if (!network_.TryBeginFirmwareUpdate()) return finish(false, "network_switch_pending");
     struct UpdateReservation final {
-        explicit UpdateReservation(device::Cellular& service) : service(service) {}
+        explicit UpdateReservation(host::network::Network& service) : service(service) {}
         ~UpdateReservation() { service.EndFirmwareUpdate(); }
         UpdateReservation(const UpdateReservation&) = delete;
         UpdateReservation& operator=(const UpdateReservation&) = delete;
-        device::Cellular& service;
-    } reservation(cellular_);
+        host::network::Network& service;
+    } reservation(network_);
 
     const char* version = cJSON_IsObject(params) ? JsonString(params, "version") : nullptr;
     const char* path = cJSON_IsObject(params) ? JsonString(params, "url") : nullptr;
@@ -2676,7 +2620,7 @@ void RemoteControlAgent::TaskMain() {
     TickType_t next_firmware_check_ticks = 0U;
     bool credential_refresh_attempted = false;
     ReconnectBackoff reconnect_backoff;
-    uint8_t network_path = 0;  // 0 offline, 1 Wi-Fi, 2 cellular.
+    uint64_t network_generation = 0;
 
     auto ticks_until = [](TickType_t deadline_ticks) {
         const int32_t remaining_ticks = static_cast<int32_t>(deadline_ticks - xTaskGetTickCount());
@@ -2928,15 +2872,13 @@ void RemoteControlAgent::TaskMain() {
             (void)WaitForWork(next_scheduled_wait());
             continue;
         }
-        task_context.wifi_snapshot = wifi_.Snapshot();
-        const device::WifiSnapshot& wifi = task_context.wifi_snapshot;
-        const uint8_t preferred_path = wifi.connected ? 1U : (cellular_.Snapshot().connected ? 2U : 0U);
-        if (network_path != preferred_path) {
+        network_.CopySnapshot(task_context.network_snapshot);
+        if (network_generation != task_context.network_snapshot.route_generation) {
             close_transport();
-            network_path = preferred_path;
+            network_generation = task_context.network_snapshot.route_generation;
             reconnect_backoff.Reset();
         }
-        if (preferred_path == 0U) {
+        if (!task_context.network_snapshot.connected) {
             close_transport();
             if (snapshot.enabled) {
                 SetConnectionState(host_ui::RemoteControlConnectionState::kWaitingForNetwork, "Waiting for network");

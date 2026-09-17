@@ -23,9 +23,9 @@ class CellularController final : public device::Cellular {
     void BindBackgroundExecutor(work::BackgroundExecutor& executor);
     [[nodiscard]] std::expected<void, device::CellularError> Initialize() override;
     [[nodiscard]] device::CellularSnapshot Snapshot() const override;
-    [[nodiscard]] bool TryBeginFirmwareUpdate() override;
-    void EndFirmwareUpdate() override;
-    void RequestSignalRefresh() override;
+    [[nodiscard]] bool TryHoldConfiguration() override;
+    void ReleaseConfiguration() override;
+    void Poll() override;
     void RequestSimRefresh() override;
     [[nodiscard]] std::expected<void, device::CellularError> SetSimSlot(device::CellularSimSlot slot) override;
     void SetStateChangeSink(device::CellularStateChangeSink sink, void* context) override;
@@ -35,6 +35,9 @@ class CellularController final : public device::Cellular {
     void Shutdown();
 
    private:
+    void SubmitSimRefreshLocked();
+    void ScheduleRecovery(bool restart);
+    static void Recover(void* context);
     static void SwitchMode(void* context);
     static void ReadSignal(void* context);
     static void ReadSim(void* context);
@@ -60,10 +63,18 @@ class CellularController final : public device::Cellular {
     std::atomic<bool> sim_cancelled_{};
     std::atomic<bool> switch_cancelled_{};
     device::CellularSimSlot requested_sim_{device::CellularSimSlot::kUnknown};
-    bool firmware_update_active_{};  // Protected by snapshot_mutex_.
+    bool configuration_held_{};  // Protected by snapshot_mutex_.
     bool requested_mode_{};
+    bool modem_stop_requested_{};
+    int64_t switch_requested_us_{};
     bool initialized_{};
     bool signal_pending_{};
+    bool sim_refresh_needed_{};
+    bool sim_read_pending_{};
+    bool sim_switching_{};
+    bool recovery_needed_{};  // Protected by snapshot_mutex_.
+    bool recovery_pending_{};
+    bool recovery_restart_{};
     int64_t next_signal_refresh_us_{};
 };
 

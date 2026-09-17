@@ -68,7 +68,8 @@ enable flag (0 off, 1 on); `host_wifi/state` continues to store the Wi-Fi switch
 Absent cellular settings leave it off. Switching either radio does not reboot.
 Cellular start/stop runs on the existing background executor; persistence or driver
 failures leave a retryable error, and a failed stop never cuts power to live workers.
-SIM-slot changes still follow the factory restart procedure.
+SIM-slot changes quiesce PDP control, apply the RF/slot commands, then restart only
+the modem after a 100 ms reset pulse. The Host and app session remain running.
 
 ESP-NETIF automatically chooses Wi-Fi STA (priority 100) over cellular Ethernet
 (priority 50), falls back when Wi-Fi disconnects, and returns to Wi-Fi after DHCP.

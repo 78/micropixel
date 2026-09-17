@@ -232,11 +232,11 @@ struct StatusLayerModel final {
     bool cellular_enabled{};
     bool cellular_connected{};
     bool cellular_switching{};
+    uint64_t cellular_command_ack_us{};  // Last switch request handled by the Host, including rejection.
     bool cellular_switch_failed{};
     device::CellularSimSlot cellular_sim_slot{device::CellularSimSlot::kUnknown};
     bool cellular_sim_pending{};
     bool cellular_sim_failed{};
-    uint8_t cellular_sim_restart_seconds{};
     bool battery_available{};
     bool battery_charging{};
     bool battery_discharging{};
@@ -486,6 +486,9 @@ struct WifiSettingsModel final {
     bool enabled{};
     bool connected{};
     bool scanning{};
+    bool control_pending{};
+    bool control_failed{};
+    uint64_t command_ack_us{};
     WifiConnectionState connection_state{WifiConnectionState::kDisconnected};
 };
 
@@ -537,7 +540,7 @@ enum class SystemUiActionType {
     // these actions directly.
     kPowerButtonPressed,
     kPowerOffRequested,
-    kWifiStateChanged,
+    kNetworkStateChanged,
     kBatteryStateChanged,
     kTimeStateChanged,
     kRemoteCommandReady,
