@@ -38,6 +38,63 @@ indices, scroll state or UI objects. The bounded virtualized Hall-card policy li
 board must not define pages, Hall lifecycle, card events or product UI
 properties.
 
+## Metalio-Claw4 peripheral power
+
+`BoardIo::InitializeIoExpander()` establishes the factory TCA9555 startup
+directions and rail levels before display and peripheral initialization. NT26,
+the Bluetooth audio bridge and the active-low SD rail are powered; GPS, camera,
+PA and USB host power are disabled. The audio source selects the Bluetooth
+bridge. The power-key pulse stays low, while the power key, accelerometer
+interrupt, wired/wireless charge detectors and unused lines stay inputs.
+Output latches are written before enabling their output directions to avoid
+transient PA/USB host activation. Subsequent audio and power-key operations
+continue through the shared I2C executor.
+
+These power defaults do not by themselves implement SD mounting, camera capture
+or GPS. Hardware acceptance must check rail levels after cold boot and MCU reset,
+and verify charging/key inputs.
+
+## Metalio-Claw4 cellular network
+
+`CellularController` manages the factory NT26 UART Ethernet driver: UART1 at
+2,000,000 baud, TX28/RX29, MRDY13/SRDY4 and TCA9555 P0.7 power/reset. The default
+PDP context is the factory `IP` / `eapn1.net`. SIM selection is exposed by the
+4G settings page; an APN editor is not implemented.
+
+Wi-Fi and cellular have independent persisted switches and may both be enabled,
+or both disabled. Wi-Fi is always initialized, even on devices previously saved
+in cellular-only mode. The existing `network/type` key is retained as the cellular
+enable flag (0 off, 1 on); `host_wifi/state` continues to store the Wi-Fi switch.
+Absent cellular settings leave it off. Switching either radio does not reboot.
+Cellular start/stop runs on the existing background executor; persistence or driver
+failures leave a retryable error, and a failed stop never cuts power to live workers.
+SIM-slot changes quiesce PDP control, apply the RF/slot commands, then restart only
+the modem after a 100 ms reset pulse. The Host and app session remain running.
+
+ESP-NETIF automatically chooses Wi-Fi STA (priority 100) over cellular Ethernet
+(priority 50), falls back when Wi-Fi disconnects, and returns to Wi-Fi after DHCP.
+The Claw4 profile enables per-interface DNS so resolvers follow the default route.
+Remote Control rebuilds its QUIC connection when the preferred transport changes;
+ongoing requests may need retrying. This is link/IP failover, not an Internet
+health check: a Wi-Fi AP with working DHCP but a broken WAN remains preferred.
+
+The Host reads cellular availability, mode, IP connection and measured CSQ bars.
+CSQ uses factory thresholds (0–9, 10–14, 15–19, 20–31; unknown is no bars) and is
+queried after connection and at most every five seconds while the system UI
+requests refresh. Remote control, App Store, OTA and SNTP accept cellular-only
+connectivity. Other boards retain an unavailable cellular capability.
+
+Power-off cancels queued mode switches and stops the modem before cutting board
+power. Manual sleep stops the driver and disables its rail; wake starts the saved
+cellular mode again. A failed stop rejects sleep instead of releasing live driver
+storage. Physical power-key wake remains the board's explicit-sleep policy.
+
+Host tests use fake UART, NVS and I2C dependencies to exercise the real board
+controller. Target acceptance remains pending: cold boot with either/both radios, independent switch
+persistence, Wi-Fi loss/recovery with 4G connected, both-off behavior, actual SIM/APN registration, DHCP, signal changes, remote/store/OTA
+over 4G, no-SIM recovery, and shutdown/sleep during traffic. Neither build success
+nor the controller tests prove modem or power timing on hardware.
+
 ## Required files and registration
 
 1. Add `boards/<board>/CMakeLists.txt` and the implementation that provides the

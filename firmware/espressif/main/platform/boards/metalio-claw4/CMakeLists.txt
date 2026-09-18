@@ -7,6 +7,7 @@ list(APPEND micropixel_sources
     "platform/boards/metalio-claw4/haptic_actuator.cpp"
     "platform/boards/metalio-claw4/tca9555_power_key.cpp"
     "platform/boards/metalio-claw4/i2s_audio_sink.cpp"
+    "platform/boards/metalio-claw4/cellular_controller.cpp"
     "platform/boards/metalio-claw4/platform.cpp"
     "platform/boards/metalio-claw4/sensor_peripheral.cpp"
     "platform/boards/metalio-claw4/presentation.cpp"

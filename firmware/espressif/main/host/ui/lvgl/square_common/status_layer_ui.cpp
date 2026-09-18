@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
+#include "host/ui/cellular_status.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/ui_text.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -200,10 +201,13 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
 void StatusLayerUi::ResolveLayoutLocked() { layout_ = &ActiveLayout(); }
 
 int32_t StatusLayerUi::TransitionDialogVisibleY() const {
+    if (cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN)) return 0;
     return layout_ != nullptr ? layout_->dialog.y : ActiveLayout().dialog.y;
 }
 
 int32_t StatusLayerUi::TransitionDialogHiddenY() const {
+    if (cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN))
+        return -cellular_layout_.height;
     return layout_ != nullptr ? layout_->dialog_hidden_y : ActiveLayout().dialog_hidden_y;
 }
 
@@ -291,7 +295,10 @@ void StatusLayerUi::EmitTarget(TouchTarget target, uint64_t timestamp_us) {
             EmitAction(host_ui::SystemUiActionType::kOpenWifiSettings);
             break;
         case TouchTarget::kCellular:
-            // Cellular stays read-only until a real network service owns it.
+            if (cellular_available_ && !CellularSwitchBusy()) {
+                ShowCellularDialogLocked();
+                EmitAction(host_ui::SystemUiActionType::kRefreshCellularSim);
+            }
             break;
         case TouchTarget::kPerformance:
             EmitAction(host_ui::SystemUiActionType::kTogglePerformanceOverlay);
@@ -306,6 +313,242 @@ void StatusLayerUi::EmitTarget(TouchTarget target, uint64_t timestamp_us) {
         case TouchTarget::kNone:
             break;
     }
+}
+
+void StatusLayerUi::ShowCellularDialogLocked() {
+    lv_obj_add_flag(status_dialog_, LV_OBJ_FLAG_HIDDEN);
+    if (cellular_dialog_ != nullptr) {
+        lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
+        UpdateCellularDialogLocked();
+        return;
+    }
+    const auto& layout = cellular_layout_;
+    cellular_dialog_ = lv_obj_create(status_layer_);
+    StyleFullscreenContainer(cellular_dialog_, theme::kMenuBackground, layout.width, layout.height);
+    lv_obj_add_flag(cellular_dialog_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    (void)CreateSystemHeader(cellular_dialog_, layout, UiText(host_strings::Id::kCellularTitle),
+                             UiText(host_strings::Id::kCellularSubtitle), CellularBackEvent, this);
+    auto* content = CreateSystemScrollColumn(cellular_dialog_, layout, CellularScrollEvent, this);
+    auto* cellular_panel = CreateSystemPanel(content, layout);
+    lv_obj_set_flex_flow(cellular_panel, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cellular_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(cellular_panel, layout.panel_gap, 0);
+    auto* cellular_text = CreateSystemColumn(cellular_panel, 2);
+    lv_obj_set_width(cellular_text, 0);
+    lv_obj_set_flex_grow(cellular_text, 1);
+    (void)CreateSystemLabel(cellular_text, "4G", layout.heading_font, theme::kPrimaryText);
+    cellular_mode_label_ = CreateSystemLabel(cellular_text, "", layout.detail_font, theme::kSecondaryText);
+    cellular_mode_ = lv_switch_create(cellular_panel);
+    lv_obj_set_size(cellular_mode_, layout.control_height + 12, layout.control_height * 3 / 5);
+    lv_obj_add_event_cb(cellular_mode_, CellularEvent, LV_EVENT_VALUE_CHANGED, this);
+
+    lv_obj_set_width(cellular_mode_label_, LV_PCT(100));
+    lv_label_set_long_mode(cellular_mode_label_, LV_LABEL_LONG_WRAP);
+    cellular_sections_ = CreateSystemColumn(content, layout.panel_gap);
+    auto* sim_panel = CreateSystemPanel(cellular_sections_, layout);
+
+    (void)CreateSystemLabel(sim_panel, UiText(host_strings::Id::kCellularSimCard), layout.heading_font,
+                            theme::kPrimaryText);
+    auto* choices = CreateSystemColumn(sim_panel, layout.panel_gap);
+    lv_obj_set_flex_flow(choices, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(choices, layout.panel_gap, 0);
+    for (unsigned i = 0; i < 2; ++i) {
+        auto* button = CreateSystemActionButton(choices, layout, "", theme::kPrimaryText);
+        lv_obj_set_width(button, 0);
+        lv_obj_set_flex_grow(button, 1);
+        cellular_sim_buttons_[i] = button;
+        cellular_sim_labels_[i] = lv_obj_get_child(button, 0);
+        lv_obj_set_style_text_color(button, lv_color_hex(theme::kPrimaryText), LV_STATE_DISABLED);
+        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_STATE_DISABLED);
+        lv_obj_add_event_cb(button, CellularEvent, LV_EVENT_SHORT_CLICKED, this);
+    }
+    auto* note = CreateSystemLabel(sim_panel, UiText(host_strings::Id::kCellularSimRestart), layout.detail_font,
+                                   theme::kSecondaryText);
+    lv_obj_set_width(note, LV_PCT(100));
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+
+    auto* details = CreateSystemPanel(cellular_sections_, layout, 0);
+
+    (void)CreateSystemLabel(details, UiText(host_strings::Id::kCellularDetails), layout.heading_font,
+                            theme::kPrimaryText);
+    const char* names[]{UiText(host_strings::Id::kCellularSimStatus),
+                        UiText(host_strings::Id::kCellularSignal),
+                        UiText(host_strings::Id::kCellularRegistration),
+                        UiText(host_strings::Id::kCellularOperator),
+                        UiText(host_strings::Id::kCellularRadio),
+                        UiText(host_strings::Id::kCellularAttached),
+                        "APN",
+                        UiText(host_strings::Id::kCellularPdpAddress)};
+    for (unsigned i = 0; i < 8; ++i) {
+        auto* row =
+            CreateSystemInformationRow(details, layout, names[i], UiText(host_strings::Id::kCellularUnknown), true);
+        cellular_detail_values_[i] = lv_obj_get_child(row, 1);
+    }
+    auto* mode = CreateSystemPanel(cellular_sections_, layout);
+    (void)CreateSystemLabel(mode, UiText(host_strings::Id::kCellularMode), layout.heading_font, theme::kPrimaryText);
+    auto* mode_note =
+        CreateSystemLabel(mode, UiText(host_strings::Id::kCellularModeNote), layout.body_font, theme::kSecondaryText);
+    lv_obj_set_width(mode_note, LV_PCT(100));
+    lv_label_set_long_mode(mode_note, LV_LABEL_LONG_WRAP);
+    UpdateCellularDialogLocked();
+}
+
+void StatusLayerUi::UpdateCellularDialogLocked() {
+    if (cellular_dialog_ == nullptr) return;
+    const bool switching = CellularSwitchBusy();
+    const auto& details = cellular_diagnostics_;
+    auto message = DescribeCellularConnection(cellular_enabled_, cellular_connected_, cellular_state_, details,
+                                              host_strings::ForTag(DisplayLocale()));
+    if (cellular_switch_failed_)
+        message = {UiText(host_strings::Id::kCellularSaveFailed), UiText(host_strings::Id::kCellularRetry)};
+    if (cellular_sim_failed_)
+        message = {UiText(host_strings::Id::kCellularSimFailed), UiText(host_strings::Id::kCellularSimFailedHint)};
+    if (switching)
+        message = {UiText(lv_obj_has_state(cellular_mode_, LV_STATE_CHECKED) ? host_strings::Id::kCellularEnabling
+                                                                             : host_strings::Id::kCellularDisabling),
+                   UiText(host_strings::Id::kCellularSaving)};
+    lv_label_set_text(cellular_mode_label_,
+                      cellular_available_ ? message.title : UiText(host_strings::Id::kUiNotAvailable));
+    lv_obj_set_style_text_color(cellular_mode_label_,
+                                lv_color_hex(cellular_connected_ ? theme::kSuccess : theme::kSecondaryText), 0);
+    // Keep the user's requested switch position while the asynchronous operation completes.
+    if (!switching) {
+        if (cellular_enabled_)
+            lv_obj_add_state(cellular_mode_, LV_STATE_CHECKED);
+        else
+            lv_obj_remove_state(cellular_mode_, LV_STATE_CHECKED);
+    }
+    // Reveal once the first diagnostic pass finishes, including absent/locked
+    // SIMs and partial results. Keep the layout stable across later samples and
+    // modem restarts during a SIM change; only turning 4G off hides it again.
+    const bool checked = lv_obj_has_state(cellular_mode_, LV_STATE_CHECKED);
+    if (!checked)
+        cellular_sections_ready_ = false;
+    else if (!switching && details.sampled)
+        cellular_sections_ready_ = true;
+    if (checked && cellular_sections_ready_)
+        lv_obj_remove_flag(cellular_sections_, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(cellular_sections_, LV_OBJ_FLAG_HIDDEN);
+    const bool busy = switching || cellular_sim_pending_;
+    const auto enabled = [](lv_obj_t* object, bool value) {
+        if (value)
+            lv_obj_remove_state(object, LV_STATE_DISABLED);
+        else
+            lv_obj_add_state(object, LV_STATE_DISABLED);
+    };
+    enabled(cellular_mode_, !switching && cellular_available_);
+    for (unsigned i = 0; i < 2; ++i) {
+        const bool selected = static_cast<unsigned>(cellular_sim_slot_) == i;
+        auto* button = cellular_sim_buttons_[i];
+        enabled(button, !busy && cellular_enabled_);
+        lv_label_set_text_fmt(
+            cellular_sim_labels_[i], "%s%s",
+            UiText(i == 0 ? host_strings::Id::kCellularExternal : host_strings::Id::kCellularInternal),
+            selected ? "  " LV_SYMBOL_OK : "");
+        lv_obj_set_style_border_color(button, lv_color_hex(selected ? theme::kAccent : theme::kBorder), 0);
+        lv_obj_set_style_border_width(button, selected ? 2 : 1, 0);
+    }
+    using Sim = device::CellularSimStatus;
+    const char* sim = details.sim_status == Sim::kReady         ? UiText(host_strings::Id::kCellularReady)
+                      : details.sim_status == Sim::kPinRequired ? UiText(host_strings::Id::kCellularPin)
+                      : details.sim_status == Sim::kPukRequired ? UiText(host_strings::Id::kCellularPuk)
+                      : details.sim_status == Sim::kAbsent      ? UiText(host_strings::Id::kCellularAbsent)
+                      : details.sim_status == Sim::kNotReady    ? UiText(host_strings::Id::kCellularNotReady)
+                                                                : UiText(host_strings::Id::kCellularUnknown);
+    char signal[48]{};
+    if (details.signal_csq >= 0 && details.signal_csq <= 31) {
+        const char* strength = details.signal_csq < 10   ? UiText(host_strings::Id::kCellularWeak)
+                               : details.signal_csq < 15 ? UiText(host_strings::Id::kCellularFair)
+                               : details.signal_csq < 20 ? UiText(host_strings::Id::kCellularGood)
+                                                         : UiText(host_strings::Id::kCellularStrong);
+        (void)std::snprintf(signal, sizeof(signal), "%s (CSQ %d/31)", strength, details.signal_csq);
+    } else {
+        (void)std::snprintf(signal, sizeof(signal), "%s",
+                            details.signal_csq == 99 ? UiText(host_strings::Id::kCellularUnknownCsq)
+                                                     : UiText(host_strings::Id::kCellularUnavailable));
+    }
+    char registration[80]{};
+    if (details.registration >= 0)
+        (void)std::snprintf(registration, sizeof(registration), "%s (%d)",
+                            CellularRegistrationText(details.registration, host_strings::ForTag(DisplayLocale())),
+                            details.registration);
+    else
+        (void)std::snprintf(registration, sizeof(registration), "%s", UiText(host_strings::Id::kCellularUnavailable));
+    const char* radio = details.radio_function == 1   ? UiText(host_strings::Id::kCellularOn)
+                        : details.radio_function == 4 ? UiText(host_strings::Id::kCellularFlight)
+                        : details.radio_function == 0 ? UiText(host_strings::Id::kCellularOff)
+                                                      : UiText(host_strings::Id::kCellularUnknown);
+    const char* attached = details.attached == 1   ? UiText(host_strings::Id::kCellularYes)
+                           : details.attached == 0 ? UiText(host_strings::Id::kCellularNo)
+                                                   : UiText(host_strings::Id::kCellularUnknown);
+    const char* address =
+        details.pdp_address[0] == '\0' ? UiText(host_strings::Id::kCellularNotReported) : details.pdp_address.data();
+    if (std::strcmp(address, "0.0.0.0") == 0) address = UiText(host_strings::Id::kCellularNotAssigned);
+    const char* values[]{
+        sim,
+        signal,
+        registration,
+        details.operator_name[0] ? details.operator_name.data() : UiText(host_strings::Id::kCellularNotReported),
+        radio,
+        attached,
+        details.apn[0] ? details.apn.data() : UiText(host_strings::Id::kCellularUnknown),
+        address};
+    for (unsigned i = 0; i < 8; ++i) lv_label_set_text(cellular_detail_values_[i], values[i]);
+    // Native switch/style animations only invalidate; the static scene timer
+    // otherwise leaves intermediate frames waiting for its one-second tick.
+    if (lv_anim_count_running()) cellular_animation_refresh_.Start(lv_obj_get_display(cellular_dialog_));
+}
+
+void StatusLayerUi::CellularScrollEvent(lv_event_t* event) {
+    auto* ui = static_cast<StatusLayerUi*>(lv_event_get_user_data(event));
+    platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(ui->cellular_dialog_));
+}
+
+void StatusLayerUi::CellularBackEvent(lv_event_t* event) {
+    auto* ui = static_cast<StatusLayerUi*>(lv_event_get_user_data(event));
+    if (ui->cellular_settings_page_) {
+        ui->EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer);
+    } else {
+        lv_obj_add_flag(ui->cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(ui->status_dialog_, LV_OBJ_FLAG_HIDDEN);
+        platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(ui->status_layer_));
+    }
+}
+
+void StatusLayerUi::CellularEvent(lv_event_t* event) {
+    auto* ui = static_cast<StatusLayerUi*>(lv_event_get_user_data(event));
+    if (ui == nullptr) return;
+    const auto* target = lv_event_get_target_obj(event);
+    if (ui->CellularSwitchBusy()) return;
+    if (target == ui->cellular_mode_) {
+        const bool enabled = lv_obj_has_state(ui->cellular_mode_, LV_STATE_CHECKED);
+        // Latch before handing the request to the Host. A stale status update must
+        // not undo the click or allow a second request while this one is queued.
+        ui->cellular_command_pending_us_ = static_cast<uint64_t>(esp_timer_get_time());
+        // Keep the control locked through its animation, even when Stop finishes
+        // before the next tap in a double-click can reach LVGL.
+        ui->cellular_switch_guard_ = lv_timer_create(CellularSwitchGuardElapsed, 500, ui);
+        if (ui->cellular_switch_guard_) lv_timer_set_repeat_count(ui->cellular_switch_guard_, 1);
+        ui->UpdateCellularDialogLocked();
+        platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(ui->status_layer_));
+        ui->EmitAction(host_ui::SystemUiActionType::kSetCellularEnabled, enabled ? 1U : 0U,
+                       ui->cellular_command_pending_us_);
+    } else if (ui->cellular_enabled_ && !ui->cellular_sim_pending_) {
+        for (uint32_t slot = 0; slot < 2; ++slot) {
+            if (target == ui->cellular_sim_buttons_[slot] && static_cast<uint32_t>(ui->cellular_sim_slot_) != slot) {
+                ui->EmitAction(host_ui::SystemUiActionType::kSetCellularSimSlot, slot);
+            }
+        }
+    }
+}
+
+void StatusLayerUi::CellularSwitchGuardElapsed(lv_timer_t* timer) {
+    auto* ui = static_cast<StatusLayerUi*>(lv_timer_get_user_data(timer));
+    ui->cellular_switch_guard_ = nullptr;
+    ui->UpdateCellularDialogLocked();
+    if (ui->status_layer_) platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(ui->status_layer_));
 }
 
 void StatusLayerUi::UpdateSliderLocked(TouchTarget target, uint8_t percent) {
@@ -467,7 +710,7 @@ void StatusLayerUi::DrawQuickCard(lv_obj_t* root, TouchTarget target, const char
     quick_panels_[index] = panel;
     quick_name_labels_[index] = name_label;
     quick_detail_labels_[index] = detail_label;
-    const bool interactive = target != TouchTarget::kCellular && available;
+    const bool interactive = available;
     lv_obj_add_event_cb(panel, QuickEvent, LV_EVENT_SHORT_CLICKED, this);
     if (!interactive) {
         lv_obj_add_state(panel, LV_STATE_DISABLED);
@@ -546,6 +789,15 @@ StatusLayerUi::MetricObjects StatusLayerUi::DrawMetric(lv_obj_t* root, uint32_t 
 }
 
 void StatusLayerUi::ResetObjectPointers() {
+    cellular_dialog_ = nullptr;
+    cellular_sections_ = nullptr;
+    cellular_sections_ready_ = false;
+    cellular_mode_ = nullptr;
+    cellular_mode_label_ = nullptr;
+    cellular_sim_buttons_[0] = nullptr;
+    cellular_sim_buttons_[1] = nullptr;
+    std::fill(std::begin(cellular_sim_labels_), std::end(cellular_sim_labels_), nullptr);
+    std::fill(std::begin(cellular_detail_values_), std::end(cellular_detail_values_), nullptr);
     status_dialog_ = nullptr;
     for (uint32_t index = 0U; index < 3U; ++index) {
         quick_panels_[index] = nullptr;
@@ -576,7 +828,7 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
     lv_label_set_text(quick_detail_labels_[index], detail);
     lv_obj_set_style_text_color(quick_detail_labels_[index],
                                 lv_color_hex(active && available ? theme::kOverlayText : theme::kSecondaryText), 0);
-    const bool interactive = target != TouchTarget::kCellular && available;
+    const bool interactive = available;
     if (interactive) {
         lv_obj_remove_state(quick_panels_[index], LV_STATE_DISABLED);
     } else {
@@ -585,6 +837,17 @@ void StatusLayerUi::UpdateQuickCardLocked(TouchTarget target, const char* detail
 }
 
 void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model) {
+    cellular_diagnostics_ = model.cellular_diagnostics;
+    cellular_state_ = model.cellular_state;
+    cellular_connected_ = model.cellular_connected;
+    cellular_available_ = model.cellular_available;
+    cellular_enabled_ = model.cellular_enabled;
+    if (cellular_command_pending_us_ == model.cellular_command_ack_us) cellular_command_pending_us_ = 0;
+    cellular_switching_ = model.cellular_switching;
+    cellular_switch_failed_ = model.cellular_switch_failed;
+    cellular_sim_slot_ = model.cellular_sim_slot;
+    cellular_sim_pending_ = model.cellular_sim_pending;
+    cellular_sim_failed_ = model.cellular_sim_failed;
     const bool compact = layout_ != nullptr && layout_->screen_width <= 320;
     const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
     const char* wifi_detail = !model.wifi_available
@@ -596,9 +859,9 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     const char* cellular_detail =
         !model.cellular_available
             ? unavailable
-            : (model.cellular_connected
-                   ? UiText(host_strings::Id::kUiConnectedCaps)
-                   : (model.cellular_enabled ? UiText(host_strings::Id::kUiOn) : UiText(host_strings::Id::kUiOffCaps)));
+            : (model.cellular_switch_failed ? "SAVE FAILED"
+               : model.cellular_switching   ? "RESTARTING"
+                                            : (model.cellular_enabled ? "SIM / NETWORK" : "NETWORK"));
     UpdateQuickCardLocked(TouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
     UpdateQuickCardLocked(TouchTarget::kCellular, cellular_detail, model.cellular_enabled, model.cellular_available);
     UpdateQuickCardLocked(TouchTarget::kPerformance,
@@ -610,6 +873,7 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     UpdateSliderLocked(TouchTarget::kBrightness, model.brightness_percent);
     UpdateSliderLocked(TouchTarget::kVolume, model.volume_percent);
     UpdateSramMetricLocked(model);
+    UpdateCellularDialogLocked();
 }
 
 void StatusLayerUi::UpdateSramMetricLocked(const host_ui::StatusLayerModel& model) {
@@ -625,6 +889,16 @@ void StatusLayerUi::UpdateSramMetricLocked(const host_ui::StatusLayerModel& mode
 }
 
 void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
+    cellular_diagnostics_ = model.cellular_diagnostics;
+    cellular_state_ = model.cellular_state;
+    cellular_connected_ = model.cellular_connected;
+    cellular_available_ = model.cellular_available;
+    cellular_enabled_ = model.cellular_enabled;
+    cellular_switching_ = model.cellular_switching;
+    cellular_switch_failed_ = model.cellular_switch_failed;
+    cellular_sim_slot_ = model.cellular_sim_slot;
+    cellular_sim_pending_ = model.cellular_sim_pending;
+    cellular_sim_failed_ = model.cellular_sim_failed;
     ResolveLayoutLocked();
     if (status_layer_ == nullptr) {
         status_layer_ = lv_obj_create(lv_screen_active());
@@ -660,9 +934,9 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     const char* cellular_detail =
         !model.cellular_available
             ? unavailable
-            : (model.cellular_connected
-                   ? UiText(host_strings::Id::kUiConnectedCaps)
-                   : (model.cellular_enabled ? UiText(host_strings::Id::kUiOn) : UiText(host_strings::Id::kUiOffCaps)));
+            : (model.cellular_switch_failed ? "SAVE FAILED"
+               : model.cellular_switching   ? "RESTARTING"
+                                            : (model.cellular_enabled ? "SIM / NETWORK" : "NETWORK"));
     DrawQuickCard(status_dialog_, TouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled, model.wifi_available);
     DrawQuickCard(status_dialog_, TouchTarget::kCellular, "4G", cellular_detail, model.cellular_enabled,
                   model.cellular_available);
@@ -706,7 +980,11 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(status_layer_));
 }
 
-StatusLayerUi::~StatusLayerUi() { heap_caps_free(performance_snapshot_pixels_); }
+StatusLayerUi::~StatusLayerUi() {
+    cellular_animation_refresh_.Stop();
+    if (cellular_switch_guard_) lv_timer_delete(cellular_switch_guard_);
+    heap_caps_free(performance_snapshot_pixels_);
+}
 
 std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host_ui::StatusLayerModel& model,
                                                                       host_ui::SystemUiActionSink action_sink,
@@ -714,8 +992,14 @@ std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host
     if (lv_screen_active() == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    cellular_animation_refresh_.Stop();
+    if (cellular_switch_guard_) lv_timer_delete(cellular_switch_guard_);
+    cellular_switch_guard_ = nullptr;
+    cellular_command_pending_us_ = 0;
     DrawLayerLocked(model);
-    SetTransitionProgressLocked(0U);
+    cellular_settings_page_ = model.open_cellular_settings;
+    if (cellular_settings_page_) ShowCellularDialogLocked();
+    SetTransitionProgressLocked(cellular_settings_page_ ? kTransitionComplete : 0U);
     action_sink_ = action_sink;
     action_context_ = action_context;
     updating_controls_ = false;
@@ -737,9 +1021,9 @@ void StatusLayerUi::SetTransitionProgressLocked(uint16_t progress_per_mille) {
     }
     const uint32_t progress = progress_per_mille <= kTransitionComplete ? progress_per_mille : kTransitionComplete;
     const int32_t dialog_y =
-        layout_->dialog_hidden_y +
-        static_cast<int32_t>((layout_->dialog.y - layout_->dialog_hidden_y) * progress / kTransitionComplete);
-    lv_obj_set_y(status_dialog_, dialog_y);
+        TransitionDialogHiddenY() +
+        static_cast<int32_t>((TransitionDialogVisibleY() - TransitionDialogHiddenY()) * progress / kTransitionComplete);
+    lv_obj_set_y(TransitionDialogLocked(), dialog_y);
     // Keep the scrim stable while the panel moves. Animating a translucent
     // 720x720 object forces LVGL to blend and refresh the full display on
     // every step, which turns the status transition into a slideshow even
@@ -757,6 +1041,9 @@ void StatusLayerUi::Deactivate() {
 
 void StatusLayerUi::LeaveLocked() {
     Deactivate();
+    cellular_animation_refresh_.Stop();
+    if (cellular_switch_guard_) lv_timer_delete(cellular_switch_guard_);
+    cellular_switch_guard_ = nullptr;
     if (status_layer_ == nullptr) {
         return;
     }

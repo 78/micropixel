@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "host/ui/lvgl/square_common/action_sheet_presenter.hpp"
 #include "host/ui/system_ui.hpp"
+#include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
 
@@ -38,6 +39,11 @@ class WifiSettingsUi final {
 
     static void BackEvent(lv_event_t* event);
     static void SwitchEvent(lv_event_t* event);
+    static void SwitchGuardElapsed(lv_timer_t* timer);
+    bool SwitchBusy() const { return model_.control_pending || switch_pending_us_ != 0 || switch_guard_ != nullptr; }
+    bool DisplayedEnabled() const {
+        return switch_pending_us_ != 0 || switch_guard_ ? switch_requested_enabled_ : model_.enabled;
+    }
     static void OpenScanEvent(lv_event_t* event);
     static void NetworkEvent(lv_event_t* event);
     static void SheetConnectEvent(lv_event_t* event);
@@ -51,6 +57,7 @@ class WifiSettingsUi final {
 
     void QueueRender();
     void RenderLocked();
+    void UpdateSwitchLocked();
     void DrawNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& network, NetworkBinding& binding);
     void DrawActionSheetLocked();
     void DrawPasswordLocked();
@@ -76,6 +83,12 @@ class WifiSettingsUi final {
     uint32_t selected_saved_index_{};
     int32_t scroll_offset_{};
     portMUX_TYPE render_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    uint64_t switch_pending_us_{};
+    lv_timer_t* switch_guard_{};
+    platform::lvgl::AnimatedDisplayRefresh switch_animation_refresh_{};
+    lv_obj_t* switch_control_{};
+    lv_obj_t* switch_status_{};
+    bool switch_requested_enabled_{};
     bool scan_view_{};
     bool action_sheet_visible_{};
     bool action_sheet_rendered_{};

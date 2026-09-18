@@ -7,6 +7,7 @@
 #include <expected>
 #include <utility>
 
+#include "device/contracts/cellular.hpp"
 #include "device/contracts/power.hpp"
 #include "host/store_update_request.hpp"
 
@@ -208,6 +209,9 @@ struct CpuUsageSample final {
 };
 
 struct StatusLayerModel final {
+    bool open_cellular_settings{};
+    device::CellularDiagnostics cellular_diagnostics{};
+    device::CellularState cellular_state{device::CellularState::kOff};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     uint32_t memory_used_kib{};
     uint32_t memory_total_kib{};
@@ -227,6 +231,12 @@ struct StatusLayerModel final {
     bool cellular_available{};
     bool cellular_enabled{};
     bool cellular_connected{};
+    bool cellular_switching{};
+    uint64_t cellular_command_ack_us{};  // Last switch request handled by the Host, including rejection.
+    bool cellular_switch_failed{};
+    device::CellularSimSlot cellular_sim_slot{device::CellularSimSlot::kUnknown};
+    bool cellular_sim_pending{};
+    bool cellular_sim_failed{};
     bool battery_available{};
     bool battery_charging{};
     bool battery_discharging{};
@@ -244,6 +254,7 @@ enum class SystemMenuItem : uint32_t {
     kLanguage,
     kSystemInformation,
     kManageApps,
+    kCellular,
 };
 
 enum class LanguageDownloadState : uint8_t {
@@ -274,6 +285,10 @@ struct SystemMenuModel final {
     void* language_progress_context{};
     uint8_t language_progress{};
     LanguageDownloadState language_state{};
+    bool cellular_available{};
+    bool cellular_enabled{};
+    bool cellular_connected{};
+    bool cellular_connecting{};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     const char* locale{"en"};
     const char* language{"English"};
@@ -474,6 +489,9 @@ struct WifiSettingsModel final {
     bool enabled{};
     bool connected{};
     bool scanning{};
+    bool control_pending{};
+    bool control_failed{};
+    uint64_t command_ack_us{};
     WifiConnectionState connection_state{WifiConnectionState::kDisconnected};
 };
 
@@ -509,6 +527,9 @@ enum class SystemUiActionType {
     kOpenWifiNetworkScan,
     kCloseWifiNetworkScan,
     kSetWifiEnabled,
+    kSetCellularEnabled,
+    kRefreshCellularSim,
+    kSetCellularSimSlot,
     kConnectSavedWifi,
     kConnectNewWifi,
     kDisconnectWifi,
@@ -522,7 +543,7 @@ enum class SystemUiActionType {
     // these actions directly.
     kPowerButtonPressed,
     kPowerOffRequested,
-    kWifiStateChanged,
+    kNetworkStateChanged,
     kBatteryStateChanged,
     kTimeStateChanged,
     kRemoteCommandReady,

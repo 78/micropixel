@@ -169,7 +169,7 @@ class SquareSystemUiState final {
     lv_obj_t* root{};
     lv_image_dsc_t launch_image_descriptor{};
     GuestGestureHintUi guest_gesture_hint_ui{};
-    StatusLayerUi status_layer_ui{};
+    StatusLayerUi status_layer_ui;
     HallSceneUi hall_scene_ui{};
     ActionSheetPresenter action_sheets;
     SystemMenuUi system_menu_ui;

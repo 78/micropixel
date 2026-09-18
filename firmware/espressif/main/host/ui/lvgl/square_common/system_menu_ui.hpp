@@ -111,6 +111,7 @@ class SystemMenuUi final {
     lv_obj_t* language_status_label_{};
     bool language_view_{};
     lv_obj_t* wifi_detail_label_{};
+    lv_obj_t* cellular_detail_label_{};
     lv_obj_t* remote_control_detail_label_{};
     lv_obj_t* system_information_detail_label_{};
     lv_obj_t* appearance_detail_label_{};
@@ -120,7 +121,7 @@ class SystemMenuUi final {
     lv_obj_t* apps_update_dot_{};
     lv_obj_t* font_update_button_{};
     bool font_update_shown_{};
-    std::array<RowBinding, 7> row_bindings_{};
+    std::array<RowBinding, 8> row_bindings_{};
     host_ui::SystemUiActionSink action_sink_{};
     void* action_context_{};
 };

@@ -52,18 +52,55 @@ lv_obj_t* Button(lv_obj_t* label) {
         if (lv_obj_check_type(p, &lv_button_class)) return p;
     return nullptr;
 }
+void CheckInformationRows(lv_obj_t* root, const SystemPageLayout& layout) {
+    auto* panel = CreateSystemPanel(root, layout, 0);
+    lv_obj_set_width(panel, layout.width - 2 * layout.safe_horizontal);
+    auto* row = CreateSystemInformationRow(panel, layout, "Signal", "Ready", true);
+    auto* value = lv_obj_get_child(row, 1);
+    lv_obj_update_layout(root);
+    lv_area_t row_area{}, value_area{};
+    lv_obj_get_coords(row, &row_area);
+    lv_obj_get_coords(value, &value_area);
+    Check(std::abs((row_area.y1 + row_area.y2) - (value_area.y1 + value_area.y2)) <= 2,
+          "single-line details centered between dividers");
+    const int32_t short_height = lv_obj_get_height(row);
+    lv_label_set_text(value,
+                      "A long carrier name that wraps across multiple lines without touching the divider below it");
+    lv_obj_update_layout(root);
+    lv_obj_get_coords(row, &row_area);
+    lv_obj_get_coords(value, &value_area);
+    Check(lv_obj_get_height(row) > short_height, "wrapped values grow their row");
+    Check(value_area.y1 > row_area.y1 && value_area.y2 < row_area.y2 - 1, "wrapped value stays above divider");
+    Check(std::abs((row_area.y1 + row_area.y2) - (value_area.y1 + value_area.y2)) <= 2,
+          "wrapped details retain symmetric spacing");
+    lv_obj_delete(panel);
+}
 void Run(const SystemMenuLayout& layout, const SystemPageLayout& page) {
     auto* display = lv_display_create(layout.width, layout.height);
     std::vector<uint32_t> buffer(layout.width * layout.height);
     lv_display_set_buffers(display, buffer.data(), nullptr, buffer.size() * 4, LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(display, [](lv_display_t* d, const lv_area_t*, uint8_t*) { lv_display_flush_ready(d); });
     auto* root = lv_screen_active();
+    CheckInformationRows(root, page);
     StatusLayerTransition transition;
     ActionSheetPresenter presenter(transition);
     SystemMenuUi ui(page, presenter);
     SystemMenuModel model{};
     model.locale = "en";
+    model.cellular_available = true;
     Check(ui.ShowLocked(root, display, layout, model, Action, nullptr).has_value(), "show settings menu");
+    auto* cellular_row = Button(Find(root, "Cellular Network"));
+    Check(cellular_row && Find(cellular_row, "Off"), "cellular menu shows its name and disabled state");
+    model.cellular_enabled = model.cellular_connecting = true;
+    ui.Update(model);
+    Check(Find(cellular_row, "Connecting..."), "cellular menu refreshes while connecting");
+    model.cellular_connecting = false;
+    model.cellular_connected = true;
+    ui.Update(model);
+    Check(Find(cellular_row, "Connected"), "cellular menu refreshes after connection");
+    model.cellular_enabled = false;
+    ui.Update(model);
+    Check(Find(cellular_row, "Off"), "disabled cellular wins over an older connected state");
     const auto dot = [&](const char* name) -> lv_obj_t* {
         auto* row = Button(Find(root, name));
         Check(row, "settings row exists");

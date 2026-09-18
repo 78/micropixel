@@ -138,6 +138,7 @@ class WifiManager final : public device::Wifi {
     bool initialization_started_{};
     bool radio_startup_task_started_{};
     bool initialized_{};
+    bool controls_ready_{};
     bool driver_initialized_{};
     bool enabled_{true};
     bool associated_{};

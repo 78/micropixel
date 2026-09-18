@@ -3,9 +3,11 @@
 #include <cstdint>
 #include <expected>
 
+#include "host/ui/lvgl/square_common/system_page_layout.hpp"
 #include "host/ui/system_ui.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
+#include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
 
@@ -14,7 +16,7 @@ namespace micropixel::host_ui::lvgl::square_common {
 // lock for methods whose name ends in Locked.
 class StatusLayerUi final {
    public:
-    StatusLayerUi() = default;
+    explicit StatusLayerUi(const SystemPageLayout& layout) : cellular_layout_(layout) {}
     StatusLayerUi(const StatusLayerUi&) = delete;
     StatusLayerUi& operator=(const StatusLayerUi&) = delete;
     ~StatusLayerUi();
@@ -27,7 +29,11 @@ class StatusLayerUi final {
     void Deactivate();
     void LeaveLocked();
     [[nodiscard]] void* ActionContext() const;
-    [[nodiscard]] lv_obj_t* TransitionDialogLocked() const { return status_dialog_; }
+    [[nodiscard]] bool CellularSettingsPage() const { return cellular_settings_page_; }
+    [[nodiscard]] lv_obj_t* TransitionDialogLocked() const {
+        return cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN) ? cellular_dialog_
+                                                                                                     : status_dialog_;
+    }
     [[nodiscard]] int32_t TransitionDialogVisibleY() const;
     [[nodiscard]] int32_t TransitionDialogHiddenY() const;
     [[nodiscard]] uint32_t TransitionScrimRgb() const;
@@ -129,6 +135,15 @@ class StatusLayerUi final {
 
     static void LayerEvent(lv_event_t* event);
     static void QuickEvent(lv_event_t* event);
+    static void CellularBackEvent(lv_event_t* event);
+    static void CellularScrollEvent(lv_event_t* event);
+    static void CellularEvent(lv_event_t* event);
+    static void CellularSwitchGuardElapsed(lv_timer_t* timer);
+    [[nodiscard]] bool CellularSwitchBusy() const {
+        return cellular_switching_ || cellular_command_pending_us_ != 0 || cellular_switch_guard_ != nullptr;
+    }
+    void ShowCellularDialogLocked();
+    void UpdateCellularDialogLocked();
     static void SliderEvent(lv_event_t* event);
 
     [[nodiscard]] static lv_obj_t* CreateLabel(lv_obj_t* parent, const char* text, const lv_font_t* font,
@@ -149,6 +164,29 @@ class StatusLayerUi final {
 
     lv_obj_t* status_layer_{};
     lv_obj_t* status_dialog_{};
+    bool cellular_settings_page_{};
+    bool cellular_available_{};
+    bool cellular_enabled_{};
+    bool cellular_switching_{};
+    uint64_t cellular_command_pending_us_{};
+    lv_timer_t* cellular_switch_guard_{};
+    platform::lvgl::AnimatedDisplayRefresh cellular_animation_refresh_{};
+    bool cellular_sim_pending_{};
+    bool cellular_sim_failed_{};
+    bool cellular_switch_failed_{};
+    device::CellularSimSlot cellular_sim_slot_{device::CellularSimSlot::kUnknown};
+    lv_obj_t* cellular_dialog_{};
+    lv_obj_t* cellular_sections_{};
+    bool cellular_sections_ready_{};
+    lv_obj_t* cellular_mode_{};
+    lv_obj_t* cellular_mode_label_{};
+    lv_obj_t* cellular_sim_buttons_[2]{};
+    const SystemPageLayout& cellular_layout_;
+    device::CellularDiagnostics cellular_diagnostics_{};
+    device::CellularState cellular_state_{};
+    bool cellular_connected_{};
+    lv_obj_t* cellular_sim_labels_[2]{};
+    lv_obj_t* cellular_detail_values_[8]{};
     lv_obj_t* quick_panels_[3]{};
     lv_obj_t* quick_name_labels_[3]{};
     lv_obj_t* quick_detail_labels_[3]{};

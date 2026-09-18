@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(micropixel_network_json_tests LANGUAGES C CXX)
+get_filename_component(workspace_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+set(cjson_dir "${workspace_root}/firmware/espressif/managed_components/espressif__cjson/cJSON")
+add_executable(network_json_test ../test_network_json.cpp "${cjson_dir}/cJSON.c")
+target_include_directories(network_json_test PRIVATE "${cjson_dir}" "${workspace_root}/firmware/espressif/main")
+target_compile_features(network_json_test PRIVATE cxx_std_23)
+target_compile_options(network_json_test PRIVATE -Wall -Wextra -Werror)

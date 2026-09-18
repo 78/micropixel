@@ -86,6 +86,29 @@ build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physic
 build_and_run frame_timing \
     "$workspace_root/tools/tests/test_frame_timing.cpp"
 
+python3 "$workspace_root/tools/generate_localization.py" \
+    --catalog-dir "$workspace_root/firmware/espressif/main/host/ui/i18n" \
+    --default-locale en --cpp-namespace host_strings \
+    --output-header "$test_output_dir/host_strings.hpp" \
+    --report "$test_output_dir/host-localization-report.json"
+
+build_and_run network_controller -pthread \
+    "$workspace_root/tools/tests/test_network_controller.cpp" \
+    "$workspace_root/firmware/espressif/main/host/network/network_controller.cpp"
+
+build_and_run async_wifi -pthread \
+    -iquote "$workspace_root/tools/tests/cellular_stubs" \
+    "$workspace_root/tools/tests/test_async_wifi.cpp" \
+    "$workspace_root/firmware/espressif/main/host/network/async_wifi.cpp"
+
+build_and_run cellular_controller \
+    -I "$test_output_dir" \
+    -pthread \
+    -iquote "$workspace_root/tools/tests/cellular_stubs" \
+    -include "$workspace_root/tools/tests/cellular_stubs/cellular_nvs_declarations.hpp" \
+    "$workspace_root/tools/tests/test_cellular_controller.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/boards/metalio-claw4/cellular_controller.cpp"
+
 build_and_run guest_timers \
     "$workspace_root/tools/tests/test_guest_timers.cpp" \
     "$workspace_root/guest/runtime/timers.cpp"
@@ -589,7 +612,15 @@ build_and_run blocks_model \
 # Exercise real LVGL flex layout and scrolling, including the compact 320x240 Hall.
 cmake -S "$workspace_root/tools/tests/lvgl_ui" -B "$test_output_dir/lvgl-ui" \
     -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_menu_test --parallel 4
+cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_menu_test cellular_ui_test wifi_ui_test --parallel 4
 (cd "$test_output_dir/lvgl-ui" && ./hall_error_dialog_test)
 
 (cd "$test_output_dir/lvgl-ui" && ./system_menu_test)
+
+(cd "$test_output_dir/lvgl-ui" && ./cellular_ui_test)
+
+(cd "$test_output_dir/lvgl-ui" && ./wifi_ui_test)
+
+cmake -S "$workspace_root/tools/tests/network_json" -B "$test_output_dir/network-json"
+cmake --build "$test_output_dir/network-json" --parallel 2
+"$test_output_dir/network-json/network_json_test"

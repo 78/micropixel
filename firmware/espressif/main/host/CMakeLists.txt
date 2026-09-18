@@ -2,6 +2,9 @@
 list(APPEND micropixel_sources
     "host/logging/system_log_buffer.cpp"
     "host/fonts/language_packs.cpp"
+    "host/network/async_wifi.cpp"
+    "host/network/network_controller.cpp"
+    "host/network/network_maintenance.cpp"
     "host/time/network_time.cpp"
     "host/time/system_time.cpp"
 )

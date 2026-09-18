@@ -54,6 +54,8 @@ struct WifiSnapshot final {
     bool enabled{};
     bool connected{};
     bool scanning{};
+    bool control_pending{};
+    bool control_failed{};
     WifiConnectionState connection_state{WifiConnectionState::kDisconnected};
 };
 
@@ -80,6 +82,7 @@ class Wifi {
     // signal for operations and state-change sinks report the transition.
     [[nodiscard]] virtual std::expected<void, WifiError> Initialize() = 0;
     [[nodiscard]] virtual WifiSnapshot Snapshot() const = 0;
+    virtual void Poll() {}  // Non-blocking request for background status maintenance.
     virtual void SetStateChangeSink(WifiStateChangeSink sink, void* context) = 0;
     [[nodiscard]] virtual std::expected<void, WifiError> SetEnabled(bool enabled) = 0;
     [[nodiscard]] virtual std::expected<void, WifiError> RequestScan() = 0;

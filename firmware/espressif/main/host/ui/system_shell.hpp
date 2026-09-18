@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <expected>
+#include <mutex>
 #include <optional>
 
 #include "freertos/FreeRTOS.h"
@@ -82,7 +83,7 @@ class SystemShell final {
     [[nodiscard]] bool PowerOffRequested() const;
     [[nodiscard]] bool ConsumePowerOffRequested();
     [[nodiscard]] bool PowerTransitionRequested() const;
-    void NotifyWifiStateChanged();
+    void NotifyNetworkStateChanged();
     void NotifyBatteryStateChanged();
     void NotifyTimeStateChanged();
     void NotifyRemoteCommandReady();
@@ -115,6 +116,9 @@ class SystemShell final {
     StaticQueue_t action_queue_storage_{};
     std::array<uint8_t, sizeof(SystemUiAction) * kActionQueueCapacity> action_queue_bytes_{};
     QueueHandle_t action_queue_{};
+    // One outstanding network switch is allowed by the visible UI. Retain it under queue pressure.
+    std::mutex network_switch_action_mutex_;
+    std::optional<SystemUiAction> network_switch_action_overflow_;
     std::atomic_bool power_transition_pending_{};
     std::atomic_bool power_button_pending_{};
     std::atomic_bool power_button_queued_{};

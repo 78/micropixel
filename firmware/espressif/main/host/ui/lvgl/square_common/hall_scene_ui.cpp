@@ -7,6 +7,7 @@
 
 #include "host/ui/lvgl/square_common/hall_error_dialog.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
+#include "host/ui/lvgl/square_common/icons/cellular_status_icons.hpp"
 #include "host/ui/lvgl/square_common/icons/wifi_status_icons.hpp"
 #include "host/ui/ui_text.hpp"
 
@@ -294,22 +295,14 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     objects_.cellular_container = lv_obj_create(objects_.status_bar_items);
     StyleTransparentContainer(objects_.cellular_container);
     lv_obj_set_size(objects_.cellular_container, status.cellular.width, status.cellular.height);
-    lv_obj_set_flex_flow(objects_.cellular_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(objects_.cellular_container, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_END,
-                          LV_FLEX_ALIGN_CENTER);
-    for (uint32_t index = 0U; index < objects_.cellular_bars.size(); ++index) {
-        lv_obj_t* bar = lv_obj_create(objects_.cellular_container);
-        const int32_t height = std::max<int32_t>(2, status.cellular.height * static_cast<int32_t>(index + 1U) / 5);
-        lv_obj_set_size(bar, std::max<int32_t>(2, status.cellular.width / 7), height);
-        lv_obj_set_style_pad_all(bar, 0, 0);
-        lv_obj_set_style_radius(bar, 1, 0);
-        lv_obj_set_style_border_width(bar, 0, 0);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(theme::kPrimaryText), 0);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
-        objects_.cellular_bars[index] = bar;
-    }
+    objects_.cellular_image = lv_image_create(objects_.cellular_container);
+    lv_image_set_src(objects_.cellular_image, &micropixel_cellular_status_5);
+    const uint32_t cellular_scale = std::min(status.cellular.width * 256U / micropixel_cellular_status_5.header.w,
+                                             status.cellular.height * 256U / micropixel_cellular_status_5.header.h);
+    lv_image_set_scale(objects_.cellular_image, cellular_scale);
+    lv_obj_center(objects_.cellular_image);
+    lv_obj_set_style_image_recolor(objects_.cellular_image, lv_color_hex(theme::kPrimaryText), 0);
+    lv_obj_set_style_image_recolor_opa(objects_.cellular_image, LV_OPA_COVER, 0);
     objects_.wifi_image = lv_image_create(objects_.status_bar_items);
     lv_image_set_scale(objects_.wifi_image, status.wifi_scale);
     lv_obj_set_style_image_recolor(objects_.wifi_image, lv_color_hex(theme::kPrimaryText), 0);
@@ -390,19 +383,22 @@ void HallSceneUi::DismissFailureEvent(lv_event_t* event) {
 
 void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model) {
     if (objects_.status_bar_container == nullptr || objects_.time_label == nullptr ||
-        objects_.cellular_container == nullptr || objects_.wifi_image == nullptr ||
-        objects_.battery_container == nullptr || objects_.battery_label == nullptr ||
+        objects_.cellular_container == nullptr || objects_.cellular_image == nullptr ||
+        objects_.wifi_image == nullptr || objects_.battery_container == nullptr || objects_.battery_label == nullptr ||
         objects_.battery_percent_label == nullptr) {
         return;
     }
     lv_label_set_text(objects_.time_label, model.time_text.data());
-    if (model.cellular.available) {
-        const uint32_t bars = model.cellular.enabled && model.cellular.connected
-                                  ? std::min<uint32_t>(model.cellular.signal_bars, objects_.cellular_bars.size())
-                                  : 0U;
-        for (uint32_t index = 0U; index < objects_.cellular_bars.size(); ++index) {
-            lv_obj_set_style_bg_opa(objects_.cellular_bars[index], index < bars ? LV_OPA_COVER : 72, 0);
-        }
+    if (model.cellular.available && model.cellular.enabled) {
+        // The device contract has four strength levels; the highest uses the
+        // complete five-column font glyph. Unknown/searching stays dimmed.
+        const uint32_t bars = model.cellular.connected ? std::min<uint32_t>(model.cellular.signal_bars, 4U) : 0U;
+        const lv_image_dsc_t* image = bars == 1U   ? &micropixel_cellular_status_1
+                                      : bars == 2U ? &micropixel_cellular_status_2
+                                      : bars == 3U ? &micropixel_cellular_status_3
+                                                   : &micropixel_cellular_status_5;
+        lv_image_set_src(objects_.cellular_image, image);
+        lv_obj_set_style_image_opa(objects_.cellular_image, bars ? LV_OPA_COVER : 72, 0);
         lv_obj_remove_flag(objects_.cellular_container, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(objects_.cellular_container, LV_OBJ_FLAG_HIDDEN);

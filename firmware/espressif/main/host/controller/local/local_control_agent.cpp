@@ -206,8 +206,12 @@ bool ParseKeyCode(const char* text, device::KeyCode& code) {
 
 LocalControlAgent::LocalControlAgent(device::LocalControl& transport, control::ControlDispatcher& controls,
                                      logging::SystemLogBuffer& system_logs, const device::BoardInfo& board_info,
-                                     device::Wifi& wifi)
-    : transport_(transport), controls_(controls), system_logs_(system_logs), board_info_(board_info), wifi_(wifi) {
+                                     host::network::Network& network)
+    : transport_(transport),
+      controls_(controls),
+      system_logs_(system_logs),
+      board_info_(board_info),
+      network_(network) {
     response_queue_bytes_ = static_cast<uint8_t*>(
         heap_caps_calloc(kResponseQueueCapacity, sizeof(Response), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     void* command_workspace_storage =
@@ -627,7 +631,8 @@ void LocalControlAgent::HandleDeviceStatus(uint32_t request_id, std::string_view
     controls_.CopySnapshot(*snapshot_workspace_);
     const esp_app_desc_t* firmware = esp_app_get_description();
     const device::BoardInfo board_info = board_info_;
-    const device::WifiSnapshot wifi = wifi_.Snapshot();
+    network_.CopySnapshot(network_workspace_);
+    const auto& network = network_workspace_;
     auto encode = [](const char* source, auto& output, size_t& encoded_size) {
         const char* text = source != nullptr ? source : "";
         return mbedtls_base64_encode(output.data(), output.size(), &encoded_size,
@@ -644,17 +649,18 @@ void LocalControlAgent::HandleDeviceStatus(uint32_t request_id, std::string_view
     detail = {};
     const char* active_app =
         snapshot_workspace_->active_app_id[0] != '\0' ? snapshot_workspace_->active_app_id.data() : "-";
-    const int length = std::snprintf(
-        detail.data(), detail.size(),
-        "DEVICE_STATUS %.*s %.*s %.*s %" PRIu64 " %s %s %" PRIu32 " %" PRIu64 " %" PRIu64 " %zu %zu %" PRIu32
-        " %" PRIu32 " %u %u %u",
-        static_cast<int>(version_size), version.data(), static_cast<int>(board_size), board.data(),
-        static_cast<int>(chip_size), chip.data(), static_cast<uint64_t>(esp_timer_get_time() / 1000), active_app,
-        snapshot_workspace_->lifecycle.data(), snapshot_workspace_->catalog.count,
-        snapshot_workspace_->catalog.store_used_bytes, snapshot_workspace_->catalog.store_total_bytes,
-        heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
-        heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), board_info.display.width_pixels,
-        board_info.display.height_pixels, wifi.available ? 1U : 0U, wifi.enabled ? 1U : 0U, wifi.connected ? 1U : 0U);
+    const int length =
+        std::snprintf(detail.data(), detail.size(),
+                      "DEVICE_STATUS %.*s %.*s %.*s %" PRIu64 " %s %s %" PRIu32 " %" PRIu64 " %" PRIu64
+                      " %zu %zu %" PRIu32 " %" PRIu32 " %u %u %u",
+                      static_cast<int>(version_size), version.data(), static_cast<int>(board_size), board.data(),
+                      static_cast<int>(chip_size), chip.data(), static_cast<uint64_t>(esp_timer_get_time() / 1000),
+                      active_app, snapshot_workspace_->lifecycle.data(), snapshot_workspace_->catalog.count,
+                      snapshot_workspace_->catalog.store_used_bytes, snapshot_workspace_->catalog.store_total_bytes,
+                      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                      heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT), board_info.display.width_pixels,
+                      board_info.display.height_pixels, network.available ? 1U : 0U, network.enabled ? 1U : 0U,
+                      network.connected ? 1U : 0U);
     if (length <= 0 || static_cast<size_t>(length) >= detail.size()) {
         (void)QueueResponse(request_id, "ERROR", "response_too_large");
         return;

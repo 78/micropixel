@@ -171,7 +171,7 @@ inline lv_obj_t* CreateSystemButtonPanel(lv_obj_t* parent, const SystemPageLayou
 }
 
 inline lv_obj_t* CreateSystemInformationRow(lv_obj_t* parent, const SystemPageLayout& layout, const char* name,
-                                            const char* value) {
+                                            const char* value, bool wrap_value = false) {
     lv_obj_t* row = lv_obj_create(parent);
     StyleTransparentContainer(row);
     lv_obj_set_size(row, LV_PCT(100), layout.row_height);
@@ -187,7 +187,17 @@ inline lv_obj_t* CreateSystemInformationRow(lv_obj_t* parent, const SystemPageLa
     lv_obj_set_width(value_label, 0);
     lv_obj_set_flex_grow(value_label, 1);
     lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_long_mode(value_label, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(value_label, wrap_value ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+    if (wrap_value) {
+        // A content-sized Flex row applies min_height after laying out its children.
+        // Symmetric padding keeps text centered without relying on that late clamp.
+        const int32_t line_height = lv_font_get_line_height(lv_obj_get_style_text_font(value_label, LV_PART_MAIN));
+        const int32_t padding = std::max<int32_t>(0, (layout.row_height - line_height - 1) / 2);
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_style_min_height(row, layout.row_height, 0);
+        lv_obj_set_style_pad_top(row, padding, 0);
+        lv_obj_set_style_pad_bottom(row, padding, 0);
+    }
     return row;
 }
 

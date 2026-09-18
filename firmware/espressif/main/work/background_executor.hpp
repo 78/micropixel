@@ -12,14 +12,14 @@
 
 namespace micropixel::work {
 
-// Process-wide, bounded executor for non-real-time Host work. Jobs run to
+// Bounded executor for non-real-time Host work. Jobs run to
 // completion on one low-priority unpinned task; callers retain ownership of
 // the job context until their completion protocol says otherwise.
 class BackgroundExecutor final {
    public:
     using Function = void (*)(void* context);
 
-    BackgroundExecutor();
+    explicit BackgroundExecutor(const char* task_name = "micropixel_bg");
     BackgroundExecutor(const BackgroundExecutor&) = delete;
     BackgroundExecutor& operator=(const BackgroundExecutor&) = delete;
     ~BackgroundExecutor();

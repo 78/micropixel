@@ -8,6 +8,7 @@
 #include "device/contracts/battery.hpp"
 #include "device/contracts/block_storage.hpp"
 #include "device/contracts/board_info.hpp"
+#include "device/contracts/cellular.hpp"
 #include "device/contracts/graphics.hpp"
 #include "device/contracts/input.hpp"
 #include "device/contracts/local_control.hpp"
@@ -39,6 +40,7 @@ struct PlatformServices final {
     device::Battery* battery{};
     device::Random* random{};
     device::Wifi* wifi{};
+    device::Cellular* cellular{};
     device::Power* power{};
     device::LocalControl* local_control{};
     device::DeviceCatalog* devices{};
@@ -74,6 +76,7 @@ class BoardRegistration final {
                         audio::AudioPowerController* power_controller = nullptr);
     void SetBattery(device::Battery& battery) { battery_ = &battery; }
     void SetWifi(device::Wifi& wifi) { wifi_ = &wifi; }
+    void SetCellular(device::Cellular& cellular) { cellular_ = &cellular; }
     void SetPower(device::Power& power) { power_ = &power; }
     void SetLocalControl(device::LocalControl& local_control) { local_control_ = &local_control; }
     void SetAppStorage(device::BlockStorage& storage, uint32_t bundle_block_size = 0U, bool removable = false) {
@@ -107,6 +110,7 @@ class BoardRegistration final {
     uint32_t audio_sample_rate_{};
     device::Battery* battery_{};
     device::Wifi* wifi_{};
+    device::Cellular* cellular_{};
     device::Power* power_{};
     device::LocalControl* local_control_{};
     device::BlockStorage* app_storage_{};

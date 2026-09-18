@@ -43,6 +43,13 @@ inline constexpr gpio_num_t kAudioDataOut = GPIO_NUM_9;
 // Mix/output rate of the BT audio bridge.
 inline constexpr uint32_t kAudioSampleRate = 16000U;
 
+inline constexpr uart_port_t kCellularUart = UART_NUM_1;
+inline constexpr int kCellularBaud = 2000000;
+inline constexpr gpio_num_t kCellularTx = GPIO_NUM_28;
+inline constexpr gpio_num_t kCellularRx = GPIO_NUM_29;
+inline constexpr gpio_num_t kCellularMrdy = GPIO_NUM_13;
+inline constexpr gpio_num_t kCellularSrdy = GPIO_NUM_4;
+
 }  // namespace micropixel::platform::metalio_claw4::board
 
 #endif

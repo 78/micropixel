@@ -197,6 +197,21 @@ void ActionSheetPresentationSurvivesQueuePressure() {
     Check(ui.present_sheet_calls == 3U, "queue reset must not strand pending presentation");
 }
 
+void CellularSwitchSurvivesQueuePressure() {
+    for (auto type : {SystemUiActionType::kSetCellularEnabled, SystemUiActionType::kSetWifiEnabled}) {
+        FakeSystemUi ui;
+        SystemShell shell(ui);
+        Check(shell.ShowStatusLayer(StatusLayerModel{}).has_value(), "show controls");
+        for (unsigned i = 0; i < 10; ++i) ui.Emit({.type = SystemUiActionType::kStopApp});
+        ui.Emit({.type = type, .value = 0U, .timestamp_us = 1234U});
+        const auto action = shell.PollAction(0U);
+        Check(action && action->type == type && action->timestamp_us == 1234U,
+              "queue pressure must preserve switch request and acknowledgment token");
+        const auto next = shell.PollAction(0U);
+        Check(next && next->type == SystemUiActionType::kStopApp, "pending switch delivered exactly once");
+    }
+}
+
 void DiscreteActionsRemainOrdered() {
     FakeSystemUi ui;
     SystemShell shell(ui);
@@ -280,17 +295,17 @@ void WifiStateNotificationsAreCoalescedAndSurviveScreenChanges() {
     SystemShell shell(ui);
     Check(shell.ShowHall(HallModel{}).has_value(), "hall should render");
 
-    shell.NotifyWifiStateChanged();
-    shell.NotifyWifiStateChanged();
+    shell.NotifyNetworkStateChanged();
+    shell.NotifyNetworkStateChanged();
     const auto coalesced = shell.PollAction(0U);
-    Check(coalesced.has_value() && coalesced->type == SystemUiActionType::kWifiStateChanged,
+    Check(coalesced.has_value() && coalesced->type == SystemUiActionType::kNetworkStateChanged,
           "duplicate Wi-Fi state notifications should coalesce");
     Check(!shell.PollAction(0U).has_value(), "coalesced Wi-Fi notification should only be queued once");
 
-    shell.NotifyWifiStateChanged();
+    shell.NotifyNetworkStateChanged();
     Check(shell.ShowSystemMenu(SystemMenuModel{}).has_value(), "system menu should render after Wi-Fi notification");
     const auto preserved = shell.PollAction(0U);
-    Check(preserved.has_value() && preserved->type == SystemUiActionType::kWifiStateChanged,
+    Check(preserved.has_value() && preserved->type == SystemUiActionType::kNetworkStateChanged,
           "pending Wi-Fi notification should survive a screen queue reset");
 }
 
@@ -575,6 +590,7 @@ void IdleTimeoutSelectsBoardActionAndRespectsActivityAndPower() {
 int main() {
     IdleTimeoutSelectsBoardActionAndRespectsActivityAndPower();
     ActionSheetPresentationSurvivesQueuePressure();
+    CellularSwitchSurvivesQueuePressure();
     DiscreteActionsRemainOrdered();
     DestructorUnbindsCallbacks();
     SystemMenuActionsReachTheShell();
@@ -589,6 +605,6 @@ int main() {
     ConcurrentPowerNotificationsHaveExactlyOneWinner();
     WifiActionsReachTheShell();
     DetailScreenActionsReachTheShell();
-    std::cout << "system_shell tests passed: 16 cases\n";
+    std::cout << "system_shell tests passed: 17 cases\n";
     return 0;
 }

@@ -72,8 +72,11 @@ std::expected<StatusLayerPresentation, host_ui::SystemUiError> PresentStatusLaye
         lv_refr_now(display);
         esp_lv_adapter_unlock();
     }
-    const bool hardware_started = transition.BeginStatusLayerTransition(
-        true, ui.TransitionScrimRgb(), ui.TransitionScrimOpacity(), trigger_timestamp_us);
+    // Cellular settings opened from the menu switch directly like other settings pages.
+    const bool animate = !model.open_cellular_settings;
+    const bool hardware_started =
+        animate && transition.BeginStatusLayerTransition(true, ui.TransitionScrimRgb(), ui.TransitionScrimOpacity(),
+                                                         trigger_timestamp_us);
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         if (hardware_started) {
             transition.CancelStatusLayerTransition();
@@ -102,7 +105,7 @@ std::expected<StatusLayerPresentation, host_ui::SystemUiError> PresentStatusLaye
         return std::unexpected(result.error());
     }
     if (!hardware_finished) {
-        RunSoftwareTransition(display, ui, true, allow_software_animation);
+        RunSoftwareTransition(display, ui, true, animate && allow_software_animation);
     }
     return StatusLayerPresentation{
         .hardware_accelerated = hardware_finished,
@@ -114,9 +117,11 @@ StatusLayerPresentation DismissStatusLayer(lv_display_t* display, StatusLayerUi&
                                            uint64_t trigger_timestamp_us, bool allow_software_animation) {
     const int64_t started_us = esp_timer_get_time();
     const platform::lvgl::SystemScanoutScope scanout_scope;
+    const bool animate = !ui.CellularSettingsPage();
     ui.Deactivate();
-    const bool hardware_started = transition.BeginStatusLayerTransition(
-        false, ui.TransitionScrimRgb(), ui.TransitionScrimOpacity(), trigger_timestamp_us);
+    const bool hardware_started =
+        animate && transition.BeginStatusLayerTransition(false, ui.TransitionScrimRgb(), ui.TransitionScrimOpacity(),
+                                                         trigger_timestamp_us);
     if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
         if (hardware_started) {
             transition.CancelStatusLayerTransition();
@@ -147,10 +152,12 @@ StatusLayerPresentation DismissStatusLayer(lv_display_t* display, StatusLayerUi&
         transition.CancelStatusLayerTransition();
     }
     esp_lv_adapter_unlock();
-    RunSoftwareTransition(display, ui, false, allow_software_animation);
+    if (animate) {
+        RunSoftwareTransition(display, ui, false, allow_software_animation);
+    }
     if (esp_lv_adapter_lock(-1) == ESP_OK) {
         ui.LeaveLocked();
-        if (!allow_software_animation) {
+        if (!animate || !allow_software_animation) {
             lv_refr_now(display);
         }
         esp_lv_adapter_unlock();

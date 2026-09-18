@@ -350,8 +350,15 @@ prepare_host_config() {
                 saw_freertos_tickless = 1
                 next
             }
+            /^CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF=/ ||
+            /^# CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF is not set$/ { next }
+            /^CONFIG_LWIP_DNS_SETSERVER_WITH_NETIF=/ ||
+            /^# CONFIG_LWIP_DNS_SETSERVER_WITH_NETIF is not set$/ { next }
             { print }
             END {
+                # Claw4 keeps both radios online; DNS follows the default route.
+                print "CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF=y"
+                print "CONFIG_LWIP_DNS_SETSERVER_WITH_NETIF=y"
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 if (!saw_port) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=" remote_port
                 if (!saw_tls) {

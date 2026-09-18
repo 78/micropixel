@@ -197,7 +197,7 @@ WifiManager::~WifiManager() {
         wifi_event_instance_ = nullptr;
     }
     if (ip_event_instance_ != nullptr) {
-        (void)esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_instance_);
+        (void)esp_event_handler_instance_unregister(IP_EVENT, ESP_EVENT_ANY_ID, ip_event_instance_);
         ip_event_instance_ = nullptr;
     }
     (void)ReleaseDriver();
@@ -295,12 +295,11 @@ std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
         return std::unexpected(WifiErrorFor(radio_status));
     }
 
+    // STA_START may arrive before esp_wifi_start returns and must be allowed to
+    // start discovery. Expose controls only after the full startup completes.
     {
         ScopedLock lock(mutex_);
         initialized_ = true;
-        Cold().snapshot.available = true;
-        Cold().snapshot.enabled = enabled_;
-        RebuildSnapshotLocked();
     }
     if (enabled_) {
         esp_err_t status = InitializeDriver();
@@ -324,6 +323,13 @@ std::expected<void, device::WifiError> WifiManager::FinishInitialize() {
 #endif
             return std::unexpected(WifiErrorFor(status));
         }
+    }
+    {
+        ScopedLock lock(mutex_);
+        controls_ready_ = true;
+        Cold().snapshot.available = true;
+        Cold().snapshot.enabled = enabled_;
+        RebuildSnapshotLocked();
     }
     ESP_LOGI(kTag, "Wi-Fi manager ready: radio=%s enabled=%s saved=%lu", radio_.Name(), enabled_ ? "yes" : "no",
              static_cast<unsigned long>(profile_count_));
@@ -353,7 +359,7 @@ esp_err_t WifiManager::InitializeDriver() {
                                                      &wifi_event_instance_);
     }
     if (status == ESP_OK && ip_event_instance_ == nullptr) {
-        status = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, WifiEventHandler, this,
+        status = esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, WifiEventHandler, this,
                                                      &ip_event_instance_);
     }
     if (status != ESP_OK) {
@@ -464,11 +470,6 @@ std::expected<void, device::WifiError> WifiManager::SetEnabled(bool enabled) {
         }
 #endif
     }
-#if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C5
-    if (status == ESP_OK && enabled) {
-        status = esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY);
-    }
-#endif
     if (status != ESP_OK) {
         ScopedLock lock(mutex_);
         enabled_ = !enabled;
@@ -781,6 +782,11 @@ void WifiManager::WifiEventHandler(void* context, esp_event_base_t event_base, i
         manager->HandleWifiEvent(event_id, event_data);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         manager->HandleGotIp();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        ScopedLock lock(manager->mutex_);
+        manager->Cold().snapshot.connected = false;
+        manager->Cold().snapshot.connection_state = device::WifiConnectionState::kDisconnected;
+        manager->RebuildSnapshotLocked();
     }
 }
 
@@ -1343,7 +1349,7 @@ void WifiManager::ProcessPendingSettingsSaves() {
 }
 
 void WifiManager::RebuildSnapshotLocked() {
-    Cold().snapshot.available = initialized_;
+    Cold().snapshot.available = initialized_ && controls_ready_;
     Cold().snapshot.enabled = enabled_;
     Cold().snapshot.saved_network_count = profile_count_;
     Cold().snapshot.available_network_count = 0U;

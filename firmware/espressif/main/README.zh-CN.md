@@ -43,3 +43,9 @@ P4 与 S31 的 ARGB 快照共用对齐步长校验，PPA 像素行距包含填�
 刷新前同步提交“Uninstalling...”等待画面，并暂停页面触摸输入；成功后返回 Hall 或刷新应用列表，
 失败时保留确认弹层并显示错误与重试入口。Manage Apps 的模型刷新复用页面根节点，避免外层
 先清空页面造成弹层引用失效。卸载仍由 Host 串行执行，等待画面不提供取消按钮。
+
+Host 双网络入口位于 `host/network/`：`Network` 是状态与配置协调接口，`NetworkController`
+组合独立 Wi-Fi/SIM 控制视图，`NetworkMaintenance` 负责页面之外的周期维护。默认 IPv4 路由由
+`platform/network/` 在 TCP/IP 上下文内读取。USB、远程控制与大厅复用统一网络快照。
+`AsyncWifi` 将 Wi-Fi 命令和实时信号查询放到专用有界执行器，前台只读缓存；两个网络开关
+都在点击时锁定请求，收到 Host 确认和后台完成后恢复操作。蜂窝关闭先非阻塞取消驱动等待，再后台回收。
