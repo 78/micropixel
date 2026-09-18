@@ -35,14 +35,11 @@ else()
         "${micropixel_builtin_font_output_dir}/font_builtin_latin_32.c")
 endif()
 list(APPEND micropixel_sources ${micropixel_builtin_font_sources})
-set(micropixel_cellular_icon_source "${CMAKE_CURRENT_BINARY_DIR}/generated/cellular_status_icons.c")
-list(APPEND micropixel_sources "${micropixel_cellular_icon_source}")
 # ESP-IDF includes component CMake files once in script mode while discovering
 # requirements. Source properties are only available during the real configure
 # pass; the custom-command outputs are registered as generated there.
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set_source_files_properties(${micropixel_builtin_font_generated_sources} PROPERTIES GENERATED TRUE)
-    set_source_files_properties("${micropixel_cellular_icon_source}" PROPERTIES GENERATED TRUE)
 endif()
 set(micropixel_requires 78__esp-http3 app_update cjson esp_app_format esp_netif esp_wifi mbedtls nvs_flash pthread)
 
@@ -135,16 +132,6 @@ set(micropixel_builtin_font_profile
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/builtin-latin-v1.json")
 set(micropixel_lvgl_font_source_dir
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/vendor")
-add_custom_command(
-    OUTPUT "${micropixel_cellular_icon_source}"
-    COMMAND "${micropixel_python}" "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_cellular_status_icons.py"
-            --font "${micropixel_lvgl_font_source_dir}/FontAwesome5-Solid+Brands+Regular.woff"
-            --output "${micropixel_cellular_icon_source}"
-    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_cellular_status_icons.py"
-            "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_wifi_status_icons.py"
-            "${micropixel_lvgl_font_source_dir}/FontAwesome5-Solid+Brands+Regular.woff"
-    VERBATIM
-)
 set(micropixel_lvgl_symbol_def
     "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/src/font/lv_symbol_def.h")
 set(micropixel_lvgl_keyboard_source
