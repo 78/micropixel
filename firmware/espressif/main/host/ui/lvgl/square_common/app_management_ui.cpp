@@ -582,7 +582,7 @@ void SystemDetailUi::DrawAppManagementActionsLocked() {
     if (app_management_model_.launch_available) {
         lv_obj_add_event_cb(open, AppManagementOpenEvent, LV_EVENT_SHORT_CLICKED, this);
     } else {
-        lv_obj_remove_flag(open, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(open, false);
         lv_obj_set_style_opa(open, LV_OPA_40, 0);
     }
     if (app.update_version[0] != '\0') {

@@ -64,7 +64,7 @@ void DefaultKeyboardPreviewEvent(lv_event_t* event) {
     }
     const lv_event_code_t code = lv_event_get_code(event);
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST || code == LV_EVENT_CANCEL || code == LV_EVENT_READY) {
-        lv_obj_add_flag(preview, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(preview, true);
         return;
     }
 
@@ -76,13 +76,13 @@ void DefaultKeyboardPreviewEvent(lv_event_t* event) {
     const char* text = lv_keyboard_get_button_text(keyboard, button);
     lv_obj_t* label = lv_obj_get_child(preview, 0);
     if (text == nullptr || label == nullptr) {
-        lv_obj_add_flag(preview, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(preview, true);
         return;
     }
     lv_label_set_text(label, std::strcmp(text, " ") == 0 ? "Space" : text);
     lv_obj_center(label);
     lv_obj_align_to(preview, keyboard, LV_ALIGN_OUT_TOP_MID, 0, -8);
-    lv_obj_remove_flag(preview, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(preview, false);
     lv_obj_move_foreground(preview);
 }
 
@@ -113,9 +113,9 @@ lv_obj_t* CreateDefaultKeyboard(lv_obj_t* parent, lv_obj_t* textarea, platform::
     lv_obj_set_style_border_color(preview, lv_color_hex(theme::kAccent), 0);
     lv_obj_set_style_bg_color(preview, lv_color_hex(theme::kActionBackground), 0);
     lv_obj_set_style_bg_opa(preview, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(preview, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(preview, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(preview, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_scrollable(preview, false);
+    lv_obj_set_clickable(preview, false);
+    lv_obj_set_hidden(preview, true);
     lv_obj_t* preview_label = lv_label_create(preview);
     lv_obj_set_style_text_font(preview_label, platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kTitle),
                                0);

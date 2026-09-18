@@ -67,12 +67,12 @@ void GuestGestureHintUi::RefreshLocked() {
         lv_obj_set_style_border_width(indicator_, 0, 0);
         lv_obj_set_style_radius(indicator_, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(indicator_, kIndicatorOpacity, 0);
-        lv_obj_remove_flag(indicator_, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(indicator_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scrollable(indicator_, false);
+        lv_obj_set_clickable(indicator_, false);
     }
     lv_obj_set_style_bg_color(indicator_, lv_color_hex(theme::kOverlayText), 0);
     if (!VisibleLocked()) {
-        lv_obj_remove_flag(indicator_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(indicator_, false);
         RaiseLocked();
         platform::lvgl::RequestDisplayRefresh(display_);
     }
@@ -104,9 +104,7 @@ void GuestGestureHintUi::RaiseLocked() {
     }
 }
 
-bool GuestGestureHintUi::VisibleLocked() const {
-    return indicator_ != nullptr && !lv_obj_has_flag(indicator_, LV_OBJ_FLAG_HIDDEN);
-}
+bool GuestGestureHintUi::VisibleLocked() const { return indicator_ != nullptr && !lv_obj_is_hidden(indicator_); }
 
 void GuestGestureHintUi::HideTimerCallback(lv_timer_t* timer) {
     auto* ui = static_cast<GuestGestureHintUi*>(lv_timer_get_user_data(timer));
@@ -134,7 +132,7 @@ void GuestGestureHintUi::HideObjectLocked() {
     if (!VisibleLocked()) {
         return;
     }
-    lv_obj_add_flag(indicator_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(indicator_, true);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(indicator_));
 }
 

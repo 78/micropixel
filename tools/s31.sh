@@ -39,7 +39,7 @@ fi
 
 firmware_dir="$workspace_root/firmware/espressif"
 common_max_task_name_len="$(sed -n 's/^CONFIG_FREERTOS_MAX_TASK_NAME_LEN=//p' "$firmware_dir/sdkconfig.defaults")"
-lv_mem_size_kib="$(sed -n 's/^CONFIG_LV_MEM_SIZE_KILOBYTES=//p' "$firmware_dir/sdkconfig.s31.defaults")"
+lv_mem_size_bytes="$(sed -n 's/^CONFIG_LV_MEM_SIZE=//p' "$firmware_dir/sdkconfig.s31.defaults")"
 host_build_dir="${S31_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s31-mosaico}"
 sdkconfig_path="${S31_SDKCONFIG:-$host_build_dir/sdkconfig.release}"
 sdkconfig_defaults="${S31_SDKCONFIG_DEFAULTS:-$firmware_dir/sdkconfig.defaults;$firmware_dir/sdkconfig.s31.defaults}"
@@ -169,19 +169,30 @@ prepare_host_config() {
     if [[ -f "$sdkconfig_path" ]]; then
         local updated
         updated="$(mktemp "${sdkconfig_path}.XXXXXX")"
-        awk -v lv_mem_size_kib="$lv_mem_size_kib" \
+        awk -v lv_mem_size_bytes="$lv_mem_size_bytes" \
             -v remote_host="$remote_host" -v remote_port="$remote_port" \
             -v allow_unverified="$allow_unverified" -v trusted_ca="$trusted_ca" \
             -v max_task_name_len="$common_max_task_name_len" '
             BEGIN {
-                saw_lv_mem_size = 0
+                saw_lv_mem_size = 0; saw_lv_style_cache = 0
                 saw_host = 0; saw_port = 0; saw_tls = 0; saw_ca = 0; saw_cert_time = 0
                 saw_pm = 0; saw_pm_dfs = 0; saw_tickless = 0; saw_wifi_lwip_psram = 0
                 saw_main_stack = 0; saw_max_task_name_len = 0
             }
-            /^CONFIG_LV_MEM_SIZE_KILOBYTES=/ {
-                print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
+            /^CONFIG_LV_MEM_SIZE=/ {
+                print "CONFIG_LV_MEM_SIZE=" lv_mem_size_bytes
                 saw_lv_mem_size = 1
+                next
+            }
+            # LVGL 9.6 deprecated these symbols; a non-default value emits a
+            # #warning that -Werror=cpp turns into a build failure. Drop stale
+            # lines so Kconfig re-applies its neutral defaults.
+            /^CONFIG_LV_MEM_SIZE_KILOBYTES=/ ||
+            /^CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=/ ||
+            /^CONFIG_LV_ASSERT_HANDLER_INCLUDE=/ { next }
+            /^CONFIG_LV_OBJ_STYLE_CACHE=/ || /^# CONFIG_LV_OBJ_STYLE_CACHE is not set$/ {
+                print "CONFIG_LV_OBJ_STYLE_CACHE=y"
+                saw_lv_style_cache = 1
                 next
             }
             /^CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=/ {
@@ -243,7 +254,8 @@ prepare_host_config() {
             }
             { print }
             END {
-                if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE_KILOBYTES=" lv_mem_size_kib
+                if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE=" lv_mem_size_bytes
+                if (!saw_lv_style_cache) print "CONFIG_LV_OBJ_STYLE_CACHE=y"
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""
                 if (!saw_port) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT=" remote_port
                 if (!saw_tls) {

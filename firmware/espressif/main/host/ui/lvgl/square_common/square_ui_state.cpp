@@ -36,8 +36,8 @@ void StyleFullscreen(lv_obj_t* object, uint32_t background, int32_t width, int32
     lv_obj_set_style_radius(object, 0, 0);
     lv_obj_set_style_bg_color(object, lv_color_hex(background), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(object, false);
+    lv_obj_set_clickable(object, false);
 }
 
 uint32_t BitmapPixelRgb888(const device::BitmapView& bitmap, uint32_t x, uint32_t y) {

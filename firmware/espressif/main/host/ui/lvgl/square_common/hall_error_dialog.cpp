@@ -9,9 +9,9 @@ namespace micropixel::host_ui::lvgl::square_common {
 namespace {
 void Plain(lv_obj_t* object) {
     lv_obj_remove_style_all(object);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_EVENT_BUBBLE);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_set_scrollable(object, false);
+    lv_obj_set_event_bubble(object, false);
+    lv_obj_set_gesture_bubble(object, false);
 }
 
 void Label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color) {
@@ -35,7 +35,7 @@ HallErrorDialogObjects DrawHallErrorDialog(lv_obj_t* root, int32_t width, int32_
     objects.overlay = lv_obj_create(root);
     Plain(objects.overlay);
     lv_obj_set_size(objects.overlay, width, height);
-    lv_obj_add_flag(objects.overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(objects.overlay, true);
     lv_obj_set_style_bg_color(objects.overlay, lv_color_hex(theme::kModalScrim), 0);
     lv_obj_set_style_bg_opa(objects.overlay, LV_OPA_70, 0);
 
@@ -57,8 +57,8 @@ HallErrorDialogObjects DrawHallErrorDialog(lv_obj_t* root, int32_t width, int32_
     Plain(objects.body);
     lv_obj_set_size(objects.body, LV_PCT(100), 0);
     lv_obj_set_flex_grow(objects.body, 1);
-    lv_obj_add_flag(objects.body, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(objects.body, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_scrollable(objects.body, true);
+    lv_obj_set_scroll_chain(objects.body, false);
     lv_obj_set_scroll_dir(objects.body, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(objects.body, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_style_pad_row(objects.body, gap, 0);

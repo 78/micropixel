@@ -32,7 +32,7 @@ void StyleContainer(lv_obj_t* object, int32_t x, int32_t y, int32_t width, int32
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(object, false);
 }
 
 }  // namespace
@@ -54,9 +54,9 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
     lv_obj_set_style_border_post(card, true, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(theme::kHallCardBackground), 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(card, false);
     if (!app.installing) {
-        lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(card, true);
     }
     if (!app.installing && card_event != nullptr) {
         lv_obj_add_event_cb(card, card_event, LV_EVENT_ALL, event_context);
@@ -65,12 +65,12 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
     lv_obj_t* cover = lv_obj_create(card);
     StyleContainer(cover, -layout.border_width, -layout.border_width, layout.width, layout.width, layout.radius,
                    theme::kHallCoverBackground);
-    lv_obj_remove_flag(cover, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(cover, false);
 
     objects.cover_placeholder = lv_obj_create(cover);
     StyleContainer(objects.cover_placeholder, 0, 0, layout.width, layout.width, layout.radius,
                    theme::kHallCoverColors[index % theme::kHallCoverColors.size()]);
-    lv_obj_remove_flag(objects.cover_placeholder, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(objects.cover_placeholder, false);
     lv_obj_t* cover_label = lv_label_create(objects.cover_placeholder);
     lv_label_set_text(cover_label, AppDisplayName(app));
     const int32_t cover_label_padding = std::max<int32_t>(8, layout.width / 16);
@@ -84,10 +84,10 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
 
     objects.cover_image = lv_image_create(cover);
     lv_obj_center(objects.cover_image);
-    lv_obj_add_flag(objects.cover_image, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(objects.cover_image, true);
 
     if (app.installing) {
-        lv_obj_add_flag(objects.cover_placeholder, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects.cover_placeholder, true);
         const int32_t progress_size = std::max<int32_t>(64, layout.width / 3);
         const int32_t progress_width = std::max<int32_t>(6, layout.width / 40);
         objects.install_progress_arc = lv_arc_create(cover);
@@ -103,7 +103,7 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
                                    LV_PART_INDICATOR);
         lv_obj_set_style_arc_opa(objects.install_progress_arc, LV_OPA_COVER, LV_PART_INDICATOR);
         lv_obj_set_style_bg_opa(objects.install_progress_arc, LV_OPA_TRANSP, LV_PART_KNOB);
-        lv_obj_remove_flag(objects.install_progress_arc, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(objects.install_progress_arc, false);
         lv_obj_center(objects.install_progress_arc);
 
         objects.install_progress_label = lv_label_create(cover);
@@ -129,7 +129,7 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
         StyleContainer(running, layout.running_x, layout.running_y, layout.running_width, layout.running_height,
                        layout.running_height / 2, theme::kHallCardControlBackground);
         lv_obj_set_style_bg_opa(running, LV_OPA_90, 0);
-        lv_obj_remove_flag(running, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(running, false);
         lv_obj_t* running_label = lv_label_create(running);
         lv_label_set_text(running_label, UiText(host_strings::Id::kUiPaused));
         lv_obj_set_style_text_font(running_label, platform::lvgl::BuiltinLatinFont(layout.badge_font), 0);
@@ -150,7 +150,7 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
         lv_obj_t* stop_icon = lv_obj_create(stop);
         StyleContainer(stop_icon, 0, 0, layout.stop_icon_size, layout.stop_icon_size,
                        std::max<int32_t>(2, layout.stop_icon_size / 6), theme::kStop);
-        lv_obj_remove_flag(stop_icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(stop_icon, false);
         lv_obj_center(stop_icon);
     }
 
@@ -158,8 +158,8 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
     StyleContainer(objects.press_overlay, -layout.border_width, -layout.border_width, layout.width, layout.height,
                    layout.radius, theme::kBlack);
     lv_obj_set_style_bg_opa(objects.press_overlay, LV_OPA_40, 0);
-    lv_obj_remove_flag(objects.press_overlay, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(objects.press_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_clickable(objects.press_overlay, false);
+    lv_obj_set_hidden(objects.press_overlay, true);
 }
 
 void SetHallCardPressed(const HallCardObjects& objects, bool pressed) {
@@ -167,10 +167,10 @@ void SetHallCardPressed(const HallCardObjects& objects, bool pressed) {
         return;
     }
     if (pressed) {
-        lv_obj_remove_flag(objects.press_overlay, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects.press_overlay, false);
         lv_obj_move_foreground(objects.press_overlay);
     } else {
-        lv_obj_add_flag(objects.press_overlay, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects.press_overlay, true);
     }
 }
 
@@ -189,16 +189,16 @@ void SetHallCardInstallProgress(const HallCardObjects& objects, uint8_t progress
 
 void ShowHallCoverPlaceholder(const HallCardObjects& objects) {
     if (objects.cover_image != nullptr) {
-        lv_obj_add_flag(objects.cover_image, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects.cover_image, true);
     }
     if (objects.install_progress_arc != nullptr) {
         if (objects.cover_placeholder != nullptr) {
-            lv_obj_add_flag(objects.cover_placeholder, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(objects.cover_placeholder, true);
         }
         return;
     }
     if (objects.cover_placeholder != nullptr) {
-        lv_obj_remove_flag(objects.cover_placeholder, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects.cover_placeholder, false);
     }
 }
 
@@ -235,13 +235,13 @@ void AttachHallCover(const HallCardLayout& layout, const HallCardObjects& object
     descriptor.data_size = cover.size;
     descriptor.data = cover.data;
     lv_image_set_src(objects.cover_image, &descriptor);
-    lv_obj_remove_flag(objects.cover_image, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(objects.cover_image, false);
     if (objects.cover_placeholder != nullptr) {
         // A decoded cover is opaque, so keeping the colored placeholder alive
         // underneath only lets it leak through a rounded edge or a one-pixel
         // panel alignment boundary. It can be restored by
         // ShowHallCoverPlaceholder() if this cover is detached later.
-        lv_obj_add_flag(objects.cover_placeholder, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects.cover_placeholder, true);
     }
 }
 

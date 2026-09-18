@@ -10,11 +10,11 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_timer.h"
+#include "lvgl.h"
 #include "platform/lvgl/display/dialog_snapshot_layout.hpp"
 #include "platform/lvgl/display/scanout_stage_pool.hpp"
 #include "platform/lvgl/display/system_transition_timeline.hpp"
 #include "src/core/lv_obj_draw_private.h"
-#include "src/draw/snapshot/lv_snapshot.h"
 
 namespace micropixel::platform::esp_mosaico {
 namespace {
@@ -498,7 +498,7 @@ bool PanelTransitionCompositor::CaptureStatusDialogLocked(lv_obj_t* dialog) {
     const uint32_t stride = layout->stride_bytes;
     const bool captured =
         lv_draw_buf_init(&snapshot, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
-                         LV_COLOR_FORMAT_ARGB8888, stride, status_dialog_pixels_, bytes) == LV_RESULT_OK &&
+                         LV_COLOR_FORMAT_ARGB8888, stride, status_dialog_pixels_, allocation_bytes) == LV_RESULT_OK &&
         lv_snapshot_take_to_draw_buf(dialog, LV_COLOR_FORMAT_ARGB8888, &snapshot) == LV_RESULT_OK;
     if (!captured || snapshot.header.w != static_cast<uint32_t>(width) ||
         snapshot.header.h != static_cast<uint32_t>(height) || snapshot.header.stride != stride) {

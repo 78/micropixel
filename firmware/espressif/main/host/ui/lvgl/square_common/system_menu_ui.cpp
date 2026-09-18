@@ -57,8 +57,8 @@ void StyleMenuContainer(lv_obj_t* object) {
     lv_obj_set_style_pad_all(object, 0, 0);
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(object, false);
+    lv_obj_set_clickable(object, false);
 }
 
 const char* WifiDetail(const host_ui::SystemMenuModel& model, const host_strings::Catalog& strings) {
@@ -182,12 +182,12 @@ void SystemMenuUi::DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuIt
     lv_obj_set_style_bg_color(panel, lv_color_hex(theme::kPressedBackground),
                               static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
     lv_obj_set_style_shadow_width(panel, 0, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(panel, false);
     if (interactive) {
         lv_obj_add_event_cb(panel, RowEvent, LV_EVENT_SHORT_CLICKED, &row_bindings_[index]);
     } else {
-        lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+        lv_obj_set_clickable(panel, false);
+        lv_obj_set_click_focusable(panel, false);
     }
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -245,8 +245,8 @@ void SystemMenuUi::DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuIt
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(dot, 0, 0);
         lv_obj_set_style_bg_color(dot, lv_color_hex(theme::kNotification), 0);
-        lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scrollable(dot, false);
+        lv_obj_set_clickable(dot, false);
         if (item == SystemMenuItem::kSystemInformation)
             firmware_update_dot_ = dot;
         else if (item == SystemMenuItem::kLanguage)
@@ -292,9 +292,9 @@ void SystemMenuUi::UpdateBadgesLocked(const SystemMenuModel& model) {
     const auto show = [](lv_obj_t* dot, bool visible) {
         if (!dot) return;
         if (visible)
-            lv_obj_remove_flag(dot, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(dot, false);
         else
-            lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(dot, true);
     };
     show(firmware_update_dot_, model.firmware_update_available);
     show(language_update_dot_, model.font_update_available);
@@ -305,9 +305,9 @@ void SystemMenuUi::UpdateFontButtonLocked(const SystemMenuModel& model) {
     if (!font_update_button_ || font_update_shown_ == model.font_update_available) return;
     font_update_shown_ = model.font_update_available;
     if (font_update_shown_)
-        lv_obj_remove_flag(font_update_button_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(font_update_button_, false);
     else
-        lv_obj_add_flag(font_update_button_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(font_update_button_, true);
     platform::lvgl::RequestDisplayRefresh(display_);
 }
 
@@ -374,7 +374,7 @@ bool SystemMenuUi::UpdateLanguageSheetLocked(const host_ui::SystemMenuModel& mod
                                         CancelLanguageEvent, this, theme::kStrongBorder, &language_overlay_);
         lv_obj_add_event_cb(language_overlay_, LanguageSheetDeleted, LV_EVENT_DELETE, this);
         lv_obj_set_style_max_height(sheet, page_layout_.height - page_layout_.safe_horizontal * 2, 0);
-        lv_obj_add_flag(sheet, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(sheet, true);
         (void)Label(sheet, strings.Get(model.language_updating ? Id::kLanguageUpdateTitle : Id::kLanguageConfirmTitle),
                     platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
         (void)Label(sheet,
@@ -419,9 +419,9 @@ bool SystemMenuUi::UpdateLanguageSheetLocked(const host_ui::SystemMenuModel& mod
     const bool checking = model.language_state == LanguageDownloadState::kChecking;
     const auto hidden = [](lv_obj_t* object, bool value) {
         if (value)
-            lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(object, true);
         else
-            lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(object, false);
     };
     hidden(language_cancel_, busy);
     hidden(language_confirm_, busy);
@@ -540,7 +540,7 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     lv_obj_set_style_bg_opa(back, LV_OPA_90, 0);
     lv_obj_set_style_bg_color(back, lv_color_hex(theme::kPressedBackground),
                               static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-    lv_obj_remove_flag(back, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(back, false);
     lv_obj_set_ext_click_area(back, std::max<int32_t>(0, layout.back_button_hit_padding));
     lv_obj_add_event_cb(back, BackEvent, LV_EVENT_SHORT_CLICKED, this);
     lv_obj_t* back_label = lv_label_create(back);
@@ -584,10 +584,9 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     lv_obj_set_style_bg_opa(scroll_content_, LV_OPA_TRANSP, 0);
     lv_obj_set_scroll_dir(scroll_content_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(scroll_content_, LV_SCROLLBAR_MODE_AUTO);
-    constexpr lv_obj_flag_t kScrollFlags = static_cast<lv_obj_flag_t>(
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
-    lv_obj_add_flag(scroll_content_, kScrollFlags);
+    lv_obj_set_scrollable(scroll_content_, true);
+    lv_obj_set_scroll_momentum(scroll_content_, true);
+    lv_obj_set_scroll_elastic(scroll_content_, true);
     lv_obj_add_event_cb(scroll_content_, ScrollEvent, LV_EVENT_SCROLL, this);
     lv_obj_add_event_cb(scroll_content_, ScrollEvent, LV_EVENT_SCROLL_END, this);
     lv_obj_set_flex_flow(scroll_content_, LV_FLEX_FLOW_COLUMN);
@@ -613,7 +612,7 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
         }
         font_update_button_ = CreateSystemActionButton(
             scroll_content_, page_layout_, strings.Get(host_strings::Id::kLanguageUpdateFont), theme::kSuccess, false);
-        lv_obj_add_flag(font_update_button_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(font_update_button_, true);
         lv_obj_add_event_cb(font_update_button_, UpdateFontEvent, LV_EVENT_SHORT_CLICKED, this);
         UpdateFontButtonLocked(model);
         section(strings.Get(host_strings::Id::kLanguageOther), true);
@@ -639,7 +638,7 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
                 strings.Get(host_strings::Id::kSystemSettingsSystemInformation), firmware_detail.data(),
                 theme::kAccent);
         if (firmware_update_dot_ != nullptr && !model.firmware_update_available) {
-            lv_obj_add_flag(firmware_update_dot_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(firmware_update_dot_, true);
         }
         DrawRow(scroll_content_, 3U, host_ui::SystemMenuItem::kLanguage, "A",
                 strings.Get(host_strings::Id::kSystemSettingsLanguage), UiLocaleName(model.locale), theme::kSuccess);

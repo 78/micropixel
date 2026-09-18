@@ -55,7 +55,7 @@ void ActionSheetPresenter::RequestLocked(const SystemPageLayout& layout, lv_obj_
     // The transparent overlay still intercepts taps while the Host is waking.
     // Hide only its sheet so no final-position flash precedes the snapshot.
     lv_obj_set_style_bg_opa(lv_obj_get_parent(sheet_), LV_OPA_TRANSP, 0);
-    lv_obj_add_flag(sheet_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(sheet_, true);
     sink(context, SystemUiAction{.type = SystemUiActionType::kPresentActionSheet});
 }
 
@@ -71,7 +71,7 @@ void ActionSheetPresenter::CancelLocked() {
     if (sheet_ == nullptr) return;
     lv_obj_remove_event_cb_with_user_data(sheet_, SheetDeleted, this);
     lv_obj_set_style_bg_opa(lv_obj_get_parent(sheet_), LV_OPA_80, 0);
-    lv_obj_remove_flag(sheet_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(sheet_, false);
     sheet_ = nullptr;
     layout_ = nullptr;
 }

@@ -77,8 +77,8 @@ lv_obj_t* CreateWifiSignal(lv_obj_t* parent, const SystemPageLayout& layout, int
         lv_obj_set_style_border_width(bar, 0, 0);
         lv_obj_set_style_bg_color(bar, lv_color_hex(color), 0);
         lv_obj_set_style_bg_opa(bar, index < level ? LV_OPA_COVER : LV_OPA_30, 0);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scrollable(bar, false);
+        lv_obj_set_clickable(bar, false);
     }
     return signal;
 }
@@ -102,8 +102,8 @@ lv_obj_t* CreateOverlay(lv_obj_t* root) {
     lv_obj_set_style_radius(overlay, 0, 0);
     lv_obj_set_style_bg_color(overlay, lv_color_hex(theme::kModalScrim), 0);
     lv_obj_set_style_bg_opa(overlay, LV_OPA_80, 0);
-    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(overlay, false);
+    lv_obj_set_clickable(overlay, true);
     return overlay;
 }
 
@@ -452,7 +452,7 @@ void WifiSettingsUi::SwitchEvent(lv_event_t* event) {
     // Hide the previous network list immediately; render the new content after
     // the animation guard, without deleting the control handling this event.
     for (uint32_t i = 1; i < lv_obj_get_child_count(ui->scroll_content_); ++i)
-        lv_obj_add_flag(lv_obj_get_child(ui->scroll_content_, i), LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(lv_obj_get_child(ui->scroll_content_, i), true);
     ui->switch_animation_refresh_.Start(ui->display_);
     ui->action_sink_(ui->action_context_, host_ui::SystemUiAction{
                                               .type = host_ui::SystemUiActionType::kSetWifiEnabled,

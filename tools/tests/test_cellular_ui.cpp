@@ -65,27 +65,27 @@ void Run(const SystemPageLayout& layout) {
     auto* sections = lv_obj_get_child(lv_obj_get_parent(lv_obj_get_parent(control)), 1);
     auto* sim_choices = lv_obj_get_child(lv_obj_get_child(sections, 0), 1);
     auto* sim_button = lv_obj_get_child(sim_choices, 0);
-    Check(lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN), "startup hides unsampled SIM details");
+    Check(lv_obj_is_hidden(sections), "startup hides unsampled SIM details");
     for (unsigned i = 0; i < 4; ++i) ui.UpdateLocked(model);
-    Check(lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN), "startup events do not prematurely expand details");
+    Check(lv_obj_is_hidden(sections), "startup events do not prematurely expand details");
     model.cellular_diagnostics.sampled = true;
     model.cellular_diagnostics.incomplete = true;
     model.cellular_diagnostics.sim_status = micropixel::device::CellularSimStatus::kAbsent;
     ui.UpdateLocked(model);
-    Check(!lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
+    Check(!lv_obj_is_hidden(sections) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
           "first sample reveals usable SIM selection even with no SIM or incomplete diagnostics");
     model.cellular_diagnostics.sim_status = micropixel::device::CellularSimStatus::kPinRequired;
     ui.UpdateLocked(model);
-    Check(!lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
+    Check(!lv_obj_is_hidden(sections) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
           "later diagnostic updates preserve layout and interactive SIM controls");
     model.cellular_sim_pending = true;
     ui.UpdateLocked(model);
-    Check(!lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_state(sim_button, LV_STATE_DISABLED),
+    Check(!lv_obj_is_hidden(sections) && lv_obj_has_state(sim_button, LV_STATE_DISABLED),
           "actual SIM switching disables selection without collapsing details");
     model.cellular_sim_pending = false;
     model.cellular_diagnostics = {};  // The SIM change restarts only the modem.
     ui.UpdateLocked(model);
-    Check(!lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
+    Check(!lv_obj_is_hidden(sections) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
           "modem restart preserves an already revealed layout");
     lv_obj_set_style_anim_duration(control, 300, LV_PART_MAIN);
     for (unsigned i = 0; i < 20; ++i) {
@@ -104,7 +104,7 @@ void Run(const SystemPageLayout& layout) {
           "searching radio accepts off immediately");
     Check(lv_obj_has_state(control, LV_STATE_DISABLED), "first click locks switch before Host handles request");
     Check(HasText(page, "Turning 4G off..."), "first click explains pending shutdown");
-    Check(lv_obj_has_flag(lv_obj_get_child(lv_obj_get_parent(lv_obj_get_parent(control)), 1), LV_OBJ_FLAG_HIDDEN),
+    Check(lv_obj_is_hidden(lv_obj_get_child(lv_obj_get_parent(lv_obj_get_parent(control)), 1)),
           "off request immediately hides network details");
     const auto off_request = last;
     ui.UpdateLocked(model);  // A battery/network event was already queued before the click.
@@ -128,7 +128,7 @@ void Run(const SystemPageLayout& layout) {
           "completed shutdown releases switch in off position");
     Click(control);
     Check(actions == 2 && last.value == 1 && HasText(page, "Turning 4G on..."), "later deliberate enable accepted");
-    Check(lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN), "enabling again waits for a fresh diagnostic sample");
+    Check(lv_obj_is_hidden(sections), "enabling again waits for a fresh diagnostic sample");
     model.cellular_command_ack_us = last.timestamp_us;  // Rejected by an OTA hold or full worker queue.
     ui.UpdateLocked(model);
     lv_tick_inc(501);
@@ -143,10 +143,10 @@ void Run(const SystemPageLayout& layout) {
     lv_timer_handler();
     Check(!lv_obj_has_state(control, LV_STATE_DISABLED) && lv_obj_has_state(control, LV_STATE_CHECKED),
           "fast completion does not strand pending latch");
-    Check(lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN), "radio enabled alone does not reveal details");
+    Check(lv_obj_is_hidden(sections), "radio enabled alone does not reveal details");
     model.cellular_diagnostics.sampled = true;
     ui.UpdateLocked(model);
-    Check(!lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN), "new enable cycle reveals its first sample");
+    Check(!lv_obj_is_hidden(sections), "new enable cycle reveals its first sample");
     ui.LeaveLocked();
     lv_display_delete(display);
 }

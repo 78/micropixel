@@ -31,8 +31,7 @@ class StatusLayerUi final {
     [[nodiscard]] void* ActionContext() const;
     [[nodiscard]] bool CellularSettingsPage() const { return cellular_settings_page_; }
     [[nodiscard]] lv_obj_t* TransitionDialogLocked() const {
-        return cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN) ? cellular_dialog_
-                                                                                                     : status_dialog_;
+        return cellular_dialog_ != nullptr && !lv_obj_is_hidden(cellular_dialog_) ? cellular_dialog_ : status_dialog_;
     }
     [[nodiscard]] int32_t TransitionDialogVisibleY() const;
     [[nodiscard]] int32_t TransitionDialogHiddenY() const;

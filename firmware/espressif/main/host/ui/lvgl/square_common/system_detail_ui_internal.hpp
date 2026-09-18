@@ -130,8 +130,8 @@ inline lv_obj_t* CreateOverlay(lv_obj_t* root, lv_event_cb_t cancel_event, void*
     lv_obj_set_style_radius(overlay, 0, 0);
     lv_obj_set_style_bg_color(overlay, lv_color_hex(theme::kModalScrim), 0);
     lv_obj_set_style_bg_opa(overlay, LV_OPA_80, 0);
-    lv_obj_remove_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(overlay, false);
+    lv_obj_set_clickable(overlay, true);
     lv_obj_add_event_cb(overlay, cancel_event, LV_EVENT_SHORT_CLICKED, context);
     return overlay;
 }
@@ -147,7 +147,7 @@ inline lv_obj_t* CreateActionSheet(ActionSheetPresenter& presenter, SystemUiActi
     lv_obj_t* sheet = Panel(layout, overlay);
     lv_obj_set_width(sheet, layout.width - layout.safe_horizontal * 2);
     lv_obj_set_style_border_color(sheet, lv_color_hex(border_color), 0);
-    lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(sheet, true);
     lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, -layout.safe_horizontal);
     if (!animate) {
         return sheet;

@@ -39,7 +39,7 @@ CONFIG_MICROPIXEL_MOSAICO_LVGL_DOUBLE_BUFFER=y
 # as tightly packed rows. Keep LVGL's global stride packed; persistent
 # MicroPixel-owned RGB888 surfaces apply their own 16-pixel stride alignment.
 CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=1
-CONFIG_LV_MEM_SIZE_KILOBYTES=768
+CONFIG_LV_MEM_SIZE=786432
 # Keep hosted/native network payload allocations in PSRAM on the S31;
 # only native ESP32-S3 profiles use the bounded dynamic Wi-Fi pool.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

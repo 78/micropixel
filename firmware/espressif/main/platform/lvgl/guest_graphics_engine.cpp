@@ -98,8 +98,8 @@ void StyleFullscreenContainer(lv_obj_t* container, int32_t width, int32_t height
     lv_obj_set_style_radius(container, 0, 0);
     lv_obj_set_style_bg_color(container, lv_color_hex(background), 0);
     lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(container, false);
+    lv_obj_set_clickable(container, false);
 }
 
 }  // namespace
@@ -451,11 +451,11 @@ void GuestGraphicsEngine::ShowAppSurfaceLocked() {
         lv_image_set_antialias(app_surface_image_, false);
         lv_obj_set_pos(app_surface_image_, 0, 0);
         lv_obj_set_size(app_surface_image_, width_, height_);
-        lv_obj_remove_flag(app_surface_image_, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(app_surface_image_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scrollable(app_surface_image_, false);
+        lv_obj_set_clickable(app_surface_image_, false);
     }
     if (!app_surface_active_) {
-        lv_obj_remove_flag(app_surface_image_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(app_surface_image_, false);
         lv_obj_move_foreground(app_surface_image_);
         app_surface_active_ = true;
     }
@@ -463,7 +463,7 @@ void GuestGraphicsEngine::ShowAppSurfaceLocked() {
 
 void GuestGraphicsEngine::HideAppSurfaceLocked() {
     if (app_surface_image_ != nullptr && app_surface_active_) {
-        lv_obj_add_flag(app_surface_image_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(app_surface_image_, true);
     }
     if (app_surface_active_ && app_surface_compositor_.has_value()) {
         // Frames rendered by LVGL are not mirrored into the hidden pixel cache.
@@ -1321,7 +1321,7 @@ bool GuestGraphicsEngine::HostUiVisibleLocked() const {
     const uint32_t child_count = lv_obj_get_child_count(screen);
     for (uint32_t index = static_cast<uint32_t>(lv_obj_get_index(guest_frame_)) + 1U; index < child_count; ++index) {
         lv_obj_t* sibling = lv_obj_get_child(screen, index);
-        if (!lv_obj_has_flag(sibling, LV_OBJ_FLAG_HIDDEN)) {
+        if (!lv_obj_is_hidden(sibling)) {
             LogHostUiBlocker("screen sibling above guest frame", sibling);
             return true;
         }
@@ -1333,7 +1333,7 @@ bool GuestGraphicsEngine::HostUiVisibleLocked() const {
         const uint32_t layer_children = lv_obj_get_child_count(layer);
         for (uint32_t index = 0U; index < layer_children; ++index) {
             lv_obj_t* child = lv_obj_get_child(layer, index);
-            if (!lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) {
+            if (!lv_obj_is_hidden(child)) {
                 LogHostUiBlocker(layer == lv_layer_top() ? "top layer child" : "sys layer child", child);
                 return true;
             }

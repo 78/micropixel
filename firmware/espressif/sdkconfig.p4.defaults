@@ -69,10 +69,7 @@ CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=60
 # Merge nearby retained-object invalidations to limit repeated LVGL tree walks.
 # Coalescing is always enabled; this bounds the extra overdraw per merge.
 CONFIG_MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS=8192
-CONFIG_LV_COLOR_DEPTH_24=y
-# The Host shell, status panel and the Guest App Surface image share LVGL's
-# fixed pool. Do not rely on run-time pool expansion in the display task.
-CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0
+CONFIG_LV_COLOR_FORMAT_RGB888=y
 # CONFIG_LV_USE_LODEPNG is not set
 # main/CMakeLists.txt overrides LVGL's built-in default font with generated
 # builtin-latin-v1/14. Explicitly disable the other duplicate sizes too.
@@ -86,7 +83,9 @@ CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=0
 # Keep every LVGL row 16-byte aligned without producing a fractional RGB888
 # physical width: lcm(16-byte SIMD alignment, 3-byte RGB888 pixel) = 48 bytes.
 CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=48
-CONFIG_LV_MEM_SIZE_KILOBYTES=1024
+# The Host shell, status panel and the Guest App Surface image share LVGL's
+# fixed 1 MiB pool. LVGL 9.6 has no run-time pool expansion option.
+CONFIG_LV_MEM_SIZE=1048576
 
 # micropixel.ai App Store public trust anchor (private key stays on the server).
 CONFIG_MICROPIXEL_STORE_SIGNING_KID="store-v1"

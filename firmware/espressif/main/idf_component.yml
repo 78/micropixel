@@ -4,7 +4,7 @@ dependencies:
   78/esp-http3:
     version: "1.6.2"
   lvgl/lvgl:
-    version: "9.5.0"
+    version: "9.6.0~1"
     rules:
       - if: "target in [esp32p4, esp32s31, esp32s3]"
   espressif/esp_lvgl_adapter:

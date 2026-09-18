@@ -83,6 +83,9 @@ CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_DRAW_BUF_ALIGN=64
 CONFIG_LV_DRAW_SW_ASM_NONE=y
 CONFIG_LV_FONT_FMT_TXT_LARGE=y
+# LVGL 9.6 enables the per-object style cache by default (2 x 32-bit per
+# lv_obj_t). Keep it explicit so stale build configs match fresh ones.
+CONFIG_LV_OBJ_STYLE_CACHE=y
 CONFIG_LV_USE_SNAPSHOT=y
 # The Host always uses LVGL's fixed builtin pool; main/CMakeLists.txt places
 # that pool in PSRAM on every supported target.

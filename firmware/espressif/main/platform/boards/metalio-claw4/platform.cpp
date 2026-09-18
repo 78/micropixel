@@ -1,3 +1,5 @@
+#include "platform/platform.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -20,15 +22,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "lvgl.h"
-#include "src/misc/cache/instance/lv_image_cache.h"
-#include "src/misc/cache/instance/lv_image_header_cache.h"
-#include "src/widgets/buttonmatrix/lv_buttonmatrix_private.h"
-#if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
-#include "src/draw/snapshot/lv_snapshot.h"
-#endif
 #include "host/ui/lvgl/square_common/square_system_ui.hpp"
 #include "host/ui/lvgl/square_common/status_layer_transition.hpp"
+#include "lvgl.h"
 #include "platform/adapters/graphics_adapter.hpp"
 #include "platform/boards/metalio-claw4/battery_peripheral.hpp"
 #include "platform/boards/metalio-claw4/board_config.hpp"
@@ -58,10 +54,12 @@
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/memory/graphics_buffer_alignment.hpp"
 #include "platform/memory/internal_ram.hpp"
-#include "platform/platform.hpp"
 #include "platform/random/system_random.hpp"
 #include "platform/wifi/esp_hosted_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
+#include "src/misc/cache/instance/lv_image_cache.h"
+#include "src/misc/cache/instance/lv_image_header_cache.h"
+#include "src/widgets/buttonmatrix/lv_buttonmatrix_private.h"
 #include "work/background_executor.hpp"
 #include "work/task_policy.hpp"
 

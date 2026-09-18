@@ -58,8 +58,8 @@ void SystemDetailUi::RenderRemoteControlLocked() {
     lv_obj_set_style_border_width(dot, 0, 0);
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(dot, lv_color_hex(RemoteStateColor(remote_control_model_.connection_state)), 0);
-    lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(dot, false);
+    lv_obj_set_clickable(dot, false);
     (void)Label(status_heading, RemoteState(remote_control_model_.connection_state),
                 platform::lvgl::SystemFontRole::kLarge, theme::kPrimaryText);
     lv_obj_t* service_row = square_common::CreateSystemInformationRow(
@@ -96,7 +96,7 @@ void SystemDetailUi::RenderRemoteControlLocked() {
         if (available) {
             lv_obj_add_event_cb(generate, RemoteControlPairingEvent, LV_EVENT_SHORT_CLICKED, this);
         } else {
-            lv_obj_remove_flag(generate, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_clickable(generate, false);
         }
     }
     lv_obj_t* note = Label(pairing, UiText(host_strings::Id::kUiCodesAreSingleUseAndExpireAfter5Minutes),

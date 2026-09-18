@@ -100,7 +100,7 @@ if(CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3 OR CONFIG_MICROPIXEL_BOARD_SZPI_ESP32S
         "LV_MEM_POOL_INCLUDE=\"lvgl_psram_pool.h\"")
 else()
     # LVGL's builtin allocator normally backs its TLSF pool with an untagged
-    # static array in internal .bss. LVGL 9.5 applies this attribute only to
+    # static array in internal .bss. LVGL 9.5/9.6 apply this attribute only to
     # that pool, so ESP-IDF can map it into external-RAM BSS without moving
     # LVGL's mutex or allocator state out of internal memory.
     target_compile_definitions(${micropixel_lvgl_lib} PRIVATE
@@ -132,8 +132,9 @@ set(micropixel_builtin_font_profile
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/builtin-latin-v1.json")
 set(micropixel_lvgl_font_source_dir
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/vendor")
+# LVGL 9.6 moved the public headers to include/lvgl/; src/ keeps only shims.
 set(micropixel_lvgl_symbol_def
-    "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/src/font/lv_symbol_def.h")
+    "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/include/lvgl/font/lv_symbol_def.h")
 set(micropixel_lvgl_keyboard_source
     "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/src/widgets/keyboard/lv_keyboard.c")
 set(micropixel_lvgl_dropdown_source

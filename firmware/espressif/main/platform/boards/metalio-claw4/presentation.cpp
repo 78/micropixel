@@ -1,3 +1,5 @@
+#include "platform/boards/metalio-claw4/presentation.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -20,12 +22,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "lvgl.h"
-#if CONFIG_MICROPIXEL_SYSTEM_SHELL_SNAPSHOT
-#include "src/draw/snapshot/lv_snapshot.h"
-#endif
 #include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
+#include "lvgl.h"
 #include "platform/adapters/graphics_adapter.hpp"
 #include "platform/boards/metalio-claw4/battery_peripheral.hpp"
 #include "platform/boards/metalio-claw4/board_config.hpp"
@@ -34,7 +33,6 @@
 #include "platform/boards/metalio-claw4/display/screen_capture.hpp"
 #include "platform/boards/metalio-claw4/gpio_peripheral.hpp"
 #include "platform/boards/metalio-claw4/platform_state.hpp"
-#include "platform/boards/metalio-claw4/presentation.hpp"
 #include "platform/boards/metalio-claw4/sensor_peripheral.hpp"
 #include "platform/boards/metalio-claw4/tca9555_power_key.hpp"
 #include "platform/buses/i2c_executor.hpp"

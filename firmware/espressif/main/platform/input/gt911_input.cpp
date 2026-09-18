@@ -213,10 +213,10 @@ void Gt911Input::UpdateSmokeUi(const esp_lcd_touch_point_data_t* points, uint8_t
     }
     if (smoke_root_ != nullptr && smoke_marker_ != nullptr && smoke_status_ != nullptr) {
         if (point_count == 0U) {
-            lv_obj_add_flag(smoke_marker_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(smoke_marker_, true);
             lv_label_set_text(smoke_status_, "Touch released");
         } else {
-            lv_obj_remove_flag(smoke_marker_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(smoke_marker_, false);
             lv_obj_set_pos(smoke_marker_, points[0].x - 14, points[0].y - 14);
             char text[80]{};
             std::snprintf(text, sizeof(text), "Touch x=%u y=%u id=%u irq=%lu", points[0].x, points[0].y,

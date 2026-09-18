@@ -12,10 +12,10 @@
 #include "host/ui/cellular_status.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/ui_text.hpp"
+#include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 #include "src/core/lv_obj_draw_private.h"
-#include "src/draw/snapshot/lv_snapshot.h"
 
 namespace micropixel::host_ui::lvgl::square_common {
 namespace {
@@ -34,8 +34,8 @@ void StyleFullscreenContainer(lv_obj_t* container, uint32_t background, int32_t 
     lv_obj_set_style_radius(container, 0, 0);
     lv_obj_set_style_bg_color(container, lv_color_hex(background), 0);
     lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(container, false);
+    lv_obj_set_clickable(container, false);
 }
 
 }  // namespace
@@ -201,13 +201,12 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
 void StatusLayerUi::ResolveLayoutLocked() { layout_ = &ActiveLayout(); }
 
 int32_t StatusLayerUi::TransitionDialogVisibleY() const {
-    if (cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN)) return 0;
+    if (cellular_dialog_ != nullptr && !lv_obj_is_hidden(cellular_dialog_)) return 0;
     return layout_ != nullptr ? layout_->dialog.y : ActiveLayout().dialog.y;
 }
 
 int32_t StatusLayerUi::TransitionDialogHiddenY() const {
-    if (cellular_dialog_ != nullptr && !lv_obj_has_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN))
-        return -cellular_layout_.height;
+    if (cellular_dialog_ != nullptr && !lv_obj_is_hidden(cellular_dialog_)) return -cellular_layout_.height;
     return layout_ != nullptr ? layout_->dialog_hidden_y : ActiveLayout().dialog_hidden_y;
 }
 
@@ -316,17 +315,17 @@ void StatusLayerUi::EmitTarget(TouchTarget target, uint64_t timestamp_us) {
 }
 
 void StatusLayerUi::ShowCellularDialogLocked() {
-    lv_obj_add_flag(status_dialog_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(status_dialog_, true);
     if (cellular_dialog_ != nullptr) {
-        lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(cellular_dialog_, false);
         UpdateCellularDialogLocked();
         return;
     }
     const auto& layout = cellular_layout_;
     cellular_dialog_ = lv_obj_create(status_layer_);
     StyleFullscreenContainer(cellular_dialog_, theme::kMenuBackground, layout.width, layout.height);
-    lv_obj_add_flag(cellular_dialog_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_set_clickable(cellular_dialog_, true);
+    lv_obj_set_gesture_bubble(cellular_dialog_, false);
     (void)CreateSystemHeader(cellular_dialog_, layout, UiText(host_strings::Id::kCellularTitle),
                              UiText(host_strings::Id::kCellularSubtitle), CellularBackEvent, this);
     auto* content = CreateSystemScrollColumn(cellular_dialog_, layout, CellularScrollEvent, this);
@@ -428,9 +427,9 @@ void StatusLayerUi::UpdateCellularDialogLocked() {
     else if (!switching && details.sampled)
         cellular_sections_ready_ = true;
     if (checked && cellular_sections_ready_)
-        lv_obj_remove_flag(cellular_sections_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(cellular_sections_, false);
     else
-        lv_obj_add_flag(cellular_sections_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(cellular_sections_, true);
     const bool busy = switching || cellular_sim_pending_;
     const auto enabled = [](lv_obj_t* object, bool value) {
         if (value)
@@ -511,8 +510,8 @@ void StatusLayerUi::CellularBackEvent(lv_event_t* event) {
     if (ui->cellular_settings_page_) {
         ui->EmitAction(host_ui::SystemUiActionType::kCloseStatusLayer);
     } else {
-        lv_obj_add_flag(ui->cellular_dialog_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(ui->status_dialog_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(ui->cellular_dialog_, true);
+        lv_obj_set_hidden(ui->status_dialog_, false);
         platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(ui->status_layer_));
     }
 }
@@ -674,8 +673,8 @@ lv_obj_t* StatusLayerUi::CreatePanel(lv_obj_t* parent, const Bounds& bounds, uin
     lv_obj_set_style_border_color(panel, lv_color_hex(theme::kStrongBorder), 0);
     lv_obj_set_style_bg_color(panel, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(panel, false);
+    lv_obj_set_clickable(panel, false);
     return panel;
 }
 
@@ -696,7 +695,7 @@ void StatusLayerUi::DrawQuickCard(lv_obj_t* root, TouchTarget target, const char
     lv_obj_set_style_bg_opa(panel, available && !active ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
     lv_obj_set_style_bg_opa(panel, 180, LV_STATE_PRESSED);
     lv_obj_set_style_border_width(panel, 3, LV_STATE_PRESSED);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(panel, false);
     const uint32_t name_color =
         !available ? theme::kDisabledText : (active ? theme::kOverlayText : theme::kPrimaryText);
     lv_obj_t* name_label = CreateLabel(panel, name, platform::lvgl::BuiltinLatinFont(layout_->quick_name_font),
@@ -784,7 +783,7 @@ StatusLayerUi::MetricObjects StatusLayerUi::DrawMetric(lv_obj_t* root, uint32_t 
     lv_obj_set_style_bg_color(bar, lv_color_hex(color), LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_radius(bar, layout_->metric_track_height / 2, LV_PART_INDICATOR);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(bar, false);
     return {.panel = panel, .value_label = value_label, .bar = bar};
 }
 
@@ -904,13 +903,13 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
         status_layer_ = lv_obj_create(lv_screen_active());
         StyleFullscreenContainer(status_layer_, theme::kStatusLayerBackground, layout_->screen_width,
                                  layout_->screen_height);
-        lv_obj_add_flag(status_layer_, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(status_layer_, true);
         lv_obj_add_event_cb(status_layer_, LayerEvent, LV_EVENT_SHORT_CLICKED, this);
         lv_obj_add_event_cb(status_layer_, LayerEvent, LV_EVENT_GESTURE, this);
     }
     ResetObjectPointers();
     lv_obj_clean(status_layer_);
-    lv_obj_remove_flag(status_layer_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(status_layer_, false);
     lv_obj_set_style_bg_color(status_layer_, lv_color_hex(layout_->scrim_rgb), 0);
     lv_obj_set_style_bg_opa(status_layer_, layout_->scrim_opacity, 0);
 
@@ -918,7 +917,7 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     // Consume taps on empty dialog space so only the surrounding scrim closes
     // the layer. Child controls keep LV_OBJ_FLAG_GESTURE_BUBBLE so an upward
     // gesture can still dismiss the sheet through LayerEvent.
-    lv_obj_add_flag(status_dialog_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(status_dialog_, true);
     lv_obj_set_style_radius(status_dialog_, layout_->dialog_radius, 0);
     lv_obj_set_style_border_width(status_dialog_, layout_->dialog_border_width, 0);
     lv_obj_set_style_border_color(status_dialog_, lv_color_hex(theme::kStatusDialogBorder), 0);
@@ -1008,7 +1007,7 @@ std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host
 }
 
 void StatusLayerUi::UpdateLocked(const host_ui::StatusLayerModel& model) {
-    if (status_layer_ == nullptr || lv_obj_has_flag(status_layer_, LV_OBJ_FLAG_HIDDEN)) {
+    if (status_layer_ == nullptr || lv_obj_is_hidden(status_layer_)) {
         return;
     }
     UpdateControlsLocked(model);
@@ -1016,7 +1015,7 @@ void StatusLayerUi::UpdateLocked(const host_ui::StatusLayerModel& model) {
 }
 
 void StatusLayerUi::SetTransitionProgressLocked(uint16_t progress_per_mille) {
-    if (status_layer_ == nullptr || status_dialog_ == nullptr || lv_obj_has_flag(status_layer_, LV_OBJ_FLAG_HIDDEN)) {
+    if (status_layer_ == nullptr || status_dialog_ == nullptr || lv_obj_is_hidden(status_layer_)) {
         return;
     }
     const uint32_t progress = progress_per_mille <= kTransitionComplete ? progress_per_mille : kTransitionComplete;
@@ -1049,7 +1048,7 @@ void StatusLayerUi::LeaveLocked() {
     }
     lv_obj_clean(status_layer_);
     ResetObjectPointers();
-    lv_obj_add_flag(status_layer_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(status_layer_, true);
     platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(status_layer_));
     ESP_LOGI(kTag, "status layer hidden");
 }
@@ -1063,14 +1062,14 @@ void StatusLayerUi::RaisePerformanceOverlayLocked() {
 }
 
 bool StatusLayerUi::PerformanceOverlayVisibleLocked() const {
-    return performance_overlay_ != nullptr && !lv_obj_has_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+    return performance_overlay_ != nullptr && !lv_obj_is_hidden(performance_overlay_);
 }
 
 void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, const CpuUsageSample& cpu,
                                                    uint32_t guest_presented_frame_sequence) {
     if (!enabled) {
         if (performance_overlay_ != nullptr) {
-            lv_obj_add_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(performance_overlay_, true);
             platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(performance_overlay_));
         }
         performance_last_frame_sequence_ = guest_presented_frame_sequence;
@@ -1080,7 +1079,7 @@ void StatusLayerUi::UpdatePerformanceOverlayLocked(bool enabled, const CpuUsageS
     }
 
     EnsurePerformanceOverlayLocked();
-    lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(performance_overlay_, false);
     // On-screen (LVGL-composited) HUD keeps its translucent backing; the
     // Direct Surface snapshot path switches it to opaque.
     lv_obj_set_style_bg_opa(performance_overlay_, kPerformanceOverlayBackingOpa, 0);
@@ -1119,11 +1118,11 @@ void StatusLayerUi::EnsurePerformanceOverlayLocked() {
     // Keep the translucent backing tightly fitted to the text so it remains
     // a small, PPA-eligible blend instead of a full-screen cost.
     lv_obj_set_style_bg_opa(performance_overlay_, kPerformanceOverlayBackingOpa, 0);
-    lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(performance_overlay_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(performance_overlay_, false);
+    lv_obj_set_clickable(performance_overlay_, false);
     // Created hidden; UpdatePerformanceOverlayLocked shows it, the Direct
     // Surface snapshot path never does.
-    lv_obj_add_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(performance_overlay_, true);
     performance_label_ = CreateLabel(performance_overlay_, "", font, theme::kPrimaryText, 0, 0);
     lv_obj_set_size(performance_label_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_text_align(performance_label_, LV_TEXT_ALIGN_CENTER, 0);
@@ -1149,9 +1148,9 @@ bool StatusLayerUi::RenderPerformanceOverlaySnapshotLocked(const CpuUsageSample&
                                                            PerformanceOverlaySnapshot& snapshot_out) {
     snapshot_out = {};
     EnsurePerformanceOverlayLocked();
-    if (!lv_obj_has_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN)) {
+    if (!lv_obj_is_hidden(performance_overlay_)) {
         // Switching from the on-screen HUD: hide it and let LVGL erase it.
-        lv_obj_add_flag(performance_overlay_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(performance_overlay_, true);
         platform::lvgl::RequestDisplayRefresh(lv_obj_get_display(performance_overlay_));
     }
     SetPerformanceOverlayTextLocked(cpu, fps);
@@ -1174,7 +1173,10 @@ bool StatusLayerUi::RenderPerformanceOverlaySnapshotLocked(const CpuUsageSample&
     // (LV_DRAW_BUF_STRIDE_ALIGN); the text width changes with every sample, so
     // ask LVGL for the stride instead of assuming width * 4.
     const uint32_t stride = lv_draw_buf_width_to_stride(static_cast<uint32_t>(width), LV_COLOR_FORMAT_ARGB8888);
-    const uint32_t bytes = stride * static_cast<uint32_t>(height);
+    // LVGL 9.6 lv_snapshot reshapes the target and requires data_size to cover
+    // stride * height rounded up to LV_DRAW_BUF_ALIGN, not just the tight size.
+    const uint32_t bytes =
+        (stride * static_cast<uint32_t>(height) + LV_DRAW_BUF_ALIGN - 1U) / LV_DRAW_BUF_ALIGN * LV_DRAW_BUF_ALIGN;
     if (performance_snapshot_pixels_ == nullptr || performance_snapshot_capacity_ < bytes) {
         heap_caps_free(performance_snapshot_pixels_);
         performance_snapshot_pixels_ =

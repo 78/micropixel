@@ -63,8 +63,8 @@ lv_obj_t* Swatch(lv_obj_t* parent, uint32_t color, uint32_t border_color) {
     lv_obj_set_style_border_color(swatch, lv_color_hex(border_color), 0);
     lv_obj_set_style_bg_color(swatch, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(swatch, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(swatch, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(swatch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(swatch, false);
+    lv_obj_set_clickable(swatch, false);
     return swatch;
 }
 

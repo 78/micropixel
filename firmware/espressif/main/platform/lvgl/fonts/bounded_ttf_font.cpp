@@ -257,7 +257,9 @@ const void* BoundedTtfFont::Bitmap(lv_font_glyph_dsc_t* glyph, lv_draw_buf_t*) {
     }
     ++slot->pins;
     slot->used = ++state.sequence;
-    glyph->entry = reinterpret_cast<lv_cache_entry_t*>(slot);
+    // LVGL 9.5 types `entry` as lv_cache_entry_t*, 9.6 as an opaque void*;
+    // the font owns the slot either way.
+    glyph->entry = reinterpret_cast<decltype(glyph->entry)>(slot);
     return glyph->req_raw_bitmap ? static_cast<const void*>(slot->buffer.data) : &slot->buffer;
 }
 

@@ -71,7 +71,7 @@ void TestSize(int width, int height) {
     Check(panel.x1 >= 0 && panel.y1 >= 0 && panel.x2 < width && panel.y2 < height, "dialog stays inside screen");
     Check(button.y1 > body.y2 && button.y2 < height && button.x2 < width, "close is pinned outside scrolling text");
     Check(body.y2 > body.y1, "text gets a visible viewport");
-    Check(lv_obj_has_flag(dialog.overlay, LV_OBJ_FLAG_CLICKABLE), "scrim intercepts background taps");
+    Check(lv_obj_is_clickable(dialog.overlay), "scrim intercepts background taps");
     Check(lv_obj_get_child(root, -1) == dialog.overlay, "dialog covers the Hall");
     Check(lv_obj_get_scroll_bottom(dialog.body) <= 0, "font instruction is fully visible at each target size");
     Capture(display, width, height);

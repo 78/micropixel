@@ -114,17 +114,17 @@ void Run(const SystemMenuLayout& layout, const SystemPageLayout& page) {
     };
     auto* language_dot = dot("Language");
     auto* apps_dot = dot("Manage Apps");
-    Check(language_dot && apps_dot && lv_obj_has_flag(language_dot, LV_OBJ_FLAG_HIDDEN) &&
-              lv_obj_has_flag(apps_dot, LV_OBJ_FLAG_HIDDEN),
+    Check(language_dot && apps_dot && lv_obj_is_hidden(language_dot) &&
+              lv_obj_is_hidden(apps_dot),
           "update badges start hidden");
     model.font_update_available = true;
     ui.Update(model);
-    Check(!lv_obj_has_flag(language_dot, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_flag(apps_dot, LV_OBJ_FLAG_HIDDEN),
+    Check(!lv_obj_is_hidden(language_dot) && lv_obj_is_hidden(apps_dot),
           "font update only marks Language");
     model.font_update_available = false;
     model.app_updates_available = true;
     ui.Update(model);
-    Check(lv_obj_has_flag(language_dot, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(apps_dot, LV_OBJ_FLAG_HIDDEN),
+    Check(lv_obj_is_hidden(language_dot) && !lv_obj_is_hidden(apps_dot),
           "ordinary app update only marks Manage Apps");
     ui.Deactivate();
     lv_obj_clean(root);
@@ -134,10 +134,10 @@ void Run(const SystemMenuLayout& layout, const SystemPageLayout& page) {
     auto* current = Find(root, "English");
     Check(current && !Button(current), "current language has no clickable button");
     auto* update = Button(Find(root, "Update font"));
-    Check(update && lv_obj_has_flag(update, LV_OBJ_FLAG_HIDDEN), "font update entry hidden without release");
+    Check(update && lv_obj_is_hidden(update), "font update entry hidden without release");
     model.font_update_available = true;
     ui.Update(model);
-    Check(!lv_obj_has_flag(update, LV_OBJ_FLAG_HIDDEN), "font update entry appears on discovery");
+    Check(!lv_obj_is_hidden(update), "font update entry appears on discovery");
     const auto before = actions;
     lv_obj_send_event(update, LV_EVENT_SHORT_CLICKED, nullptr);
     Check(actions == before + 1 && last.type == SystemUiActionType::kUpdateLanguageFont,
@@ -179,7 +179,7 @@ void Run(const SystemMenuLayout& layout, const SystemPageLayout& page) {
     model.language_state = LanguageDownloadState::kDownloading;
     ui.Update(model);
     lv_obj_send_event(close, LV_EVENT_SHORT_CLICKED, nullptr);
-    Check(actions == submitted && lv_obj_has_flag(close, LV_OBJ_FLAG_HIDDEN), "download blocks closing the modal");
+    Check(actions == submitted && lv_obj_is_hidden(close), "download blocks closing the modal");
     model.language_state = LanguageDownloadState::kFailed;
     ui.Update(model);
     lv_obj_send_event(close, LV_EVENT_SHORT_CLICKED, nullptr);

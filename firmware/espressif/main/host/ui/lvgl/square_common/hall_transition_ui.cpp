@@ -53,8 +53,8 @@ bool HallTransitionUi::PrepareLocked(HallTransitionFrame intermediate, HallTrans
         frames_ = {};
         return false;
     }
-    lv_obj_remove_flag(overlay_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(overlay_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_clickable(overlay_, false);
+    lv_obj_set_scrollable(overlay_, false);
     ShowFrameLocked(direction == HallTransitionDirection::kToHall ? 0U : 1U);
     return true;
 }

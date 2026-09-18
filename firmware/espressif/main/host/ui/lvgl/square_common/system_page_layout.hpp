@@ -44,8 +44,8 @@ inline void StyleTransparentContainer(lv_obj_t* object) {
     lv_obj_set_style_pad_all(object, 0, 0);
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(object, false);
+    lv_obj_set_clickable(object, false);
 }
 
 inline lv_obj_t* CreateSystemLabel(lv_obj_t* parent, const char* text, platform::lvgl::SystemFontRole font,
@@ -90,7 +90,7 @@ inline lv_obj_t* CreateSystemHeader(lv_obj_t* root, const SystemPageLayout& layo
     lv_obj_set_style_bg_opa(back, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(back, lv_color_hex(theme::kPressedBackground),
                               static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
-    lv_obj_remove_flag(back, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(back, false);
     lv_obj_set_ext_click_area(back, std::max<int32_t>(0, layout.back_button_hit_padding));
     lv_obj_add_event_cb(back, back_event, LV_EVENT_SHORT_CLICKED, context);
     lv_obj_t* icon =
@@ -127,10 +127,9 @@ inline lv_obj_t* CreateSystemScrollColumn(lv_obj_t* root, const SystemPageLayout
     lv_obj_set_scrollbar_mode(scroll, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_flex_flow(scroll, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(scroll, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    constexpr lv_obj_flag_t kScrollFlags = static_cast<lv_obj_flag_t>(
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
-    lv_obj_add_flag(scroll, kScrollFlags);
+    lv_obj_set_scrollable(scroll, true);
+    lv_obj_set_scroll_momentum(scroll, true);
+    lv_obj_set_scroll_elastic(scroll, true);
     if (scroll_event != nullptr) {
         lv_obj_add_event_cb(scroll, scroll_event, LV_EVENT_SCROLL, context);
         lv_obj_add_event_cb(scroll, scroll_event, LV_EVENT_SCROLL_END, context);
@@ -154,13 +153,13 @@ inline void StyleSystemPanel(lv_obj_t* panel, const SystemPageLayout& layout, in
     lv_obj_set_style_shadow_width(panel, 0, 0);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(panel, false);
 }
 
 inline lv_obj_t* CreateSystemPanel(lv_obj_t* parent, const SystemPageLayout& layout, int32_t gap = -1) {
     lv_obj_t* panel = lv_obj_create(parent);
     StyleSystemPanel(panel, layout, gap);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(panel, false);
     return panel;
 }
 
@@ -216,7 +215,7 @@ inline lv_obj_t* CreateSystemActionButton(lv_obj_t* parent, const SystemPageLayo
     lv_obj_set_style_bg_color(button, lv_color_hex(theme::kActionPressedBackground),
                               static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
     lv_obj_set_style_shadow_width(button, 0, 0);
-    lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(button, false);
     lv_obj_t* label = CreateSystemLabel(button, text, layout.body_font, color);
     lv_obj_center(label);
     return button;
@@ -238,8 +237,8 @@ inline lv_obj_t* CreateSystemMoreIndicator(lv_obj_t* parent, int32_t width, int3
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
         lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_scrollable(dot, false);
+        lv_obj_set_clickable(dot, false);
     }
     return indicator;
 }

@@ -148,16 +148,16 @@ void VirtualizedHallPolicy::ShowPlaceholderLocked(uint32_t index) {
         return;
     }
     if (state_.hall_cover_images[index] != nullptr) {
-        lv_obj_add_flag(state_.hall_cover_images[index], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(state_.hall_cover_images[index], true);
     }
     if (state_.hall_install_progress_arcs[index] != nullptr) {
         if (state_.hall_cover_placeholders[index] != nullptr) {
-            lv_obj_add_flag(state_.hall_cover_placeholders[index], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(state_.hall_cover_placeholders[index], true);
         }
         return;
     }
     if (state_.hall_cover_placeholders[index] != nullptr) {
-        lv_obj_remove_flag(state_.hall_cover_placeholders[index], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(state_.hall_cover_placeholders[index], false);
     }
 }
 
@@ -183,9 +183,9 @@ void VirtualizedHallPolicy::AttachCoverLocked(uint32_t index, const host_ui::Hal
     descriptor.data_size = cover.size;
     descriptor.data = cover.data;
     lv_image_set_src(state_.hall_cover_images[index], &descriptor);
-    lv_obj_remove_flag(state_.hall_cover_images[index], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(state_.hall_cover_images[index], false);
     if (state_.hall_cover_placeholders[index] != nullptr) {
-        lv_obj_add_flag(state_.hall_cover_placeholders[index], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(state_.hall_cover_placeholders[index], true);
     }
 }
 
@@ -554,7 +554,7 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
     state_.hall_action_sink = action_sink;
     state_.hall_action_context = action_context;
     if (!transition_ready && guest != nullptr) {
-        lv_obj_add_flag(guest, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(guest, true);
     }
     lv_obj_move_foreground(transition_ready ? guest : state_.root);
     if (state_.status_layer_ui.PerformanceOverlayVisibleLocked()) {

@@ -22,7 +22,7 @@ void StyleContainer(lv_obj_t* object, const HallSceneRect& bounds, int32_t radiu
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(object, false);
 }
 
 void StyleTransparentContainer(lv_obj_t* object) {
@@ -30,8 +30,8 @@ void StyleTransparentContainer(lv_obj_t* object) {
     lv_obj_set_style_radius(object, 0, 0);
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(object, false);
+    lv_obj_set_clickable(object, false);
 }
 
 lv_obj_t* CreateLabel(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color, HallScenePoint point) {
@@ -179,7 +179,7 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
 
     lv_obj_t* brand = lv_obj_create(root);
     StyleContainer(brand, layout.brand, layout.brand_radius, theme::kBrandAccent);
-    lv_obj_remove_flag(brand, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(brand, false);
 
     (void)CreateLabel(root, UiText(host_strings::Id::kUiAppHall),
                       platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kTitle), theme::kPrimaryText,
@@ -202,18 +202,17 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
         lv_obj_t* update_dot = lv_obj_create(update_button_);
         StyleContainer(update_dot, {.x = layout.update_button.width - 19, .y = 8, .width = 10, .height = 10},
                        LV_RADIUS_CIRCLE, theme::kNotification);
-        lv_obj_remove_flag(update_dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(update_dot, false);
     }
 
     objects_.carousel_viewport = lv_obj_create(root);
     StyleContainer(objects_.carousel_viewport, layout.carousel, 0, theme::kHallBackground);
     lv_obj_set_scroll_dir(objects_.carousel_viewport, LV_DIR_HOR);
     lv_obj_set_scrollbar_mode(objects_.carousel_viewport, LV_SCROLLBAR_MODE_OFF);
-    constexpr lv_obj_flag_t kScrollFlags = static_cast<lv_obj_flag_t>(
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLLABLE) | static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_MOMENTUM) |
-        static_cast<uint32_t>(LV_OBJ_FLAG_SCROLL_ELASTIC));
-    lv_obj_add_flag(objects_.carousel_viewport, kScrollFlags);
-    lv_obj_add_flag(objects_.carousel_viewport, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(objects_.carousel_viewport, true);
+    lv_obj_set_scroll_momentum(objects_.carousel_viewport, true);
+    lv_obj_set_scroll_elastic(objects_.carousel_viewport, true);
+    lv_obj_set_clickable(objects_.carousel_viewport, true);
     if (events.carousel_event != nullptr) {
         lv_obj_add_event_cb(objects_.carousel_viewport, events.carousel_event, LV_EVENT_SCROLL,
                             events.carousel_context);
@@ -229,12 +228,12 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     StyleContainer(objects_.carousel_content, {.x = 0, .y = 0, .width = cards_width, .height = layout.carousel.height},
                    0, theme::kHallBackground);
     lv_obj_set_style_bg_opa(objects_.carousel_content, LV_OPA_TRANSP, 0);
-    lv_obj_remove_flag(objects_.carousel_content, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(objects_.carousel_content, false);
 
     if (visible_count > layout.fully_visible_cards) {
         objects_.scroll_track = lv_obj_create(root);
         StyleContainer(objects_.scroll_track, layout.scroll_track, layout.scroll_track.height / 2, theme::kDivider);
-        lv_obj_remove_flag(objects_.scroll_track, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(objects_.scroll_track, false);
         objects_.scroll_thumb = lv_obj_create(objects_.scroll_track);
         const int32_t thumb_width =
             std::max<int32_t>(layout.scroll_min_thumb_width, layout.scroll_track.width *
@@ -243,7 +242,7 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
         StyleContainer(objects_.scroll_thumb,
                        {.x = 0, .y = 0, .width = thumb_width, .height = layout.scroll_track.height},
                        layout.scroll_track.height / 2, theme::kControlAccent);
-        lv_obj_remove_flag(objects_.scroll_thumb, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_clickable(objects_.scroll_thumb, false);
     }
 
     if (visible_count == 0U) {
@@ -399,15 +398,15 @@ void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model
                                                    : &micropixel_cellular_status_5;
         lv_image_set_src(objects_.cellular_image, image);
         lv_obj_set_style_image_opa(objects_.cellular_image, bars ? LV_OPA_COVER : 72, 0);
-        lv_obj_remove_flag(objects_.cellular_container, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects_.cellular_container, false);
     } else {
-        lv_obj_add_flag(objects_.cellular_container, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects_.cellular_container, true);
     }
     if (const lv_image_dsc_t* wifi = HallWifiImage(model.wifi); wifi != nullptr) {
         lv_image_set_src(objects_.wifi_image, wifi);
-        lv_obj_remove_flag(objects_.wifi_image, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects_.wifi_image, false);
     } else {
-        lv_obj_add_flag(objects_.wifi_image, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects_.wifi_image, true);
     }
     const bool battery_visible = model.battery.available || model.battery.charging;
     if (battery_visible) {
@@ -428,9 +427,9 @@ void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model
         const uint32_t color = model.battery.charging ? theme::kSuccess : theme::kPrimaryText;
         lv_obj_set_style_text_color(objects_.battery_label, lv_color_hex(color), 0);
         lv_obj_set_style_text_color(objects_.battery_percent_label, lv_color_hex(color), 0);
-        lv_obj_remove_flag(objects_.battery_container, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects_.battery_container, false);
     } else {
-        lv_obj_add_flag(objects_.battery_container, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(objects_.battery_container, true);
     }
     lv_obj_update_layout(objects_.status_bar_container);
 }
