@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include "host/ui/system_ui.hpp"
@@ -86,7 +85,7 @@ struct HallSceneObjects final {
     lv_obj_t* status_bar_items{};
     lv_obj_t* time_label{};
     lv_obj_t* cellular_container{};
-    std::array<lv_obj_t*, 4U> cellular_bars{};
+    lv_obj_t* cellular_image{};
     lv_obj_t* wifi_image{};
     lv_obj_t* battery_container{};
     lv_obj_t* battery_label{};
