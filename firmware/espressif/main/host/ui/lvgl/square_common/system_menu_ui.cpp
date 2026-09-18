@@ -69,6 +69,13 @@ const char* WifiDetail(const host_ui::SystemMenuModel& model, const host_strings
                                    : strings.Get(host_strings::Id::kCommonOff);
 }
 
+const char* CellularDetail(const host_ui::SystemMenuModel& model, const host_strings::Catalog& strings) {
+    return !model.cellular_enabled     ? strings.Get(host_strings::Id::kCommonOff)
+           : model.cellular_connected  ? strings.Get(host_strings::Id::kCommonConnected)
+           : model.cellular_connecting ? strings.Get(host_strings::Id::kCommonConnecting)
+                                       : strings.Get(host_strings::Id::kCommonNotConnected);
+}
+
 const char* RemoteControlDetail(const host_ui::SystemMenuModel& model, const host_strings::Catalog& strings) {
     return model.remote_control_connected ? strings.Get(host_strings::Id::kCommonConnected)
            : model.remote_control_enabled ? strings.Get(host_strings::Id::kCommonNotConnected)
@@ -142,6 +149,7 @@ void SystemMenuUi::ResetObjectPointers() {
     scroll_content_ = nullptr;
     language_status_label_ = nullptr;
     wifi_detail_label_ = nullptr;
+    cellular_detail_label_ = nullptr;
     remote_control_detail_label_ = nullptr;
     system_information_detail_label_ = nullptr;
     appearance_detail_label_ = nullptr;
@@ -223,6 +231,8 @@ void SystemMenuUi::DrawRow(lv_obj_t* parent, size_t index, host_ui::SystemMenuIt
             appearance_detail_label_ = detail_label;
             break;
         case host_ui::SystemMenuItem::kCellular:
+            cellular_detail_label_ = detail_label;
+            break;
         case host_ui::SystemMenuItem::kLanguage:
         case host_ui::SystemMenuItem::kManageApps:
             break;
@@ -265,6 +275,7 @@ void SystemMenuUi::Update(const host_ui::SystemMenuModel& model) {
     }
     const host_strings::Catalog strings = host_strings::ForTag(model.locale);
     lv_label_set_text(wifi_detail_label_, WifiDetail(model, strings));
+    if (cellular_detail_label_) lv_label_set_text(cellular_detail_label_, CellularDetail(model, strings));
     lv_label_set_text(remote_control_detail_label_, RemoteControlDetail(model, strings));
     if (power_management_detail_label_ != nullptr) {
         lv_label_set_text(power_management_detail_label_, PowerManagementDetail(model).data());
@@ -616,8 +627,9 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
         DrawRow(scroll_content_, 0U, host_ui::SystemMenuItem::kWifi, LV_SYMBOL_WIFI,
                 strings.Get(host_strings::Id::kSystemSettingsWifi), WifiDetail(model, strings), theme::kAccent, true);
         if (model.cellular_available) {
-            DrawRow(scroll_content_, 7U, host_ui::SystemMenuItem::kCellular, "4G", "4G / SIM",
-                    strings.Get(host_strings::Id::kCellularSettingsHint), theme::kAccent, true);
+            DrawRow(scroll_content_, 7U, host_ui::SystemMenuItem::kCellular, "4G",
+                    strings.Get(host_strings::Id::kCellularTitle), CellularDetail(model, strings), theme::kAccent,
+                    true);
         }
         DrawRow(scroll_content_, 1U, host_ui::SystemMenuItem::kRemoteControl, LV_SYMBOL_REFRESH,
                 strings.Get(host_strings::Id::kSystemSettingsRemoteControl), RemoteControlDetail(model, strings),

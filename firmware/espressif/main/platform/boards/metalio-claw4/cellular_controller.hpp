@@ -43,7 +43,7 @@ class CellularController final : public device::Cellular {
     static void ReadSim(void* context);
     static void SwitchSim(void* context);
     [[nodiscard]] device::CellularSimSlot QuerySimSlot();
-    [[nodiscard]] device::CellularDiagnostics QueryDiagnostics();
+    [[nodiscard]] device::CellularDiagnostics QueryDiagnostics(device::CellularTelemetry& telemetry);
     void FinishSim(bool failed, device::CellularSimSlot slot);
     void OnModemEvent(UartEthModem::UartEthModemEvent event);
     void Publish(device::CellularState state);
@@ -76,6 +76,8 @@ class CellularController final : public device::Cellular {
     bool recovery_pending_{};
     bool recovery_restart_{};
     int64_t next_signal_refresh_us_{};
+    int64_t next_diagnostics_refresh_us_{};
+    uint32_t telemetry_generation_{};
 };
 
 }  // namespace micropixel::platform::metalio_claw4

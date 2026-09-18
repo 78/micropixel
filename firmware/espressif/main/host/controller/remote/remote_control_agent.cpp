@@ -32,6 +32,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "host/controller/remote/firmware_release_notes.hpp"
+#include "host/controller/remote/network_snapshot_json.hpp"
 #include "host/controller/remote/remote_control_defaults.hpp"
 #include "host/controller/remote/remote_pairing_policy.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
@@ -1299,25 +1300,7 @@ bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& ide
     auto& snapshot = task_context_->network_snapshot;
     network_.CopySnapshot(snapshot);
     cJSON* network = cJSON_AddObjectToObject(result, "network");
-    if (network != nullptr) {
-        (void)cJSON_AddBoolToObject(network, "available", snapshot.available);
-        (void)cJSON_AddBoolToObject(network, "enabled", snapshot.enabled);
-        (void)cJSON_AddBoolToObject(network, "connected", snapshot.connected);
-        (void)cJSON_AddStringToObject(network, "transport", host::network::TransportName(snapshot.route.transport));
-        if (snapshot.route.transport == device::NetworkTransport::kWifi && snapshot.wifi.connected) {
-            (void)cJSON_AddStringToObject(network, "ssid", snapshot.wifi.ssid.data());
-            (void)cJSON_AddNumberToObject(network, "rssi", snapshot.wifi.rssi);
-        }
-        const auto add = [&](const char* key, const auto& text) {
-            if (text[0]) (void)cJSON_AddStringToObject(network, key, text.data());
-        };
-        add("macAddress", snapshot.route.mac);
-        add("ipAddress", snapshot.route.address);
-        add("gateway", snapshot.route.gateway);
-        add("netmask", snapshot.route.netmask);
-        add("hostname", snapshot.route.hostname);
-        add("dns", snapshot.route.dns);
-    }
+    host::remote::AddNetworkSnapshotJson(network, snapshot, static_cast<uint64_t>(esp_timer_get_time()));
 
     return PostCommandResult(client, identity, command_id, true, result);
 }

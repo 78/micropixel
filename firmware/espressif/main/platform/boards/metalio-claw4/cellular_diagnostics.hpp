@@ -68,6 +68,40 @@ bool Text(std::string_view field, std::array<char, N>& output) {
     return true;
 }
 
+template <size_t N>
+bool Identifier(std::string_view field, std::array<char, N>& output, std::string_view alphabet, size_t minimum = 1) {
+    output.fill(0);
+    if (field.size() >= 2 && field.front() == '"' && field.back() == '"') {
+        field.remove_prefix(1);
+        field.remove_suffix(1);
+    }
+    if (field.size() < minimum || field.size() >= N || field.find_first_not_of(alphabet) != std::string_view::npos)
+        return false;
+    std::copy(field.begin(), field.end(), output.begin());
+    return true;
+}
+
+inline void Cell(std::string_view line, device::CellularTelemetry& result) {
+    // Only registered query responses carry a usable serving-cell location.
+    const auto registration = Number(Field(line, 1), 10);
+    if (registration != 1 && registration != 5) return;
+    if (!Identifier(Field(line, 2), result.tac, "0123456789abcdefABCDEF") ||
+        !Identifier(Field(line, 3), result.cell_id, "0123456789abcdefABCDEF") ||
+        (result.access_technology = Number(Field(line, 4), 127)) < 0) {
+        result.tac.fill(0);
+        result.cell_id.fill(0);
+        result.access_technology = -1;
+    }
+}
+
+inline void Plmn(std::string_view line, device::CellularTelemetry& result) {
+    if (Number(Field(line, 1), 2) != 2) return;
+    std::array<char, 7> value{};
+    if (!Identifier(Field(line, 2), value, "0123456789", 5)) return;
+    std::copy_n(value.begin(), 3, result.mcc.begin());
+    std::copy(value.begin() + 3, value.end() - 1, result.mnc.begin());
+}
+
 inline device::CellularSimStatus SimStatus(std::string_view response) {
     const auto value = Line(response, "+CPIN:");
     using Status = device::CellularSimStatus;

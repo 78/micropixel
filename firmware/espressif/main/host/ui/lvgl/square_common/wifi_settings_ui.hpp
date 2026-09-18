@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "host/ui/lvgl/square_common/action_sheet_presenter.hpp"
 #include "host/ui/system_ui.hpp"
+#include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
 
@@ -56,6 +57,7 @@ class WifiSettingsUi final {
 
     void QueueRender();
     void RenderLocked();
+    void UpdateSwitchLocked();
     void DrawNetworkRow(lv_obj_t* parent, const host_ui::WifiNetworkModel& network, NetworkBinding& binding);
     void DrawActionSheetLocked();
     void DrawPasswordLocked();
@@ -83,6 +85,9 @@ class WifiSettingsUi final {
     portMUX_TYPE render_lock_ = portMUX_INITIALIZER_UNLOCKED;
     uint64_t switch_pending_us_{};
     lv_timer_t* switch_guard_{};
+    platform::lvgl::AnimatedDisplayRefresh switch_animation_refresh_{};
+    lv_obj_t* switch_control_{};
+    lv_obj_t* switch_status_{};
     bool switch_requested_enabled_{};
     bool scan_view_{};
     bool action_sheet_visible_{};

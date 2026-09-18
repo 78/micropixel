@@ -87,7 +87,20 @@ void Run(const SystemMenuLayout& layout, const SystemPageLayout& page) {
     SystemMenuUi ui(page, presenter);
     SystemMenuModel model{};
     model.locale = "en";
+    model.cellular_available = true;
     Check(ui.ShowLocked(root, display, layout, model, Action, nullptr).has_value(), "show settings menu");
+    auto* cellular_row = Button(Find(root, "Cellular Network"));
+    Check(cellular_row && Find(cellular_row, "Off"), "cellular menu shows its name and disabled state");
+    model.cellular_enabled = model.cellular_connecting = true;
+    ui.Update(model);
+    Check(Find(cellular_row, "Connecting..."), "cellular menu refreshes while connecting");
+    model.cellular_connecting = false;
+    model.cellular_connected = true;
+    ui.Update(model);
+    Check(Find(cellular_row, "Connected"), "cellular menu refreshes after connection");
+    model.cellular_enabled = false;
+    ui.Update(model);
+    Check(Find(cellular_row, "Off"), "disabled cellular wins over an older connected state");
     const auto dot = [&](const char* name) -> lv_obj_t* {
         auto* row = Button(Find(root, name));
         Check(row, "settings row exists");

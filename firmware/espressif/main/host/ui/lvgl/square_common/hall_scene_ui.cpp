@@ -396,8 +396,8 @@ void HallSceneUi::UpdateStatusBarLocked(const host_ui::HallStatusBarModel& model
         return;
     }
     lv_label_set_text(objects_.time_label, model.time_text.data());
-    if (model.cellular.available) {
-        const uint32_t bars = model.cellular.enabled && model.cellular.connected
+    if (model.cellular.available && model.cellular.enabled) {
+        const uint32_t bars = model.cellular.connected
                                   ? std::min<uint32_t>(model.cellular.signal_bars, objects_.cellular_bars.size())
                                   : 0U;
         for (uint32_t index = 0U; index < objects_.cellular_bars.size(); ++index) {

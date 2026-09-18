@@ -6,7 +6,7 @@
   "common.done": "完成",
   "common.not_available": "不可用",
   "common.not_connected": "未连接",
-  "common.off": "关闭",
+  "common.off": "已关闭",
   "language.english": "英语",
   "system.settings.appearance": "外观",
   "system.settings.language": "语言",
@@ -312,5 +312,5 @@
   "cellular.unknown_modem": "模块无法确认",
   "cellular.registered_roaming": "已注册（漫游）",
   "cellular.unknown_unavailable": "未知或无法获取",
-  "cellular.settings_hint": "移动数据与 SIM 卡选择"
+  "cellular.title": "蜂窝网络"
 }

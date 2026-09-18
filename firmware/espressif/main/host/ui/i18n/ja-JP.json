@@ -312,5 +312,5 @@
   "cellular.unknown_modem": "Unknown to modem",
   "cellular.registered_roaming": "Registered (roaming)",
   "cellular.unknown_unavailable": "Unknown / unavailable",
-  "cellular.settings_hint": "Mobile data and SIM selection"
+  "cellular.title": "モバイルネットワーク"
 }

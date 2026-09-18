@@ -76,6 +76,9 @@ void CellularController::Publish(device::CellularState state) {
     snapshot_.state = state;
     snapshot_.connected = state == device::CellularState::kConnected;
     if (!snapshot_.connected) {
+        snapshot_.telemetry = {};
+        ++telemetry_generation_;
+        next_diagnostics_refresh_us_ = 0;
         snapshot_.signal_bars = 0;
         next_signal_refresh_us_ = 0;
     }
@@ -224,6 +227,8 @@ std::expected<void, device::CellularError> CellularController::SetSimSlot(device
         sim_switching_ = false;
         return std::unexpected(device::CellularError::kBusy);
     }
+    snapshot_.telemetry = {};
+    ++telemetry_generation_;
     if (sink_ != nullptr) sink_(sink_context_);
     return {};
 }
@@ -273,7 +278,7 @@ void CellularController::FinishSim(bool failed, device::CellularSimSlot slot) {
     if (sink_ != nullptr) sink_(sink_context_);
 }
 
-device::CellularDiagnostics CellularController::QueryDiagnostics() {
+device::CellularDiagnostics CellularController::QueryDiagnostics(device::CellularTelemetry& telemetry) {
     device::CellularDiagnostics result{};
     std::string response;
     const auto query = [&](const char* command) {
@@ -295,11 +300,15 @@ device::CellularDiagnostics CellularController::QueryDiagnostics() {
         result.signal_csq = diagnostics::Number(diagnostics::Field(diagnostics::Line(response, "+CSQ:"), 0), 99);
         if (result.signal_csq > 31 && result.signal_csq != 99) result.signal_csq = -1;
     }
-    if (query("AT+CEREG?"))
-        result.registration = diagnostics::Number(diagnostics::Field(diagnostics::Line(response, "+CEREG:"), 1), 10);
+    if (query("AT+CEREG?")) {
+        const auto line = diagnostics::Line(response, "+CEREG:");
+        result.registration = diagnostics::Number(diagnostics::Field(line, 1), 10);
+        diagnostics::Cell(line, telemetry);
+    }
     if (query("AT+CGATT?")) result.attached = diagnostics::Number(diagnostics::Line(response, "+CGATT:"), 1);
     if (query("AT+COPS?")) {
         const auto line = diagnostics::Line(response, "+COPS:");
+        diagnostics::Plmn(line, telemetry);
         const auto name = diagnostics::Field(line, 2);
         if (!name.empty() && !diagnostics::Text(name, result.operator_name)) result.incomplete = true;
     }
@@ -319,6 +328,14 @@ device::CellularDiagnostics CellularController::QueryDiagnostics() {
                 result.incomplete = true;
         }
     }
+    // Query fresh identifiers rather than driver caches: the SIM can change
+    // while the same modem object stays alive. Cancellation gates every query.
+    if (query("AT+CGSN=1"))
+        (void)diagnostics::Identifier(diagnostics::Line(response, "+CGSN:"), telemetry.imei, "0123456789", 15);
+    if (result.sim_status == device::CellularSimStatus::kReady && query("AT+ECICCID"))
+        (void)diagnostics::Identifier(diagnostics::Line(response, "+ECICCID:"), telemetry.iccid,
+                                      "0123456789ABCDEFabcdef", 19);
+    telemetry.sampled_at_us = static_cast<uint64_t>(esp_timer_get_time());
     result.sampled = true;
     result.incomplete = result.incomplete || result.sim_status == device::CellularSimStatus::kUnknown ||
                         result.signal_csq < 0 || result.registration < 0 || result.radio_function < 0 ||
@@ -331,9 +348,15 @@ void CellularController::ReadSim(void* context) {
     std::lock_guard operation(self.operation_mutex_);
     device::CellularSimSlot slot = device::CellularSimSlot::kUnknown;
     device::CellularDiagnostics details{};
+    device::CellularTelemetry telemetry{};
+    uint32_t generation;
+    {
+        std::lock_guard lock(self.snapshot_mutex_);
+        generation = self.telemetry_generation_;
+    }
     if (!self.stopping_ && !self.paused_ && !self.sim_cancelled_) {
         slot = self.QuerySimSlot();
-        details = self.QueryDiagnostics();
+        details = self.QueryDiagnostics(telemetry);
     }
     std::lock_guard lock(self.snapshot_mutex_);
     self.sim_read_pending_ = false;
@@ -341,6 +364,8 @@ void CellularController::ReadSim(void* context) {
     // clear that command's pending state or overwrite its eventual result.
     if (!self.sim_cancelled_ && !self.snapshot_.sim_pending) {
         self.snapshot_.diagnostics = details;
+        if (generation == self.telemetry_generation_) self.snapshot_.telemetry = telemetry;
+        self.next_diagnostics_refresh_us_ = esp_timer_get_time() + 30000000;
         self.snapshot_.sim_slot = slot;
         self.snapshot_.sim_failed = slot == device::CellularSimSlot::kUnknown;
     }
@@ -395,6 +420,8 @@ void CellularController::SwitchSim(void* context) {
     {
         std::lock_guard lock(self.snapshot_mutex_);
         self.snapshot_.diagnostics = {};
+        self.snapshot_.telemetry = {};
+        ++self.telemetry_generation_;
     }
     ESP_LOGI(kTag, "SIM switch: slot=%u, write=%s, modem restart=%s", static_cast<unsigned>(slot),
              failed ? "failed" : "ok", esp_err_to_name(status));
@@ -478,6 +505,8 @@ void CellularController::SwitchMode(void* context) {
             self.snapshot_.state = device::CellularState::kOff;
             self.snapshot_.signal_bars = 0;
             self.snapshot_.diagnostics = {};
+            self.snapshot_.telemetry = {};
+            ++self.telemetry_generation_;
             self.snapshot_.sim_slot = device::CellularSimSlot::kUnknown;
             self.snapshot_.sim_failed = false;
         } else if (status != ESP_OK) {
@@ -539,6 +568,8 @@ void CellularController::ScheduleRecovery(bool restart) {
     recovery_restart_ = recovery_restart_ || restart;
     snapshot_.connected = false;
     snapshot_.state = device::CellularState::kFailed;
+    snapshot_.telemetry = {};
+    ++telemetry_generation_;
     snapshot_.signal_bars = 0;
     if (!recovery_pending_ && background_ != nullptr) recovery_pending_ = background_->Submit(Recover, this);
     if (sink_ != nullptr) sink_(sink_context_);
@@ -577,14 +608,17 @@ void CellularController::Poll() {
     std::lock_guard lock(snapshot_mutex_);
     if (recovery_needed_ && !recovery_pending_ && !stopping_ && background_ != nullptr)
         recovery_pending_ = background_->Submit(Recover, this);
-    if (sim_refresh_needed_) SubmitSimRefreshLocked();
     const int64_t now = esp_timer_get_time();
-    if (background_ == nullptr || stopping_ || signal_pending_ || !snapshot_.connected || snapshot_.switching ||
-        now < next_signal_refresh_us_)
-        return;
-    signal_pending_ = true;
-    if (!background_->Submit(ReadSignal, this)) signal_pending_ = false;
-    next_signal_refresh_us_ = now + 5000000;
+    if (background_ != nullptr && !stopping_ && !signal_pending_ && snapshot_.connected && !snapshot_.switching &&
+        now >= next_signal_refresh_us_) {
+        signal_pending_ = true;
+        if (background_->Submit(ReadSignal, this))
+            next_signal_refresh_us_ = now + 5000000;
+        else
+            signal_pending_ = false;
+    }
+    if (now >= next_diagnostics_refresh_us_) sim_refresh_needed_ = true;
+    if (sim_refresh_needed_) SubmitSimRefreshLocked();
 }
 
 void CellularController::ReadSignal(void* context) {
@@ -595,6 +629,8 @@ void CellularController::ReadSignal(void* context) {
         strength = self.modem_.GetSignalStrength();
     std::lock_guard lock(self.snapshot_mutex_);
     self.signal_pending_ = false;
+    if (!self.sim_cancelled_ && self.snapshot_.connected)
+        self.snapshot_.diagnostics.signal_csq = strength >= 0 && strength <= 31 ? strength : 99;
     // Match the factory's CSQ thresholds; 99/invalid remains unknown (no bars).
     self.snapshot_.signal_bars = !self.snapshot_.connected || strength < 0 || strength > 31 ? 0
                                  : strength < 10                                            ? 1
@@ -615,6 +651,8 @@ esp_err_t CellularController::Pause() {
         sim_cancelled_ = true;
         switch_cancelled_ = true;
         snapshot_.diagnostics = {};
+        snapshot_.telemetry = {};
+        ++telemetry_generation_;
         sim_refresh_needed_ = false;
     }
     const esp_err_t status = modem_.Stop();

@@ -327,8 +327,8 @@ void StatusLayerUi::ShowCellularDialogLocked() {
     StyleFullscreenContainer(cellular_dialog_, theme::kMenuBackground, layout.width, layout.height);
     lv_obj_add_flag(cellular_dialog_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(cellular_dialog_, LV_OBJ_FLAG_GESTURE_BUBBLE);
-    (void)CreateSystemHeader(cellular_dialog_, layout, "4G / SIM", UiText(host_strings::Id::kCellularSubtitle),
-                             CellularBackEvent, this);
+    (void)CreateSystemHeader(cellular_dialog_, layout, UiText(host_strings::Id::kCellularTitle),
+                             UiText(host_strings::Id::kCellularSubtitle), CellularBackEvent, this);
     auto* content = CreateSystemScrollColumn(cellular_dialog_, layout, CellularScrollEvent, this);
     auto* cellular_panel = CreateSystemPanel(content, layout);
     lv_obj_set_flex_flow(cellular_panel, LV_FLEX_FLOW_ROW);
@@ -496,6 +496,9 @@ void StatusLayerUi::UpdateCellularDialogLocked() {
         details.apn[0] ? details.apn.data() : UiText(host_strings::Id::kCellularUnknown),
         address};
     for (unsigned i = 0; i < 8; ++i) lv_label_set_text(cellular_detail_values_[i], values[i]);
+    // Native switch/style animations only invalidate; the static scene timer
+    // otherwise leaves intermediate frames waiting for its one-second tick.
+    if (lv_anim_count_running()) cellular_animation_refresh_.Start(lv_obj_get_display(cellular_dialog_));
 }
 
 void StatusLayerUi::CellularScrollEvent(lv_event_t* event) {
@@ -978,6 +981,7 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
 }
 
 StatusLayerUi::~StatusLayerUi() {
+    cellular_animation_refresh_.Stop();
     if (cellular_switch_guard_) lv_timer_delete(cellular_switch_guard_);
     heap_caps_free(performance_snapshot_pixels_);
 }
@@ -988,6 +992,7 @@ std::expected<void, host_ui::SystemUiError> StatusLayerUi::ShowLocked(const host
     if (lv_screen_active() == nullptr) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    cellular_animation_refresh_.Stop();
     if (cellular_switch_guard_) lv_timer_delete(cellular_switch_guard_);
     cellular_switch_guard_ = nullptr;
     cellular_command_pending_us_ = 0;
@@ -1036,6 +1041,7 @@ void StatusLayerUi::Deactivate() {
 
 void StatusLayerUi::LeaveLocked() {
     Deactivate();
+    cellular_animation_refresh_.Stop();
     if (cellular_switch_guard_) lv_timer_delete(cellular_switch_guard_);
     cellular_switch_guard_ = nullptr;
     if (status_layer_ == nullptr) {

@@ -6,7 +6,7 @@
   "common.done": "完成",
   "common.not_available": "無法使用",
   "common.not_connected": "未連線",
-  "common.off": "關閉",
+  "common.off": "已關閉",
   "language.english": "英語",
   "system.settings.appearance": "外觀",
   "system.settings.language": "語言",
@@ -312,5 +312,5 @@
   "cellular.unknown_modem": "模組無法確認",
   "cellular.registered_roaming": "已註冊（漫遊）",
   "cellular.unknown_unavailable": "未知或無法獲取",
-  "cellular.settings_hint": "行動數據與 SIM 卡選擇"
+  "cellular.title": "行動網路"
 }

@@ -286,6 +286,9 @@ struct SystemMenuModel final {
     uint8_t language_progress{};
     LanguageDownloadState language_state{};
     bool cellular_available{};
+    bool cellular_enabled{};
+    bool cellular_connected{};
+    bool cellular_connecting{};
     device::IdlePowerAction idle_power_action{device::IdlePowerAction::kSleep};
     const char* locale{"en"};
     const char* language{"English"};

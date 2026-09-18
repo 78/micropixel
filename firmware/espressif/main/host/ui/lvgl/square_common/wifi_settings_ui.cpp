@@ -116,6 +116,7 @@ std::expected<void, host_ui::SystemUiError> WifiSettingsUi::ShowLocked(
     if (root == nullptr || display == nullptr || layout.width <= 0 || layout.height <= layout.header_height) {
         return std::unexpected(host_ui::SystemUiError::kUnavailable);
     }
+    switch_animation_refresh_.Stop();
     if (switch_guard_) lv_timer_delete(switch_guard_);
     switch_guard_ = nullptr;
     switch_pending_us_ = 0;
@@ -151,7 +152,15 @@ void WifiSettingsUi::RenderLocked() {
     if (!visible_ || root_ == nullptr || display_ == nullptr || layout_ == nullptr) {
         return;
     }
+    // Keep the native switch alive through its animation. Rebuilding the page
+    // here used to delete/recreate it on both the click and the Host response.
+    if (switch_guard_ && switch_control_ && !scan_view_ && !password_visible_ && !action_sheet_visible_) {
+        UpdateSwitchLocked();
+        return;
+    }
     const SystemPageLayout& layout = *layout_;
+    switch_control_ = nullptr;
+    switch_status_ = nullptr;
     password_textarea_ = nullptr;
     keyboard_ = nullptr;
     bindings_ = {};
@@ -173,21 +182,15 @@ void WifiSettingsUi::RenderLocked() {
         lv_obj_set_width(wifi_text, 0);
         lv_obj_set_flex_grow(wifi_text, 1);
         (void)CreateSystemLabel(wifi_text, "Wi-Fi", layout.heading_font, theme::kPrimaryText);
-        const char* status = SwitchBusy()            ? UiText(host_strings::Id::kUiNetworkApplying)
-                             : model_.control_failed ? UiText(host_strings::Id::kCellularSaveFailed)
-                             : !model_.available     ? UiText(host_strings::Id::kUiNotAvailable)
-                             : !model_.enabled       ? UiText(host_strings::Id::kUiOff)
-                             : model_.connected      ? UiText(host_strings::Id::kUiConnected)
-                                                     : UiText(host_strings::Id::kUiNotConnected);
-        (void)CreateSystemLabel(wifi_text, status, layout.detail_font, theme::kSecondaryText);
+        switch_status_ = CreateSystemLabel(wifi_text, "", layout.detail_font, theme::kSecondaryText);
         lv_obj_t* toggle = lv_switch_create(wifi_panel);
+        switch_control_ = toggle;
         lv_obj_set_size(toggle, layout.control_height + 12, layout.control_height * 3 / 5);
-        if (DisplayedEnabled()) {
-            lv_obj_add_state(toggle, LV_STATE_CHECKED);
-        }
-        if (!model_.available || SwitchBusy()) {
-            lv_obj_add_state(toggle, LV_STATE_DISABLED);
-        }
+        // A freshly built page starts at its actual state, not at the beginning
+        // of a new off-to-on animation on every scan/connection update.
+        lv_obj_set_style_anim_duration(toggle, 0, LV_PART_MAIN);
+        UpdateSwitchLocked();
+        lv_obj_remove_local_style_prop(toggle, LV_STYLE_ANIM_DURATION, LV_PART_MAIN);
         lv_obj_add_event_cb(toggle, SwitchEvent, LV_EVENT_VALUE_CHANGED, this);
     }
 
@@ -246,6 +249,26 @@ void WifiSettingsUi::RenderLocked() {
     if (raise_overlay_sink_ != nullptr) {
         raise_overlay_sink_(raise_overlay_context_);
     }
+    platform::lvgl::RequestDisplayRefresh(display_);
+}
+
+void WifiSettingsUi::UpdateSwitchLocked() {
+    if (!switch_control_ || !switch_status_) return;
+    const char* status = SwitchBusy()            ? UiText(host_strings::Id::kUiNetworkApplying)
+                         : model_.control_failed ? UiText(host_strings::Id::kCellularSaveFailed)
+                         : !model_.available     ? UiText(host_strings::Id::kUiNotAvailable)
+                         : !model_.enabled       ? UiText(host_strings::Id::kUiOff)
+                         : model_.connected      ? UiText(host_strings::Id::kUiConnected)
+                                                 : UiText(host_strings::Id::kUiNotConnected);
+    lv_label_set_text(switch_status_, status);
+    if (DisplayedEnabled())
+        lv_obj_add_state(switch_control_, LV_STATE_CHECKED);
+    else
+        lv_obj_remove_state(switch_control_, LV_STATE_CHECKED);
+    if (!model_.available || SwitchBusy())
+        lv_obj_add_state(switch_control_, LV_STATE_DISABLED);
+    else
+        lv_obj_remove_state(switch_control_, LV_STATE_DISABLED);
     platform::lvgl::RequestDisplayRefresh(display_);
 }
 
@@ -425,8 +448,12 @@ void WifiSettingsUi::SwitchEvent(lv_event_t* event) {
     lv_obj_add_state(toggle, LV_STATE_DISABLED);
     ui->switch_guard_ = lv_timer_create(SwitchGuardElapsed, 500, ui);
     if (ui->switch_guard_) lv_timer_set_repeat_count(ui->switch_guard_, 1);
-    ui->QueueRender();
-    platform::lvgl::RequestDisplayRefresh(ui->display_);
+    ui->UpdateSwitchLocked();
+    // Hide the previous network list immediately; render the new content after
+    // the animation guard, without deleting the control handling this event.
+    for (uint32_t i = 1; i < lv_obj_get_child_count(ui->scroll_content_); ++i)
+        lv_obj_add_flag(lv_obj_get_child(ui->scroll_content_, i), LV_OBJ_FLAG_HIDDEN);
+    ui->switch_animation_refresh_.Start(ui->display_);
     ui->action_sink_(ui->action_context_, host_ui::SystemUiAction{
                                               .type = host_ui::SystemUiActionType::kSetWifiEnabled,
                                               .value = ui->switch_requested_enabled_ ? 1U : 0U,
@@ -669,6 +696,7 @@ void WifiSettingsUi::Leave() {
     struct Unlock {
         ~Unlock() { esp_lv_adapter_unlock(); }
     } unlock;
+    switch_animation_refresh_.Stop();
     if (switch_guard_) lv_timer_delete(switch_guard_);
     switch_guard_ = nullptr;
     switch_pending_us_ = 0;
@@ -682,6 +710,8 @@ void WifiSettingsUi::Leave() {
     display_ = nullptr;
     layout_ = nullptr;
     scroll_content_ = nullptr;
+    switch_control_ = nullptr;
+    switch_status_ = nullptr;
     password_textarea_ = nullptr;
     keyboard_ = nullptr;
     action_sheet_visible_ = false;

@@ -22,6 +22,7 @@ void Check(bool ok, const char* message) {
     }
 }
 unsigned actions{};
+unsigned frames{};
 SystemUiAction last{};
 void Action(void*, const SystemUiAction& action) {
     ++actions;
@@ -47,7 +48,11 @@ void Run(const SystemPageLayout& layout) {
     auto* display = lv_display_create(layout.width, layout.height);
     std::vector<uint32_t> pixels(layout.width * layout.height);
     lv_display_set_buffers(display, pixels.data(), nullptr, pixels.size() * 4, LV_DISPLAY_RENDER_MODE_FULL);
-    lv_display_set_flush_cb(display, [](lv_display_t* d, const lv_area_t*, uint8_t*) { lv_display_flush_ready(d); });
+    lv_display_set_flush_cb(display, [](lv_display_t* d, const lv_area_t*, uint8_t*) {
+        ++frames;
+        lv_display_flush_ready(d);
+    });
+    lv_timer_set_period(lv_display_get_refr_timer(display), 1000);
     StatusLayerUi ui(layout);
     StatusLayerModel model{};
     model.cellular_available = model.cellular_enabled = model.open_cellular_settings = true;
@@ -82,8 +87,19 @@ void Run(const SystemPageLayout& layout) {
     ui.UpdateLocked(model);
     Check(!lv_obj_has_flag(sections, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(sim_button, LV_STATE_DISABLED),
           "modem restart preserves an already revealed layout");
+    lv_obj_set_style_anim_duration(control, 300, LV_PART_MAIN);
+    for (unsigned i = 0; i < 20; ++i) {
+        lv_tick_inc(16);
+        lv_timer_handler();
+    }
+    frames = 0;
     actions = 0;
     Click(control);
+    for (unsigned i = 0; i < 16; ++i) {
+        lv_tick_inc(16);
+        lv_timer_handler();
+    }
+    Check(frames >= 3, "native switch animation reaches display while static refresh timer is slow");
     Check(actions == 1 && last.type == SystemUiActionType::kSetCellularEnabled && last.value == 0,
           "searching radio accepts off immediately");
     Check(lv_obj_has_state(control, LV_STATE_DISABLED), "first click locks switch before Host handles request");

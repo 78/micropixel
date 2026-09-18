@@ -289,5 +289,9 @@ OTA 在 Host 网络协调器原子取得配置保留；保留期间拒绝两种�
 
 进程生命周期的网络维护定时器每 5 秒提交蜂窝维护与采样，复用有界 BackgroundExecutor，
 页面切换与 Guest 运行不影响推进。设备回调只发出网络变化唤醒，不从回调内读取快照或执行网络操作。
+网络开关的原生 LVGL 动画使用逐帧刷新，不依赖静态页面的低频刷新定时器；
+Wi-Fi 开关动画期间保留控件，网络列表在动画结束后重建，避免状态更新打断动画。
 默认路由由 Platform 在 TCP/IP 上下文内复制，Host 不持有 `esp_netif_t*`。
 USB 与远程控制的 `network.available/enabled/connected` 使用相同聚合语义，保留现有 MPX1 字段布局。
+
+网络上报字段与小区数据有效期见 [网络遥测](network-telemetry.zh-CN.md)。

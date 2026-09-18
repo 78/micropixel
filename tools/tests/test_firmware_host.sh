@@ -620,3 +620,7 @@ cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_
 (cd "$test_output_dir/lvgl-ui" && ./cellular_ui_test)
 
 (cd "$test_output_dir/lvgl-ui" && ./wifi_ui_test)
+
+cmake -S "$workspace_root/tools/tests/network_json" -B "$test_output_dir/network-json"
+cmake --build "$test_output_dir/network-json" --parallel 2
+"$test_output_dir/network-json/network_json_test"

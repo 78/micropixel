@@ -111,6 +111,7 @@ class SystemMenuUi final {
     lv_obj_t* language_status_label_{};
     bool language_view_{};
     lv_obj_t* wifi_detail_label_{};
+    lv_obj_t* cellular_detail_label_{};
     lv_obj_t* remote_control_detail_label_{};
     lv_obj_t* system_information_detail_label_{};
     lv_obj_t* appearance_detail_label_{};

@@ -457,6 +457,9 @@ host_ui::SystemMenuModel MakeSystemMenuModel(const host_ui::StatusLayerModel& st
                                              const char* effective_locale = "en") {
     return host_ui::SystemMenuModel{
         .cellular_available = status.cellular_available,
+        .cellular_enabled = status.cellular_enabled,
+        .cellular_connected = status.cellular_connected,
+        .cellular_connecting = status.cellular_state == device::CellularState::kConnecting,
         .idle_power_action = status.idle_power_action,
         .locale = effective_locale,
         .language = host_ui::LocaleDisplayName(effective_locale),

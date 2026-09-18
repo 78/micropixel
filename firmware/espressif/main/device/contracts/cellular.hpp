@@ -26,8 +26,22 @@ struct CellularDiagnostics final {
     bool incomplete{};
 };
 
+// Copied Host telemetry. Cell identifiers are hexadecimal strings, preserving
+// leading zeroes. A zero timestamp means no current location sample is available.
+struct CellularTelemetry final {
+    std::array<char, 16> imei{};
+    std::array<char, 21> iccid{};
+    std::array<char, 9> tac{};
+    std::array<char, 9> cell_id{};
+    std::array<char, 4> mcc{};
+    std::array<char, 4> mnc{};
+    int8_t access_technology{-1};
+    uint64_t sampled_at_us{};
+};
+
 struct CellularSnapshot final {
     CellularDiagnostics diagnostics{};
+    CellularTelemetry telemetry{};
     uint8_t signal_bars{};
     bool available{};
     bool enabled{};

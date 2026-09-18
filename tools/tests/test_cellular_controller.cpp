@@ -502,6 +502,8 @@ int main() {
         UartEthModem::failed_command.clear();
         UartEthModem::responses = {
             {"AT+CPIN?", "\r\n+CPIN: READY\r\nOK"},
+            {"AT+CGSN=1", "+CGSN: \"000000000000000\"\r\nOK"},
+            {"AT+ECICCID", "+ECICCID: 000000000000D0000000\r\nOK"},
             {"AT+CFUN?", "+CFUN: 1\r\nOK"},
             {"AT+CSQ", "+CSQ: 99,99\r\nOK"},
             {"AT+CEREG?", "+CEREG: 2,2\r\nOK"},
@@ -523,6 +525,25 @@ int main() {
         assert(std::strcmp(details.apn.data(), "eapn1.net") == 0);
         assert(std::strcmp(DescribeCellularConnection(true, false, CellularState::kConnecting, details).title,
                            "Searching for network") == 0);
+        auto telemetry = controller.Snapshot().telemetry;
+        assert(std::strcmp(telemetry.imei.data(), "000000000000000") == 0);
+        assert(std::strcmp(telemetry.iccid.data(), "000000000000D0000000") == 0);
+        assert(telemetry.tac[0] == 0);  // Searching cannot supply a usable location.
+        UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,5,\"00AB\",\"00123456\",7\r\nOK";
+        UartEthModem::responses["AT+COPS?"] = "+COPS: 0,2,\"00101\",7\r\nOK";
+        controller.RequestSimRefresh();
+        background.Run();
+        telemetry = controller.Snapshot().telemetry;
+        assert(std::strcmp(telemetry.tac.data(), "00AB") == 0);
+        assert(std::strcmp(telemetry.cell_id.data(), "00123456") == 0 && telemetry.access_technology == 7);
+        assert(std::strcmp(telemetry.mcc.data(), "001") == 0 && std::strcmp(telemetry.mnc.data(), "01") == 0);
+        UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,1,\"invalid\",\"00123456\",7\r\nOK";
+        UartEthModem::responses["AT+ECICCID"] = "+ECICCID: malformed\r\nOK";
+        controller.RequestSimRefresh();
+        background.Run();
+        telemetry = controller.Snapshot().telemetry;
+        assert(telemetry.tac[0] == 0 && telemetry.cell_id[0] == 0 && telemetry.iccid[0] == 0);
+        UartEthModem::responses["AT+ECICCID"] = "+ECICCID: 000000000000D0000000\r\nOK";
         // Do not race the modem's baud/SIM initialization with a diagnostic query.
         UartEthModem::instance->at_ready = false;
         UartEthModem::commands.clear();
@@ -556,6 +577,17 @@ int main() {
         background.Run();
         assert(!controller.Snapshot().sim_pending && !controller.Snapshot().sim_failed);
         assert(controller.Snapshot().sim_slot == target);
+        bool disconnected_during_read = false;
+        UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,1,\"00AB\",\"00123456\",7\r\nOK";
+        UartEthModem::instance->on_send = [&](const std::string& command) {
+            if (command != "AT+ECICCID") return;
+            UartEthModem::instance->Emit(UartEthModem::UartEthModemEvent::Disconnected);
+            disconnected_during_read = true;
+        };
+        controller.RequestSimRefresh();
+        background.Run();
+        UartEthModem::instance->on_send = {};
+        assert(disconnected_during_read && controller.Snapshot().telemetry.sampled_at_us == 0);
         // Connection completion refreshes diagnostics while the page stays open.
         UartEthModem::responses["AT+CEREG?"] = "+CEREG: 2,1\r\nOK";
         UartEthModem::responses["AT+CSQ"] = "+CSQ: 18,99\r\nOK";

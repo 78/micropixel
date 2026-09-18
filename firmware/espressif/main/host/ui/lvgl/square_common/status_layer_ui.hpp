@@ -7,6 +7,7 @@
 #include "host/ui/system_ui.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/fonts/font_registry.hpp"
+#include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
 
@@ -169,6 +170,7 @@ class StatusLayerUi final {
     bool cellular_switching_{};
     uint64_t cellular_command_pending_us_{};
     lv_timer_t* cellular_switch_guard_{};
+    platform::lvgl::AnimatedDisplayRefresh cellular_animation_refresh_{};
     bool cellular_sim_pending_{};
     bool cellular_sim_failed_{};
     bool cellular_switch_failed_{};
