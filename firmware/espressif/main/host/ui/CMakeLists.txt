@@ -25,6 +25,7 @@ list(APPEND micropixel_sources
     "host/ui/lvgl/square_common/virtualized_hall_policy.cpp"
     "host/ui/lvgl/square_common/wifi_settings_ui.cpp"
     "host/ui/lvgl/square_common/icons/wifi_status_icons.c"
+    "host/ui/lvgl/square_common/icons/cellular_status_icons.c"
     "host/ui/system_gesture_router.cpp"
     "host/ui/system_locale.cpp"
     "host/ui/system_settings_store.cpp"

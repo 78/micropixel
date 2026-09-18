@@ -3,7 +3,7 @@
 """Derive cellular status masks and a preview from Font Awesome's signal glyph.
 
 Use --preview for visual inspection and --output for generated LVGL A8 C data.
-Keep generated files outside the source tree.
+Commit the generated C next to the Wi-Fi masks so Host builds do not need Pillow.
 """
 
 from __future__ import annotations
