@@ -438,6 +438,87 @@ void TestKernelsAgainstReference() {
         std::fill(frame.begin(), frame.end(), 0U);
     }
 
+    // Warp, wide rows: the kernel walks four entries per step with the next
+    // group's loads issued early and pairs of pixels stored as 32-bit words.
+    // A 61-wide map (not a multiple of four) with skip/solid entries sprinkled
+    // in, drawn at an odd x so the 32-bit path has to fall back on unaligned
+    // rows, must match a per-entry reference exactly, spans and fill included.
+    {
+        constexpr uint32_t kMapW = 61U;
+        constexpr uint32_t kMapH = 7U;
+        std::vector<uint32_t> entries(kMapW * kMapH);
+        uint32_t seed = 12345U;
+        auto next = [&seed] {
+            seed = seed * 1103515245U + 12345U;
+            return seed >> 8U;
+        };
+        for (uint32_t i = 0U; i < entries.size(); ++i) {
+            const uint32_t r = next();
+            if ((r % 23U) == 0U) {
+                entries[i] = MICROPIXEL_RASTER_WARP_ENTRY_SKIP;
+            } else if ((r % 23U) == 1U) {
+                entries[i] = MICROPIXEL_RASTER_WARP_ENTRY_SOLID | ((r >> 4U) % kLightLevels) << 24U | (r & 0xFFU);
+            } else {
+                entries[i] = (((r >> 4U) % kLightLevels) << 24U) | (((r >> 8U) & 15U) << 12U) | ((r >> 12U) & 63U);
+            }
+        }
+        // Row 3 starts and ends with skips so its span is a strict subset.
+        entries[3U * kMapW] = MICROPIXEL_RASTER_WARP_ENTRY_SKIP;
+        entries[3U * kMapW + 1U] = MICROPIXEL_RASTER_WARP_ENTRY_SKIP;
+        entries[3U * kMapW + kMapW - 1U] = MICROPIXEL_RASTER_WARP_ENTRY_SKIP;
+        std::vector<uint16_t> spans(kMapH * 2U);
+        uint8_t max_light = 0U;
+        Require(raster::WarpScanRows(entries.data(), kMapW, kMapH, spans.data(), max_light));
+        const raster::Palette palette{.entries = lit.data(), .light_levels = kLightLevels};
+        for (int16_t origin_x : {int16_t{1}, int16_t{2}, int16_t{-3}}) {
+            micropixel_raster_warp_t warp{};
+            warp.type = MICROPIXEL_RASTER_RECORD_WARP;
+            warp.flags = MICROPIXEL_RASTER_WARP_FILL_SKIPPED;
+            warp.x = origin_x;
+            warp.y = 20;
+            warp.u_offset = 4U * 7U + 1U;
+            warp.v_offset = 5U;
+            warp.u_fraction_bits = 2U;
+            warp.fill_color = 0x0F0FU;
+            std::fill(frame.begin(), frame.end(), 0U);
+            const raster::WarpMap plain{
+                .entries = entries.data(), .width = kMapW, .height = kMapH, .max_light = max_light};
+            raster::DrawWarp(target, plain, textures[1], palette, warp);
+            // Reference: one entry at a time, straight from the ABI text.
+            for (uint32_t my = 0U; my < kMapH; ++my) {
+                for (uint32_t mx = 0U; mx < kMapW; ++mx) {
+                    const int32_t tx = origin_x + static_cast<int32_t>(mx);
+                    const int32_t ty = 20 + static_cast<int32_t>(my);
+                    if (tx < 0 || tx >= static_cast<int32_t>(kWidth) || ty >= static_cast<int32_t>(kHeight)) continue;
+                    const uint32_t w = entries[my * kMapW + mx];
+                    uint16_t expected = 0x0F0FU;
+                    if ((w & MICROPIXEL_RASTER_WARP_ENTRY_SKIP) == 0U) {
+                        const uint32_t light = (w >> 24U) & 31U;
+                        if ((w & MICROPIXEL_RASTER_WARP_ENTRY_SOLID) != 0U) {
+                            expected = Lit(light, static_cast<uint8_t>(w & 0xFFU));
+                        } else {
+                            const uint32_t u = (((w & 0xFFFU) + warp.u_offset) >> 2U) & 15U;
+                            const uint32_t v = (((w >> 12U) & 0xFFFU) + warp.v_offset) & 15U;
+                            expected = Lit(light, Texel(u, v));
+                        }
+                    }
+                    Require(PixelAt(frame.data(), kPitch, static_cast<uint32_t>(tx), static_cast<uint32_t>(ty)) ==
+                            expected);
+                }
+            }
+            std::vector<uint8_t> reference = frame;
+            std::fill(frame.begin(), frame.end(), 0U);
+            const raster::WarpMap spanned{.entries = entries.data(),
+                                          .row_spans = spans.data(),
+                                          .width = kMapW,
+                                          .height = kMapH,
+                                          .max_light = max_light};
+            raster::DrawWarp(target, spanned, textures[1], palette, warp);
+            Require(frame == reference);
+        }
+        std::fill(frame.begin(), frame.end(), 0U);
+    }
+
     // Column: v walks 16.16 through the texture, wrapping on the height mask.
     const int32_t v_step = (kTexSize << 16) / 10;  // ~1.6 texels per pixel
     const auto column = Column(5U, 3U, 40U, 0U, 2U, 9U, 3 << 16, v_step);
@@ -2016,10 +2097,10 @@ void SharedCopyEngineBatching() {
                     block.destination_y + block.height <= destination.height);
             if (fail && !self.fail_after_partial_write) return false;
             for (uint32_t row = 0U; row < block.height; ++row) {
-                const uint8_t* source = block.source_pixels + (block.source_y + row) * block.source_stride +
-                                        block.source_x * 2U;
-                uint8_t* out = destination.pixels + (block.destination_y + row) * destination.pitch +
-                               block.destination_x * 2U;
+                const uint8_t* source =
+                    block.source_pixels + (block.source_y + row) * block.source_stride + block.source_x * 2U;
+                uint8_t* out =
+                    destination.pixels + (block.destination_y + row) * destination.pitch + block.destination_x * 2U;
                 // A failing engine scribbles the first row of each block and
                 // gives up so the fallback has something to repair.
                 if (fail) {

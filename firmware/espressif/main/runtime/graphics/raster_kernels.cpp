@@ -914,22 +914,7 @@ void DrawWarp(const Target& target, const WarpMap& warp, const Texture& texture,
             for (uint32_t x = end; x < clip.skip_x + (clip.x1 - clip.x0); ++x) row[x] = fill_color;
         }
         const uint32_t* entry = warp.entries + map_row * warp.width;
-        uint32_t x = begin;
-        while (x < end) {
-            // Two textured entries per step keep two gathers in flight on the
-            // in-order core; a skip/solid entry is handled singly below.
-            if (x + 2U <= end) {
-                const uint32_t w0 = entry[x];
-                const uint32_t w1 = entry[x + 1U];
-                if (((w0 | w1) & kSpecial) == 0U) {
-                    const uint16_t c0 = textured(w0);
-                    const uint16_t c1 = textured(w1);
-                    row[x] = c0;
-                    row[x + 1U] = c1;
-                    x += 2U;
-                    continue;
-                }
-            }
+        auto single = [&](uint32_t x) {
             const uint32_t w = entry[x];
             if (static_cast<int32_t>(w) < 0) {  // ENTRY_SKIP
                 if (fill) row[x] = fill_color;
@@ -940,8 +925,61 @@ void DrawWarp(const Target& target, const WarpMap& warp, const Texture& texture,
             } else {
                 row[x] = textured(w);
             }
-            ++x;
+        };
+        uint32_t x = begin;
+        // Four textured entries per step, software pipelined: the next four
+        // entries are fetched before this group's gathers so their PSRAM
+        // misses overlap the entry -> texel -> palette load chain, and each
+        // pair of results leaves as one 32-bit store. Any skip/solid entry in
+        // a group sends the whole group through the single-entry path.
+        if (x + 4U <= end) {
+            uint32_t w0 = entry[x];
+            uint32_t w1 = entry[x + 1U];
+            uint32_t w2 = entry[x + 2U];
+            uint32_t w3 = entry[x + 3U];
+            for (;;) {
+                const bool more = x + 8U <= end;
+                uint32_t n0 = 0U;
+                uint32_t n1 = 0U;
+                uint32_t n2 = 0U;
+                uint32_t n3 = 0U;
+                if (more) {
+                    n0 = entry[x + 4U];
+                    n1 = entry[x + 5U];
+                    n2 = entry[x + 6U];
+                    n3 = entry[x + 7U];
+                }
+                if (((w0 | w1 | w2 | w3) & kSpecial) == 0U) {
+                    const uint32_t c0 = textured(w0);
+                    const uint32_t c1 = textured(w1);
+                    const uint32_t c2 = textured(w2);
+                    const uint32_t c3 = textured(w3);
+                    uint16_t* out = row + x;
+                    if ((reinterpret_cast<uintptr_t>(out) & 3U) == 0U) {
+                        auto* pairs = reinterpret_cast<uint32_t*>(out);
+                        pairs[0] = c0 | (c1 << 16U);
+                        pairs[1] = c2 | (c3 << 16U);
+                    } else {
+                        out[0] = static_cast<uint16_t>(c0);
+                        out[1] = static_cast<uint16_t>(c1);
+                        out[2] = static_cast<uint16_t>(c2);
+                        out[3] = static_cast<uint16_t>(c3);
+                    }
+                } else {
+                    single(x);
+                    single(x + 1U);
+                    single(x + 2U);
+                    single(x + 3U);
+                }
+                x += 4U;
+                if (!more) break;
+                w0 = n0;
+                w1 = n1;
+                w2 = n2;
+                w3 = n3;
+            }
         }
+        for (; x < end; ++x) single(x);
     }
 }
 
