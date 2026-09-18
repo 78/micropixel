@@ -9,6 +9,7 @@
 #include "host/controller/remote/remote_control_defaults.hpp"
 #include "host/controller/remote/remote_pairing_policy.hpp"
 #include "host/controller/remote/remote_reconnect_policy.hpp"
+#include "host/controller/remote/runtime_snapshot_policy.hpp"
 
 namespace {
 
@@ -63,6 +64,33 @@ void TestPairingConsumedPolicy() {
     Check(!MatchesPairingConsumed(1, "", "", kSession, kPairing), "missing IDs cannot consume");
 }
 
+void TestRuntimeSnapshotPolicy() {
+    using micropixel::firmware::remote_control::RuntimeSnapshotPolicy;
+    RuntimeSnapshotPolicy policy;
+    constexpr int64_t kSecond = 1000000;
+    constexpr int64_t kConnected = 7 * kSecond;
+    Check(policy.ShouldPublish(kConnected, 0U), "new connection needs an initial snapshot");
+    policy.RecordPublished(kConnected, 0U);
+    Check(!policy.ShouldPublish(kConnected, 0U), "initial snapshot must not be sent twice");
+    for (int64_t elapsed = 20 * kSecond; elapsed < 300 * kSecond; elapsed += 20 * kSecond) {
+        Check(!policy.ShouldPublish(kConnected + elapsed, 0U), "heartbeat must not upload unchanged status");
+    }
+    Check(!policy.ShouldPublish(kConnected + 300 * kSecond - 1, 0U), "five-minute boundary is not early");
+    Check(policy.ShouldPublish(kConnected + 300 * kSecond, 0U), "idle status refreshes after five minutes");
+    Check(policy.ShouldPublish(kConnected + 320 * kSecond, 0U), "failed publication remains due");
+
+    // A console read (or reconnect) bypasses the interval and starts a new one.
+    Check(policy.ShouldPublish(kConnected + kSecond, 0U, true), "explicit reads and reconnects refresh immediately");
+    policy.RecordPublished(kConnected + kSecond, 0U);
+    Check(!policy.ShouldPublish(kConnected + 300 * kSecond, 0U), "explicit refresh postpones periodic duplicate");
+    Check(policy.ShouldPublish(kConnected + 301 * kSecond, 0U), "periodic refresh follows last accepted snapshot");
+
+    Check(policy.ShouldPublish(kConnected + 2 * kSecond, 1U), "lifecycle change refreshes immediately");
+    policy.RecordPublished(kConnected + 2 * kSecond, 1U);
+    Check(!policy.ShouldPublish(kConnected + 3 * kSecond, 1U), "published lifecycle change is not repeated");
+    Check(policy.ShouldPublish(kConnected + 3 * kSecond, 2U), "change during publication is not lost");
+}
+
 }  // namespace
 
 void TestFirmwareReleaseNotes() {
@@ -97,5 +125,6 @@ int main() {
     TestRemoteControlDefaults();
     TestRemoteControlReconnectPolicy();
     TestPairingConsumedPolicy();
+    TestRuntimeSnapshotPolicy();
     return 0;
 }

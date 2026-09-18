@@ -63,6 +63,7 @@ v2 Host settings record 保存在 `sys_store/system`；旧 v1 record 首次读�
 | Wi-Fi 扫描页 | retry 1 s，刷新 10 s | 只在扫描页面可见时按下一个 deadline 等待；Wi-Fi driver 状态变化仍走事件 |
 | Remote agent 离线状态 | 旧实现 Poll 1 s | 已改为 task notification；命令与 Wi-Fi 状态变化显式唤醒，disabled 状态仅等待 15 min 固件检查 deadline |
 | Remote agent 已连接 control stream | 旧实现 Read timeout 250 ms | 已改为 HTTP/3 stream/异步完成、Host result、命令和 Runtime snapshot 事件唤醒；醒来后用 `TryRead()` 排空数据，无事件和 deadline 时无限等待 |
+| Remote 状态快照 | 未变化时 5 min | control session 建立后立即发送；后续由现有网络事件唤醒检查，距上次成功发送或进入有界 outbox 至少 5 min 才重复上报。App 生命周期变化及固件更新状态仍即时发送；控制台打开或主动刷新时已有的 `device.get_system_info` 命令同时触发最新快照 |
 | 音频 I2S mixer | 每 128 帧写一次，16 kHz 下约 8 ms | Guest 前台期间保持输出链路就绪并可发送静音；Suspend、Stop 或 Session 销毁后才允许按 10 s idle grace 关闭 PA/I2S。没有前台 App 且没有可播放 voice 时无限阻塞 |
 | 前台 App completion | 20 ms | 仅 Guest 前台期间，用于 completion、远控和系统动作编排；不是大厅空闲来源 |
 | 固件更新页面 | 100 ms | 仅更新页面/更新流程期间刷新进度；可在 Remote model change event 完整接入后删除 |
@@ -73,6 +74,9 @@ v2 Host settings record 保存在 `sys_store/system`；旧 v1 record 首次读�
 产品使用按需 LVGL clock、事件驱动 pointer、显式 display wake、阻塞 worker 和准确 deadline；不要重新引入
 毫秒级永久轮询来推动 UI、USB、Remote、Resource 或空闲音频。大厅的 30 s 状态采样只负责电量与固件状态
 兜底，Wi-Fi、外部供电和远控命令仍应通过事件即时唤醒。
+
+Remote control stream 的服务端心跳用于连接保活，不等于设备状态上报，也不触发日志采集。
+日志正文仅响应 `logs.read` 命令；状态快照不携带日志。状态刷新复用现有事件唤醒，不新增周期轮询任务。
 
 当前启用 FreeRTOS tickless idle，但不启用 automatic light sleep。显式 light sleep 由 Host 电源状态机编排，
 不能用空闲 scheduler 自行进入。若未来启用 automatic light sleep，Metalio-Claw4 必须验证 MIPI-DSI、PPA、

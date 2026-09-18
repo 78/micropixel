@@ -1150,11 +1150,13 @@ bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& 
     std::array<char, control::kAppIdCapacity> active_app{};
     std::array<char, control::kCommandIdCapacity> app_session{};
     std::array<char, 24U> lifecycle{};
+    uint64_t generation = 0U;
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
         active_app = active_app_id_;
         app_session = app_session_id_;
         lifecycle = app_lifecycle_;
+        generation = runtime_snapshot_generation_;
     }
     (void)AddRuntimeSnapshotJson(root, active_app.data(), app_session.data(), lifecycle.data());
     {
@@ -1182,22 +1184,21 @@ bool RemoteControlAgent::PostFirmwareUpdateStatus(void* client, const Identity& 
             (void)cJSON_AddNumberToObject(services, kMicropixelAppServices[i], store_state.environment.services[i]);
     }
 
-    return PostEvent(client, identity, root, "device.snapshot");
+    if (!PostEvent(client, identity, root, "device.snapshot")) return false;
+    runtime_snapshot_policy_.RecordPublished(esp_timer_get_time(), generation);
+    return true;
 }
 
-void RemoteControlAgent::PublishRuntimeSnapshotIfChanged(void* client, const Identity& identity) {
+void RemoteControlAgent::PublishRuntimeSnapshotIfDue(void* client, const Identity& identity, bool force) {
+    if (control_session_id_[0] == '\0') return;
     uint64_t generation = 0U;
     {
         std::lock_guard<std::mutex> lock(diagnostics_mutex_);
         generation = runtime_snapshot_generation_;
-        if (generation == published_runtime_snapshot_generation_ &&
-            esp_timer_get_time() - last_store_snapshot_us_ < 5000000)
-            return;
     }
-    if (!PostFirmwareUpdateStatus(client, identity)) return;
-    std::lock_guard<std::mutex> lock(diagnostics_mutex_);
-    published_runtime_snapshot_generation_ = generation;
-    last_store_snapshot_us_ = esp_timer_get_time();
+    if (runtime_snapshot_policy_.ShouldPublish(esp_timer_get_time(), generation, force)) {
+        (void)PostFirmwareUpdateStatus(client, identity);
+    }
 }
 
 bool RemoteControlAgent::PostSystemInformation(void* client, const Identity& identity, const char* command_id) {
@@ -2492,7 +2493,7 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
                 (void)cJSON_AddNumberToObject(limits, "maxRuntimeSessions", 1U);
                 (void)cJSON_AddNumberToObject(limits, "maxInputOperations", control::kMaxSequenceOperations);
                 (void)PostEvent(client, identity, hello, "device.hello");
-                (void)PostFirmwareUpdateStatus(client, identity);
+                PublishRuntimeSnapshotIfDue(client, identity, true);
             } else {
                 cJSON_Delete(hello);
             }
@@ -2540,6 +2541,9 @@ void RemoteControlAgent::HandleControlLine(void* client, const Identity& identit
                 ESP_LOGW(kTag, "Unable to acknowledge command %s; continuing execution", command_id);
             }
             if (name != nullptr && std::strcmp(name, "device.get_system_info") == 0) {
+                // The console already requests system information on connection
+                // and explicit refresh. Refresh its runtime/store status too.
+                PublishRuntimeSnapshotIfDue(client, identity, true);
                 (void)PostSystemInformation(client, identity, command_id);
             } else if (name != nullptr && std::strcmp(name, "device.get_task_diagnostics") == 0) {
                 (void)PostTaskDiagnostics(client, identity, command_id);
@@ -3028,7 +3032,7 @@ void RemoteControlAgent::TaskMain() {
 
         FlushPendingResults(client.get(), identity);
         DrainHostResults(client.get(), identity);
-        PublishRuntimeSnapshotIfChanged(client.get(), identity);
+        PublishRuntimeSnapshotIfDue(client.get(), identity);
         std::array<char, control::kAppIdCapacity> update_app{};
         if (controls_.ConsumeStoreUpdate(update_app)) {
             const std::string path = DevicePath(identity.device_id.data(), "/store/install");

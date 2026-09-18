@@ -18,6 +18,7 @@
 #include "host/controller/control_dispatcher.hpp"
 #include "host/controller/remote/remote_control_protocol.hpp"
 #include "host/controller/remote/remote_identity_store.hpp"
+#include "host/controller/remote/runtime_snapshot_policy.hpp"
 #include "host/fonts/font_download.hpp"
 #include "host/logging/system_log_buffer.hpp"
 #include "host/network/network.hpp"
@@ -143,7 +144,7 @@ class RemoteControlAgent final {
     [[nodiscard]] bool PostUnsupportedCommandResult(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostRestartResult(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostFirmwareUpdateStatus(void* client, const Identity& identity);
-    void PublishRuntimeSnapshotIfChanged(void* client, const Identity& identity);
+    void PublishRuntimeSnapshotIfDue(void* client, const Identity& identity, bool force = false);
     [[nodiscard]] bool PostSystemInformation(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostTaskDiagnostics(void* client, const Identity& identity, const char* command_id);
     [[nodiscard]] bool PostInstalledApps(void* client, const Identity& identity, const char* command_id);
@@ -188,7 +189,7 @@ class RemoteControlAgent final {
     std::array<char, control::kCommandIdCapacity> app_session_id_{};
     std::array<char, control::kCommandIdCapacity> last_app_session_id_{};
     uint64_t runtime_snapshot_generation_{};
-    uint64_t published_runtime_snapshot_generation_{};
+    RuntimeSnapshotPolicy runtime_snapshot_policy_{};
     static constexpr size_t kTaskDiagnosticCapacity = 48U;
     uint64_t previous_total_runtime_{};
     logging::SystemLogBuffer& system_logs_;
@@ -216,7 +217,6 @@ class RemoteControlAgent final {
     bool pairing_requested_{};
     bool pairing_cancel_requested_{};
     bool firmware_update_requested_{};
-    int64_t last_store_snapshot_us_{};
     std::array<char, 256U> firmware_download_path_{};
     std::array<uint8_t, 32U> firmware_sha256_{};
     size_t firmware_size_{};
