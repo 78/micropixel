@@ -91,7 +91,7 @@ else()
     target_compile_options(${micropixel_lvgl_lib} PUBLIC
         "-include${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/system_font_config.h")
     target_add_binary_data(${COMPONENT_LIB}
-        "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf" BINARY)
+        "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/vendor/Montserrat-Medium.ttf" BINARY)
 endif()
 if(CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3 OR CONFIG_MICROPIXEL_BOARD_SZPI_ESP32S3 OR
    CONFIG_MICROPIXEL_BOARD_M5STACK_CORES3)
@@ -134,7 +134,7 @@ target_include_directories(${COMPONENT_LIB} PRIVATE "${micropixel_host_i18n_outp
 set(micropixel_builtin_font_profile
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/builtin-latin-v1.json")
 set(micropixel_lvgl_font_source_dir
-    "${CMAKE_CURRENT_LIST_DIR}/../managed_components/lvgl__lvgl/scripts/built_in_font")
+    "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/vendor")
 add_custom_command(
     OUTPUT "${micropixel_cellular_icon_source}"
     COMMAND "${micropixel_python}" "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_cellular_status_icons.py"
