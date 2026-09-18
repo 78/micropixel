@@ -88,7 +88,7 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     default_font = (
         repo_root
-        / "firmware/espressif/managed_components/lvgl__lvgl/scripts/built_in_font/FontAwesome5-Solid+Brands+Regular.woff"
+        / "firmware/espressif/main/platform/lvgl/fonts/vendor/FontAwesome5-Solid+Brands+Regular.woff"
     )
     default_output = (
         repo_root / "firmware/espressif/main/platform/lvgl/ui/square_common/icons/wifi_status_icons.c"

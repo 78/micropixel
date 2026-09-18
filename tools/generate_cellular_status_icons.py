@@ -100,8 +100,8 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--font", type=Path, default=root / (
-        "firmware/espressif/managed_components/lvgl__lvgl/scripts/"
-        "built_in_font/FontAwesome5-Solid+Brands+Regular.woff"
+        "firmware/espressif/main/platform/lvgl/fonts/vendor/"
+        "FontAwesome5-Solid+Brands+Regular.woff"
     ))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--preview", type=Path)

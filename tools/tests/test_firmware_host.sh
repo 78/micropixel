@@ -279,7 +279,7 @@ build_and_run language_packs \
 
 build_and_run bounded_ttf_font \
     -DMICROPIXEL_TEST_TRACK_HEAP \
-    -DMICROPIXEL_TEST_FONT=\"${MICROPIXEL_TEST_LANGUAGE_FONT:-$workspace_root/firmware/espressif/managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf}\" \
+    -DMICROPIXEL_TEST_FONT=\"${MICROPIXEL_TEST_LANGUAGE_FONT:-$workspace_root/firmware/espressif/main/platform/lvgl/fonts/vendor/Montserrat-Medium.ttf}\" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
     -I "$workspace_root/firmware/espressif/managed_components/lvgl__lvgl" \
     "$workspace_root/tools/tests/test_bounded_ttf_font.cpp" \
@@ -593,7 +593,7 @@ manifest = json.loads((root / 'component.json').read_text())
 manifest.pop('fonts')
 manifest['font'] = {'asset': 'regular', 'format': 'ttf'}
 (root / 'ttf.json').write_text(json.dumps(manifest))
-shutil.copyfile(workspace / 'firmware/espressif/managed_components/lvgl__lvgl/scripts/built_in_font/Montserrat-Medium.ttf', root / 'regular.ttf')
+shutil.copyfile(workspace / 'firmware/espressif/main/platform/lvgl/fonts/vendor/Montserrat-Medium.ttf', root / 'regular.ttf')
 (root / 'ttf-assets.json').write_text(json.dumps({'schema_version': 1, 'assets': [{'name': 'regular', 'format': 'font_ttf', 'path': 'regular.ttf'}]}))
 PYTTF
 python3 "$workspace_root/tools/build_app_bundle.py" --app-manifest "$component_output_dir/ttf.json" \
