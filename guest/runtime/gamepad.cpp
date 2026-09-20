@@ -3,6 +3,7 @@
 // whole Guest; Application::WaitEventInternal offers every decoded event to it.
 #include "sdk/gamepad.hpp"
 
+#include "runtime/display_context.hpp"
 #include "sdk/application.hpp"
 
 namespace micropixel {
@@ -16,7 +17,13 @@ bool shared_pad_enabled{};
 }  // namespace
 
 bool Gamepad::Configure(const GamepadConfig& config) const {
-    if (!shared_pad.Configure(config)) {
+    GamepadConfig resolved = config;
+    if (resolved.bounds == Rect{}) {
+        const auto& display = runtime::LoadDisplayContext();
+        resolved.bounds = {0, 0, static_cast<int32_t>(display.logical_width),
+                           static_cast<int32_t>(display.logical_height)};
+    }
+    if (!shared_pad.Configure(resolved)) {
         return false;
     }
     shared_pad_enabled = true;

@@ -100,7 +100,6 @@ so game code never routes input and never branches on the source:
 ```cpp
 const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
-                         .bounds = {0, 0, width, height},     // touch coordinate space
                          .buttons = buttons});
 micropixel::GamepadSkin skin;
 skin.Initialize(app.resources(), app.gamepad().pad());     // bakes ring, knob and buttons into one texture
@@ -110,6 +109,9 @@ const micropixel::GamepadState state = app.gamepad().Consume();  // stick_x/y, l
                                                                  // right_x/y and triggers from a physical pad
 skin.Draw(list, app.gamepad().pad());                     // HostSurface; or skin.Attach(scene) + skin.Sync(pad)
 ```
+
+Omitted `bounds` (or `{}`) covers the current logical canvas. Configure the display or create the surface
+before configuring the gamepad; set `bounds` explicitly only for a custom region.
 
 Events the gamepad took are marked `Event::gamepad_handled()`, so menu code can skip them; call
 `app.gamepad().set_enabled(false)` on pages where touches must reach the App's own UI. Layouts: `kStickOnly`,
@@ -127,7 +129,7 @@ Centres use `bounds` coordinates and circles must fit inside the bounds. Hit are
 overlaps prefer the first button. Reconfigure the pad and reinitialize its skin after changing buttons.
 Views from `pad.buttons()` and `pad.config().buttons` remain valid until reconfiguration.
 
-`VirtualGamepad` also accepts `OnEvent(event)` directly for standalone use. Custom renderers can read
+Standalone `VirtualGamepad` requires explicit `bounds` and accepts `OnEvent(event)`. Custom renderers can read
 `stick_geometry()` and `button_geometry()`. `GamepadSkinStyle` controls the stick and overlay; button
 styles belong to their descriptors. Defaults use matching faint rims, grey glyphs, transparent idle
 buttons and dark grey press feedback. Floating sticks appear only while engaged unless

@@ -103,9 +103,8 @@ struct GamepadConfig final {
     static constexpr uint8_t kMaxButtons = 4U;
 
     GamepadLayout layout{GamepadLayout::kStickLook};
-    // Region the controls live in, in the same coordinate space as the touch
-    // events fed to OnTouch(): buffer pixels for DirectSurface Apps (convert
-    // with DirectSurface::ToBuffer), logical pixels for Scene Apps.
+    // Region in touch coordinates. Gamepad::Configure resolves {} to the current
+    // logical canvas; standalone VirtualGamepad requires explicit bounds.
     Rect bounds{};
     // Ordered South, East, West, North. Configure copies this collection.
     std::span<const GamepadButtonConfig> buttons{};
@@ -769,7 +768,7 @@ class VirtualGamepad final {
 // sees them; events it took are marked Event::gamepad_handled(). Games then
 // only read Consume() each frame:
 //
-//   app.gamepad().Configure({.layout = GamepadLayout::kStickLook, .bounds = {0, 0, w, h}});
+//   app.gamepad().Configure({.layout = GamepadLayout::kStickLook});
 //   ...
 //   const GamepadState state = app.gamepad().Consume();
 //   skin.Draw(list, app.gamepad().pad());
@@ -781,7 +780,9 @@ class Gamepad final {
     constexpr Gamepad(const Gamepad&) noexcept = default;
     constexpr Gamepad& operator=(const Gamepad&) noexcept = default;
 
-    // Configures the shared pad and enables it. See VirtualGamepad::Configure.
+    // Configures the shared pad and enables it. Empty default bounds ({}) use
+    // the current logical canvas. Configure the display / create surfaces first.
+    // See VirtualGamepad::Configure for validation and descriptor ownership.
     bool Configure(const GamepadConfig& config) const;
     [[nodiscard]] bool configured() const;
     // While disabled the Runtime routes nothing to the pad and the pad holds

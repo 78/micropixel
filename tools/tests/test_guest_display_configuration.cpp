@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "runtime/display_context.cpp"
+#include "runtime/gamepad.cpp"
 #include "runtime/graphics.cpp"
 #include "sdk/application.hpp"
 
@@ -79,6 +80,7 @@ int main() {
     Application app;
     const auto renderer = app.renderer();
     const auto resources = app.resources();
+    const auto gamepad = app.gamepad();
     const AssetId asset{1};
     {
         auto native = resources.LoadTexture(asset);
@@ -86,6 +88,9 @@ int main() {
         assert(last_texture_request.scale_numerator == 1 && last_texture_request.scale_denominator == 1);
         assert(renderer.ConfigureDisplay({}).error().code() == ErrorCode::kInvalidState);
     }
+    assert(gamepad.Configure({}));
+    assert(gamepad.enabled());
+    assert(gamepad.pad().config().bounds == (Rect{0, 0, 480, 480}));
     // A fresh Guest instance, while retaining the fake physical display.
     runtime::display_context_loaded = false;
     runtime::display_context_configured = false;
@@ -99,6 +104,19 @@ int main() {
            info.physical_height() == 480);
     assert(runtime::ToLogical({240, 240}) == (Point{160, 120}));
     assert(runtime::ToLogical({0, 30}) == (Point{0, -20}));
+    const GamepadButtonConfig buttons[] = {{.glyph = GamepadGlyph::kJump}};
+    assert(gamepad.Configure({.layout = GamepadLayout::kStickLookButtons, .buttons = buttons}));
+    assert(gamepad.pad().config().bounds == (Rect{0, 0, 320, 240}));
+    const auto button = gamepad.pad().button_geometry(0);
+    assert(gamepad.pad().config().bounds.contains(button.center));
+    gamepad.set_enabled(false);
+    assert(!gamepad.Configure({.bounds = {0, 0, 0, 240}}));
+    assert(!gamepad.Configure({.bounds = {0, 0, -1, 240}}));
+    assert(!gamepad.enabled());
+    assert(gamepad.pad().config().bounds == (Rect{0, 0, 320, 240}));
+    assert(gamepad.Configure({.bounds = {10, 20, 200, 160}}));
+    assert(gamepad.enabled());
+    assert(gamepad.pad().config().bounds == (Rect{10, 20, 200, 160}));
     assert(!renderer.ConfigureDisplay({}));
     TestSurface target;
     assert(target.ToBuffer(Point{160, 120}) == (Point{120, 120}));
@@ -140,6 +158,8 @@ int main() {
     assert(renderer.info().width() == 240 && renderer.info().height() == 240 &&
            renderer.info().physical_width() == 480);
     assert(runtime::ToLogical({480, 240}) == (Point{240, 120}));
+    assert(gamepad.Configure({.layout = GamepadLayout::kStickLookButtons, .buttons = buttons}));
+    assert(gamepad.pad().config().bounds == (Rect{0, 0, 240, 240}));
     assert(target.ToBuffer(Point{100, 70}) == (Point{100, 70}));
     assert(target.ToBuffer(Rect{10, 20, 30, 40}) == (Rect{10, 20, 30, 40}));
     assert(target.ToLogical({100, 70}) == (Point{100, 70}));

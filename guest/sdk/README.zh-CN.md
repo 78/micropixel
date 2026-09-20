@@ -398,7 +398,6 @@ TextOverflow::kReject。后续修改失败不能提交一半属性。控件 ToSt
 ```cpp
 const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
-                         .bounds = {0, 0, width, height},     // 与触摸坐标同一空间
                          .buttons = buttons});
 micropixel::GamepadSkin skin;
 skin.Initialize(app.resources(), app.gamepad().pad());     // 把圆环、摇杆帽和按键烘焙进一张动态纹理
@@ -407,6 +406,9 @@ const micropixel::GamepadState state = app.gamepad().Consume();  // stick_x/y、
                                                                  // 物理手柄另有 right_x/y 与扳机
 skin.Draw(list, app.gamepad().pad());                     // HostSurface；Scene 用 skin.Attach(scene) + skin.Sync(pad)
 ```
+
+省略 `bounds`（或使用 `{}`）时覆盖当前逻辑画布。先配置显示或创建 Surface，再配置手柄；
+仅自定义区域需要显式填写 `bounds`。
 
 被手柄接管的事件带 `Event::gamepad_handled()` 标记，菜单代码据此跳过；需要触摸抵达应用自己 UI 的页面调用
 `app.gamepad().set_enabled(false)`。布局预设：`kStickOnly`、`kStickLook`（拖拽区轻点按下 `look_tap_button`）、
@@ -421,7 +423,8 @@ skin.Draw(list, app.gamepad().pad());                     // HostSurface；Scene
 触摸范围外扩 25%，重叠时先匹配靠前的按钮。修改按钮后需重新配置手柄并初始化皮肤；
 `pad.buttons()` 和 `pad.config().buttons` 返回的视图在重新配置前有效。
 
-`VirtualGamepad` 可单独接收 `OnEvent(event)`；自定义绘制可读取 `stick_geometry()` 和 `button_geometry()`。
+独立使用 `VirtualGamepad` 时须显式填写 `bounds`，自行传入 `OnEvent(event)`；自定义绘制可读取
+`stick_geometry()` 和 `button_geometry()`。
 `GamepadSkinStyle` 控制摇杆与浮层样式，各按钮外观由自身配置决定。默认使用统一的淡边框、灰色图标、透明底色和
 深灰按下反馈。浮动摇杆仅在操作时显示（`show_stick_at_rest` 可改为常显），固定摇杆常显。
 

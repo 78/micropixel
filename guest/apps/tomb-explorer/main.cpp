@@ -184,12 +184,11 @@ game::Controls TombApp::PadControls() {
 void TombApp::ConfigurePad() {
     micropixel::GamepadConfig config{};
     config.layout = micropixel::GamepadLayout::kStickLookButtons;
-    config.bounds = {0, 0, width_, height_};
     const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kJump}};
     config.buttons = buttons;
     config.look_tap_button = -1;  // Only the fixed button jumps; the look pad is for camera control.
     if (!app_.gamepad().Configure(config)) {
-        app_.log().Error("tomb: virtual gamepad rejected the view bounds");
+        app_.log().Error("tomb: invalid virtual gamepad configuration");
         return;
     }
     if (!skin_.Initialize(app_.resources(), app_.gamepad().pad())) {
