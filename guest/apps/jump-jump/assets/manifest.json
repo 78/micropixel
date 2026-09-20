@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "name": "launch",
+      "format": "jpeg",
+      "path": "launch.jpg"
+    },
+    {
+      "name": "music-box",
+      "format": "ogg_opus",
+      "path": "music_box.ogg"
+    },
+    {
+      "name": "drain",
+      "format": "ogg_opus",
+      "path": "drain.ogg"
+    }
+  ]
+}

@@ -61,6 +61,25 @@ class FirmwareSdkInputsTest(unittest.TestCase):
 
 
 class FirmwareGuestToolchainTest(unittest.TestCase):
+    def test_factory_app_inputs_exist_in_version_control(self):
+        root = firmware_artifacts.ROOT
+        for app in firmware_artifacts.SOURCES['guest_apps']:
+            with self.subTest(app=app):
+                project = root / 'guest/apps' / app
+                manifest = json.loads((project / 'app.json').read_text())
+                paths = [project / 'app.json', *(project / name for name in manifest['sources'])]
+                if manifest.get('asset_manifest'):
+                    assets_path = project / manifest['asset_manifest']
+                    paths.append(assets_path)
+                    assets = json.loads(assets_path.read_text())
+                    paths.extend(assets_path.parent / asset['path'] for asset in assets['assets'])
+                audio = project / 'audio/sfx.json'
+                if audio.exists():
+                    paths.append(audio)
+                subprocess.run(['git', '-C', str(root), 'ls-files', '--error-unmatch', '--',
+                                *(str(path.relative_to(root)) for path in paths)],
+                               check=True, capture_output=True, text=True)
+
     def test_checkout_apps_use_verified_toolchain_not_installed_example_headers(self):
         setup = {'ok': True, 'result': {'sdk_version': '0.17.0', 'toolchain_id': 'verified-fixture',
                  'paths': {'WASI_SDK_PATH': '/verified/wasi', 'WAMRC': '/verified/riscv',
