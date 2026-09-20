@@ -124,9 +124,12 @@ Guest buffer 的 pinned memory 会提前占用连续空间，默认 Host buffer 
 返回大厅时，如果板级截图阶段已完成缩小动画，Hall 直接接管截图卡片，不再重建转场背景。
 排查 `Hall background region update failed: captured=no` 时检查 LVGL 自动行对齐：截图缓冲区按
 `lv_draw_buf_width_to_stride` 分配，交给只接受紧密 RGB888 的拷贝路径前去除行填充。
-`lcd.dsi` 的 underrun 则表示扫描输出取数不足，应结合 PSRAM 带宽与真机画面单独验证。
-Claw4 的 DPI 像素时钟设为 40 MHz，由默认 240 MHz 时钟源精确 6 分频产生；
-按 720×720 和现有消隐时序估算约 65.5 Hz。
+`lcd.dsi` 的 underrun 则表示扫描输出取数不足（画面变蓝），应结合 PSRAM 带宽与真机画面单独验证。
+Claw4 的 DPI 像素时钟由默认 240 MHz 时钟源整数分频产生，只能取 240/N：40 MHz（6 分频，约 65.5 Hz）
+在 App 光栅、PPA 与 DMA2D 争用 PSRAM 时会触发 underrun，现设为 240/7 ≈ 34.29 MHz（约 56.2 Hz），
+DSI 读 framebuffer 的带宽减少 14%，真机运行中不再蓝闪；App 启动瞬间的峰值仍可能闪一下。
+不能用 RGB565 framebuffer 换带宽：NV3051F 只有只读的像素格式寄存器（固定 24 bit），而 ESP32-P4
+rev 1.x 的 DSI 桥输入与输出格式共用一个寄存器，做不了 RGB565→RGB888 的桥内转换（v3 硅片才有）。
 P4 L2 Cache 配置为 256 KiB、cache line 为 64 B；相对 128 KiB Cache 额外占用 128 KiB 内部 SRAM。
 ESP-Hosted transport 缓冲池优先放在 PSRAM，以保留内部 SRAM。当前发送池的 1600 B 块间距能满足
 64 B 对齐，但不能保证每块都满足 128 B 对齐；不要在该配置下单独将 cache line 改回 128 B，否则

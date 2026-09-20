@@ -238,8 +238,14 @@ esp_err_t BoardIo::InitializeLcd() {
 
     esp_lcd_dpi_panel_config_t dpi_config{};
     dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
-    // Exact 240/6 MHz division keeps the panel above 60 Hz with these timings.
-    dpi_config.dpi_clock_freq_mhz = 40;
+    // The DPI clock is an integer division of the 240 MHz source. 240/6 = 40 MHz
+    // gave 65.5 Hz with these timings but let the DSI bridge FIFO underrun
+    // (blue frames) while an App's raster, PPA and DMA2D traffic competes for
+    // PSRAM: the NV3051F only accepts 24-bit pixels and ESP32-P4 rev 1.x cannot
+    // scan out an RGB565 framebuffer, so the DSI DMA has to read 1.5 MiB per
+    // frame. 240/7 = 34.29 MHz (56.2 Hz) trims that bandwidth by 14%, which
+    // keeps the running App underrun-free on the measured device.
+    dpi_config.dpi_clock_freq_mhz = 240.0F / 7.0F;
     dpi_config.virtual_channel = 0;
     dpi_config.num_fbs = kDisplayFramebufferCount;
     dpi_config.video_timing.h_size = display_width_;
