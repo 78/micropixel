@@ -122,7 +122,7 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         lvgl = root / "firmware/espressif/managed_components/lvgl__lvgl"
         requirements = generate_builtin_fonts.lvgl_symbol_requirements(
-            lvgl / "src/font/lv_symbol_def.h",
+            lvgl / "include/lvgl/font/lv_symbol_def.h",
             [
                 root / "firmware/espressif/main/host/ui",
                 root / "firmware/espressif/main/platform/lvgl",
