@@ -7,6 +7,7 @@
 #include "esp_err.h"
 
 #define ESP_PARTITION_TYPE_DATA 1
+#define ESP_PARTITION_SUBTYPE_DATA_NVS 2
 #define ESP_PARTITION_SUBTYPE_ANY 0xff
 #define ESP_PARTITION_MMAP_DATA 0
 

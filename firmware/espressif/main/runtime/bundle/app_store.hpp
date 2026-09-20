@@ -116,6 +116,8 @@ class AppStore final {
     [[nodiscard]] std::expected<void, AppStoreError> BeginAppInstall(const char* app_id, size_t size);
     [[nodiscard]] std::expected<void, AppStoreError> WriteAppInstall(size_t offset, std::span<const uint8_t> bytes);
     void AbortAppInstall();
+    // Requires no active AppSession. Explicit uninstall clears private KV;
+    // Install/CommitStream replacements preserve it.
     [[nodiscard]] std::expected<void, AppStoreError> UninstallApp(const char* app_id);
     [[nodiscard]] std::expected<void, AppStoreError> UninstallComponent(const char* component_id,
                                                                         std::string_view active_component_id = {});

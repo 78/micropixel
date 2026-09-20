@@ -18,7 +18,7 @@ namespace micropixel::platform::wifi {
 namespace {
 
 constexpr char kTag[] = "micropixel_wifi";
-constexpr char kNvsPartition[] = "runtime_nvs";
+constexpr char kNvsPartition[] = "nvs";
 constexpr char kNvsNamespace[] = "host_wifi";
 constexpr char kNvsStateKey[] = "state";
 constexpr uint32_t kStoredStateMagic = 0x57494649U;
@@ -341,7 +341,7 @@ esp_err_t WifiManager::InitializeDriver() {
         return ESP_OK;
     }
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    // MicroPixel owns Wi-Fi persistence in runtime_nvs and explicitly uses
+    // MicroPixel owns Wi-Fi persistence in nvs/host_wifi and explicitly uses
     // WIFI_STORAGE_RAM below. Disable the driver's separate default-NVS path
     // so native and hosted radios share one authoritative settings store.
     config.nvs_enable = false;

@@ -17,6 +17,7 @@
 #include "runtime/bundle/memory_bundle_source.h"
 #include "runtime/bundle/system_assets.hpp"
 #include "runtime/bundlefs/bundle_store_source.hpp"
+#include "runtime/services/app_storage.hpp"
 #include "sdkconfig.h"
 
 namespace micropixel::runtime {
@@ -726,6 +727,13 @@ std::expected<void, AppStoreError> AppStore::UninstallApp(const char* app_id) {
     auto located = Locate(app_id);
     if (!located) {
         return std::unexpected(located.error());
+    }
+    // Clear first so a failed NVS commit leaves the package installed and the
+    // explicit uninstall retryable. Replacement installs never enter here.
+    const esp_err_t storage_error = EraseAppStorage(app_id);
+    if (storage_error != ESP_OK) {
+        ESP_LOGE(kTag, "could not clear App data: app=%s error=%s", app_id, esp_err_to_name(storage_error));
+        return std::unexpected(AppStoreError::kCommitFailed);
     }
     const bundlefs_error_t error = located->store->Remove(app_id);
     if (error != BUNDLEFS_OK) {

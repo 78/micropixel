@@ -1,0 +1,5 @@
+0.1.1 maintenance update
+
+Updated display scaling and texture loading. Migrated audio sequencing, effect pools, deterministic random and storage helpers to the shared SDK.
+
+Built for RISC-V and Xtensa with SDK 0.20.0. This release has no new hardware validation claim.

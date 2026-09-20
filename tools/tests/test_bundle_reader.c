@@ -14,6 +14,7 @@ static uint32_t mapping_attempts;
 static uint32_t last_mapping_offset;
 static uint32_t last_mapping_size;
 static uint32_t next_mapping_handle = 1U;
+static uint32_t source_reads;
 
 static bool check(bool condition, const char* message) {
     if (!condition) {
@@ -64,6 +65,7 @@ static bool test_source_size(const micropixel_bundle_source_t* source, uint32_t*
 
 static bool test_source_read(const micropixel_bundle_source_t* source, uint32_t offset, void* destination,
                              uint32_t size) {
+    ++source_reads;
     if (source->state[0] != kTestSourceToken || offset > test_bundle_size || size > test_bundle_size - offset) {
         return false;
     }
@@ -267,6 +269,22 @@ static bool validate_bundle(bool mappable) {
     }
     const uint32_t package_mapping_attempts = mapping_attempts;
     micropixel_bundle_asset_mapping_t launch;
+    const uint32_t reads_before_lookup = source_reads;
+    const uint32_t maps_before_lookup = mapping_attempts;
+    const micropixel_bundle_section_t* launch_metadata =
+        micropixel_bundle_find_asset(&package, package.launch_asset_id);
+    if (!check((launch_metadata != NULL) == has_launch_asset, "metadata lookup must match launch asset presence") ||
+        !check(launch_metadata == NULL || (launch_metadata->id == package.launch_asset_id &&
+                                           launch_metadata->kind == MICROPIXEL_BUNDLE_SECTION_ASSET),
+               "metadata lookup must return the validated asset TOC entry") ||
+        !check(micropixel_bundle_find_asset(NULL, 1U) == NULL && micropixel_bundle_find_asset(&package, 0U) == NULL &&
+                   micropixel_bundle_find_asset(&package, 0xfffffffeU) == NULL,
+               "invalid asset metadata lookup must fail") ||
+        !check(source_reads == reads_before_lookup && mapping_attempts == maps_before_lookup,
+               "metadata lookup must not perform payload IO or mapping")) {
+        micropixel_close_aot_package(&package);
+        return false;
+    }
     const bool opened_launch = micropixel_bundle_open_asset(&package, package.launch_asset_id, &launch);
     if (!check(opened_launch == has_launch_asset, "running package launch asset state must match its header")) {
         return false;

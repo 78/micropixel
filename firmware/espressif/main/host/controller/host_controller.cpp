@@ -45,6 +45,7 @@
 #include "runtime/app_runtime.hpp"
 #include "runtime/bundle/app_environment.hpp"
 #include "runtime/bundle/app_store.hpp"
+#include "runtime/services/app_storage.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
 #include "work/background_executor.hpp"
@@ -676,6 +677,19 @@ void FillSystemInformationModel(host_ui::SystemInformationModel& model,
     constexpr uint32_t kPsramCapabilities = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     model.internal_sram = ReadMemoryStatistics(kInternalSramCapabilities);
     model.psram = ReadMemoryStatistics(kPsramCapabilities);
+    model.app_data_usage_available = false;
+    model.app_data_total_bytes = 0U;
+    model.app_data_used_bytes = 0U;
+    model.app_data_available_bytes = 0U;
+    if (!firmware_update_view) {
+        const auto usage = runtime::ReadAppStorageUsage();
+        if (usage) {
+            model.app_data_total_bytes = usage->partition_bytes;
+            model.app_data_used_bytes = usage->used_bytes;
+            model.app_data_available_bytes = usage->available_bytes;
+            model.app_data_usage_available = true;
+        }
+    }
     model.latest_firmware_version = remote_control.latest_firmware_version;
     model.firmware_update_message = remote_control.firmware_update_message;
     model.firmware_size_bytes = remote_control.firmware_size_bytes;

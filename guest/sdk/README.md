@@ -9,7 +9,13 @@ A restricted C++23 SDK for WebAssembly apps. No ESP-IDF, LVGL, board-specific ty
 - [Windows automation](AI.md) — managed installation and JSON commands.
 - [API reference (中文)](README.zh-CN.md) — resources, events, graphics, audio, input, and devices.
 
-## Upgrading to 0.20.0
+## Upgrading to 0.20.1
+
+This patch adds configurable gamepad buttons, fixes default gamepad bounds to use the logical canvas,
+and refines overlay visibility. Firmware 0.9.4 adds private KV usage reporting and uninstall cleanup,
+with default quotas of 16 KiB per AppId and 4 KiB per value. Earlier Hosts retain their configured quotas.
+
+### Migrating from versions before 0.20.0
 
 Use firmware 0.9.3 for the companion Host input changes. Existing Bundles remain installed during a
 Host-only update; changing the factory preload list affects full images only.
@@ -81,6 +87,13 @@ stays the source of entropy. `CyclicPool<T, N>` hands out slots in order and ove
 low-pass, deadzone, axis inversion); open the sensor with `app.sensors().OpenFirst<Acceleration>(app.devices(), 10_ms)`
 and feed `Sample(value, timestamp)` per reading. `FixedString::AppendFixed`, `LaunchArguments::HasFlag/GetUnsigned`,
 `KVStore::GetU32Or` and `Rect::intersects/united` cover the small utilities apps used to hand-write.
+
+Private KV storage defaults to 16 KiB of logical value data per AppId, up to 16 keys,
+and 4 KiB per value. The Host enforces these configurable quotas; the SDK's value
+limit is the protocol ceiling. Apps share the physical `runtime_nvs` partition,
+so a quota does not reserve space and writes may fail when the partition is full.
+Explicit App uninstall clears its private KV data. Updating or installing over
+the same AppId preserves it; uninstalling and then installing starts with empty data.
 
 `ToneSequencer<N>` plays the `ToneSpec` arrays the build generates from `audio/sfx.json`:
 

@@ -22,7 +22,7 @@ int wakeups{};
 }  // namespace
 
 esp_err_t nvs_open_from_partition(const char* partition, const char* name, int, nvs_handle_t* handle) {
-    assert(std::strcmp(partition, "runtime_nvs") == 0 && std::strcmp(name, "network") == 0);
+    assert(std::strcmp(partition, "nvs") == 0 && std::strcmp(name, "network") == 0);
     *handle = 1;
     return ESP_OK;
 }

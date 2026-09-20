@@ -124,6 +124,10 @@ codec/I2S output and the RGB565/QSPI presentation boundary. Codec control,
 battery and touch work are serialized through the board's shared I2C executor.
 Brightness uses the CO5300 component API instead of issuing panel registers
 from System UI.
+On Mosaico, panel initialization leaves scanout off. The Host creates and renders
+the startup screen before starting the LVGL worker; the subsequent CO5300
+DISPLAY_ON command drains queued SPI pixel transfers before enabling scanout.
+This keeps both the default LVGL light screen and unwritten panel GRAM hidden.
 
 BMI270 and both BMM150 devices use the pinned Bosch SensorAPI sources under
 `components/bosch_sensorapi/` and reusable drivers under `platform/drivers/sensors/`.

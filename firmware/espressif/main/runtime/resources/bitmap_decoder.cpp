@@ -1,6 +1,7 @@
 #include "runtime/resources/bitmap_decoder.hpp"
 
 #include <cinttypes>
+#include <cstdio>
 #include <cstring>
 
 #include "esp_heap_caps.h"
@@ -8,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_memory_utils.h"
 #include "png.h"
+#include "runtime/bundle/bundle_section_reader.hpp"
 #include "runtime/wamr/diagnostics.h"
 #include "sdkconfig.h"
 
@@ -22,20 +24,13 @@ constexpr uint64_t kBitmapAlignment = CONFIG_CACHE_L2_CACHE_LINE_SIZE;
 constexpr uint64_t kBitmapAlignment = 128U;
 #endif
 
-struct PngMemoryReader final {
-    const uint8_t* data{};
-    size_t size{};
-    size_t offset{};
-};
-
 void ReadPngBytes(png_structp png, png_bytep output, png_size_t size) {
-    auto* reader = static_cast<PngMemoryReader*>(png_get_io_ptr(png));
-    if (reader == nullptr || reader->offset > reader->size || size > reader->size - reader->offset) {
-        png_error(png, "truncated PNG bitmap");
+    auto* reader = static_cast<BundleSectionReader*>(png_get_io_ptr(png));
+    if (reader == nullptr) {
+        png_error(png, "PNG reader missing");
         return;
     }
-    std::memcpy(output, reader->data + reader->offset, size);
-    reader->offset += size;
+    if (!reader->Read({output, size})) png_error(png, reader->FailureDetail());
 }
 
 // The error buffer belongs to the caller and survives libpng's longjmp.
@@ -57,6 +52,37 @@ bool ValidDecodedSize(uint32_t width, uint32_t height, uint32_t bytes_per_pixel,
     return width > 0U && height > 0U && width <= UINT16_MAX && height <= UINT16_MAX &&
            (bytes_per_pixel == 2U || bytes_per_pixel == 3U || bytes_per_pixel == 4U) && size == expected_size &&
            static_cast<uint64_t>(width) * bytes_per_pixel <= UINT16_MAX && expected_size <= UINT32_MAX;
+}
+
+bool BitmapLayout(uint32_t width, uint32_t height, uint32_t bytes_per_pixel, uint32_t alignment_pixels,
+                  uint32_t& stride, uint32_t& size) {
+    if (width == 0U || height == 0U || width > UINT16_MAX || height > UINT16_MAX || bytes_per_pixel < 2U ||
+        bytes_per_pixel > 4U || alignment_pixels == 0U || (alignment_pixels & (alignment_pixels - 1U)) != 0U ||
+        width > UINT32_MAX - (alignment_pixels - 1U)) {
+        return false;
+    }
+    const uint32_t storage_width = (width + alignment_pixels - 1U) & ~(alignment_pixels - 1U);
+    const uint64_t row_bytes = static_cast<uint64_t>(storage_width) * bytes_per_pixel;
+    const uint64_t pixel_bytes = row_bytes * height;
+    const uint64_t allocation_bytes =
+        alignment_pixels == 1U ? pixel_bytes : (pixel_bytes + kBitmapAlignment - 1U) & ~(kBitmapAlignment - 1U);
+    if (row_bytes > UINT16_MAX || allocation_bytes > UINT32_MAX) {
+        return false;
+    }
+    stride = static_cast<uint32_t>(row_bytes);
+    size = static_cast<uint32_t>(allocation_bytes);
+    return true;
+}
+
+// A monotonic map permits a single source row to serve every destination row.
+// Preserve authored atlas borders, including the final row/column, without blending alpha.
+uint32_t MapPngSample(uint32_t index, uint32_t destination_extent, uint32_t source_extent) {
+    if (destination_extent <= 1U || source_extent <= 1U) {
+        return 0U;
+    }
+    return static_cast<uint32_t>(
+        (static_cast<uint64_t>(index) * (source_extent - 1U) + (destination_extent - 1U) / 2U) /
+        (destination_extent - 1U));
 }
 
 void RgbToLvRgb888(uint8_t* data, uint32_t size) {
@@ -139,14 +165,22 @@ void PackRgb565Row(const uint8_t* rgb, uint8_t* output, uint32_t width) {
     }
 }
 
-bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_opaque_format, device::BitmapView& view,
+bool DecodePng(BundleSectionReader& reader, const PngDecodeOptions& options, device::BitmapView& view,
                char* failure_detail) {
     micropixel_check_heap("before PNG decode");
     uint32_t expected_width = 0U;
     uint32_t expected_height = 0U;
-    if (!PreflightPng(asset, expected_width, expected_height)) {
+    uint8_t header[24];
+    if (!reader.PeekPrefix(header)) {
+        (void)std::snprintf(failure_detail, 96U, "%s", reader.FailureDetail());
+        return false;
+    }
+    micropixel_bundle_asset_view_t prefix{};
+    prefix.data = header;
+    prefix.size = sizeof(header);
+    if (!PreflightPng(prefix, expected_width, expected_height)) {
         std::strcpy(failure_detail, "PNG dimensions or header invalid");
-        ESP_LOGE(kTag, "PNG rejected before decode: bytes=%u", asset.size);
+        ESP_LOGE(kTag, "PNG rejected before decode: bytes=%u", reader.size());
         return false;
     }
 
@@ -163,19 +197,20 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_o
         return false;
     }
 
-    volatile uint8_t* decoded = nullptr;
-    volatile uint8_t* row_buffer = nullptr;
+    // The pointers themselves must survive longjmp; volatile pointees are insufficient.
+    // Do not construct RAII owners between setjmp and any libpng call that can jump.
+    uint8_t* volatile decoded = nullptr;
+    uint8_t* volatile row_buffer = nullptr;
     if (setjmp(png_jmpbuf(png)) != 0) {
-        heap_caps_free(const_cast<uint8_t*>(row_buffer));
-        heap_caps_free(const_cast<uint8_t*>(decoded));
+        heap_caps_free(row_buffer);
+        heap_caps_free(decoded);
         png_destroy_read_struct(&png, &info, nullptr);
-        ESP_LOGE(kTag, "streaming libpng decode failed: bytes=%u reason=%s free-psram=%u largest=%u", asset.size,
+        ESP_LOGE(kTag, "streaming libpng decode failed: bytes=%u reason=%s free-psram=%u largest=%u", reader.size(),
                  failure_detail, static_cast<unsigned>(heap_caps_get_free_size(kBitmapPsramCapabilities)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(kBitmapPsramCapabilities)));
         return false;
     }
 
-    PngMemoryReader reader{asset.data, asset.size, 0U};
     png_set_read_fn(png, &reader, ReadPngBytes);
     png_set_user_limits(png, UINT16_MAX, UINT16_MAX);
     png_read_info(png, info);
@@ -205,7 +240,7 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_o
     if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
         png_set_gray_to_rgb(png);
     }
-    const bool rgb565 = !has_alpha && preferred_opaque_format == MICROPIXEL_PIXEL_FORMAT_RGB565;
+    const bool rgb565 = !has_alpha && options.preferred_opaque_format == MICROPIXEL_PIXEL_FORMAT_RGB565;
     // LVGL's RGB888/ARGB8888 byte layouts on this little-endian target are
     // BGR/BGRA. RGB565 uses an explicit little-endian row pack below.
     if (!rgb565) {
@@ -224,37 +259,80 @@ bool DecodePng(const micropixel_bundle_asset_view_t& asset, uint32_t preferred_o
         png_get_rowbytes(png, info) != static_cast<size_t>(width) * decoded_bytes_per_pixel) {
         png_error(png, "unsupported PNG bitmap pixel layout");
     }
-    const size_t output_size = static_cast<size_t>(output_size_64);
-    decoded = static_cast<uint8_t*>(heap_caps_aligned_alloc(64U, output_size, kBitmapPsramCapabilities));
+    const auto scaled_dimension = [&options](uint32_t dimension) {
+        return static_cast<uint32_t>(
+            (static_cast<uint64_t>(dimension) * options.scale_numerator + options.scale_denominator / 2U) /
+            options.scale_denominator);
+    };
+    const uint32_t output_width = scaled_dimension(width);
+    const uint32_t output_height = scaled_dimension(height);
+    uint32_t output_stride = 0U;
+    uint32_t output_size = 0U;
+    if (!BitmapLayout(output_width, output_height, bytes_per_pixel, options.stride_alignment_pixels, output_stride,
+                      output_size)) {
+        png_error(png, "PNG scaled dimensions or stride invalid");
+    }
+    decoded = static_cast<uint8_t*>(heap_caps_aligned_alloc(kBitmapAlignment, output_size, kBitmapPsramCapabilities));
     if (decoded == nullptr) {
-        png_error(png, "PNG bitmap output allocation failed");
+        char detail[96];
+        (void)std::snprintf(detail, sizeof(detail),
+                            "PNG output allocation failed: %" PRIu32 "x%" PRIu32 " stride=%" PRIu32 " bytes=%" PRIu32,
+                            output_width, output_height, output_stride, output_size);
+        png_error(png, detail);
     }
 
-    if (rgb565) {
-        row_buffer = static_cast<uint8_t*>(heap_caps_malloc(static_cast<size_t>(width) * 3U, kBitmapPsramCapabilities));
+    const bool resample = output_width != width || output_height != height;
+    if (rgb565 || resample) {
+        row_buffer = static_cast<uint8_t*>(
+            heap_caps_malloc(static_cast<size_t>(width) * decoded_bytes_per_pixel, kBitmapPsramCapabilities));
         if (row_buffer == nullptr) {
-            png_error(png, "PNG RGB565 row allocation failed");
+            png_error(png, "PNG source row allocation failed");
         }
     }
+    uint32_t destination_y = 0U;
     for (uint32_t row = 0U; row < height; ++row) {
-        uint8_t* destination = const_cast<uint8_t*>(decoded) + static_cast<size_t>(row) * width * bytes_per_pixel;
-        if (rgb565) {
-            png_read_row(png, const_cast<uint8_t*>(row_buffer), nullptr);
-            PackRgb565Row(const_cast<const uint8_t*>(row_buffer), destination, width);
-        } else {
+        if (row_buffer == nullptr) {
+            uint8_t* destination = decoded + static_cast<size_t>(row) * output_stride;
             png_read_row(png, destination, nullptr);
+            continue;
+        }
+        // Even unselected rows must pass through PNG's filters and CRC validation.
+        png_read_row(png, row_buffer, nullptr);
+        while (destination_y < output_height && MapPngSample(destination_y, output_height, height) == row) {
+            uint8_t* destination = decoded + static_cast<size_t>(destination_y) * output_stride;
+            if (output_width == width) {
+                if (rgb565) {
+                    PackRgb565Row(row_buffer, destination, width);
+                } else {
+                    std::memcpy(destination, row_buffer, static_cast<size_t>(width) * bytes_per_pixel);
+                }
+            } else {
+                for (uint32_t x = 0U; x < output_width; ++x) {
+                    const uint32_t source_x = MapPngSample(x, output_width, width);
+                    const uint8_t* pixel = row_buffer + static_cast<size_t>(source_x) * decoded_bytes_per_pixel;
+                    uint8_t* output_pixel = destination + static_cast<size_t>(x) * bytes_per_pixel;
+                    if (rgb565) {
+                        PackRgb565Row(pixel, output_pixel, 1U);
+                    } else {
+                        std::memcpy(output_pixel, pixel, bytes_per_pixel);
+                    }
+                }
+            }
+            ++destination_y;
         }
     }
-    heap_caps_free(const_cast<uint8_t*>(row_buffer));
+    heap_caps_free(row_buffer);
     row_buffer = nullptr;
     png_read_end(png, info);
+    if (!reader.Finish()) png_error(png, reader.FailureDetail());
     png_destroy_read_struct(&png, &info, nullptr);
 
     micropixel_check_heap("after PNG decode");
-    auto* pixels = const_cast<uint8_t*>(decoded);
-    view = {pixels, static_cast<uint32_t>(output_size), width, height, width * bytes_per_pixel, pixel_format};
-    ESP_LOGD(kTag, "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " bytes=%zu format=%" PRIu32 " output=%p", width,
-             height, output_size, pixel_format, pixels);
+    view = {decoded, output_size, output_width, output_height, output_stride, pixel_format};
+    ESP_LOGD(kTag,
+             "streaming libpng decoded: %" PRIu32 "x%" PRIu32 " -> %" PRIu32 "x%" PRIu32 " bytes=%" PRIu32
+             " format=%" PRIu32,
+             width, height, output_width, output_height, output_size, pixel_format);
     return true;
 }
 
@@ -274,17 +352,9 @@ bool AllocateBitmap(uint32_t width, uint32_t height, uint32_t pixel_format, Deco
                                          : (pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
                                                 ? 4U
                                                 : (pixel_format == MICROPIXEL_PIXEL_FORMAT_RGB565 ? 2U : 0U));
-    if (width == 0U || height == 0U || width > UINT16_MAX || height > UINT16_MAX || bytes_per_pixel == 0U ||
-        stride_alignment_pixels == 0U || (stride_alignment_pixels & (stride_alignment_pixels - 1U)) != 0U ||
-        width > UINT32_MAX - (stride_alignment_pixels - 1U)) {
-        return false;
-    }
-    const uint32_t storage_width = (width + stride_alignment_pixels - 1U) & ~(stride_alignment_pixels - 1U);
-    const uint64_t stride = static_cast<uint64_t>(storage_width) * bytes_per_pixel;
-    const uint64_t pixel_bytes = stride * height;
-    const uint64_t allocation_bytes =
-        stride_alignment_pixels == 1U ? pixel_bytes : (pixel_bytes + kBitmapAlignment - 1U) & ~(kBitmapAlignment - 1U);
-    if (stride > UINT16_MAX || allocation_bytes > UINT32_MAX) {
+    uint32_t stride = 0U;
+    uint32_t allocation_bytes = 0U;
+    if (!BitmapLayout(width, height, bytes_per_pixel, stride_alignment_pixels, stride, allocation_bytes)) {
         return false;
     }
     auto* pixels = static_cast<uint8_t*>(
@@ -315,9 +385,35 @@ bool DecodeBitmap(const micropixel_bundle_asset_view_t& asset, uint32_t preferre
         return DecodeJpeg(asset, preferred_opaque_format, decoded.view_);
     }
     if (asset.format == MICROPIXEL_BUNDLE_FORMAT_PNG) {
-        return DecodePng(asset, preferred_opaque_format, decoded.view_, decoded.failure_detail_.data());
+        return DecodePngBitmap(asset, PngDecodeOptions{preferred_opaque_format}, decoded);
     }
     return false;
+}
+
+bool DecodePngBitmap(const micropixel_bundle_asset_view_t& asset, const PngDecodeOptions& options,
+                     DecodedBitmap& decoded) {
+    if (decoded.valid()) return false;
+    BundleSectionReader reader;
+    if (asset.format != MICROPIXEL_BUNDLE_FORMAT_PNG || asset.data == nullptr ||
+        !reader.OpenMemory({asset.data, asset.size})) {
+        std::strcpy(decoded.failure_detail_.data(), "PNG input invalid");
+        return false;
+    }
+    return DecodePngBitmap(reader, options, decoded);
+}
+
+bool DecodePngBitmap(BundleSectionReader& reader, const PngDecodeOptions& options, DecodedBitmap& decoded) {
+    if (decoded.valid()) {
+        return false;
+    }
+    std::strcpy(decoded.failure_detail_.data(), "PNG decode options invalid");
+    if (options.scale_numerator == 0U || options.scale_denominator == 0U || options.scale_numerator > 4096U ||
+        options.scale_denominator > 4096U ||
+        (options.preferred_opaque_format != MICROPIXEL_PIXEL_FORMAT_BGR888 &&
+         options.preferred_opaque_format != MICROPIXEL_PIXEL_FORMAT_RGB565)) {
+        return false;
+    }
+    return DecodePng(reader, options, decoded.view_, decoded.failure_detail_.data());
 }
 
 }  // namespace micropixel::runtime

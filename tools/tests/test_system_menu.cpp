@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "host/ui/lvgl/square_common/system_menu_ui.hpp"
+#include "host/ui/lvgl/square_common/launch_screen_ui.hpp"
+#include "host/ui/lvgl/square_common/hall_cover_mask.hpp"
 
 // Exercise real LVGL layout/events; hardware scanout and locking are not part of this fixture.
 namespace micropixel::host_ui {
@@ -75,12 +77,68 @@ void CheckInformationRows(lv_obj_t* root, const SystemPageLayout& layout) {
           "wrapped details retain symmetric spacing");
     lv_obj_delete(panel);
 }
+void CheckLaunchScreen(lv_obj_t* root, lv_display_t* display, const std::vector<uint32_t>& buffer, int32_t width, int32_t height) {
+    const LaunchScreenLayout layout{.width = static_cast<uint32_t>(width),
+                                    .height = static_cast<uint32_t>(height),
+                                    .label_bottom_offset = 16,
+                                    .scale_oversized_bitmap = true};
+    const HallCardLayout card{.width = height / 2, .height = height / 2, .radius = 12};
+    const HallCardPresentation app{.app_id = "xiage.tarot", .display_name = "Tarot"};
+    lv_obj_set_style_bg_color(root, lv_color_hex(0), 0);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    std::vector<uint8_t> pixels(card.width * card.width * 3, 255);
+    MaskHallCoverRgb888(pixels.data(), card.width, card.width * 3, card.radius, 0);
+    const auto original_pixels = pixels;
+    lv_image_dsc_t cover{};
+    cover.header.magic = LV_IMAGE_HEADER_MAGIC;
+    cover.header.cf = LV_COLOR_FORMAT_RGB888;
+    cover.header.w = cover.header.h = card.width;
+    cover.header.stride = card.width * 3;
+    cover.data_size = pixels.size();
+    cover.data = pixels.data();
+    lv_image_dsc_t pending_cover{};
+    for (const lv_image_dsc_t* source : {static_cast<const lv_image_dsc_t*>(nullptr),
+                                        static_cast<const lv_image_dsc_t*>(&pending_cover),
+                                        static_cast<const lv_image_dsc_t*>(&cover)}) {
+        DrawLaunchScreen(root, layout, source, card, app, 8);
+        lv_obj_update_layout(root);
+        auto* loading = Find(root, "Loading...");
+        Check(loading && lv_obj_is_visible(loading), "Loading is visible regardless of cover readiness");
+        lv_area_t label_area{}, art_area{};
+        lv_obj_get_coords(loading, &label_area);
+        lv_obj_get_coords(lv_obj_get_child(root, 0), &art_area);
+        Check(label_area.x1 >= 0 && label_area.x2 < width && label_area.y1 > art_area.y2 &&
+                  label_area.y2 < height, "Loading fits below launch art");
+        if (source == &cover) {
+            Check(lv_obj_check_type(lv_obj_get_child(lv_obj_get_child(root, 0), 0), &lv_image_class) && !Find(root, "Tarot"),
+                  "ready cover retains bitmap presentation");
+            lv_refr_now(display);
+            const auto pixel = [&](int x, int y) { return buffer[y * width + x] & 0xFFFFFFU; };
+            for (int x : {art_area.x1, art_area.x2}) {
+                for (int y : {art_area.y1, art_area.y2}) {
+                    Check(pixel(x, y) == 0U, "all four launch corners reveal the background");
+                }
+            }
+            const int middle_x = (art_area.x1 + art_area.x2) / 2;
+            Check(pixel(middle_x, art_area.y1) == 0xFFFFFFU &&
+                      pixel(middle_x, art_area.y2) == 0xFFFFFFU &&
+                      pixel(middle_x, (art_area.y1 + art_area.y2) / 2) == 0xFFFFFFU,
+                  "rounded clipping preserves the image edges and center");
+            Check(pixels == original_pixels, "launch clipping does not modify shared Hall pixels");
+        } else {
+            Check(Find(root, "Tarot") && lv_obj_is_visible(Find(root, "Tarot")),
+                  "pending cover displays the app placeholder");
+        }
+        lv_obj_clean(root);
+    }
+}
 void Run(const SystemMenuLayout& layout, const SystemPageLayout& page) {
     auto* display = lv_display_create(layout.width, layout.height);
     std::vector<uint32_t> buffer(layout.width * layout.height);
     lv_display_set_buffers(display, buffer.data(), nullptr, buffer.size() * 4, LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(display, [](lv_display_t* d, const lv_area_t*, uint8_t*) { lv_display_flush_ready(d); });
     auto* root = lv_screen_active();
+    CheckLaunchScreen(root, display, buffer, layout.width, layout.height);
     CheckInformationRows(root, page);
     StatusLayerTransition transition;
     ActionSheetPresenter presenter(transition);

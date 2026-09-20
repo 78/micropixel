@@ -105,6 +105,7 @@ class SquareSystemUiState final {
     void DropLaunchBitmapLocked();
     void ResetHallPresentationLocked();
     [[nodiscard]] int32_t ShowLaunchBitmap(const device::BitmapView& bitmap);
+    [[nodiscard]] int32_t ShowLaunchPlaceholder(uint32_t app_index);
     [[nodiscard]] bool DismissLaunchBitmap();
     void SetHostPointerEnabledLocked(bool enabled);
     [[nodiscard]] bool HostPointerBusy();
@@ -208,6 +209,7 @@ class SquareSystemUiState final {
     static theme::Mode ThemeMode(host_ui::SystemThemeMode mode);
     void RefreshPerformanceOverlayLocked(bool refresh_sample);
     void ShowStartingScreenLocked();
+    [[nodiscard]] int32_t ShowLaunchScreen(const device::BitmapView* bitmap, uint32_t app_index);
     void PrepareGuestFrameLocked(lv_obj_t* guest_frame, bool created_guest_frame, bool& needs_present);
     void ResetHallLocked();
     void BindPageInput(host_ui::SystemUiActionSink action_sink, void* action_context);
@@ -226,6 +228,7 @@ class SquareSystemUiState final {
     CpuUsageSample performance_cpu_{};
     bool performance_overlay_requested_{};
     bool guest_actions_watched_{};
+    bool launch_screen_visible_{};
     // Direct Surface telemetry: FPS window and whether the presenter currently
     // holds an overlay published by us.
     uint32_t performance_direct_frames_{};

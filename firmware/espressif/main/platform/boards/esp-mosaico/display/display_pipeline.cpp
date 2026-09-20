@@ -48,24 +48,16 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
     static const uint8_t kHbmBrightness[] = {0xff};
     static const uint8_t kColumnRange[] = {0x00, 0x00, 0x01, 0xdf};
     static const uint8_t kRowRange[] = {0x00, 0x00, 0x01, 0xdf};
+    // Omit DISPLAY_ON: the Host first writes a complete startup frame with scanout off.
     static const co5300_lcd_init_cmd_t kVendorInit[] = {
         // The documented CO5300 sleep-out guard is 120 ms. The previous
         // 600 ms guard was inherited from early bring-up and extended every
         // boot needlessly.
-        {0x11, nullptr, 0, 120},
-        {0xfe, kPage20, sizeof(kPage20), 0},
-        {0x19, kRegister19, 1, 0},
-        {0x1c, kRegister1c, 1, 0},
-        {0xfe, kPage00, sizeof(kPage00), 0},
-        {0xc4, kRegisterC4, 1, 0},
-        {0x3a, kPixelFormat, 1, 0},
-        {0x35, kTearEffect, 1, 0},
-        {0x53, kDisplayControl, 1, 0},
-        {0x51, kMaximumBrightness, 1, 0},
-        {0x63, kHbmBrightness, 1, 0},
-        {0x2a, kColumnRange, 4, 0},
+        {0x11, nullptr, 0, 120},          {0xfe, kPage20, sizeof(kPage20), 0}, {0x19, kRegister19, 1, 0},
+        {0x1c, kRegister1c, 1, 0},        {0xfe, kPage00, sizeof(kPage00), 0}, {0xc4, kRegisterC4, 1, 0},
+        {0x3a, kPixelFormat, 1, 0},       {0x35, kTearEffect, 1, 0},           {0x53, kDisplayControl, 1, 0},
+        {0x51, kMaximumBrightness, 1, 0}, {0x63, kHbmBrightness, 1, 0},        {0x2a, kColumnRange, 4, 0},
         {0x2b, kRowRange, 4, 0},
-        {0x29, nullptr, 0, 120},
     };
 
     spi_bus_config_t bus_config{};
@@ -117,7 +109,6 @@ esp_err_t MosaicoDisplayPipeline::InitializePanel() {
                         "create CO5300 panel failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel_), kTag, "reset CO5300 failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel_), kTag, "initialize CO5300 failed");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel_, true), kTag, "turn CO5300 on failed");
     ESP_LOGI(kTag, "CO5300 pipeline ready: %" PRIu32 "x%" PRIu32 " QSPI with TE on GPIO%d", geometry_.width,
              geometry_.height, static_cast<int>(board::kDisplayTe));
     return ESP_OK;

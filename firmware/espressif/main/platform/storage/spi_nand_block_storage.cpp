@@ -150,6 +150,7 @@ esp_err_t SpiNandBlockStorage::Initialize(const Config& config) {
 }
 
 void SpiNandBlockStorage::Shutdown() {
+    cache_valid_ = false;
     if (nand_ != nullptr) {
         (void)spi_nand_flash_sync(nand_);
         (void)spi_nand_flash_deinit_device(nand_);
@@ -184,10 +185,22 @@ std::expected<void, device::BlockStorageError> SpiNandBlockStorage::ReadSector(u
 
 std::expected<void, device::BlockStorageError> SpiNandBlockStorage::WriteSector(uint32_t sector,
                                                                                 const uint8_t* source) {
+    if (cache_valid_ && cached_sector_ == sector) cache_valid_ = false;
     if (spi_nand_flash_write_sector(nand_, source, sector) != ESP_OK) {
         ESP_LOGE(kTag, "sector write failed: sector=%" PRIu32, sector);
         return std::unexpected(device::BlockStorageError::kIo);
     }
+    return {};
+}
+
+std::expected<void, device::BlockStorageError> SpiNandBlockStorage::CacheSector(uint32_t sector) {
+    if (cache_valid_ && cached_sector_ == sector) return {};
+    // A failed read may partially overwrite the buffer. Neither old nor new bytes
+    // may remain visible as a cache hit on that path.
+    cache_valid_ = false;
+    if (auto result = ReadSector(sector, sector_buffer_); !result) return result;
+    cached_sector_ = sector;
+    cache_valid_ = true;
     return {};
 }
 
@@ -204,12 +217,14 @@ std::expected<void, device::BlockStorageError> SpiNandBlockStorage::Read(uint64_
         const uint32_t sector = static_cast<uint32_t>(current / sector_size_);
         const uint32_t within = static_cast<uint32_t>(current % sector_size_);
         const uint32_t chunk = std::min<uint32_t>(sector_size_ - within, destination.size() - consumed);
-        if (within == 0U && chunk == sector_size_) {
+        if (cache_valid_ && cached_sector_ == sector) {
+            std::memcpy(destination.data() + consumed, sector_buffer_ + within, chunk);
+        } else if (within == 0U && chunk == sector_size_) {
             if (auto result = ReadSector(sector, destination.data() + consumed); !result) {
                 return result;
             }
         } else {
-            if (auto result = ReadSector(sector, sector_buffer_); !result) {
+            if (auto result = CacheSector(sector); !result) {
                 return result;
             }
             std::memcpy(destination.data() + consumed, sector_buffer_ + within, chunk);
@@ -240,9 +255,10 @@ std::expected<void, device::BlockStorageError> SpiNandBlockStorage::Program(uint
             // Partial sector: merge into the current contents so neighbouring
             // bytes (an earlier streamed chunk, the record body next to its
             // commit marker) survive.
-            if (auto result = ReadSector(sector, sector_buffer_); !result) {
+            if (auto result = CacheSector(sector); !result) {
                 return result;
             }
+            cache_valid_ = false;
             std::memcpy(sector_buffer_ + within, source.data() + consumed, chunk);
             if (auto result = WriteSector(sector, sector_buffer_); !result) {
                 return result;
@@ -262,6 +278,7 @@ std::expected<void, device::BlockStorageError> SpiNandBlockStorage::Erase(uint64
     const uint32_t first = static_cast<uint32_t>(offset / sector_size_);
     const uint32_t count = static_cast<uint32_t>(size / sector_size_);
     for (uint32_t index = 0U; index < count; ++index) {
+        if (cache_valid_ && cached_sector_ == first + index) cache_valid_ = false;
         // Trimmed sectors read back as 0xFF from the FTL without occupying a page.
         if (spi_nand_flash_trim(nand_, first + index) != ESP_OK) {
             ESP_LOGE(kTag, "sector trim failed: sector=%" PRIu32, first + index);

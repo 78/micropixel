@@ -22,6 +22,11 @@ using system_detail_internal::Label;
 using system_detail_internal::Panel;
 using system_detail_internal::Scroll;
 using system_detail_internal::SectionLabel;
+
+void FormatStorageBytes(uint32_t bytes, char* output, size_t capacity) {
+    const uint64_t hundredths = (static_cast<uint64_t>(bytes) * 100U + 512U) / 1024U;
+    std::snprintf(output, capacity, "%" PRIu64 ".%02" PRIu64 " KB", hundredths / 100U, hundredths % 100U);
+}
 }  // namespace
 
 std::expected<void, host_ui::SystemUiError> SystemDetailUi::ShowSystemInformationLocked(
@@ -119,6 +124,25 @@ void SystemDetailUi::RenderSystemInformationLocked() {
     InformationRow(layout_, memory, UiText(host_strings::Id::kUiSramFree), sram_free);
     InformationRow(layout_, memory, UiText(host_strings::Id::kUiPsramTotal), psram_total);
     InformationRow(layout_, memory, UiText(host_strings::Id::kUiPsramFree), psram_free);
+
+    SectionLabel(scroll, UiText(host_strings::Id::kUiAppSavedData));
+    lv_obj_t* app_data = Panel(layout_, scroll, 0);
+    if (system_information_model_.app_data_usage_available) {
+        char total[24]{}, used[24]{}, available[24]{};
+        FormatStorageBytes(system_information_model_.app_data_total_bytes, total, sizeof(total));
+        FormatStorageBytes(system_information_model_.app_data_used_bytes, used, sizeof(used));
+        FormatStorageBytes(system_information_model_.app_data_available_bytes, available, sizeof(available));
+        InformationRow(layout_, app_data, UiText(host_strings::Id::kUiSaveStorageCapacity), total);
+        InformationRow(layout_, app_data, UiText(host_strings::Id::kUiSaveStorageUsed), used);
+        InformationRow(layout_, app_data, UiText(host_strings::Id::kUiSaveStorageAvailableEstimate), available);
+        lv_obj_t* note = Label(app_data, UiText(host_strings::Id::kUiSaveStorageOverheadNotice),
+                               platform::lvgl::SystemFontRole::kSmall, theme::kMutedText);
+        lv_obj_set_width(note, LV_PCT(100));
+        lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+    } else {
+        InformationRow(layout_, app_data, UiText(host_strings::Id::kUiSaveStorageUsed),
+                       UiText(host_strings::Id::kUiSaveStorageUnavailable));
+    }
 
     SectionLabel(scroll, UiText(host_strings::Id::kUiRuntime));
     lv_obj_t* runtime = Panel(layout_, scroll, 0);

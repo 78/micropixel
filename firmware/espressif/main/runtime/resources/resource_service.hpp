@@ -64,7 +64,7 @@ class ResourceService final {
    private:
     struct Work final {
         ResourceService* service{};
-        micropixel_bundle_asset_view_t asset{};  // points into a mapping LoadTexture holds open
+        const micropixel_bundle_section_t* section{};  // borrowed from package_; no payload IO on the Guest task
         uint32_t scale_numerator{1U};
         uint32_t scale_denominator{1U};
         uint32_t asset_id{};
@@ -77,7 +77,6 @@ class ResourceService final {
 
     static void ProcessEntry(void* argument);
     void Process(const Work& work);
-    [[nodiscard]] ServiceResult<micropixel_texture_info_t> AddAsset(const micropixel_bundle_asset_view_t& asset);
     [[nodiscard]] int32_t LoadOwnedAsset(const Work& work, micropixel_texture_handle_t& texture_out);
     [[nodiscard]] micropixel_texture_info_t TextureInfo(micropixel_texture_handle_t texture_handle,
                                                         const device::BitmapView& view) const;

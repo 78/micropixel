@@ -8,6 +8,16 @@
 #define MALLOC_CAP_INTERNAL (1U << 1U)
 #define MALLOC_CAP_SPIRAM (1U << 2U)
 
+static inline size_t heap_caps_get_free_size(unsigned capabilities) {
+    (void)capabilities;
+    return 0;
+}
+
+static inline size_t heap_caps_get_largest_free_block(unsigned capabilities) {
+    (void)capabilities;
+    return 0;
+}
+
 #if defined(MICROPIXEL_TEST_TRACK_PSRAM) || defined(MICROPIXEL_TEST_TRACK_HEAP)
 void* micropixel_test_psram_allocate(size_t size);
 void micropixel_test_psram_free(void* memory);

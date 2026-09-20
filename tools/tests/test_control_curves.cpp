@@ -23,16 +23,30 @@ bool Check(bool condition, const char* message) {
 
 bool VolumeCurveHasExpectedAnchors() {
     return Check(VolumeOutputPerTenThousand(0U) == 0U, "zero percent volume must remain muted") &&
-           Check(VolumeOutputPerTenThousand(1U) == 20U,
-                 "one percent must match ten percent of the former minus sixty dB curve") &&
-           Check(VolumeOutputPerTenThousand(10U) == 35U, "ten percent must follow the dB curve") &&
-           Check(VolumeOutputPerTenThousand(15U) == 48U, "fifteen percent must follow the dB curve") &&
-           Check(VolumeOutputPerTenThousand(50U) == 433U, "fifty percent must follow the remapped dB curve") &&
-           Check(VolumeOutputPerTenThousand(90U) == 5337U, "ninety percent must follow the remapped dB curve") &&
+           Check(VolumeOutputPerTenThousand(1U) == 1U, "one percent must retain the smallest nonzero gain") &&
+           Check(VolumeOutputPerTenThousand(10U) == 100U, "ten percent must give one percent amplitude") &&
+           Check(VolumeOutputPerTenThousand(15U) == 225U, "fifteen percent must give 2.25 percent amplitude") &&
+           Check(VolumeOutputPerTenThousand(50U) == 2500U, "fifty percent must give twenty-five percent amplitude") &&
+           Check(VolumeOutputPerTenThousand(70U) == 4900U, "default volume must give forty-nine percent amplitude") &&
+           Check(VolumeOutputPerTenThousand(80U) == 6400U, "eighty percent must give sixty-four percent amplitude") &&
+           Check(VolumeOutputPerTenThousand(90U) == 8100U, "ninety percent must give eighty-one percent amplitude") &&
            Check(VolumeOutputPerTenThousand(100U) == kVolumeControlScale,
                  "one hundred percent must remain full output") &&
            Check(VolumeOutputPerTenThousand(255U) == kVolumeControlScale,
                  "out-of-range input must clamp to full output");
+}
+
+bool VolumeCurveIsMonotonicAndClamped() {
+    uint16_t previous = VolumeOutputPerTenThousand(0U);
+    for (uint32_t percent = 1U; percent <= 255U; ++percent) {
+        const uint16_t output = VolumeOutputPerTenThousand(static_cast<uint8_t>(percent));
+        if (!Check(percent <= 100U ? output > previous : output == kVolumeControlScale,
+                   "volume must rise at every valid step and clamp above one hundred percent")) {
+            return false;
+        }
+        previous = output;
+    }
+    return true;
 }
 
 bool BrightnessZeroUsesTheSafePanelFloor() {
@@ -77,6 +91,10 @@ bool LaterSliderStepsHaveMoreOutputRange() {
 
 bool AudioOutputIsTransparentAndSaturatesSafely() {
     return Check(ScaleOutputSample(4000, 10000U) == 4000, "full volume must preserve the Guest sample") &&
+           Check(ApplyHostOutputGain(10000, VolumeOutputPerTenThousand(80U), false) == 6400,
+                 "eighty percent volume must apply sixty-four percent gain to the mixed output") &&
+           Check(ApplyHostOutputGain(-10000, VolumeOutputPerTenThousand(50U), false) == -2500,
+                 "fifty percent volume must apply twenty-five percent gain to negative samples") &&
            Check(ScaleOutputSample(4000, 5000U) == 2000, "Host volume must only attenuate the Guest sample") &&
            Check(ScaleOutputSample(4000, 0U) == 0, "muted volume must remain silent") &&
            Check(ScaleOutputSample(40000, 10000U) == 32767, "positive overflow must saturate safely") &&
@@ -94,9 +112,10 @@ bool HardwareMuteDoesNotOverwriteMasterVolume() {
 }  // namespace
 
 int main() {
-    return VolumeCurveHasExpectedAnchors() && BrightnessZeroUsesTheSafePanelFloor() &&
-                   BrightnessCurveSupportsABoardSpecificFloor() && LaterSliderStepsHaveMoreOutputRange() &&
-                   AudioOutputIsTransparentAndSaturatesSafely() && HardwareMuteDoesNotOverwriteMasterVolume()
+    return VolumeCurveHasExpectedAnchors() && VolumeCurveIsMonotonicAndClamped() &&
+                   BrightnessZeroUsesTheSafePanelFloor() && BrightnessCurveSupportsABoardSpecificFloor() &&
+                   LaterSliderStepsHaveMoreOutputRange() && AudioOutputIsTransparentAndSaturatesSafely() &&
+                   HardwareMuteDoesNotOverwriteMasterVolume()
                ? 0
                : 1;
 }

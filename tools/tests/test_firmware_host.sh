@@ -67,6 +67,18 @@ for key in ('capabilities','services'):
 lines.append('static const struct { const char* current; const char* candidate; bool update; } fixture_versions[] = {'+','.join('{'+json.dumps(a)+','+json.dumps(b)+','+str(c).lower()+'}' for a,b,c in fixture['versions'])+'};')
 Path(sys.argv[2]).write_text('\n'.join(lines)+'\n')
 PYFIXTURE
+kv_test_defines=()
+while IFS= read -r definition; do
+    kv_test_defines+=("-D${definition}")
+done < <(sed -n '/^CONFIG_MICROPIXEL_KV_/p' "$workspace_root/firmware/espressif/sdkconfig.defaults")
+build_and_run private_storage \
+    "${kv_test_defines[@]}" \
+    "$workspace_root/tools/tests/test_private_storage.cpp" \
+    "$workspace_root/tools/tests/fake_nvs.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/storage_service.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/app_storage.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/storage/network_settings_migration.cpp"
+
 build_and_run guest_failure_detail "$workspace_root/tools/tests/test_guest_failure_detail.cpp"
 build_and_run linear_memory_policy "$workspace_root/tools/tests/test_linear_memory_policy.cpp"
 
@@ -224,6 +236,31 @@ build_and_run bitmap_store \
     "$workspace_root/tools/tests/test_bitmap_store.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/resources/bitmap_store.cpp"
 
+# Exercise the pinned decoder with real PNG input and fault-injected PSRAM.
+# libpng supports C++ compilation; no system libpng installation is required.
+png_component="$workspace_root/firmware/espressif/managed_components/espressif__libpng"
+png_sources=()
+for source in png pngerror pngget pngmem pngpread pngread pngrio pngrtran pngrutil pngset pngtrans \
+    pngwio pngwrite pngwtran pngwutil; do
+    png_sources+=("$png_component/libpng/$source.c")
+done
+build_and_run bitmap_decoder \
+    -DMICROPIXEL_TEST_TRACK_HEAP -DPNG_ARM_NEON_OPT=0 -DPNG_INTEL_SSE_OPT=0 \
+    -Wno-unused-command-line-argument \
+    -fsanitize=address,undefined -g -O2 \
+    -I "$png_component" -I "$png_component/libpng" \
+    -I "$workspace_root/firmware/espressif/managed_components/espressif__esp_new_jpeg/include" \
+    "$workspace_root/tools/tests/test_bitmap_decoder.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/resources/bitmap_decoder.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/bundle/bundle_section_reader.cpp" \
+    -x c++ "${png_sources[@]}" -lz
+
+build_and_run spi_nand_block_storage \
+    -fsanitize=address,undefined -g -O2 \
+    -I "$workspace_root/tools/tests/nand_stubs" \
+    "$workspace_root/tools/tests/test_spi_nand_block_storage.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/storage/spi_nand_block_storage.cpp"
+
 build_and_run pixel_compositor \
     "$workspace_root/tools/tests/test_pixel_compositor.cpp" \
     "$workspace_root/firmware/espressif/main/platform/graphics/pixel_compositor.cpp"
@@ -302,6 +339,8 @@ build_and_run language_packs \
     "$workspace_root/tools/tests/test_language_packs.cpp" \
     "$workspace_root/firmware/espressif/main/host/fonts/language_packs.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/services/app_storage.cpp" \
+    "$workspace_root/tools/tests/fake_nvs.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundle_store_source.cpp" \
     -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
 
@@ -425,6 +464,8 @@ build_and_run device_catalog \
 app_store_sources=(
     "$workspace_root/tools/tests/test_app_store.cpp"
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
+    "$workspace_root/firmware/espressif/main/runtime/services/app_storage.cpp"
+    "$workspace_root/tools/tests/fake_nvs.cpp"
     "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundle_store_source.cpp"
     -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
 )

@@ -1,12 +1,11 @@
 #include "runtime/services/storage_service.hpp"
 
-#include <cinttypes>
-#include <cstdio>
 #include <cstring>
 
 #include "abi/micropixel_abi.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "runtime/services/app_storage.hpp"
 #include "sdkconfig.h"
 
 namespace {
@@ -35,15 +34,6 @@ bool ValidIdentifierByte(uint8_t byte) {
            byte == '_' || byte == '-' || byte == '.';
 }
 
-uint64_t AppIdHash(const uint8_t* bytes, size_t length) {
-    uint64_t hash = 14695981039346656037ULL;
-    for (size_t index = 0U; index < length; ++index) {
-        hash ^= bytes[index];
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
 }  // namespace
 
 namespace micropixel::runtime {
@@ -61,16 +51,9 @@ StorageService::StorageService(const micropixel_aot_package_t& package) : token_
         ESP_LOGE(kTag, "Bundle AppId is not a valid NVS namespace");
         return;
     }
-    if (length < sizeof(namespace_)) {
-        memcpy(namespace_, package.app_id, length);
-    } else {
-        const uint64_t hash = AppIdHash(package.app_id, length) & 0x00FFFFFFFFFFFFFFULL;
-        int written = snprintf(namespace_, sizeof(namespace_), "m%014" PRIx64, hash);
-        if (written <= 0 || static_cast<size_t>(written) >= sizeof(namespace_)) {
-            ESP_LOGE(kTag, "unable to derive NVS namespace from Bundle AppId");
-            return;
-        }
-        ESP_LOGI(kTag, "long AppId uses private KV namespace '%s'", namespace_);
+    if (!AppStorageNamespace(std::string_view(reinterpret_cast<const char*>(package.app_id), length), namespace_)) {
+        ESP_LOGE(kTag, "unable to derive private KV namespace from Bundle AppId");
+        return;
     }
     esp_err_t error = nvs_open_from_partition(kPartition, namespace_, NVS_READWRITE, &handle_);
     if (error != ESP_OK) {

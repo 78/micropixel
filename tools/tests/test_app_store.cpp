@@ -16,6 +16,7 @@
 #include "runtime/bundlefs/bundle_store.hpp"
 #include "runtime/bundlefs/bundlefs_format.h"
 #include "sdkconfig.h"
+#include "fake_nvs.hpp"
 
 namespace {
 bool fail_next_heap_allocation{};
@@ -407,6 +408,7 @@ void TestEmptyInstallUpdateAndRemove() {
               catalog.store_used_bytes == MICROPIXEL_BUNDLEFS_METADATA_SIZE + first_bundle.size() &&
               catalog.apps[0].sha256 == Hash(first_bundle),
           "installed Bundle must be listed with metadata-inclusive Store usage and Catalog SHA-256");
+    fake_nvs::data["runtime_nvs/demo"]["save"] = {NVS_TYPE_BLOB, {1, 2, 3}};
     installed = store.Install(Request(first_bundle, "demo"));
     Check(installed.has_value() && !installed->changed && fake.file_count == 1U,
           "installing the same Bundle digest must converge without rewriting it");
@@ -415,6 +417,7 @@ void TestEmptyInstallUpdateAndRemove() {
     installed = store.Install(Request(second_bundle, "demo"));
     Check(installed.has_value() && installed->changed && fake.file_count == 1U && fake.files[0].data == second_bundle,
           "same AppId must atomically replace the old file");
+    Check(fake_nvs::data["runtime_nvs/demo"].contains("save"), "reinstall and update must retain private data");
 
     auto invalid_request = Request(first_bundle, "demo");
     invalid_request.expected_sha256[0] ^= 0xffU;
@@ -429,7 +432,12 @@ void TestEmptyInstallUpdateAndRemove() {
     installed = store.Install(Request(second_bundle, "demo"));
     Check(installed.has_value() && !installed->changed && fake.file_count == 1U,
           "old version survives failed replacement");
+    fake_nvs::fail_commit_partition = "runtime_nvs";
+    Check(!store.UninstallApp("demo") && fake.file_count == 1U, "failed KV commit keeps uninstall retryable");
+    fake_nvs::fail_commit_partition.clear();
+    fake_nvs::data["runtime_nvs/demo"]["save"] = {NVS_TYPE_BLOB, {1, 2, 3}};
     Check(store.UninstallApp("demo").has_value(), "installed App must uninstall");
+    Check(fake_nvs::data["runtime_nvs/demo"].empty(), "uninstall clears private data");
     Check(store.LoadCatalog(catalog).has_value() && catalog.count == 0U, "uninstalled App must disappear");
 }
 

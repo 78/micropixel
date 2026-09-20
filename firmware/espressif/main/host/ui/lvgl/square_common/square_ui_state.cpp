@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "host/ui/gesture_thresholds.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
+#include "host/ui/lvgl/square_common/launch_screen_ui.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/fonts/system_fonts.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
@@ -201,12 +202,12 @@ lv_obj_t* SquareSystemUiState::PrepareSystemPageRootLocked() {
     ResetHallLocked();
     lv_obj_clean(page_root);
     lv_obj_set_style_bg_color(page_root, lv_color_hex(theme::kMenuBackground), 0);
-    DropLaunchImageCacheLocked(launch_image_descriptor);
+    DropLaunchBitmapLocked();
     return page_root;
 }
 
 void SquareSystemUiState::DeleteRootLocked() {
-    DropLaunchImageCacheLocked(launch_image_descriptor);
+    DropLaunchBitmapLocked();
     if (root != nullptr) {
         ResetHallLocked();
         lv_obj_delete(root);
@@ -215,7 +216,10 @@ void SquareSystemUiState::DeleteRootLocked() {
     hall_scene_ui.ResetLocked();
 }
 
-void SquareSystemUiState::DropLaunchBitmapLocked() { DropLaunchImageCacheLocked(launch_image_descriptor); }
+void SquareSystemUiState::DropLaunchBitmapLocked() {
+    launch_screen_visible_ = false;
+    DropLaunchImageCacheLocked(launch_image_descriptor);
+}
 
 void SquareSystemUiState::ResetHallPresentationLocked() { ResetHallLocked(); }
 
@@ -291,59 +295,65 @@ int32_t SquareSystemUiState::ShowLaunchBitmap(const device::BitmapView& bitmap) 
         }
         lv_draw_buf_flush_cache(&draw_buffer, nullptr);
     }
+    return ShowLaunchScreen(&bitmap, host_ui::kMaxHallApps);
+}
+
+int32_t SquareSystemUiState::ShowLaunchPlaceholder(uint32_t app_index) {
+    if (display == nullptr || root == nullptr || app_index >= host_ui::kMaxHallApps) {
+        return MICROPIXEL_STATUS_INVALID_ARGUMENT;
+    }
+    return ShowLaunchScreen(nullptr, app_index);
+}
+
+int32_t SquareSystemUiState::ShowLaunchScreen(const device::BitmapView* bitmap, uint32_t app_index) {
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;
     }
     if (before_launch_presentation_locked_ != nullptr) {
         before_launch_presentation_locked_(before_launch_presentation_context_);
     }
-    DropLaunchImageCacheLocked(launch_image_descriptor);
+    DropLaunchBitmapLocked();
     ResetHallLocked();
     lv_obj_clean(root);
     const uint32_t background =
-        profile.derive_launch_background && bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
-            ? LaunchBackgroundRgb888(bitmap)
+        bitmap != nullptr && profile.derive_launch_background && bitmap->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGR888
+            ? LaunchBackgroundRgb888(*bitmap)
             : theme::kLoadingBackground;
     lv_obj_set_style_bg_color(root, lv_color_hex(background), 0);
-    launch_image_descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
-    launch_image_descriptor.header.cf =
-        bitmap.pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888 ? LV_COLOR_FORMAT_ARGB8888 : LV_COLOR_FORMAT_RGB888;
-    launch_image_descriptor.header.w = bitmap.width;
-    launch_image_descriptor.header.h = bitmap.height;
-    launch_image_descriptor.header.stride = bitmap.stride;
-    launch_image_descriptor.data_size = bitmap.size;
-    launch_image_descriptor.data = bitmap.data;
-    lv_obj_t* image = lv_image_create(root);
-    lv_image_set_src(image, &launch_image_descriptor);
-    if (profile.scale_oversized_launch_bitmap) {
-        // Keep the launch art clear of the screen edges and the loading label.
-        // Use one uniform scale so non-square launch assets retain their aspect
-        // ratio, and never enlarge a smaller source bitmap.
-        constexpr uint32_t kLaunchAreaNumerator = 3U;
-        constexpr uint32_t kLaunchAreaDenominator = 4U;
-        const uint32_t maximum_width = profile.square.width * kLaunchAreaNumerator / kLaunchAreaDenominator;
-        const uint32_t maximum_height = profile.square.height * kLaunchAreaNumerator / kLaunchAreaDenominator;
-        const uint32_t width_scale = static_cast<uint32_t>(static_cast<uint64_t>(256U) * maximum_width / bitmap.width);
-        const uint32_t height_scale =
-            static_cast<uint32_t>(static_cast<uint64_t>(256U) * maximum_height / bitmap.height);
-        const uint32_t scale = std::min<uint32_t>({256U, width_scale, height_scale});
-        if (scale < 256U) {
-            lv_image_set_scale(image, static_cast<uint16_t>(scale));
-        }
+    if (bitmap != nullptr) {
+        launch_image_descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+        launch_image_descriptor.header.cf = bitmap->pixel_format == MICROPIXEL_PIXEL_FORMAT_BGRA8888
+                                                ? LV_COLOR_FORMAT_ARGB8888
+                                                : LV_COLOR_FORMAT_RGB888;
+        launch_image_descriptor.header.w = bitmap->width;
+        launch_image_descriptor.header.h = bitmap->height;
+        launch_image_descriptor.header.stride = bitmap->stride;
+        launch_image_descriptor.data_size = bitmap->size;
+        launch_image_descriptor.data = bitmap->data;
     }
-    lv_obj_center(image);
-    lv_obj_t* label = lv_label_create(root);
-    lv_label_set_text(label, "Loading...");
-    lv_obj_set_style_text_color(label, lv_color_hex(theme::kLoadingText), 0);
-    lv_obj_set_style_text_font(label, platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge), 0);
-    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -profile.launch_label_bottom_offset);
+    const HallCardPresentation app =
+        app_index < host_ui::kMaxHallApps
+            ? HallCardPresentation{.app_id = hall_app_presentations[app_index].app_id.data(),
+                                   .display_name = hall_app_presentations[app_index].display_name.data()}
+            : HallCardPresentation{};
+    DrawLaunchScreen(root,
+                     {.width = profile.square.width,
+                      .height = profile.square.height,
+                      .label_bottom_offset = profile.launch_label_bottom_offset,
+                      .scale_oversized_bitmap = profile.scale_oversized_launch_bitmap},
+                     bitmap != nullptr ? &launch_image_descriptor : nullptr, profile.hall_card, app, app_index);
+    launch_screen_visible_ = true;
     platform::lvgl::RequestDisplayRefresh(display);
     esp_lv_adapter_unlock();
     return MICROPIXEL_STATUS_OK;
 }
 
 bool SquareSystemUiState::DismissLaunchBitmap() {
-    if (display == nullptr || launch_image_descriptor.data == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+    if (display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return false;
+    }
+    if (!launch_screen_visible_) {
+        esp_lv_adapter_unlock();
         return false;
     }
     DeleteRootLocked();

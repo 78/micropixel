@@ -41,3 +41,7 @@ CMakeUserPresets.json
 
 # Local Maze Evil art sources; the SDK example ships prepared assets.
 /guest/apps/maze-evil/assets/source/
+
+# Jump Jump ships compressed runtime assets; keep original art and store screenshots local.
+/guest/apps/jump-jump/assets/source/cover-v1.png
+/guest/apps/jump-jump/store/*.jpg

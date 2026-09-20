@@ -640,6 +640,10 @@ void SystemDetailUi::DrawAppManagementUninstallConfirmationLocked() {
         lv_obj_set_width(detail, LV_PCT(100));
         lv_label_set_long_mode(detail, LV_LABEL_LONG_WRAP);
     }
+    lv_obj_t* data_notice = Label(sheet, UiText(host_strings::Id::kUiAppSavedDataWillAlsoBeDeleted),
+                                  platform::lvgl::SystemFontRole::kMedium, theme::kSecondaryText);
+    lv_obj_set_width(data_notice, LV_PCT(100));
+    lv_label_set_long_mode(data_notice, LV_LABEL_LONG_WRAP);
     lv_obj_t* uninstall =
         Button(layout_, sheet, failed ? UiText(host_strings::Id::kUiTryAgain) : UiText(host_strings::Id::kUiUninstall),
                theme::kDanger);
