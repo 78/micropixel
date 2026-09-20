@@ -28,11 +28,13 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 | 可复现随机数（种子、回放、测试） | `XorShift32` | `random.hpp` |
 | 硬件随机数 | `Random::U32/Below` | `random.hpp` |
 | 固定容量的粒子/轨迹/弹字池 | `CyclicPool<T, N>` | `cyclic_pool.hpp` |
-| 定长字符串与数字格式化 | `FixedString<N>` | `fixed_string.hpp` |
+| 定长字符串、整数与小数格式化 | `FixedString<N>`、`AppendFixed` | `fixed_string.hpp` |
+| 矩形相交与合并（脏区） | `Rect::intersects/united/intersection` | `geometry.hpp` |
 | 定时器与帧节拍 | `Timers::After/Every`、`TimerEvent::delta()` | `timer.hpp` |
-| 加速度计、陀螺仪、磁力计 | `Sensors::Open<Acceleration>` | `sensors.hpp`、`sensor_types.hpp` |
-| 持久化分数与设置 | `KVStore::GetU32/SetU32/GetBytes` | `storage.hpp` |
-| 启动参数 | `LaunchArguments::FindValue` | `launch_arguments.hpp` |
+| 加速度计、陀螺仪、磁力计 | `Sensors::OpenFirst<Acceleration>(devices, interval)` | `sensors.hpp`、`sensor_types.hpp` |
+| 倾斜操控：校准、低通、死区 | `TiltFilter` | `tilt_filter.hpp` |
+| 持久化分数与设置 | `KVStore::GetU32Or/SetU32/GetBytes` | `storage.hpp` |
+| 启动参数开关与数值 | `LaunchArguments::HasFlag/GetUnsigned/FindValue` | `launch_arguments.hpp` |
 | 多语言字符串 | `Localization::CurrentLocale` + 生成的字符串表 | `localization.hpp` |
 | 振动、GPIO、电源、设备发现 | `Haptics`、`Gpio`、`PowerInfo`、`Devices` | `haptics.hpp`、`gpio.hpp`、`power_info.hpp`、`devices.hpp` |
 
@@ -439,6 +441,11 @@ Host 拒绝或因槽位不足丢弃的命令，应用通常只在首次非零时
 `math.hpp` 不依赖 libm：`Sin`、`Cos`、`Atan`、`Atan2`、`WrapAngle`、`ApproachAngle`、`Sqrt`、`Floor`、
 `Clamp`、`Lerp`、`SmoothStep`、`ApplyDeadzone`。`XorShift32` 由种子完全确定，用于关卡生成、回放与测试；
 `Random` 仍是硬件熵源。`CyclicPool<T, N>` 按顺序发放槽位，超出容量时覆盖最旧的一个，适合粒子、轨迹和弹字。
+
+`TiltFilter` 把加速度计样本变成 -1..1 的屏幕空间倾斜量：中性姿态校准、指数低通、死区与轴向反转可配；
+传感器用 `app.sensors().OpenFirst<Acceleration>(app.devices(), 10_ms)` 打开（采样间隔自动夹到传感器范围内），
+每次读到新样本调 `Sample(value, timestamp)`。`FixedString::AppendFixed`、`LaunchArguments::HasFlag/GetUnsigned`、
+`KVStore::GetU32Or` 与 `Rect::intersects/united` 覆盖了各 app 曾经手写的零碎工具。
 
 ## 设备发现、传感器与 GPIO
 

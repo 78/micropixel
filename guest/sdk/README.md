@@ -51,11 +51,13 @@ already covers the need; apps must not re-implement these locally.
 | Reproducible random numbers (seeds, replays, tests) | `XorShift32` | `random.hpp` |
 | Hardware random numbers | `Random::U32/Below` | `random.hpp` |
 | Fixed-capacity particle/trail/popup pools | `CyclicPool<T, N>` | `cyclic_pool.hpp` |
-| Bounded strings and number formatting | `FixedString<N>` | `fixed_string.hpp` |
+| Bounded strings, integers and decimals | `FixedString<N>`, `AppendFixed` | `fixed_string.hpp` |
+| Rectangle overlap and union (dirty regions) | `Rect::intersects/united/intersection` | `geometry.hpp` |
 | Timers and frame ticks | `Timers::After/Every`, `TimerEvent::delta()` | `timer.hpp` |
-| Accelerometer, gyroscope, magnetometer | `Sensors::Open<Acceleration>` | `sensors.hpp`, `sensor_types.hpp` |
-| Persistent scores and settings | `KVStore::GetU32/SetU32/GetBytes` | `storage.hpp` |
-| Launch flags | `LaunchArguments::FindValue` | `launch_arguments.hpp` |
+| Accelerometer, gyroscope, magnetometer | `Sensors::OpenFirst<Acceleration>(devices, interval)` | `sensors.hpp`, `sensor_types.hpp` |
+| Tilt-to-steer: calibration, low-pass, deadzone | `TiltFilter` | `tilt_filter.hpp` |
+| Persistent scores and settings | `KVStore::GetU32Or/SetU32/GetBytes` | `storage.hpp` |
+| Launch flags and numeric options | `LaunchArguments::HasFlag/GetUnsigned/FindValue` | `launch_arguments.hpp` |
 | Locale-aware strings | `Localization::CurrentLocale` + generated string tables | `localization.hpp` |
 | Haptics, GPIO, power, device discovery | `Haptics`, `Gpio`, `PowerInfo`, `Devices` | `haptics.hpp`, `gpio.hpp`, `power_info.hpp`, `devices.hpp` |
 
@@ -64,6 +66,11 @@ already covers the need; apps must not re-implement these locally.
 `math.hpp` is freestanding: `Sin`, `Cos`, `Atan`, `Atan2`, `WrapAngle`, `ApproachAngle`, `Sqrt`, `Floor`,
 `Clamp`, `Lerp`, `SmoothStep`, `ApplyDeadzone`. `XorShift32` replays identically from a seed; `Random`
 stays the source of entropy. `CyclicPool<T, N>` hands out slots in order and overwrites the oldest one.
+
+`TiltFilter` turns accelerometer samples into a -1..1 screen-space tilt (neutral calibration, exponential
+low-pass, deadzone, axis inversion); open the sensor with `app.sensors().OpenFirst<Acceleration>(app.devices(), 10_ms)`
+and feed `Sample(value, timestamp)` per reading. `FixedString::AppendFixed`, `LaunchArguments::HasFlag/GetUnsigned`,
+`KVStore::GetU32Or` and `Rect::intersects/united` cover the small utilities apps used to hand-write.
 
 `ToneSequencer<N>` plays the `ToneSpec` arrays the build generates from `audio/sfx.json`:
 

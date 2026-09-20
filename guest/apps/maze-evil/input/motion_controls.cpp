@@ -1,6 +1,5 @@
 #include "apps/maze-evil/input/motion_controls.hpp"
 
-#include "sdk/devices.hpp"
 #include "sdk/math.hpp"
 
 namespace maze_break::input {
@@ -20,39 +19,20 @@ float ApplyDeadzone(float value) { return math::ApplyDeadzone(value, kDeadzone);
 // Softer response near the centre for fine aiming, full rate at the edge.
 float Expo(float v) { return 0.45F * v + 0.55F * v * v * v; }
 
-template <typename Reading>
-bool OpenFirst(micropixel::Application& app, micropixel::SensorKind kind, micropixel::Sensor<Reading>& out) {
-    auto listed = app.devices().List(micropixel::DeviceKind::kSensor);
-    if (!listed.has_value()) {
-        return false;
-    }
-    for (micropixel::DeviceId device : listed.value()) {
-        auto info = app.sensors().GetInfo(device);
-        if (!info.has_value() || info->kind != kind) {
-            continue;
-        }
-        auto opened = app.sensors().Open<Reading>(device);
-        if (!opened.has_value()) {
-            continue;
-        }
-        out = static_cast<micropixel::Sensor<Reading>&&>(opened.value());
-        if (!out.SetSampleInterval(micropixel::Duration::Microseconds(kSampleIntervalUs)).has_value()) {
-            out.Reset();
-            continue;
-        }
-        return true;
-    }
-    return false;
-}
-
 }  // namespace
 
 bool MotionControls::Initialize(micropixel::Application& app) {
-    if (!OpenFirst(app, micropixel::SensorKind::kAcceleration, accelerometer_)) {
+    const micropixel::Duration interval = micropixel::Duration::Microseconds(kSampleIntervalUs);
+    auto accelerometer = app.sensors().OpenFirst<micropixel::Acceleration>(app.devices(), interval);
+    if (!accelerometer.has_value()) {
         return false;
     }
+    accelerometer_ = static_cast<micropixel::Accelerometer&&>(accelerometer.value());
     // The gyroscope is optional: without it aiming falls back to roll only.
-    (void)OpenFirst(app, micropixel::SensorKind::kAngularVelocity, gyroscope_);
+    auto gyroscope = app.sensors().OpenFirst<micropixel::AngularVelocity>(app.devices(), interval);
+    if (gyroscope.has_value()) {
+        gyroscope_ = static_cast<micropixel::Gyroscope&&>(gyroscope.value());
+    }
     Recalibrate();
     return true;
 }

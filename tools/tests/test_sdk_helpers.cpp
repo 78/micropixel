@@ -5,11 +5,17 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string_view>
 #include <vector>
 
 #include "sdk/cyclic_pool.hpp"
+#include "sdk/fixed_string.hpp"
+#include "sdk/geometry.hpp"
+#include "sdk/launch_arguments.hpp"
 #include "sdk/math.hpp"
 #include "sdk/random.hpp"
+#include "sdk/storage.hpp"
+#include "sdk/tilt_filter.hpp"
 #include "sdk/tone_sequencer.hpp"
 
 namespace micropixel {
@@ -22,10 +28,46 @@ uint32_t g_stop_all_calls = 0U;
 bool g_reject_commands = false;
 }  // namespace
 
+namespace {
+std::vector<const char*> g_arguments;
+uint32_t g_stored_best = 0U;
+bool g_store_has_best = false;
+}  // namespace
+
 class Application final {
    public:
     static constexpr Audio MakeAudio() { return Audio{Audio::CapabilityToken{}}; }
+    static constexpr LaunchArguments MakeArguments() { return LaunchArguments{LaunchArguments::CapabilityToken{}}; }
+    static constexpr KVStore MakeStore() { return KVStore{KVStore::CapabilityToken{}}; }
 };
+
+uint32_t LaunchArguments::count() const { return static_cast<uint32_t>(g_arguments.size()); }
+const char* LaunchArguments::Get(uint32_t index) const {
+    return index < g_arguments.size() ? g_arguments[index] : nullptr;
+}
+const char* LaunchArguments::FindValue(const char* name) const {
+    // Mirrors the Runtime: "--name value" or "--name=value".
+    const std::string_view wanted{name};
+    for (uint32_t index = 0U; index < count(); ++index) {
+        const std::string_view argument{g_arguments[index]};
+        if (argument == wanted) {
+            return index + 1U < count() ? g_arguments[index + 1U] : nullptr;
+        }
+        if (argument.size() > wanted.size() && argument.substr(0, wanted.size()) == wanted &&
+            argument[wanted.size()] == '=') {
+            return g_arguments[index] + wanted.size() + 1U;
+        }
+    }
+    return nullptr;
+}
+
+Result<uint32_t> KVStore::GetU32(const char*) const {
+    if (!g_store_has_best) {
+        return unexpected(Error{ErrorCode::kNotFound});
+    }
+    return g_stored_best;
+}
+Result<bool> KVStore::GetBool(const char*) const { return unexpected(Error{ErrorCode::kNotFound}); }
 
 Result<void> Audio::Play(const Tone& tone) const {
     if (g_reject_commands) {
@@ -211,6 +253,122 @@ void ToneSequencerSchedulesProfiles() {
           "set_enabled turns the sequencer on");
 }
 
+void FixedStringAppendsDecimals() {
+    micropixel::FixedString<32> line;
+    Check(line.AppendFixed(-1.2345F, 2) && std::string_view{line.c_str()} == "-1.23", "two decimals, negative");
+    line.Clear();
+    Check(line.AppendFixed(9.8F) && std::string_view{line.c_str()} == "9.80", "default two decimals pad zeros");
+    line.Clear();
+    Check(line.AppendFixed(0.004F, 2) && std::string_view{line.c_str()} == "0.00", "tiny values do not print -0");
+    line.Clear();
+    Check(line.AppendFixed(-0.004F, 2) && std::string_view{line.c_str()} == "0.00", "negative tiny values neither");
+    line.Clear();
+    Check(line.AppendFixed(3.14159F, 4) && std::string_view{line.c_str()} == "3.1416", "four decimals round");
+    line.Clear();
+    Check(line.AppendFixed(2.5F, 0) && std::string_view{line.c_str()} == "2", "zero decimals is an integer");
+    line.Clear();
+    Check(line.AppendFixed(0.05F, 1) && std::string_view{line.c_str()} == "0.1", "0.05 rounds up to one decimal");
+    micropixel::FixedString<4> tight;
+    Check(!tight.AppendFixed(12.5F, 1) && tight.truncated(), "overflow reports truncation");
+}
+
+void LaunchArgumentFlagsAndNumbers() {
+    micropixel::g_arguments = {"--benchmark", "--upscale=2",      "--frames",   "240",
+                               "--seed=99x",  "--big=5000000000", "--buffers=3"};
+    const micropixel::LaunchArguments args = micropixel::Application::MakeArguments();
+    Check(args.HasFlag("--benchmark") && args.HasFlag("--upscale") && args.HasFlag("--frames"), "flags present");
+    Check(args.HasFlag("--buffers=3") && !args.HasFlag("--buffers=2"), "exact match with value works");
+    Check(!args.HasFlag("--bench") && !args.HasFlag("--perf"), "prefixes and absent flags are false");
+    Check(args.GetUnsigned("--upscale", 1U) == 2U, "--name=N");
+    Check(args.GetUnsigned("--frames", 1U) == 240U, "--name N");
+    Check(args.GetUnsigned("--seed", 7U) == 7U, "non-digits fall back");
+    Check(args.GetUnsigned("--big", 7U) == 7U, "overflow falls back");
+    Check(args.GetUnsigned("--missing", 7U) == 7U, "absent falls back");
+    micropixel::g_arguments = {"--frames"};
+    Check(args.GetUnsigned("--frames", 3U) == 3U, "a dangling option falls back");
+    micropixel::g_arguments.clear();
+}
+
+void StorageFallbacks() {
+    const micropixel::KVStore store = micropixel::Application::MakeStore();
+    micropixel::g_store_has_best = false;
+    Check(store.GetU32Or("best", 42U) == 42U, "missing key yields the fallback");
+    micropixel::g_store_has_best = true;
+    micropixel::g_stored_best = 1234U;
+    Check(store.GetU32Or("best", 42U) == 1234U, "present key yields the value");
+    Check(store.GetBoolOr("flag", true), "missing bool yields the fallback");
+}
+
+void RectUnionAndIntersection() {
+    using micropixel::Rect;
+    const Rect a{0, 0, 10, 10};
+    const Rect b{5, 5, 10, 10};
+    const Rect apart{20, 20, 3, 3};
+    Check(a.intersects(b) && b.intersects(a), "overlapping rects intersect");
+    Check(!a.intersects(apart) && !a.intersects(Rect{10, 0, 5, 5}), "touching edges do not intersect");
+    Check(!a.intersects(Rect{2, 2, 0, 5}), "empty rects never intersect");
+    const Rect u = a.united(b);
+    Check(u.x == 0 && u.y == 0 && u.width == 15 && u.height == 15, "union spans both");
+    const Rect e = a.united(Rect{});
+    Check(e.x == a.x && e.width == a.width && e.height == a.height, "union with empty is identity");
+    const Rect f = Rect{}.united(apart);
+    Check(f.x == 20 && f.width == 3, "empty united with a rect is that rect");
+}
+
+void TiltFilterCalibratesAndFilters() {
+    using micropixel::Acceleration;
+    using micropixel::Duration;
+    using micropixel::TimePoint;
+    micropixel::TiltFilterConfig config{};
+    config.calibration_samples = 4U;
+    config.filter_alpha = 1.0F;  // no lag: the tilt follows each sample exactly
+    config.full_scale = 2.0F;
+    config.deadzone = 0.1F;
+    micropixel::TiltFilter filter{config};
+    Check(!filter.calibrated() && filter.x() == 0.0F, "starts uncalibrated and centred");
+    uint64_t at_us = 1000U;
+    const auto feed = [&](float x, float y, float z) {
+        return filter.Sample(Acceleration{{x, y, z}}, TimePoint{} + Duration::Microseconds(at_us += 10'000U));
+    };
+    // Resting slightly off-level: the neutral pose is the average of the calibration samples.
+    Check(feed(0.2F, -0.1F, 9.8F), "first sample accepted");
+    Check(Near(filter.calibration_progress(), 0.25F, 1e-6F), "progress advances");
+    feed(0.2F, -0.1F, 9.8F);
+    feed(0.2F, -0.1F, 9.8F);
+    Check(!filter.calibrated(), "three of four samples");
+    feed(0.2F, -0.1F, 9.8F);
+    Check(filter.calibrated() && filter.calibration_progress() == 1.0F, "four samples calibrate");
+    Check(Near(filter.neutral().x, 0.2F, 1e-6F) && Near(filter.neutral().y, -0.1F, 1e-6F), "neutral is the mean");
+    Check(filter.x() == 0.0F && filter.y() == 0.0F, "at rest reads zero");
+    // Repeated timestamps are ignored.
+    Check(!filter.Sample(Acceleration{{5.0F, 5.0F, 5.0F}}, TimePoint{} + Duration::Microseconds(at_us)),
+          "stale sample rejected");
+    Check(filter.x() == 0.0F, "stale sample changes nothing");
+    // Tilt right on the board: sensor X drops (inverted axis), full scale 2 m/s^2.
+    feed(0.2F - 1.0F, -0.1F, 9.8F);
+    Check(Near(filter.x(), (0.5F - 0.1F) / 0.9F, 1e-5F) && filter.y() == 0.0F, "half travel minus deadzone");
+    feed(0.2F - 3.0F, -0.1F + 3.0F, 9.8F);
+    Check(filter.x() == 1.0F && filter.y() == 1.0F, "clamped to full deflection; +Y is screen down");
+    feed(0.2F + 0.15F, -0.1F, 9.8F);
+    Check(filter.x() == 0.0F, "inside the deadzone reads zero");
+    filter.Recalibrate();
+    Check(!filter.calibrated() && filter.x() == 0.0F, "Recalibrate forgets the pose");
+    // Low-pass: with alpha 0.5 a step reaches half way on the first sample.
+    micropixel::TiltFilterConfig slow = config;
+    slow.filter_alpha = 0.5F;
+    slow.deadzone = 0.0F;
+    slow.invert_x = false;
+    micropixel::TiltFilter smooth{slow};
+    for (int i = 0; i < 4; ++i)
+        feed(0.0F, 0.0F, 9.8F),
+            smooth.Sample(Acceleration{{0.0F, 0.0F, 9.8F}}, TimePoint{} + Duration::Microseconds(at_us));
+    Check(smooth.calibrated(), "second filter calibrated");
+    smooth.Sample(Acceleration{{2.0F, 0.0F, 9.8F}}, TimePoint{} + Duration::Microseconds(at_us += 10'000U));
+    Check(Near(smooth.x(), 0.5F, 1e-5F), "alpha 0.5 reaches half of the step");
+    smooth.Sample(Acceleration{{2.0F, 0.0F, 9.8F}}, TimePoint{} + Duration::Microseconds(at_us += 10'000U));
+    Check(Near(smooth.x(), 0.75F, 1e-5F), "and three quarters on the next");
+}
+
 }  // namespace
 
 int main() {
@@ -219,6 +377,11 @@ int main() {
     XorShiftIsDeterministic();
     CyclicPoolWrapsToTheOldestSlot();
     ToneSequencerSchedulesProfiles();
+    FixedStringAppendsDecimals();
+    LaunchArgumentFlagsAndNumbers();
+    StorageFallbacks();
+    RectUnionAndIntersection();
+    TiltFilterCalibratesAndFilters();
     std::cout << "sdk helper tests passed\n";
     return 0;
 }

@@ -64,16 +64,6 @@ bool SameString(const char* a, const char* b) {
     return *a == *b;
 }
 
-uint32_t ParseUint(const char* text, uint32_t fallback) {
-    if (text == nullptr || *text == '\0') return fallback;
-    uint32_t value = 0U;
-    for (; *text != '\0'; ++text) {
-        if (*text < '0' || *text > '9') return fallback;
-        value = value * 10U + static_cast<uint32_t>(*text - '0');
-    }
-    return value;
-}
-
 struct Options final {
     uint32_t upscale{1U};
     uint32_t frames_per_phase{240U};
@@ -82,9 +72,9 @@ struct Options final {
 
 Options ParseOptions(const micropixel::LaunchArguments& args) {
     Options options{};
-    options.upscale = ParseUint(args.FindValue("--upscale"), 1U);
+    options.upscale = args.GetUnsigned("--upscale", 1U);
     if (options.upscale < 1U || options.upscale > 4U) options.upscale = 1U;
-    options.frames_per_phase = ParseUint(args.FindValue("--frames"), 240U);
+    options.frames_per_phase = args.GetUnsigned("--frames", 240U);
     if (options.frames_per_phase < kStatsWindow) options.frames_per_phase = kStatsWindow;
     const char* phase = args.FindValue("--phase");
     if (phase != nullptr) {

@@ -42,23 +42,6 @@ void AppendTime(Line& line, uint32_t ms) {
     line.AppendUint(seconds);
 }
 
-bool HasLaunchFlag(const micropixel::LaunchArguments& args, const char* name) {
-    for (uint32_t index = 0U; index < args.count(); ++index) {
-        const char* arg = args.Get(index);
-        if (arg == nullptr) {
-            continue;
-        }
-        uint32_t k = 0U;
-        while (name[k] != '\0' && arg[k] == name[k]) {
-            ++k;
-        }
-        if (name[k] == '\0' && (arg[k] == '\0' || arg[k] == '=')) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // Panels wider than 480 px render at half resolution: the Host raster kernels
 // then write a quarter of the pixels and the PPA enlarges the frame.
 constexpr uint32_t kUpscaleThresholdWidth = 480U;
@@ -94,12 +77,12 @@ struct Options {
 
 Options ParseOptions(const micropixel::LaunchArguments& args) {
     Options options{};
-    options.benchmark = HasLaunchFlag(args, "--benchmark");
-    options.bgm = !HasLaunchFlag(args, "--no-bgm");
+    options.benchmark = args.HasFlag("--benchmark");
+    options.bgm = !args.HasFlag("--no-bgm");
     // Benchmarks measure graphics; keep the room quiet unless --sound is given.
-    options.mute = HasLaunchFlag(args, "--mute") || (options.benchmark && !HasLaunchFlag(args, "--sound"));
-    options.motion = HasLaunchFlag(args, "--motion") && !HasLaunchFlag(args, "--no-motion");
-    options.perf = options.benchmark || HasLaunchFlag(args, "--perf");
+    options.mute = args.HasFlag("--mute") || (options.benchmark && !args.HasFlag("--sound"));
+    options.motion = args.HasFlag("--motion") && !args.HasFlag("--no-motion");
+    options.perf = options.benchmark || args.HasFlag("--perf");
     return options;
 }
 

@@ -26,6 +26,7 @@
 #include "sdk/sphere_view.hpp"
 #include "sdk/storage.hpp"
 #include "sdk/symbols.hpp"
+#include "sdk/tilt_filter.hpp"
 #include "sdk/tone_sequencer.hpp"
 #include "sdk/ui/button.hpp"
 #include "sdk/ui/flex_container.hpp"

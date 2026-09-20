@@ -49,6 +49,22 @@ struct Rect final {
         return Rect{x + amount, y + amount, width - amount * 2, height - amount * 2};
     }
 
+    [[nodiscard]] constexpr bool intersects(Rect other) const {
+        return !empty() && !other.empty() && x < other.x + other.width && other.x < x + width &&
+               y < other.y + other.height && other.y < y + height;
+    }
+
+    // Smallest rectangle containing both; an empty side contributes nothing.
+    [[nodiscard]] constexpr Rect united(Rect other) const {
+        if (empty()) return other;
+        if (other.empty()) return *this;
+        const int32_t left = x < other.x ? x : other.x;
+        const int32_t top = y < other.y ? y : other.y;
+        const int32_t right = x + width > other.x + other.width ? x + width : other.x + other.width;
+        const int32_t bottom = y + height > other.y + other.height ? y + height : other.y + other.height;
+        return {left, top, right - left, bottom - top};
+    }
+
     [[nodiscard]] constexpr Rect intersection(Rect other) const {
         const int32_t left = x > other.x ? x : other.x;
         const int32_t top = y > other.y ? y : other.y;

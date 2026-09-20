@@ -42,34 +42,11 @@ struct Options final {
     uint32_t upscale{};
 };
 
-bool HasFlag(const micropixel::LaunchArguments& args, const char* name) {
-    for (uint32_t index = 0U; index < args.count(); ++index) {
-        const char* arg = args.Get(index);
-        const char* expected = name;
-        while (*arg != '\0' && *arg == *expected) {
-            ++arg;
-            ++expected;
-        }
-        if (*arg == '\0' && *expected == '\0') return true;
-    }
-    return false;
-}
-
-uint32_t ParseUint(const char* text, uint32_t fallback) {
-    if (text == nullptr || *text == '\0') return fallback;
-    uint32_t value = 0U;
-    for (; *text != '\0'; ++text) {
-        if (*text < '0' || *text > '9') return fallback;
-        value = value * 10U + static_cast<uint32_t>(*text - '0');
-    }
-    return value;
-}
-
 Options ParseOptions(const micropixel::LaunchArguments& args) {
     Options options{};
-    options.benchmark = HasFlag(args, "--benchmark");
-    options.perf = options.benchmark || HasFlag(args, "--perf");
-    options.upscale = ParseUint(args.FindValue("--upscale"), 0U);
+    options.benchmark = args.HasFlag("--benchmark");
+    options.perf = options.benchmark || args.HasFlag("--perf");
+    options.upscale = args.GetUnsigned("--upscale", 0U);
     if (options.upscale > 4U) options.upscale = 0U;
     return options;
 }

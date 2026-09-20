@@ -261,21 +261,13 @@ class Demo final {
 
     // ---- sensors ----------------------------------------------------------
     void OpenSensors() {
-        auto devices = app_.devices().List(mp::DeviceKind::kSensor);
-        if (!devices) return;
-        for (auto id : *devices) {
-            auto info = app_.sensors().GetInfo(id);
-            if (!info) continue;
-            auto interval = mp::Duration::Milliseconds(5);
-            if (interval < info->minimum_interval) interval = info->minimum_interval;
-            if (interval > info->maximum_interval) interval = info->maximum_interval;
-            if (info->kind == mp::SensorKind::kAcceleration && !accelerometer_.valid()) {
-                auto sensor = app_.sensors().Open<mp::Acceleration>(id);
-                if (sensor && sensor->SetSampleInterval(interval)) accelerometer_ = std::move(*sensor);
-            } else if (info->kind == mp::SensorKind::kAngularVelocity && !gyroscope_.valid()) {
-                auto sensor = app_.sensors().Open<mp::AngularVelocity>(id);
-                if (sensor && sensor->SetSampleInterval(interval)) gyroscope_ = std::move(*sensor);
-            }
+        // The SDK clamps the interval to each sensor's supported range.
+        const auto interval = mp::Duration::Milliseconds(5);
+        if (auto sensor = app_.sensors().OpenFirst<mp::Acceleration>(app_.devices(), interval)) {
+            accelerometer_ = std::move(*sensor);
+        }
+        if (auto sensor = app_.sensors().OpenFirst<mp::AngularVelocity>(app_.devices(), interval)) {
+            gyroscope_ = std::move(*sensor);
         }
     }
     // Sensor axes follow the Tilt convention: screen right is -X, screen down
@@ -559,14 +551,8 @@ class Demo final {
         const int size = std::max(2, Round(radius * 2));
         return {Round(cx - static_cast<float>(size) * 0.5F), Round(cy - static_cast<float>(size) * 0.5F), size, size};
     }
-    static bool Intersects(mp::Rect a, mp::Rect b) {
-        return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-    }
-    static mp::Rect Union(mp::Rect a, mp::Rect b) {
-        const int x0 = std::min(a.x, b.x), y0 = std::min(a.y, b.y);
-        const int x1 = std::max(a.x + a.width, b.x + b.width), y1 = std::max(a.y + a.height, b.y + b.height);
-        return {x0, y0, x1 - x0, y1 - y0};
-    }
+    static bool Intersects(mp::Rect a, mp::Rect b) { return a.intersects(b); }
+    static mp::Rect Union(mp::Rect a, mp::Rect b) { return a.united(b); }
     void BuildFrame() {
         const float far_depth = ViewDepth(world_.extent.z);
         for (unsigned i = 0; i < world_.count; ++i) {

@@ -44,21 +44,6 @@ namespace {
     return "Unknown";
 }
 
-void AppendFixed2(Line& line, float value) {
-    const int32_t scaled = static_cast<int32_t>(value * 100.0F);
-    const uint32_t magnitude = static_cast<uint32_t>(scaled < 0 ? -scaled : scaled);
-    if (scaled < 0) {
-        line.Append("-");
-    }
-    line.AppendUint(magnitude / 100U);
-    line.Append(".");
-    const uint64_t fraction = magnitude % 100U;
-    if (fraction < 10U) {
-        line.Append("0");
-    }
-    line.AppendUint(fraction);
-}
-
 class DevicePage final {
    public:
     void Enter(DemoContext& context) {
@@ -498,25 +483,25 @@ class DevicePage final {
             Line axes;
             if (sensor_kind_ == micropixel::SensorKind::kAcceleration && has_acceleration_) {
                 axes.Append("m/s2  x ");
-                AppendFixed2(axes, acceleration_.meters_per_second_squared.x);
+                axes.AppendFixed(acceleration_.meters_per_second_squared.x);
                 axes.Append("  y ");
-                AppendFixed2(axes, acceleration_.meters_per_second_squared.y);
+                axes.AppendFixed(acceleration_.meters_per_second_squared.y);
                 axes.Append("  z ");
-                AppendFixed2(axes, acceleration_.meters_per_second_squared.z);
+                axes.AppendFixed(acceleration_.meters_per_second_squared.z);
             } else if (sensor_kind_ == micropixel::SensorKind::kAngularVelocity && has_angular_velocity_) {
                 axes.Append("rad/s  x ");
-                AppendFixed2(axes, angular_velocity_.radians_per_second.x);
+                axes.AppendFixed(angular_velocity_.radians_per_second.x);
                 axes.Append("  y ");
-                AppendFixed2(axes, angular_velocity_.radians_per_second.y);
+                axes.AppendFixed(angular_velocity_.radians_per_second.y);
                 axes.Append("  z ");
-                AppendFixed2(axes, angular_velocity_.radians_per_second.z);
+                axes.AppendFixed(angular_velocity_.radians_per_second.z);
             } else if (sensor_kind_ == micropixel::SensorKind::kMagneticField && has_magnetic_field_) {
                 axes.Append("uT  x ");
-                AppendFixed2(axes, magnetic_field_.microtesla.x);
+                axes.AppendFixed(magnetic_field_.microtesla.x);
                 axes.Append("  y ");
-                AppendFixed2(axes, magnetic_field_.microtesla.y);
+                axes.AppendFixed(magnetic_field_.microtesla.y);
                 axes.Append("  z ");
-                AppendFixed2(axes, magnetic_field_.microtesla.z);
+                axes.AppendFixed(magnetic_field_.microtesla.z);
             } else {
                 axes.Append("Waiting for the first cached sample...");
             }
