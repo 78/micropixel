@@ -318,15 +318,13 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     lv_obj_set_style_text_font(objects_.battery_label,
                                platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kLarge), 0);
     lv_obj_set_style_text_color(objects_.battery_label, lv_color_hex(theme::kPrimaryText), 0);
-    lv_obj_set_width(objects_.battery_label, status.battery_width);
-    lv_obj_set_style_text_align(objects_.battery_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(objects_.battery_label, LV_SIZE_CONTENT);
     objects_.battery_percent_label = lv_label_create(objects_.battery_container);
     lv_label_set_text(objects_.battery_percent_label, "");
     lv_obj_set_style_text_font(objects_.battery_percent_label,
                                platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium), 0);
     lv_obj_set_style_text_color(objects_.battery_percent_label, lv_color_hex(theme::kPrimaryText), 0);
-    lv_obj_set_width(objects_.battery_percent_label, status.battery_percent_width);
-    lv_obj_set_style_text_align(objects_.battery_percent_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_width(objects_.battery_percent_label, LV_SIZE_CONTENT);
     UpdateStatusBarLocked(model.status_bar);
     if (model.status == host_ui::HallStatus::kAppFailed) DrawFailureLocked(root, model);
 }

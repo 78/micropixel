@@ -1,0 +1,5 @@
+0.1.1 maintenance update
+
+Updates display scaling and resource atlas loading, and simplifies the device demonstration with shared SDK formatting helpers.
+
+Built for RISC-V and Xtensa with SDK 0.20.0. This release has no new hardware validation claim.

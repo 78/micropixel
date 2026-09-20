@@ -104,7 +104,7 @@ esp_err_t InitializeDisplay(board_detail::MosaicoBoardState& state) {
     }
     ESP_RETURN_ON_ERROR(state.display_pipeline.BindLvgl(state.display), board_detail::kTag,
                         "bind Mosaico display pipeline to LVGL failed");
-    ESP_RETURN_ON_ERROR(esp_lv_adapter_start(), board_detail::kTag, "start LVGL adapter failed");
+    // The worker must not flush LVGL's default light screen before the Host UI exists.
     return ESP_OK;
 }
 
@@ -222,6 +222,15 @@ class EspMosaicoBoard final : public Board, public device::Power {
         }
 
         esp_lv_adapter_unlock();
+
+        // Render the startup screen while the panel is still off and before the
+        // worker can race this first refresh. CO5300 DISPLAY_ON uses SPI tx_param,
+        // which drains queued pixel transfers before sending the command, so even
+        // the final asynchronous partial flush reaches GRAM before scanout starts.
+        ESP_RETURN_ON_ERROR(esp_lv_adapter_refresh_now(state_.display), board_detail::kTag,
+                            "render Mosaico startup frame failed");
+        ESP_RETURN_ON_ERROR(state_.display_pipeline.Resume(), board_detail::kTag, "show Mosaico startup frame failed");
+        ESP_RETURN_ON_ERROR(esp_lv_adapter_start(), board_detail::kTag, "start LVGL adapter failed");
 
         ESP_RETURN_ON_ERROR(sensors_.FinishInitialize(), board_detail::kTag, "finish Mosaico sensor discovery failed");
         ESP_RETURN_ON_ERROR(audio_output_.Configure(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,

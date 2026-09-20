@@ -1,0 +1,5 @@
+0.1.2 maintenance update
+
+Improves the settings panel on short landscape screens and declares 320x240 display support. Updates native display and touch coordinate mapping and sensor discovery.
+
+Built for RISC-V and Xtensa with SDK 0.20.0. This release has no new hardware validation claim.

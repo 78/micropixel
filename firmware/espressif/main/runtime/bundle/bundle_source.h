@@ -11,7 +11,7 @@ extern "C" {
 
 /*
  * A Bundle source is a read-only view of one immutable Bundle file. It hides
- * where the bytes live (BundleFS on NOR, a future NAND store, a LittleFS or
+ * where the bytes live (BundleFS on NOR or NAND, a LittleFS or
  * FAT directory) so the Bundle reader and everything above it only depend on
  * this contract.
  *
@@ -50,7 +50,9 @@ struct micropixel_bundle_mapping {
 typedef struct micropixel_bundle_source_ops {
     /* Logical file size in bytes. */
     bool (*size)(const micropixel_bundle_source_t* source, uint32_t* size_out);
-    /* Copies `size` bytes at `offset` into `destination`; the range must lie inside the file. */
+    /* Copies exactly `size` bytes at `offset`; the range must lie inside the file.
+     * A replaced/removed file must fail rather than return a different version.
+     * Failure may leave destination partially written; consumers must discard it. */
     bool (*read)(const micropixel_bundle_source_t* source, uint32_t offset, void* destination, uint32_t size);
     /* Optional zero-copy view of `[offset, offset + size)`. NULL when the storage cannot be mapped. */
     bool (*map)(const micropixel_bundle_source_t* source, uint32_t offset, uint32_t size,

@@ -5,16 +5,17 @@ Host Tone feedback; its App-specific `recordings` section defines the independen
 compressed tracks. The generic `micropixel package` pipeline checks the Tone
 profiles and generates `jump-jump_sfx_profiles.hpp` under `build/`.
 
-`land` is the reference effect at the repository's -14 dBFS short-window
-baseline. Takeoff adds no separate thump; center hits climb through eight
+`land` is the reference effect, with an elevated target for device audibility.
+Takeoff adds no separate thump; center hits climb through eight
 pitches, saturating at the last one and resetting after a broken streak. Shop
 rewards use a two-note door chime, cube rewards use three short mechanical
 clicks, drains play filtered water/bubbling noise, and failure uses a descending
 phrase. These are approximations, not the original recordings. There is no App-wide volume adjustment.
 
-Charge plays short triangle-wave notes from a low register into a quieter high
-register. The four charge profiles contain one ascending sequence; the hold
-profile repeats its final pitch. The 10 ms audio timer schedules the generated
+Charge plays short ascending triangle-wave notes with a shallow high-register
+taper so later notes remain audible when judging jump strength. The four charge
+profiles contain one sequence; the hold profile repeats its final pitch.
+The 10 ms audio timer schedules the generated
 profiles independently of drawing. A late event skips stale notes instead of
 bursting them together. Only two charge voices overlap.
 

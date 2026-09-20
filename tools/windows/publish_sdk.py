@@ -70,11 +70,11 @@ GitHub's automatically generated Source code archives contain repository sources
 
 ## What's new
 
-- Runtime-owned gamepads combine touch controls, keys and physical gamepad input. Input 1.1 adds analog-axis events; use companion firmware 0.9.3 for the new Host input support.
-- Shared SDK helpers cover game math, deterministic random numbers, fixed-capacity pools, tone sequencing, bounded text and launch arguments.
-- `Sensors::OpenFirst` discovers typed sensors and configures their sampling interval. `TiltFilter` provides calibration, smoothing and a deadzone for motion controls.
-- Surface canvas adoption and coordinate helpers keep raster drawing and input aligned with the display configuration. See the SDK capability catalog before adding app-local helpers.
-- Firmware 0.9.3 preinstalls Jump Jump and Gravity Balls in place of Tomb Explorer. Tomb Explorer remains available as SDK example source. Existing installed Bundles are preserved by Host-only updates.
+- Gamepad buttons support customization, and default control bounds now follow the logical canvas.
+- Gamepad glyph, rim and fill opacity are controlled independently, with refined defaults for overlay visibility.
+- Updated examples include refined Tomb Explorer controls and improved Jump Jump sound and charge cues.
+- Companion firmware 0.9.4 reports private KV usage, clears private data on explicit uninstall, and defaults to 16 KiB per AppId and 4 KiB per value. Updating an installed App preserves its data; earlier Hosts retain their configured quotas.
+- Firmware 0.9.4 also updates app launch feedback, image loading, storage handling and device volume behavior. Existing installed Bundles remain installed during Host-only updates.
 
 ## Installation and compatibility
 

@@ -34,8 +34,6 @@ struct HallStatusBarLayout final {
     int32_t time_width{};
     HallSceneSize cellular{};
     uint16_t wifi_scale{256U};
-    int32_t battery_width{};
-    int32_t battery_percent_width{};
 };
 
 struct HallSceneLayout final {

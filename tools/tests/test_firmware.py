@@ -108,6 +108,36 @@ common_max_task_name_len=32
                         self.assertNotIn("CONFIG_LV_MEM_SIZE_KILOBYTES=", config.read_text())
                         self.assertNotIn("CONFIG_LV_ASSERT_HANDLER_INCLUDE=", config.read_text())
 
+    def test_s31_retires_old_kv_defaults_but_keeps_custom_quotas(self) -> None:
+        script = (firmware.WORKSPACE_ROOT / "tools/s31.sh").read_text()
+        prepare = script.split("prepare_host_config() {", 1)[1].split("\nbuild_profile() {", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "build").mkdir()
+            config = root / "build/sdkconfig.release"
+            command = """set -euo pipefail
+host_build_dir="$1/build"
+sdkconfig_path="$host_build_dir/sdkconfig.release"
+sdkconfig_defaults="$1/sdkconfig.defaults"
+host_config_prepared=false
+common_max_task_name_len=32
+lv_mem_size_bytes=1572864
+""" + "prepare_host_config() {" + prepare + "\nprepare_host_config\n"
+            for total, value in ((2048, 512), (8192, 4096), (16384, 4096), (12288, 1024)):
+                with self.subTest(total=total, value=value):
+                    config.write_text(f"CONFIG_MICROPIXEL_KV_MAX_BYTES={total}\n"
+                                      f"CONFIG_MICROPIXEL_KV_MAX_VALUE_BYTES={value}\n")
+                    subprocess.run(["bash", "-c", command, "test", temporary], check=True,
+                                   env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+                    if total in (2048, 8192):
+                        self.assertNotIn("CONFIG_MICROPIXEL_KV_MAX_BYTES=", config.read_text())
+                    else:
+                        self.assertIn(f"CONFIG_MICROPIXEL_KV_MAX_BYTES={total}\n", config.read_text())
+                    if value == 512:
+                        self.assertNotIn("CONFIG_MICROPIXEL_KV_MAX_VALUE_BYTES=", config.read_text())
+                    else:
+                        self.assertIn(f"CONFIG_MICROPIXEL_KV_MAX_VALUE_BYTES={value}\n", config.read_text())
+
     def test_lvgl_capacity_matches_chip_family(self) -> None:
         for name, profile in self.profiles.items():
             with self.subTest(profile=name):

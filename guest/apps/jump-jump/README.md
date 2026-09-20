@@ -80,7 +80,8 @@ version, not a claim of exact original physics or sound reproduction.
 | `audio/sfx.json` | Sole source of tone and recorded-track parameters |
 | `audio/build_tracks.py`, `assets/*.ogg` | Reproducible synthesized drain and music-box source assets |
 | `assets/launch.jpg` | 720×720 launcher cover, referenced by `launch_asset` |
-| `assets/source/cover-v1.png`, `assets/source/cover-v1.prompt.txt` | Original cover artwork and image-generation prompt; not packaged |
+| `assets/source/cover-v1.prompt.txt` | Tracked image-generation prompt; original `cover-v1.png` stays local and is not required to build |
+| `store/*.md`, `store/summary.txt` | Store description and release notes; screenshots stay local |
 
 The target is 30 presented frames/s at native resolution. Each Host buffer is
 fully cleared once, then keeps its own bounded 32-band coverage map. Reuse clears only the previous content in that particular buffer

@@ -16,8 +16,9 @@ extern "C" {
  * An opened App Bundle. `payload` is a Host-owned PSRAM copy of the AOT
  * section handed to WAMR. `sections` is a Host-owned copy of the validated
  * TOC. `bundle_mapping` holds a whole-Bundle lease for the package lifetime.
- * When that mapping is unavailable, all sections use on-demand PSRAM copies
- * for this package lifetime; the whole Bundle is never copied into RAM.
+ * When that mapping is unavailable, addressable sections use on-demand PSRAM
+ * copies; sequential consumers may use BundleSectionReader instead. The whole
+ * Bundle is never copied into RAM.
  * Copies of this struct are shallow views; only the original passed to
  * `micropixel_close_aot_package` owns the payload, TOC and whole-Bundle lease.
  */
@@ -109,6 +110,11 @@ void micropixel_close_asset_mapping(micropixel_bundle_asset_mapping_t* mapping);
  */
 bool micropixel_open_aot_package(const micropixel_bundle_source_t* source, micropixel_aot_package_t* package_out);
 void micropixel_close_aot_package(micropixel_aot_package_t* package);
+/* Borrows validated TOC metadata without reading or verifying section payload.
+ * The package must outlive the returned pointer. Streaming consumers must verify
+ * the full section hash before publishing decoded output. */
+const micropixel_bundle_section_t* micropixel_bundle_find_asset(const micropixel_aot_package_t* package,
+                                                                uint32_t asset_id);
 bool micropixel_bundle_open_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
                                   micropixel_bundle_asset_mapping_t* mapping_out);
 bool micropixel_bundle_open_font(const micropixel_aot_package_t* package, uint32_t resource_id,

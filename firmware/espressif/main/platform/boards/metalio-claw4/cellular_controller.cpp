@@ -93,7 +93,7 @@ std::expected<void, device::CellularError> CellularController::Initialize() {
     }
     int32_t mode = 0;
     nvs_handle_t settings{};
-    esp_err_t status = nvs_open_from_partition("runtime_nvs", kNamespace, NVS_READONLY, &settings);
+    esp_err_t status = nvs_open_from_partition("nvs", kNamespace, NVS_READONLY, &settings);
     if (status == ESP_OK) {
         status = nvs_get_i32(settings, kModeKey, &mode);
         nvs_close(settings);
@@ -452,7 +452,7 @@ void CellularController::SwitchMode(void* context) {
     // Keep the old key for upgrades, but it now controls only the cellular radio.
     const auto save = [](bool value) {
         nvs_handle_t settings{};
-        esp_err_t status = nvs_open_from_partition("runtime_nvs", kNamespace, NVS_READWRITE, &settings);
+        esp_err_t status = nvs_open_from_partition("nvs", kNamespace, NVS_READWRITE, &settings);
         if (status == ESP_OK) {
             status = nvs_set_i32(settings, kModeKey, value ? 1 : 0);
             if (status == ESP_OK) status = nvs_commit(settings);

@@ -25,7 +25,10 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/host_strings.hp
     DEPENDS ${catalogs} "${workspace_root}/tools/generate_localization.py")
 add_executable(system_menu_test ../test_system_menu.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/generated/host_strings.hpp"
-    "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/system_menu_ui.cpp")
+    "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/system_menu_ui.cpp"
+    "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/hall_card_ui.cpp"
+    "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/launch_screen_ui.cpp"
+    "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/hall_cover_mask.cpp")
 target_include_directories(system_menu_test PRIVATE stubs ../firmware_stubs
     "${CMAKE_CURRENT_BINARY_DIR}/generated" "${workspace_root}/firmware/espressif/main" "${workspace_root}/guest")
 target_compile_features(system_menu_test PRIVATE cxx_std_23)

@@ -37,6 +37,25 @@ void StyleContainer(lv_obj_t* object, int32_t x, int32_t y, int32_t width, int32
 
 }  // namespace
 
+lv_obj_t* CreateHallCoverPlaceholder(lv_obj_t* parent, const HallCardLayout& layout, const HallCardPresentation& app,
+                                     uint32_t index) {
+    lv_obj_t* placeholder = lv_obj_create(parent);
+    StyleContainer(placeholder, 0, 0, layout.width, layout.width, layout.radius,
+                   theme::kHallCoverColors[index % theme::kHallCoverColors.size()]);
+    lv_obj_set_clickable(placeholder, false);
+    lv_obj_t* cover_label = lv_label_create(placeholder);
+    lv_label_set_text(cover_label, AppDisplayName(app));
+    const int32_t cover_label_padding = std::max<int32_t>(8, layout.width / 16);
+    lv_obj_set_width(cover_label, layout.width - cover_label_padding * 2);
+    lv_obj_set_height(cover_label, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(cover_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(cover_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(cover_label, platform::lvgl::BuiltinLatinFont(layout.label_font), 0);
+    lv_obj_set_style_text_color(cover_label, lv_color_hex(theme::kHallCardControlBackground), 0);
+    lv_obj_center(cover_label);
+    return placeholder;
+}
+
 void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCardPresentation& app, uint32_t index,
                   lv_event_cb_t card_event, lv_event_cb_t stop_event, void* event_context, HallCardObjects& objects) {
     objects = {};
@@ -67,20 +86,7 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
                    theme::kHallCoverBackground);
     lv_obj_set_clickable(cover, false);
 
-    objects.cover_placeholder = lv_obj_create(cover);
-    StyleContainer(objects.cover_placeholder, 0, 0, layout.width, layout.width, layout.radius,
-                   theme::kHallCoverColors[index % theme::kHallCoverColors.size()]);
-    lv_obj_set_clickable(objects.cover_placeholder, false);
-    lv_obj_t* cover_label = lv_label_create(objects.cover_placeholder);
-    lv_label_set_text(cover_label, AppDisplayName(app));
-    const int32_t cover_label_padding = std::max<int32_t>(8, layout.width / 16);
-    lv_obj_set_width(cover_label, layout.width - cover_label_padding * 2);
-    lv_obj_set_height(cover_label, LV_SIZE_CONTENT);
-    lv_label_set_long_mode(cover_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(cover_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(cover_label, platform::lvgl::BuiltinLatinFont(layout.label_font), 0);
-    lv_obj_set_style_text_color(cover_label, lv_color_hex(theme::kHallCardControlBackground), 0);
-    lv_obj_center(cover_label);
+    objects.cover_placeholder = CreateHallCoverPlaceholder(cover, layout, app, index);
 
     objects.cover_image = lv_image_create(cover);
     lv_obj_center(objects.cover_image);

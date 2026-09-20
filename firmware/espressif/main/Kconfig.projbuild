@@ -100,12 +100,12 @@ menu "WAMR application quotas"
     config MICROPIXEL_KV_MAX_BYTES
         int "Maximum logical private KV bytes per Guest"
         range 256 16384
-        default 2048
+        default 16384
 
     config MICROPIXEL_KV_MAX_VALUE_BYTES
         int "Maximum private KV value bytes"
         range 32 4096
-        default 512
+        default 4096
 
     config MICROPIXEL_KV_MAX_KEYS
         int "Maximum private KV keys per Guest"

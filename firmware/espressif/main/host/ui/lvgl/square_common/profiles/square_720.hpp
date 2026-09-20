@@ -41,7 +41,7 @@ inline constexpr HallCardLayout kHallCardLayout{
     .stop_x = 146,
     .stop_y = 10,
     .stop_size = 46,
-    .stop_hit_padding = 10,
+    .stop_hit_padding = 26,
     .stop_icon_size = 18,
     .label_font = platform::lvgl::SystemFontRole::kMedium,
     .badge_font = platform::lvgl::SystemFontRole::kSmall,
@@ -88,8 +88,6 @@ inline constexpr HallSceneLayout kHallSceneLayout{
             .time_width = 72,
             .cellular = {.width = 22, .height = 16},
             .wifi_scale = 256U,
-            .battery_width = 30,
-            .battery_percent_width = 48,
         },
 };
 

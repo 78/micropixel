@@ -9,7 +9,13 @@ A restricted C++23 SDK for WebAssembly apps. No ESP-IDF, LVGL, board-specific ty
 - [Windows automation](AI.md) — managed installation and JSON commands.
 - [API reference (中文)](README.zh-CN.md) — resources, events, graphics, audio, input, and devices.
 
-## Upgrading to 0.20.0
+## Upgrading to 0.20.1
+
+This patch adds configurable gamepad buttons, fixes default gamepad bounds to use the logical canvas,
+and refines overlay visibility. Firmware 0.9.4 adds private KV usage reporting and uninstall cleanup,
+with default quotas of 16 KiB per AppId and 4 KiB per value. Earlier Hosts retain their configured quotas.
+
+### Migrating from versions before 0.20.0
 
 Use firmware 0.9.3 for the companion Host input changes. Existing Bundles remain installed during a
 Host-only update; changing the factory preload list affects full images only.
@@ -82,6 +88,13 @@ low-pass, deadzone, axis inversion); open the sensor with `app.sensors().OpenFir
 and feed `Sample(value, timestamp)` per reading. `FixedString::AppendFixed`, `LaunchArguments::HasFlag/GetUnsigned`,
 `KVStore::GetU32Or` and `Rect::intersects/united` cover the small utilities apps used to hand-write.
 
+Private KV storage defaults to 16 KiB of logical value data per AppId, up to 16 keys,
+and 4 KiB per value. The Host enforces these configurable quotas; the SDK's value
+limit is the protocol ceiling. Apps share the physical `runtime_nvs` partition,
+so a quota does not reserve space and writes may fail when the partition is full.
+Explicit App uninstall clears its private KV data. Updating or installing over
+the same AppId preserves it; uninstalling and then installing starts with empty data.
+
 `ToneSequencer<N>` plays the `ToneSpec` arrays the build generates from `audio/sfx.json`:
 
 ```cpp
@@ -98,10 +111,9 @@ feeds every touch, key, analog axis (Input 1.1), gamepad device and Resume event
 so game code never routes input and never branches on the source:
 
 ```cpp
+const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
-                         .bounds = {0, 0, width, height},     // touch coordinate space
-                         .button_count = 1,
-                         .glyphs = {micropixel::GamepadGlyph::kFire}});
+                         .buttons = buttons});
 micropixel::GamepadSkin skin;
 skin.Initialize(app.resources(), app.gamepad().pad());     // bakes ring, knob and buttons into one texture
 
@@ -110,6 +122,9 @@ const micropixel::GamepadState state = app.gamepad().Consume();  // stick_x/y, l
                                                                  // right_x/y and triggers from a physical pad
 skin.Draw(list, app.gamepad().pad());                     // HostSurface; or skin.Attach(scene) + skin.Sync(pad)
 ```
+
+Omitted `bounds` (or `{}`) covers the current logical canvas. Configure the display or create the surface
+before configuring the gamepad; set `bounds` explicitly only for a custom region.
 
 Events the gamepad took are marked `Event::gamepad_handled()`, so menu code can skip them; call
 `app.gamepad().set_enabled(false)` on pages where touches must reach the App's own UI. Layouts: `kStickOnly`,
@@ -120,15 +135,18 @@ and the left stick axis drive the stick (a touching finger wins, then the axis, 
 its role until it lifts. The overlay follows `GamepadOverlayPolicy`: `kAuto` hides it after key/axis input or a
 gamepad connection until the next touch. `physical_connected()` reports a connected gamepad device.
 
-Follow-ups, by expected payoff: multi-segment run-length rows so the ring's hole is skipped; a mostly-opaque
-button style so the Host writes without reading the frame buffer; once the Host gains a `kGamepad`
-peripheral and the `AXIS` event bridge, a system-menu overlay switch (auto / always / hidden) driving
-`GamepadOverlayPolicy`; further layout presets when a second game needs them.
+`GamepadConfig::buttons` accepts up to four `GamepadButtonConfig` values in South/East/West/North order.
+`Configure` copies the descriptors, so the source array or vector need not outlive the call. Each button
+sets its glyph, optional centre/radius and `GamepadButtonStyle`; omitted geometry uses the layout preset.
+Centres use `bounds` coordinates and circles must fit inside the bounds. Hit areas add 25% padding;
+overlaps prefer the first button. Reconfigure the pad and reinitialize its skin after changing buttons.
+Views from `pad.buttons()` and `pad.config().buttons` remain valid until reconfiguration.
 
-`VirtualGamepad` (the class behind `pad()`) is also usable standalone with `OnEvent(event)` for Apps that need
-several pads or want to unit-test their control mapping; `GamepadSkin` draws either. Games with their own art
-read `stick_geometry()` and `button_geometry()` instead. `GamepadSkin` draws anti-aliased vector glyphs
-(`GamepadGlyph`) and, by default, shows a floating stick only while it is engaged (`GamepadSkinStyle::show_stick_at_rest`).
+Standalone `VirtualGamepad` requires explicit `bounds` and accepts `OnEvent(event)`. Custom renderers can read
+`stick_geometry()` and `button_geometry()`. `GamepadSkinStyle` controls the stick and overlay; button
+styles belong to their descriptors. Defaults use matching faint rims, grey glyphs, transparent idle
+buttons and dark grey press feedback. Floating sticks appear only while engaged unless
+`show_stick_at_rest` is enabled; fixed sticks stay visible.
 
 ## Mode7 and surface textures
 

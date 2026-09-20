@@ -2,7 +2,7 @@
 // (Graphics 1.6 TRIANGLE/QUAD records through the SDK MeshRenderer).
 //
 // Touch: left half is a stick, dragging on the right half orbits the camera,
-// a tap on the right half (or the function key) jumps.
+// the fixed jump button at bottom right (or the function key) jumps.
 // Options: --benchmark (scripted walk, fixed step, stats every 120 frames),
 // --perf (stats while playing), --upscale=N (render N times smaller).
 
@@ -172,8 +172,7 @@ game::Controls TombApp::PadControls() {
     const micropixel::GamepadState pad = app_.gamepad().Consume();
     game::Controls controls{};
     if (pad.stick_active) {
-        controls.forward = -pad.stick_y;
-        controls.strafe = pad.stick_x;
+        controls.SetStick(pad.stick_x, pad.stick_y);
     }
     const float panel_scale = static_cast<float>(upscale_);
     controls.orbit = static_cast<float>(pad.look_dx) * kOrbitPerPanelPixel * panel_scale;
@@ -184,11 +183,12 @@ game::Controls TombApp::PadControls() {
 
 void TombApp::ConfigurePad() {
     micropixel::GamepadConfig config{};
-    config.layout = micropixel::GamepadLayout::kStickLook;
-    config.bounds = {0, 0, width_, height_};
-    config.look_tap_button = static_cast<int8_t>(micropixel::GamepadButton::kSouth);  // tap jumps
+    config.layout = micropixel::GamepadLayout::kStickLookButtons;
+    const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kJump}};
+    config.buttons = buttons;
+    config.look_tap_button = -1;  // Only the fixed button jumps; the look pad is for camera control.
     if (!app_.gamepad().Configure(config)) {
-        app_.log().Error("tomb: virtual gamepad rejected the view bounds");
+        app_.log().Error("tomb: invalid virtual gamepad configuration");
         return;
     }
     if (!skin_.Initialize(app_.resources(), app_.gamepad().pad())) {

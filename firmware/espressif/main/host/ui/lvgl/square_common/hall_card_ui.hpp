@@ -47,6 +47,9 @@ struct HallCardObjects final {
     lv_obj_t* press_overlay{};
 };
 
+// Shared by Hall cards and the launch screen when decoded cover pixels are unavailable.
+[[nodiscard]] lv_obj_t* CreateHallCoverPlaceholder(lv_obj_t* parent, const HallCardLayout& layout,
+                                                   const HallCardPresentation& app, uint32_t index);
 void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCardPresentation& app, uint32_t index,
                   lv_event_cb_t card_event, lv_event_cb_t stop_event, void* event_context, HallCardObjects& objects);
 void SetHallCardPressed(const HallCardObjects& objects, bool pressed);

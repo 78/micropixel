@@ -5,14 +5,45 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 #include "sdk/gamepad.hpp"
+#include "sdk/gamepad_skin.hpp"
+
+namespace {
+std::vector<uint8_t> texture_pixels;
+micropixel::Size texture_size{};
+uint32_t texture_pitch{};
+}  // namespace
 
 namespace micropixel {
+// Capture the real skin atlas; no Host or Scene is needed for these tests.
+Result<Texture> Resources::CreateDynamicTexture(Size size, PixelFormat format, std::span<const uint8_t> pixels,
+                                                uint32_t pitch) const {
+    if (format != PixelFormat::kBgra8888 || pitch != size.width * 4U) std::abort();
+    texture_pixels.assign(pixels.begin(), pixels.end());
+    texture_size = size;
+    texture_pitch = pitch;
+    return Texture{1U, size.width, size.height, size.width, size.height, false};
+}
+Texture::Texture(Texture&& other) noexcept { *this = static_cast<Texture&&>(other); }
+Texture& Texture::operator=(Texture&& other) noexcept {
+    handle_ = other.handle_;
+    width_ = other.width_;
+    height_ = other.height_;
+    other.handle_ = 0U;
+    return *this;
+}
+Texture::~Texture() = default;
+void Texture::Reset() { handle_ = 0U; }
+bool NodeHandle::valid() const { return false; }
+void NodeHandle::Destroy() {}
+
 // The event constructors are private to the runtime; tests mint events the
 // same way the maze/tomb tests do.
 class Application final {
    public:
+    static Resources TestResources() { return Resources{Resources::CapabilityToken{}}; }
     static constexpr KeyEvent Key(KeyPhase phase, KeyCode code) { return KeyEvent{TimePoint{}, code, phase, 0U}; }
     static constexpr TouchEvent Touch(TouchPhase phase, uint32_t id, int x, int y, uint64_t at_us = 0U) {
         return TouchEvent{TimePoint{} + Duration::Microseconds(at_us), phase, id, x, y, false, 0U};
@@ -64,8 +95,9 @@ VirtualGamepad MakePad(GamepadLayout layout, int size, uint8_t buttons) {
     GamepadConfig config{};
     config.layout = layout;
     config.bounds = {0, 0, size, size};
-    config.button_count = buttons;
-    config.glyphs[0] = GamepadGlyph::kFire;
+    micropixel::GamepadButtonConfig descriptors[GamepadConfig::kMaxButtons]{};
+    descriptors[0].glyph = GamepadGlyph::kFire;
+    config.buttons = {descriptors, buttons};
     Check(pad.Configure(config), "layout must configure for a square view");
     return pad;
 }
@@ -73,10 +105,143 @@ VirtualGamepad MakePad(GamepadLayout layout, int size, uint8_t buttons) {
 void ConfigurationIsValidated() {
     VirtualGamepad pad;
     Check(!pad.Configure({.bounds = {0, 0, 0, 100}}), "empty bounds are rejected");
-    Check(!pad.Configure({.bounds = {0, 0, 100, 100}, .button_count = 5U}), "more than four buttons are rejected");
+    const micropixel::GamepadButtonConfig too_many[5]{};
+    Check(!pad.Configure({.bounds = {0, 0, 100, 100}, .buttons = too_many}), "more than four buttons are rejected");
     Check(!pad.configured(), "a rejected configuration leaves the pad unconfigured");
     pad.OnTouch(Application::Touch(TouchPhase::kDown, 1, 10, 10));
     Check(!pad.Consume().stick_active, "an unconfigured pad ignores input");
+}
+
+void IndependentButtonsOwnTheirConfiguration() {
+    using micropixel::Color;
+    using micropixel::GamepadButtonConfig;
+    VirtualGamepad pad;
+    {
+        std::vector<GamepadButtonConfig> buttons{
+            {.glyph = GamepadGlyph::kJump, .center = micropixel::Point{100, 100}, .radius = 20U},
+            {.glyph = GamepadGlyph::kFire, .center = micropixel::Point{340, 340}, .radius = 40U},
+        };
+        buttons[0].style.glyph = Color::Rgb(120, 30, 40);
+        buttons[1].style.glyph = Color::Rgb(30, 40, 120);
+        Check(
+            pad.Configure({.layout = GamepadLayout::kStickLookButtons, .bounds = {0, 0, 480, 480}, .buttons = buttons}),
+            "independent buttons configure from a vector");
+        buttons[0].radius = 80U;
+        buttons.clear();
+    }
+    const auto first = pad.button_geometry(0U);
+    const auto second = pad.button_geometry(1U);
+    Check(first.center.x == 100 && first.radius == 20 && first.glyph == GamepadGlyph::kJump,
+          "first descriptor is owned after source destruction");
+    Check(second.center.x == 340 && second.radius == 40 && second.glyph == GamepadGlyph::kFire,
+          "second descriptor retains independent geometry and icon");
+    Check(pad.buttons()[0].style.glyph == Color::Rgb(120, 30, 40) &&
+              pad.buttons()[1].style.glyph == Color::Rgb(30, 40, 120),
+          "styles are independent and owned");
+    // These points lie in the individual 25% touch padding, outside the drawn circles.
+    pad.OnTouch(Application::Touch(TouchPhase::kDown, 1, 124, 100));
+    pad.OnTouch(Application::Touch(TouchPhase::kDown, 2, 389, 340));
+    auto state = pad.Consume();
+    Check(state.Held(GamepadButton::kSouth) && state.Held(GamepadButton::kEast),
+          "different button sizes accept simultaneous contacts in their own hit padding");
+    pad.OnTouch(Application::Touch(TouchPhase::kUp, 1, 124, 100));
+    state = pad.Consume();
+    Check(!state.Held(GamepadButton::kSouth) && state.Held(GamepadButton::kEast),
+          "releasing one button preserves the other");
+    pad.Reset();
+    pad.OnTouch(Application::Touch(TouchPhase::kDown, 3, 126, 100));
+    Check(pad.Consume().buttons_held == 0U, "small button does not inherit the large button hit radius");
+
+    VirtualGamepad copy = pad;
+    Check(copy.config().buttons.data() != pad.config().buttons.data(), "copied pads own separate descriptor storage");
+    Check(copy.Configure(copy.config()), "reconfiguration from an owned snapshot is safe");
+    const GamepadButtonConfig single[] = {{.glyph = GamepadGlyph::kJump}};
+    Check(pad.Configure({.layout = GamepadLayout::kStickLookButtons, .bounds = {0, 0, 480, 480}, .buttons = single}),
+          "one descriptor configures one button");
+    Check(pad.button_count() == 1U && pad.button_geometry(1U).radius == 0, "shrinking removes old button geometry");
+    Check(copy.button_count() == 2U && copy.buttons()[0].style.glyph == Color::Rgb(120, 30, 40),
+          "reconfiguring the original leaves the copied pad intact");
+    const GamepadButtonConfig outside[] = {{.center = micropixel::Point{2, 2}, .radius = 20U}};
+    Check(!pad.Configure({.bounds = {0, 0, 480, 480}, .buttons = outside}), "circles outside bounds are rejected");
+    Check(pad.configured() && pad.button_count() == 1U, "rejected geometry preserves the previous configuration");
+    Check(pad.Configure({.layout = GamepadLayout::kStickLookButtons, .bounds = {0, 0, 480, 480}}),
+          "empty collection is supported");
+    Check(pad.button_count() == 0U && pad.buttons().empty(), "empty collection exposes no stale buttons");
+}
+
+void IndependentButtonAtlasPreservesSizesAndStyles() {
+    using micropixel::Color;
+    micropixel::GamepadButtonConfig buttons[] = {
+        {.radius = 20U},
+        {.radius = 40U},
+    };
+    buttons[0].style.fill = Color::Rgb(255, 0, 0);
+    buttons[1].style.fill = Color::Rgb(0, 0, 255);
+    buttons[0].style.pressed_fill = Color::Rgb(0, 255, 0);
+    buttons[1].style.pressed_fill = Color::Rgb(255, 0, 255);
+    for (auto& button : buttons) {
+        button.style.fill_opacity = 255U;
+        button.style.pressed_fill_opacity = 255U;
+        button.style.rim_opacity = 0U;
+    }
+    VirtualGamepad pad;
+    Check(pad.Configure({.layout = GamepadLayout::kButtonsOnly, .bounds = {0, 0, 480, 480}, .buttons = buttons}),
+          "mixed button sizes configure for atlas");
+    micropixel::GamepadSkin skin;
+    Check(skin.Initialize(Application::TestResources(), pad), "mixed button atlas initializes");
+    Check(texture_pixels.size() == static_cast<size_t>(texture_pitch) * texture_size.height,
+          "atlas storage matches uploaded pitch and height");
+    const auto count_colour = [](Color color) {
+        size_t count = 0U;
+        for (size_t offset = 0U; offset < texture_pixels.size(); offset += 4U) {
+            if (texture_pixels[offset] == color.blue() && texture_pixels[offset + 1U] == color.green() &&
+                texture_pixels[offset + 2U] == color.red() && texture_pixels[offset + 3U] == 255U)
+                ++count;
+        }
+        return count;
+    };
+    const size_t small_idle = count_colour(buttons[0].style.fill);
+    const size_t large_idle = count_colour(buttons[1].style.fill);
+    Check(small_idle > 1100U && small_idle < 1300U && large_idle > 4700U && large_idle < 5200U,
+          "atlas preserves distinct disc areas without clipping or overwriting neighboring tiles");
+    Check(count_colour(buttons[0].style.pressed_fill) == small_idle &&
+              count_colour(buttons[1].style.pressed_fill) == large_idle,
+          "each pressed tile retains its own geometry and colour");
+}
+
+void GlyphOpacityLeavesButtonBackgroundsUnchanged() {
+    micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kInteract}};
+    VirtualGamepad pad;
+    micropixel::GamepadSkin skin;
+    const auto bake = [&](uint8_t opacity) {
+        buttons[0].style.glyph_opacity = opacity;
+        Check(
+            pad.Configure({.layout = GamepadLayout::kStickLookButtons, .bounds = {0, 0, 480, 480}, .buttons = buttons}),
+            "glyph opacity configuration succeeds");
+        Check(skin.Initialize(Application::TestResources(), pad), "glyph opacity atlas initializes");
+        return texture_pixels;
+    };
+    const auto hidden = bake(0U);
+    const auto faint = bake(160U);
+    const auto solid = bake(255U);
+    size_t faded = 0U;
+    for (size_t offset = 0U; offset < solid.size(); offset += 4U) {
+        bool glyph_pixel = false;
+        for (size_t channel = 0U; channel < 4U; ++channel) {
+            glyph_pixel |= solid[offset + channel] != hidden[offset + channel];
+        }
+        if (!glyph_pixel) {
+            for (size_t channel = 0U; channel < 4U; ++channel) {
+                Check(faint[offset + channel] == hidden[offset + channel],
+                      "glyph opacity leaves rims, stick and button fills unchanged");
+            }
+        } else if (solid[offset + 3U] == 255U) {
+            Check(faint[offset + 3U] > hidden[offset + 3U] && faint[offset + 3U] < 255U,
+                  "glyph opacity blends over transparent idle and dark pressed backgrounds");
+            ++faded;
+        }
+    }
+    Check(faded > 20U, "both glyph tiles contain translucent interiors");
 }
 
 void StickDeflectsAndClamps() {
@@ -458,6 +623,9 @@ void PhysicalAxesFeedTheSameState() {
 
 int main() {
     ConfigurationIsValidated();
+    IndependentButtonsOwnTheirConfiguration();
+    IndependentButtonAtlasPreservesSizesAndStyles();
+    GlyphOpacityLeavesButtonBackgroundsUnchanged();
     StickDeflectsAndClamps();
     LookPadDragsAndTaps();
     ButtonsTrackEdgesAndRoles();

@@ -97,6 +97,21 @@ class PerceptualAnalysisTest(unittest.TestCase):
         self.assertIn("kBgmBCount", generated)
         self.assertNotIn("kMasterPercent", generated)
 
+    def test_jump_jump_charge_remains_audible_through_high_register(self) -> None:
+        manifest = SFX.load_manifest(WORKSPACE_ROOT / "guest/apps/jump-jump/audio/sfx.json")
+        report = SFX.analyze_manifest(manifest)
+        self.assertFalse(report["violations"])
+        effects = report["effects"]
+        start_level = effects["charge_1"]["momentary_rms_dbfs"]
+        for name in ("charge_2", "charge_3", "charge_4", "charge_hold"):
+            self.assertGreaterEqual(effects[name]["momentary_rms_dbfs"], start_level - 6.0, name)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "profiles.hpp"
+            SFX.emit_cpp_header(manifest, output)
+            generated = output.read_text(encoding="utf-8")
+        for symbol in ("kLand", "kCharge1", "kCharge2", "kCharge3", "kCharge4", "kChargeHold"):
+            self.assertIn(symbol, generated)
+
     def test_guest_master_attenuation_is_rejected(self) -> None:
         source = WORKSPACE_ROOT / "guest" / "apps" / "blocks" / "audio" / "sfx.json"
         manifest = json.loads(source.read_text(encoding="utf-8"))

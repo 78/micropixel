@@ -16,6 +16,9 @@ struct Controls final {
     float orbit{};    // radians to turn the camera around the player this frame
     float tilt{};     // radians to pitch the camera this frame
     bool jump{};
+
+    // Human stick input: tolerate sideways drift without reducing forward speed.
+    void SetStick(float x, float y);
 };
 
 // The explorer: walks on the sector floors with step-up, drop and jump

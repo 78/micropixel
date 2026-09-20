@@ -17,7 +17,7 @@ from any commercial game.
 | `game/character.*` | eleven-box explorer with procedural walk/jump poses |
 | `gfx/palette.*` | 16 ramps × 16 steps INDEX8 palette and the 16-level lit palette |
 | `gfx/textures.*` | generated 64×64 textures (`tools/generate_textures.py`) |
-| (SDK `app.gamepad()` + `GamepadSkin`) | `kStickLook` layout: left-half stick, right-half orbit/tilt drag, tap to jump; the Runtime routes input, the SDK atlas draws it |
+| (SDK `app.gamepad()` + `GamepadSkin`) | `kStickLookButtons` layout: left-half stick, right-half orbit/tilt drag, fixed jump button; the Runtime routes input, the SDK atlas draws it |
 
 ## Level description
 
@@ -36,6 +36,9 @@ python3 guest/apps/tomb-explorer/tools/generate_level.py --check
 ```
 
 ## Run
+
+Use the left stick to move; small sideways drift is ignored. Drag on the right to adjust the
+camera, and press the fixed bottom-right button to jump.
 
 ```bash
 python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX run guest/apps/tomb-explorer \
@@ -58,4 +61,5 @@ polygon pool in `main.cpp` needs to grow.
 ## Tests
 
 `tools/tests/test_tomb_room_world.cpp` (run by `bash tools/tests/test_firmware_host.sh`) checks the
-generated level, portal traversal order and scissors, sector heights and player collision on the host.
+generated level, portal traversal order and scissors, sector heights, player collision, stick drift
+tolerance and camera steering on the host.

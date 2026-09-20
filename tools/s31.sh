@@ -190,6 +190,10 @@ prepare_host_config() {
             /^CONFIG_LV_MEM_SIZE_KILOBYTES=/ ||
             /^CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=/ ||
             /^CONFIG_LV_ASSERT_HANDLER_INCLUDE=/ { next }
+            # Retire the old private-storage defaults in incremental builds.
+            # Other explicit quota choices remain intact.
+            /^CONFIG_MICROPIXEL_KV_MAX_BYTES=(2048|8192)$/ ||
+            /^CONFIG_MICROPIXEL_KV_MAX_VALUE_BYTES=512$/ { next }
             /^CONFIG_LV_OBJ_STYLE_CACHE=/ || /^# CONFIG_LV_OBJ_STYLE_CACHE is not set$/ {
                 print "CONFIG_LV_OBJ_STYLE_CACHE=y"
                 saw_lv_style_cache = 1

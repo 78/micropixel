@@ -25,6 +25,7 @@
 #endif
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/platform.hpp"
+#include "platform/storage/network_settings_migration.hpp"
 #include "platform/storage/partition_block_storage.hpp"
 #include "runtime/bundle/app_store.hpp"
 #include "runtime/bundlefs/bundlefs.hpp"
@@ -180,6 +181,14 @@ std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform()
         return std::unexpected(StartupError::kNvsInitialization);
     }
     ESP_LOGI(kTag, "runtime_nvs initialized; Guest data preserved across Host OTA/restart");
+
+    nvs_error = nvs_flash_init_partition("nvs");
+    if (nvs_error == ESP_OK) nvs_error = platform::storage::MigrateNetworkSettings();
+    if (nvs_error != ESP_OK) {
+        ESP_LOGE(kTag, "network settings initialization/migration failed without erasing data: %s",
+                 esp_err_to_name(nvs_error));
+        return std::unexpected(StartupError::kNvsInitialization);
+    }
 
     if (platform_.Initialize() != ESP_OK) {
         ESP_LOGE(kTag, "configured platform did not initialize");

@@ -58,6 +58,7 @@ class SpiNandBlockStorage final : public device::BlockStorage {
    private:
     [[nodiscard]] bool InRange(uint64_t offset, uint64_t size) const;
     [[nodiscard]] std::expected<void, device::BlockStorageError> ReadSector(uint32_t sector, uint8_t* destination);
+    [[nodiscard]] std::expected<void, device::BlockStorageError> CacheSector(uint32_t sector);
     [[nodiscard]] std::expected<void, device::BlockStorageError> WriteSector(uint32_t sector, const uint8_t* source);
 
     // Serialises the shared sector buffer; the FTL keeps its own lock.
@@ -67,6 +68,8 @@ class SpiNandBlockStorage final : public device::BlockStorage {
     spi_device_handle_t device_{};
     spi_nand_flash_device_t* nand_{};
     uint8_t* sector_buffer_{};
+    uint32_t cached_sector_{};
+    bool cache_valid_{};
     uint32_t sector_size_{};
     uint32_t sector_count_{};
     device::BlockStorageGeometry geometry_{};

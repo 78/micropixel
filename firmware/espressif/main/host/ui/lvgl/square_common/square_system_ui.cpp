@@ -63,7 +63,7 @@ std::expected<void, host_ui::SystemUiError> SquareSystemUi::RestoreGuestView() {
     state_.SetHostPointerEnabledLocked(false);
     lv_obj_delete(state_.root);
     state_.root = nullptr;
-    state_.launch_image_descriptor = {};
+    state_.DropLaunchBitmapLocked();
     lv_obj_set_hidden(guest_frame, false);
     lv_obj_move_foreground(guest_frame);
     lv_obj_invalidate(guest_frame);

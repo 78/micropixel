@@ -699,14 +699,21 @@ void VirtualizedHallPolicy::Leave() {
         state_.hall_cover_cache.TrimForLaunchLocked(launch_cover.data);
         esp_lv_adapter_unlock();
     }
-    if (launch_cover.data != nullptr) {
-        const int32_t status = state_.ShowLaunchBitmap(launch_cover);
-        if (status == MICROPIXEL_STATUS_OK) {
-            ESP_LOGI(kTag, "retained Hall card as native-size App launch cover: index=%" PRIu32 " size=%" PRIu32,
-                     launch_index, launch_cover.width);
-        } else {
+    if (launch_index < app_count) {
+        if (launch_cover.data != nullptr) {
+            const int32_t status = state_.ShowLaunchBitmap(launch_cover);
+            if (status == MICROPIXEL_STATUS_OK) {
+                ESP_LOGI(kTag, "retained Hall card as native-size App launch cover: index=%" PRIu32 " size=%" PRIu32,
+                         launch_index, launch_cover.width);
+                return;
+            }
             ESP_LOGW(kTag, "unable to retain Hall card as App launch cover: index=%" PRIu32 " status=%" PRId32,
                      launch_index, status);
+        }
+        const int32_t status = state_.ShowLaunchPlaceholder(launch_index);
+        if (status != MICROPIXEL_STATUS_OK) {
+            ESP_LOGW(kTag, "unable to show App launch placeholder: index=%" PRIu32 " status=%" PRId32, launch_index,
+                     status);
         }
     }
 }

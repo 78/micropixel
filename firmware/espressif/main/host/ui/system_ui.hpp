@@ -382,6 +382,10 @@ struct SystemInformationModel final {
     std::array<char, kSystemInformationTextCapacity> last_reset{};
     MemoryStatisticsModel internal_sram{};
     MemoryStatisticsModel psram{};
+    uint32_t app_data_total_bytes{};
+    uint32_t app_data_used_bytes{};
+    uint32_t app_data_available_bytes{};
+    bool app_data_usage_available{};
     uint32_t firmware_size_bytes{};
     uint32_t firmware_processed_bytes{};
     uint8_t firmware_progress_percent{};

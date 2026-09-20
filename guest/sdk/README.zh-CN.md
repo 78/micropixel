@@ -8,7 +8,13 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 驱动更新；Host 管理硬件、资源和系统 UI。本文介绍编程模型与易错边界，完整可运行用法见
 [Demo](../apps/sdk-demo/)，底层协议见 [ABI](../abi/README.zh-CN.md)。
 
-## 升级到 0.20.0
+## 升级到 0.20.1
+
+此补丁增加虚拟手柄按钮定制，修复默认手柄区域使用逻辑画布，并调整叠加控件可见度。
+固件 0.9.4 增加私有 KV 用量显示和卸载清理，默认每个 AppId 配额为 16 KiB、单值为 4 KiB。
+旧 Host 仍使用其自身配置的配额。
+
+### 从 0.20.0 之前的版本迁移
 
 配套 Host 输入改动使用固件 0.9.3。仅更新 Host 会保留已安装的 Bundle，预装列表调整只影响完整镜像。
 迁移到 `app.gamepad()` 后，在初始化时配置控件、逐帧读取状态，移除向同一个 pad 手工转发事件的代码；
@@ -396,10 +402,9 @@ TextOverflow::kReject。后续修改失败不能提交一半属性。控件 ToSt
 触摸、按键、模拟轴（Input 1.1）、手柄设备接入/断开和 Resume 事件先喂给它，游戏代码既不路由输入，也不区分输入来源：
 
 ```cpp
+const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
-                         .bounds = {0, 0, width, height},     // 与触摸坐标同一空间
-                         .button_count = 1,
-                         .glyphs = {micropixel::GamepadGlyph::kFire}});
+                         .buttons = buttons});
 micropixel::GamepadSkin skin;
 skin.Initialize(app.resources(), app.gamepad().pad());     // 把圆环、摇杆帽和按键烘焙进一张动态纹理
 
@@ -408,6 +413,9 @@ const micropixel::GamepadState state = app.gamepad().Consume();  // stick_x/y、
 skin.Draw(list, app.gamepad().pad());                     // HostSurface；Scene 用 skin.Attach(scene) + skin.Sync(pad)
 ```
 
+省略 `bounds`（或使用 `{}`）时覆盖当前逻辑画布。先配置显示或创建 Surface，再配置手柄；
+仅自定义区域需要显式填写 `bounds`。
+
 被手柄接管的事件带 `Event::gamepad_handled()` 标记，菜单代码据此跳过；需要触摸抵达应用自己 UI 的页面调用
 `app.gamepad().set_enabled(false)`。布局预设：`kStickOnly`、`kStickLook`（拖拽区轻点按下 `look_tap_button`）、
 `kStickButtons`、`kStickLookButtons`、`kDPadButtons`（方向量化为 -1/0/1）、`kButtonsOnly`。按键按物理位置命名，
@@ -415,14 +423,16 @@ skin.Draw(list, app.gamepad().pad());                     // HostSurface；Scene
 摇杆（触摸优先，其次模拟轴，最后按键）。每个触点在抬起前保持自己的角色。浮层遵循 `GamepadOverlayPolicy`：
 `kAuto` 在按键/轴输入或手柄接入后隐藏，直到下一次触摸；`physical_connected()` 报告是否有手柄设备接入。
 
-待办（按收益排序）：圆环 tile 改多段 run-length 以跳过中间的洞；常驻按键提供以不透明像素为主的样式，
-让 Host 直接写入而不读 frame buffer；Host 侧 `DeviceKind::kGamepad` 外设与 `AXIS` 事件 bridge 落地后，
-系统菜单提供浮层"自动 / 常显 / 隐藏"开关并驱动 `GamepadOverlayPolicy`；更多布局预设等第二个游戏提出需求。
+`GamepadConfig::buttons` 按 South/East/West/North 顺序接收最多四个 `GamepadButtonConfig`。
+`Configure` 复制配置，源数组或 vector 不必持续存活。每个按钮独立设置图标、可选中心/半径与
+`GamepadButtonStyle`；省略位置或半径时使用布局预设。中心与 `bounds` 使用同一坐标空间，绘制圆须完全位于边界内。
+触摸范围外扩 25%，重叠时先匹配靠前的按钮。修改按钮后需重新配置手柄并初始化皮肤；
+`pad.buttons()` 和 `pad.config().buttons` 返回的视图在重新配置前有效。
 
-`pad()` 背后的 `VirtualGamepad` 也可单独使用（`OnEvent(event)`），适合需要多个手柄或想为控制映射写单元测试的
-应用；`GamepadSkin` 两种都能画。想用自己的美术时读取 `stick_geometry()` / `button_geometry()` 自行绘制。
-预设图标见 `GamepadGlyph`，由矢量形状抗锯齿绘制，随按键尺寸缩放；`GamepadSkinStyle` 可改颜色与透明度，
-浮动摇杆默认只在手指或按键驱动时显示（`show_stick_at_rest` 可改为常显），固定摇杆常显。
+独立使用 `VirtualGamepad` 时须显式填写 `bounds`，自行传入 `OnEvent(event)`；自定义绘制可读取
+`stick_geometry()` 和 `button_geometry()`。
+`GamepadSkinStyle` 控制摇杆与浮层样式，各按钮外观由自身配置决定。默认使用统一的淡边框、灰色图标、透明底色和
+深灰按下反馈。浮动摇杆仅在操作时显示（`show_stick_at_rest` 可改为常显），固定摇杆常显。
 
 ## 音频
 
@@ -470,7 +480,12 @@ GPIO 打开即租用板级白名单中的引脚，释放后恢复安全输入状
 ## 存储、启动参数与语言
 
 Package 资源与应用私有 KV 存储是独立入口，不暴露文件系统路径。GetBytesSize 先查询精确大小，
-再分配 buffer 并 GetBytes；key/value 上限由 KVStore 常量给出，UTF-8 key 按 bytes 计数。
+再分配 buffer 并 GetBytes；key/value 协议上限由 KVStore 常量给出，UTF-8 key 按 bytes 计数。
+Host 默认限制每个 AppId 的 value 总量为 16 KiB、最多 16 个 key、单个 value 最多 4 KiB，
+并在写入时独立检查配额。所有 App 共用 `runtime_nvs` 物理分区；配额不代表预留空间，
+分区满时即使未达到单 App 配额，写入也可能失败。
+明确卸载 App 时清除其私有 KV；同 AppId 的升级或覆盖安装保留存档。
+先卸载再安装属于全新安装，不恢复旧存档。
 Random::Below 使用无偏范围采样，需要范围随机数时不要自行对 U32 取模。
 
 CLI 的 `--` 后参数属于本次新建 Session，应用从 launch_arguments 读取，FindValue 同时识别

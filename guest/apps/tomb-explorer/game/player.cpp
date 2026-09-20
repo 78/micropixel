@@ -13,8 +13,14 @@ constexpr float kCameraHeight = 1.35F;  // look-at point above the feet
 constexpr float kCameraMinDistance = 0.6F;
 constexpr float kCameraFollowRate = 2.2F;  // radians per second the orbit drifts behind the player
 constexpr float kMaxSlopeSnap = 0.5F;      // floor rise per frame that counts as a slope, not a fall
+constexpr float kStrafeDeadzone = 0.3F;
 
 }  // namespace
+
+void Controls::SetStick(float x, float y) {
+    forward = -y;
+    strafe = math::ApplyDeadzone(x, kStrafeDeadzone);
+}
 
 void Player::Reset(const world::RoomWorld& world) {
     const world::Level& level = world.level();
@@ -150,8 +156,13 @@ void Player::Update(const world::RoomWorld& world, const Controls& controls, flo
     // is steering it.
     // Pure strafing (facing across the view) leaves the camera alone so the
     // player can circle an object without the view spinning.
-    if (controls.orbit == 0.0F && speed_ > 0.3F && math::Abs(math::WrapAngle(yaw_ - camera_yaw_)) < 1.1F) {
-        camera_yaw_ = math::ApproachAngle(camera_yaw_, yaw_, kCameraFollowRate * dt * math::Clamp(speed_, 0.0F, 1.0F));
+    const float camera_error = math::Abs(math::WrapAngle(yaw_ - camera_yaw_));
+    if (controls.orbit == 0.0F && speed_ > 0.3F && camera_error < 1.1F) {
+        // Ease small corrections so a slight stick offset cannot drive the
+        // camera at its full follow rate and continually redirect movement.
+        camera_yaw_ = math::ApproachAngle(
+            camera_yaw_, yaw_,
+            kCameraFollowRate * dt * math::Clamp(speed_, 0.0F, 1.0F) * math::Clamp(camera_error, 0.0F, 1.0F));
     }
     PlaceCamera(world);
 }

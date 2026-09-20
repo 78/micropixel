@@ -5,6 +5,7 @@ list(APPEND micropixel_sources
     "host/ui/lvgl/square_common/default_keyboard.cpp"
     "host/ui/lvgl/square_common/guest_gesture_hint_ui.cpp"
     "host/ui/lvgl/square_common/hall_card_ui.cpp"
+    "host/ui/lvgl/square_common/launch_screen_ui.cpp"
     "host/ui/lvgl/square_common/hall_cover_cache.cpp"
     "host/ui/lvgl/square_common/hall_cover_codec.cpp"
     "host/ui/lvgl/square_common/hall_cover_mask.cpp"

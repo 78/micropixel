@@ -1,0 +1,5 @@
+0.1.2 maintenance update
+
+Explicit display scaling and updated texture loading for the game canvas. Migrated audio sequencing and deterministic random helpers to the shared SDK.
+
+Built for RISC-V and Xtensa with SDK 0.20.0. This release has no new hardware validation claim.

@@ -1310,6 +1310,11 @@ void micropixel_close_aot_package(micropixel_aot_package_t* package) {
     memset(package, 0, sizeof(*package));
 }
 
+const micropixel_bundle_section_t* micropixel_bundle_find_asset(const micropixel_aot_package_t* package,
+                                                                uint32_t asset_id) {
+    return find_section(package, MICROPIXEL_BUNDLE_SECTION_ASSET, asset_id);
+}
+
 bool micropixel_bundle_open_asset(const micropixel_aot_package_t* package, uint32_t asset_id,
                                   micropixel_bundle_asset_mapping_t* mapping_out) {
     if (mapping_out == NULL) {
