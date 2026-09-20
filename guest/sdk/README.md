@@ -9,6 +9,16 @@ A restricted C++23 SDK for WebAssembly apps. No ESP-IDF, LVGL, board-specific ty
 - [Windows automation](AI.md) — managed installation and JSON commands.
 - [API reference (中文)](README.zh-CN.md) — resources, events, graphics, audio, input, and devices.
 
+## Upgrading to 0.20.0
+
+Use firmware 0.9.3 for the companion Host input changes. Existing Bundles remain installed during a
+Host-only update; changing the factory preload list affects full images only.
+
+Apps migrating to `app.gamepad()` should configure it once and consume its state each frame; remove
+manual forwarding of the same events to the pad. Disable the gamepad while an app menu owns touch input.
+Touch and key controls remain usable on earlier Hosts; analog axis events require Input 1.1 support.
+Check the capability catalog below before keeping app-local math, random, pool, sound or sensor helpers.
+
 ## Programming model
 
 Apps run a single-threaded event loop. The Host owns hardware, system UI, and app lifecycle.

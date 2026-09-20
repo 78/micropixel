@@ -70,10 +70,11 @@ GitHub's automatically generated Source code archives contain repository sources
 
 ## What's new
 
-- `ConfigureDisplay` lets apps choose their logical canvas and scaling mode explicitly, removing the SDK's fixed 720 baseline. Textures follow the display configuration by default.
-- DirectSurface adds coordinate conversion and texture-scale helpers using the same display configuration, while buffers retain pixel coordinates. Examples and migration documentation have been updated.
-- The Service ABI is unchanged, and existing Bundles retain their behavior. When rebuilding older apps designed for a 720 canvas, configure `kExpand` explicitly; use `kNative` explicitly for native-resolution assets.
-- Companion firmware 0.9.1 streams App installation into BundleFS. PNG images are still fully decoded before resizing, so these scaling APIs do not eliminate peak decode memory usage.
+- Runtime-owned gamepads combine touch controls, keys and physical gamepad input. Input 1.1 adds analog-axis events; use companion firmware 0.9.3 for the new Host input support.
+- Shared SDK helpers cover game math, deterministic random numbers, fixed-capacity pools, tone sequencing, bounded text and launch arguments.
+- `Sensors::OpenFirst` discovers typed sensors and configures their sampling interval. `TiltFilter` provides calibration, smoothing and a deadzone for motion controls.
+- Surface canvas adoption and coordinate helpers keep raster drawing and input aligned with the display configuration. See the SDK capability catalog before adding app-local helpers.
+- Firmware 0.9.3 preinstalls Jump Jump and Gravity Balls in place of Tomb Explorer. Tomb Explorer remains available as SDK example source. Existing installed Bundles are preserved by Host-only updates.
 
 ## Installation and compatibility
 

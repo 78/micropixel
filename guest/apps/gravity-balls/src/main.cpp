@@ -457,6 +457,7 @@ class Demo final {
     }
     // Fixed rectangles for the HUD, the menu button and the settings panel.
     void LayoutUi() {
+        const bool compact = height_ < 320;
         auto title = app_.renderer().MeasureText("GRAVITY BALLS", mp::SystemFont::kMedium);
         auto status = app_.renderer().MeasureText("tap outside to close", mp::SystemFont::kSmall);
         auto menu = app_.renderer().MeasureText("MENU", mp::SystemFont::kSmall);
@@ -503,14 +504,16 @@ class Demo final {
         // padding scale with the buffer so they stay finger-sized on the panel
         // whether the buffer is upscaled or native.
         const int pad = std::max(8, Round(16.0F * ui));
-        const int button = std::max(medium_h + 20, Round(56.0F * ui));
+        const int button = compact ? std::max(medium_h + 12, 32) : std::max(medium_h + 20, Round(56.0F * ui));
         const int row_h = button + pad;
         const int needed = 5 * pad + label_w + value_w + 2 * button;
         const int panel_w = std::min(needed, width_ - 2 * Round(48.0F * ui));
         const int title_h_row = medium_h + pad;
         const int hint_h_row = small_h + pad;
         const int panel_h = 2 * pad + title_h_row + row_h * static_cast<int>(kSettingRows) + hint_h_row;
-        panel_rect_ = {(width_ - panel_w) / 2, (height_ - panel_h) / 2, panel_w, panel_h};
+        // Short landscape screens keep the panel below the menu tab.
+        const int panel_top = compact ? menu_button_.y + menu_button_.height + pad : 0;
+        panel_rect_ = {(width_ - panel_w) / 2, panel_top + (height_ - panel_top - panel_h) / 2, panel_w, panel_h};
         const int right = panel_rect_.x + panel_rect_.width - pad;
         panel_title_ = {panel_rect_.x + pad, panel_rect_.y + pad + (title_h_row - medium_h) / 2};
         for (unsigned row = 0; row < kSettingRows; ++row) {
