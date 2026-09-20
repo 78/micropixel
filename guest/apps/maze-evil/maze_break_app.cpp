@@ -10,7 +10,6 @@
 #include "apps/maze-evil/gfx/sprites.hpp"
 #include "apps/maze-evil/gfx/textures.hpp"
 #include "apps/maze-evil/input/menu_controls.hpp"
-#include "apps/maze-evil/input/motion_controls.hpp"
 #include "apps/maze-evil/maze_break_audio.hpp"
 #include "sdk/gamepad_skin.hpp"
 #include "sdk/micropixel.hpp"
@@ -19,9 +18,7 @@ namespace maze_break {
 namespace {
 
 constexpr uint32_t kBufferCount = 2U;
-constexpr float kTiltTurnRate = 2.6F;  // rad/s at full roll deflection
 constexpr uint64_t kMaxFrameDtUs = 50'000U;
-constexpr uint64_t kRecalibrateHoldUs = 1'500'000U;
 constexpr uint32_t kStatsWindowFrames = 120U;
 // Benchmark runs a fixed simulation step so the autopilot path is identical
 // on every board regardless of frame rate.
@@ -71,7 +68,6 @@ struct Options {
     bool benchmark{};
     bool bgm{true};
     bool mute{};
-    bool motion{};
     bool perf{};
 };
 
@@ -81,7 +77,6 @@ Options ParseOptions(const micropixel::LaunchArguments& args) {
     options.bgm = !args.HasFlag("--no-bgm");
     // Benchmarks measure graphics; keep the room quiet unless --sound is given.
     options.mute = args.HasFlag("--mute") || (options.benchmark && !args.HasFlag("--sound"));
-    options.motion = args.HasFlag("--motion") && !args.HasFlag("--no-motion");
     options.perf = options.benchmark || args.HasFlag("--perf");
     return options;
 }
@@ -111,7 +106,7 @@ class MazeBreakApp final {
     bool HandleEvent(const micropixel::Event& event);
     bool DrainEvents();
     bool WaitForFreeBuffer(uint32_t& index);
-    game::Controls GatherControls(uint64_t now_us, float dt);
+    game::Controls GatherControls();
     void PumpSounds();
     void RequestStart();
     void ConfigurePad();
@@ -132,10 +127,6 @@ class MazeBreakApp final {
     game::Renderer& renderer_{gRenderer};
     game::World& world_{gWorld};
     micropixel::GamepadSkin skin_{};
-    uint64_t fire_held_since_us_{};
-    input::MotionControls motion_{};
-    bool motion_mode_{};
-    bool recalibrate_armed_{true};
     game::RunRecord record_{};
     bool record_save_failed_{};
     GameAudio audio_{app_};
@@ -145,10 +136,8 @@ class MazeBreakApp final {
     uint64_t last_frame_us_{};
     bool resumed_{};
     bool started_{};
-    bool calibrating_{};
     input::MenuControls menu_{};
     bool retry_requested_{};
-    uint64_t calibration_started_us_{};
 };
 
 bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
@@ -201,15 +190,10 @@ void MazeBreakApp::RequestStart() {
     record_.Start();
     record_save_failed_ = false;
     started_ = true;
-    calibrating_ = motion_mode_;
-    calibration_started_us_ = app_.clock().Now().microseconds();
-    last_frame_us_ = calibration_started_us_;
-    if (motion_mode_) {
-        motion_.Recalibrate();
-    }
+    last_frame_us_ = app_.clock().Now().microseconds();
     audio_.StartBgm();
     stats_ = FrameStats{};
-    stats_.window_start_us = calibration_started_us_;
+    stats_.window_start_us = last_frame_us_;
     SyncGamepad();
 }
 
@@ -352,7 +336,7 @@ bool MazeBreakApp::WaitForFreeBuffer(uint32_t& index) {
     return true;
 }
 
-game::Controls MazeBreakApp::GatherControls(uint64_t now_us, float dt) {
+game::Controls MazeBreakApp::GatherControls() {
     if (options_.benchmark) {
         return AutopilotControls(frame_index_);
     }
@@ -365,38 +349,6 @@ game::Controls MazeBreakApp::GatherControls(uint64_t now_us, float dt) {
     controls.turn = static_cast<float>(pad.look_dx) * kTurnPerPanelPixel * static_cast<float>(upscale_);
     // A tap on the fire button counts even when it is released before this frame.
     controls.fire = pad.Held(micropixel::GamepadButton::kSouth) || pad.Pressed(micropixel::GamepadButton::kSouth);
-    if (pad.Pressed(micropixel::GamepadButton::kSouth)) {
-        fire_held_since_us_ = now_us;
-    } else if (!pad.Held(micropixel::GamepadButton::kSouth)) {
-        fire_held_since_us_ = 0U;
-    }
-    if (motion_mode_) {
-        motion_.Poll();
-        if (calibrating_) {
-            if (motion_.ready()) {
-                calibrating_ = false;
-            } else if (now_us - calibration_started_us_ >= 3'000'000U) {
-                calibrating_ = false;
-                motion_mode_ = false;
-                app_.log().Info("maze-break: calibration timed out; continuing with touch controls");
-                return controls;
-            }
-        }
-        const input::MotionControls::Sample motion = motion_.Consume();
-        controls.forward = math::Clamp(controls.forward + motion.forward, -1.0F, 1.0F);
-        controls.turn += motion.turn_rate * kTiltTurnRate * dt + motion.yaw_delta;
-        // Holding the function key re-centres the neutral orientation once
-        // per hold; the key also fires, which is harmless.
-        const bool fire_held_long = fire_held_since_us_ != 0U && now_us - fire_held_since_us_ > kRecalibrateHoldUs;
-        if (fire_held_long) {
-            if (recalibrate_armed_) {
-                recalibrate_armed_ = false;
-                motion_.Recalibrate();
-            }
-        } else {
-            recalibrate_armed_ = true;
-        }
-    }
     return controls;
 }
 
@@ -490,8 +442,6 @@ int MazeBreakApp::Run() {
     }
     ConfigurePad();
 
-    motion_mode_ = options_.motion && !options_.benchmark && motion_.Initialize(app_);
-
     auto best = app_.storage().GetU32(kBestTimeKey);
     if (best.has_value()) record_.Restore(best.value());
     world_.Reset();
@@ -525,9 +475,7 @@ int MazeBreakApp::Run() {
         msg.AppendUint(surface_.max_full_frame_fps());
         msg.Append(" fps");
         app_.log().Info(msg.c_str());
-        app_.log().Info(motion_mode_
-                            ? "maze-break: motion controls; tilt to move/turn, swing to aim, middle-right fires"
-                            : "maze-break: touch controls; left half stick, right drag looks, middle-right fires");
+        app_.log().Info("maze-break: touch controls; left half stick, right drag looks, bottom-right fires");
     }
 
     const uint64_t start_us = app_.clock().Now().microseconds();
@@ -550,14 +498,8 @@ int MazeBreakApp::Run() {
         if (resumed_) {
             resumed_ = false;
             last_frame_us_ = now_us;
-            if (calibrating_) {
-                calibration_started_us_ = now_us;
-            }
             if (started_) {
                 audio_.StartBgm();
-            }
-            if (motion_mode_) {
-                motion_.Recalibrate();
             }
         }
         const uint64_t active_elapsed_us = now_us - last_frame_us_;
@@ -572,7 +514,7 @@ int MazeBreakApp::Run() {
         const float dt = static_cast<float>(dt_us) * 1e-6F;
 
         if (started_) {
-            game::Controls controls = GatherControls(now_us, dt);
+            game::Controls controls = GatherControls();
             const game::Phase phase_before = world_.phase();
             if (phase_before != game::Phase::kPlaying && !options_.benchmark) {
                 controls = {};  // Menu confirmation is independent of gameplay fire.
@@ -596,12 +538,9 @@ int MazeBreakApp::Run() {
             if (phase_before != game::Phase::kPlaying && world_.phase() == game::Phase::kPlaying &&
                 !options_.benchmark) {
                 // Both win and death retries return to the frozen first-frame
-                // tutorial. Require a fresh press there, so the retry finger's
-                // release cannot silently confirm a new neutral orientation.
+                // tutorial and require a fresh press there.
                 started_ = false;
-                calibrating_ = false;
                 menu_ = input::MenuControls{};
-                recalibrate_armed_ = true;
                 audio_.StopAll();
             }
             PumpSounds();
