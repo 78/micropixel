@@ -1,4 +1,5 @@
 list(APPEND micropixel_sources
+    "platform/sensors/polled_vector_sensor_peripheral.cpp"
     "platform/boards/m5stack-cores3/battery_peripheral.cpp"
     "platform/boards/m5stack-cores3/board_hardware.cpp"
     "platform/boards/m5stack-cores3/display_hardware.cpp"

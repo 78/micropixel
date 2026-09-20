@@ -1,14 +1,22 @@
 #ifndef MICROPIXEL_PLATFORM_BOARDS_METALIO_CLAW4_BOARD_CONFIG_HPP
 #define MICROPIXEL_PLATFORM_BOARDS_METALIO_CLAW4_BOARD_CONFIG_HPP
 
+#include <array>
 #include <cstdint>
 
+#include "device/contracts/peripheral_channel.hpp"
 #include "driver/gpio.h"
 #include "driver/i2c_types.h"
 #include "driver/ledc.h"
 #include "driver/uart.h"
 
 namespace micropixel::platform::metalio_claw4::board {
+
+inline constexpr device::PeripheralChannelId kAccelerationChannel = 1U;
+inline constexpr device::PeripheralChannelId kMagneticFieldChannel = 2U;
+
+inline constexpr std::array<device::PeripheralChannelId, 14> kApplicationGpioLines{5U,  14U, 15U, 16U, 17U, 18U, 19U,
+                                                                                   20U, 21U, 23U, 35U, 46U, 47U, 48U};
 
 inline constexpr int32_t kDisplayWidth = 720;
 inline constexpr int32_t kDisplayHeight = 720;

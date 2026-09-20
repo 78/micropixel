@@ -16,13 +16,14 @@
 #include "platform/boards/esp32-s3-box-3/i2s_audio_sink.hpp"
 #include "platform/boards/esp32-s3-box-3/platform_state.hpp"
 #include "platform/boards/esp32-s3-box-3/presentation.hpp"
-#include "platform/boards/esp32-s3-box-3/sensor_peripheral.hpp"
 #include "platform/boards/esp32-s3-common/lvgl_display.hpp"
 #include "platform/controllers/brightness_curve.hpp"
+#include "platform/drivers/sensors/icm42670.hpp"
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/memory/internal_ram.hpp"
+#include "platform/sensors/polled_inertial_sensor_peripheral.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
 
@@ -145,12 +146,12 @@ class Esp32S3Box3Board final : public Board {
         registration.SetSystemUi(system_ui_);
         bool registered = true;
         if (sensors_.acceleration_available()) {
-            registered = registration.AddSensor(sensors_, esp32_s3_box_3::SensorPeripheral::kAcceleration,
+            registered = registration.AddSensor(sensors_, sensors::PolledInertialSensorPeripheral::kAcceleration,
                                                 "Built-in ICM-42607-P accelerometer") &&
                          registered;
         }
         if (sensors_.angular_velocity_available()) {
-            registered = registration.AddSensor(sensors_, esp32_s3_box_3::SensorPeripheral::kAngularVelocity,
+            registered = registration.AddSensor(sensors_, sensors::PolledInertialSensorPeripheral::kAngularVelocity,
                                                 "Built-in ICM-42607-P gyroscope") &&
                          registered;
         }
@@ -182,7 +183,15 @@ class Esp32S3Box3Board final : public Board {
     adapters::GraphicsAdapter graphics_;
     esp32_s3_box_3::I2sAudioSink audio_output_{};
     esp32_s3_box_3::HostMuteControl mute_control_{};
-    esp32_s3_box_3::SensorPeripheral sensors_{};
+    drivers::Icm42670 inertial_{};
+    drivers::Icm42670::Vector acceleration_{inertial_, drivers::Icm42670::Kind::kAcceleration};
+    drivers::Icm42670::Vector angular_velocity_{inertial_, drivers::Icm42670::Kind::kAngularVelocity};
+    sensors::PolledInertialSensorPeripheral sensors_{acceleration_,
+                                                     angular_velocity_,
+                                                     {.log_tag = "box3_sensors",
+                                                      .model = "ICM-42607-P",
+                                                      .acceleration_timer_name = "box3_accel",
+                                                      .angular_velocity_timer_name = "box3_gyro"}};
     gpio::EspGpioPeripheral gpio_{esp32_s3_box_3::board::kApplicationGpioLines};
     board_detail::Box3Presentation presentation_;
     host_ui::lvgl::square_common::SquareSystemUi system_ui_;

@@ -32,15 +32,14 @@
 #include "platform/boards/metalio-claw4/cellular_controller.hpp"
 #include "platform/boards/metalio-claw4/display/display_pipeline.hpp"
 #include "platform/boards/metalio-claw4/display/screen_capture.hpp"
-#include "platform/boards/metalio-claw4/gpio_peripheral.hpp"
 #include "platform/boards/metalio-claw4/haptic_actuator.hpp"
 #include "platform/boards/metalio-claw4/i2s_audio_sink.hpp"
 #include "platform/boards/metalio-claw4/platform_state.hpp"
 #include "platform/boards/metalio-claw4/presentation.hpp"
-#include "platform/boards/metalio-claw4/sensor_peripheral.hpp"
 #include "platform/boards/metalio-claw4/tca9555_power_key.hpp"
 #include "platform/buses/i2c_executor.hpp"
 #include "platform/controllers/brightness_curve.hpp"
+#include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/graphics/dma2d_copy_engine.hpp"
 #include "platform/input/gt911_input.hpp"
 #include "platform/lvgl/display/jpeg_cover_decoder.hpp"
@@ -267,6 +266,35 @@ esp_err_t InitializeLvgl(board_detail::MetalioClaw4BoardState& state) {
 
 namespace {
 
+void InitializeSensors(board_detail::MetalioClaw4BoardState& state) {
+    if (state.board_io.I2cBus() == nullptr) {
+        ESP_LOGW(board_detail::kSensorTag, "shared I2C bus unavailable");
+        return;
+    }
+    const esp_err_t initialized = state.i2c_executor.Invoke(
+        buses::I2cExecutor::Priority::kNormal,
+        [](void* context) {
+            auto& state = *static_cast<board_detail::MetalioClaw4BoardState*>(context);
+            const auto bus = state.board_io.I2cBus();
+            if (const esp_err_t status = state.acceleration.Initialize(bus); status != ESP_OK) {
+                ESP_LOGW(board_detail::kSensorTag, "SC7A20HTR unavailable: %s", esp_err_to_name(status));
+            }
+            if (const esp_err_t status = state.magnetic_field.Initialize(bus); status != ESP_OK) {
+                ESP_LOGW(board_detail::kSensorTag, "QMC6309 unavailable: %s", esp_err_to_name(status));
+            }
+            return ESP_OK;
+        },
+        &state);
+    if (initialized != ESP_OK) {
+        ESP_LOGW(board_detail::kSensorTag, "sensor discovery could not run on the shared I2C executor: %s",
+                 esp_err_to_name(initialized));
+        return;
+    }
+    if (const esp_err_t status = state.sensors.Initialize(state.i2c_executor); status != ESP_OK) {
+        ESP_LOGW(board_detail::kSensorTag, "sampler initialization failed: %s", esp_err_to_name(status));
+    }
+}
+
 esp_err_t InitializePlatformImpl(board_detail::MetalioClaw4BoardState& state) {
     ESP_LOGI(board_detail::kTag, "initializing Metalio-Claw4 LVGL display pipeline");
     esp_err_t status = state.board_io.Initialize();
@@ -283,7 +311,7 @@ esp_err_t InitializePlatformImpl(board_detail::MetalioClaw4BoardState& state) {
         status = state.power_key.Initialize(state.board_io.IoExpander(), state.i2c_executor);
     }
     if (status == ESP_OK) {
-        state.sensors.Initialize(state.board_io.I2cBus(), state.i2c_executor);
+        InitializeSensors(state);
         status = state.gpio.Initialize();
     }
     if (status == ESP_OK) {
@@ -494,17 +522,17 @@ class MetalioClaw4Board final : public Board, public device::Power {
         registration.SetLocalControl(metalio_claw4::UsbLocalControl());
         registration.SetSystemUi(system_ui_);
         bool registered = true;
-        if (state_.sensors.acceleration_available()) {
-            registered = registration.AddSensor(state_.sensors, metalio_claw4::SensorPeripheral::kAcceleration,
+        if (state_.acceleration.available()) {
+            registered = registration.AddSensor(state_.sensors, metalio_claw4::board::kAccelerationChannel,
                                                 "Built-in accelerometer") &&
                          registered;
         }
-        if (state_.sensors.magnetic_field_available()) {
-            registered = registration.AddSensor(state_.sensors, metalio_claw4::SensorPeripheral::kMagneticField,
+        if (state_.magnetic_field.available()) {
+            registered = registration.AddSensor(state_.sensors, metalio_claw4::board::kMagneticFieldChannel,
                                                 "Built-in magnetometer") &&
                          registered;
         }
-        for (device::PeripheralChannelId line : metalio_claw4::GpioPeripheral::kApplicationLines) {
+        for (device::PeripheralChannelId line : metalio_claw4::board::kApplicationGpioLines) {
             char name[16]{};
             (void)std::snprintf(name, sizeof(name), "P%u", static_cast<unsigned>(line));
             registered = registration.AddGpio(state_.gpio, line, name) && registered;
@@ -547,15 +575,14 @@ class MetalioClaw4Board final : public Board, public device::Power {
     }
 
    private:
-    static board_detail::MetalioClaw4BoardState& TaskState(buses::I2cExecutor& executor,
-                                                           metalio_claw4::GpioPeripheral& gpio,
+    static board_detail::MetalioClaw4BoardState& TaskState(buses::I2cExecutor& executor, gpio::EspGpioPeripheral& gpio,
                                                            input::Gt911Input& touch) {
         static MICROPIXEL_EXT_RAM_BSS board_detail::MetalioClaw4BoardState state(executor, gpio, touch);
         return state;
     }
 
     buses::I2cExecutor i2c_executor_{};
-    metalio_claw4::GpioPeripheral gpio_{};
+    gpio::EspGpioPeripheral gpio_{metalio_claw4::board::kApplicationGpioLines};
     input::Gt911Input touch_input_{board_detail::kWidth, board_detail::kHeight, metalio_claw4::board::kTouchInterrupt};
     board_detail::MetalioClaw4BoardState& state_;
     std::optional<BoardRegistration> registration_{};

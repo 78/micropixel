@@ -137,6 +137,20 @@ build_and_run i2c_executor \
     "$workspace_root/tools/tests/test_i2c_executor.cpp" \
     "$workspace_root/firmware/espressif/main/platform/buses/i2c_executor.cpp"
 
+build_and_run polled_vector_sensor \
+    -iquote "$workspace_root/tools/tests/sensor_stubs" \
+    "$workspace_root/tools/tests/test_polled_vector_sensor.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/sensors/polled_vector_sensor_peripheral.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/sensors/polled_inertial_sensor_peripheral.cpp"
+
+build_and_run board_gpio \
+    -pthread \
+    -iquote "$workspace_root/tools/tests/gpio_stubs" \
+    "$workspace_root/tools/tests/test_board_gpio.cpp" \
+    "$workspace_root/firmware/espressif/main/device/device_registry.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/gpio/esp_gpio_peripheral.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/gpio/gpio_isr_service.cpp"
+
 build_and_run internal_ram \
     -DMICROPIXEL_TEST_INTERNAL_RAM \
     "$workspace_root/tools/tests/test_internal_ram.cpp"
