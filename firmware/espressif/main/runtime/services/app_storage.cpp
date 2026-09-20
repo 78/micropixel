@@ -50,7 +50,8 @@ bool AppStorageNamespace(std::string_view app_id, std::span<char> output) {
         output[app_id.size()] = '\0';
         return true;
     }
-    const int written = std::snprintf(output.data(), output.size(), "m%014" PRIx64, hash & 0x00FFFFFFFFFFFFFFULL);
+    const int written =
+        std::snprintf(output.data(), output.size(), "m%014" PRIx64, hash & UINT64_C(0x00FFFFFFFFFFFFFF));
     return written == NVS_NS_NAME_MAX_SIZE - 1;
 }
 
