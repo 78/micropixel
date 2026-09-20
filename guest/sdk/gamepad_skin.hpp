@@ -20,7 +20,7 @@ struct GamepadSkinStyle final {
     Color ring{GamepadButtonStyle{}.rim};
     uint8_t ring_opacity{GamepadButtonStyle{}.rim_opacity};
     Color knob{GamepadButtonStyle{}.pressed_fill};
-    uint8_t knob_opacity{128U};
+    uint8_t knob_opacity{224U};
     uint8_t overlay_opacity{255U};
     // Floating sticks normally appear only while engaged; fixed sticks stay visible.
     bool show_stick_at_rest{false};
