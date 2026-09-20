@@ -3,7 +3,11 @@
 
 #include <stdint.h>
 
+#include <optional>
+#include <span>
+
 #include "sdk/event.hpp"
+#include "sdk/gamepad_style.hpp"
 #include "sdk/geometry.hpp"
 #include "sdk/math.hpp"
 
@@ -87,6 +91,14 @@ enum class GamepadOverlayPolicy : uint8_t {
     kHidden,
 };
 
+struct GamepadButtonConfig final {
+    GamepadGlyph glyph{GamepadGlyph::kNone};
+    // Unspecified values use the layout preset. A centre is in bounds coordinates.
+    std::optional<Point> center{};
+    uint16_t radius{};
+    GamepadButtonStyle style{};
+};
+
 struct GamepadConfig final {
     static constexpr uint8_t kMaxButtons = 4U;
 
@@ -95,15 +107,13 @@ struct GamepadConfig final {
     // events fed to OnTouch(): buffer pixels for DirectSurface Apps (convert
     // with DirectSurface::ToBuffer), logical pixels for Scene Apps.
     Rect bounds{};
-    // Face buttons, indexed by GamepadButton; 0..kMaxButtons.
-    uint8_t button_count{};
-    GamepadGlyph glyphs[kMaxButtons]{};
+    // Ordered South, East, West, North. Configure copies this collection.
+    std::span<const GamepadButtonConfig> buttons{};
     // Look-pad taps press this button; -1 disables. Ignored without a look pad.
     int8_t look_tap_button{static_cast<int8_t>(GamepadButton::kSouth)};
     // Geometry in `bounds` pixels; 0 derives from the short edge of `bounds`.
     uint16_t stick_radius{};    // finger travel for full deflection
     uint16_t stick_deadzone{};  // travel that still reads as centred
-    uint16_t button_radius{};   // drawn radius; the hit area is 25% larger
     // A floating stick centres on the first touch; a fixed one sits at its rest
     // position and only reacts inside twice its radius.
     bool floating_stick{true};
@@ -151,9 +161,9 @@ struct GamepadState final {
 // free of Host calls, so games can unit-test their control mapping.
 //
 //   micropixel::VirtualGamepad pad;
+//   const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 //   pad.Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
-//                  .bounds = {0, 0, w, h}, .button_count = 1,
-//                  .glyphs = {micropixel::GamepadGlyph::kFire}});
+//                  .bounds = {0, 0, w, h}, .buttons = buttons});
 //   // per event:  if (pad.OnEvent(event)) continue;   // the pad took it
 //   // per frame:  const auto state = pad.Consume();
 //
@@ -185,29 +195,52 @@ class VirtualGamepad final {
 
     VirtualGamepad() = default;
 
-    // False (and unconfigured) when `bounds` is empty or `button_count`
-    // exceeds kMaxButtons. Reconfiguring releases every contact.
+    // Rejects invalid bounds, too many buttons or circles outside the bounds,
+    // preserving the previous configuration. Success copies descriptors and releases contacts.
     bool Configure(const GamepadConfig& config) {
-        if (config.bounds.empty() || config.button_count > GamepadConfig::kMaxButtons) {
+        if (config.bounds.empty() || config.buttons.size() > GamepadConfig::kMaxButtons) {
             return false;
         }
-        config_ = config;
         const int32_t unit = math::Min(config.bounds.width, config.bounds.height);
+        const auto count = static_cast<uint8_t>(config.buttons.size());
+        const int32_t default_radius = math::Max(count >= 3U ? unit / 14 : unit / 11, 6);
+        Point centers[GamepadConfig::kMaxButtons]{};
+        int32_t radii[GamepadConfig::kMaxButtons]{};
+        for (uint8_t index = 0U; index < count; ++index) {
+            const GamepadButtonConfig& button = config.buttons[index];
+            centers[index] = button.center.value_or(DefaultButtonCenter(config.bounds, count, index));
+            radii[index] = button.radius != 0U ? button.radius : default_radius;
+            const int64_t x = centers[index].x, y = centers[index].y, radius = radii[index];
+            if (x - radius < config.bounds.x || y - radius < config.bounds.y ||
+                x + radius > static_cast<int64_t>(config.bounds.x) + config.bounds.width ||
+                y + radius > static_cast<int64_t>(config.bounds.y) + config.bounds.height) {
+                return false;
+            }
+        }
+        config_ = config;
+        config_.buttons = {};  // Never retain a pointer into caller-owned descriptors.
+        button_count_ = count;
+        for (uint8_t index = 0U; index < count; ++index) {
+            button_configs_[index] = config.buttons[index];
+            button_centers_[index] = centers[index];
+            button_radii_[index] = radii[index];
+        }
         stick_radius_ = config.stick_radius != 0U ? config.stick_radius : math::Max(unit / 9, 8);
         stick_deadzone_ = config.stick_deadzone != 0U ? config.stick_deadzone : math::Max(stick_radius_ / 7, 2);
-        // Three or four buttons share the right half with the diamond spread,
-        // so they shrink to keep their hit areas apart and inside `bounds`.
-        const int32_t default_button_radius = config.button_count >= 3U ? unit / 14 : unit / 11;
-        button_radius_ = config.button_radius != 0U ? config.button_radius : math::Max(default_button_radius, 6);
         stick_rest_ = {config.bounds.x + unit * 28 / 100, config.bounds.y + config.bounds.height - unit * 28 / 100};
-        PlaceButtons(unit);
         configured_ = true;
         Reset();
         return true;
     }
 
     [[nodiscard]] constexpr bool configured() const { return configured_; }
-    [[nodiscard]] constexpr const GamepadConfig& config() const { return config_; }
+    // Snapshot with a view into this pad's owned descriptors, valid until reconfiguration.
+    [[nodiscard]] GamepadConfig config() const {
+        GamepadConfig snapshot = config_;
+        snapshot.buttons = buttons();
+        return snapshot;
+    }
+    [[nodiscard]] std::span<const GamepadButtonConfig> buttons() const { return {button_configs_, button_count_}; }
 
     // Releases every contact and key without emitting edges. Call on Resume.
     void Reset() {
@@ -418,12 +451,11 @@ class VirtualGamepad final {
     }
     [[nodiscard]] constexpr bool has_buttons() const {
         return config_.layout != GamepadLayout::kStickOnly && config_.layout != GamepadLayout::kStickLook &&
-               config_.button_count != 0U;
+               button_count_ != 0U;
     }
     [[nodiscard]] constexpr bool digital_stick() const { return config_.layout == GamepadLayout::kDPadButtons; }
-    [[nodiscard]] constexpr uint8_t button_count() const { return has_buttons() ? config_.button_count : 0U; }
+    [[nodiscard]] constexpr uint8_t button_count() const { return has_buttons() ? button_count_ : 0U; }
     [[nodiscard]] constexpr int32_t stick_radius() const { return stick_radius_; }
-    [[nodiscard]] constexpr int32_t button_radius() const { return button_radius_; }
     [[nodiscard]] constexpr Point stick_rest() const { return stick_rest_; }
     // Right half of `bounds`; where look-pad contacts start.
     [[nodiscard]] constexpr Rect look_region() const {
@@ -470,9 +502,9 @@ class VirtualGamepad final {
             return geometry;
         }
         geometry.center = button_centers_[index];
-        geometry.radius = button_radius_;
+        geometry.radius = button_radii_[index];
         geometry.held = (held_ & static_cast<uint8_t>(1U << index)) != 0U;
-        geometry.glyph = config_.glyphs[index];
+        geometry.glyph = button_configs_[index].glyph;
         return geometry;
     }
 
@@ -490,30 +522,33 @@ class VirtualGamepad final {
         return (key_directions_ & GamepadDirectionBit(direction)) != 0U;
     }
 
-    void PlaceButtons(int32_t unit) {
-        const Rect& b = config_.bounds;
-        const int32_t right = b.x + b.width;
-        const int32_t bottom = b.y + b.height;
-        if (config_.button_count == 1U) {
-            button_centers_[0] = {right - unit * 18 / 100, bottom - unit * 28 / 100};
-            return;
+    [[nodiscard]] static Point DefaultButtonCenter(const Rect& bounds, uint8_t count, uint8_t index) {
+        const int32_t unit = math::Min(bounds.width, bounds.height);
+        const int32_t right = bounds.x + bounds.width;
+        const int32_t bottom = bounds.y + bounds.height;
+        if (count == 1U) {
+            return {right - unit * 18 / 100, bottom - unit * 28 / 100};
         }
-        // Diamond like a physical pad: South at the bottom, East to the right.
-        // Two buttons only use South and East, so they can sit further right.
-        const bool compact = config_.button_count >= 3U;
+        const bool compact = count >= 3U;
         const Point centre{right - unit * (compact ? 27 : 30) / 100, bottom - unit * 30 / 100};
         const int32_t spread = unit * (compact ? 14 : 16) / 100;
-        button_centers_[0] = {centre.x, centre.y + spread};
-        button_centers_[1] = {centre.x + spread, centre.y};
-        button_centers_[2] = {centre.x - spread, centre.y};
-        button_centers_[3] = {centre.x, centre.y - spread};
+        switch (index) {
+            case 0U:
+                return {centre.x, centre.y + spread};
+            case 1U:
+                return {centre.x + spread, centre.y};
+            case 2U:
+                return {centre.x - spread, centre.y};
+            default:
+                return {centre.x, centre.y - spread};
+        }
     }
 
     [[nodiscard]] int8_t HitButton(Point position) const {
-        const int32_t hit_radius = button_radius_ * 5 / 4;
         for (uint8_t index = 0U; index < button_count(); ++index) {
-            const int32_t dx = position.x - button_centers_[index].x;
-            const int32_t dy = position.y - button_centers_[index].y;
+            const int64_t hit_radius = button_radii_[index] * 5 / 4;
+            const int64_t dx = static_cast<int64_t>(position.x) - button_centers_[index].x;
+            const int64_t dy = static_cast<int64_t>(position.y) - button_centers_[index].y;
             if (dx * dx + dy * dy <= hit_radius * hit_radius) {
                 return static_cast<int8_t>(index);
             }
@@ -707,7 +742,9 @@ class VirtualGamepad final {
     bool key_after_touch_{};
     int32_t stick_radius_{};
     int32_t stick_deadzone_{};
-    int32_t button_radius_{};
+    uint8_t button_count_{};
+    GamepadButtonConfig button_configs_[GamepadConfig::kMaxButtons]{};
+    int32_t button_radii_[GamepadConfig::kMaxButtons]{};
     Point stick_rest_{};
     Point button_centers_[GamepadConfig::kMaxButtons]{};
     Finger stick_{};

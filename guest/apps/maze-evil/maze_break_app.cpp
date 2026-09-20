@@ -201,8 +201,8 @@ void MazeBreakApp::ConfigurePad() {
     micropixel::GamepadConfig config{};
     config.layout = micropixel::GamepadLayout::kStickLookButtons;
     config.bounds = {0, 0, view_.width, view_.height};
-    config.button_count = 1U;
-    config.glyphs[0] = micropixel::GamepadGlyph::kFire;
+    const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
+    config.buttons = buttons;
     config.look_tap_button = -1;  // dragging to look must never fire
     if (!app_.gamepad().Configure(config)) {
         app_.log().Error("maze-break: virtual gamepad rejected the view bounds");

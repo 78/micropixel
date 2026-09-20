@@ -185,6 +185,59 @@ void TestVisibility() {
     CHECK(count == 2U && visible[1].room == entrance, "capacity limits the traversal");
 }
 
+void TestStickSteering() {
+    world::RoomWorld world;
+    world.Initialize(world::TombLevel());
+    const world::Level& level = world.level();
+    const uint8_t hall = RoomNamed(level, 3.5F, 15.5F);
+    constexpr int kFrameRates[] = {30, 60};
+    constexpr float kDirections[] = {-1.0F, 1.0F};
+    for (const int fps : kFrameRates) {
+        const float dt = 1.0F / static_cast<float>(fps);
+        for (const float direction : kDirections) {
+            game::Player player;
+            player.Reset(world);
+            game::Controls controls{};
+            controls.SetStick(direction * 0.25F, -0.95F);
+            for (int frame = 0; frame < fps * 8; ++frame) player.Update(world, controls, dt);
+            CHECK(player.room() == hall, "slight sideways drift still walks through the corridor into the hall");
+            CHECK(Near(player.position().x, level.start.x), "sideways drift does not accumulate lateral movement");
+            CHECK(Near(player.camera_yaw(), level.start_yaw), "sideways drift does not spin the follow camera");
+
+            // Just beyond the tolerance, steer gently instead of immediately
+            // driving the follow camera at its maximum angular speed.
+            player.Reset(world);
+            controls.SetStick(direction * 0.4F, -0.9F);
+            for (int frame = 0; frame < fps / 2; ++frame) player.Update(world, controls, dt);
+            CHECK(direction * player.camera_yaw() > 0.01F && direction * player.camera_yaw() < 0.25F,
+                  "small deliberate steering produces a gentle camera correction");
+            CHECK(player.position().z > level.start.z + 0.7F, "gentle steering keeps making forward progress");
+
+            player.Reset(world);
+            controls.SetStick(direction, 0.0F);
+            for (int frame = 0; frame < fps / 2; ++frame) player.Update(world, controls, dt);
+            CHECK(direction * (player.position().x - level.start.x) > 0.5F,
+                  "full sideways input still moves in either direction");
+        }
+    }
+
+    game::Controls controls{};
+    controls.SetStick(0.3F, 0.8F);
+    CHECK(controls.strafe == 0.0F && Near(controls.forward, -0.8F), "deadzone preserves backward input");
+    controls.SetStick(0.301F, -0.8F);
+    CHECK(controls.strafe > 0.0F && controls.strafe < 0.005F && Near(controls.forward, 0.8F),
+          "horizontal response is continuous at the deadzone edge");
+    controls.SetStick(0.0F, 0.0F);
+    CHECK(controls.forward == 0.0F && controls.strafe == 0.0F, "released stick stops requesting movement");
+
+    game::Player player;
+    player.Reset(world);
+    controls.SetStick(0.0F, -1.0F);
+    controls.orbit = 0.2F;
+    player.Update(world, controls, 1.0F / 30.0F);
+    CHECK(Near(player.camera_yaw(), level.start_yaw + controls.orbit), "manual orbit overrides camera follow");
+}
+
 void TestPlayer() {
     world::RoomWorld world;
     world.Initialize(world::TombLevel());
@@ -259,6 +312,7 @@ int main() {
     TestLevelData();
     TestHeights();
     TestVisibility();
+    TestStickSteering();
     TestPlayer();
     std::puts("tomb_room_world: ok");
     return 0;

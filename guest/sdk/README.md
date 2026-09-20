@@ -98,10 +98,10 @@ feeds every touch, key, analog axis (Input 1.1), gamepad device and Resume event
 so game code never routes input and never branches on the source:
 
 ```cpp
+const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
                          .bounds = {0, 0, width, height},     // touch coordinate space
-                         .button_count = 1,
-                         .glyphs = {micropixel::GamepadGlyph::kFire}});
+                         .buttons = buttons});
 micropixel::GamepadSkin skin;
 skin.Initialize(app.resources(), app.gamepad().pad());     // bakes ring, knob and buttons into one texture
 
@@ -120,15 +120,18 @@ and the left stick axis drive the stick (a touching finger wins, then the axis, 
 its role until it lifts. The overlay follows `GamepadOverlayPolicy`: `kAuto` hides it after key/axis input or a
 gamepad connection until the next touch. `physical_connected()` reports a connected gamepad device.
 
-Follow-ups, by expected payoff: multi-segment run-length rows so the ring's hole is skipped; a mostly-opaque
-button style so the Host writes without reading the frame buffer; once the Host gains a `kGamepad`
-peripheral and the `AXIS` event bridge, a system-menu overlay switch (auto / always / hidden) driving
-`GamepadOverlayPolicy`; further layout presets when a second game needs them.
+`GamepadConfig::buttons` accepts up to four `GamepadButtonConfig` values in South/East/West/North order.
+`Configure` copies the descriptors, so the source array or vector need not outlive the call. Each button
+sets its glyph, optional centre/radius and `GamepadButtonStyle`; omitted geometry uses the layout preset.
+Centres use `bounds` coordinates and circles must fit inside the bounds. Hit areas add 25% padding;
+overlaps prefer the first button. Reconfigure the pad and reinitialize its skin after changing buttons.
+Views from `pad.buttons()` and `pad.config().buttons` remain valid until reconfiguration.
 
-`VirtualGamepad` (the class behind `pad()`) is also usable standalone with `OnEvent(event)` for Apps that need
-several pads or want to unit-test their control mapping; `GamepadSkin` draws either. Games with their own art
-read `stick_geometry()` and `button_geometry()` instead. `GamepadSkin` draws anti-aliased vector glyphs
-(`GamepadGlyph`) and, by default, shows a floating stick only while it is engaged (`GamepadSkinStyle::show_stick_at_rest`).
+`VirtualGamepad` also accepts `OnEvent(event)` directly for standalone use. Custom renderers can read
+`stick_geometry()` and `button_geometry()`. `GamepadSkinStyle` controls the stick and overlay; button
+styles belong to their descriptors. Defaults use matching faint rims, grey glyphs, transparent idle
+buttons and dark grey press feedback. Floating sticks appear only while engaged unless
+`show_stick_at_rest` is enabled; fixed sticks stay visible.
 
 ## Mode7 and surface textures
 

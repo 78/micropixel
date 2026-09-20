@@ -14,23 +14,15 @@
 namespace micropixel {
 
 // Colours of the default on-screen gamepad. Opacity is straight alpha baked
-// into the atlas; `Draw`/`Sync` apply `overlay_opacity` on top.
+// into the atlas; `Draw`/`Sync` apply `overlay_opacity` on top. Idle controls
+// use faint matching rims, clear interiors and neutral glyphs; presses add a subtle dark grey fill.
 struct GamepadSkinStyle final {
-    Color ring{Color::White()};
-    uint8_t ring_opacity{110U};
-    Color knob{Color::Rgb(255U, 214U, 110U)};
-    uint8_t knob_opacity{200U};
-    Color button{Color::Rgb(36U, 40U, 48U)};
-    uint8_t button_opacity{140U};
-    Color button_rim{Color::White()};
-    uint8_t button_rim_opacity{160U};
-    Color button_pressed{Color::Rgb(255U, 170U, 60U)};
-    uint8_t button_pressed_opacity{230U};
-    Color glyph{Color::White()};
+    Color ring{GamepadButtonStyle{}.rim};
+    uint8_t ring_opacity{GamepadButtonStyle{}.rim_opacity};
+    Color knob{GamepadButtonStyle{}.pressed_fill};
+    uint8_t knob_opacity{128U};
     uint8_t overlay_opacity{255U};
-    // A floating stick has no fixed home, so by default it only appears while
-    // a finger (or the direction keys) engage it, like the invisible look pad.
-    // Fixed sticks are always drawn at their rest position.
+    // Floating sticks normally appear only while engaged; fixed sticks stay visible.
     bool show_stick_at_rest{false};
 };
 
@@ -347,13 +339,16 @@ class GamepadSkin final {
         style_ = style;
         ring_radius_ = pad.stick_radius();
         knob_radius_ = math::Max(ring_radius_ * 9 / 25, 4);
-        button_radius_ = pad.button_radius();
         button_count_ = pad.button_count();
         const int32_t ring_tile = ring_radius_ * 2 + 4;
         const int32_t knob_tile = knob_radius_ * 2 + 4;
-        const int32_t button_tile = button_radius_ * 2 + 4;
-        const int32_t width = ring_tile + knob_tile + button_tile * 2 * button_count_;
-        const int32_t height = math::Max(ring_tile, button_tile);
+        int32_t width = ring_tile + knob_tile;
+        int32_t height = math::Max(ring_tile, knob_tile);
+        for (uint8_t index = 0U; index < button_count_; ++index) {
+            const int32_t tile = pad.button_geometry(index).radius * 2 + 4;
+            width += tile * 2;
+            height = math::Max(height, tile);
+        }
         std::unique_ptr<uint8_t[]> pixels(new uint8_t[static_cast<size_t>(width) * static_cast<size_t>(height) * 4U]());
         detail::GamepadAtlasCanvas canvas{pixels.get(), width, height};
 
@@ -369,21 +364,23 @@ class GamepadSkin final {
                     style.knob_opacity);
         cursor += knob_tile;
 
-        const float glyph_half = static_cast<float>(button_radius_) * 0.5F;
-        const float rim = static_cast<float>(math::Max(button_radius_ / 12, 1));
         for (uint8_t index = 0U; index < button_count_; ++index) {
-            const GamepadGlyph glyph = pad.button_geometry(index).glyph;
+            const VirtualGamepad::ButtonGeometry button = pad.button_geometry(index);
+            const GamepadButtonStyle& button_style = pad.buttons()[index].style;
+            const int32_t button_tile = button.radius * 2 + 4;
+            const float radius = static_cast<float>(button.radius);
+            const float glyph_half = radius * 0.5F;
+            const float rim = math::Min(ring_thickness, radius);
             for (int pressed = 0; pressed < 2; ++pressed) {
                 const Point centre{cursor + button_tile / 2, button_tile / 2};
-                const float radius = static_cast<float>(button_radius_);
                 if (pressed == 0) {
-                    canvas.Disc(centre, radius, 0.0F, style.button, style.button_opacity);
-                    canvas.Disc(centre, radius, radius - rim, style.button_rim, style.button_rim_opacity);
+                    canvas.Disc(centre, radius, 0.0F, button_style.fill, button_style.fill_opacity);
+                    canvas.Disc(centre, radius, radius - rim, button_style.rim, button_style.rim_opacity);
                 } else {
-                    canvas.Disc(centre, radius, 0.0F, style.button_pressed, style.button_pressed_opacity);
+                    canvas.Disc(centre, radius, 0.0F, button_style.pressed_fill, button_style.pressed_fill_opacity);
                 }
-                canvas.Glyph(centre, glyph, glyph_half, style.glyph,
-                             pressed == 0 ? style.button : style.button_pressed);
+                canvas.Glyph(centre, button.glyph, glyph_half, button_style.glyph,
+                             pressed == 0 ? button_style.fill : button_style.pressed_fill);
                 (pressed == 0 ? button_idle_source_ : button_pressed_source_)[index] = {cursor, 0, button_tile,
                                                                                         button_tile};
                 cursor += button_tile;
@@ -496,7 +493,6 @@ class GamepadSkin final {
     SpriteBatch batch_{};
     int32_t ring_radius_{};
     int32_t knob_radius_{};
-    int32_t button_radius_{};
     uint8_t button_count_{};
     Rect ring_source_{};
     Rect knob_source_{};

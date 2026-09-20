@@ -396,10 +396,10 @@ TextOverflow::kReject。后续修改失败不能提交一半属性。控件 ToSt
 触摸、按键、模拟轴（Input 1.1）、手柄设备接入/断开和 Resume 事件先喂给它，游戏代码既不路由输入，也不区分输入来源：
 
 ```cpp
+const micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kFire}};
 app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
                          .bounds = {0, 0, width, height},     // 与触摸坐标同一空间
-                         .button_count = 1,
-                         .glyphs = {micropixel::GamepadGlyph::kFire}});
+                         .buttons = buttons});
 micropixel::GamepadSkin skin;
 skin.Initialize(app.resources(), app.gamepad().pad());     // 把圆环、摇杆帽和按键烘焙进一张动态纹理
 
@@ -415,14 +415,15 @@ skin.Draw(list, app.gamepad().pad());                     // HostSurface；Scene
 摇杆（触摸优先，其次模拟轴，最后按键）。每个触点在抬起前保持自己的角色。浮层遵循 `GamepadOverlayPolicy`：
 `kAuto` 在按键/轴输入或手柄接入后隐藏，直到下一次触摸；`physical_connected()` 报告是否有手柄设备接入。
 
-待办（按收益排序）：圆环 tile 改多段 run-length 以跳过中间的洞；常驻按键提供以不透明像素为主的样式，
-让 Host 直接写入而不读 frame buffer；Host 侧 `DeviceKind::kGamepad` 外设与 `AXIS` 事件 bridge 落地后，
-系统菜单提供浮层"自动 / 常显 / 隐藏"开关并驱动 `GamepadOverlayPolicy`；更多布局预设等第二个游戏提出需求。
+`GamepadConfig::buttons` 按 South/East/West/North 顺序接收最多四个 `GamepadButtonConfig`。
+`Configure` 复制配置，源数组或 vector 不必持续存活。每个按钮独立设置图标、可选中心/半径与
+`GamepadButtonStyle`；省略位置或半径时使用布局预设。中心与 `bounds` 使用同一坐标空间，绘制圆须完全位于边界内。
+触摸范围外扩 25%，重叠时先匹配靠前的按钮。修改按钮后需重新配置手柄并初始化皮肤；
+`pad.buttons()` 和 `pad.config().buttons` 返回的视图在重新配置前有效。
 
-`pad()` 背后的 `VirtualGamepad` 也可单独使用（`OnEvent(event)`），适合需要多个手柄或想为控制映射写单元测试的
-应用；`GamepadSkin` 两种都能画。想用自己的美术时读取 `stick_geometry()` / `button_geometry()` 自行绘制。
-预设图标见 `GamepadGlyph`，由矢量形状抗锯齿绘制，随按键尺寸缩放；`GamepadSkinStyle` 可改颜色与透明度，
-浮动摇杆默认只在手指或按键驱动时显示（`show_stick_at_rest` 可改为常显），固定摇杆常显。
+`VirtualGamepad` 可单独接收 `OnEvent(event)`；自定义绘制可读取 `stick_geometry()` 和 `button_geometry()`。
+`GamepadSkinStyle` 控制摇杆与浮层样式，各按钮外观由自身配置决定。默认使用统一的淡边框、灰色图标、透明底色和
+深灰按下反馈。浮动摇杆仅在操作时显示（`show_stick_at_rest` 可改为常显），固定摇杆常显。
 
 ## 音频
 
