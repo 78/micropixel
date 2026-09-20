@@ -73,8 +73,7 @@ build_and_run linear_memory_policy "$workspace_root/tools/tests/test_linear_memo
 build_and_run_c app_requirements -I "$test_output_dir" "$workspace_root/tools/tests/test_app_requirements.c"
 
 build_and_run maze_touch_controls \
-    "$workspace_root/tools/tests/test_maze_touch_controls.cpp" \
-    "$workspace_root/guest/apps/maze-evil/input/touch_controls.cpp"
+    "$workspace_root/tools/tests/test_maze_touch_controls.cpp"
 
 build_and_run ft6336_report \
     -I "$workspace_root/tools/tests/touch_stubs" \
@@ -175,6 +174,15 @@ build_and_run guest_display_transform \
 build_and_run snake_gamekit \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_snake_gamekit.cpp"
+
+# Header-only SDK game helpers shared by the Guest apps.
+build_and_run sdk_helpers \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_sdk_helpers.cpp"
+
+build_and_run sdk_gamepad \
+    -I "$workspace_root/guest" \
+    "$workspace_root/tools/tests/test_sdk_gamepad.cpp"
 
 build_and_run mesh_renderer \
     -I "$workspace_root/guest" \

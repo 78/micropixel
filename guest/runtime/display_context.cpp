@@ -90,6 +90,20 @@ Result<void> ConfigureDisplayContext(const DisplayConfiguration& configuration) 
     return {};
 }
 
+bool AdoptSurfaceCanvas(uint32_t buffer_width, uint32_t buffer_height) {
+    if (display_context_configured || AnyLiveScene()) return false;
+    const auto& physical = LoadPhysicalGraphicsInfo();
+    // kExpand with the buffer size yields exactly the buffer as logical canvas
+    // because the upscale divides both physical extents.
+    const DisplayConfiguration configuration{{buffer_width, buffer_height}, DisplayScaleMode::kExpand};
+    const auto transform = detail::MakeDisplayTransform(physical.width, physical.height, configuration);
+    if (transform.logical_width != buffer_width || transform.logical_height != buffer_height) return false;
+    cached_display_context = transform;
+    display_context_configured = true;
+    display_context_loaded = true;
+    return true;
+}
+
 int32_t ScaleCoordinate(int32_t value, uint32_t numerator, uint32_t denominator) {
     return micropixel::detail::ScaleCoordinate(value, numerator, denominator);
 }

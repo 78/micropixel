@@ -11,9 +11,8 @@
 #include "apps/maze-evil/gfx/textures.hpp"
 #include "apps/maze-evil/input/menu_controls.hpp"
 #include "apps/maze-evil/input/motion_controls.hpp"
-#include "apps/maze-evil/input/touch_controls.hpp"
 #include "apps/maze-evil/maze_break_audio.hpp"
-#include "apps/maze-evil/rc_math.hpp"
+#include "sdk/gamepad_skin.hpp"
 #include "sdk/micropixel.hpp"
 
 namespace maze_break {
@@ -68,55 +67,9 @@ constexpr uint32_t kUpscaleThresholdWidth = 480U;
     return panel_width > kUpscaleThresholdWidth && panel_width % 2U == 0U && panel_height % 2U == 0U ? 2U : 1U;
 }
 
-// SDK touch events use the configured logical space. DirectSurface
-// raster and the stick overlay are panel / buffer pixels.
-[[nodiscard]] int MapCoord(int value, uint32_t dst_extent, uint32_t src_extent) {
-    if (src_extent == 0U) {
-        return 0;
-    }
-    const int64_t product = static_cast<int64_t>(value) * static_cast<int64_t>(dst_extent);
-    const int64_t rounding = static_cast<int64_t>(src_extent / 2U);
-    return static_cast<int>((product >= 0 ? product + rounding : product - rounding) /
-                            static_cast<int64_t>(src_extent));
-}
-
-[[nodiscard]] micropixel::TouchEvent ToPanelTouch(const micropixel::TouchEvent& touch, uint32_t panel_width,
-                                                  uint32_t panel_height, uint32_t logical_width,
-                                                  uint32_t logical_height) {
-    return touch.WithPosition(
-        {MapCoord(touch.x(), panel_width, logical_width), MapCoord(touch.y(), panel_height, logical_height)});
-}
-
-// Virtual stick ring and knob. Touch coordinates are panel pixels; the view
-// may be `upscale` times smaller.
-bool DrawStickOverlay(micropixel::RasterDrawList& list, const game::Renderer& renderer,
-                      const input::TouchControls::Overlay& overlay, int upscale) {
-    const uint16_t fire_color = gfx::PaletteRgb565(gfx::Index(overlay.fire_active ? gfx::kWhite : gfx::kOrange, 14));
-    const int fire_x = overlay.fire_x / upscale;
-    const int fire_y = overlay.fire_y / upscale;
-    bool fire_ok = renderer.DrawCircle(list, fire_x, fire_y, overlay.fire_radius / upscale, fire_color, false);
-    fire_ok =
-        renderer.DrawText(list, fire_x - gfx::TextWidth("FIRE", 1) / 2, fire_y - 3, "FIRE", fire_color, 1) && fire_ok;
-    if (!overlay.stick_active) {
-        return fire_ok;
-    }
-    const gfx::ViewConfig& view = renderer.view();
-    const uint16_t ring = gfx::PaletteRgb565(gfx::Index(gfx::kWhite, 9));
-    const uint16_t knob = gfx::PaletteRgb565(gfx::Index(gfx::kCyan, 12));
-    const int ring_radius = 30 * view.hud_scale;
-    const int knob_radius = 8 * view.hud_scale;
-    const int origin_x = overlay.stick_origin_x / upscale;
-    const int origin_y = overlay.stick_origin_y / upscale;
-    bool ok = renderer.DrawCircle(list, origin_x, origin_y, ring_radius, ring, false) && fire_ok;
-    int dx = (overlay.stick_x - overlay.stick_origin_x) / upscale;
-    int dy = (overlay.stick_y - overlay.stick_origin_y) / upscale;
-    const float len = math::Sqrt(static_cast<float>(dx * dx + dy * dy));
-    if (len > static_cast<float>(ring_radius)) {
-        dx = static_cast<int>(dx * ring_radius / len);
-        dy = static_cast<int>(dy * ring_radius / len);
-    }
-    return renderer.DrawCircle(list, origin_x + dx, origin_y + dy, knob_radius, knob, true) && ok;
-}
+// Look-pad drag in panel pixels to view rotation; the pad reports buffer
+// pixels, which are `upscale` times coarser.
+constexpr float kTurnPerPanelPixel = 0.0075F;  // radians
 
 // Scripted controls for --benchmark: walk forward while sweeping the view and
 // firing on a fixed cadence. Walls stop the player, so the sweep keeps the
@@ -178,6 +131,10 @@ class MazeBreakApp final {
     game::Controls GatherControls(uint64_t now_us, float dt);
     void PumpSounds();
     void RequestStart();
+    void ConfigurePad();
+    // The Runtime gamepad only takes input during gameplay.
+    void SyncGamepad() { app_.gamepad().set_enabled(Playing()); }
+    [[nodiscard]] bool Playing() const { return started_ && world_.phase() == game::Phase::kPlaying; }
     bool DrawRecord(micropixel::RasterDrawList& list);
     bool DrawInstructions(micropixel::RasterDrawList& list);
     void PublishStats(uint64_t now_us);
@@ -189,17 +146,16 @@ class MazeBreakApp final {
     micropixel::RasterResources raster_{};
     gfx::ViewConfig view_{};
     uint32_t upscale_{1U};
-    uint32_t logical_width_{};
-    uint32_t logical_height_{};
     game::Renderer& renderer_{gRenderer};
     game::World& world_{gWorld};
-    input::TouchControls touch_{};
+    micropixel::GamepadSkin skin_{};
+    uint64_t fire_held_since_us_{};
     input::MotionControls motion_{};
     bool motion_mode_{};
     bool recalibrate_armed_{true};
     game::RunRecord record_{};
     bool record_save_failed_{};
-    GameAudio audio_{};
+    GameAudio audio_{app_};
     game::HudStats hud_{};
     FrameStats stats_{};
     uint32_t frame_index_{};
@@ -218,40 +174,32 @@ bool MazeBreakApp::HandleEvent(const micropixel::Event& event) {
             return false;
         case micropixel::EventType::kResume:
             // The Host stopped audio and returned every buffer while we were
-            // paused; the frame clock restarts so dt does not jump.
-            touch_ = input::TouchControls{};
-            touch_.Initialize(static_cast<int>(surface_.width()), static_cast<int>(surface_.height()));
+            // paused; the frame clock restarts so dt does not jump. The
+            // Runtime gamepad released its contacts on its own.
             menu_ = input::MenuControls{};
             resumed_ = true;
             return true;
         case micropixel::EventType::kTouch:
-            if (!started_ || world_.phase() != game::Phase::kPlaying) {
-                if (!retry_requested_ && menu_.OnTouch(*event.touch())) {
-                    if (!started_) {
-                        menu_ = input::MenuControls{};
-                        RequestStart();
-                    } else {
-                        retry_requested_ = true;
-                    }
+            // While playing the Runtime gamepad owns the touches (it is enabled
+            // by SyncGamepad); menu pages confirm on the ones it left alone.
+            if (!Playing() && !event.gamepad_handled() && !retry_requested_ && menu_.OnTouch(*event.touch())) {
+                if (!started_) {
+                    menu_ = input::MenuControls{};
+                    RequestStart();
+                } else {
+                    retry_requested_ = true;
                 }
-                return true;
             }
-            touch_.OnTouch(
-                ToPanelTouch(*event.touch(), surface_.width(), surface_.height(), logical_width_, logical_height_));
             return true;
         case micropixel::EventType::kKey:
-            if (!started_ || world_.phase() != game::Phase::kPlaying) {
-                if (!retry_requested_ && menu_.OnKey(*event.key())) {
-                    if (!started_) {
-                        menu_ = input::MenuControls{};
-                        RequestStart();
-                    } else {
-                        retry_requested_ = true;
-                    }
+            if (!Playing() && !event.gamepad_handled() && !retry_requested_ && menu_.OnKey(*event.key())) {
+                if (!started_) {
+                    menu_ = input::MenuControls{};
+                    RequestStart();
+                } else {
+                    retry_requested_ = true;
                 }
-                return true;
             }
-            touch_.OnKey(*event.key());
             return true;
         case micropixel::EventType::kAudioPlayback:
             audio_.OnPlaybackEvent(event);
@@ -279,6 +227,24 @@ void MazeBreakApp::RequestStart() {
     audio_.StartBgm();
     stats_ = FrameStats{};
     stats_.window_start_us = calibration_started_us_;
+    SyncGamepad();
+}
+
+void MazeBreakApp::ConfigurePad() {
+    micropixel::GamepadConfig config{};
+    config.layout = micropixel::GamepadLayout::kStickLookButtons;
+    config.bounds = {0, 0, view_.width, view_.height};
+    config.button_count = 1U;
+    config.glyphs[0] = micropixel::GamepadGlyph::kFire;
+    config.look_tap_button = -1;  // dragging to look must never fire
+    if (!app_.gamepad().Configure(config)) {
+        app_.log().Error("maze-break: virtual gamepad rejected the view bounds");
+        return;
+    }
+    SyncGamepad();
+    if (!skin_.Initialize(app_.resources(), app_.gamepad().pad())) {
+        app_.log().Info("maze-break: gamepad skin unavailable; controls stay invisible");
+    }
 }
 
 bool MazeBreakApp::DrawRecord(micropixel::RasterDrawList& list) {
@@ -407,7 +373,20 @@ game::Controls MazeBreakApp::GatherControls(uint64_t now_us, float dt) {
     if (options_.benchmark) {
         return AutopilotControls(frame_index_);
     }
-    game::Controls controls = touch_.Consume(now_us);
+    const micropixel::GamepadState pad = app_.gamepad().Consume();
+    game::Controls controls{};
+    if (pad.stick_active) {
+        controls.forward = -pad.stick_y;
+        controls.strafe = pad.stick_x;
+    }
+    controls.turn = static_cast<float>(pad.look_dx) * kTurnPerPanelPixel * static_cast<float>(upscale_);
+    // A tap on the fire button counts even when it is released before this frame.
+    controls.fire = pad.Held(micropixel::GamepadButton::kSouth) || pad.Pressed(micropixel::GamepadButton::kSouth);
+    if (pad.Pressed(micropixel::GamepadButton::kSouth)) {
+        fire_held_since_us_ = now_us;
+    } else if (!pad.Held(micropixel::GamepadButton::kSouth)) {
+        fire_held_since_us_ = 0U;
+    }
     if (motion_mode_) {
         motion_.Poll();
         if (calibrating_) {
@@ -425,7 +404,8 @@ game::Controls MazeBreakApp::GatherControls(uint64_t now_us, float dt) {
         controls.turn += motion.turn_rate * kTiltTurnRate * dt + motion.yaw_delta;
         // Holding the function key re-centres the neutral orientation once
         // per hold; the key also fires, which is harmless.
-        if (touch_.KeyHeldFor(now_us, kRecalibrateHoldUs)) {
+        const bool fire_held_long = fire_held_since_us_ != 0U && now_us - fire_held_since_us_ > kRecalibrateHoldUs;
+        if (fire_held_long) {
             if (recalibrate_armed_) {
                 recalibrate_armed_ = false;
                 motion_.Recalibrate();
@@ -489,15 +469,14 @@ void MazeBreakApp::PublishStats(uint64_t now_us) {
 }
 
 int MazeBreakApp::Run() {
-    app_.renderer().ConfigureDisplay({}).value();  // Native screen coordinates.
+    // No ConfigureDisplay: the HostSurface below adopts its buffer as the
+    // logical canvas, so touch arrives in buffer pixels.
     options_ = ParseOptions(app_.launch_arguments());
 
     // Host-owned buffers: the App never maps a frame, so it needs no pinned
     // linear memory; every pixel comes from the Host raster kernels (Graphics 1.6). 480 px panels render 1:1; larger
     // ones at half resolution, enlarged by the Host on present.
     const micropixel::RendererInfo display = app_.renderer().info();
-    logical_width_ = display.width();
-    logical_height_ = display.height();
     upscale_ = UpscaleFor(display.physical_width(), display.physical_height());
     auto created = app_.renderer().CreateHostSurface(kBufferCount, upscale_);
     if (!created.has_value()) {
@@ -526,7 +505,7 @@ int MazeBreakApp::Run() {
         app_.log().Error("maze-break: Host raster refused the texture or palette upload");
         return 2;
     }
-    touch_.Initialize(static_cast<int>(surface_.width()), static_cast<int>(surface_.height()));
+    ConfigurePad();
 
     motion_mode_ = options_.motion && !options_.benchmark && motion_.Initialize(app_);
 
@@ -537,7 +516,7 @@ int MazeBreakApp::Run() {
         world_.SeedRng(1U);
     }
 
-    audio_.Initialize(app_, options_.bgm, options_.mute);
+    audio_.Initialize(options_.bgm, options_.mute);
     started_ = options_.benchmark;
     if (started_) {
         audio_.StartBgm();
@@ -552,6 +531,11 @@ int MazeBreakApp::Run() {
         msg.AppendUint(surface_.buffer_height());
         msg.Append(" Direct Surface, upscale=");
         msg.AppendUint(upscale_);
+        // The adopted logical canvas must equal the buffer for touch to land.
+        msg.Append(", logical ");
+        msg.AppendUint(app_.renderer().info().width());
+        msg.Append("x");
+        msg.AppendUint(app_.renderer().info().height());
         msg.Append(surface_.direct_scanout() ? ", direct scanout" : ", composited fallback");
         msg.Append(", Host buffers + raster kernels");
         msg.Append(", panel max ");
@@ -568,6 +552,7 @@ int MazeBreakApp::Run() {
     stats_.window_start_us = start_us;
 
     for (;;) {
+        SyncGamepad();
         if (!DrainEvents()) {
             break;
         }
@@ -634,8 +619,6 @@ int MazeBreakApp::Run() {
                 calibrating_ = false;
                 menu_ = input::MenuControls{};
                 recalibrate_armed_ = true;
-                touch_ = input::TouchControls{};
-                touch_.Initialize(static_cast<int>(surface_.width()), static_cast<int>(surface_.height()));
                 audio_.StopAll();
             }
             PumpSounds();
@@ -648,7 +631,7 @@ int MazeBreakApp::Run() {
             drawn = started_ ? renderer_.Render(list, world_, hud_) : DrawInstructions(list);
             if (drawn && !options_.benchmark) drawn = DrawRecord(list);
             if (drawn && started_ && !options_.benchmark && world_.phase() == game::Phase::kPlaying) {
-                drawn = DrawStickOverlay(list, renderer_, touch_.overlay(), static_cast<int>(upscale_));
+                drawn = skin_.Draw(list, app_.gamepad().pad());
             }
         });
         if (!drawn || !rendered) {

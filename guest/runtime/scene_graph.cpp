@@ -1159,6 +1159,10 @@ int32_t EncodeAndSubmit(SceneState& state, bool keyframe) {
 
 }  // namespace
 
+namespace runtime {
+bool AnyLiveScene() { return scene_active || live_scenes != nullptr; }
+}  // namespace runtime
+
 bool NodeHandle::valid() const { return StateAlive(state_) && state_->NodeValid(id_, generation_); }
 
 void NodeHandle::Destroy() {

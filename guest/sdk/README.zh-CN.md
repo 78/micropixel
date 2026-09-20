@@ -8,6 +8,34 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 驱动更新；Host 管理硬件、资源和系统 UI。本文介绍编程模型与易错边界，完整可运行用法见
 [Demo](../apps/sdk-demo/)，底层协议见 [ABI](../abi/README.zh-CN.md)。
 
+## 能力目录
+
+在应用内动手写任何 helper 之前先查这张表：每一行都对应 `guest/sdk/` 下已有的头文件，应用不得在本地重复实现。
+
+| 需求 | 使用 | 头文件 |
+|---|---|---|
+| 事件循环、Service view、`Result<T>` | `Application`、`app.xxx()` | `application.hpp`、`result.hpp` |
+| retained 2D UI、精灵、文字、布局 | `Scene`、`SpriteBatch`、`ui::FlexContainer`、`ui::TextButton` | `scene.hpp`、`ui/*.hpp` |
+| Host 光栅帧、INDEX8 纹理、调色板 | `HostSurface`、`RasterDrawList`、`RasterResources` | `graphics.hpp` |
+| 光线投射墙面、PS1 级多边形、Mode7 地面、球体 | `Raycaster`、`MeshRenderer`、`Mode7Plane`、`SphereView` | `raycast.hpp`、`mesh_renderer.hpp`、`mode7_plane.hpp`、`sphere_view.hpp` |
+| 纹理、字体、动态纹理 | `Resources::LoadTexture/LoadFont/CreateDynamicTexture` | `resources.hpp` |
+| Surface 的逻辑坐标与缓冲坐标换算 | `DirectSurface::ToBuffer/ToLogical` | `graphics.hpp` |
+| 屏幕摇杆、视角拖拽区、按键；物理手柄按键与摇杆轴 | `app.gamepad()`、`GamepadSkin` | `gamepad.hpp`、`gamepad_skin.hpp` |
+| 带 hit padding 的按下/松开判定 | `ui::Button` | `ui/button.hpp` |
+| `audio/sfx.json` 生成的多音符音效 | `ToneSequencer<N>`、`ToneSpec::ToTone` | `tone_sequencer.hpp`、`audio.hpp` |
+| 音频片段、PCM 流、单音 | `Audio::Play/Load/OpenPcmStream` | `audio.hpp` |
+| 无 libm 的 Sin/Cos/Atan2、clamp、lerp、smoothstep、死区 | `math::*` | `math.hpp` |
+| 可复现随机数（种子、回放、测试） | `XorShift32` | `random.hpp` |
+| 硬件随机数 | `Random::U32/Below` | `random.hpp` |
+| 固定容量的粒子/轨迹/弹字池 | `CyclicPool<T, N>` | `cyclic_pool.hpp` |
+| 定长字符串与数字格式化 | `FixedString<N>` | `fixed_string.hpp` |
+| 定时器与帧节拍 | `Timers::After/Every`、`TimerEvent::delta()` | `timer.hpp` |
+| 加速度计、陀螺仪、磁力计 | `Sensors::Open<Acceleration>` | `sensors.hpp`、`sensor_types.hpp` |
+| 持久化分数与设置 | `KVStore::GetU32/SetU32/GetBytes` | `storage.hpp` |
+| 启动参数 | `LaunchArguments::FindValue` | `launch_arguments.hpp` |
+| 多语言字符串 | `Localization::CurrentLocale` + 生成的字符串表 | `localization.hpp` |
+| 振动、GPIO、电源、设备发现 | `Haptics`、`Gpio`、`PowerInfo`、`Devices` | `haptics.hpp`、`gpio.hpp`、`power_info.hpp`、`devices.hpp` |
+
 ## 工具链兼容性
 
 SDK 使用受限 C++23 和固定 commit 的
@@ -182,11 +210,14 @@ auto texture = app.resources().LoadTexture(atlas_asset, scale).value();
 缓冲区，加载比例为 240/320。素材已经按缓冲区像素制作时显式使用 kNative。
 upscale 必须整除屏幕物理宽高。重建 Surface 不会重新加载纹理。
 
-如果配置了逻辑画布，Touch 仍是应用逻辑坐标；应用需转换为缓冲区坐标后用于 Raster 交互。
-SDK 提供 `surface.ToBuffer(Point/Rect)` 与 `surface.ToLogical(Point)`，使用同一份显示配置，
-包含留边、裁切偏移和 upscale，不必手写换算。无效 Surface 返回空几何；转换不自动裁剪坐标。
-纹理可传 `surface.texture_scale()`，其比例来自当前显示配置再除以 upscale；无效 Surface 返回无效比例，加载失败。
-这些接口不创建额外 mapping 对象。
+只用 Surface 的应用只有一套坐标：未调用 `ConfigureDisplay` 且没有 Scene 存在时，第一个 DirectSurface
+会把自己的缓冲区尺寸设为逻辑画布（与 Godot 的 viewport stretch、SDL3 的 logical presentation 相同）。
+此后 Touch 直接以缓冲像素到达，`RendererInfo::width()/height()` 返回缓冲区尺寸，`ToBuffer` 退化为恒等，
+画布随即冻结，之后换 upscale 重建 Surface 也不再改变。创建前先读 `renderer().info()` 选 upscale 不影响这一行为。
+配置了设计画布或先建了 Scene 的混合应用保持原有逻辑空间：Touch 仍是逻辑坐标，用 `surface.ToBuffer(Point/Rect)`
+与 `surface.ToLogical(Point)` 换算，包含留边、裁切偏移和 upscale。无效 Surface 返回空几何；转换不自动裁剪坐标。
+纹理可传 `surface.texture_scale()`，其比例来自当前显示配置再除以 upscale（采用缓冲画布时为 1:1）；
+无效 Surface 返回无效比例，加载失败。
 参考 [Maze Break](../apps/maze-evil/maze_break_app.cpp) 和 [Tomb Explorer](../apps/tomb-explorer/main.cpp)。
 
 #### 从 0.18 迁移
@@ -350,6 +381,40 @@ Guest 不自行修改 Texture 字节序。
 TextOverflow::kReject。后续修改失败不能提交一半属性。控件 ToString 可用于错误诊断，具体属性与
 限制见 [ui](ui/)。
 
+## 手柄
+
+`app.gamepad()` 是 Runtime 持有的手柄。游戏只声明一次需要哪些逻辑控件，之后 Guest Runtime 在解码事件时把每个
+触摸、按键、模拟轴（Input 1.1）、手柄设备接入/断开和 Resume 事件先喂给它，游戏代码既不路由输入，也不区分输入来源：
+
+```cpp
+app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
+                         .bounds = {0, 0, width, height},     // 与触摸坐标同一空间
+                         .button_count = 1,
+                         .glyphs = {micropixel::GamepadGlyph::kFire}});
+micropixel::GamepadSkin skin;
+skin.Initialize(app.resources(), app.gamepad().pad());     // 把圆环、摇杆帽和按键烘焙进一张动态纹理
+
+const micropixel::GamepadState state = app.gamepad().Consume();  // stick_x/y、look_dx/dy、Held/Pressed/Released，
+                                                                 // 物理手柄另有 right_x/y 与扳机
+skin.Draw(list, app.gamepad().pad());                     // HostSurface；Scene 用 skin.Attach(scene) + skin.Sync(pad)
+```
+
+被手柄接管的事件带 `Event::gamepad_handled()` 标记，菜单代码据此跳过；需要触摸抵达应用自己 UI 的页面调用
+`app.gamepad().set_enabled(false)`。布局预设：`kStickOnly`、`kStickLook`（拖拽区轻点按下 `look_tap_button`）、
+`kStickButtons`、`kStickLookButtons`、`kDPadButtons`（方向量化为 -1/0/1）、`kButtonsOnly`。按键按物理位置命名，
+`kSouth` 是主动作，与 `KeyCode::kSouth..kNorth` 一一对应；`kConfirm` 视为 South，`kUp..kRight` 与左摇杆轴驱动
+摇杆（触摸优先，其次模拟轴，最后按键）。每个触点在抬起前保持自己的角色。浮层遵循 `GamepadOverlayPolicy`：
+`kAuto` 在按键/轴输入或手柄接入后隐藏，直到下一次触摸；`physical_connected()` 报告是否有手柄设备接入。
+
+待办（按收益排序）：圆环 tile 改多段 run-length 以跳过中间的洞；常驻按键提供以不透明像素为主的样式，
+让 Host 直接写入而不读 frame buffer；Host 侧 `DeviceKind::kGamepad` 外设与 `AXIS` 事件 bridge 落地后，
+系统菜单提供浮层"自动 / 常显 / 隐藏"开关并驱动 `GamepadOverlayPolicy`；更多布局预设等第二个游戏提出需求。
+
+`pad()` 背后的 `VirtualGamepad` 也可单独使用（`OnEvent(event)`），适合需要多个手柄或想为控制映射写单元测试的
+应用；`GamepadSkin` 两种都能画。想用自己的美术时读取 `stick_geometry()` / `button_geometry()` 自行绘制。
+预设图标见 `GamepadGlyph`，由矢量形状抗锯齿绘制，随按键尺寸缩放；`GamepadSkinStyle` 可改颜色与透明度，
+浮动摇杆默认只在手指或按键驱动时显示（`show_stick_at_rest` 可改为常显），固定摇杆常显。
+
 ## 音频
 
 Tone 用于短音效；AudioClip 表示资源，Playback 表示一次播放，可暂停、恢复和停止。
@@ -363,6 +428,17 @@ Ogg Opus 由 Host 解码和缓冲，Guest 不访问 codec/I2S。采样率与可�
 
 每个应用最多一条 PCM stream，支持 1/2 声道，采样率为设备混音率或其整数分频。Close、析构或
 StopAll 关闭流；暂停期间保留流，恢复后继续播放已缓冲数据。接口见 [audio.hpp](audio.hpp)。
+
+多音符音效由 `ToneSequencer<N>`（[tone_sequencer.hpp](tone_sequencer.hpp)）播放：`Play(profile, gain)`
+接收构建从 `audio/sfx.json` 生成的 `ToneSpec` 数组，`delay_ms == 0` 的音符立即发出，其余进入 N 个
+固定槽位，由帧定时器里的 `Advance(delta)` 推进；`StopAll()` 清空排队并静音 Host。`dropped()` 累计被
+Host 拒绝或因槽位不足丢弃的命令，应用通常只在首次非零时记录一条日志。
+
+## 游戏工具
+
+`math.hpp` 不依赖 libm：`Sin`、`Cos`、`Atan`、`Atan2`、`WrapAngle`、`ApproachAngle`、`Sqrt`、`Floor`、
+`Clamp`、`Lerp`、`SmoothStep`、`ApplyDeadzone`。`XorShift32` 由种子完全确定，用于关卡生成、回放与测试；
+`Random` 仍是硬件熵源。`CyclicPool<T, N>` 按顺序发放槽位，超出容量时覆盖最旧的一个，适合粒子、轨迹和弹字。
 
 ## 设备发现、传感器与 GPIO
 

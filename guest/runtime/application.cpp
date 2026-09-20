@@ -44,6 +44,14 @@ bool Application::WaitEventFor(Event& event, Duration timeout) const {
 bool Application::PollEvent(Event& event) const { return WaitEventInternal(event, 0U); }
 
 bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
+    if (!DecodeEventInternal(event, timeout_us)) {
+        return false;
+    }
+    RouteToGamepad(event);
+    return true;
+}
+
+bool Application::DecodeEventInternal(Event& event, uint64_t timeout_us) const {
     micropixel_event_t raw{};
     const int32_t status = micropixel_event_wait(&raw, sizeof(raw), timeout_us);
     if (status == MICROPIXEL_STATUS_TIMEOUT) {
@@ -202,6 +210,21 @@ bool Application::WaitEventInternal(Event& event, uint64_t timeout_us) const {
             runtime::Panic("application.wait_event.key_repeat", MICROPIXEL_STATUS_INTERNAL);
         }
         event = Event{KeyEvent{timestamp, static_cast<KeyCode>(payload.code), phase, payload.repeat_count}};
+        return true;
+    }
+
+    if (raw.service_id == MICROPIXEL_SERVICE_INPUT && raw.event_id == MICROPIXEL_INPUT_EVENT_AXIS) {
+        micropixel_axis_event_payload_t payload{};
+        CopyBytes(&payload, raw.payload, sizeof(payload));
+        const bool trigger =
+            payload.axis == MICROPIXEL_AXIS_LEFT_TRIGGER || payload.axis == MICROPIXEL_AXIS_RIGHT_TRIGGER;
+        if (payload.axis < MICROPIXEL_AXIS_LEFT_X || payload.axis > MICROPIXEL_AXIS_RIGHT_TRIGGER ||
+            payload.axis != raw.source || payload.reserved0 != 0U || payload.reserved1 != 0U ||
+            payload.value > 32767 || payload.value < (trigger ? 0 : -32767)) {
+            runtime::Panic("application.wait_event.axis_payload", MICROPIXEL_STATUS_INTERNAL);
+        }
+        event = Event{AxisEvent{timestamp, static_cast<GamepadAxis>(payload.axis),
+                                static_cast<float>(payload.value) / 32767.0F, DeviceId{payload.device}}};
         return true;
     }
 

@@ -7,6 +7,7 @@
 #include "sdk/clock.hpp"
 #include "sdk/devices.hpp"
 #include "sdk/event.hpp"
+#include "sdk/gamepad.hpp"
 #include "sdk/gpio.hpp"
 #include "sdk/graphics.hpp"
 #include "sdk/haptics.hpp"
@@ -48,6 +49,8 @@ class Application final {
     [[nodiscard]] constexpr Renderer renderer() const noexcept { return Renderer{Renderer::CapabilityToken{}}; }
     [[nodiscard]] constexpr Audio audio() const noexcept { return Audio{Audio::CapabilityToken{}}; }
     [[nodiscard]] constexpr Input input() const noexcept { return Input{Input::CapabilityToken{}}; }
+    // Runtime-owned on-screen/physical gamepad; see Gamepad.
+    [[nodiscard]] constexpr Gamepad gamepad() const noexcept { return Gamepad{Gamepad::CapabilityToken{}}; }
     [[nodiscard]] constexpr Resources resources() const noexcept { return Resources{Resources::CapabilityToken{}}; }
     [[nodiscard]] constexpr KVStore storage() const noexcept { return KVStore{KVStore::CapabilityToken{}}; }
     [[nodiscard]] constexpr Localization localization() const noexcept {
@@ -99,6 +102,9 @@ class Application final {
     void BeginRun() const;
     void EndRun() const;
     [[nodiscard]] bool WaitEventInternal(Event& event, uint64_t timeout_us) const;
+    [[nodiscard]] bool DecodeEventInternal(Event& event, uint64_t timeout_us) const;
+    // Offers a decoded event to the Runtime gamepad (runtime/gamepad.cpp).
+    static void RouteToGamepad(Event& event);
 
     mutable bool running_{};
 };

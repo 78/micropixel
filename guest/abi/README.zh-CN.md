@@ -331,8 +331,11 @@ capabilities 与显示名称。
 - Sensors 按 `device_id` 查询类型和单位，再 `OPEN` 独立 handle。加速度、角速度与磁场使用不同的 typed reading，
   不是一个不断增加可选字段的万能 Sensor 对象。第一个 handle 启动 Host 最新值缓存，最后一个 handle
   `CLOSE` 后停止；应用按自己的节奏调用 `READ`，实际维数由 `SensorInfo::value_count` 和 sensor kind 决定。
-  `SET_SAMPLE_INTERVAL` 配置缓存采样间隔，Host 不宣告 Sensor events；event 1 继续保留且不得复用。一个手柄以后可
-  作为 parent device，其按键和子传感器仍分别走对应 Service。
+  `SET_SAMPLE_INTERVAL` 配置缓存采样间隔，Host 不宣告 Sensor events；event 1 继续保留且不得复用。
+- 手柄是 `MICROPIXEL_DEVICE_KIND_GAMEPAD` device，接入与断开通过 Devices added/removed 通知；它的按键走 Input
+  `KEY` event（按位置命名的 South/East/West/North 与方向键），摇杆与扳机走 Input 1.1 的 `AXIS` event，
+  子传感器仍走 Sensors。Guest Runtime 在解码事件时把这些统一喂给 Runtime 持有的 gamepad
+  （SDK `Application::gamepad()`），应用不需要区分触摸、板载键和物理手柄。
 - GPIO 把每根可开放物理引脚列为 `GPIO_LINE` device。应用枚举后可直接将任意一根以 input、output
   或 PWM 模式 `OPEN`；打开即取得 Session 内独占 lease，`CLOSE`/Session teardown 恢复安全输入状态。
   当前不提供出厂 binding、用途命名或权限声明流程。input 只有配置 rising/falling/both edge 时才订阅
@@ -351,7 +354,7 @@ handle 懒启动 worker，最后一个释放或 App Suspend 时停止；GPIO ISR
 
 事件 envelope 固定为 48 bytes，包含 `service_id + event_id`、flags、source、Guest 单调时间、
 sequence、status 和 16-byte payload。event ID 只在所属 Service 内解释；当前定义 Timer expired、
-Input touch、Input semantic key、Audio playback finished、Audio PCM stream low water、Devices added/removed、GPIO edge、
+Input touch、Input semantic key、Input axis（1.1）、Audio playback finished、Audio PCM stream low water、Devices added/removed、GPIO edge、
 Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表。
 
 - 周期 Timer 队列中同一 handle 最多保留一条记录。积压时 `elapsed_us` 累加，`missed_count` 统计未单独
@@ -362,6 +365,11 @@ Haptics finished 和 Core host wake。新增事件不会扩大 Core import 表�
   Confirm、Back、Menu 和按位置定义的 gamepad South/East/West/North，阶段为 Down、Up、Repeat、Cancel；
   Repeat 必须携带非零计数，其他阶段的计数必须为 0。ABI 不定义 A/B/X/Y 标签键码。
   Host 负责把设备标签与区域性的确认/返回习惯映射为稳定语义；事件不表示设备一定安装了物理键盘。
+- `MICROPIXEL_INPUT_EVENT_AXIS` 与 `MICROPIXEL_INPUT_CAP_AXIS_EVENTS`（Input 1.1）：模拟轴按位置命名为
+  LEFT_X/LEFT_Y/RIGHT_X/RIGHT_Y/LEFT_TRIGGER/RIGHT_TRIGGER；摇杆取值 -32767..32767（正向为屏幕右/下），
+  扳机 0..32767；`source` 携带轴编号，payload 的 `device` 是手柄的 Devices id（无法归属时为 0）。
+  只有宣告该 capability 的 Host 才会投递；Host 应合并同一轴的积压样本，队列里只保留最新值。
+  当前 Host 不宣告该 capability，也没有手柄 Peripheral；ABI 先行预留，Guest Runtime 已能解码。
 
 ## 稳定性与安全规则
 

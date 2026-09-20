@@ -24,7 +24,7 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
   全屏点击或按下并松开任意 Guest 按键后开始世界和 BGM；死亡或通关后同样可全屏点击或按键返回说明页，
   无需命中开火热区。每次页面切换需要新的按下、松开，取消的触摸或按键不触发确认。
   `--benchmark` 自动跳过说明。
-- 输入：默认纯触摸。左半屏浮动摇杆控制前进、后退和左右平移；右侧拖动控制水平转向，右下方留给拇指滑动，另一根手指可同时按住右侧中部开火键。
+- 输入：默认纯触摸，由 Runtime 手柄 `app.gamepad()`（`kStickLookButtons` 布局，一个 `kFire` 按键）提供，只在游戏进行中启用，菜单页读未被接管的触摸。左半屏浮动摇杆控制前进、后退和左右平移；右侧拖动控制水平转向，另一根手指可同时按住右下开火键；接入物理手柄时方向键与 South 键走同一套 `GamepadState`，按键后浮层自动隐藏。
   右侧中部常驻 `FIRE` 圆圈，按下即开火、按住连发，松开停止；确认键也可开火。
   圆圈半径为屏幕短边的 1/10，触摸热区半径为短边的 1/8（720 px 屏幕分别为 72 / 90 px），
   按下时优先判定开火热区。每个触点在按下时确定职责，滑入其他区域不会切换职责或误开枪；
@@ -39,7 +39,7 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
   `World::Reset()` 将字符转换为墙、门、敌人和道具；击杀全部敌人并贴近出口后通关。
 - 音频：16 个音效只写在 [`audio/sfx.json`](audio/sfx.json)，BGM 用 `assets/bgm_loop.ogg` 循环播放；
   `--no-bgm` 关闭 BGM 以便测量。
-- 数学：Guest 不链接 libm，`rc_math.hpp` 用 Wasm 指令和短多项式提供 `sin/cos/atan/sqrt/floor`。
+- 数学：Guest 不链接 libm，`sdk/math.hpp` 用 Wasm 指令和短多项式提供 `Sin/Cos/Atan/Sqrt/Floor`；可复现随机数用 `sdk/random.hpp` 的 `XorShift32`。
 
 启动参数：
 
@@ -54,7 +54,7 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
 （`SURFACE_PRESENT` 调用）、`wait_avg_us`（等待 `SURFACE_RELEASED` 归还 buffer）以及 `frame_max_us`。
 
 应用使用 Host buffer 与 Host Raster 内核。面板宽于 480 px 时自动使用 `upscale = 2`，
-减少填充像素与内存带宽需求；触摸摇杆坐标按 `upscale` 换算。性能 HUD 会改变绘制工作量，
+减少填充像素与内存带宽需求；HostSurface 创建后逻辑画布即为缓冲区，Runtime 直接以缓冲像素喂给手柄。性能 HUD 会改变绘制工作量，
 对比测量时应固定其状态。方法见 [图形性能诊断](../../../docs/development/graphics-performance.zh-CN.md)。
 
 示例直接使用 `gfx/textures.cpp`、`gfx/sprites.cpp` 中的索引像素数据，以及 `assets/launch.png` 和

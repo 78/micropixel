@@ -12,17 +12,18 @@
 #include <span>
 
 #include "apps/tomb-explorer/game/character.hpp"
-#include "apps/tomb-explorer/game/math.hpp"
 #include "apps/tomb-explorer/game/player.hpp"
 #include "apps/tomb-explorer/gfx/palette.hpp"
 #include "apps/tomb-explorer/gfx/textures.hpp"
-#include "apps/tomb-explorer/input/touch_controls.hpp"
 #include "apps/tomb-explorer/world/level.hpp"
 #include "apps/tomb-explorer/world/room_world.hpp"
+#include "sdk/gamepad_skin.hpp"
+#include "sdk/math.hpp"
 #include "sdk/mesh_renderer.hpp"
 #include "sdk/micropixel.hpp"
 
 namespace tomb {
+namespace math = micropixel::math;
 namespace {
 
 constexpr uint32_t kBufferCount = 2U;
@@ -73,10 +74,10 @@ Options ParseOptions(const micropixel::LaunchArguments& args) {
     return options;
 }
 
-int32_t MapCoord(int32_t value, uint32_t panel, uint32_t logical) {
-    if (logical == 0U || panel == logical) return value;
-    return static_cast<int32_t>(static_cast<int64_t>(value) * static_cast<int64_t>(panel) / logical);
-}
+// Look-pad drag (buffer pixels) to camera rotation. The pad reports buffer
+// pixels, which are `upscale` times coarser than the panel.
+constexpr float kOrbitPerPanelPixel = 0.008F;  // radians
+constexpr float kTiltPerPanelPixel = 0.005F;
 
 // Scripted route for --benchmark: a loop through every room.
 constexpr float kRoute[][2] = {
@@ -113,8 +114,9 @@ class TombApp final {
     bool HandleEvent(const micropixel::Event& event);
     bool WaitForFreeBuffer(uint32_t& index);
     game::Controls Autopilot(float dt);
+    game::Controls PadControls();
     bool Render(micropixel::RasterDrawList& list);
-    void DrawStickOverlay(micropixel::RasterDrawList& list);
+    void ConfigurePad();
     void LogStats(uint64_t now_us);
 
     micropixel::Application& app_;
@@ -122,8 +124,6 @@ class TombApp final {
     micropixel::HostSurface surface_{};
     micropixel::RasterResources raster_{};
     uint32_t upscale_{1U};
-    uint32_t logical_width_{};
-    uint32_t logical_height_{};
     int width_{};
     int height_{};
     uint16_t palette_[gfx::kLightLevels * 256U]{};
@@ -133,7 +133,7 @@ class TombApp final {
     world::RoomWorld world_{};
     game::Player player_{};
     game::Character character_{};
-    input::TouchControls touch_{};
+    micropixel::GamepadSkin skin_{};
 
     bool resumed_{};
     bool first_frame_{true};
@@ -152,20 +152,13 @@ bool TombApp::DrainEvents() {
 }
 
 bool TombApp::HandleEvent(const micropixel::Event& event) {
+    // Touches, keys and axes reach the Runtime gamepad before this handler
+    // (app_.gamepad()); the App only reacts to lifecycle events.
     switch (event.type()) {
         case micropixel::EventType::kStop:
             return false;
         case micropixel::EventType::kResume:
             resumed_ = true;
-            return true;
-        case micropixel::EventType::kTouch: {
-            const micropixel::TouchEvent& touch = *event.touch();
-            touch_.OnTouch(touch.WithPosition({MapCoord(touch.x(), surface_.width(), logical_width_),
-                                               MapCoord(touch.y(), surface_.height(), logical_height_)}));
-            return true;
-        }
-        case micropixel::EventType::kKey:
-            touch_.OnKey(*event.key());
             return true;
         default:
             return true;
@@ -198,26 +191,32 @@ game::Controls TombApp::Autopilot(float dt) {
     return controls;
 }
 
-void TombApp::DrawStickOverlay(micropixel::RasterDrawList& list) {
-    const input::TouchControls::Overlay overlay = touch_.overlay();
-    if (!overlay.stick_active) return;
-    const int scale = static_cast<int>(upscale_);
-    const int ring = 70 / scale;
-    const int knob = 14 / scale;
-    const micropixel::Color ring_color = micropixel::Color::Rgb(220U, 220U, 220U);
-    const micropixel::Color knob_color = micropixel::Color::Rgb(255U, 210U, 90U);
-    const int ox = overlay.origin_x / scale;
-    const int oy = overlay.origin_y / scale;
-    // Ring as four thin bars, knob as a filled square.
-    (void)list.FillRect({ox - ring, oy - ring, ring * 2, 2}, ring_color, 140U);
-    (void)list.FillRect({ox - ring, oy + ring - 2, ring * 2, 2}, ring_color, 140U);
-    (void)list.FillRect({ox - ring, oy - ring, 2, ring * 2}, ring_color, 140U);
-    (void)list.FillRect({ox + ring - 2, oy - ring, 2, ring * 2}, ring_color, 140U);
-    int kx = overlay.x / scale;
-    int ky = overlay.y / scale;
-    kx = kx < ox - ring ? ox - ring : (kx > ox + ring ? ox + ring : kx);
-    ky = ky < oy - ring ? oy - ring : (ky > oy + ring ? oy + ring : ky);
-    (void)list.FillRect({kx - knob / 2, ky - knob / 2, knob, knob}, knob_color, 200U);
+game::Controls TombApp::PadControls() {
+    const micropixel::GamepadState pad = app_.gamepad().Consume();
+    game::Controls controls{};
+    if (pad.stick_active) {
+        controls.forward = -pad.stick_y;
+        controls.strafe = pad.stick_x;
+    }
+    const float panel_scale = static_cast<float>(upscale_);
+    controls.orbit = static_cast<float>(pad.look_dx) * kOrbitPerPanelPixel * panel_scale;
+    controls.tilt = -static_cast<float>(pad.look_dy) * kTiltPerPanelPixel * panel_scale;
+    controls.jump = pad.Pressed(micropixel::GamepadButton::kSouth);
+    return controls;
+}
+
+void TombApp::ConfigurePad() {
+    micropixel::GamepadConfig config{};
+    config.layout = micropixel::GamepadLayout::kStickLook;
+    config.bounds = {0, 0, width_, height_};
+    config.look_tap_button = static_cast<int8_t>(micropixel::GamepadButton::kSouth);  // tap jumps
+    if (!app_.gamepad().Configure(config)) {
+        app_.log().Error("tomb: virtual gamepad rejected the view bounds");
+        return;
+    }
+    if (!skin_.Initialize(app_.resources(), app_.gamepad().pad())) {
+        app_.log().Info("tomb: gamepad skin unavailable; controls stay invisible");
+    }
 }
 
 bool TombApp::Render(micropixel::RasterDrawList& list) {
@@ -248,7 +247,7 @@ bool TombApp::Render(micropixel::RasterDrawList& list) {
         }
     }
     if (!mesh_.Flush(list)) return false;
-    if (!options_.benchmark) DrawStickOverlay(list);
+    if (!options_.benchmark && !skin_.Draw(list, app_.gamepad().pad())) return false;
 
     const micropixel::MeshRenderer::Stats& stats = mesh_.stats();
     stats_.faces += stats.faces;
@@ -303,8 +302,6 @@ int TombApp::Run() {
         app_.log().Error("tomb: Host has no polygon raster records (Graphics 1.6 polygon capability)");
         return 1;
     }
-    logical_width_ = display.width();
-    logical_height_ = display.height();
     // 480 px panels render 1:1; larger ones at half resolution unless overridden.
     upscale_ = options_.upscale != 0U ? options_.upscale : (display.physical_width() > 480U ? 2U : 1U);
     auto created = app_.renderer().CreateHostSurface(kBufferCount, upscale_);
@@ -354,7 +351,7 @@ int TombApp::Run() {
     }
     world_.Initialize(world::TombLevel());
     player_.Reset(world_);
-    touch_.Initialize(static_cast<int>(surface_.width()));
+    ConfigurePad();
 
     {
         Line msg;
@@ -392,7 +389,7 @@ int TombApp::Run() {
         if (options_.benchmark) dt_us = kBenchmarkDtUs;
         const float dt = static_cast<float>(dt_us) * 1e-6F;
 
-        const game::Controls controls = options_.benchmark ? Autopilot(dt) : touch_.Consume();
+        const game::Controls controls = options_.benchmark ? Autopilot(dt) : PadControls();
         player_.Update(world_, controls, dt);
 
         const uint64_t render_started_us = app_.clock().Now().microseconds();
@@ -431,7 +428,8 @@ int TombApp::Run() {
 
 int main() {
     micropixel::Application app;
-    app.renderer().ConfigureDisplay({}).value();  // Native pixels; DirectSurface remains independent.
+    // No ConfigureDisplay: the HostSurface adopts its buffer as the logical
+    // canvas, so touch arrives in buffer pixels.
     // Level-independent state (polygon pool, palette, character) is far larger
     // than the WAMR call stack budget; keep it on the heap.
     auto tomb = std::make_unique<tomb::TombApp>(app);

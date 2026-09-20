@@ -21,7 +21,6 @@
     "game/level.cpp",
     "game/world.cpp",
     "game/renderer.cpp",
-    "input/touch_controls.cpp",
     "input/motion_controls.cpp"
   ],
   "asset_manifest": "assets/manifest.json",

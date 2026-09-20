@@ -31,6 +31,8 @@ enum class EventType : uint16_t {
     kHapticFinished,
     kSurfaceReleased,
     kPcmStreamLowWater,
+    // Input 1.1: analog gamepad axis.
+    kAxis,
 };
 
 enum class TouchPhase : uint8_t {
@@ -124,6 +126,42 @@ class KeyEvent final {
     KeyPhase phase_{KeyPhase::kCancel};
     uint32_t repeat_count_{};
 
+    friend class Application;
+    friend class Event;
+};
+
+// Analog gamepad axes, named by position like the face keys. Sticks report
+// -1..1 (positive = right / down, screen convention), triggers 0..1.
+enum class GamepadAxis : uint16_t {
+    kLeftX = 1,
+    kLeftY = 2,
+    kRightX = 3,
+    kRightY = 4,
+    kLeftTrigger = 5,
+    kRightTrigger = 6,
+};
+
+class AxisEvent final {
+   public:
+    constexpr AxisEvent(const AxisEvent&) = default;
+    constexpr AxisEvent& operator=(const AxisEvent&) = default;
+
+    [[nodiscard]] constexpr TimePoint timestamp() const { return timestamp_; }
+    [[nodiscard]] constexpr GamepadAxis axis() const { return axis_; }
+    // Normalized: -1..1 for sticks, 0..1 for triggers.
+    [[nodiscard]] constexpr float value() const { return value_; }
+    // The gamepad the axis belongs to; invalid when the Host cannot attribute it.
+    [[nodiscard]] constexpr DeviceId device() const { return device_; }
+
+   private:
+    constexpr AxisEvent() = default;
+    constexpr AxisEvent(TimePoint timestamp, GamepadAxis axis, float value, DeviceId device)
+        : timestamp_(timestamp), axis_(axis), value_(value), device_(device) {}
+
+    TimePoint timestamp_{};
+    GamepadAxis axis_{GamepadAxis::kLeftX};
+    float value_{};
+    DeviceId device_{};
     friend class Application;
     friend class Event;
 };
@@ -299,6 +337,10 @@ class Event final {
     [[nodiscard]] const PcmStreamEvent* LowWaterFrom(const PcmStream& source) const;
     [[nodiscard]] constexpr const TouchEvent* touch() const { return type_ == EventType::kTouch ? &touch_ : nullptr; }
     [[nodiscard]] constexpr const KeyEvent* key() const { return type_ == EventType::kKey ? &key_ : nullptr; }
+    [[nodiscard]] constexpr const AxisEvent* axis() const { return type_ == EventType::kAxis ? &axis_ : nullptr; }
+    // True when the Runtime-owned gamepad (Application::gamepad()) took this
+    // touch, key or axis before it reached the App; UI code skips such events.
+    [[nodiscard]] constexpr bool gamepad_handled() const { return gamepad_handled_; }
     [[nodiscard]] constexpr const DeviceEvent* device() const {
         return type_ == EventType::kDeviceAdded || type_ == EventType::kDeviceRemoved ? &device_ : nullptr;
     }
@@ -333,6 +375,8 @@ class Event final {
 
     explicit constexpr Event(KeyEvent key) : type_(EventType::kKey), timestamp_(key.timestamp()), key_(key) {}
 
+    explicit constexpr Event(AxisEvent axis) : type_(EventType::kAxis), timestamp_(axis.timestamp()), axis_(axis) {}
+
     explicit constexpr Event(AudioPlaybackEvent playback)
         : type_(EventType::kAudioPlayback), timestamp_(playback.timestamp()), audio_playback_(playback) {}
 
@@ -356,12 +400,14 @@ class Event final {
     TimerEvent timer_{};
     TouchEvent touch_{TimePoint{}, TouchPhase::kCancel, 0U, 0, 0, false, 0U};
     KeyEvent key_{TimePoint{}, KeyCode::kConfirm, KeyPhase::kCancel, 0U};
+    AxisEvent axis_{};
     AudioPlaybackEvent audio_playback_{};
     DeviceEvent device_{};
     GpioEdgeEvent gpio_edge_{};
     HapticEvent haptic_{};
     SurfaceReleasedEvent surface_released_{};
     PcmStreamEvent pcm_stream_{};
+    bool gamepad_handled_{};
     friend class Application;
 };
 
