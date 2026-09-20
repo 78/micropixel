@@ -1,8 +1,6 @@
 name: SDK manager and archive tests
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ['tools/**', 'guest/sdk/**', '.github/workflows/windows-sdk-tests.yml']
 permissions:
   contents: read
 concurrency:

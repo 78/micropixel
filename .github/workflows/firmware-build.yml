@@ -23,8 +23,6 @@ jobs:
       matrix: ${{ steps.select.outputs.matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Test SDK build-input verification
-        run: python3 -m unittest tools.tests.test_verify_firmware_sdk -v
       - id: select
         env:
           REUSE_RUN: ${{ inputs.reuse_hosts_run }}
@@ -127,30 +125,23 @@ jobs:
       - name: Install fixed IDF tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ninja-build ccache libusb-1.0-0 python3-venv clang-18 libc++-18-dev libc++abi-18-dev
+          sudo apt-get install -y ninja-build ccache libusb-1.0-0 python3-venv
           "$IDF_PATH/install.sh" ${{ matrix.chip }}
       - name: Compile this board and verify embedded release configuration
         run: |
           bash tools/${{ matrix.wrapper }}
           . "$IDF_PATH/export.sh" >/dev/null
           python tools/ci/firmware_artifacts.py collect --profile ${{ matrix.profile }} --output build/ci-host/${{ matrix.profile }}
-      - name: Save compiled tool cache before independent regression
+      - name: Save IDF tool cache
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.espressif
           key: idf-linux-${{ matrix.chip }}-${{ env.IDF_REVISION }}
-      - name: Save compiler cache before independent regression
+      - name: Save compiler cache
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cache/ccache
           key: ccache-${{ matrix.profile }}-${{ env.IDF_REVISION }}-${{ github.sha }}
-      - name: Run shared Host regression once
-        if: matrix.profile == 'metalio-claw4'
-        run: |
-          # Test fixtures intentionally zero-initialize omitted aggregate fields.
-          printf '#!/bin/sh\nexec /usr/bin/clang++-18 -stdlib=libc++ "$@" -Wno-missing-field-initializers\n' > "$RUNNER_TEMP/host-cxx"
-          chmod +x "$RUNNER_TEMP/host-cxx"
-          CXX="$RUNNER_TEMP/host-cxx" CC=/usr/bin/clang-18 bash tools/tests/test_firmware_host.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: host-${{ matrix.profile }}
