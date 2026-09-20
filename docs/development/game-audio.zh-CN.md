@@ -178,6 +178,7 @@ python3 tools/analyze_sfx.py --manifest guest/apps/snake/audio/sfx.json \
 游戏内的参考事件、响度例外和重复频率由各自 `audio/sfx.json` 定义；不要在说明文档中复制数值。
 Snake 背景旋律的音符间隔由游戏等级控制，分析时的 delay 仅用于模拟暴露。
 
-游戏差异：Blocks 的落地参考声采用较高目标以改善设备可听度，移动和软降仍保持较低层级；
+游戏差异：Blocks 和 Jump Jump 的落地参考声采用较高目标以改善设备可听度；Blocks 的移动和软降仍保持较低层级，
+Jump Jump 的蓄力后半段仅轻度衰减，让升调持续可辨；
 Snake 用旋律长度区分启动、升级与失败，保持操作音优先于背景旋律；
 Tilt 的碰墙声使用短促反馈与 cooldown，避免连续接触造成重复噪声。

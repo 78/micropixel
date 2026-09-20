@@ -4,7 +4,7 @@
   "cpp_namespace": "jump_jump_sfx",
   "header_guard": "MICROPIXEL_JUMP_JUMP_SFX_PROFILES_HPP",
   "reference_effect": "land",
-  "reference_momentary_rms_dbfs": -14.0,
+  "reference_momentary_rms_dbfs": -11.0,
   "effects": {
     "land": {
       "max_rate_hz": 2.0,
@@ -14,7 +14,7 @@
           "waveform": "triangle",
           "frequency_hz": 220,
           "duration_ms": 80,
-          "volume_per_mille": 293,
+          "volume_per_mille": 414,
           "attack_ms": 2,
           "release_ms": 30,
           "delay_ms": 0
@@ -23,7 +23,7 @@
           "waveform": "triangle",
           "frequency_hz": 165,
           "duration_ms": 85,
-          "volume_per_mille": 206,
+          "volume_per_mille": 291,
           "attack_ms": 2,
           "release_ms": 34,
           "delay_ms": 18
@@ -38,7 +38,7 @@
           "waveform": "triangle",
           "frequency_hz": 392,
           "duration_ms": 180,
-          "volume_per_mille": 205,
+          "volume_per_mille": 289,
           "attack_ms": 4,
           "release_ms": 60,
           "delay_ms": 0
@@ -47,7 +47,7 @@
           "waveform": "triangle",
           "frequency_hz": 294,
           "duration_ms": 180,
-          "volume_per_mille": 205,
+          "volume_per_mille": 289,
           "attack_ms": 4,
           "release_ms": 60,
           "delay_ms": 100
@@ -56,7 +56,7 @@
           "waveform": "triangle",
           "frequency_hz": 220,
           "duration_ms": 180,
-          "volume_per_mille": 205,
+          "volume_per_mille": 289,
           "attack_ms": 4,
           "release_ms": 60,
           "delay_ms": 200
@@ -65,7 +65,7 @@
           "waveform": "triangle",
           "frequency_hz": 147,
           "duration_ms": 180,
-          "volume_per_mille": 205,
+          "volume_per_mille": 289,
           "attack_ms": 4,
           "release_ms": 60,
           "delay_ms": 300
@@ -80,7 +80,7 @@
           "waveform": "sine",
           "frequency_hz": 523,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -95,7 +95,7 @@
           "waveform": "sine",
           "frequency_hz": 784,
           "duration_ms": 400,
-          "volume_per_mille": 132,
+          "volume_per_mille": 186,
           "attack_ms": 5,
           "release_ms": 65,
           "delay_ms": 0
@@ -104,7 +104,7 @@
           "waveform": "sine",
           "frequency_hz": 659,
           "duration_ms": 550,
-          "volume_per_mille": 132,
+          "volume_per_mille": 186,
           "attack_ms": 5,
           "release_ms": 65,
           "delay_ms": 180
@@ -113,7 +113,7 @@
           "waveform": "sine",
           "frequency_hz": 392,
           "duration_ms": 400,
-          "volume_per_mille": 39,
+          "volume_per_mille": 55,
           "attack_ms": 5,
           "release_ms": 65,
           "delay_ms": 0
@@ -122,7 +122,7 @@
           "waveform": "sine",
           "frequency_hz": 330,
           "duration_ms": 550,
-          "volume_per_mille": 39,
+          "volume_per_mille": 55,
           "attack_ms": 5,
           "release_ms": 65,
           "delay_ms": 180
@@ -137,7 +137,7 @@
           "waveform": "triangle",
           "frequency_hz": 180,
           "duration_ms": 55,
-          "volume_per_mille": 325,
+          "volume_per_mille": 458,
           "attack_ms": 2,
           "release_ms": 42,
           "delay_ms": 0
@@ -146,7 +146,7 @@
           "waveform": "triangle",
           "frequency_hz": 240,
           "duration_ms": 50,
-          "volume_per_mille": 325,
+          "volume_per_mille": 458,
           "attack_ms": 2,
           "release_ms": 38,
           "delay_ms": 95
@@ -155,7 +155,7 @@
           "waveform": "triangle",
           "frequency_hz": 310,
           "duration_ms": 60,
-          "volume_per_mille": 325,
+          "volume_per_mille": 458,
           "attack_ms": 2,
           "release_ms": 45,
           "delay_ms": 175
@@ -170,7 +170,7 @@
           "waveform": "sine",
           "frequency_hz": 587,
           "duration_ms": 150,
-          "volume_per_mille": 255,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -185,7 +185,7 @@
           "waveform": "sine",
           "frequency_hz": 659,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -200,7 +200,7 @@
           "waveform": "sine",
           "frequency_hz": 698,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -215,7 +215,7 @@
           "waveform": "sine",
           "frequency_hz": 784,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -230,7 +230,7 @@
           "waveform": "sine",
           "frequency_hz": 880,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -245,7 +245,7 @@
           "waveform": "sine",
           "frequency_hz": 988,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -260,7 +260,7 @@
           "waveform": "sine",
           "frequency_hz": 1047,
           "duration_ms": 150,
-          "volume_per_mille": 256,
+          "volume_per_mille": 361,
           "attack_ms": 4,
           "release_ms": 110,
           "delay_ms": 0
@@ -269,13 +269,13 @@
     },
     "charge_1": {
       "max_rate_hz": 2,
-      "target_relative_db": -8,
+      "target_relative_db": -4,
       "tones": [
         {
           "waveform": "triangle",
           "frequency_hz": 131,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 0
@@ -284,7 +284,7 @@
           "waveform": "triangle",
           "frequency_hz": 147,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 70
@@ -293,7 +293,7 @@
           "waveform": "triangle",
           "frequency_hz": 165,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 140
@@ -302,7 +302,7 @@
           "waveform": "triangle",
           "frequency_hz": 175,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 210
@@ -311,7 +311,7 @@
           "waveform": "triangle",
           "frequency_hz": 196,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 280
@@ -320,7 +320,7 @@
           "waveform": "triangle",
           "frequency_hz": 220,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 350
@@ -329,7 +329,7 @@
           "waveform": "triangle",
           "frequency_hz": 247,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 420
@@ -338,7 +338,7 @@
           "waveform": "triangle",
           "frequency_hz": 262,
           "duration_ms": 110,
-          "volume_per_mille": 143,
+          "volume_per_mille": 320,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 490
@@ -347,13 +347,13 @@
     },
     "charge_2": {
       "max_rate_hz": 2,
-      "target_relative_db": -10,
+      "target_relative_db": -4,
       "tones": [
         {
           "waveform": "triangle",
           "frequency_hz": 294,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 560
@@ -362,7 +362,7 @@
           "waveform": "triangle",
           "frequency_hz": 330,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 630
@@ -371,7 +371,7 @@
           "waveform": "triangle",
           "frequency_hz": 349,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 700
@@ -380,7 +380,7 @@
           "waveform": "triangle",
           "frequency_hz": 392,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 770
@@ -389,7 +389,7 @@
           "waveform": "triangle",
           "frequency_hz": 440,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 840
@@ -398,7 +398,7 @@
           "waveform": "triangle",
           "frequency_hz": 494,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 910
@@ -407,7 +407,7 @@
           "waveform": "triangle",
           "frequency_hz": 523,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 980
@@ -416,7 +416,7 @@
           "waveform": "triangle",
           "frequency_hz": 587,
           "duration_ms": 110,
-          "volume_per_mille": 121,
+          "volume_per_mille": 340,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1050
@@ -425,13 +425,13 @@
     },
     "charge_3": {
       "max_rate_hz": 2,
-      "target_relative_db": -16,
+      "target_relative_db": -5,
       "tones": [
         {
           "waveform": "triangle",
           "frequency_hz": 659,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1120
@@ -440,7 +440,7 @@
           "waveform": "triangle",
           "frequency_hz": 698,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1190
@@ -449,7 +449,7 @@
           "waveform": "triangle",
           "frequency_hz": 784,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1260
@@ -458,7 +458,7 @@
           "waveform": "triangle",
           "frequency_hz": 880,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1330
@@ -467,7 +467,7 @@
           "waveform": "triangle",
           "frequency_hz": 988,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1400
@@ -476,7 +476,7 @@
           "waveform": "triangle",
           "frequency_hz": 1047,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1470
@@ -485,7 +485,7 @@
           "waveform": "triangle",
           "frequency_hz": 1175,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1540
@@ -494,7 +494,7 @@
           "waveform": "triangle",
           "frequency_hz": 1319,
           "duration_ms": 110,
-          "volume_per_mille": 63,
+          "volume_per_mille": 314,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1610
@@ -503,13 +503,13 @@
     },
     "charge_4": {
       "max_rate_hz": 2,
-      "target_relative_db": -22,
+      "target_relative_db": -8,
       "tones": [
         {
           "waveform": "triangle",
           "frequency_hz": 1397,
           "duration_ms": 110,
-          "volume_per_mille": 32,
+          "volume_per_mille": 226,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1680
@@ -518,7 +518,7 @@
           "waveform": "triangle",
           "frequency_hz": 1568,
           "duration_ms": 110,
-          "volume_per_mille": 32,
+          "volume_per_mille": 226,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1750
@@ -527,7 +527,7 @@
           "waveform": "triangle",
           "frequency_hz": 1760,
           "duration_ms": 110,
-          "volume_per_mille": 32,
+          "volume_per_mille": 226,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 1820
@@ -537,13 +537,13 @@
     "charge_hold": {
       "max_rate_hz": 14.285714285714286,
       "check_repetition_exposure": true,
-      "target_relative_db": -22,
+      "target_relative_db": -8,
       "tones": [
         {
           "waveform": "triangle",
           "frequency_hz": 1760,
           "duration_ms": 110,
-          "volume_per_mille": 32,
+          "volume_per_mille": 232,
           "attack_ms": 8,
           "release_ms": 92,
           "delay_ms": 0
@@ -562,7 +562,7 @@
     "music_box": {
       "kind": "music_box",
       "bpm": 120,
-      "volume_per_mille": 129,
+      "volume_per_mille": 182,
       "attack_ms": 8,
       "release_ms": 120,
       "tail_ms": 1000,
@@ -788,7 +788,7 @@
     "drain": {
       "kind": "water",
       "duration_ms": 1800,
-      "volume_per_mille": 696,
+      "volume_per_mille": 983,
       "seed": 17,
       "cutoff_hz": 550,
       "attack_ms": 50,
