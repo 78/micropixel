@@ -1916,6 +1916,109 @@ void TestDisabledPool() {
             MICROPIXEL_STATUS_UNSUPPORTED);
 }
 
+// A BGRA texture with a row span table must render exactly like the same
+// texture without one, whatever the scale, clip or source window: the spans
+// only skip columns whose alpha is zero.
+void OpaqueSpansMatchTheFullWalk() {
+    using micropixel::device::BitmapView;
+    constexpr uint32_t kSize = 16U;
+    static uint8_t bgra[kSize * kSize * 4U]{};
+    static uint16_t spans[kSize * 2U]{};
+    // A ring (hollow, two segments per row) plus a solid diagonal streak, so
+    // rows have transparent margins, holes and fully transparent lines.
+    for (uint32_t y = 0U; y < kSize; ++y) {
+        uint32_t first = kSize;
+        uint32_t end = 0U;
+        for (uint32_t x = 0U; x < kSize; ++x) {
+            const int dx = static_cast<int>(x) - 8;
+            const int dy = static_cast<int>(y) - 8;
+            const int d2 = dx * dx + dy * dy;
+            const bool ring = d2 >= 25 && d2 <= 49 && y != 3U;
+            const bool streak = x == y && x < 5U;
+            uint8_t* pixel = bgra + (y * kSize + x) * 4U;
+            pixel[0] = static_cast<uint8_t>(x * 16U);
+            pixel[1] = static_cast<uint8_t>(y * 16U);
+            pixel[2] = 200U;
+            pixel[3] = ring ? 255U : (streak ? 90U : 0U);
+            if (pixel[3] != 0U) {
+                first = first == kSize ? x : first;
+                end = x + 1U;
+            }
+        }
+        spans[y * 2U] = static_cast<uint16_t>(first);
+        spans[y * 2U + 1U] = static_cast<uint16_t>(end);
+    }
+    BitmapView plain{bgra, sizeof(bgra), kSize, kSize, kSize * 4U, MICROPIXEL_PIXEL_FORMAT_BGRA8888, 0U};
+    BitmapView indexed = plain;
+    indexed.opaque_spans = spans;
+    constexpr uint32_t kTargetWidth = 40U;
+    constexpr uint32_t kTargetHeight = 30U;
+    static uint16_t expected[kTargetWidth * kTargetHeight];
+    static uint16_t actual[kTargetWidth * kTargetHeight];
+    const auto render = [&](const BitmapView& texture, uint16_t* pixels, const micropixel_raster_image_t& record,
+                            bool swapped) {
+        for (uint32_t index = 0U; index < kTargetWidth * kTargetHeight; ++index) {
+            pixels[index] = static_cast<uint16_t>(0x1234U + index);  // a busy backdrop shows stray writes
+        }
+        raster::Target target{reinterpret_cast<uint8_t*>(pixels), kTargetWidth, kTargetHeight, kTargetWidth * 2U,
+                              swapped};
+        raster::Resources resources{};
+        BitmapView* context = const_cast<BitmapView*>(&texture);
+        resources.texture_context = context;
+        resources.resolve_texture = [](void* ctx, uint32_t, BitmapView& output) {
+            output = *static_cast<BitmapView*>(ctx);
+            return true;
+        };
+        DrawList list{0};
+        list.Add(record);
+        list.Finish();
+        micropixel_raster_header_t header{};
+        Require(raster::ValidateDrawList(list.bytes.data(), list.bytes.size(), target, resources, header) ==
+                MICROPIXEL_STATUS_OK);
+        raster::ExecuteDrawList(list.bytes.data(), header, target, resources);
+    };
+    struct Case final {
+        int32_t x, y;
+        uint32_t width, height, source_x, source_y, source_width, source_height;
+        uint8_t opacity;
+        bool swapped;
+    };
+    const Case cases[] = {
+        {2, 3, 16, 16, 0, 0, 16, 16, 255, false},    // 1:1
+        {-5, -4, 16, 16, 0, 0, 16, 16, 255, false},  // clipped top-left
+        {30, 20, 16, 16, 0, 0, 16, 16, 200, true},   // clipped bottom-right, translucent, swapped panel
+        {1, 1, 32, 28, 0, 0, 16, 16, 255, false},    // upscaled 2x
+        {0, 0, 7, 5, 0, 0, 16, 16, 255, false},      // downscaled
+        {4, 4, 12, 12, 5, 2, 6, 9, 255, false},      // source window inside the ring
+        {6, 6, 24, 6, 3, 3, 4, 2, 128, true},        // window over the streak, stretched wide
+        {-3, 10, 20, 12, 8, 0, 8, 16, 255, false},   // right half only, clipped left
+    };
+    for (const Case& c : cases) {
+        micropixel_raster_image_t record{};
+        record.type = MICROPIXEL_RASTER_RECORD_IMAGE;
+        record.opacity = c.opacity;
+        record.texture_handle = 1;
+        record.x = c.x;
+        record.y = c.y;
+        record.width = c.width;
+        record.height = c.height;
+        record.source_x = c.source_x;
+        record.source_y = c.source_y;
+        record.source_width = c.source_width;
+        record.source_height = c.source_height;
+        render(plain, expected, record, c.swapped);
+        render(indexed, actual, record, c.swapped);
+        for (uint32_t index = 0U; index < kTargetWidth * kTargetHeight; ++index) {
+            if (expected[index] != actual[index]) {
+                std::fprintf(stderr, "case (%d,%d %ux%u src %u,%u %ux%u) pixel %u,%u expected %04x actual %04x\n", c.x,
+                             c.y, c.width, c.height, c.source_x, c.source_y, c.source_width, c.source_height,
+                             index % kTargetWidth, index / kTargetWidth, expected[index], actual[index]);
+            }
+            Require(expected[index] == actual[index]);
+        }
+    }
+}
+
 }  // namespace
 
 void SharedTextureImageSamplingAndValidation() {
@@ -2219,6 +2322,7 @@ int main() {
     TestDisabledPool();
     TestDynamicTextures();
     TestArbitraryDimensions();
+    OpaqueSpansMatchTheFullWalk();
     Require(allocations.empty());
     std::puts("Raster: palette slots, warp maps, polygons, arbitrary sampling, OOM rollback and release passed");
     return 0;

@@ -55,6 +55,8 @@ class BitmapStore final {
 
     struct Slot final {
         const uint8_t* data{};
+        // Owned by the slot; BGRA8888 bitmaps only. See BitmapView::opaque_spans.
+        const uint16_t* opaque_spans{};
         uint32_t generation{};
         uint32_t scene_references{};
         uint16_t width{};
@@ -78,9 +80,13 @@ class BitmapStore final {
     [[nodiscard]] const Slot* ResolveSlotLocked(micropixel_texture_handle_t bitmap) const;
     [[nodiscard]] static device::BitmapView View(const Slot& slot);
     static void ClearSlot(Slot& slot);
+    // Scans a BGRA8888 bitmap once and returns its row span table in PSRAM, or
+    // nullptr for other formats or when memory is short (blitters then walk
+    // every column as before).
+    [[nodiscard]] static const uint16_t* BuildOpaqueSpans(const device::BitmapView& view);
 
     static_assert(limits::kMaxBitmaps <= kHandleIndexMask);
-    static_assert(sizeof(void*) != sizeof(uint32_t) || sizeof(Slot) == 20U);
+    static_assert(sizeof(void*) != sizeof(uint32_t) || sizeof(Slot) == 24U);
 
     mutable portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
     Slot* slots_{};

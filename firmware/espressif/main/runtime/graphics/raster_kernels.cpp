@@ -83,6 +83,14 @@ struct ClippedRect final {
 
 [[nodiscard]] inline bool WordAligned(const void* pointer) { return (reinterpret_cast<uintptr_t>(pointer) & 3U) == 0U; }
 
+// Internal-SRAM staging row for read-modify-write blends. Kernels run on the
+// Guest task only, so one process-lifetime buffer serves every draw list.
+inline constexpr uint32_t kRowStagePixels = 256U;
+[[nodiscard]] inline uint16_t* RowStage() {
+    static uint16_t stage[kRowStagePixels];
+    return stage;
+}
+
 // Writes `count` copies of `color` starting at `row`; two pixels per store
 // once the destination is word aligned, since full-screen fills on a PSRAM
 // frame buffer are bound by the number of bus writes.
@@ -569,18 +577,27 @@ void DrawRect(const Target& target, const micropixel_raster_rect_t& rect) {
         for (uint32_t y = clip.y0; y < clip.y1; ++y) FillRow(Row(target, y) + clip.x0, count, color);
         return;
     }
-    // Blend in canonical order; swapped targets are converted per pixel.
+    // Blend in canonical order; swapped targets are converted per pixel. The
+    // destination row is staged through internal SRAM: reading the PSRAM frame
+    // buffer pixel by pixel costs far more than the blend itself (measured on
+    // ESP32-S31), while one word-wise copy per row amortizes the bus latency.
     const uint32_t alpha = static_cast<uint32_t>(rect.opacity) + 1U;  // 1..254 -> 2..255 (255 handled above)
     for (uint32_t y = clip.y0; y < clip.y1; ++y) {
         uint16_t* row = Row(target, y) + clip.x0;
-        if (target.byte_swapped) {
-            for (uint32_t x = 0U; x < count; ++x) {
-                row[x] = ByteSwap(Blend565(ByteSwap(row[x]), rect.color, alpha));
+        for (uint32_t offset = 0U; offset < count; offset += kRowStagePixels) {
+            const uint32_t run = count - offset < kRowStagePixels ? count - offset : kRowStagePixels;
+            uint16_t* stage = RowStage();
+            std::memcpy(stage, row + offset, static_cast<size_t>(run) * 2U);
+            if (target.byte_swapped) {
+                for (uint32_t x = 0U; x < run; ++x) {
+                    stage[x] = ByteSwap(Blend565(ByteSwap(stage[x]), rect.color, alpha));
+                }
+            } else {
+                for (uint32_t x = 0U; x < run; ++x) {
+                    stage[x] = Blend565(stage[x], rect.color, alpha);
+                }
             }
-        } else {
-            for (uint32_t x = 0U; x < count; ++x) {
-                row[x] = Blend565(row[x], rect.color, alpha);
-            }
+            std::memcpy(row + offset, stage, static_cast<size_t>(run) * 2U);
         }
     }
 }
@@ -796,32 +813,82 @@ void DrawImage(const Target& target, const device::BitmapView& texture, const mi
             }
             continue;
         }
+        uint32_t x_begin = clipped.x0;
+        uint32_t x_end = clipped.x1;
         uint32_t sx = first_sx;
         uint32_t remainder = first_remainder;
-        for (uint32_t x = clipped.x0; x < clipped.x1; ++x) {
-            const uint8_t* pixel = source_row + sx * bytes;
-            sx += step;
-            remainder += step_remainder;
-            if (remainder >= image.width) {
-                remainder -= image.width;
-                ++sx;
+        if (bytes == 4U && texture.opaque_spans != nullptr) {
+            // BGRA rows carry [first, end) of their non-transparent columns.
+            // Map that source span onto destination columns and walk only
+            // those; fully transparent rows and margins (icons, rings) cost
+            // nothing per frame.
+            const uint32_t span_begin = texture.opaque_spans[sy * 2U];
+            const uint32_t span_end = texture.opaque_spans[sy * 2U + 1U];
+            const uint32_t source_end = image.source_x + image.source_width;
+            if (span_end <= span_begin || span_end <= image.source_x || span_begin >= source_end) continue;
+            const uint32_t rel_begin = span_begin > image.source_x ? span_begin - image.source_x : 0U;
+            const uint32_t rel_end = (span_end < source_end ? span_end : source_end) - image.source_x;
+            // Destination column dx samples source column floor(dx * sw / w), so
+            // the columns sampling [rel_begin, rel_end) are [ceil(rel_begin*w/sw), ceil(rel_end*w/sw)).
+            const uint64_t width = image.width;
+            const uint64_t source_width = image.source_width;
+            const uint32_t dx_begin = static_cast<uint32_t>((rel_begin * width + source_width - 1U) / source_width);
+            const uint32_t dx_end = static_cast<uint32_t>((rel_end * width + source_width - 1U) / source_width);
+            // image.x may be negative (clipped on the left); work in int64.
+            const int64_t abs_begin = static_cast<int64_t>(image.x) + dx_begin;
+            const int64_t abs_end = static_cast<int64_t>(image.x) + dx_end;
+            if (abs_begin > static_cast<int64_t>(x_begin)) x_begin = static_cast<uint32_t>(abs_begin);
+            if (abs_end < static_cast<int64_t>(x_end)) x_end = abs_end < 0 ? 0U : static_cast<uint32_t>(abs_end);
+            if (x_begin >= x_end) continue;
+            const uint64_t numerator =
+                static_cast<uint64_t>(static_cast<int64_t>(x_begin) - image.x) * image.source_width;
+            sx = image.source_x + static_cast<uint32_t>(numerator / image.width);
+            remainder = static_cast<uint32_t>(numerator % image.width);
+        }
+        // Translucent texels read the frame buffer; stage each run of the row
+        // through internal SRAM (see DrawRect) instead of touching PSRAM per
+        // pixel. Fully transparent texels leave their staged pixel untouched.
+        for (uint32_t run_begin = x_begin; run_begin < x_end; run_begin += kRowStagePixels) {
+            const uint32_t run = x_end - run_begin < kRowStagePixels ? x_end - run_begin : kRowStagePixels;
+            uint16_t* stage = RowStage();
+            std::memcpy(stage, destination + run_begin, static_cast<size_t>(run) * 2U);
+            for (uint32_t index = 0U; index < run; ++index) {
+                const uint8_t* pixel = source_row + sx * bytes;
+                sx += step;
+                remainder += step_remainder;
+                if (remainder >= image.width) {
+                    remainder -= image.width;
+                    ++sx;
+                }
+                uint16_t color{};
+                uint32_t alpha = image.opacity;
+                if (bytes == 2) {
+                    std::memcpy(&color, pixel, 2);
+                    if (texture_swapped) color = ByteSwap(color);
+                } else if (bytes == 4) {
+                    // One 32-bit load per BGRA texel; the alpha byte gates the
+                    // colour conversion and the blend below.
+                    uint32_t bgra{};
+                    std::memcpy(&bgra, pixel, 4);
+                    const uint32_t texel_alpha = bgra >> 24U;
+                    if (texel_alpha == 0U) continue;
+                    // alpha * texel_alpha / 255 without a divide: x * 257 >> 16
+                    // is exact for the products this can produce.
+                    alpha = alpha == 255U ? texel_alpha : ((alpha * texel_alpha + 128U) * 257U) >> 16U;
+                    color = static_cast<uint16_t>(((bgra >> 8U) & 0xF800U) | ((bgra >> 5U) & 0x07E0U) |
+                                                  ((bgra >> 3U) & 0x001FU));
+                } else {
+                    color = static_cast<uint16_t>(((pixel[2] >> 3) << 11) | ((pixel[1] >> 2) << 5) | (pixel[0] >> 3));
+                }
+                if (alpha == 0) continue;
+                if (alpha != 255) {
+                    // Same 1/64-step blend as RECT; alpha 1..254 -> 2..255.
+                    const uint16_t old = target.byte_swapped ? ByteSwap(stage[index]) : stage[index];
+                    color = Blend565(old, color, alpha + 1U);
+                }
+                stage[index] = target.byte_swapped ? ByteSwap(color) : color;
             }
-            uint16_t color{};
-            uint32_t alpha = image.opacity;
-            if (bytes == 2) {
-                std::memcpy(&color, pixel, 2);
-                if (texture_swapped) color = ByteSwap(color);
-            } else {
-                color = static_cast<uint16_t>(((pixel[2] >> 3) << 11) | ((pixel[1] >> 2) << 5) | (pixel[0] >> 3));
-                if (bytes == 4) alpha = (alpha * pixel[3] + 127) / 255;
-            }
-            if (alpha == 0) continue;
-            if (alpha != 255) {
-                // Same 1/64-step blend as RECT; alpha 1..254 -> 2..255.
-                const uint16_t old = target.byte_swapped ? ByteSwap(destination[x]) : destination[x];
-                color = Blend565(old, color, alpha + 1U);
-            }
-            destination[x] = target.byte_swapped ? ByteSwap(color) : color;
+            std::memcpy(destination + run_begin, stage, static_cast<size_t>(run) * 2U);
         }
     }
 }

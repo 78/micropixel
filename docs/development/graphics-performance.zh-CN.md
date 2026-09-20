@@ -179,6 +179,18 @@ FPS 提升。P4 高分辨率场景与 S31 原尺寸输出应分别测量。
 改变数据驻留位置也可能改变访存的代码生成成本，必须用对照测量分离变量；
 不能仅凭查表耗时推断 cache miss 是主因。
 
+半透明记录（带 alpha 的 `Rect`、BGRA `Image`）的成本主体不是混合运算，而是对 PSRAM frame buffer 的
+逐像素读取：在 S31 上逐个 16 位读取比整行 `memcpy` 到内部 SRAM 再写回慢约五倍。`DrawRect` 与 `DrawImage`
+因此把每行分段暂存到内部 SRAM 再混合。BGRA 纹理在进入 `BitmapStore` 时另外建立每行非透明区间表
+（`BitmapView::opaque_spans`，每行两个 `uint16_t`），`DrawImage` 只遍历区间内的目标列，透明边距与整行
+透明不再产生逐像素开销。带洞的图形（圆环）单区间只能省去两侧，中间仍会遍历。评估这类改动时用同一
+Guest Bundle 在新旧 Host 上对比 `render_avg_us`，并附一个不画该记录的对照 Bundle。
+
+虚拟手柄浮层（`GamepadSkin`）在 S31 480×480 上的现状：常驻一个按键约 +1.5 ms/帧，摇杆圆环与摇杆帽
+同时可见时约 +3.4 ms，每个混合像素约 150 ns，其中纹理读取已是主体。尚未做的优化：
+（1）区间表升级为每行多段 run-length，消掉圆环中间的洞；（2）皮肤默认样式改为以 alpha=255 像素为主，
+不透明像素直接写入、不读 frame buffer；（3）纹理读取按行预取到内部 SRAM，与目标行暂存合并成一次拷贝。
+
 ### 系统字体缓存
 
 使用 [Font Benchmark](../../guest/apps/font-benchmark/README.zh-CN.md) 分别测试 Scene 的动态数字脏区和
