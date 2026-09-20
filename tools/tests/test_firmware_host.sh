@@ -82,6 +82,12 @@ build_and_run ft6336_report \
 
 build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physics_test.cpp"
 
+build_and_run jump_jump \
+    "$workspace_root/tools/tests/test_jump_jump.cpp" \
+    "$workspace_root/guest/apps/jump-jump/model.cpp" \
+    "$workspace_root/guest/apps/jump-jump/renderer.cpp" \
+    "$workspace_root/firmware/espressif/main/runtime/graphics/raster_kernels.cpp"
+
 build_and_run frame_timing \
     "$workspace_root/tools/tests/test_frame_timing.cpp"
 

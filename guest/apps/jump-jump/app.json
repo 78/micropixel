@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "app_id": "micropixel.jump-jump",
+  "version": "0.1.8",
+  "threading": "none",
+  "title": {"default": "en", "values": {"en": "Jump Jump", "zh-Hans": "跳一跳"}},
+  "sources": ["main.cpp", "model.cpp", "renderer.cpp"],
+  "asset_manifest": "assets/manifest.json",
+  "launch_asset": "launch",
+  "requirements": {
+    "schema_version": 1,
+    "display": {"layouts": ["square", "landscape", "portrait"], "min_width": 240, "min_height": 240},
+    "required": ["input.touch"],
+    "optional": ["audio.output"],
+    "any_of": [],
+    "services": {"graphics": 65536}
+  }
+}

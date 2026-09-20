@@ -1,0 +1,13 @@
+Use case: stylized-concept
+Asset type: square 1024x1024 launcher cover for the MicroPixel game “跳一跳” (Jump Jump), actual full-bleed artwork.
+Primary request: polished playful 3D game cover faithfully reflecting a minimalist isometric press-and-hold jumping game.
+Scene/backdrop: warm ivory background and ground, very clean with soft directional shadows.
+Subject: one dark charcoal pawn with a perfectly smooth spherical head and gently tapered rounded body, no face, arms or legs, caught mid-jump from a large rounded mint-green cylindrical platform toward a smaller challenging round pedestal table. A few cream, muted amber and lilac block platforms continue into the distance. The pawn is the strong focal point; readable gaps between the platforms convey the precision jumping mechanic. Smooth curved highlights on cylindrical surfaces, never rectangular highlight patches.
+Style/medium: premium stylized 3D toy-like game key art; simple solid geometry, clean silhouettes, restrained materials, elegant soft lighting and ambient occlusion.
+Composition/framing: square, a strong isometric diagonal arrangement with a clearly airborne hero pawn, uncluttered at thumbnail sizes. Full bleed ivory background, no outer border. Keep the upper area as clean ivory negative space without any lettering.
+Color palette: warm ivory, charcoal, muted mint green, amber and lavender, matching the game.
+Text: none. No text in any language.
+Constraints: no title, no subtitle, no brand logo, no watermark, no device frame, no UI, no score, no buttons, no extra characters, no pixelation, no mosaic highlights, no realistic environment.
+
+Final edit prompt (built-in imagegen, original cover as reference):
+Edit the supplied Jump Jump app cover. Remove the entire Chinese title in the upper part of the image, including all three characters and every trace of lettering. Seamlessly fill that area with the same warm ivory background and soft lighting. Keep the existing square dimensions, composition, dark airborne pawn, mint cylindrical starting platform, small amber round pedestal table, distant pastel platforms, jump trail, materials, highlights and shadows unchanged. The final cover must have absolutely no text in any language, no lettering, no logos, no watermark, no added objects. Preserve the visual identity and quality of the original artwork.
