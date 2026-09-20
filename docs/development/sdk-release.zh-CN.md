@@ -29,9 +29,9 @@ SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK
 ## 日常 SDK 发布
 
 1. 修改 `tools/micropixel` 的精确版本，更新 API 文档、迁移说明和验收状态。
-2. 运行 `bash tools/p4.sh test`，提交 PR。Windows 验证会构建安装器并测试实际安装后的 SDK。
-3. PR 验证通过并合并后，给同一提交创建 `sdk-v<版本>` tag 并推送。
-4. `sdk-release.yml` 构建确定性 SDK 归档、内置运行时、安装器、清单和隔离的验收副本。
+2. 发版前对待发布源码运行一次相关回归并记录结果，再提交 PR；完整本地检查入口为 `bash tools/p4.sh test`。需要 Windows/Linux 云端回归时，手动运行 **SDK manager and archive tests**。普通 PR 不自动重复运行该回归或整套 SDK 发布验证。
+3. 确认发版前检查通过并合并后，给对应提交创建 `sdk-v<版本>` tag 并推送。
+4. `sdk-release.yml` 仅由版本 tag 或手动触发，构建确定性 SDK 归档、内置运行时、安装器、清单和隔离的验收副本，不再次运行源码回归。安装生命周期、实际安装后的双架构构建和公开附件摘要仍针对本次产物验证。
 5. 默认不启用 `full_validation`。安装后完成双架构构建、打包、发布预检、中文路径和增量依赖检查，创建 Draft Release。安装器逻辑、内置 Python/pyserial、管理组件或更新机制有实质改动时，手动启用 `full_validation`，追加 A/B 升级回退与组件切换。先对待发布分支手动运行完整验证，再创建 tag；不要向已经发布的 tag 重跑创建 Release。
 6. 按 `tools/windows/release-policy.json` 指定的通道发布（当前为未签名正式版），再从公开下载地址核对核心产物摘要，关联本次全新安装缓存中的成功构建证据；同一批文件不重复安装编译。
 7. 公开复验成功后，才更新对应 `stable` 或 `preview` 索引及管理组件入口。
@@ -54,7 +54,7 @@ SDK、Windows 管理组件与工具链分别保留不可变的版本产物。SDK
 工具链源和编译选项固定在 `tools/windows/toolchain-sources.json`、`build_toolchain.py`。
 只有更新这些输入时才重新构建 `wamrc`。WASI 和 MSVC app-local runtime 各自固定摘要。
 
-1. 先运行 `Windows toolchain verification`，确认两种目标的原生编译和应用验证均成功。
+1. 工具链输入变化时手动运行 `Windows toolchain verification`，确认两种目标的原生编译和应用验证均成功；不随普通 PR 或 SDK 发版自动重跑。
 2. 从主分支运行 `Publish verified Windows toolchain`，输入该成功 run ID。
 3. producer 检查 run 所属仓库、workflow、提交与当前固定编译配方，核对编译器及 CRT 摘要后发布独立工具链 Release。
 4. 将已发布 `toolchain.json` 的 HTTPS 地址和 SHA-256 写入 `tools/windows/release-channel.json`。

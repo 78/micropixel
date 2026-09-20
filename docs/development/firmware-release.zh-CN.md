@@ -18,9 +18,9 @@ GitHub Release 标题、正文和附件显示名称统一使用英文。
 ## 日常发布
 
 1. 更新固件与 SDK 版本、相关 API 文档；提交与发布相关的源码。
-2. 运行一次相关自动回归与格式检查。`bash tools/p4.sh test` 是本地完整检查入口，不必对每块板重复执行。
+2. 对待发布源码运行一次相关自动回归与格式检查，保留结果；源码变化后只重跑受影响检查。`bash tools/p4.sh test` 是本地完整检查入口。普通 PR、SDK 标签发布和各板 Host 构建不重复执行这些回归。
 3. 创建 `sdk-v<版本>` tag。SDK workflow 验证安装与双架构构建一次，发布后核对同一批文件的公开摘要。
-4. 从对应提交运行 **Build release firmware in parallel**。Windows job 按架构各编译一次预装应用；五个 Ubuntu job 独立构建 Host，共享 Host 回归只在 P4 job 执行一次。
+4. 从对应提交运行 **Build release firmware in parallel**。Windows job 按架构各编译一次预装应用；五个 Ubuntu job 只构建各板 Host、核对发布配置并上传产物，不再运行共享 Host 回归。
 5. 汇总 job 核对源提交、版本、芯片、OTA 容量、远控配置摘要和文件摘要，生成五板 OTA 与完整镜像。
 6. 下载验证后的产物，再发布 GitHub / 网站，不在部署机器重新编译：
 
