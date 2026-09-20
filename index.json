@@ -1,16 +1,16 @@
 {
   "manager": {
-    "build_id": "0.1.0-b37ec776d57b87e6",
-    "name": "micropixel-manager-0.1.0-b37ec776d57b87e6.zip",
+    "build_id": "0.1.0-893e7e4e9b082c29",
+    "name": "micropixel-manager-0.1.0-893e7e4e9b082c29.zip",
     "root": "manager",
-    "sha256": "5235c8ccff0ae1bc60f450964570eeef3d18621a2ebde108787dcc1b65bf4fc0",
-    "size_bytes": 11093574,
-    "url": "https://github.com/78/micropixel/releases/download/sdk-v0.20.0/micropixel-manager-0.1.0-b37ec776d57b87e6.zip",
+    "sha256": "ceac2a3115b78b3f727ca2c50b436267ad2f718ebb82eea84e4112eb1fff66c3",
+    "size_bytes": 11093577,
+    "url": "https://github.com/78/micropixel/releases/download/sdk-v0.20.1/micropixel-manager-0.1.0-893e7e4e9b082c29.zip",
     "version": "0.1.0"
   },
   "preview": "0.16.1",
   "schema_version": 1,
-  "stable": "0.20.0",
+  "stable": "0.20.1",
   "versions": {
     "0.16.0": {
       "name": "sdk-manifest.json",
@@ -74,20 +74,29 @@
       "sha256": "ed5c98023a6055c6b16d3a20aac89cf41db776be9a2957291ae6162f0f099af6",
       "size_bytes": 2243,
       "url": "https://github.com/78/micropixel/releases/download/sdk-v0.20.0/sdk-manifest.json"
+    },
+    "0.20.1": {
+      "name": "sdk-manifest.json",
+      "performance": [],
+      "release_notes_url": "https://github.com/78/micropixel/releases/tag/sdk-v0.20.1",
+      "root": "",
+      "sha256": "27e6486c95624a9e5d03eabadf476531947270cc084d6e75846263e641f54695",
+      "size_bytes": 2243,
+      "url": "https://github.com/78/micropixel/releases/download/sdk-v0.20.1/sdk-manifest.json"
     }
   },
   "windows_installer": {
     "architecture": "windows-x64",
     "code_signing": "unsigned",
-    "manager_build_id": "0.1.0-b37ec776d57b87e6",
+    "manager_build_id": "0.1.0-893e7e4e9b082c29",
     "manager_version": "0.1.0",
-    "name": "micropixel-setup-0.20.0-windows-x64.exe",
+    "name": "micropixel-setup-0.20.1-windows-x64.exe",
     "preview": false,
     "schema_version": 1,
-    "sha256": "714a44d5ca6b5fd9d5fa58f1e2cd13d1538aa3978761b00a2eaaaac8d6601e77",
-    "size_bytes": 11232009,
-    "url": "https://github.com/78/micropixel/releases/download/sdk-v0.20.0/micropixel-setup-0.20.0-windows-x64.exe",
-    "version": "0.20.0",
+    "sha256": "0e3551112e25031e188404fdfaea4018fc685a164476d93052fc5573601604da",
+    "size_bytes": 11232166,
+    "url": "https://github.com/78/micropixel/releases/download/sdk-v0.20.1/micropixel-setup-0.20.1-windows-x64.exe",
+    "version": "0.20.1",
     "windows_acceptance": "partial-windows-11"
   }
 }
