@@ -61,6 +61,39 @@ class FixedString final {
         return AppendUint(magnitude) && complete;
     }
 
+    // Appends `value` rounded to `decimals` digits after the point (0..6),
+    // e.g. AppendFixed(-1.2345F, 2) -> "-1.23".
+    bool AppendFixed(float value, uint32_t decimals = 2U) {
+        if (decimals == 0U) {
+            return AppendInt(static_cast<int64_t>(value));
+        }
+        if (decimals > 6U) {
+            decimals = 6U;
+        }
+        uint32_t scale = 1U;
+        for (uint32_t index = 0U; index < decimals; ++index) {
+            scale *= 10U;
+        }
+        const bool negative = value < 0.0F;
+        const float magnitude = negative ? -value : value;
+        const auto scaled = static_cast<uint64_t>(magnitude * static_cast<float>(scale) + 0.5F);
+        bool complete = true;
+        if (negative && scaled != 0U) {
+            complete = Append("-");
+        }
+        complete = AppendUint(scaled / scale) && complete;
+        complete = Append(".") && complete;
+        uint64_t fraction = scaled % scale;
+        for (uint32_t divisor = scale / 10U; divisor > 1U; divisor /= 10U) {
+            if (fraction < divisor) {
+                complete = Append("0") && complete;
+            } else {
+                break;
+            }
+        }
+        return AppendUint(fraction) && complete;
+    }
+
     bool AppendPadded4(uint32_t value) {
         uint32_t digits = 1U;
         for (uint32_t remaining = value; remaining >= 10U; remaining /= 10U) {

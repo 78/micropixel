@@ -20,9 +20,7 @@
     "gfx/font.cpp",
     "game/level.cpp",
     "game/world.cpp",
-    "game/renderer.cpp",
-    "input/touch_controls.cpp",
-    "input/motion_controls.cpp"
+    "game/renderer.cpp"
   ],
   "asset_manifest": "assets/manifest.json",
   "launch_asset": "launch",
@@ -41,9 +39,7 @@
       "input.touch"
     ],
     "optional": [
-      "audio.output",
-      "sensor.acceleration",
-      "sensor.gyroscope"
+      "audio.output"
     ],
     "any_of": [],
     "services": {}

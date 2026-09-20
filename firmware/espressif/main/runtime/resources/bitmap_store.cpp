@@ -43,9 +43,42 @@ const BitmapStore::Slot* BitmapStore::ResolveSlotLocked(micropixel_texture_handl
 }
 
 device::BitmapView BitmapStore::View(const Slot& slot) {
-    return device::BitmapView{
-        slot.data,         static_cast<uint32_t>(slot.stride) * slot.height, slot.width, slot.height, slot.stride,
-        slot.pixel_format, static_cast<uint32_t>(slot.flags & kViewFlagMask)};
+    return device::BitmapView{slot.data,
+                              static_cast<uint32_t>(slot.stride) * slot.height,
+                              slot.width,
+                              slot.height,
+                              slot.stride,
+                              slot.pixel_format,
+                              static_cast<uint32_t>(slot.flags & kViewFlagMask),
+                              slot.opaque_spans};
+}
+
+const uint16_t* BitmapStore::BuildOpaqueSpans(const device::BitmapView& view) {
+    if (view.pixel_format != MICROPIXEL_PIXEL_FORMAT_BGRA8888 || view.data == nullptr || view.height == 0U ||
+        view.width == 0U || view.width > UINT16_MAX) {
+        return nullptr;
+    }
+    auto* spans = static_cast<uint16_t*>(heap_caps_malloc(static_cast<size_t>(view.height) * 2U * sizeof(uint16_t),
+                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (spans == nullptr) {
+        return nullptr;
+    }
+    for (uint32_t row = 0U; row < view.height; ++row) {
+        const uint8_t* pixel = view.data + static_cast<size_t>(row) * view.stride + 3U;  // alpha byte
+        uint32_t first = view.width;
+        uint32_t end = 0U;
+        for (uint32_t x = 0U; x < view.width; ++x, pixel += 4U) {
+            if (*pixel != 0U) {
+                if (first == view.width) {
+                    first = x;
+                }
+                end = x + 1U;
+            }
+        }
+        spans[row * 2U] = static_cast<uint16_t>(first);
+        spans[row * 2U + 1U] = static_cast<uint16_t>(end);
+    }
+    return spans;
 }
 
 void BitmapStore::ClearSlot(Slot& slot) {
@@ -61,6 +94,8 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
         required_size > view.size || view.pixel_format > UINT8_MAX || (view.flags & ~kViewFlagMask) != 0U) {
         return 0U;
     }
+    // One pass over the alpha channel now saves the blitters a pass per frame.
+    const uint16_t* opaque_spans = BuildOpaqueSpans(view);
     portENTER_CRITICAL(&lock_);
     for (uint32_t index = 0U; index < limits::kMaxBitmaps; ++index) {
         Slot& slot = slots_[index];
@@ -70,6 +105,7 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
         const uint32_t generation = slot.generation + 1U;
         slot = {
             .data = view.data,
+            .opaque_spans = opaque_spans,
             .generation = generation,
             .width = static_cast<uint16_t>(view.width),
             .height = static_cast<uint16_t>(view.height),
@@ -84,6 +120,7 @@ micropixel_texture_handle_t BitmapStore::Add(const device::BitmapView& view, boo
         return handle;
     }
     portEXIT_CRITICAL(&lock_);
+    heap_caps_free(const_cast<uint16_t*>(opaque_spans));
     return 0U;
 }
 
@@ -230,6 +267,7 @@ bool BitmapStore::RetainSceneReference(micropixel_texture_handle_t bitmap) {
 
 void BitmapStore::ReleaseSceneReference(micropixel_texture_handle_t bitmap) {
     const uint8_t* owned_data = nullptr;
+    const uint16_t* spans = nullptr;
     portENTER_CRITICAL(&lock_);
     Slot* slot = ResolveSlotLocked(bitmap);
     if (slot != nullptr && slot->scene_references != 0U) {
@@ -238,16 +276,19 @@ void BitmapStore::ReleaseSceneReference(micropixel_texture_handle_t bitmap) {
             if ((slot->flags & kOwned) != 0U) {
                 owned_data = slot->data;
             }
+            spans = slot->opaque_spans;
             ClearSlot(*slot);
             --live_count_;
         }
     }
     portEXIT_CRITICAL(&lock_);
     heap_caps_free(const_cast<uint8_t*>(owned_data));
+    heap_caps_free(const_cast<uint16_t*>(spans));
 }
 
 void BitmapStore::Release(micropixel_texture_handle_t bitmap) {
     const uint8_t* owned_data = nullptr;
+    const uint16_t* spans = nullptr;
     portENTER_CRITICAL(&lock_);
     Slot* slot = ResolveSlotLocked(bitmap);
     if (slot != nullptr) {
@@ -256,30 +297,39 @@ void BitmapStore::Release(micropixel_texture_handle_t bitmap) {
             if ((slot->flags & kOwned) != 0U) {
                 owned_data = slot->data;
             }
+            spans = slot->opaque_spans;
             ClearSlot(*slot);
             --live_count_;
         }
     }
     portEXIT_CRITICAL(&lock_);
     heap_caps_free(const_cast<uint8_t*>(owned_data));
+    heap_caps_free(const_cast<uint16_t*>(spans));
 }
 
 void BitmapStore::ReleaseAll() {
-    const uint8_t* owned_data[limits::kMaxBitmaps]{};
-    uint32_t owned_count = 0U;
-    portENTER_CRITICAL(&lock_);
+    // One slot per lock hold: the pixels and span table are freed outside the
+    // critical section without staging every pointer on the stack.
     for (uint32_t index = 0U; slots_ != nullptr && index < limits::kMaxBitmaps; ++index) {
+        const uint8_t* owned_data = nullptr;
+        const uint16_t* spans = nullptr;
+        portENTER_CRITICAL(&lock_);
         Slot& slot = slots_[index];
-        if (slot.data != nullptr && (slot.flags & kOwned) != 0U) {
-            owned_data[owned_count++] = slot.data;
+        if (slot.data != nullptr) {
+            if ((slot.flags & kOwned) != 0U) {
+                owned_data = slot.data;
+            }
+            spans = slot.opaque_spans;
+            --live_count_;
         }
         ClearSlot(slot);
+        portEXIT_CRITICAL(&lock_);
+        heap_caps_free(const_cast<uint8_t*>(owned_data));
+        heap_caps_free(const_cast<uint16_t*>(spans));
     }
+    portENTER_CRITICAL(&lock_);
     live_count_ = 0U;
     portEXIT_CRITICAL(&lock_);
-    for (uint32_t index = 0U; index < owned_count; ++index) {
-        heap_caps_free(const_cast<uint8_t*>(owned_data[index]));
-    }
 }
 
 uint32_t BitmapStore::HighWaterMark() const {

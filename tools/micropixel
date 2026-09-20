@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 
-VERSION = "0.19.0"
+VERSION = "0.20.0"
 MINIMUM_FIRMWARE_VERSION = "0.4.0"
 BUNDLE_MAGIC = b"MPXBNDL\0"
 BUNDLE_HEADER_SIZE = 128
@@ -1862,6 +1862,7 @@ def _run_build_sources(args: argparse.Namespace) -> None:
             root / "guest/runtime/sphere_view.cpp",
             root / "guest/runtime/mode7_plane.cpp",
             root / "guest/runtime/application.cpp",
+            root / "guest/runtime/gamepad.cpp",
             root / "guest/runtime/scene_graph.cpp",
             *sources,
         ],

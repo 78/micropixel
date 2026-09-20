@@ -13,7 +13,7 @@
 #define MICROPIXEL_GRAPHICS_INTERFACE_MAJOR 1U
 #define MICROPIXEL_GRAPHICS_INTERFACE_MINOR 0U
 #define MICROPIXEL_INPUT_INTERFACE_MAJOR 1U
-#define MICROPIXEL_INPUT_INTERFACE_MINOR 0U
+#define MICROPIXEL_INPUT_INTERFACE_MINOR 1U
 /* Scene channel messages: 'MPGS'. */
 #define MICROPIXEL_GRAPHICS_SCENE_MAGIC 0x5347504dU
 /* Raster channel draw lists: 'MPRS'. Warp entries carry 5 light bits and
@@ -1587,6 +1587,8 @@ typedef enum micropixel_touch_phase {
 typedef enum micropixel_input_capability {
     MICROPIXEL_INPUT_CAP_PRESSURE = 1U << 0U,
     MICROPIXEL_INPUT_CAP_KEY_EVENTS = 1U << 1U,
+    /* Input 1.1: the Host may deliver MICROPIXEL_INPUT_EVENT_AXIS. */
+    MICROPIXEL_INPUT_CAP_AXIS_EVENTS = 1U << 2U,
 } micropixel_input_capability_t;
 
 typedef enum micropixel_key_code {
@@ -1632,7 +1634,23 @@ typedef enum micropixel_timer_event_id {
 typedef enum micropixel_input_event_id {
     MICROPIXEL_INPUT_EVENT_TOUCH = 1,
     MICROPIXEL_INPUT_EVENT_KEY = 2,
+    /* Input 1.1: analog gamepad axis; micropixel_event_t.source carries the axis code. */
+    MICROPIXEL_INPUT_EVENT_AXIS = 3,
 } micropixel_input_event_id_t;
+
+/* Input 1.1 analog axes, named by position like the gamepad face keys. Sticks
+ * report -32767..32767 (positive = right / down, screen convention), triggers
+ * 0..32767. A gamepad is a MICROPIXEL_DEVICE_KIND_GAMEPAD device: its buttons
+ * arrive as KEY events, its sticks as AXIS events, and Devices added/removed
+ * announce connection. */
+typedef enum micropixel_input_axis {
+    MICROPIXEL_AXIS_LEFT_X = 1,
+    MICROPIXEL_AXIS_LEFT_Y = 2,
+    MICROPIXEL_AXIS_RIGHT_X = 3,
+    MICROPIXEL_AXIS_RIGHT_Y = 4,
+    MICROPIXEL_AXIS_LEFT_TRIGGER = 5,
+    MICROPIXEL_AXIS_RIGHT_TRIGGER = 6,
+} micropixel_input_axis_t;
 
 typedef struct micropixel_timer_event_payload {
     uint64_t elapsed_us;
@@ -1656,6 +1674,18 @@ typedef struct micropixel_key_event_payload {
     uint32_t modifiers;
     uint32_t reserved0;
 } micropixel_key_event_payload_t;
+
+/* Input 1.1. `device` is the Devices catalog id of the gamepad, 0 when the
+ * Host cannot attribute the axis. Only sent when the Host advertises
+ * MICROPIXEL_INPUT_CAP_AXIS_EVENTS; a Host coalesces backlogged samples of the
+ * same axis so the queue holds the latest value. */
+typedef struct micropixel_axis_event_payload {
+    uint16_t axis;
+    uint16_t reserved0;
+    int32_t value;
+    micropixel_device_id_t device;
+    uint32_t reserved1;
+} micropixel_axis_event_payload_t;
 
 /* Fixed-size envelope. Event IDs are scoped by service_id. */
 typedef struct micropixel_event {
@@ -1718,6 +1748,8 @@ MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_timer_event_payload_t) == 16U,
                              "micropixel_timer_event_payload_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_touch_event_payload_t) == 16U,
                              "micropixel_touch_event_payload_t ABI size changed");
+MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_axis_event_payload_t) == 16U,
+                             "micropixel_axis_event_payload_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(sizeof(micropixel_key_event_payload_t) == 16U,
                              "micropixel_key_event_payload_t ABI size changed");
 MICROPIXEL_ABI_STATIC_ASSERT(offsetof(micropixel_raster_texture_upload_request_t, texture_slot) == 2U,

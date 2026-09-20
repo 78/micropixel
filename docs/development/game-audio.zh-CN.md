@@ -21,12 +21,14 @@ guest/apps/<game>/
 ├── audio/
 │   ├── sfx.json       # 唯一音效参数源，必须提交
 │   └── README.md      # 游戏特有的层级选择、事件语义和试听说明
-└── <game>_audio.cpp   # 只消费生成的 ToneSpec，不硬编码音色参数
+└── <game>_audio.cpp   # 用 sdk/tone_sequencer.hpp 播放生成的 ToneSpec，不硬编码音色参数
 ```
 
 波形、频率、时长、`volume_per_mille`、Attack、Release 和音符 Delay 必须写在 `audio/sfx.json`。
 运行时代码不得另行维护同一组常量。允许运行时根据游戏状态选择 profile、改变 BGM 节拍或截取前缀，
-但音符本身仍来自生成的 `ToneSpec`。
+但音符本身仍来自生成的 `ToneSpec`（即 `micropixel::ToneSpec`）。延迟音符的排队与逐帧推进由 SDK 的
+`micropixel::ToneSequencer<N>` 负责：`Play(profile, gain)` 播放整段 profile，`Advance(delta)` 在帧定时器里
+推进，`StopAll()` 在暂停或结算时清空；游戏代码不得再自行维护 `ScheduledTone` 队列。
 
 生成的 `<game>_sfx_profiles.hpp`、分析报告和试听 WAV 都属于构建产物，写入 `build/apps/<game>/`，
 不得提交到源码目录。新游戏可从 [game-sfx.template.json](game-sfx.template.json) 开始。

@@ -1,4 +1,5 @@
 list(APPEND micropixel_sources
+    "platform/sensors/polled_vector_sensor_peripheral.cpp"
     "platform/boards/esp-mosaico/board_config.cpp"
     "platform/boards/esp-mosaico/i2s_audio_sink.cpp"
     "platform/boards/esp-mosaico/battery_peripheral.cpp"

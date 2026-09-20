@@ -13,10 +13,9 @@ snake/
 ├── snake_game.hpp/.cpp       # 状态机、输入、计时和存档
 ├── snake_renderer.cpp        # HUD、棋盘和画面提交
 ├── snake_effects.cpp         # 粒子、轨迹、弹字和闪光
-├── snake_audio.cpp           # 消费生成 profile 的 BGM、音序器和音效
+├── snake_audio.cpp           # 用 SDK ToneSequencer 播放生成 profile 的音效与 BGM 节拍
 ├── audio/                    # JSON 音效参数、感知约束和校准说明
 ├── gamekit/
-│   ├── cyclic_pool.hpp       # 固定容量循环对象池
 │   └── swipe_gesture.hpp     # 连续滑动与点击识别
 └── assets/
     ├── manifest.json         # 资源、atlas 帧和画布位置的唯一数据源
@@ -31,6 +30,7 @@ python3 tools/micropixel package guest/apps/snake --aot-target riscv32-ilp32f
 ```
 
 `gamekit/` 仍是 Snake 内部实现；只有第二个游戏出现相同需求且语义稳定后，才移动到公共 SDK。
+循环对象池已因 Tilt 的同类需求上提为 `sdk/cyclic_pool.hpp`，延迟音效队列上提为 `sdk/tone_sequencer.hpp`。
 通用的按钮交互、固定字符串和 retained Scene API 位于 `guest/sdk/`；START/RESTART 使用 SDK 的
 `TextButton`，不再携带纯色按钮贴图。
 

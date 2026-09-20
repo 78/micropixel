@@ -261,21 +261,13 @@ class Demo final {
 
     // ---- sensors ----------------------------------------------------------
     void OpenSensors() {
-        auto devices = app_.devices().List(mp::DeviceKind::kSensor);
-        if (!devices) return;
-        for (auto id : *devices) {
-            auto info = app_.sensors().GetInfo(id);
-            if (!info) continue;
-            auto interval = mp::Duration::Milliseconds(5);
-            if (interval < info->minimum_interval) interval = info->minimum_interval;
-            if (interval > info->maximum_interval) interval = info->maximum_interval;
-            if (info->kind == mp::SensorKind::kAcceleration && !accelerometer_.valid()) {
-                auto sensor = app_.sensors().Open<mp::Acceleration>(id);
-                if (sensor && sensor->SetSampleInterval(interval)) accelerometer_ = std::move(*sensor);
-            } else if (info->kind == mp::SensorKind::kAngularVelocity && !gyroscope_.valid()) {
-                auto sensor = app_.sensors().Open<mp::AngularVelocity>(id);
-                if (sensor && sensor->SetSampleInterval(interval)) gyroscope_ = std::move(*sensor);
-            }
+        // The SDK clamps the interval to each sensor's supported range.
+        const auto interval = mp::Duration::Milliseconds(5);
+        if (auto sensor = app_.sensors().OpenFirst<mp::Acceleration>(app_.devices(), interval)) {
+            accelerometer_ = std::move(*sensor);
+        }
+        if (auto sensor = app_.sensors().OpenFirst<mp::AngularVelocity>(app_.devices(), interval)) {
+            gyroscope_ = std::move(*sensor);
         }
     }
     // Sensor axes follow the Tilt convention: screen right is -X, screen down
@@ -465,6 +457,7 @@ class Demo final {
     }
     // Fixed rectangles for the HUD, the menu button and the settings panel.
     void LayoutUi() {
+        const bool compact = height_ < 320;
         auto title = app_.renderer().MeasureText("GRAVITY BALLS", mp::SystemFont::kMedium);
         auto status = app_.renderer().MeasureText("tap outside to close", mp::SystemFont::kSmall);
         auto menu = app_.renderer().MeasureText("MENU", mp::SystemFont::kSmall);
@@ -511,14 +504,16 @@ class Demo final {
         // padding scale with the buffer so they stay finger-sized on the panel
         // whether the buffer is upscaled or native.
         const int pad = std::max(8, Round(16.0F * ui));
-        const int button = std::max(medium_h + 20, Round(56.0F * ui));
+        const int button = compact ? std::max(medium_h + 12, 32) : std::max(medium_h + 20, Round(56.0F * ui));
         const int row_h = button + pad;
         const int needed = 5 * pad + label_w + value_w + 2 * button;
         const int panel_w = std::min(needed, width_ - 2 * Round(48.0F * ui));
         const int title_h_row = medium_h + pad;
         const int hint_h_row = small_h + pad;
         const int panel_h = 2 * pad + title_h_row + row_h * static_cast<int>(kSettingRows) + hint_h_row;
-        panel_rect_ = {(width_ - panel_w) / 2, (height_ - panel_h) / 2, panel_w, panel_h};
+        // Short landscape screens keep the panel below the menu tab.
+        const int panel_top = compact ? menu_button_.y + menu_button_.height + pad : 0;
+        panel_rect_ = {(width_ - panel_w) / 2, panel_top + (height_ - panel_top - panel_h) / 2, panel_w, panel_h};
         const int right = panel_rect_.x + panel_rect_.width - pad;
         panel_title_ = {panel_rect_.x + pad, panel_rect_.y + pad + (title_h_row - medium_h) / 2};
         for (unsigned row = 0; row < kSettingRows; ++row) {
@@ -559,14 +554,8 @@ class Demo final {
         const int size = std::max(2, Round(radius * 2));
         return {Round(cx - static_cast<float>(size) * 0.5F), Round(cy - static_cast<float>(size) * 0.5F), size, size};
     }
-    static bool Intersects(mp::Rect a, mp::Rect b) {
-        return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-    }
-    static mp::Rect Union(mp::Rect a, mp::Rect b) {
-        const int x0 = std::min(a.x, b.x), y0 = std::min(a.y, b.y);
-        const int x1 = std::max(a.x + a.width, b.x + b.width), y1 = std::max(a.y + a.height, b.y + b.height);
-        return {x0, y0, x1 - x0, y1 - y0};
-    }
+    static bool Intersects(mp::Rect a, mp::Rect b) { return a.intersects(b); }
+    static mp::Rect Union(mp::Rect a, mp::Rect b) { return a.united(b); }
     void BuildFrame() {
         const float far_depth = ViewDepth(world_.extent.z);
         for (unsigned i = 0; i < world_.count; ++i) {

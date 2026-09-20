@@ -9,6 +9,16 @@ A restricted C++23 SDK for WebAssembly apps. No ESP-IDF, LVGL, board-specific ty
 - [Windows automation](AI.md) — managed installation and JSON commands.
 - [API reference (中文)](README.zh-CN.md) — resources, events, graphics, audio, input, and devices.
 
+## Upgrading to 0.20.0
+
+Use firmware 0.9.3 for the companion Host input changes. Existing Bundles remain installed during a
+Host-only update; changing the factory preload list affects full images only.
+
+Apps migrating to `app.gamepad()` should configure it once and consume its state each frame; remove
+manual forwarding of the same events to the pad. Disable the gamepad while an app menu owns touch input.
+Touch and key controls remain usable on earlier Hosts; analog axis events require Input 1.1 support.
+Check the capability catalog below before keeping app-local math, random, pool, sound or sensor helpers.
+
 ## Programming model
 
 Apps run a single-threaded event loop. The Host owns hardware, system UI, and app lifecycle.
@@ -29,6 +39,96 @@ Use `Scene` for object-based UI and 2D graphics. `HostSurface` submits raster co
 | [Tomb Explorer](../apps/tomb-explorer/README.md) | Polygon rendering and portals |
 
 [ABI reference (中文)](../abi/README.zh-CN.md)
+
+## Capability catalog
+
+Check this table before writing a helper inside an app. Every row is a header under `guest/sdk/` that
+already covers the need; apps must not re-implement these locally.
+
+| Need | Use | Header |
+|---|---|---|
+| Event loop, service views, `Result<T>` | `Application`, `app.xxx()` | `application.hpp`, `result.hpp` |
+| Retained 2D UI, sprites, labels, layout | `Scene`, `SpriteBatch`, `ui::FlexContainer`, `ui::TextButton` | `scene.hpp`, `ui/*.hpp` |
+| Host-rasterized frames, INDEX8 textures, palettes | `HostSurface`, `RasterDrawList`, `RasterResources` | `graphics.hpp` |
+| Raycast walls, PS1-style polygons, Mode7 ground, globe | `Raycaster`, `MeshRenderer`, `Mode7Plane`, `SphereView` | `raycast.hpp`, `mesh_renderer.hpp`, `mode7_plane.hpp`, `sphere_view.hpp` |
+| Textures, fonts, dynamic textures | `Resources::LoadTexture/LoadFont/CreateDynamicTexture` | `resources.hpp` |
+| Logical/buffer coordinate mapping for surfaces | `DirectSurface::ToBuffer/ToLogical` | `graphics.hpp` |
+| On-screen stick, look pad and buttons; physical gamepad keys and axes | `app.gamepad()`, `GamepadSkin` | `gamepad.hpp`, `gamepad_skin.hpp` |
+| Button press/release with hit padding | `ui::Button` | `ui/button.hpp` |
+| Multi-note sound effects from `audio/sfx.json` | `ToneSequencer<N>`, `ToneSpec::ToTone` | `tone_sequencer.hpp`, `audio.hpp` |
+| Clips, PCM streams, tones | `Audio::Play/Load/OpenPcmStream` | `audio.hpp` |
+| Sin/Cos/Atan2 without libm, clamp, lerp, smoothstep, deadzone | `math::*` | `math.hpp` |
+| Reproducible random numbers (seeds, replays, tests) | `XorShift32` | `random.hpp` |
+| Hardware random numbers | `Random::U32/Below` | `random.hpp` |
+| Fixed-capacity particle/trail/popup pools | `CyclicPool<T, N>` | `cyclic_pool.hpp` |
+| Bounded strings, integers and decimals | `FixedString<N>`, `AppendFixed` | `fixed_string.hpp` |
+| Rectangle overlap and union (dirty regions) | `Rect::intersects/united/intersection` | `geometry.hpp` |
+| Timers and frame ticks | `Timers::After/Every`, `TimerEvent::delta()` | `timer.hpp` |
+| Accelerometer, gyroscope, magnetometer | `Sensors::OpenFirst<Acceleration>(devices, interval)` | `sensors.hpp`, `sensor_types.hpp` |
+| Tilt-to-steer: calibration, low-pass, deadzone | `TiltFilter` | `tilt_filter.hpp` |
+| Persistent scores and settings | `KVStore::GetU32Or/SetU32/GetBytes` | `storage.hpp` |
+| Launch flags and numeric options | `LaunchArguments::HasFlag/GetUnsigned/FindValue` | `launch_arguments.hpp` |
+| Locale-aware strings | `Localization::CurrentLocale` + generated string tables | `localization.hpp` |
+| Haptics, GPIO, power, device discovery | `Haptics`, `Gpio`, `PowerInfo`, `Devices` | `haptics.hpp`, `gpio.hpp`, `power_info.hpp`, `devices.hpp` |
+
+## Game helpers
+
+`math.hpp` is freestanding: `Sin`, `Cos`, `Atan`, `Atan2`, `WrapAngle`, `ApproachAngle`, `Sqrt`, `Floor`,
+`Clamp`, `Lerp`, `SmoothStep`, `ApplyDeadzone`. `XorShift32` replays identically from a seed; `Random`
+stays the source of entropy. `CyclicPool<T, N>` hands out slots in order and overwrites the oldest one.
+
+`TiltFilter` turns accelerometer samples into a -1..1 screen-space tilt (neutral calibration, exponential
+low-pass, deadzone, axis inversion); open the sensor with `app.sensors().OpenFirst<Acceleration>(app.devices(), 10_ms)`
+and feed `Sample(value, timestamp)` per reading. `FixedString::AppendFixed`, `LaunchArguments::HasFlag/GetUnsigned`,
+`KVStore::GetU32Or` and `Rect::intersects/united` cover the small utilities apps used to hand-write.
+
+`ToneSequencer<N>` plays the `ToneSpec` arrays the build generates from `audio/sfx.json`:
+
+```cpp
+micropixel::ToneSequencer<8> tones{app.audio(), audio_available};
+tones.Play(my_sfx::kJump);          // game event; delayed notes wait in N slots
+tones.Advance(tick.delta());        // frame timer
+tones.StopAll();                    // pause or game over
+```
+
+## Gamepad
+
+`app.gamepad()` is a Runtime-owned gamepad. Games declare the logical controls once; the Guest Runtime then
+feeds every touch, key, analog axis (Input 1.1), gamepad device and Resume event to it while decoding events,
+so game code never routes input and never branches on the source:
+
+```cpp
+app.gamepad().Configure({.layout = micropixel::GamepadLayout::kStickLookButtons,
+                         .bounds = {0, 0, width, height},     // touch coordinate space
+                         .button_count = 1,
+                         .glyphs = {micropixel::GamepadGlyph::kFire}});
+micropixel::GamepadSkin skin;
+skin.Initialize(app.resources(), app.gamepad().pad());     // bakes ring, knob and buttons into one texture
+
+// frame
+const micropixel::GamepadState state = app.gamepad().Consume();  // stick_x/y, look_dx/dy, Held/Pressed/Released,
+                                                                 // right_x/y and triggers from a physical pad
+skin.Draw(list, app.gamepad().pad());                     // HostSurface; or skin.Attach(scene) + skin.Sync(pad)
+```
+
+Events the gamepad took are marked `Event::gamepad_handled()`, so menu code can skip them; call
+`app.gamepad().set_enabled(false)` on pages where touches must reach the App's own UI. Layouts: `kStickOnly`,
+`kStickLook` (tap on the look pad presses `look_tap_button`), `kStickButtons`, `kStickLookButtons`,
+`kDPadButtons` (directions snapped to -1/0/1), `kButtonsOnly`. Buttons are named by physical position
+(`kSouth` is the primary action) and map 1:1 to `KeyCode::kSouth..kNorth`; `kConfirm` is South, `kUp..kRight`
+and the left stick axis drive the stick (a touching finger wins, then the axis, then keys). Each contact keeps
+its role until it lifts. The overlay follows `GamepadOverlayPolicy`: `kAuto` hides it after key/axis input or a
+gamepad connection until the next touch. `physical_connected()` reports a connected gamepad device.
+
+Follow-ups, by expected payoff: multi-segment run-length rows so the ring's hole is skipped; a mostly-opaque
+button style so the Host writes without reading the frame buffer; once the Host gains a `kGamepad`
+peripheral and the `AXIS` event bridge, a system-menu overlay switch (auto / always / hidden) driving
+`GamepadOverlayPolicy`; further layout presets when a second game needs them.
+
+`VirtualGamepad` (the class behind `pad()`) is also usable standalone with `OnEvent(event)` for Apps that need
+several pads or want to unit-test their control mapping; `GamepadSkin` draws either. Games with their own art
+read `stick_geometry()` and `button_geometry()` instead. `GamepadSkin` draws anti-aliased vector glyphs
+(`GamepadGlyph`) and, by default, shows a floating stick only while it is engaged (`GamepadSkinStyle::show_stick_at_rest`).
 
 ## Mode7 and surface textures
 
@@ -110,11 +210,15 @@ The reference is the design canvas short edge, not the atlas size. Native pixel 
 use kNative. Upscale must divide both physical screen dimensions exactly. Recreating a surface does not
 reload textures. The compatibility kSurface entry point uses configured display scale / active surface
 upscale and fails without an active surface. A mapping object is not required.
-Touch remains in the configured application coordinates; Surface apps must convert it to buffer coordinates.
-Use `surface.ToBuffer(Point/Rect)` and `surface.ToLogical(Point)` to share the configured viewport, including
-offsets and upscale. These methods do not clip coordinates and return empty geometry for an invalid surface.
-`surface.texture_scale()` derives the configured display scale divided by upscale; an invalid surface returns
-an invalid ratio and texture loading fails. No mapping object or hand-written conversion is required.
+Surface-only apps get one coordinate space: when no `ConfigureDisplay` was called and no Scene exists, the
+first DirectSurface adopts its buffer size as the logical canvas (like Godot's viewport stretch or SDL3's
+logical presentation). Touch then arrives in buffer pixels, `RendererInfo::width()/height()` report the buffer,
+`ToBuffer` is the identity and the canvas stays frozen for later surfaces. Reading `renderer().info()` first to
+pick the upscale is fine. Mixed apps that configure a design canvas or show a Scene before the surface keep
+their logical space; there touch stays in logical coordinates and `surface.ToBuffer(Point/Rect)` /
+`surface.ToLogical(Point)` convert, including offsets and upscale. These methods do not clip coordinates and
+return empty geometry for an invalid surface. `surface.texture_scale()` derives the display scale divided by
+upscale (1:1 for an adopted canvas); an invalid surface returns an invalid ratio and texture loading fails.
 
 ### Migration from 0.18
 

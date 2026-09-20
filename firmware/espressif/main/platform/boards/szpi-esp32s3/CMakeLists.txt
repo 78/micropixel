@@ -1,4 +1,5 @@
 list(APPEND micropixel_sources
+    "platform/sensors/polled_vector_sensor_peripheral.cpp"
     "platform/boards/szpi-esp32s3/board_hardware.cpp"
     "platform/boards/szpi-esp32s3/display_hardware.cpp"
     "platform/boards/szpi-esp32s3/i2s_audio_sink.cpp"

@@ -2,31 +2,26 @@
 #define MICROPIXEL_TILT_INPUT_HPP
 
 #include "apps/tilt/tilt_common.hpp"
+#include "sdk/tilt_filter.hpp"
 
 namespace tilt {
 
+// The board accelerometer through the SDK TiltFilter: calibration, low-pass
+// and deadzone live in the SDK; this class only owns the sensor handle and
+// converts to the game's Vec2.
 class TiltInput final {
    public:
     bool Initialize(micropixel::Application& app);
     bool Sample();
-    void Recalibrate();
+    void Recalibrate() { filter_.Recalibrate(); }
 
     [[nodiscard]] constexpr bool available() const { return accelerometer_.valid(); }
-    [[nodiscard]] constexpr bool calibrated() const { return calibrated_; }
-    [[nodiscard]] constexpr Vec2 tilt() const { return tilt_; }
+    [[nodiscard]] constexpr bool calibrated() const { return filter_.calibrated(); }
+    [[nodiscard]] constexpr Vec2 tilt() const { return Vec2{filter_.x(), filter_.y()}; }
 
    private:
-    static float ApplyDeadZone(float value);
-
     micropixel::Accelerometer accelerometer_{};
-    micropixel::Vector3 calibration_sum_{};
-    micropixel::Vector3 neutral_{};
-    micropixel::Vector3 filtered_{};
-    micropixel::TimePoint last_sample_{};
-    Vec2 tilt_{};
-    uint32_t calibration_samples_{};
-    bool calibrated_{};
-    bool filter_seeded_{};
+    micropixel::TiltFilter filter_{};
 };
 
 }  // namespace tilt

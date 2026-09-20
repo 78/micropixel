@@ -34,12 +34,16 @@ fail_on_include platform/defaults platform/boards \
     "Reusable Platform defaults must not depend on a concrete board."
 fail_on_include platform/drivers platform/boards \
     "Reusable device drivers must not depend on a concrete board."
+fail_on_include platform/gpio platform/boards \
+    "Reusable Platform GPIO components must not depend on a concrete board."
 fail_on_include platform/haptics platform/boards \
     "Reusable Platform haptics components must not depend on a concrete board."
 fail_on_include platform/lvgl platform/boards \
     "Reusable LVGL profiles must not depend on a concrete board."
 fail_on_include platform/random platform/boards \
     "Reusable Platform random sources must not depend on a concrete board."
+fail_on_include platform/sensors platform/boards \
+    "Reusable Platform sensor components must not depend on a concrete board."
 fail_on_include platform/transports platform/boards \
     "Reusable transports must not depend on a concrete board."
 fail_on_include platform/wifi platform/boards \

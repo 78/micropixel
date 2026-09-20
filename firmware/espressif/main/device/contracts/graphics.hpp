@@ -36,6 +36,12 @@ struct BitmapView final {
     uint32_t stride{};
     uint32_t pixel_format{};
     uint32_t flags{};
+    // Optional, BGRA8888 only: per row the first column with non-zero alpha
+    // and one past the last, as `height` pairs of uint16_t (SDL's RLE
+    // acceleration reduced to one span per row). Blitters skip the fully
+    // transparent columns outside the span; a pair with end <= begin marks an
+    // empty row. nullptr when unknown.
+    const uint16_t* opaque_spans{};
 };
 
 struct FontResourceView final {

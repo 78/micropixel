@@ -17,7 +17,7 @@ from any commercial game.
 | `game/character.*` | eleven-box explorer with procedural walk/jump poses |
 | `gfx/palette.*` | 16 ramps × 16 steps INDEX8 palette and the 16-level lit palette |
 | `gfx/textures.*` | generated 64×64 textures (`tools/generate_textures.py`) |
-| `input/touch_controls.*` | left-half stick, right-half orbit/tilt drag, tap to jump |
+| (SDK `app.gamepad()` + `GamepadSkin`) | `kStickLook` layout: left-half stick, right-half orbit/tilt drag, tap to jump; the Runtime routes input, the SDK atlas draws it |
 
 ## Level description
 

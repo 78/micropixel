@@ -3,6 +3,8 @@
 
 #include "apps/tilt/tilt_input.hpp"
 #include "apps/tilt/tilt_model.hpp"
+#include "sdk/cyclic_pool.hpp"
+#include "sdk/tone_sequencer.hpp"
 #include "tilt_sfx_profiles.hpp"
 
 namespace tilt {
@@ -50,12 +52,6 @@ class TiltGame final {
         bool active{};
     };
 
-    struct ScheduledTone final {
-        micropixel::Tone tone{};
-        uint64_t delay_us{};
-        bool active{};
-    };
-
     void InitializeScene();
     void StartCalibration(bool reset_model);
     void CompleteCalibration();
@@ -85,12 +81,8 @@ class TiltGame final {
     [[nodiscard]] static micropixel::Rect MechanicDestination(WallRect rect);
     static void FormatTime(uint64_t elapsed_us, char (&output)[6]);
 
-    [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
-                                             uint16_t volume_per_mille, uint16_t attack_ms, uint16_t release_ms) const;
-    void EmitTone(const micropixel::Tone& tone);
-    void QueueTone(const micropixel::Tone& tone, uint32_t delay_ms);
-    void QueueProfile(const tilt_sfx::ToneSpec* tones, uint32_t count);
-    void AdvanceAudio(uint64_t delta_us);
+    void QueueProfile(std::span<const micropixel::ToneSpec> profile);
+    void AdvanceAudio(micropixel::Duration delta);
     void ClearAudioQueue();
     void PlayStartSound();
     void PlayWallSound();
@@ -149,23 +141,19 @@ class TiltGame final {
     micropixel::ui::TextButton previous_level_button_{};
     micropixel::ui::TextButton next_level_button_{};
     micropixel::ui::Button pause_button_{kPauseTouchRect};
-    micropixel::Audio audio_;
+    micropixel::ToneSequencer<8U> tones_;
     TiltInput input_{};
     TiltModel model_{};
-    Trail trails_[kTrailCapacity]{};
-    Particle particles_[kParticleCapacity]{};
-    ScheduledTone scheduled_tones_[8U]{};
+    micropixel::CyclicPool<Trail, kTrailCapacity> trails_{};
+    micropixel::CyclicPool<Particle, kParticleCapacity> particles_{};
     uint64_t animation_time_us_{};
     uint64_t trail_accumulated_us_{};
     uint64_t wall_sound_cooldown_us_{};
     uint64_t bumper_flash_us_{};
-    uint32_t trail_cursor_{};
-    uint32_t particle_cursor_{};
     ProgressData progress_{};
     uint32_t completed_rating_{};
     uint32_t selected_level_index_{};
     uint32_t rendered_level_index_{UINT32_MAX};
-    bool audio_available_{};
     bool audio_error_logged_{};
     bool storage_error_logged_{};
     bool scene_initialized_{};

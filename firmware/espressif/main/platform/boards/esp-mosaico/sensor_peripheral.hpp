@@ -1,14 +1,14 @@
 #ifndef MICROPIXEL_PLATFORM_BOARDS_ESP_MOSAICO_SENSOR_PERIPHERAL_HPP
 #define MICROPIXEL_PLATFORM_BOARDS_ESP_MOSAICO_SENSOR_PERIPHERAL_HPP
 
-#include <atomic>
+#include <array>
 
 #include "device/contracts/sensors.hpp"
 #include "driver/i2c_master.h"
-#include "esp_timer.h"
 #include "platform/buses/i2c_executor.hpp"
 #include "platform/drivers/sensors/bmi270.hpp"
 #include "platform/drivers/sensors/bmm150.hpp"
+#include "platform/sensors/polled_vector_sensor_peripheral.hpp"
 
 namespace micropixel::platform::esp_mosaico {
 
@@ -35,26 +35,7 @@ class SensorPeripheral final : public device::SensorPeripheral {
     void Stop(device::PeripheralChannelId channel) override;
 
    private:
-    struct Sampler final {
-        SensorPeripheral* owner{};
-        device::PeripheralChannelId channel{};
-        esp_timer_handle_t timer{};
-        device::SensorValues latest{};
-        std::atomic<bool> active{};
-        std::atomic<bool> pending{};
-        int32_t status{MICROPIXEL_STATUS_WOULD_BLOCK};
-    };
-
     void InitializeOnWorker();
-    void PrepareSamplers();
-    [[nodiscard]] int32_t ReadVector(device::PeripheralChannelId channel, device::SensorValues& values_out);
-    [[nodiscard]] int32_t ConfigureOnWorker(device::PeripheralChannelId channel, uint32_t interval_us);
-    void StopOnWorker(device::PeripheralChannelId channel);
-    [[nodiscard]] drivers::VectorSensor* DriverFor(device::PeripheralChannelId channel);
-    [[nodiscard]] Sampler* FindSampler(device::PeripheralChannelId channel);
-    [[nodiscard]] const Sampler* FindSampler(device::PeripheralChannelId channel) const;
-    static void TimerExpired(void* context);
-    static esp_err_t SampleOnWorker(void* context);
 
     i2c_master_bus_handle_t bus_{};
     drivers::Bmi270 inertial_{};
@@ -65,11 +46,13 @@ class SensorPeripheral final : public device::SensorPeripheral {
     buses::I2cExecutor* i2c_executor_{};
     bool initialization_started_{};
     bool initialization_finished_{};
-    Sampler acceleration_sampler_{};
-    Sampler angular_velocity_sampler_{};
-    Sampler magnetic_field2_sampler_{};
-    Sampler magnetic_field3_sampler_{};
-    portMUX_TYPE cache_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    std::array<sensors::PolledVectorSensorPeripheral::Channel, 4> channels_{{
+        {kAcceleration, MICROPIXEL_SENSOR_ACCELERATION, acceleration_, "mosaico_accel"},
+        {kAngularVelocity, MICROPIXEL_SENSOR_ANGULAR_VELOCITY, angular_velocity_, "mosaico_gyro"},
+        {kMagneticField2, MICROPIXEL_SENSOR_MAGNETIC_FIELD, magnetic_field2_, "mosaico_mag2"},
+        {kMagneticField3, MICROPIXEL_SENSOR_MAGNETIC_FIELD, magnetic_field3_, "mosaico_mag3"},
+    }};
+    sensors::PolledVectorSensorPeripheral peripheral_{channels_, "mosaico_sensors"};
 };
 
 }  // namespace micropixel::platform::esp_mosaico

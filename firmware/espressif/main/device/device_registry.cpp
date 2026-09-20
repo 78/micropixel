@@ -220,9 +220,10 @@ int32_t DeviceRegistry::Open(micropixel_device_id_t device, uint16_t mode, uint1
     }
     entry->gpio_edge_sink = edge_sink;
     entry->gpio_edge_context = edge_sink == nullptr ? nullptr : edge_context;
-    const int32_t status =
-        static_cast<GpioPeripheral*>(entry->peripheral)
-            ->Open(entry->channel, mode, pull, edge, initial_value, pwm_frequency_hz, OnGpioEdge, this);
+    const GpioPeripheralEdgeSink peripheral_sink = edge_sink == nullptr ? nullptr : OnGpioEdge;
+    const int32_t status = static_cast<GpioPeripheral*>(entry->peripheral)
+                               ->Open(entry->channel, mode, pull, edge, initial_value, pwm_frequency_hz,
+                                      peripheral_sink, peripheral_sink == nullptr ? nullptr : this);
     if (status != MICROPIXEL_STATUS_OK) {
         entry->gpio_edge_sink = nullptr;
         entry->gpio_edge_context = nullptr;

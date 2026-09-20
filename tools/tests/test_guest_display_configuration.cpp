@@ -11,6 +11,7 @@ namespace {
 micropixel_texture_load_request_t last_texture_request{};
 uint32_t surface_upscale{};
 uint32_t texture_calls{};
+bool scene_alive{};
 }  // namespace
 
 namespace micropixel {
@@ -21,6 +22,7 @@ namespace micropixel::runtime {
 [[noreturn]] void Panic(const char*, int32_t) { std::abort(); }
 void RequireOk(int32_t status, const char*) { assert(status == MICROPIXEL_STATUS_OK); }
 uint32_t ActiveSurfaceUpscale() { return surface_upscale; }
+bool AnyLiveScene() { return scene_alive; }
 int32_t OpenService(ServiceCache& cache, uint32_t id, uint16_t major, uint16_t minor) {
     cache.info.service_handle = id;
     cache.info.interface_major = major;
@@ -124,4 +126,45 @@ int main() {
     assert(!resources.LoadTexture(asset, TextureLoadOptions::Ratio(4097, 4096)));
     assert(!resources.LoadTexture(asset, static_cast<TextureScale>(255)));
     assert(texture_calls == calls);
+
+    // An explicitly configured canvas is never replaced by a surface.
+    assert(!runtime::AdoptSurfaceCanvas(240, 240));
+    assert(renderer.info().width() == 320);
+
+    // Surface-only App: reading info() first (to pick the upscale) is fine; the
+    // surface then adopts its buffer size as the logical canvas.
+    runtime::display_context_loaded = false;
+    runtime::display_context_configured = false;
+    assert(renderer.info().width() == 480);
+    assert(runtime::AdoptSurfaceCanvas(240, 240));
+    assert(renderer.info().width() == 240 && renderer.info().height() == 240 &&
+           renderer.info().physical_width() == 480);
+    assert(runtime::ToLogical({480, 240}) == (Point{240, 120}));
+    assert(target.ToBuffer(Point{100, 70}) == (Point{100, 70}));
+    assert(target.ToBuffer(Rect{10, 20, 30, 40}) == (Rect{10, 20, 30, 40}));
+    assert(target.ToLogical({100, 70}) == (Point{100, 70}));
+    // Default loads still follow the display scale (logical -> physical, 2:1);
+    // surface.texture_scale() divides by the upscale and lands at 1:1.
+    auto adopted = resources.LoadTexture(asset);
+    assert(adopted && last_texture_request.scale_numerator == 2 && last_texture_request.scale_denominator == 1);
+    auto adopted_surface = resources.LoadTexture(asset, target.texture_scale());
+    assert(adopted_surface && last_texture_request.scale_numerator == 1 && last_texture_request.scale_denominator == 1);
+    assert(!renderer.ConfigureDisplay({{320, 240}, DisplayScaleMode::kAspectFit}));
+    // The canvas is frozen: a second surface with another upscale keeps it.
+    assert(!runtime::AdoptSurfaceCanvas(480, 480));
+    assert(renderer.info().width() == 240);
+
+    // A live Scene commits the native canvas; the surface leaves it alone.
+    runtime::display_context_loaded = false;
+    runtime::display_context_configured = false;
+    scene_alive = true;
+    assert(!runtime::AdoptSurfaceCanvas(240, 240));
+    assert(renderer.info().width() == 480);
+    scene_alive = false;
+
+    // A buffer that does not tile the panel cannot become the canvas.
+    runtime::display_context_loaded = false;
+    runtime::display_context_configured = false;
+    assert(!runtime::AdoptSurfaceCanvas(200, 240));
+    assert(!runtime::display_context_configured);
 }

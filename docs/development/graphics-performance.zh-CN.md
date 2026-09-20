@@ -124,9 +124,12 @@ Guest buffer 的 pinned memory 会提前占用连续空间，默认 Host buffer 
 返回大厅时，如果板级截图阶段已完成缩小动画，Hall 直接接管截图卡片，不再重建转场背景。
 排查 `Hall background region update failed: captured=no` 时检查 LVGL 自动行对齐：截图缓冲区按
 `lv_draw_buf_width_to_stride` 分配，交给只接受紧密 RGB888 的拷贝路径前去除行填充。
-`lcd.dsi` 的 underrun 则表示扫描输出取数不足，应结合 PSRAM 带宽与真机画面单独验证。
-Claw4 的 DPI 像素时钟设为 40 MHz，由默认 240 MHz 时钟源精确 6 分频产生；
-按 720×720 和现有消隐时序估算约 65.5 Hz。
+`lcd.dsi` 的 underrun 则表示扫描输出取数不足（画面变蓝），应结合 PSRAM 带宽与真机画面单独验证。
+Claw4 的 DPI 像素时钟由默认 240 MHz 时钟源整数分频产生，只能取 240/N：40 MHz（6 分频，约 65.5 Hz）
+在 App 光栅、PPA 与 DMA2D 争用 PSRAM 时会触发 underrun，现设为 240/7 ≈ 34.29 MHz（约 56.2 Hz），
+DSI 读 framebuffer 的带宽减少 14%，真机运行中不再蓝闪；App 启动瞬间的峰值仍可能闪一下。
+不能用 RGB565 framebuffer 换带宽：NV3051F 只有只读的像素格式寄存器（固定 24 bit），而 ESP32-P4
+rev 1.x 的 DSI 桥输入与输出格式共用一个寄存器，做不了 RGB565→RGB888 的桥内转换（v3 硅片才有）。
 P4 L2 Cache 配置为 256 KiB、cache line 为 64 B；相对 128 KiB Cache 额外占用 128 KiB 内部 SRAM。
 ESP-Hosted transport 缓冲池优先放在 PSRAM，以保留内部 SRAM。当前发送池的 1600 B 块间距能满足
 64 B 对齐，但不能保证每块都满足 128 B 对齐；不要在该配置下单独将 cache line 改回 128 B，否则
@@ -178,6 +181,18 @@ FPS 提升。P4 高分辨率场景与 S31 原尺寸输出应分别测量。
 
 改变数据驻留位置也可能改变访存的代码生成成本，必须用对照测量分离变量；
 不能仅凭查表耗时推断 cache miss 是主因。
+
+半透明记录（带 alpha 的 `Rect`、BGRA `Image`）的成本主体不是混合运算，而是对 PSRAM frame buffer 的
+逐像素读取：在 S31 上逐个 16 位读取比整行 `memcpy` 到内部 SRAM 再写回慢约五倍。`DrawRect` 与 `DrawImage`
+因此把每行分段暂存到内部 SRAM 再混合。BGRA 纹理在进入 `BitmapStore` 时另外建立每行非透明区间表
+（`BitmapView::opaque_spans`，每行两个 `uint16_t`），`DrawImage` 只遍历区间内的目标列，透明边距与整行
+透明不再产生逐像素开销。带洞的图形（圆环）单区间只能省去两侧，中间仍会遍历。评估这类改动时用同一
+Guest Bundle 在新旧 Host 上对比 `render_avg_us`，并附一个不画该记录的对照 Bundle。
+
+虚拟手柄浮层（`GamepadSkin`）在 S31 480×480 上的现状：常驻一个按键约 +1.5 ms/帧，摇杆圆环与摇杆帽
+同时可见时约 +3.4 ms，每个混合像素约 150 ns，其中纹理读取已是主体。尚未做的优化：
+（1）区间表升级为每行多段 run-length，消掉圆环中间的洞；（2）皮肤默认样式改为以 alpha=255 像素为主，
+不透明像素直接写入、不读 frame buffer；（3）纹理读取按行预取到内部 SRAM，与目标行暂存合并成一次拷贝。
 
 ### 系统字体缓存
 

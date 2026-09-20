@@ -86,7 +86,69 @@ void DynamicSnapshotsRetainOldPixelsAndRejectInvalidUpdates() {
     assert(allocations.empty());
 }
 
+// BGRA bitmaps get a per-row opaque span table that follows the slot's
+// lifetime; other formats do not, and a failed table allocation degrades to
+// "unknown" rather than refusing the bitmap.
+void OpaqueSpansFollowBgraBitmaps() {
+    using namespace micropixel::runtime;
+    using micropixel::device::BitmapView;
+    BitmapStore store;
+    assert(store.valid());
+    // 4x3 BGRA: row 0 transparent, row 1 opaque in columns 1..2, row 2 alpha at 0 and 3.
+    static const uint8_t bgra[4 * 3 * 4]{
+        0, 0, 0, 0,  0, 0, 0, 0,   0, 0, 0, 0, 0, 0, 0, 0,    //
+        0, 0, 0, 0,  9, 9, 9, 255, 9, 9, 9, 7, 0, 0, 0, 0,    //
+        1, 1, 1, 40, 0, 0, 0, 0,   0, 0, 0, 0, 1, 1, 1, 255,  //
+    };
+    const BitmapView view{bgra, sizeof(bgra), 4U, 3U, 16U, MICROPIXEL_PIXEL_FORMAT_BGRA8888, 0U};
+    const auto before = allocations.size();
+    const micropixel_texture_handle_t handle = store.Add(view, false);
+    assert(handle != 0U);
+    assert(allocations.size() == before + 1U);  // exactly the span table
+    BitmapView resolved{};
+    assert(store.Resolve(handle, resolved));
+    assert(resolved.opaque_spans != nullptr);
+    assert(resolved.opaque_spans[0] == 4U && resolved.opaque_spans[1] == 0U);  // empty row: end <= begin
+    assert(resolved.opaque_spans[2] == 1U && resolved.opaque_spans[3] == 3U);
+    assert(resolved.opaque_spans[4] == 0U && resolved.opaque_spans[5] == 4U);
+    store.Release(handle);
+    assert(allocations.size() == before);  // the table is freed with the slot
+
+    // Dynamic BGRA textures index every snapshot; RGB565 ones never.
+    const auto dynamic = store.CreateDynamic(4U, 3U, MICROPIXEL_PIXEL_FORMAT_BGRA8888, bgra, sizeof(bgra), 16U);
+    assert(dynamic.has_value());
+    assert(store.Resolve(dynamic.value(), resolved) && resolved.opaque_spans != nullptr &&
+           resolved.opaque_spans[3] == 3U);
+    const uint8_t patch[]{5, 5, 5, 200, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0};
+    const auto updated = store.UpdateDynamic(dynamic.value(), 0U, 0U, 4U, 1U, patch, sizeof(patch), 16U);
+    assert(updated.has_value());
+    assert(store.Resolve(updated.value(), resolved) && resolved.opaque_spans != nullptr);
+    assert(resolved.opaque_spans[0] == 0U && resolved.opaque_spans[1] == 1U);  // the patched row
+    assert(resolved.opaque_spans[2] == 1U && resolved.opaque_spans[3] == 3U);  // untouched rows keep theirs
+    const uint8_t rgb565[4 * 3 * 2]{};
+    const auto plain = store.CreateDynamic(4U, 3U, MICROPIXEL_PIXEL_FORMAT_RGB565, rgb565, sizeof(rgb565), 8U);
+    assert(plain.has_value());
+    assert(store.Resolve(plain.value(), resolved) && resolved.opaque_spans == nullptr);
+    store.Release(dynamic.value());
+    store.Release(updated.value());
+    store.Release(plain.value());
+    assert(allocations.size() == before);
+
+    // Out of memory for the table: the bitmap is still admitted, just unindexed.
+    const micropixel_texture_handle_t asset = store.Add(view, false);
+    assert(asset != 0U);
+    store.Release(asset);
+    fail_allocation = true;
+    const micropixel_texture_handle_t unindexed = store.Add(view, false);
+    fail_allocation = false;
+    assert(unindexed != 0U);
+    assert(store.Resolve(unindexed, resolved) && resolved.opaque_spans == nullptr);
+    store.ReleaseAll();
+    assert(allocations.size() == before);
+}
+
 int main() {
+    OpaqueSpansFollowBgraBitmaps();
     DynamicSnapshotsRetainOldPixelsAndRejectInvalidUpdates();
     using micropixel::runtime::BitmapStore;
     using micropixel::runtime::limits::kMaxBitmaps;

@@ -22,9 +22,8 @@ BlocksGame::BlocksGame(micropixel::Application& app, micropixel::Renderer render
       renderer_(renderer),
       renderer_info_(renderer_info),
       scene_(renderer.CreateScene(micropixel::Color::Rgb(5U, 5U, 5U)).value()),
-      audio_(audio),
-      best_score_(best_score),
-      audio_available_(audio_available) {
+      tones_(audio, audio_available),
+      best_score_(best_score) {
     model_.Reset(kDefaultRandomSeed);
 }
 
@@ -89,7 +88,7 @@ void BlocksGame::HandleOutcome(const LockOutcome& outcome) {
 
 void BlocksGame::OnTimer(const micropixel::TimerEvent& tick) {
     const uint64_t delta_us = tick.delta().count_microseconds();
-    AdvanceAudio(delta_us);
+    AdvanceAudio(tick.delta());
     if (screen_ != Screen::kPlaying) {
         return;
     }

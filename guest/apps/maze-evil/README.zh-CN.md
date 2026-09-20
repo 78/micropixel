@@ -24,13 +24,10 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
   全屏点击或按下并松开任意 Guest 按键后开始世界和 BGM；死亡或通关后同样可全屏点击或按键返回说明页，
   无需命中开火热区。每次页面切换需要新的按下、松开，取消的触摸或按键不触发确认。
   `--benchmark` 自动跳过说明。
-- 输入：默认纯触摸。左半屏浮动摇杆控制前进、后退和左右平移；右侧拖动控制水平转向，右下方留给拇指滑动，另一根手指可同时按住右侧中部开火键。
-  右侧中部常驻 `FIRE` 圆圈，按下即开火、按住连发，松开停止；确认键也可开火。
-  圆圈半径为屏幕短边的 1/10，触摸热区半径为短边的 1/8（720 px 屏幕分别为 72 / 90 px），
-  按下时优先判定开火热区。每个触点在按下时确定职责，滑入其他区域不会切换职责或误开枪；
+- 输入：默认纯触摸，由 Runtime 手柄 `app.gamepad()`（`kStickLookButtons` 布局，一个 `kFire` 按键）提供，只在游戏进行中启用，菜单页读未被接管的触摸。左半屏浮动摇杆控制前进、后退和左右平移；右侧拖动控制水平转向，另一根手指可同时按住右下开火键；接入物理手柄时方向键与 South 键走同一套 `GamepadState`，按键后浮层自动隐藏。
+  右下常驻开火键（SDK `GamepadSkin` 的瞄准十字图标），按下即开火、按住连发，松开停止；确认键也可开火。
+  按键半径为缓冲短边的 1/11，触摸热区再放大 25%，按下时优先判定按键。每个触点在按下时确定职责，滑入其他区域不会切换职责或误开枪；
   触点取消和恢复应用时清理按住状态。多指同时移动、转向、开火取决于面板支持的触点数量。
-  `--motion` 可显式开启体感辅助移动和瞄准，长按确认键 1.5 s 重新归中；`--no-motion` 强制关闭。
-  体感在后台归中，3 秒未完成会退回纯触摸。
 - 纪录：开始页显示 `BEST`，游玩和结算页显示 `TIME / BEST`，统一使用 `00:00`（分:秒），不显示小数秒。只累计前台实际游玩时间，
   不包含说明页、暂停和结算等待，也不使用限幅后的模拟时间。通关结算只显示本次 `TIME` 和本轮开始前的 `PREV BEST`（首次为 `--:--`）。严格快于旧成绩时更新纪录，
   用应用 KV 存储的 `level1_v1_ms` 保存毫秒成绩；平局、死亡和 benchmark 不更新纪录。
@@ -39,7 +36,7 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
   `World::Reset()` 将字符转换为墙、门、敌人和道具；击杀全部敌人并贴近出口后通关。
 - 音频：16 个音效只写在 [`audio/sfx.json`](audio/sfx.json)，BGM 用 `assets/bgm_loop.ogg` 循环播放；
   `--no-bgm` 关闭 BGM 以便测量。
-- 数学：Guest 不链接 libm，`rc_math.hpp` 用 Wasm 指令和短多项式提供 `sin/cos/atan/sqrt/floor`。
+- 数学：Guest 不链接 libm，`sdk/math.hpp` 用 Wasm 指令和短多项式提供 `Sin/Cos/Atan/Sqrt/Floor`；可复现随机数用 `sdk/random.hpp` 的 `XorShift32`。
 
 启动参数：
 
@@ -48,13 +45,12 @@ Bundle 的资源包仍只携带 Opus BGM 和启动图标。
 | `--benchmark` | 固定 1/40 s 步长、固定 RNG 种子和脚本化自动漫游，每 120 帧输出 `maze-break-bench:` 一行；默认静音，`--sound` 恢复 |
 | `--perf` | 正常游玩时同样输出统计并显示 HUD 的 FPS / RENDER / PRESENT / WAIT |
 | `--mute` / `--no-bgm` | 关闭全部声音 / 只关 BGM |
-| `--motion` / `--no-motion` | 开启体感辅助 / 强制纯触摸（默认） |
 
 统计行字段与 demo 日志对齐：`render_avg_us`（几何 + 记录编码 + Host kernel 执行）、`present_avg_us`
 （`SURFACE_PRESENT` 调用）、`wait_avg_us`（等待 `SURFACE_RELEASED` 归还 buffer）以及 `frame_max_us`。
 
 应用使用 Host buffer 与 Host Raster 内核。面板宽于 480 px 时自动使用 `upscale = 2`，
-减少填充像素与内存带宽需求；触摸摇杆坐标按 `upscale` 换算。性能 HUD 会改变绘制工作量，
+减少填充像素与内存带宽需求；HostSurface 创建后逻辑画布即为缓冲区，Runtime 直接以缓冲像素喂给手柄。性能 HUD 会改变绘制工作量，
 对比测量时应固定其状态。方法见 [图形性能诊断](../../../docs/development/graphics-performance.zh-CN.md)。
 
 示例直接使用 `gfx/textures.cpp`、`gfx/sprites.cpp` 中的索引像素数据，以及 `assets/launch.png` 和

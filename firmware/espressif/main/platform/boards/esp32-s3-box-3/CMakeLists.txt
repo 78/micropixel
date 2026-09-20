@@ -1,10 +1,10 @@
 list(APPEND micropixel_sources
+    "platform/sensors/polled_vector_sensor_peripheral.cpp"
     "platform/boards/esp32-s3-box-3/board_hardware.cpp"
     "platform/boards/esp32-s3-box-3/display_hardware.cpp"
     "platform/boards/esp32-s3-box-3/host_mute_control.cpp"
     "platform/boards/esp32-s3-box-3/i2s_audio_sink.cpp"
     "platform/boards/esp32-s3-box-3/platform.cpp"
-    "platform/boards/esp32-s3-box-3/sensor_peripheral.cpp"
     "platform/drivers/sensors/icm42670.cpp"
     "platform/input/esp_lcd_touch_input.cpp"
     "platform/sensors/polled_inertial_sensor_peripheral.cpp"

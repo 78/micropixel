@@ -12,10 +12,13 @@ class InputInfo final {
     [[nodiscard]] constexpr uint16_t max_touch_points() const { return max_touch_points_; }
     [[nodiscard]] constexpr bool supports_pressure() const { return (capabilities_ & kPressureCapability) != 0U; }
     [[nodiscard]] constexpr bool supports_key_events() const { return (capabilities_ & kKeyEventsCapability) != 0U; }
+    // Input 1.1: the Host delivers analog gamepad axes (EventType::kAxis).
+    [[nodiscard]] constexpr bool supports_axis_events() const { return (capabilities_ & kAxisEventsCapability) != 0U; }
 
    private:
     static constexpr uint16_t kPressureCapability = 1U << 0U;
     static constexpr uint16_t kKeyEventsCapability = 1U << 1U;
+    static constexpr uint16_t kAxisEventsCapability = 1U << 2U;
     constexpr InputInfo(uint16_t max_touch_points, uint32_t capabilities)
         : max_touch_points_(max_touch_points), capabilities_(capabilities) {}
 

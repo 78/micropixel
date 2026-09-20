@@ -20,6 +20,15 @@ class KVStore final {
     [[nodiscard]] Result<uint32_t> GetU32(const char* key) const;
     [[nodiscard]] Result<void> SetU32(const char* key, uint32_t value) const;
     [[nodiscard]] Result<bool> GetBool(const char* key) const;
+    // `fallback` when the key is missing or unreadable (high scores, settings).
+    [[nodiscard]] uint32_t GetU32Or(const char* key, uint32_t fallback) const {
+        auto value = GetU32(key);
+        return value.has_value() ? value.value() : fallback;
+    }
+    [[nodiscard]] bool GetBoolOr(const char* key, bool fallback) const {
+        auto value = GetBool(key);
+        return value.has_value() ? value.value() : fallback;
+    }
     [[nodiscard]] Result<void> SetBool(const char* key, bool value) const;
     [[nodiscard]] Result<uint32_t> GetBytesSize(const char* key) const;
     [[nodiscard]] Result<uint32_t> GetBytes(const char* key, uint8_t* bytes, uint32_t capacity) const;

@@ -85,7 +85,7 @@ class FirmwareProfileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "sdkconfig.defaults").write_text("")
-            (root / "sdkconfig.p4.defaults").write_text("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n")
+            (root / "sdkconfig.p4.defaults").write_text("CONFIG_LV_MEM_SIZE=1572864\n")
             command = """set -euo pipefail
 firmware_dir="$1"
 host_build_dir="$1/build"
@@ -98,21 +98,23 @@ common_max_task_name_len=32
             for existing in (False, True):
                 with self.subTest(existing=existing):
                     if existing:
-                        config.write_text("CONFIG_LV_MEM_SIZE_KILOBYTES=96\n")
+                        config.write_text('CONFIG_LV_MEM_SIZE_KILOBYTES=96\nCONFIG_LV_ASSERT_HANDLER_INCLUDE="assert.h"\n')
                     subprocess.run(["bash", "-c", command, "test", temporary], check=True,
                                    env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
                     generated = (root / "build/sdkconfig.env.defaults").read_text()
-                    self.assertIn("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n", generated)
+                    self.assertIn("CONFIG_LV_MEM_SIZE=1572864\n", generated)
                     if existing:
-                        self.assertIn("CONFIG_LV_MEM_SIZE_KILOBYTES=1536\n", config.read_text())
+                        self.assertIn("CONFIG_LV_MEM_SIZE=1572864\n", config.read_text())
+                        self.assertNotIn("CONFIG_LV_MEM_SIZE_KILOBYTES=", config.read_text())
+                        self.assertNotIn("CONFIG_LV_ASSERT_HANDLER_INCLUDE=", config.read_text())
 
     def test_lvgl_capacity_matches_chip_family(self) -> None:
         for name, profile in self.profiles.items():
             with self.subTest(profile=name):
                 values = [line.split("=", 1)[1] for path in profile.sdkconfig_defaults
                           for line in path.read_text().splitlines()
-                          if line.startswith("CONFIG_LV_MEM_SIZE_KILOBYTES=")]
-                self.assertEqual(values, ["1024" if profile.target == "esp32p4" else "768"])
+                          if line.startswith("CONFIG_LV_MEM_SIZE=")]
+                self.assertEqual(values, ["1048576" if profile.target == "esp32p4" else "786432"])
 
     def test_every_profile_layers_shared_defaults_first(self) -> None:
         shared_defaults = firmware.FIRMWARE_DIR / "sdkconfig.defaults"

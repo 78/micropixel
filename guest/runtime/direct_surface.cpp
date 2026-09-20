@@ -5,6 +5,7 @@
 #include "runtime/service_binding.hpp"
 #include "sdk/graphics.hpp"
 
+using micropixel::runtime::AdoptSurfaceCanvas;
 using micropixel::runtime::AlignUp;
 using micropixel::runtime::CallService;
 using micropixel::runtime::CallVoid;
@@ -107,6 +108,8 @@ namespace {
     direct_surface_state.handle = response.surface_handle;
     direct_surface_state.busy_mask = 0U;
     direct_surface_state.upscale = upscale;
+    // Surface-only Apps get one coordinate space: logical == buffer pixels.
+    (void)AdoptSurfaceCanvas(geometry.width, geometry.height);
     DirectSurfaceCreation creation{};
     creation.handle = response.surface_handle;
     creation.width = raw.width;

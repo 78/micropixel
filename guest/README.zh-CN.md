@@ -22,7 +22,8 @@ Runtime binding 按能力拆分，新增实现应放入对应模块：
 | `display_context.cpp` | Graphics/Input 信息缓存与共享坐标契约 |
 | `graphics.cpp` | Renderer 信息、字体、纹理和更新批次 |
 | `direct_surface.cpp`、`raster_resources.cpp` | HostSurface/GuestSurface 缓冲区所有权、Raster 资源上传与绘制记录 |
-| `application.cpp` | 事件循环与 wire 事件解码 |
+| `application.cpp` | 事件循环与 wire 事件解码（含 Input 1.1 轴事件） |
+| `gamepad.cpp` | Runtime 持有的手柄：解码后先接收触摸/按键/轴/设备事件，标记 `gamepad_handled` |
 | `scene_graph.cpp` | Scene 状态与增量提交 |
 
 各能力持有自身 Service 缓存。Graphics binding 共用 `display_context` 的 Service 缓存；
@@ -47,6 +48,7 @@ Sensor 句柄表保留在设备模块内。内部头只服务于 Runtime，不�
 生成非共享 Wasm linear memory，使 WAMR 通过 `memory.grow` 按需扩展。Bundle 会携带该声明，Host 在加载时
 将它与 AOT target-info 的 multi-thread 特征交叉校验。
 SDK 默认使用物理屏幕像素作为逻辑坐标；App 可通过 `ConfigureDisplay` 显式声明设计尺寸与适配方式，
+只用 DirectSurface 且未显式配置的 App 由第一个 Surface 把缓冲区尺寸设为逻辑画布（触摸直接是缓冲像素），
 通过 `RendererInfo` 判断当前逻辑宽高和方向，
 并对不支持的布局显式 `Assert`。`localization`、
 `asset_manifest` 和 `audio/sfx.json` 是生成 Catalog、资源绑定、音效 profile、Wasm/AOT 与 Bundle 的

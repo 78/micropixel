@@ -5,6 +5,7 @@
 
 #include <utility>
 
+#include "sdk/devices.hpp"
 #include "sdk/result.hpp"
 #include "sdk/sensor_types.hpp"
 
@@ -93,6 +94,43 @@ class Sensors final {
             return unexpected(opened.error());
         }
         return Sensor<Reading>{opened->handle, opened->device};
+    }
+
+    // Opens the first catalogued sensor of `Reading`'s kind, optionally with a
+    // sample interval clamped to the sensor's supported range; boards expose
+    // one accelerometer, so this replaces the List/GetInfo/Open loop every
+    // motion game wrote. kNotFound when nothing of that kind opens.
+    template <typename Reading>
+    [[nodiscard]] Result<Sensor<Reading>> OpenFirst(Devices devices, Duration sample_interval = {}) const {
+        auto listed = devices.List(DeviceKind::kSensor);
+        if (!listed) {
+            return unexpected(listed.error());
+        }
+        for (DeviceId device : listed.value()) {
+            auto info = GetInfo(device);
+            if (!info || info->kind != SensorTraits<Reading>::kKind) {
+                continue;
+            }
+            auto opened = Open<Reading>(device);
+            if (!opened) {
+                continue;
+            }
+            if (sample_interval.count_microseconds() != 0U) {
+                Duration interval = sample_interval;
+                if (info->minimum_interval.count_microseconds() != 0U && interval < info->minimum_interval) {
+                    interval = info->minimum_interval;
+                }
+                if (info->maximum_interval.count_microseconds() != 0U && interval > info->maximum_interval) {
+                    interval = info->maximum_interval;
+                }
+                if (!opened->SetSampleInterval(interval)) {
+                    opened->Reset();
+                    continue;
+                }
+            }
+            return opened;
+        }
+        return unexpected(Error{ErrorCode::kNotFound});
     }
 
    private:
