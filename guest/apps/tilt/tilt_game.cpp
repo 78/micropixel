@@ -28,9 +28,8 @@ TiltGame::TiltGame(micropixel::Application& app, micropixel::Renderer renderer, 
       fan_frame_pixels_(fan_frame_pixels),
       mechanic_frame_pixels_(mechanic_frame_pixels),
       hud_frame_pixels_(hud_frame_pixels),
-      audio_(audio),
-      progress_(progress),
-      audio_available_(audio_available) {
+      tones_(audio, audio_available),
+      progress_(progress) {
     progress_.schema_version = kProgressSchemaVersion;
     progress_.level_count = kLevelCount;
     if (progress_.unlocked_level_index >= kLevelCount) {
@@ -195,7 +194,7 @@ void TiltGame::HandleOutcome(const ModelOutcome& outcome) {
 
 void TiltGame::OnTimer(const micropixel::TimerEvent& tick) {
     const uint64_t delta_us = tick.delta().count_microseconds();
-    AdvanceAudio(delta_us);
+    AdvanceAudio(tick.delta());
     if (screen_ != Screen::kPaused) {
         animation_time_us_ += delta_us;
     }
@@ -298,13 +297,13 @@ void TiltGame::ResetEffects() {
     for (Particle& particle : particles_) {
         particle.active = false;
     }
-    trail_cursor_ = 0U;
-    particle_cursor_ = 0U;
+    trails_.ResetCursor();
+    particles_.ResetCursor();
     trail_accumulated_us_ = 0U;
 }
 
 void TiltGame::SpawnTrail() {
-    Trail& trail = trails_[trail_cursor_++ % kTrailCapacity];
+    Trail& trail = trails_.Acquire();
     trail.position = model_.ball();
     trail.age_us = 0U;
     trail.active = true;
@@ -318,7 +317,7 @@ void TiltGame::SpawnParticles(PointF origin, uint32_t count) {
     const uint32_t velocity_count = sizeof(velocities) / sizeof(velocities[0]);
     count = count > kParticleCapacity ? kParticleCapacity : count;
     for (uint32_t index = 0U; index < count; ++index) {
-        Particle& particle = particles_[particle_cursor_++ % kParticleCapacity];
+        Particle& particle = particles_.Acquire();
         particle.position = origin;
         particle.velocity = velocities[index % velocity_count];
         particle.age_us = 0U;

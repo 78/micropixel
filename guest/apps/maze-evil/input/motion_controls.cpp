@@ -1,9 +1,10 @@
 #include "apps/maze-evil/input/motion_controls.hpp"
 
-#include "apps/maze-evil/rc_math.hpp"
 #include "sdk/devices.hpp"
+#include "sdk/math.hpp"
 
 namespace maze_break::input {
+namespace math = micropixel::math;
 namespace {
 
 constexpr int kCalibrationSamples = 25;  // ~0.5 s of distinct 100 Hz samples at 40 fps
@@ -14,14 +15,7 @@ constexpr float kGyroAimGain = 1.0F;     // view radians per device radian; 0 di
 constexpr float kGyroDeadband = 0.03F;   // rad/s, hides bias drift
 constexpr uint64_t kSampleIntervalUs = 10'000U;
 
-float ApplyDeadzone(float value) {
-    const float magnitude = math::Fabs(value);
-    if (magnitude < kDeadzone) {
-        return 0.0F;
-    }
-    const float scaled = (magnitude - kDeadzone) / (1.0F - kDeadzone);
-    return value < 0.0F ? -scaled : scaled;
-}
+float ApplyDeadzone(float value) { return math::ApplyDeadzone(value, kDeadzone); }
 
 // Softer response near the centre for fine aiming, full rate at the edge.
 float Expo(float v) { return 0.45F * v + 0.55F * v * v * v; }
@@ -190,7 +184,7 @@ void MotionControls::Integrate(const float accel[3], const float gyro[3], float 
         for (int i = 0; i < 3; ++i) {
             yaw_rate += (gyro[i] - gyro_bias_[i]) * up[i];
         }
-        if (math::Fabs(yaw_rate) > kGyroDeadband) {
+        if (math::Abs(yaw_rate) > kGyroDeadband) {
             yaw_delta = -yaw_rate * dt * kGyroAimGain;
         }
     }

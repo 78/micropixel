@@ -116,12 +116,6 @@ struct MoveOutcome final {
     uint32_t points{};
 };
 
-struct ScheduledTone final {
-    micropixel::Tone tone{};
-    uint64_t delay_us{};
-    bool active{};
-};
-
 struct Rgb final {
     uint8_t red{};
     uint8_t green{};

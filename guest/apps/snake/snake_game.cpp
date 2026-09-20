@@ -16,9 +16,8 @@ SnakeGame::SnakeGame(micropixel::Application& app, micropixel::Renderer renderer
       renderer_(renderer),
       renderer_info_(renderer_info),
       scene_(renderer.CreateScene(micropixel::Color::Rgb(5U, 5U, 5U)).value()),
-      audio_(audio),
+      tones_(audio, audio_available),
       best_score_(best_score),
-      audio_available_(audio_available),
       touch_gesture_{gamekit::ScalePhysicalThreshold(kSwipeThresholdPhysicalPixels, renderer_info.width(),
                                                      renderer_info.physical_width()),
                      gamekit::ScalePhysicalThreshold(kSwipeThresholdPhysicalPixels, renderer_info.height(),
@@ -250,7 +249,7 @@ void SnakeGame::StartGame() {
     pause_touch_button_.Reset();
     PlayStartSound();
     StartBgm();
-    if (audio_available_) {
+    if (tones_.enabled()) {
         app_.log().Info("snake: Audio 1.1 start cue and BGM scheduled");
     }
     app_.log().Info("snake: game started from menu");

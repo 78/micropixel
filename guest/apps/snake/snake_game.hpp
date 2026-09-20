@@ -1,9 +1,10 @@
 #ifndef MICROPIXEL_SNAKE_GAME_HPP
 #define MICROPIXEL_SNAKE_GAME_HPP
 
-#include "apps/snake/gamekit/cyclic_pool.hpp"
 #include "apps/snake/gamekit/swipe_gesture.hpp"
 #include "apps/snake/snake_model.hpp"
+#include "sdk/cyclic_pool.hpp"
+#include "sdk/tone_sequencer.hpp"
 #include "snake_sfx_profiles.hpp"
 #include "snake_strings.hpp"
 
@@ -112,18 +113,9 @@ class SnakeGame final {
 
     void PersistBestScore();
 
-    static micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
-                                      uint16_t volume_per_mille, uint16_t attack_ms = 5U, uint16_t release_ms = 20U);
-
     void NoteAudioError();
 
-    void EmitTone(const micropixel::Tone& tone);
-
-    void QueueTone(const micropixel::Tone& tone, uint32_t delay_ms);
-
-    void QueueProfile(const snake_sfx::ToneSpec* tones, uint32_t count);
-
-    void ClearScheduledTones();
+    void QueueProfile(std::span<const micropixel::ToneSpec> profile);
 
     void StopAudio();
 
@@ -164,16 +156,15 @@ class SnakeGame final {
     micropixel::LabelNode popup_labels_[kPopupPoolSize]{};
     micropixel::LabelNode overlay_labels_[2U]{};
     micropixel::ui::FlexContainer hud_{};
-    micropixel::Audio audio_;
+    micropixel::ToneSequencer<12U> tones_;
     micropixel::Texture burst_sheets_[4U]{};
     micropixel::Texture food_sheets_[4U]{};
     SnakeModel model_{};
     Cell burst_cell_{};
     Cell body_slot_previous_[kMaxLength]{};
-    snake::gamekit::CyclicPool<Particle, kParticlePoolSize> particles_{};
-    snake::gamekit::CyclicPool<Trail, kTrailPoolSize> trails_{};
-    snake::gamekit::CyclicPool<Popup, kPopupPoolSize> popups_{};
-    ScheduledTone scheduled_tones_[12]{};
+    micropixel::CyclicPool<Particle, kParticlePoolSize> particles_{};
+    micropixel::CyclicPool<Trail, kTrailPoolSize> trails_{};
+    micropixel::CyclicPool<Popup, kPopupPoolSize> popups_{};
     uint64_t accumulated_us_{};
     uint64_t animation_time_us_{};
     uint32_t best_score_{};
@@ -196,7 +187,6 @@ class SnakeGame final {
     bool record_broken_{};
     bool logic_debt_logged_{};
     bool shake_heavy_{};
-    bool audio_available_{};
     bool bgm_playing_{};
     bool audio_error_logged_{};
     bool scene_initialized_{};

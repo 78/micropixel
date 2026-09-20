@@ -1,10 +1,11 @@
 #include "apps/tomb-explorer/game/character.hpp"
 
-#include "apps/tomb-explorer/game/math.hpp"
 #include "apps/tomb-explorer/gfx/palette.hpp"
 #include "apps/tomb-explorer/gfx/textures.hpp"
+#include "sdk/math.hpp"
 
 namespace tomb::game {
+namespace math = micropixel::math;
 namespace {
 
 using micropixel::MeshFace;
@@ -134,7 +135,7 @@ bool Character::Submit(micropixel::MeshRenderer& renderer, Vec3 position, float 
 
     const float swing = math::Sin(pose.walk_phase) * 0.6F * pose.walk_weight;
     const float knee = (0.5F + 0.5F * math::Sin(pose.walk_phase + 1.2F)) * 0.9F * pose.walk_weight;
-    const float bob = math::Fabs(math::Cos(pose.walk_phase)) * 0.04F * pose.walk_weight - pose.crouch * 0.25F;
+    const float bob = math::Abs(math::Cos(pose.walk_phase)) * 0.04F * pose.walk_weight - pose.crouch * 0.25F;
     const float hip_height = 0.86F + bob;
     const float arm_up = pose.airborne * 1.6F;
 

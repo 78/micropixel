@@ -82,6 +82,9 @@ class PerceptualAnalysisTest(unittest.TestCase):
         self.assertIn("kLevelUp", generated)
         self.assertIn("kMoveCount", generated)
         self.assertNotIn("kMasterPercent", generated)
+        # Profiles reuse the SDK note type so ToneSequencer can play them directly.
+        self.assertIn("using ToneSpec = micropixel::ToneSpec;", generated)
+        self.assertNotIn("struct ToneSpec", generated)
 
     def test_snake_manifest_generates_runtime_header(self) -> None:
         manifest = SFX.load_manifest(WORKSPACE_ROOT / "guest" / "apps" / "snake" / "audio" / "sfx.json")

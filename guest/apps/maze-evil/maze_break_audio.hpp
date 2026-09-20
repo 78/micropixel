@@ -7,6 +7,7 @@
 #include "sdk/application.hpp"
 #include "sdk/audio.hpp"
 #include "sdk/event.hpp"
+#include "sdk/tone_sequencer.hpp"
 
 namespace maze_break {
 
@@ -17,8 +18,10 @@ namespace maze_break {
 // device master volume stays with the Host.
 class GameAudio final {
    public:
+    explicit GameAudio(micropixel::Application& app) : app_(&app), tones_(app.audio(), false) {}
+
     // `mute` disables every sound (SFX and BGM); `bgm_enabled` only the music.
-    void Initialize(micropixel::Application& app, bool bgm_enabled, bool mute);
+    void Initialize(bool bgm_enabled, bool mute);
 
     void Play(audio::SoundEvent event);
     // Fires tones whose delay has elapsed; call once per frame.
@@ -30,21 +33,14 @@ class GameAudio final {
     void StopAll();
 
    private:
-    struct ScheduledTone {
-        micropixel::Tone tone{};
-        uint64_t delay_us{};
-        bool active{};
-    };
-
-    void Emit(const micropixel::Tone& tone);
     void NoteError();
 
     micropixel::Application* app_{};
+    micropixel::ToneSequencer<24U> tones_;
     bool available_{};
     bool error_logged_{};
     micropixel::AudioClip bgm_clip_{};
     micropixel::Playback bgm_{};
-    ScheduledTone scheduled_[24]{};
 };
 
 }  // namespace maze_break

@@ -327,15 +327,8 @@ def emit_cpp_header(manifest: dict[str, Any], path: Path) -> None:
         "",
         f"namespace {cpp_namespace} {{",
         "",
-        "struct ToneSpec final {",
-        "    micropixel::Waveform waveform{};",
-        "    uint32_t frequency_hz{};",
-        "    uint16_t duration_ms{};",
-        "    uint16_t volume_per_mille{};",
-        "    uint16_t attack_ms{};",
-        "    uint16_t release_ms{};",
-        "    uint16_t delay_ms{};",
-        "};",
+        "// Profiles are micropixel::ToneSpec arrays; play them with micropixel::ToneSequencer.",
+        "using ToneSpec = micropixel::ToneSpec;",
         "",
     ]
     for name, effect in manifest["effects"].items():

@@ -95,20 +95,10 @@ Options ParseOptions(const micropixel::LaunchArguments& args) {
     return options;
 }
 
-class Rng final {
-   public:
-    explicit Rng(uint32_t seed) : state_(seed == 0U ? 0x9E3779B9U : seed) {}
-    uint32_t Next() {
-        state_ ^= state_ << 13U;
-        state_ ^= state_ >> 17U;
-        state_ ^= state_ << 5U;
-        return state_;
-    }
-    int Range(int low, int high) { return low + static_cast<int>(Next() % static_cast<uint32_t>(high - low + 1)); }
-
-   private:
-    uint32_t state_;
-};
+// Uniform in [low, high]; the seed is per frame so every run is identical.
+int RandomRange(micropixel::XorShift32& rng, int low, int high) {
+    return low + static_cast<int>(rng.Below(static_cast<uint32_t>(high - low + 1)));
+}
 
 uint16_t Rgb565(uint32_t r, uint32_t g, uint32_t b) {
     return static_cast<uint16_t>(((r & 0xF8U) << 8U) | ((g & 0xFCU) << 3U) | (b >> 3U));
@@ -398,7 +388,7 @@ class Benchmark final {
     // Random convex textured quads whose total area is `overdraw` buffers.
     bool DrawRandomQuads(micropixel::RasterDrawList& list, int extent, float overdraw, uint32_t& pixels,
                          uint32_t& polygons) {
-        Rng rng(frame_index_ * 2654435761U + 17U);
+        micropixel::XorShift32 rng(frame_index_ * 2654435761U + 17U);
         const uint32_t area = static_cast<uint32_t>(width_) * static_cast<uint32_t>(height_);
         const uint32_t target = static_cast<uint32_t>(static_cast<float>(area) * overdraw);
         // Each quad is a jittered square: corners pulled in by up to a quarter
@@ -408,17 +398,17 @@ class Benchmark final {
         if (count > kMaxQuads) count = kMaxQuads;
         const int jitter = extent / 4;
         for (uint32_t q = 0U; q < count; ++q) {
-            const int x = rng.Range(0, width_ - extent);
-            const int y = rng.Range(0, height_ - extent);
-            const uint8_t light = static_cast<uint8_t>(rng.Range(6, kLightLevels - 1));
-            const uint8_t light2 = static_cast<uint8_t>(rng.Range(2, kLightLevels - 1));
+            const int x = RandomRange(rng, 0, width_ - extent);
+            const int y = RandomRange(rng, 0, height_ - extent);
+            const uint8_t light = static_cast<uint8_t>(RandomRange(rng, 6, kLightLevels - 1));
+            const uint8_t light2 = static_cast<uint8_t>(RandomRange(rng, 2, kLightLevels - 1));
             const float e = static_cast<float>(extent);
             const float fx = static_cast<float>(x);
             const float fy = static_cast<float>(y);
-            const float j0 = static_cast<float>(rng.Range(0, jitter));
-            const float j1 = static_cast<float>(rng.Range(0, jitter));
-            const float j2 = static_cast<float>(rng.Range(0, jitter));
-            const float j3 = static_cast<float>(rng.Range(0, jitter));
+            const float j0 = static_cast<float>(RandomRange(rng, 0, jitter));
+            const float j1 = static_cast<float>(RandomRange(rng, 0, jitter));
+            const float j2 = static_cast<float>(RandomRange(rng, 0, jitter));
+            const float j3 = static_cast<float>(RandomRange(rng, 0, jitter));
             const micropixel::RasterVertex corners[4] = {
                 micropixel::RasterVertex::At(fx + j0, fy + j1, 0.0F, 0.0F, light),
                 micropixel::RasterVertex::At(fx + e - j1, fy + j2, 64.0F, 0.0F, light2),

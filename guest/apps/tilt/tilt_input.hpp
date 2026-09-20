@@ -16,8 +16,6 @@ class TiltInput final {
     [[nodiscard]] constexpr Vec2 tilt() const { return tilt_; }
 
    private:
-    static float ApplyDeadZone(float value);
-
     micropixel::Accelerometer accelerometer_{};
     micropixel::Vector3 calibration_sum_{};
     micropixel::Vector3 neutral_{};

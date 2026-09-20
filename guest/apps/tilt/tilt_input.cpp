@@ -1,5 +1,7 @@
 #include "apps/tilt/tilt_input.hpp"
 
+#include "sdk/math.hpp"
+
 namespace tilt {
 namespace {
 
@@ -47,15 +49,6 @@ void TiltInput::Recalibrate() {
     filter_seeded_ = false;
 }
 
-float TiltInput::ApplyDeadZone(float value) {
-    const float magnitude = value < 0.0F ? -value : value;
-    if (magnitude <= kDeadZone) {
-        return 0.0F;
-    }
-    const float scaled = (magnitude - kDeadZone) / (1.0F - kDeadZone);
-    return value < 0.0F ? -scaled : scaled;
-}
-
 bool TiltInput::Sample() {
     if (!available()) {
         return false;
@@ -93,8 +86,10 @@ bool TiltInput::Sample() {
     }
     // ESP-Mosaico hardware validation established that the sensor X axis runs
     // opposite to screen X, while sensor Y already follows screen Y.
-    tilt_.x = ApplyDeadZone(ClampFloat((neutral_.x - filtered_.x) / kFullTiltMetersPerSecondSquared, -1.0F, 1.0F));
-    tilt_.y = ApplyDeadZone(ClampFloat((filtered_.y - neutral_.y) / kFullTiltMetersPerSecondSquared, -1.0F, 1.0F));
+    tilt_.x = micropixel::math::ApplyDeadzone(
+        micropixel::math::Clamp((neutral_.x - filtered_.x) / kFullTiltMetersPerSecondSquared, -1.0F, 1.0F), kDeadZone);
+    tilt_.y = micropixel::math::ApplyDeadzone(
+        micropixel::math::Clamp((filtered_.y - neutral_.y) / kFullTiltMetersPerSecondSquared, -1.0F, 1.0F), kDeadZone);
     return true;
 }
 

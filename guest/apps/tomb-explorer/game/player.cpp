@@ -1,8 +1,9 @@
 #include "apps/tomb-explorer/game/player.hpp"
 
-#include "apps/tomb-explorer/game/math.hpp"
+#include "sdk/math.hpp"
 
 namespace tomb::game {
+namespace math = micropixel::math;
 namespace {
 
 using micropixel::Vec3;
@@ -149,7 +150,7 @@ void Player::Update(const world::RoomWorld& world, const Controls& controls, flo
     // is steering it.
     // Pure strafing (facing across the view) leaves the camera alone so the
     // player can circle an object without the view spinning.
-    if (controls.orbit == 0.0F && speed_ > 0.3F && math::Fabs(math::WrapAngle(yaw_ - camera_yaw_)) < 1.1F) {
+    if (controls.orbit == 0.0F && speed_ > 0.3F && math::Abs(math::WrapAngle(yaw_ - camera_yaw_)) < 1.1F) {
         camera_yaw_ = math::ApproachAngle(camera_yaw_, yaw_, kCameraFollowRate * dt * math::Clamp(speed_, 0.0F, 1.0F));
     }
     PlaceCamera(world);

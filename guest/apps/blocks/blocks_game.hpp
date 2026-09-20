@@ -4,15 +4,10 @@
 #include "apps/blocks/blocks_model.hpp"
 #include "blocks_sfx_profiles.hpp"
 #include "blocks_strings.hpp"
+#include "sdk/tone_sequencer.hpp"
 #include "sdk/ui/button.hpp"
 
 namespace blocks {
-
-struct ScheduledTone final {
-    micropixel::Tone tone{};
-    uint64_t delay_us{};
-    bool active{};
-};
 
 class BlocksGame final {
    public:
@@ -42,13 +37,8 @@ class BlocksGame final {
     void RenderStatusEffect(const Theme& theme);
     void RenderOverlay();
 
-    [[nodiscard]] micropixel::Tone SynthTone(micropixel::Waveform waveform, uint32_t frequency_hz, uint32_t duration_ms,
-                                             uint16_t volume_per_mille, uint16_t attack_ms = 4U,
-                                             uint16_t release_ms = 30U) const;
-    void EmitTone(const micropixel::Tone& tone);
-    void QueueTone(const micropixel::Tone& tone, uint32_t delay_ms = 0U);
-    void QueueProfile(const blocks_sfx::ToneSpec* tones, uint32_t count);
-    void AdvanceAudio(uint64_t delta_us);
+    void QueueProfile(std::span<const micropixel::ToneSpec> profile);
+    void AdvanceAudio(micropixel::Duration delta);
     void ClearAudioQueue();
     void PlayStartSound();
     void PlayMoveSound();
@@ -76,9 +66,8 @@ class BlocksGame final {
     micropixel::ShapeNode overlay_node_{};
     micropixel::ui::TextButton action_button_{};
     micropixel::ui::FlexContainer game_over_panel_{};
-    micropixel::Audio audio_;
+    micropixel::ToneSequencer<8U> tones_;
     BlocksModel model_{};
-    ScheduledTone scheduled_tones_[8U]{};
     Screen screen_{Screen::kMenu};
     uint32_t best_score_{};
     uint32_t clear_rows_mask_{};
@@ -96,7 +85,6 @@ class BlocksGame final {
     bool gesture_moved_{};
     bool gesture_started_in_pause_{};
     bool gesture_started_in_hold_{};
-    bool audio_available_{};
     bool audio_error_logged_{};
     bool storage_error_logged_{};
     bool visual_cache_valid_{};

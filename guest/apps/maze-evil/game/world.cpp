@@ -1,7 +1,6 @@
 #include "apps/maze-evil/game/world.hpp"
 
 #include "apps/maze-evil/gfx/textures.hpp"
-#include "apps/maze-evil/rc_math.hpp"
 
 namespace maze_break::game {
 namespace {
@@ -148,10 +147,10 @@ bool World::BlockedAt(int tile_x, int tile_y) const {
 }
 
 bool World::ActorBlocked(float x, float y, float radius) const {
-    const int min_x = math::FloorInt(x - radius);
-    const int max_x = math::FloorInt(x + radius);
-    const int min_y = math::FloorInt(y - radius);
-    const int max_y = math::FloorInt(y + radius);
+    const int min_x = math::FloorToInt(x - radius);
+    const int max_x = math::FloorToInt(x + radius);
+    const int min_y = math::FloorToInt(y - radius);
+    const int max_y = math::FloorToInt(y + radius);
     for (int ty = min_y; ty <= max_y; ++ty) {
         for (int tx = min_x; tx <= max_x; ++tx) {
             if (BlockedAt(tx, ty)) {
@@ -185,12 +184,12 @@ bool World::LineOfSight(float x0, float y0, float x1, float y1) const {
     // Grid DDA from (x0,y0) to (x1,y1); closed doors and walls block.
     const float dx = x1 - x0;
     const float dy = y1 - y0;
-    int map_x = math::FloorInt(x0);
-    int map_y = math::FloorInt(y0);
-    const int end_x = math::FloorInt(x1);
-    const int end_y = math::FloorInt(y1);
-    const float delta_x = dx == 0.0F ? 1e30F : math::Fabs(1.0F / dx);
-    const float delta_y = dy == 0.0F ? 1e30F : math::Fabs(1.0F / dy);
+    int map_x = math::FloorToInt(x0);
+    int map_y = math::FloorToInt(y0);
+    const int end_x = math::FloorToInt(x1);
+    const int end_y = math::FloorToInt(y1);
+    const float delta_x = dx == 0.0F ? 1e30F : math::Abs(1.0F / dx);
+    const float delta_y = dy == 0.0F ? 1e30F : math::Abs(1.0F / dy);
     const int step_x = dx < 0.0F ? -1 : 1;
     const int step_y = dy < 0.0F ? -1 : 1;
     float side_x = dx < 0.0F ? (x0 - map_x) * delta_x : (map_x + 1.0F - x0) * delta_x;
@@ -493,8 +492,8 @@ void World::UpdateFireballs(float dt) {
         fb.age += dt;
         fb.x += fb.vx * dt;
         fb.y += fb.vy * dt;
-        const int tx = math::FloorInt(fb.x);
-        const int ty = math::FloorInt(fb.y);
+        const int tx = math::FloorToInt(fb.x);
+        const int ty = math::FloorToInt(fb.y);
         if (fb.age > 4.0F || BlockedAt(tx, ty)) {
             fb.alive = false;
             if (fb.age <= 4.0F) {
@@ -593,8 +592,8 @@ void World::UpdateItems() {
 }
 
 void World::CheckExit() {
-    const int px = math::FloorInt(player_.x);
-    const int py = math::FloorInt(player_.y);
+    const int px = math::FloorToInt(player_.x);
+    const int py = math::FloorToInt(player_.y);
     bool touching = false;
     for (int dy = -1; dy <= 1 && !touching; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {

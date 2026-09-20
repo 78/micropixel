@@ -57,6 +57,31 @@ struct Tone final {
     Duration release{Duration::Milliseconds(20U)};
 };
 
+// One note of a sound effect authored in `audio/sfx.json`. The build turns the
+// manifest into `constexpr ToneSpec k<Effect>[]` arrays; ToneSequencer plays
+// them, honouring `delay_ms` relative to the moment the effect starts. Keep the
+// field order: the generated headers use aggregate initialization.
+struct ToneSpec final {
+    Waveform waveform{};
+    uint32_t frequency_hz{};
+    uint16_t duration_ms{};
+    uint16_t volume_per_mille{};
+    uint16_t attack_ms{};
+    uint16_t release_ms{};
+    uint16_t delay_ms{};
+
+    // Host tone for this note; `gain` (0..255) scales the authored volume so
+    // world code can attenuate by distance without touching the manifest.
+    [[nodiscard]] constexpr Tone ToTone(uint8_t gain = 255U) const {
+        return Tone{waveform,
+                    frequency_hz,
+                    Duration::Milliseconds(duration_ms),
+                    static_cast<uint16_t>((static_cast<uint32_t>(volume_per_mille) * gain + 127U) / 255U),
+                    Duration::Milliseconds(attack_ms),
+                    Duration::Milliseconds(release_ms)};
+    }
+};
+
 // Move-only reusable compressed source. A playing instance pins the underlying
 // Bundle asset, so Reset() may be called immediately after Play().
 class AudioClip final {

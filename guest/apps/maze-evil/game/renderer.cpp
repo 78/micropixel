@@ -5,7 +5,6 @@
 #include "apps/maze-evil/gfx/font.hpp"
 #include "apps/maze-evil/gfx/palette.hpp"
 #include "apps/maze-evil/gfx/textures.hpp"
-#include "apps/maze-evil/rc_math.hpp"
 
 namespace maze_break::game {
 namespace {
@@ -212,7 +211,7 @@ bool Renderer::DrawWeapon(micropixel::RasterDrawList& list, const World& world) 
     const gfx::Sprite& gun = gfx::SpriteFor(gfx::kSprShotgun);
     const float bob_amount = p.speed > 0.2F ? 1.0F : 0.0F;
     const int bob_x = static_cast<int>(math::Sin(p.bob_phase) * 6.0F * bob_amount) * s;
-    const int bob_y = static_cast<int>(math::Fabs(math::Cos(p.bob_phase)) * 4.0F * bob_amount) * s;
+    const int bob_y = static_cast<int>(math::Abs(math::Cos(p.bob_phase)) * 4.0F * bob_amount) * s;
     const int recoil = static_cast<int>(p.recoil * 16.0F) * s;
     const int gun_scale = s;
     const int flash_scale = s;

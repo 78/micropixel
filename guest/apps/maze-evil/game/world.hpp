@@ -6,8 +6,14 @@
 #include "apps/maze-evil/audio/sound_ids.hpp"
 #include "apps/maze-evil/game/level.hpp"
 #include "apps/maze-evil/gfx/sprites.hpp"
-#include "apps/maze-evil/rc_math.hpp"
+#include "sdk/math.hpp"
+#include "sdk/random.hpp"
 #include "sdk/raycast.hpp"
+
+namespace maze_break {
+// Freestanding float helpers come from the SDK; Guests link no libm.
+namespace math = micropixel::math;
+}  // namespace maze_break
 
 namespace maze_break::game {
 
@@ -95,7 +101,7 @@ class World {
     void Reset();
     void Update(float dt, const Controls& controls);
     // Deterministic AI for --benchmark: reseeds the wobble/cooldown RNG.
-    void SeedRng(uint32_t seed) { rng_ = math::Rng{seed}; }
+    void SeedRng(uint32_t seed) { rng_.Seed(seed); }
 
     const Player& player() const { return player_; }
     Phase phase() const { return phase_; }
@@ -159,7 +165,7 @@ class World {
     const char* message_{};
     float message_timer_{};
     bool fire_was_down_{};
-    math::Rng rng_{};
+    micropixel::XorShift32 rng_{};
     audio::SoundEvent pending_sounds_[kMaxPendingSounds]{};
     int pending_sound_count_{};
 };
