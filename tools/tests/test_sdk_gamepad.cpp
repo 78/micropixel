@@ -209,6 +209,41 @@ void IndependentButtonAtlasPreservesSizesAndStyles() {
           "each pressed tile retains its own geometry and colour");
 }
 
+void GlyphOpacityLeavesButtonBackgroundsUnchanged() {
+    micropixel::GamepadButtonConfig buttons[] = {{.glyph = micropixel::GamepadGlyph::kInteract}};
+    VirtualGamepad pad;
+    micropixel::GamepadSkin skin;
+    const auto bake = [&](uint8_t opacity) {
+        buttons[0].style.glyph_opacity = opacity;
+        Check(
+            pad.Configure({.layout = GamepadLayout::kStickLookButtons, .bounds = {0, 0, 480, 480}, .buttons = buttons}),
+            "glyph opacity configuration succeeds");
+        Check(skin.Initialize(Application::TestResources(), pad), "glyph opacity atlas initializes");
+        return texture_pixels;
+    };
+    const auto hidden = bake(0U);
+    const auto faint = bake(160U);
+    const auto solid = bake(255U);
+    size_t faded = 0U;
+    for (size_t offset = 0U; offset < solid.size(); offset += 4U) {
+        bool glyph_pixel = false;
+        for (size_t channel = 0U; channel < 4U; ++channel) {
+            glyph_pixel |= solid[offset + channel] != hidden[offset + channel];
+        }
+        if (!glyph_pixel) {
+            for (size_t channel = 0U; channel < 4U; ++channel) {
+                Check(faint[offset + channel] == hidden[offset + channel],
+                      "glyph opacity leaves rims, stick and button fills unchanged");
+            }
+        } else if (solid[offset + 3U] == 255U) {
+            Check(faint[offset + 3U] > hidden[offset + 3U] && faint[offset + 3U] < 255U,
+                  "glyph opacity blends over transparent idle and dark pressed backgrounds");
+            ++faded;
+        }
+    }
+    Check(faded > 20U, "both glyph tiles contain translucent interiors");
+}
+
 void StickDeflectsAndClamps() {
     for (const int size : {240, 480, 720}) {
         VirtualGamepad pad = MakePad(GamepadLayout::kStickOnly, size, 0U);
@@ -590,6 +625,7 @@ int main() {
     ConfigurationIsValidated();
     IndependentButtonsOwnTheirConfiguration();
     IndependentButtonAtlasPreservesSizesAndStyles();
+    GlyphOpacityLeavesButtonBackgroundsUnchanged();
     StickDeflectsAndClamps();
     LookPadDragsAndTaps();
     ButtonsTrackEdgesAndRoles();

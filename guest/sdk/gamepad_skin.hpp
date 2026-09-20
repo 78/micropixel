@@ -21,7 +21,7 @@ struct GamepadSkinStyle final {
     uint8_t ring_opacity{GamepadButtonStyle{}.rim_opacity};
     Color knob{GamepadButtonStyle{}.pressed_fill};
     uint8_t knob_opacity{128U};
-    uint8_t overlay_opacity{192U};
+    uint8_t overlay_opacity{255U};
     // Floating sticks normally appear only while engaged; fixed sticks stay visible.
     bool show_stick_at_rest{false};
 };
@@ -98,7 +98,7 @@ class GamepadAtlasCanvas final {
                 const float coverage =
                     math::Clamp(0.5F - distance(static_cast<float>(x), static_cast<float>(y)), 0.0F, 1.0F);
                 if (coverage > 0.0F) {
-                    Blend(x, y, color, static_cast<uint32_t>(coverage * 255.0F + 0.5F));
+                    Blend(x, y, color, static_cast<uint32_t>(coverage * static_cast<float>(shape_opacity_) + 0.5F));
                 }
             }
         }
@@ -187,7 +187,14 @@ class GamepadAtlasCanvas final {
     // Draws `glyph` centred at `centre`; `half` is half the glyph's extent in
     // pixels (the unit square maps to [-half, half]). `cut` is the button fill,
     // used to carve details (finger gaps) out of solid silhouettes.
-    void Glyph(Point centre, GamepadGlyph glyph, float half, Color color, Color cut) {
+    void Glyph(Point centre, GamepadGlyph glyph, float half, Color color, Color cut, uint8_t opacity = 255U) {
+        GamepadAtlasCanvas layer = *this;
+        layer.shape_opacity_ = opacity;
+        layer.DrawGlyph(centre, glyph, half, color, cut);
+    }
+
+   private:
+    void DrawGlyph(Point centre, GamepadGlyph glyph, float half, Color color, Color cut) {
         const float cx = static_cast<float>(centre.x);
         const float cy = static_cast<float>(centre.y);
         const auto at = [&](float ux, float uy) { return GlyphPoint{cx + ux * half, cy + uy * half}; };
@@ -304,6 +311,7 @@ class GamepadAtlasCanvas final {
 
    private:
     uint8_t* pixels_;
+    uint8_t shape_opacity_{255U};
     int32_t width_;
     int32_t height_;
 };
@@ -380,7 +388,7 @@ class GamepadSkin final {
                     canvas.Disc(centre, radius, 0.0F, button_style.pressed_fill, button_style.pressed_fill_opacity);
                 }
                 canvas.Glyph(centre, button.glyph, glyph_half, button_style.glyph,
-                             pressed == 0 ? button_style.fill : button_style.pressed_fill);
+                             pressed == 0 ? button_style.fill : button_style.pressed_fill, button_style.glyph_opacity);
                 (pressed == 0 ? button_idle_source_ : button_pressed_source_)[index] = {cursor, 0, button_tile,
                                                                                         button_tile};
                 cursor += button_tile;
