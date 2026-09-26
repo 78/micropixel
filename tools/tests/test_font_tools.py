@@ -2,8 +2,27 @@ import hashlib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from tools import build_font_cbin, generate_builtin_fonts
+
+
+class NpxLauncherTest(unittest.TestCase):
+    def test_resolves_the_host_npx_executable(self) -> None:
+        """The bare command name is not enough: Windows resolves npx.cmd."""
+
+        with mock.patch.object(
+            generate_builtin_fonts.shutil, "which", return_value="/usr/local/bin/npx"
+        ):
+            self.assertEqual(
+                generate_builtin_fonts.npx_launcher(), "/usr/local/bin/npx"
+            )
+
+    def test_missing_node_reports_an_actionable_error(self) -> None:
+        with mock.patch.object(generate_builtin_fonts.shutil, "which", return_value=None):
+            with self.assertRaises(ValueError) as raised:
+                generate_builtin_fonts.npx_launcher()
+        self.assertIn("Node.js", str(raised.exception))
 
 
 class BuildFontCbinTest(unittest.TestCase):

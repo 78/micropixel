@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -174,6 +175,19 @@ def sanitize_generated_source(source: str, profile_name: str, size: int) -> str:
     return source
 
 
+def npx_launcher() -> str:
+    """Resolve ``npx`` for the current host.
+
+    Windows resolves the command to ``npx.cmd``. Without the extension
+    ``CreateProcess`` cannot find it, so every build fails with FileNotFoundError.
+    """
+
+    executable = shutil.which("npx")
+    if executable is None:
+        raise ValueError("npx was not found; install Node.js so lv_font_conv can run")
+    return executable
+
+
 def run_converter(
     montserrat: Path,
     replacement_font: Path,
@@ -189,7 +203,7 @@ def run_converter(
     with tempfile.TemporaryDirectory() as temporary:
         temporary_output = Path(temporary) / output.name
         command = [
-            "npx",
+            npx_launcher(),
             "--yes",
             "lv_font_conv@1.5.3",
             "--no-compress",
