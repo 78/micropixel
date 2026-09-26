@@ -1,9 +1,14 @@
 import argparse
 import contextlib
+# POSIX host only. Several tests below drive tools/*.sh through bash with a POSIX
+# PATH, so this module is deliberately not importable on Windows; making it so would
+# turn those into permanent failures rather than runnable coverage. firmware.py
+# itself is cross-platform - see firmware._acquire_lock for the Windows lock path.
 import fcntl
 from dataclasses import replace
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -484,6 +489,61 @@ lv_mem_size_bytes=1572864
             with lock_path.open("a+") as contender:
                 fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(contender.fileno(), fcntl.LOCK_UN)
+
+    def test_shared_idf_lock_records_the_holder_on_every_platform(self) -> None:
+        """The holder record survives whichever storage layout the host uses.
+
+        Read through an unbuffered handle: Windows cannot read a byte that the
+        byte-range lock covers, and a buffered reader would pull it in.
+        """
+
+        profile = self.profiles["esp-mosaico"]
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "firmware.lock"
+            with firmware.shared_idf_lock(profile, "build", lock_path=lock_path):
+                with lock_path.open("rb", buffering=0) as handle:
+                    holder = firmware._lock_holder(handle)
+        self.assertEqual(holder, f"pid={os.getpid()} profile=esp-mosaico action=build")
+
+    def test_shared_idf_lock_excludes_and_releases_a_second_holder(self) -> None:
+        profile = self.profiles["esp-mosaico"]
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "firmware.lock"
+            lock_path.touch()
+            with lock_path.open("r+b", buffering=0) as contender:
+                with firmware.shared_idf_lock(profile, "build", lock_path=lock_path):
+                    self.assertFalse(firmware._acquire_lock(contender, blocking=False))
+                self.assertTrue(firmware._acquire_lock(contender, blocking=False))
+                firmware._release_lock(contender)
+
+    def test_idf_path_without_the_idf_script_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "idf.py"
+            with mock.patch.object(
+                firmware.shutil, "which", return_value=str(script)
+            ):
+                with self.assertRaises(firmware.FirmwareToolError) as raised:
+                    firmware.locate_idf_py({"IDF_PATH": directory})
+        self.assertIn("does not contain tools/idf.py", str(raised.exception))
+
+    def test_windows_exe_launcher_is_accepted_only_on_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tools").mkdir()
+            (root / "tools" / "idf.py").write_text("", encoding="utf-8")
+            launcher = root / "idf.py.exe"
+            launcher.write_text("", encoding="utf-8")
+            with mock.patch.object(
+                firmware.shutil, "which", return_value=str(launcher)
+            ):
+                if os.name == "nt":
+                    self.assertEqual(
+                        firmware.locate_idf_py({"IDF_PATH": directory}),
+                        launcher.resolve(),
+                    )
+                else:
+                    with self.assertRaises(firmware.FirmwareToolError):
+                        firmware.locate_idf_py({"IDF_PATH": directory})
 
 
 if __name__ == "__main__":
