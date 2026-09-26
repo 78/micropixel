@@ -370,3 +370,107 @@ PNG 解码和资源销毁边界检查堆；发现损坏会输出 `MICROPIXEL HEA
 这些串口输出会增加诊断版延迟。大厅渲染、转场截图、启动封面保留和快照释放均设有边界检查。
 可用 `P4_HOST_BUILD_DIR` 指定独立诊断构建目录，避免正常构建覆盖 ELF；分析 panic 时必须使用
 与设备启动日志中 ELF SHA256 匹配的 ELF。
+
+## 10. Windows 原生构建
+
+Windows 无需 WSL 即可完成 Host 固件的构建、烧录和监视，也可以构建 Guest 应用（游戏）Bundle
+并拼接含 App 的 app_store 镜像。
+
+### 10.1 环境
+
+- 用 ESP-IDF Installation Manager 安装 ESP-IDF 6.1 及对应工具链；本仓库钉住的提交见
+  `tools/ci/firmware-sources.json`，EIM 安装的是 `v6.1` 发行标签，两者提交号不同。
+- Host 固件构建不需要 WASI SDK 和 WAMRC；构建 Guest 应用 Bundle 需要，见 10.4。
+- 入口脚本会设置 `PYTHONUTF8=1`，避免工作区、用户目录或设备标识含非 ASCII 字符时的编码问题。
+
+入口脚本 `tools/firmware.ps1` 自动准备 ESP-IDF：优先复用当前已激活的环境，否则读取 EIM 的
+`eim_idf.json`（按 `MICROPIXEL_IDF_TOOLS_PATH`、`IDF_TOOLS_PATH`、`C:\Espressif\tools`、
+`%USERPROFILE%\.espressif` 的顺序查找）中选中的版本。默认校验主次版本为 6.1；显式传入 `-IdfPath`
+或 `-IdfActivationScript` 时只告警，不阻断。
+
+### 10.2 常用命令
+
+```powershell
+pwsh tools/firmware.ps1 build-host                       # ESP32-P4，默认板型
+pwsh tools/firmware.ps1 build-host -Board box3           # ESP32-S3-BOX-3
+pwsh tools/firmware.ps1 build-host -Board szpi           # 立创 SZPI
+pwsh tools/firmware.ps1 build-host -Board cores3         # M5Stack CoreS3
+pwsh tools/firmware.ps1 build-host -Board s31            # ESP-Mosaico
+pwsh tools/firmware.ps1 build-null -Board p4             # 无硬件编译门禁
+pwsh tools/firmware.ps1 flash-host -Board p4 -Port COM7
+pwsh tools/firmware.ps1 monitor -Board p4 -Port COM7 -Reset
+pwsh tools/firmware.ps1 fullclean-host
+pwsh tools/firmware.ps1 port -Board p4                   # 打印解析到的串口
+pwsh tools/firmware.ps1 list
+```
+
+Guest 应用（游戏）Bundle：
+
+```powershell
+. .\tools\guest-toolchain.ps1
+python tools/micropixel package guest/apps/snake --aot-target xtensa --output-dir build/package/snake
+python tools/micropixel package guest/apps/tilt --aot-target xtensa --output-dir build/package/tilt
+```
+
+`-Port` 省略时按 pyserial 枚举端口并用 `esptool` 校验芯片；Windows 端口形如 `COM7`。
+`flash-host` 只烧录已构建的 Host，不写 `app_store`。首次构建会先执行 CMake configure 并可能拉取
+managed components，编译开始前有数分钟无输出属正常。
+
+### 10.3 与 shell 入口的差异
+
+- 生成的默认值文件写入构建目录：P4/S31 为 `sdkconfig.env.defaults`，S3 为 `sdkconfig.remote.defaults`。
+  内容与 `tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh` 一致，`.env` 的加载规则也一致（同名环境变量优先）。
+- 不就地改写已生成的 `sdkconfig.release`。当 Remote Control 配置变化且构建目录已有该文件时脚本会告警，
+  此时执行 `fullclean-host` 让新值生效。shell 入口还会就地删除 LVGL 9.6 已废弃的符号
+  （`CONFIG_LV_MEM_SIZE_KILOBYTES`、`CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES`、
+  `CONFIG_LV_ASSERT_HANDLER_INCLUDE`），因为它们的非默认值会触发 `#warning` 并被 `-Werror=cpp`
+  变成构建失败；Windows 入口不做删除，因此复用旧的构建目录时请先 `fullclean-host`。
+- `build-release` 不在 Windows 上提供：它是 POSIX 入口，一次完成 Host、7 个示例 App、app_store 与整机
+  镜像。Windows 上请分步执行 10.4 的 Guest 构建，再用 `tools/build_app_store_image.py` 和
+  `tools/build_full_firmware_image.py` 拼接；WSL 中仍可用 `bash tools/p4.sh build-release`。
+
+### 10.4 Guest 应用构建
+
+Windows 上可以完整构建 Guest 应用 Bundle，不需要 WSL：
+
+```powershell
+. .\tools\guest-toolchain.ps1
+python tools/micropixel package guest/apps/snake --aot-target xtensa --output-dir build/package/snake
+```
+
+`tools/guest-toolchain.ps1` 从仓库根 `.env` 读取三个变量（当前 shell 已有的同名变量优先），
+校验路径可执行后写入当前进程环境，供 `tools/micropixel` 使用：
+
+| 变量 | 内容 | 用于 |
+|---|---|---|
+| `WASI_SDK_PATH` | WASI SDK 33，提供 `bin/clang++.exe` | C++23 → wasm |
+| `XTENSA_WAMRC` | Xtensa 版 `wamrc.exe` | ESP32-S3（box3、szpi、cores3） |
+| `WAMRC` | RISC-V 版 `wamrc.exe` | ESP32-P4、ESP32-S31 |
+
+`--aot-target` 必须与目标板一致（`xtensa` 或 `riscv32-ilp32f`）。Bundle 的 AOT 目标掩码由
+`tools/micropixel` 写入，固件会独立校验，因此目标不匹配会在设备上被拒绝而不是静默出错。
+工具链产物按官方清单的 SHA-256 校验；`wamrc --version` 本身不能证明 AOT 兼容性。
+
+拼接含 App 的整机镜像：
+
+```powershell
+python tools/build_app_store_image.py --app-store-size 0x0800000 --output build/app-store.bin `
+    build/windows/xtensa/packages/snake/snake.bundle.bin
+python tools/build_full_firmware_image.py --build-dir build/host-esp32s3-szpi `
+    --app-store-image build/app-store.bin --output build/micropixel-szpi-with-apps.bin
+```
+
+`app_store` 可用容量由分区尺寸推导：S3 的 8 MiB 分区为 `(8 MiB - 64 KiB) / 64 KiB = 127` 个
+64 KiB 数据块，即 7.94 MiB；Bundle 体积必须是 64 KiB 的整数倍。
+
+验收使用 `python tools/windows/verify_build.py --target xtensa`：它编译真实 App 与 conformance
+用例、校验 Bundle 与 AOT 契约、断言目标掩码，并确认第二次调用复用既有 Bundle。
+该脚本按 `build/windows/wasi.tar.gz` 缓存 WASI SDK；复用已校验的归档可避免重新下载。
+
+### 10.5 Windows 上尚未验证的部分
+
+- 烧录与监视路径按 Windows `COM` 端口实现（`tools/firmware.py` 在 `os.name == "nt"` 时接受 `COM<n>`），
+  但尚未在本仓库真机上完成验证。
+- `tools/tests/test_firmware_host.sh`、`tools/check_firmware_style.sh` 与
+  `tools/tests/test_firmware.py` 依赖 POSIX（`bash`、`fcntl`、`clang++`），Windows 上不能运行，
+  请在 WSL 中执行。Windows 入口本身已验证可完成 Host 构建。

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
-import fcntl
 import glob
 import json
 import os
@@ -17,13 +16,25 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, IO, Mapping, Sequence
+
+
+# Windows has no fcntl; msvcrt provides the byte-range lock used below.
+if os.name == "nt":  # pragma: no cover - selected by the host platform
+    import msvcrt
+else:  # pragma: no cover - selected by the host platform
+    import fcntl
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_DIR = WORKSPACE_ROOT / "firmware" / "espressif"
 DEFAULT_PROFILES_PATH = Path(__file__).with_name("firmware_profiles.json")
 SHARED_IDF_LOCK_PATH = WORKSPACE_ROOT / "build" / ".esp-idf-managed-components.lock"
+# Windows holds the shared lock as a byte range, so the holder record is
+# rewritten in place inside this fixed region instead of truncating the file.
+# The locked byte sits after the record, because a locked byte cannot be read.
+LOCK_RECORD_BYTES = 256
+LOCK_FILE_BYTES = LOCK_RECORD_BYTES + 1
 SERIAL_GLOBS = (
     "/dev/cu.usbmodem*",
     "/dev/cu.usbserial*",
@@ -36,6 +47,67 @@ class FirmwareToolError(RuntimeError):
     """A user-actionable firmware tooling error."""
 
 
+def _lock_holder(lock_file: IO[bytes]) -> str:
+    lock_file.seek(0)
+    return lock_file.read(LOCK_RECORD_BYTES).decode("utf-8", "replace").strip()
+
+
+def _acquire_lock(lock_file: IO[bytes], *, blocking: bool) -> bool:
+    """Take the cross-process lock; return False when another holder has it."""
+
+    if os.name != "nt":
+        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(lock_file.fileno(), flags)
+            return True
+        except BlockingIOError:
+            return False
+
+    # Truncating the file would silently drop the byte-range lock, and a locked
+    # byte cannot be read, so the record region is created up front and the lock
+    # is taken on the byte that follows it.
+    lock_file.seek(0, os.SEEK_END)
+    if lock_file.tell() < LOCK_FILE_BYTES:
+        lock_file.write(b" " * LOCK_FILE_BYTES)
+    while True:
+        lock_file.seek(LOCK_RECORD_BYTES)
+        try:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            if not blocking:
+                return False
+            time.sleep(0.2)
+
+
+def _release_lock(lock_file: IO[bytes]) -> None:
+    if os.name != "nt":
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return
+    lock_file.seek(LOCK_RECORD_BYTES)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _write_lock_record(lock_file: IO[bytes], record: str) -> None:
+    encoded = record.encode("utf-8")
+    lock_file.seek(0)
+    if os.name == "nt":
+        # Never shorten the file: that would release the byte-range lock.
+        lock_file.write(encoded.ljust(LOCK_RECORD_BYTES, b" ")[:LOCK_RECORD_BYTES])
+    else:
+        lock_file.truncate()
+        lock_file.write(encoded)
+
+
+def _clear_lock_record(lock_file: IO[bytes]) -> None:
+    if os.name == "nt":
+        lock_file.seek(0)
+        lock_file.write(b" " * LOCK_RECORD_BYTES)
+        return
+    lock_file.seek(0)
+    lock_file.truncate()
+
+
 @contextmanager
 def shared_idf_lock(
     profile: "Profile",
@@ -46,21 +118,18 @@ def shared_idf_lock(
     """Serialize ESP-IDF actions that mutate the shared managed_components tree."""
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            lock_file.seek(0)
-            holder = lock_file.read().strip() or "another firmware command"
+    lock_path.touch(exist_ok=True)
+    # Unbuffered binary I/O: a buffered text read would pull in the locked byte
+    # that follows the holder record, and Windows cannot read a locked byte.
+    with lock_path.open("r+b", buffering=0) as lock_file:
+        if not _acquire_lock(lock_file, blocking=False):
+            holder = _lock_holder(lock_file) or "another firmware command"
             print(f"==> Waiting for shared ESP-IDF lock ({holder})", flush=True)
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            _acquire_lock(lock_file, blocking=True)
 
-        lock_file.seek(0)
-        lock_file.truncate()
-        lock_file.write(
-            f"pid={os.getpid()} profile={profile.name} action={action}"
+        _write_lock_record(
+            lock_file, f"pid={os.getpid()} profile={profile.name} action={action}"
         )
-        lock_file.flush()
         print(
             f"==> Shared ESP-IDF lock acquired: {profile.name} {action}",
             flush=True,
@@ -68,10 +137,8 @@ def shared_idf_lock(
         try:
             yield
         finally:
-            lock_file.seek(0)
-            lock_file.truncate()
-            lock_file.flush()
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _clear_lock_record(lock_file)
+            _release_lock(lock_file)
 
 
 @dataclass(frozen=True)
@@ -303,6 +370,17 @@ def with_overrides(profile: Profile, args: argparse.Namespace) -> Profile:
     )
 
 
+def _is_windows_idf_launcher(executable: Path) -> bool:
+    """Recognize the ``idf-exe`` launcher ESP-IDF installs on Windows.
+
+    ``idf.py.exe`` is not the IDF script itself: it runs
+    ``$IDF_PATH/tools/idf.py`` from the environment, so it still targets the
+    active IDF tree.
+    """
+
+    return os.name == "nt" and executable.suffix.casefold() == ".exe"
+
+
 def locate_idf_py(environ: Mapping[str, str] | None = None) -> Path:
     environ = os.environ if environ is None else environ
     executable = shutil.which("idf.py")
@@ -312,9 +390,14 @@ def locate_idf_py(environ: Mapping[str, str] | None = None) -> Path:
         )
     idf_path = environ.get("IDF_PATH")
     if idf_path:
-        expected = (Path(idf_path) / "tools" / "idf.py").resolve()
+        expected = Path(idf_path) / "tools" / "idf.py"
+        if not expected.is_file():
+            raise FirmwareToolError(
+                f"IDF_PATH does not contain tools/idf.py: {idf_path}"
+            )
+        expected = expected.resolve()
         actual = Path(executable).resolve()
-        if actual != expected:
+        if actual != expected and not _is_windows_idf_launcher(actual):
             raise FirmwareToolError(
                 f"idf.py comes from {actual}, not the active IDF_PATH {expected}"
             )
