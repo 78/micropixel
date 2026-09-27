@@ -55,6 +55,8 @@ class EspLcdTouchInput final : public device::Input {
     esp_timer_handle_t poll_timer_{};
     std::atomic<uint32_t> interrupts_{};
     std::atomic<bool> work_pending_{};
+    // When the last controller frame was decoded, owned by the executor task.
+    uint64_t last_frame_us_{};
     portMUX_TYPE sink_lock_ = portMUX_INITIALIZER_UNLOCKED;
     device::TouchSink sink_{};
     void* sink_context_{};

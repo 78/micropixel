@@ -12,6 +12,16 @@ namespace {
 
 constexpr char kTag[] = "micropixel_touch";
 constexpr uint64_t kPollingIntervalUs = 10000U;
+// A touch controller that is being touched reports continuously, so a run of
+// polls that decode nothing means the frame carrying the lift was missed: the
+// poll that would have consumed it is dropped while the previous transfer is
+// still in flight (work_pending_ below), and once the finger is gone the
+// controller has nothing more to send. The "no frame is not a state change"
+// rule would then hold the pointer pressed for good - the drag stayed open and
+// every later touch was swallowed as a second Down - which is what "the panel
+// never comes back up" and "the screen stops responding while scrolling" look
+// like. Release after a silence no reporting controller produces.
+constexpr uint64_t kStaleFrameReleaseUs = 200000U;
 }  // namespace
 
 EspLcdTouchInput* EspLcdTouchInput::active_instance_ = nullptr;
@@ -219,7 +229,21 @@ void EspLcdTouchInput::ProcessInterrupt() {
         // the official LVGL adapter likewise keeps the previous press state.
         // Do not synthesize Up/Cancel here: the next valid controller report
         // will either advance the same track or release it.
-        sample_decoded = true;
+        //
+        // Keep that state only while the controller is still reporting; a
+        // long silence means the lift is never coming and the press has to be
+        // released, or the Host keeps a drag open and forwards nothing.
+        const uint64_t silence_us = static_cast<uint64_t>(esp_timer_get_time()) - last_frame_us_;
+        bool touches_active = false;
+        for (const auto& active : active_touches_) {
+            touches_active = touches_active || active.active;
+        }
+        if (!touches_active || silence_us < kStaleFrameReleaseUs) {
+            sample_decoded = true;
+        } else {
+            ESP_LOGW(kTag, "no touch frame for %llu ms while pressed; releasing",
+                     static_cast<unsigned long long>(silence_us / 1000U));
+        }
     } else if (read_status != ESP_OK) {
         ESP_LOGW(kTag, "touch sample read failed: %s", esp_err_to_name(read_status));
     } else {
@@ -232,6 +256,7 @@ void EspLcdTouchInput::ProcessInterrupt() {
         } else {
             sample_decoded = true;
             const uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
+            last_frame_us_ = timestamp_us;
             bool previous_seen[micropixel::device::kMaxTouchPoints]{};
             for (uint8_t point_index = 0U; point_index < point_count; ++point_index) {
                 auto& point = points[point_index];
