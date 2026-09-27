@@ -40,7 +40,7 @@ void StyleFullscreenContainer(lv_obj_t* container, uint32_t background, int32_t 
 
 }  // namespace
 
-const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
+const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() const {
     static constexpr Layout kLayoutLandscape320{
         .screen_width = 320,
         .screen_height = 240,
@@ -77,6 +77,54 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
         .quick_detail_font = platform::lvgl::SystemFontRole::kSmall,
         .control_font = platform::lvgl::SystemFontRole::kSmall,
         .metric_font = platform::lvgl::SystemFontRole::kSmall,
+        .scrim_rgb = theme::kStatusScrim,
+        .scrim_opacity = 190U,
+    };
+    // SenseCAP Watcher: a 412 px round cover. The 480 layout is 448 px wide and
+    // starts at y = 16, so on this panel its right column fell 52 px off the
+    // screen and its whole top band sat behind the bezel. Everything here is
+    // inside the circle instead: the sheet is 292 x 290 at (60, 61), so its
+    // corners are sqrt(146^2 + 145^2) = 205.8 px from the centre of a 206 px
+    // radius, and the tiles are inset 14 px from its edges, the same inset the
+    // System UI rows use. The metrics became full-width rows because an 82 px
+    // wide box cannot show "1.2 / 4.0 MB".
+    static constexpr Layout kLayout412{
+        .screen_width = 412,
+        .screen_height = 412,
+        .dialog = {.x = 60, .y = 61, .width = 292, .height = 290},
+        .dialog_hidden_y = -290,
+        .quick = {{.x = 74, .y = 75, .width = 82, .height = 56},
+                  {.x = 164, .y = 75, .width = 82, .height = 56},
+                  {.x = 254, .y = 75, .width = 82, .height = 56}},
+        .sliders = {{.x = 74, .y = 141, .width = 127, .height = 66}, {.x = 211, .y = 141, .width = 127, .height = 66}},
+        .metrics = {{.x = 74, .y = 217, .width = 264, .height = 36},
+                    {.x = 74, .y = 259, .width = 264, .height = 36},
+                    {.x = 74, .y = 301, .width = 264, .height = 36}},
+        .performance_overlay_y = 44,
+        .panel_radius = 12,
+        .dialog_radius = 16,
+        .dialog_border_width = 1,
+        .quick_label_x = 8,
+        .quick_name_y = 5,
+        .quick_detail_y = 27,
+        .slider_label_x = 10,
+        .slider_label_y = 5,
+        .slider_value_width = 34,
+        .slider_track_x = 10,
+        .slider_track_y = 30,
+        .slider_track_height = 9,
+        .slider_knob_size = 20,
+        .metric_label_x = 8,
+        .metric_name_y = 2,
+        .metric_value_y = 16,
+        .metric_track_x = 8,
+        .metric_track_y = 32,
+        .metric_track_height = 3,
+        .quick_name_font = platform::lvgl::SystemFontRole::kMedium,
+        .quick_detail_font = platform::lvgl::SystemFontRole::kSmall,
+        .control_font = platform::lvgl::SystemFontRole::kSmall,
+        .metric_font = platform::lvgl::SystemFontRole::kSmall,
+        .compact_labels = true,
         .scrim_rgb = theme::kStatusScrim,
         .scrim_opacity = 190U,
     };
@@ -190,12 +238,16 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() {
         .scrim_rgb = kLayout480.scrim_rgb,
         .scrim_opacity = kLayout480.scrim_opacity,
     };
+    if (layout_profile_ == StatusLayerLayoutProfile::kRound412) {
+        return kLayout412;
+    }
     lv_display_t* display = lv_screen_active() != nullptr ? lv_obj_get_display(lv_screen_active()) : nullptr;
     if (display != nullptr && lv_display_get_horizontal_resolution(display) <= 320 &&
         lv_display_get_vertical_resolution(display) <= 240) {
         return kLayoutLandscape320;
     }
-    return display != nullptr && lv_display_get_horizontal_resolution(display) <= 480 ? kLayout480 : kLayout720;
+    const int32_t width = display != nullptr ? lv_display_get_horizontal_resolution(display) : 0;
+    return width > 0 && width <= 480 ? kLayout480 : kLayout720;
 }
 
 void StatusLayerUi::ResolveLayoutLocked() { layout_ = &ActiveLayout(); }
@@ -660,6 +712,10 @@ lv_obj_t* StatusLayerUi::CreateLabel(lv_obj_t* parent, const char* text, const l
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_set_pos(label, x, y);
+    // The tiles and rows of this layer hold one line each. A value that outgrows
+    // its tile must not grow a second line over the label above it; the cellular
+    // dialog asks for wrapping explicitly where it wants it.
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
     return label;
 }
 
@@ -847,7 +903,7 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     cellular_sim_slot_ = model.cellular_sim_slot;
     cellular_sim_pending_ = model.cellular_sim_pending;
     cellular_sim_failed_ = model.cellular_sim_failed;
-    const bool compact = layout_ != nullptr && layout_->screen_width <= 320;
+    const bool compact = layout_ != nullptr && (layout_->screen_width <= 320 || layout_->compact_labels);
     const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
     const char* wifi_detail = !model.wifi_available
                                   ? unavailable
@@ -858,9 +914,10 @@ void StatusLayerUi::UpdateControlsLocked(const host_ui::StatusLayerModel& model)
     const char* cellular_detail =
         !model.cellular_available
             ? unavailable
-            : (model.cellular_switch_failed ? "SAVE FAILED"
-               : model.cellular_switching   ? "RESTARTING"
-                                            : (model.cellular_enabled ? "SIM / NETWORK" : "NETWORK"));
+            : (model.cellular_switch_failed ? (compact ? "FAILED" : "SAVE FAILED")
+               : model.cellular_switching   ? (compact ? "RESTART" : "RESTARTING")
+                                            : (model.cellular_enabled ? (compact ? "SIM/NET" : "SIM / NETWORK")
+                                                                      : (compact ? "NET" : "NETWORK")));
     UpdateQuickCardLocked(TouchTarget::kWifi, wifi_detail, model.wifi_enabled, model.wifi_available);
     UpdateQuickCardLocked(TouchTarget::kCellular, cellular_detail, model.cellular_enabled, model.cellular_available);
     UpdateQuickCardLocked(TouchTarget::kPerformance,
@@ -922,7 +979,8 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     lv_obj_set_style_border_width(status_dialog_, layout_->dialog_border_width, 0);
     lv_obj_set_style_border_color(status_dialog_, lv_color_hex(theme::kStatusDialogBorder), 0);
 
-    const bool compact = layout_->screen_width <= 320;
+    // The 412 sheet is 292 px wide, so the long state words do not fit either.
+    const bool compact = layout_->screen_width <= 320 || layout_->compact_labels;
     const char* unavailable = compact ? UiText(host_strings::Id::kUiNA) : UiText(host_strings::Id::kUiUnavailableCaps);
     const char* wifi_detail = !model.wifi_available
                                   ? unavailable
@@ -933,9 +991,10 @@ void StatusLayerUi::DrawLayerLocked(const host_ui::StatusLayerModel& model) {
     const char* cellular_detail =
         !model.cellular_available
             ? unavailable
-            : (model.cellular_switch_failed ? "SAVE FAILED"
-               : model.cellular_switching   ? "RESTARTING"
-                                            : (model.cellular_enabled ? "SIM / NETWORK" : "NETWORK"));
+            : (model.cellular_switch_failed ? (compact ? "FAILED" : "SAVE FAILED")
+               : model.cellular_switching   ? (compact ? "RESTART" : "RESTARTING")
+                                            : (model.cellular_enabled ? (compact ? "SIM/NET" : "SIM / NETWORK")
+                                                                      : (compact ? "NET" : "NETWORK")));
     DrawQuickCard(status_dialog_, TouchTarget::kWifi, "WIFI", wifi_detail, model.wifi_enabled, model.wifi_available);
     DrawQuickCard(status_dialog_, TouchTarget::kCellular, "4G", cellular_detail, model.cellular_enabled,
                   model.cellular_available);

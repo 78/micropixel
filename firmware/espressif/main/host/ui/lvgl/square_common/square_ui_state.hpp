@@ -37,6 +37,10 @@ struct SquareSystemUiProfile final {
     const HallSceneLayout& hall_scene;
     const SystemMenuLayout& system_menu;
     const SystemPageLayout& system_page;
+    // A round cover needs its own pull-down sheet geometry, which cannot be
+    // derived from the content tokens. Boards that do not declare a profile keep
+    // the layout the display size selects, exactly as before.
+    StatusLayerLayoutProfile status_layer_layout{StatusLayerLayoutProfile::kAutomatic};
     int32_t launch_label_bottom_offset{};
     bool scale_oversized_launch_bitmap{};
     bool derive_launch_background{};
@@ -197,6 +201,9 @@ class SquareSystemUiState final {
     uint32_t hall_card_window_first{host_ui::kMaxHallApps};
     uint32_t hall_card_window_last{host_ui::kMaxHallApps};
     int32_t hall_scroll_offset{};
+    // The Hall's selection: a card index, or - past the last card - one of the
+    // header buttons. kMaxHallApps means "not chosen yet".
+    uint32_t hall_selected_index{host_ui::kMaxHallApps};
     uint64_t hall_catalog_signature{};
     host_ui::HallStatusBarModel hall_status_bar{};
     bool hall_firmware_update_available{};

@@ -11,12 +11,19 @@
 
 namespace micropixel::host_ui::lvgl::square_common {
 
+enum class StatusLayerLayoutProfile : uint8_t {
+    kAutomatic,
+    kRound412,
+};
+
 // Owns the persistent quick-settings layer, its native LVGL controls, and the
 // Guest-foreground performance HUD. Callers hold the LVGL adapter
 // lock for methods whose name ends in Locked.
 class StatusLayerUi final {
    public:
-    explicit StatusLayerUi(const SystemPageLayout& layout) : cellular_layout_(layout) {}
+    explicit StatusLayerUi(const SystemPageLayout& layout,
+                           StatusLayerLayoutProfile layout_profile = StatusLayerLayoutProfile::kAutomatic)
+        : cellular_layout_(layout), layout_profile_(layout_profile) {}
     StatusLayerUi(const StatusLayerUi&) = delete;
     StatusLayerUi& operator=(const StatusLayerUi&) = delete;
     ~StatusLayerUi();
@@ -28,6 +35,9 @@ class StatusLayerUi final {
     void SetTransitionProgressLocked(uint16_t progress_per_mille);
     void Deactivate();
     void LeaveLocked();
+    // True while the sheet is on screen. The screen underneath has to know, so
+    // that it does not act on gestures the sheet is the target of.
+    [[nodiscard]] bool VisibleLocked() const { return status_layer_ != nullptr && !lv_obj_is_hidden(status_layer_); }
     [[nodiscard]] void* ActionContext() const;
     [[nodiscard]] bool CellularSettingsPage() const { return cellular_settings_page_; }
     [[nodiscard]] lv_obj_t* TransitionDialogLocked() const {
@@ -98,6 +108,9 @@ class StatusLayerUi final {
         platform::lvgl::SystemFontRole quick_detail_font{};
         platform::lvgl::SystemFontRole control_font{};
         platform::lvgl::SystemFontRole metric_font{};
+        // Panels too narrow for the long state words ("SIM / NETWORK") use the
+        // short ones the 320 px layout uses.
+        bool compact_labels{};
         uint32_t scrim_rgb{};
         uint8_t scrim_opacity{};
     };
@@ -158,7 +171,7 @@ class StatusLayerUi final {
     void UpdateControlsLocked(const host_ui::StatusLayerModel& model);
     void UpdateSramMetricLocked(const host_ui::StatusLayerModel& model);
     void DrawLayerLocked(const host_ui::StatusLayerModel& model);
-    [[nodiscard]] static const Layout& ActiveLayout();
+    [[nodiscard]] const Layout& ActiveLayout() const;
     void ResolveLayoutLocked();
 
     lv_obj_t* status_layer_{};
@@ -181,6 +194,7 @@ class StatusLayerUi final {
     lv_obj_t* cellular_mode_label_{};
     lv_obj_t* cellular_sim_buttons_[2]{};
     const SystemPageLayout& cellular_layout_;
+    StatusLayerLayoutProfile layout_profile_{};
     device::CellularDiagnostics cellular_diagnostics_{};
     device::CellularState cellular_state_{};
     bool cellular_connected_{};

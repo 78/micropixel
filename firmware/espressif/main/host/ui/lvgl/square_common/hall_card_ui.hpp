@@ -53,6 +53,10 @@ struct HallCardObjects final {
 void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCardPresentation& app, uint32_t index,
                   lv_event_cb_t card_event, lv_event_cb_t stop_event, void* event_context, HallCardObjects& objects);
 void SetHallCardPressed(const HallCardObjects& objects, bool pressed);
+// The ring that marks the item the wheel is on: a Hall card or one of the header
+// buttons, which is why it takes the object rather than a card. It is drawn as
+// an outline, so marking an item never changes that item's own layout.
+void SetHallSelectionRing(lv_obj_t* object, bool selected);
 void SetHallCardInstallProgress(const HallCardObjects& objects, uint8_t progress_percent);
 void ShowHallCoverPlaceholder(const HallCardObjects& objects);
 void DetachHallCover(const HallCardObjects& objects, lv_image_dsc_t& descriptor);
