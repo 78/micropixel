@@ -14,6 +14,16 @@ ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 固件。以�
 
 初始化子模块：`git submodule update --init --recursive`。上游 WAMRC 的版本字符串不足以证明 AOT 兼容性。
 
+共享 BundleFS 单独维护于 [78/bundlefs](https://github.com/78/bundlefs)。首次构建前，在本仓库同级
+检出固定版本；仓库内的 `firmware/espressif/components/bundlefs` 软链会引用它：
+
+```sh
+git clone --branch v0.2.0 https://github.com/78/bundlefs.git ../bundlefs
+```
+
+已有本地 BundleFS 改动时保留工作目录，不重复克隆或强制切换版本。组件同时以 `78/bundlefs` 的
+`0.2.0` 版本发布到 ESP Component Registry；本仓库使用同级源码以支持共享组件开发和 Host 测试。
+
 每个新终端都必须先激活 ESP-IDF；`export.sh` 会设置 `IDF_PATH` 并切换到匹配的 Python 环境：
 
 ```sh

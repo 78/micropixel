@@ -12,6 +12,9 @@ BundleFS 文件由 `runtime/bundlefs/bundle_store_source.hpp` 包装成一个 so
 存储核心、BlockStorage 契约、NOR/MMU 适配器，以及 Bundle v1 格式、Bundle source 契约、
 `bundle_store_source` 和 Bundle reader 由独立的 `bundlefs` ESP-IDF 组件维护，本项目的
 `firmware/espressif/components/bundlefs` 软链指向同级 `../bundlefs` 仓库。头文件路径和命名空间保持兼容；
+公开源码为 [78/bundlefs](https://github.com/78/bundlefs)，当前发行标签为 `v0.2.0`，Registry 组件为
+`78/bundlefs` `0.2.0`。固件 CI 使用仓库变量 `BUNDLEFS_REPOSITORY=78/bundlefs` 和固定提交的
+`BUNDLEFS_REF` 检出相同源码。
 AppStore、AOT loader、Section reader 和 NAND 适配器仍属于本项目。共享 reader 不依赖 WAMR：
 `FirmwareApp` 在创建 `AppStore` 前调用 `runtime::InstallAotPayloadCheck()` 注册拒绝 XIP 镜像的检查，
 未注册时 AOT 一律被拒绝。
