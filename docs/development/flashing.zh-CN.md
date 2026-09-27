@@ -148,7 +148,7 @@ down/up 且 pressed/released 状态同步；v1.0 的 Demo Devices 页选择 `Ora
 触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 
-## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI 与 M5Stack CoreS3
+## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI、M5Stack CoreS3 与 SenseCAP Watcher
 
 BOX-3 配置固定使用 40 MHz SPI、40 行内部 SRAM partial buffer 和双缓冲：
 
@@ -183,15 +183,39 @@ bash tools/s3.sh flash-host cores3 /dev/cu.usbmodemXXXX
 bash tools/s3.sh monitor cores3 /dev/cu.usbmodemXXXX --reset
 ```
 
+SenseCAP Watcher 是 412×412 圆形屏（SPD2010、QSPI），圆形几何由 `square_412` profile 提供：共享布局按
+内接正方形收敛，顶部标题栏与下拉状态面板按圆内可用区域摆放，Host 侧不使用板级条件编译。触摸中断接在
+扩展芯片 P0.5 上，Host 只能在任务中 10 ms 轮询，因此 `esp_lcd_touch_spd2010` 使用
+`firmware/espressif/patched_components/` 下的本地副本，两处补丁及移除条件见该目录 README。旋钮接
+GPIO41/42：单击确认、双击返回、长按关机。
+
+```sh
+bash tools/s3.sh build-host watcher
+bash tools/s3.sh build-release watcher   # Host + 七个集成 App + 完整浏览器镜像
+bash tools/s3.sh flash-all watcher /dev/cu.usbmodemXXXX
+bash tools/s3.sh flash-host watcher /dev/cu.usbmodemXXXX
+bash tools/s3.sh monitor watcher /dev/cu.usbmodemXXXX --reset
+```
+
+Watcher 有 32 MiB Flash：`app_store` 与其它 S3 板保持相同的 `0x800000` 起始，但扩展到 24 MiB
+（`partitions.s3-watcher.csv`），所以它的 App Store 镜像单独生成在
+`build/esp32s3-apps-watcher/app-store.bin`，与非 Watcher 的 8 MiB 镜像不通用。
+`sdkconfig.s3-watcher.defaults` 打开 ESP-IDF 实验特性、禁用 QSPI Flash 模式自动探测并启用双控制台。
+
+圆屏真机验收至少包括：标题栏与下拉面板完全落在圆内、不被边框遮挡；旋钮滚轮选择与左右滑动落在同一张
+卡片上，释放后停在卡片上；设置和更新按钮都能被选中；顶部时间在宽数字下不换行；触摸在 10 ms 轮询下
+不丢按下/抬起，也不出现空帧自触发。
+
 `build-release`、`flash-apps` 和 `flash-all` 同样接受 `szpi` 或 `cores3`；不写 `BOARD` 时保持原行为，默认
 操作 BOX-3。原有带 `-szpi`、`-cores3` 后缀的命令仍是兼容别名。
 
 新板第一次接入必须先烧一次 `app_store`（`flash-all` 或 `flash-apps BOARD PORT`）。只 `flash-host` 的
 新板 `app_store` 分区是空白 flash，Host 启动会打印 `App Store catalog scan failed`，
 `micropixel app list` 返回 `count=0, storeUsedBytes=0`，此时 `app install`/`run` 的 Bundle 上传会长时间
-挂起而没有明确错误。三款 S3 共享 `build/esp32s3-apps/app-store.bin`，`flash-apps` 不区分板型。
+挂起而没有明确错误。BOX-3、SZPI 和 CoreS3 共享 `build/esp32s3-apps/app-store.bin`，`flash-apps` 不区分板型；
+Watcher 使用 24 MiB 几何，必须用 `build/esp32s3-apps-watcher/app-store.bin`，两者不能互换。
 
-五板固件发布使用同一 `PROJECT_VER`，逐个生成 OTA `micropixel.bin` 与浏览器完整镜像
+各板固件发布使用同一 `PROJECT_VER`，逐个生成 OTA `micropixel.bin` 与浏览器完整镜像
 `micropixel-full.bin`。
 
 正式发布的 Remote Control endpoint 为 `quic.micropixel.ai`，发布 CI 显式注入该地址。本地发布构建需在
@@ -206,8 +230,8 @@ bash tools/s3.sh build-release szpi
 bash tools/s3.sh build-release cores3
 ```
 
-发布目录由 Control 服务仓库的 `firmware-release.jsonc` 统一声明（Control API 与官网不在本仓库）。三款 S3
-虽共享芯片和 Xtensa App Store，但 Host 镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户
+发布目录由 Control 服务仓库的 `firmware-release.jsonc` 统一声明（Control API 与官网不在本仓库）。四款 S3
+虽共享芯片和 Xtensa Guest 基线（Watcher 的 `app_store` 为 24 MiB 几何），但 Host 镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户
 选择具体板型并只用芯片识别做系列校验。固件镜像属于生成物，不提交到 Git；部署网站/API 时必须让配置中的五组
 相对路径都可读。
 
