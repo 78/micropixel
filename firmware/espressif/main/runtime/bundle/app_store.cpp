@@ -384,12 +384,6 @@ std::expected<void, AppStoreError> AppStore::LoadStoreCatalog(BundleStore& store
             std::strcmp(reinterpret_cast<const char*>(metadata.app_id), (*files)[index].name) != 0) {
             return std::unexpected(AppStoreError::kCatalogCorrupt);
         }
-        if (metadata.package_type == MICROPIXEL_BUNDLE_PACKAGE_COMPONENT) {
-            micropixel_bundle_metadata_t validated{};
-            if (!micropixel_validate_component_package(&*source, &validated)) {
-                return std::unexpected(AppStoreError::kCatalogCorrupt);
-            }
-        }
         // Preserve the same external-before-system precedence for every package.
         auto& inventory = catalog_out.inventory;
         bool duplicate = false;

@@ -179,6 +179,11 @@ prepare_host_config() {
                 saw_pm = 0; saw_pm_dfs = 0; saw_tickless = 0; saw_wifi_lwip_psram = 0
                 saw_main_stack = 0; saw_max_task_name_len = 0
             }
+            # Refresh the S31 boot baseline, including legacy Kconfig aliases.
+            # Derived values are recalculated by Kconfig from the choices below.
+            /^(# )?CONFIG_(ESPTOOLPY_)?FLASHMODE(_[A-Z0-9]+)?(=| is not set$)/ ||
+            /^(# )?CONFIG_ESPTOOLPY_FLASHFREQ(_[A-Z0-9]+)?(=| is not set$)/ ||
+            /^(# )?CONFIG_(BOOTLOADER_LOG_LEVEL|LOG_BOOTLOADER_LEVEL)(_[A-Z]+)?(=| is not set$)/ { next }
             /^CONFIG_LV_MEM_SIZE=/ {
                 print "CONFIG_LV_MEM_SIZE=" lv_mem_size_bytes
                 saw_lv_mem_size = 1
@@ -258,6 +263,9 @@ prepare_host_config() {
             }
             { print }
             END {
+                print "CONFIG_ESPTOOLPY_FLASHMODE_QIO=y"
+                print "CONFIG_ESPTOOLPY_FLASHFREQ_80M=y"
+                print "CONFIG_BOOTLOADER_LOG_LEVEL_ERROR=y"
                 if (!saw_lv_mem_size) print "CONFIG_LV_MEM_SIZE=" lv_mem_size_bytes
                 if (!saw_lv_style_cache) print "CONFIG_LV_OBJ_STYLE_CACHE=y"
                 if (!saw_host) print "CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST=\"" remote_host "\""

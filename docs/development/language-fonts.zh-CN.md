@@ -10,9 +10,13 @@
 通过 `micropixel publish` 发布到应用商店，使用现有版本号、不可变发布摘要与商店签名。
 TTF 组件的元数据使用 `font: {"asset":"regular","format":"ttf"}`，保留 `languages`、
 `font_bundle` 和 `charset`；其资源是单个 FONT section，format 11（静态 TrueType）。
+共享 Bundle 格式另外允许 `font: {"faces":[...],"format":"ttf"|"ttf-variable"}` 在一个组件内按回退顺序放置
+多个字体（format 12 为可含 OpenType 变体的 TrueType，供 FreeType 使用，例如 Pocket Sage）。
+本项目语言包只安装单字体的静态 TTF 组件，Tiny TTF 不加载可变字体。
 已有四角色 `fonts`/CBIN format 8 的组件保持可读；两种声明不得混用。
 
-系统字体组件安装到 NOR 系统 BundleFS，并持有只读映射；字模缓存、度量缓存和光栅化临时区使用 PSRAM。
+系统字体组件安装到 NOR 系统 BundleFS，并持有只读映射。字体内容只在安装时完整校验；开机、目录扫描和切换语言
+加载时只检查头部、metadata 与 TOC 位置，不重新哈希字体；字模缓存、度量缓存和光栅化临时区使用 PSRAM。
 映射必须覆盖所有使用该字体的字号的生命周期，活跃映射对应的物理块不得在更新中被重用。
 
 LVGL 内置分配池使用 PSRAM：ESP32-S3 与 ESP32-S31 配置 768 KiB，ESP32-P4 配置 1 MiB。

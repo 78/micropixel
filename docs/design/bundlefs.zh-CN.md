@@ -7,6 +7,16 @@ BundleFS 是 MicroPixel 存放 Bundle 的专用文件系统。它只保存不可
 BundleFS 文件由 `runtime/bundlefs/bundle_store_source.hpp` 包装成一个 source（契约见
 [架构文档](architecture.zh-CN.md)第 7 节）。
 
+### 共享组件
+
+存储核心、BlockStorage 契约、NOR/MMU 适配器，以及 Bundle v1 格式、Bundle source 契约、
+`bundle_store_source` 和 Bundle reader 由独立的 `bundlefs` ESP-IDF 组件维护，本项目的
+`firmware/espressif/components/bundlefs` 软链指向同级 `../bundlefs` 仓库。头文件路径和命名空间保持兼容；
+AppStore、AOT loader、Section reader 和 NAND 适配器仍属于本项目。共享 reader 不依赖 WAMR：
+`FirmwareApp` 在创建 `AppStore` 前调用 `runtime::InstallAotPayloadCheck()` 注册拒绝 XIP 镜像的检查，
+未注册时 AOT 一律被拒绝。
+组件版本独立于磁盘格式版本；组件工作缓冲只使用 PSRAM，分配失败返回错误，不回退到内部 SRAM。
+
 ### 实例与介质
 
 `runtime::BundleFs` 是一个实例（实现 `runtime::BundleStore` 抽象接口），构造时绑定一个
@@ -34,7 +44,7 @@ Catalog header 中；挂载时总是采用已提交 Catalog 记录的几何，�
 1. 起点是介质自身的单位：擦除单元 `erase_size`；可映射介质再取与 MMU 映射对齐 `map_alignment` 的较大者
    （ESP32-P4/S31 的 NOR 为 64 KiB）；
 2. 块号表每块占 4 字节，常驻 RAM。只有当整个介质的块号表超过
-   `CONFIG_MICROPIXEL_BUNDLEFS_BLOCK_MAP_BUDGET_KIB`（默认 1024 KiB）时才把块大小翻倍，直到落入预算；
+   `CONFIG_BUNDLEFS_BLOCK_MAP_BUDGET_KIB`（默认 1024 KiB）时才把块大小翻倍，直到落入预算；
 3. 板级可以在构造 `BundleFs` 时显式指定块大小（等价于 `mkfs -b`，通过
    `BoardRegistration::SetAppStorage(storage, bundle_block_size)` 传入），只用于格式化；
 4. 块大小必须是擦除单元和编程单元的整数倍；编程单元不能大于 4 字节的 commit marker。
@@ -162,16 +172,15 @@ Bundle 是不可变文件。安装使用写时复制：分配足够的空闲数�
 虚拟地址。上层不能获取或持久化物理块号。
 
 Bundle reader 从不把整包读入 RAM。`micropixel_open_aot_package` 只读取 TOC，并把 AOT 段复制到
-PSRAM（校验哈希并检查 XIP）。NOR 映射以完整 Bundle 文件为唯一粒度：`BundleFs::Map` 总是将
+PSRAM（交给运行时检查 XIP，不重新计算哈希）。NOR 映射以完整 Bundle 文件为唯一粒度：`BundleFs::Map` 总是将
 整文件的有序物理块映射成一个连续窗口，向调用者返回所请求的字节区间。封面、贴图、字体、音频和
 App package 对同一文件的借用共享该窗口，不再建立局部页窗口，也不拼接或扩展已有窗口。
 
 App package 打开时尝试一次整包映射，并持有一个引用直到关闭。成功时资源逐段借用整包窗口；失败或
 介质不可映射时，该 package 本次生命周期内统一按需读取单段 PSRAM 副本，不再逐段尝试 Flash 映射。
-整包映射占用虚拟地址/MMU 页，不复制整包到 PSRAM；副本模式只占用正在使用的资源内存。两种模式都
-在资源打开时校验哈希，AOT 仍独立复制。Guest PNG 纹理可通过有界 section reader 顺序读取，
-以发布纹理前完成完整 section 哈希校验替代打开时的整段副本；解码结束后仍消费并校验剩余字节。
-安装校验继续以 4 KiB 块流式计算哈希。
+整包映射占用虚拟地址/MMU 页，不复制整包到 PSRAM；副本模式只占用正在使用的资源内存。AOT 仍独立复制。
+Guest PNG 纹理可通过有界 section reader 顺序读取，替代打开时的整段副本，解码结束后不再读取剩余字节。
+哈希只在安装时以 4 KiB 块流式计算；已提交的 Bundle 不可变，大厅封面、App 启动和资源打开都不重新校验。
 
 SPI NAND 适配器复用已有扇区工作区作为单槽读缓存，键为 FTL 逻辑扇区号。小读命中时不调用 FTL；
 未命中先使缓存失效，仅在整扇区读取成功后置为有效。整扇区读取可直接进入调用方缓冲。

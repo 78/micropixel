@@ -335,7 +335,8 @@ void StreamingInput() {
     using micropixel::runtime::BundleSectionReader;
     ResetHeap();
     auto png = MakePng(32, 32, 6, 8, RgbaPixels(32, 32));
-    // IEND may precede the end of the section: all trailing bytes must be hashed.
+    const size_t png_bytes = png.size();
+    // Bytes after IEND are never read: installed sections are not re-hashed.
     png.resize(png.size() + 12000, 0xa5);
     CountingSource storage;
     storage.bytes.resize(64, 0x77);
@@ -346,14 +347,14 @@ void StreamingInput() {
     section.size = static_cast<uint32_t>(png.size());
     section.hash = Hash(png);
     section.format = MICROPIXEL_BUNDLE_FORMAT_PNG;
-    const size_t expected_calls = (png.size() + 4095) / 4096;
+    const size_t expected_calls = (png_bytes + 4095) / 4096;
     {
         BundleSectionReader reader;
         assert(reader.Open(source, section));
         DecodedBitmap bitmap;
         assert(DecodePngBitmap(reader, {}, bitmap));
         CheckPixel(bitmap, 31, 31, 31, 31);
-        assert(storage.next == storage.bytes.size() && storage.calls == expected_calls);
+        assert(storage.next < storage.bytes.size() && storage.calls == expected_calls);
         assert(reader.Finish());
         assert(storage.calls == expected_calls);
     }
@@ -375,7 +376,7 @@ void StreamingInput() {
         assert(allocations.empty());
     }
     ResetHeap();
-    // IO failure while decoding or draining the section must discard the private bitmap.
+    // IO failure while decoding the section must discard the private bitmap.
     for (uint32_t failed_read = 1; failed_read <= expected_calls; ++failed_read) {
         storage.next = 64;
         storage.calls = 0;
@@ -399,12 +400,11 @@ void StreamingInput() {
         BundleSectionReader reader;
         assert(reader.Open(source, section));
         DecodedBitmap bitmap;
-        assert(!DecodePngBitmap(reader, {}, bitmap) && !bitmap.valid());
-        assert(std::strstr(bitmap.FailureDetail(), "hash"));
+        assert(DecodePngBitmap(reader, {}, bitmap) && reader.Finish());
     }
     storage.bytes.back() ^= 1;
     assert(allocations.empty());
-    // Mapped source shares exactly the same complete-section verification, with no IO or prefetch allocation.
+    // A mapped source decodes with no IO or prefetch allocation.
     storage.calls = 0;
     {
         BundleSectionReader reader;

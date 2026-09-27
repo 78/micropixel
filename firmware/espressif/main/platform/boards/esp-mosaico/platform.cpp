@@ -33,6 +33,7 @@
 #include "platform/boards/esp-mosaico/status_led.hpp"
 #include "platform/boards/esp-mosaico/usb_cdc_console.hpp"
 #include "platform/buses/i2c_executor.hpp"
+#include "platform/diagnostics/startup_timing.hpp"
 #include "platform/gpio/esp_gpio_peripheral.hpp"
 #include "platform/input/esp_lcd_touch_input.hpp"
 #include "platform/lvgl/display/scanout_stage_pool.hpp"
@@ -171,25 +172,31 @@ class EspMosaicoBoard final : public Board, public device::Power {
     }
 
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
+        diagnostics::MarkStartupTiming("board_begin");
         presentation_.BindAudioEngine(context.AudioEngine());
         ESP_RETURN_ON_ERROR(InitializeUsbCdcConsole(), board_detail::kTag, "initialize Type-C USB CDC console failed");
+        diagnostics::MarkStartupTiming("usb_ready");
         ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, board_detail::kTag,
                             "Board control objects must reside in internal RAM");
         ESP_LOGI(board_detail::kTag, "initializing ESP-Mosaico with CO5300 and CST92xx drivers");
         ESP_RETURN_ON_ERROR(esp_mosaico::board::DetectHardware(), board_detail::kTag, "detect Mosaico hardware failed");
         ESP_RETURN_ON_ERROR(power_.Initialize(), board_detail::kTag, "initialize Mosaico power control failed");
+        diagnostics::MarkStartupTiming("power_ready");
         ESP_RETURN_ON_ERROR(status_led_.Initialize(), board_detail::kTag, "initialize Mosaico status LED failed");
         ESP_RETURN_ON_ERROR(status_led_.Set(true), board_detail::kTag, "turn on Mosaico startup status LED failed");
         ESP_RETURN_ON_ERROR(InitializeSharedI2c(state_), board_detail::kTag,
                             "initialize shared Mosaico I2C bus failed");
         ESP_RETURN_ON_ERROR(InitializeTouch(state_), board_detail::kTag, "initialize Mosaico touch failed");
+        diagnostics::MarkStartupTiming("touch_ready");
         ESP_RETURN_ON_ERROR(state_.i2c_executor.Initialize(), board_detail::kTag,
                             "start shared Mosaico I2C executor failed");
         ESP_RETURN_ON_ERROR(state_.touch_input.Initialize(state_.touch, state_.i2c_executor), board_detail::kTag,
                             "bind CST92xx input failed");
         ESP_RETURN_ON_ERROR(sensors_.BeginInitialize(state_.i2c_bus, state_.i2c_executor), board_detail::kTag,
                             "start Mosaico sensor discovery failed");
+        diagnostics::MarkStartupTiming("display_begin");
         ESP_RETURN_ON_ERROR(InitializeDisplay(state_), board_detail::kTag, "initialize Mosaico display failed");
+        diagnostics::MarkStartupTiming("display_ready");
         // Shared full-frame RGB565 staging for the Direct Surface presenter and
         // the transition compositor. Four frames cover the worst case (status
         // layer open: retained background + scrim + compose + wire) and are
@@ -211,6 +218,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(
             state_.guest_graphics.Initialize(state_.display, nullptr, state_.display_pipeline.DirectScanout()),
             board_detail::kTag, "initialize shared Guest graphics failed");
+        diagnostics::MarkStartupTiming("graphics_ready");
 
         if (esp_lv_adapter_lock(-1) != ESP_OK) {
             return ESP_FAIL;
@@ -222,6 +230,7 @@ class EspMosaicoBoard final : public Board, public device::Power {
         }
 
         esp_lv_adapter_unlock();
+        diagnostics::MarkStartupTiming("ui_ready");
 
         // Render the startup screen while the panel is still off and before the
         // worker can race this first refresh. CO5300 DISPLAY_ON uses SPI tx_param,
@@ -229,7 +238,10 @@ class EspMosaicoBoard final : public Board, public device::Power {
         // the final asynchronous partial flush reaches GRAM before scanout starts.
         ESP_RETURN_ON_ERROR(esp_lv_adapter_refresh_now(state_.display), board_detail::kTag,
                             "render Mosaico startup frame failed");
+        diagnostics::MarkStartupTiming("frame_rendered");
         ESP_RETURN_ON_ERROR(state_.display_pipeline.Resume(), board_detail::kTag, "show Mosaico startup frame failed");
+        diagnostics::MarkStartupTiming("panel_on");
+        diagnostics::ReportStartupTiming();
         ESP_RETURN_ON_ERROR(esp_lv_adapter_start(), board_detail::kTag, "start LVGL adapter failed");
 
         ESP_RETURN_ON_ERROR(sensors_.FinishInitialize(), board_detail::kTag, "finish Mosaico sensor discovery failed");

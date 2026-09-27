@@ -4,8 +4,15 @@
 #include <utility>
 
 #include "runtime/bundle/app_store.hpp"
+#include "wasm_export.h"
 
 namespace micropixel::runtime {
+
+namespace {
+bool IsRelocatableAot(const uint8_t* payload, uint32_t size) { return !wasm_runtime_is_xip_file(payload, size); }
+}  // namespace
+
+void InstallAotPayloadCheck() { micropixel_bundle_set_aot_check(IsRelocatableAot); }
 
 std::expected<void, AotPackageError> ScanInstalledApps(AppStore& store, InstalledAppCatalog& catalog_out,
                                                        std::string_view effective_locale) {

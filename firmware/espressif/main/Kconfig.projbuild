@@ -122,16 +122,6 @@ menu "WAMR application quotas"
         range 100 60000
         default 1000
 
-    config MICROPIXEL_BUNDLEFS_BLOCK_MAP_BUDGET_KIB
-        int "BundleFS Catalog block-map RAM budget per store (KiB)"
-        range 16 16384
-        default 1024
-        help
-            When a store is formatted, the data block defaults to the medium's own
-            unit (erase sector or MMU page) and is doubled only while the Catalog
-            block map (4 bytes per data block, kept in RAM while mounted) would
-            exceed this budget. Mounting adopts whatever block size the committed
-            Catalog records; this value only affects fresh formats.
 
 endmenu
 

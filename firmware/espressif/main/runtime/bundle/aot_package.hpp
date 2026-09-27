@@ -18,6 +18,10 @@ enum class AotPackageError {
     kOpenFailed,
 };
 
+// Lets the shared Bundle reader accept relocatable WAMR AOT only. Must run
+// before any App Bundle is validated or opened; until then AOT is refused.
+void InstallAotPayloadCheck();
+
 constexpr uint32_t kMaxInstalledApps = BUNDLEFS_MAX_FILES;
 
 // Which Bundle store holds an installed App: the system store (NOR app_store,

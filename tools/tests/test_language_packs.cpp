@@ -29,7 +29,8 @@ bool SaveSetting(void*) {
 extern "C" bool micropixel_bundle_open_component_font(const micropixel_bundle_source_t* source,
                                                       micropixel_bundle_metadata_t* metadata,
                                                       micropixel_bundle_font_mapping_t* mapping) {
-    if (!micropixel_validate_component_package(source, metadata) || !micropixel_bundle_source_can_map(source))
+    // Like the real reader: installed Components are not re-validated when loaded.
+    if (!micropixel_read_bundle_metadata(source, metadata) || !micropixel_bundle_source_can_map(source))
         return false;
     if (!micropixel_bundle_source_map(source, 0U, metadata->bundle_size, &mapping->mapping)) return false;
     mapping->font.data = mapping->mapping.data;

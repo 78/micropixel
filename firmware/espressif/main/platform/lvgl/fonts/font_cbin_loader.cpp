@@ -10,7 +10,6 @@
 #include <new>
 
 #include "device/font_cbin_format.h"
-#include "psa/crypto.h"
 
 namespace micropixel::platform::lvgl {
 
@@ -138,17 +137,6 @@ FontCbinError ValidateHeader(std::span<const uint8_t> package, std::span<const u
     payload_out = package.subspan(payload_offset, payload_size);
     if ((reinterpret_cast<uintptr_t>(payload_out.data()) & 3U) != 0U) {
         return FontCbinError::kAbiMismatch;
-    }
-    std::array<uint8_t, MICROPIXEL_FONT_CBIN_SHA256_SIZE> digest{};
-    size_t digest_size = 0U;
-    if (psa_crypto_init() != PSA_SUCCESS ||
-        psa_hash_compute(PSA_ALG_SHA_256, payload_out.data(), payload_out.size(), digest.data(), digest.size(),
-                         &digest_size) != PSA_SUCCESS ||
-        digest_size != digest.size()) {
-        return FontCbinError::kHashUnavailable;
-    }
-    if (std::memcmp(digest.data(), header + MICROPIXEL_FONT_CBIN_OFFSET_PAYLOAD_SHA256, digest.size()) != 0) {
-        return FontCbinError::kHashMismatch;
     }
     font_size_out = font_size;
     return FontCbinError::kNone;

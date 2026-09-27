@@ -38,8 +38,6 @@ std::expected<void, SectionReadError> BundleSectionReader::Open(const micropixel
     source_ = &source;
     source_offset_ = section.offset;
     size_ = section.size;
-    expected_hash_ = section.hash;
-    verify_ = true;
     return {};
 }
 
@@ -69,12 +67,7 @@ std::span<const uint8_t> BundleSectionReader::Available() const {
     return {buffer_ + position_ % kBufferSize, buffered_end_ - position_};
 }
 
-void BundleSectionReader::Consume(std::span<const uint8_t> bytes) {
-    if (verify_) {
-        for (uint8_t byte : bytes) hash_ = (hash_ ^ byte) * 16777619U;
-    }
-    position_ += static_cast<uint32_t>(bytes.size());
-}
+void BundleSectionReader::Consume(std::span<const uint8_t> bytes) { position_ += static_cast<uint32_t>(bytes.size()); }
 
 std::expected<void, SectionReadError> BundleSectionReader::PeekPrefix(std::span<uint8_t> output) {
     if (position_ != 0U || output.size() > kBufferSize || output.size() > size_) {
@@ -99,12 +92,8 @@ std::expected<void, SectionReadError> BundleSectionReader::Read(std::span<uint8_
 }
 
 std::expected<void, SectionReadError> BundleSectionReader::Finish() {
-    if (auto result = Fill(); !result) return result;
-    while (position_ < size_) {
-        if (auto result = Fill(); !result) return result;
-        Consume(Available());
-    }
-    if (verify_ && hash_ != expected_hash_) return Fail(SectionReadError::kHashMismatch);
+    if (error_ != SectionReadError::kNone) return std::unexpected(error_);
+    if (size_ == 0U) return Fail(SectionReadError::kInvalidRange);
     return {};
 }
 
@@ -118,8 +107,6 @@ const char* BundleSectionReader::FailureDetail() const {
             return "section read buffer allocation failed";
         case SectionReadError::kIo:
             return "section IO failed or file content changed";
-        case SectionReadError::kHashMismatch:
-            return "section hash mismatch";
     }
     return "section read failed";
 }

@@ -128,6 +128,9 @@ Guest buffer 的 pinned memory 会提前占用连续空间，默认 Host buffer 
 Claw4 的 DPI 像素时钟由默认 240 MHz 时钟源整数分频产生，只能取 240/N：40 MHz（6 分频，约 65.5 Hz）
 在 App 光栅、PPA 与 DMA2D 争用 PSRAM 时会触发 underrun，现设为 240/7 ≈ 34.29 MHz（约 56.2 Hz），
 DSI 读 framebuffer 的带宽减少 14%，真机运行中不再蓝闪；App 启动瞬间的峰值仍可能闪一下。
+P4 默认开启 `CONFIG_SPIRAM_XIP_FROM_PSRAM`，把固件代码和只读数据加载到 PSRAM，缓解 App 启动时的
+显示停顿；`tools/p4.sh build-host` 也会同步已有的增量配置。该选项消耗额外 PSRAM，S3、S31 等其他目标
+保持关闭。显示时序与 64 B cache line 不变，启动闪蓝是否消失及 PSRAM 余量仍需真机验证。
 不能用 RGB565 framebuffer 换带宽：NV3051F 只有只读的像素格式寄存器（固定 24 bit），而 ESP32-P4
 rev 1.x 的 DSI 桥输入与输出格式共用一个寄存器，做不了 RGB565→RGB888 的桥内转换（v3 硅片才有）。
 P4 L2 Cache 配置为 256 KiB、cache line 为 64 B；相对 128 KiB Cache 额外占用 128 KiB 内部 SRAM。

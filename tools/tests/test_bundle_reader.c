@@ -23,6 +23,30 @@ static bool check(bool condition, const char* message) {
     return condition;
 }
 
+static bool accept_relocatable_aot(const uint8_t* payload, uint32_t size) { return payload != NULL && size != 0U; }
+
+/* MICROPIXEL_EXPECT_FONT_FACES lists the face names in fallback order, comma separated. */
+static bool expected_faces_match(const micropixel_bundle_font_face_t* faces, uint32_t count) {
+    const char* expected = getenv("MICROPIXEL_EXPECT_FONT_FACES");
+    if (expected == NULL) return true;
+    uint32_t index = 0U;
+    char name[MICROPIXEL_BUNDLE_APP_ID_MAX_LENGTH];
+    while (*expected != '\0') {
+        const char* end = strchr(expected, ',');
+        const size_t length = end == NULL ? strlen(expected) : (size_t)(end - expected);
+        if (index >= count || length == 0U || length >= sizeof(name)) return false;
+        memcpy(name, expected, length);
+        name[length] = '\0';
+        if (strcmp(faces[index].name, name) != 0 || faces[index].id != micropixel_bundle_asset_id(name) ||
+            faces[index].size == 0U ||
+            (uint64_t)faces[index].offset + faces[index].size > test_bundle_size)
+            return false;
+        ++index;
+        expected += length + (end == NULL ? 0U : 1U);
+    }
+    return index == count;
+}
+
 static bool load_bundle(const char* path) {
     FILE* file = fopen(path, "rb");
     if (file == NULL || fseek(file, 0, SEEK_END) != 0) {
@@ -181,12 +205,30 @@ static bool validate_bundle(bool mappable) {
             return false;
         }
         if (validated.font_format == MICROPIXEL_BUNDLE_FORMAT_STATIC_TTF) {
+            const uint32_t face_count = validated.font_face_count;
+            micropixel_bundle_font_face_t* faces = calloc(face_count, sizeof(*faces));
+            micropixel_bundle_metadata_t face_metadata;
+            const bool short_table =
+                face_count > 1U && micropixel_read_component_font_faces(&file, &face_metadata, faces, face_count - 1U);
+            const bool read_faces =
+                faces != NULL && micropixel_read_component_font_faces(&file, &face_metadata, faces, face_count);
+            const uint32_t primary_offset = read_faces ? faces[0].offset : 0U;
+            const bool ordered = read_faces && expected_faces_match(faces, face_count);
+            free(faces);
+            if (!check(face_count > 0U && read_faces, "TTF Component must expose its face table") ||
+                !check(!short_table, "a face table smaller than the declared faces is refused") ||
+                !check(active_mappings == 0U, "face table validation must release every mapping") ||
+                !check(ordered, "faces must keep their declared names and fallback order")) {
+                return false;
+            }
             micropixel_bundle_font_mapping_t font = {0};
             bool opened = micropixel_bundle_open_component_font(&file, &validated, &font);
             if (!check(opened == (mappable && !reject_mappings),
                        "TTF requires actual NOR mapping without RAM fallback"))
                 return false;
             if (opened && (!check(in_test_bundle(font.font.data), "TTF bytes alias NOR source") ||
+                           !check(font.font.data == test_bundle + primary_offset,
+                                  "the primary face is the first declared face") ||
                            !check(active_mappings == 1U, "active TTF holds exactly one mapping")))
                 return false;
             micropixel_close_font_mapping(&font);
@@ -252,6 +294,14 @@ static bool validate_bundle(bool mappable) {
     }
 
     micropixel_aot_package_t package;
+    micropixel_bundle_set_aot_check(NULL);
+    const bool opened_unchecked = micropixel_open_aot_package(&file, &package);
+    if (opened_unchecked) micropixel_close_aot_package(&package);
+    micropixel_bundle_set_aot_check(accept_relocatable_aot);
+    if (!check(!opened_unchecked, "AOT must be refused until the runtime installs its check") ||
+        !check(active_mappings == 0U, "a refused AOT must not leak a mapping")) {
+        return false;
+    }
     if (!check(micropixel_open_aot_package(&file, &package), "Bundle must open as an AOT package") ||
         !check(active_mappings == one_view, "an open package retains its whole-Bundle lease") ||
         !check(package.sections != NULL && package.section_count == header.section_count &&
@@ -305,19 +355,22 @@ static bool validate_bundle(bool mappable) {
         if (!check(active_mappings == one_view, "closing a section must release its mapping")) {
             return false;
         }
-        /* Corruption inside a section is caught when that section is opened, without touching others. */
+        /* Hashes are checked at install only; opening an installed section trusts its bytes. */
         const uint8_t original = test_bundle[cover_offset];
         test_bundle[cover_offset] ^= 0xffU;
-        const bool corrupt_opened = micropixel_bundle_open_asset(&package, package.launch_asset_id, &launch);
-        if (corrupt_opened) {
+        const uint32_t reads_before_open = source_reads;
+        const bool changed_opened = micropixel_bundle_open_asset(&package, package.launch_asset_id, &launch);
+        const bool read_for_open = source_reads != reads_before_open;
+        if (changed_opened) {
             micropixel_close_asset_mapping(&launch);
         }
         micropixel_bundle_metadata_t validated;
         const bool corrupt_validated = micropixel_validate_app_package(&file, &validated);
         test_bundle[cover_offset] = original;
-        if (!check(!corrupt_opened, "a section whose hash mismatches must not open") ||
+        if (!check(changed_opened, "opening an installed section does not re-hash it") ||
+            !check(!mappable || !read_for_open, "a mapped section opens without copying or hashing") ||
             !check(!corrupt_validated, "install validation must reject a Bundle with a corrupt section") ||
-            !check(active_mappings == one_view, "failed section validation must not leak a mapping")) {
+            !check(active_mappings == one_view, "section validation must not leak a mapping")) {
             return false;
         }
     }
@@ -365,13 +418,13 @@ static bool validate_bundle(bool mappable) {
     micropixel_bundle_asset_mapping_t cover_again;
     const uint8_t original = test_bundle[cover_offset];
     test_bundle[cover_offset] ^= 0xffU;
-    const bool corrupt_cover_opened = micropixel_open_launch_asset(&file, &cover_again);
+    const bool changed_cover_opened = micropixel_open_launch_asset(&file, &cover_again);
     test_bundle[cover_offset] = original;
-    if (corrupt_cover_opened) {
+    if (changed_cover_opened) {
         micropixel_close_asset_mapping(&cover_again);
     }
-    return check(!corrupt_cover_opened, "Bundle reader must reject a corrupt cover") &&
-           check(active_mappings == 0U, "failed cover validation must not leak a mapping");
+    return check(changed_cover_opened, "Hall covers open without re-hashing installed bytes") &&
+           check(active_mappings == 0U, "closing a cover must not leak a mapping");
 }
 
 int main(int argc, char** argv) {
@@ -379,6 +432,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Usage: bundle_reader_test APP_BUNDLE\n");
         return 2;
     }
+    micropixel_bundle_set_aot_check(accept_relocatable_aot);
     bool passed = validate_bundle(true) && validate_bundle(false);
     reject_mappings = true;
     passed = validate_bundle(true) && passed;

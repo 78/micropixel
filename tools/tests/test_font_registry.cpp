@@ -240,10 +240,10 @@ void TestFontCbinLoader() {
     result = LoadFontCbin(invalid_size);
     assert(!result && result.error() == FontCbinError::kHeaderMismatch);
 
-    auto wrong_hash = package;
-    wrong_hash.back() ^= 0x01U;
-    result = LoadFontCbin(wrong_hash);
-    assert(!result && result.error() == FontCbinError::kHashMismatch);
+    // The payload SHA-256 is checked when the Component is installed, not on every load.
+    auto stale_hash = package;
+    stale_hash[MICROPIXEL_FONT_CBIN_OFFSET_PAYLOAD_SHA256] ^= 0x01U;
+    assert(LoadFontCbin(stale_hash).has_value());
 
     auto invalid_glyph = package;
     PutU32(invalid_glyph, kPayloadOffset + kFontSize + kGlyphOffset + 16U, 5U);

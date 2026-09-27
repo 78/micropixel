@@ -38,7 +38,8 @@ micropixel publish ./my-app --tested-device metalio-claw4 --tested-device esp-mo
 micropixel auth logout
 ```
 
-发布固定 release 配置、开启内存边界检查、riscv32-ilp32f。实测设备是开发者声明，与能力匹配分开。
+应用发布固定 release 配置、开启内存边界检查，先构建并校验 P4/S31 的 `riscv32-ilp32f` 和
+ESP32-S3 的 `xtensa` 两份独立 Bundle，再逐份上传。实测设备是开发者声明，与能力匹配分开。
 商店从已校验 Bundle 的 launch_asset 提取 PNG/JPEG 默认封面（最多 2 MB），保留已有封面与介绍；同一产物重试可补齐旧记录的封面。
 CLI 将开发者凭据放在 XDG_CONFIG_HOME/micropixel/publisher.json（默认 ~/.config，0600），
 有效期 30 天；CI 使用 MICROPIXEL_PUBLISH_TOKEN。MICROPIXEL_STORE_URL 默认为 https://micropixel.ai。
@@ -50,14 +51,14 @@ app.list 每个应用增加 `version`，响应增加 `freeBytes`。USB APP_LIST 
 version；CLI 兼容旧的 5/6 列。Bundle 元数据增加 core_abi 与 requirements，旧清单保持可读。
 
 device.snapshot.store 包含 protocol、target、coreAbi、width、height、capabilities、services、
-idleMs、busy。配置可信商店公钥且为 P4/S31 时 protocol=2，否则为 0。协议 1 仅支持没有适配差异的安装；协议 2 允许手动安装带适配提示的版本。协议 0 不支持商店。
+idleMs、busy。配置可信商店公钥时 protocol=2，否则为 0。协议 1 仅支持没有适配差异的安装；协议 2 允许手动安装带适配提示的版本。协议 0 不支持商店。
 
 商店安装复用 app.install，新增 storeRelease（ES256 compact JWS）、automatic、baselineSha256。
 JWS protected header 为 alg=ES256、typ=MPX-RELEASE、kid；payload 精确绑定 releaseId、publisherId、
 appId、version、target、sizeBytes、sha256。签名采用 SHA-256 和 P-256，传输签名是 64 字节 R||S。
 设备只从自身 Device Gateway 下 store/releases 路径获取授权产物，再验证签名、摘要、Core/Service ABI 及容量。
 Kconfig 配置当前与上一把可信公钥的 DER SubjectPublicKeyInfo Base64 和 kid，以支持轮换。
-P4/S31 发布 defaults 内置 micropixel.ai 的 store-v1 公钥；自建服务须替换为自己的公钥，私钥不得进入固件或仓库。
+P4、S31 和 S3 发布 defaults 内置 micropixel.ai 的 store-v1 公钥；自建服务须替换为自己的公钥，私钥不得进入固件或仓库。
 签名证明平台发布身份与完整性，不证明 AOT 代码安全或应用已经真机测试。
 
 ## 安装与更新不变量
@@ -75,7 +76,7 @@ P4/S31 发布 defaults 内置 micropixel.ai 的 store-v1 公钥；自建服务�
 
 ## 功能边界
 
-当前不包含评论评分、多实例、Xtensa 商店发布或业务崩溃后的自动回滚，不自动上架仓库本地应用。
+当前不包含评论评分、多实例或业务崩溃后的自动回滚，不自动上架仓库本地应用。
 
 ## 手动安装的适配提示
 

@@ -359,8 +359,12 @@ prepare_host_config() {
             /^# CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF is not set$/ { next }
             /^CONFIG_LWIP_DNS_SETSERVER_WITH_NETIF=/ ||
             /^# CONFIG_LWIP_DNS_SETSERVER_WITH_NETIF is not set$/ { next }
+            /^CONFIG_SPIRAM_XIP_FROM_PSRAM=/ ||
+            /^# CONFIG_SPIRAM_XIP_FROM_PSRAM is not set$/ { next }
             { print }
             END {
+                # Apply the P4 XiP default to existing incremental builds too.
+                print "CONFIG_SPIRAM_XIP_FROM_PSRAM=y"
                 # Claw4 keeps both radios online; DNS follows the default route.
                 print "CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF=y"
                 print "CONFIG_LWIP_DNS_SETSERVER_WITH_NETIF=y"

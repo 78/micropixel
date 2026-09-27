@@ -198,9 +198,9 @@ Texture 的 Guest 句柄和 Scene 引用独立计数：Guest Reset 只释放自�
 不保留原尺寸中间位图。缩放尺寸按比例四舍五入，最近邻采样保留首尾像素；单像素目标维度取源坐标 0。
 全部源行仍需顺序解码并验证 PNG 尾部。Guest PNG 纹理加载使用独立的 Bundle section reader：
 映射可用时借用映射，否则用固定 4 KiB PSRAM 预读缓冲顺序读取，不保留完整压缩资源副本。
-读取器在消费字节时累计 section 哈希，PNG 结束后继续消费 section 剩余字节；尾部检查和完整 section
-哈希均通过后才能发布纹理。校验前像素仅由后台加载任务持有。IO、内容身份失效、解码或校验失败均释放
-临时资源，不发布部分纹理。资源读取、校验及解码在同一个后台任务内完成，公开调用仍同步等待。
+section 字节已在安装时校验，读取器不再计算哈希，PNG 结束后也不读取 section 剩余字节；解码与 PNG
+尾部检查通过后才能发布纹理，此前像素仅由后台加载任务持有。IO、内容身份失效或解码失败均释放
+临时资源，不发布部分纹理。资源读取与解码在同一个后台任务内完成，公开调用仍同步等待。
 此路径不依赖 LVGL/PPA 的量化采样，内部采样位置可能与旧路径不同。
 不透明资源按 Host 选择的格式输出 RGB565 或 BGR888，透明资源保留 BGRA8888；RGB565 字节序仍由
 Host 纹理适配层处理。Guest 继续使用原始资源坐标，Host 位图记录实际尺寸与对齐 stride。
@@ -264,7 +264,7 @@ AppSession 的 trap 详情保留 SDK panic、WAMR 异常及最近一次图片解
 
 ## 7. Bundle、能力与权限
 
-Bundle reader 在创建 WAMR instance 前检查格式、hash、范围、对齐和唯一性。当前一个 Bundle 只含一个
+Bundle reader 在创建 WAMR instance 前检查格式、范围、对齐和唯一性；哈希只在安装时校验。当前一个 Bundle 只含一个
 AOT section，按 CPU 架构分别构建；安装在写入 App Store 前拒绝缺少 target 元数据或架构不匹配的 AOT。
 容器为未来多架构留有空间，但多 AOT 选择尚未启用。
 
@@ -273,8 +273,8 @@ Bundle reader、`AotPackage`、大厅封面和 Guest 资源服务不直接依赖
 只读视图，提供 `size`、`read` 和可选的 `map`。source 是按值复制的 POD，ops 表共享且不可变，文件状态
 内联保存，因此 catalog 可以直接持有它，而不关心文件来自 NOR 上的 BundleFS、NAND 上的 BundleFS，还是
 未来 LittleFS/FAT 目录中的侧载文件。reader 从不整包读取：打开时只读 TOC 并把 AOT 段复制到 PSRAM，
-贴图、字体、音频剪辑和封面在被使用时才逐段读取并校验哈希。PNG 纹理允许边解码边校验，
-在发布前完成校验；AOT 和其余 addressable section 仍在使用前完成校验。能进入 CPU 地址空间的存储（NOR
+贴图、字体、音频剪辑和封面在被使用时才逐段读取。已安装的 Bundle 不可变，Flash 读取不会改变内容，
+所以打开、启动和加载资源都不再计算哈希；完整校验只在安装写入时进行。能进入 CPU 地址空间的存储（NOR
 `app_store`）提供 `map`，一段就是一个零拷贝映射窗口；不能映射的存储把 `map` 留空，reader 把该段读入
 Host 持有的 PSRAM 副本；支持顺序消费的 PNG 纹理通过独立 reader 读取。reader 借用 source，
 不向可按值复制的 source POD 添加缓冲、游标或所有权。source 与映射必须活到读取任务结束；

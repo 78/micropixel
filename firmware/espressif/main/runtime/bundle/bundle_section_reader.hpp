@@ -11,12 +11,13 @@
 
 namespace micropixel::runtime {
 
-enum class SectionReadError : uint8_t { kNone, kInvalidRange, kNoMemory, kIo, kHashMismatch };
+enum class SectionReadError : uint8_t { kNone, kInvalidRange, kNoMemory, kIo };
 
 // Sequential, bounded section input. Source and optional whole-Bundle mapping are
-// borrowed until destruction. Finish() verifies every section byte, including any
-// bytes the decoder did not consume; decoded output must remain private until then.
-// A source must return the same immutable content or fail after replacement/removal.
+// borrowed until destruction. Section bytes were verified at install; reading
+// trusts them. Finish() reports any read failure; decoded output must remain
+// private until then. A source must return the same immutable content or fail
+// after replacement/removal.
 class BundleSectionReader final {
    public:
     BundleSectionReader() = default;
@@ -27,9 +28,9 @@ class BundleSectionReader final {
     [[nodiscard]] std::expected<void, SectionReadError> Open(const micropixel_bundle_source_t& source,
                                                              const micropixel_bundle_section_t& section,
                                                              std::span<const uint8_t> mapped_bundle = {});
-    // Adapter for already-addressable bytes whose verification belongs to the caller.
+    // Adapter for already-addressable bytes.
     [[nodiscard]] std::expected<void, SectionReadError> OpenMemory(std::span<const uint8_t> bytes);
-    // Header inspection only: does not consume or hash bytes and is limited to 4 KiB.
+    // Header inspection only: does not consume bytes and is limited to 4 KiB.
     [[nodiscard]] std::expected<void, SectionReadError> PeekPrefix(std::span<uint8_t> output);
     [[nodiscard]] std::expected<void, SectionReadError> Read(std::span<uint8_t> output);
     [[nodiscard]] std::expected<void, SectionReadError> Finish();
@@ -50,9 +51,6 @@ class BundleSectionReader final {
     uint32_t size_{};
     uint32_t position_{};
     uint32_t buffered_end_{};
-    uint32_t hash_{2166136261U};
-    uint32_t expected_hash_{};
-    bool verify_{};
     SectionReadError error_{SectionReadError::kNone};
 };
 

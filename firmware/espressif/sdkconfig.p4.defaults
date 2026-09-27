@@ -9,6 +9,8 @@ CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
 # comparison buffer still request PSRAM explicitly.
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
+# Keep code and read-only data in PSRAM to mitigate display stalls during App startup.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_CACHE_L2_CACHE_256KB=y
 CONFIG_CACHE_L2_CACHE_LINE_64B=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

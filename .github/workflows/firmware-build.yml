@@ -105,6 +105,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
+      - name: Check shared BundleFS source configuration
+        shell: bash
+        env:
+          BUNDLEFS_REPOSITORY: ${{ vars.BUNDLEFS_REPOSITORY }}
+          BUNDLEFS_REF: ${{ vars.BUNDLEFS_REF }}
+        run: |
+          test -n "$BUNDLEFS_REPOSITORY" && test -n "$BUNDLEFS_REF" || {
+            echo "Configure BUNDLEFS_REPOSITORY and BUNDLEFS_REF (fixed commit or release tag)." >&2
+            exit 1
+          }
+      - name: Checkout shared BundleFS
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ vars.BUNDLEFS_REPOSITORY }}
+          ref: ${{ vars.BUNDLEFS_REF }}
+          path: .ci/bundlefs
+      - name: Place shared BundleFS beside the project
+        shell: bash
+        run: mv .ci/bundlefs ../bundlefs
+
       - name: Read fixed ESP-IDF revision
         run: echo "IDF_REVISION=$(python3 -c 'import json; print(json.load(open("tools/ci/firmware-sources.json"))["esp_idf_commit"])')" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

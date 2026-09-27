@@ -19,6 +19,7 @@
 #include "host/time/network_time.hpp"
 #include "host/ui/system_shell.hpp"
 #include "nvs_flash.h"
+#include "platform/diagnostics/startup_timing.hpp"
 #include "platform/network/network_route_source.hpp"
 #if !CONFIG_MICROPIXEL_BOARD_NULL
 #include "platform/lvgl/fonts/system_fonts.hpp"
@@ -27,6 +28,7 @@
 #include "platform/platform.hpp"
 #include "platform/storage/network_settings_migration.hpp"
 #include "platform/storage/partition_block_storage.hpp"
+#include "runtime/bundle/aot_package.hpp"
 #include "runtime/bundle/app_store.hpp"
 #include "runtime/bundlefs/bundlefs.hpp"
 #include "work/background_executor.hpp"
@@ -157,6 +159,7 @@ void FirmwareApp::Run() {
     if (!nor_storage.present()) {
         ESP_LOGE(kTag, "app_store partition is missing; the App Store is unavailable");
     }
+    runtime::InstallAotPayloadCheck();
     static MICROPIXEL_EXT_RAM_BSS runtime::AppStore app_store(system_store, external_store);
 #if !CONFIG_MICROPIXEL_BOARD_NULL
     static MICROPIXEL_EXT_RAM_BSS host::fonts::LanguagePacks language_packs(
@@ -180,6 +183,7 @@ std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform()
                  esp_err_to_name(nvs_error));
         return std::unexpected(StartupError::kNvsInitialization);
     }
+    platform::diagnostics::MarkStartupTiming("runtime_nvs_ready");
     ESP_LOGI(kTag, "runtime_nvs initialized; Guest data preserved across Host OTA/restart");
 
     nvs_error = nvs_flash_init_partition("nvs");
@@ -190,6 +194,7 @@ std::expected<void, FirmwareApp::StartupError> FirmwareApp::InitializePlatform()
         return std::unexpected(StartupError::kNvsInitialization);
     }
 
+    platform::diagnostics::MarkStartupTiming("network_nvs_ready");
     if (platform_.Initialize() != ESP_OK) {
         ESP_LOGE(kTag, "configured platform did not initialize");
         return std::unexpected(StartupError::kPlatformInitialization);

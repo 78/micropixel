@@ -10,6 +10,7 @@
 #define SPI_FLASH_MMU_PAGE_SIZE (64U * 1024U)
 #endif
 #define SPI_FLASH_MMAP_FLAG_DATA 0U
+#define SPI_FLASH_MMAP_DATA SPI_FLASH_MMAP_FLAG_DATA
 
 typedef uint32_t spi_flash_mmap_handle_t;
 

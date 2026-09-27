@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "platform/diagnostics/startup_timing.hpp"
 #include "platform/lvgl/fonts/bounded_ttf_font.hpp"
 #include "platform/lvgl/fonts/system_font_fallback.hpp"
 #include "platform/lvgl/fonts/tiny_ttf_font_cache.hpp"
@@ -73,6 +74,7 @@ void Reset() {
 
 esp_err_t InitializeSystemFonts() {
     if (state.ready) return ESP_OK;
+    diagnostics::MarkStartupTiming("fonts_begin");
     for (size_t i = 0U; i < state.slots.size(); ++i) {
         const auto* fallback = BuiltinLatinFont(static_cast<SystemFontRole>(i));
         auto& slot = state.slots[i];
@@ -91,6 +93,7 @@ esp_err_t InitializeSystemFonts() {
     }
     micropixel_system_font_default = state.slots[0].proxy;
     state.ready = true;
+    diagnostics::MarkStartupTiming("fonts_ready");
     ESP_LOGI("system_fonts", "Tiny TTF ready: four sizes, prepared Latin glyphs and bounded kerning caches");
     return ESP_OK;
 }

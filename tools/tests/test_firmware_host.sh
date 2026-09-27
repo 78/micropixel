@@ -2,6 +2,11 @@
 set -euo pipefail
 
 workspace_root="$(cd "$(dirname "$0")/../.." && pwd)"
+bundlefs_src="$workspace_root/firmware/espressif/components/bundlefs/src"
+if [[ ! -f "$bundlefs_src/runtime/bundlefs/bundlefs.cpp" ]]; then
+    echo "Missing shared BundleFS: check out ../bundlefs (see component README)." >&2
+    exit 2
+fi
 test_output_dir="$workspace_root/build/host-tests"
 cxx="${CXX:-/usr/bin/clang++}"
 cc="${CC:-/usr/bin/clang}"
@@ -36,6 +41,7 @@ build_and_run() {
         -Wall -Wextra -Werror \
         -I "$workspace_root/tools/tests/firmware_stubs" \
         -I "$workspace_root/firmware/espressif/main" \
+        -I "$bundlefs_src" \
         -I "$workspace_root/guest" \
         "$@" \
         -o "$test_binary"
@@ -52,6 +58,7 @@ build_and_run_c() {
         -Wall -Wextra -Werror \
         -I "$workspace_root/tools/tests/watchdog_stubs" \
         -I "$workspace_root/firmware/espressif/main" \
+        -I "$bundlefs_src" \
         "$@" \
         -o "$test_binary"
     "$test_binary"
@@ -341,8 +348,8 @@ build_and_run language_packs \
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp" \
     "$workspace_root/firmware/espressif/main/runtime/services/app_storage.cpp" \
     "$workspace_root/tools/tests/fake_nvs.cpp" \
-    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundle_store_source.cpp" \
-    -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
+    "$bundlefs_src/runtime/bundlefs/bundle_store_source.cpp" \
+    -x c++ "$bundlefs_src/runtime/bundle/memory_bundle_source.c"
 
 build_and_run bounded_ttf_font \
     -DMICROPIXEL_TEST_TRACK_HEAP \
@@ -398,6 +405,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -Wall -Wextra -Werror \
     -pthread \
     -I "$workspace_root/firmware/espressif/main" \
+    -I "$bundlefs_src" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
     "$workspace_root/tools/tests/test_direct_surface_service.cpp" \
@@ -415,6 +423,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -Wall -Wextra -Werror \
     -pthread \
     -I "$workspace_root/firmware/espressif/main" \
+    -I "$bundlefs_src" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
     -DCONFIG_MICROPIXEL_APP_SURFACE_TELEMETRY_LOG=1 \
@@ -433,6 +442,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -Wall -Wextra -Werror \
     -pthread \
     -I "$workspace_root/firmware/espressif/main" \
+    -I "$bundlefs_src" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
     "$workspace_root/tools/tests/test_pcm_stream_service.cpp" \
@@ -447,6 +457,7 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cxx" \
     -Wall -Wextra -Werror \
     -pthread \
     -I "$workspace_root/firmware/espressif/main" \
+    -I "$bundlefs_src" \
     -I "$workspace_root/guest" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
     "$workspace_root/tools/tests/test_event_queue.cpp" \
@@ -466,8 +477,8 @@ app_store_sources=(
     "$workspace_root/firmware/espressif/main/runtime/bundle/app_store.cpp"
     "$workspace_root/firmware/espressif/main/runtime/services/app_storage.cpp"
     "$workspace_root/tools/tests/fake_nvs.cpp"
-    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundle_store_source.cpp"
-    -x c++ "$workspace_root/firmware/espressif/main/runtime/bundle/memory_bundle_source.c"
+    "$bundlefs_src/runtime/bundlefs/bundle_store_source.cpp"
+    -x c++ "$bundlefs_src/runtime/bundle/memory_bundle_source.c"
 )
 
 build_and_run app_store -DMICROPIXEL_TEST_TRACK_HEAP "${app_store_sources[@]}"
@@ -478,15 +489,15 @@ build_and_run app_store_s3 -DMICROPIXEL_TEST_TRACK_HEAP \
 
 bundlefs_sources=(
     "$workspace_root/tools/tests/test_bundlefs.cpp"
-    "$workspace_root/firmware/espressif/main/runtime/bundlefs/bundlefs.cpp"
-    "$workspace_root/firmware/espressif/main/platform/storage/partition_block_storage.cpp"
-    "$workspace_root/firmware/espressif/main/platform/storage/flash_page_mapping_cache.cpp"
+    "$bundlefs_src/runtime/bundlefs/bundlefs.cpp"
+    "$bundlefs_src/platform/storage/partition_block_storage.cpp"
+    "$bundlefs_src/platform/storage/flash_page_mapping_cache.cpp"
 )
 
 build_and_run flash_page_mapping_cache \
     -pthread -DMICROPIXEL_TEST_TRACK_HEAP \
     "$workspace_root/tools/tests/test_flash_page_mapping_cache.cpp" \
-    "$workspace_root/firmware/espressif/main/platform/storage/flash_page_mapping_cache.cpp"
+    "$bundlefs_src/platform/storage/flash_page_mapping_cache.cpp"
 
 build_and_run bundlefs "${bundlefs_sources[@]}"
 
@@ -671,6 +682,23 @@ python3 "$workspace_root/tools/build_app_bundle.py" --app-manifest "$component_o
 python3 "$workspace_root/tools/build_app_bundle.py" --app-manifest "$component_output_dir/ttf.json" \
     --resource-pack "$component_output_dir/ttf.pack" --output "$component_output_dir/ttf.bundle.bin"
 MICROPIXEL_EXPECT_PACKAGE_TYPE=component bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$component_output_dir/ttf.bundle.bin"
+
+# A multi-face TTF component (shared BundleFS tool) keeps its declared fallback order.
+python3 - "$component_output_dir" "$workspace_root" "$bundlefs_src/../tools" <<'PYFACES'
+import sys
+from pathlib import Path
+root, workspace, tools = map(Path, sys.argv[1:])
+sys.path.insert(0, str(tools))
+import font_component
+ttf = (workspace / 'firmware/espressif/main/platform/lvgl/fonts/vendor/Montserrat-Medium.ttf').read_bytes()
+faces = [('latin', ttf), ('fallback', ttf), ('symbols', ttf)]
+bundle = font_component.build('micropixel.fonts.multi', '1.0.0', faces, display_name='Multi-face fixture',
+                              languages=['en'], font_bundle='fixture-v1', charset='fixture-v1')
+assert [name for name, _ in font_component.parse(bundle)[2]] == ['latin', 'fallback', 'symbols']
+(root / 'faces.bundle.bin').write_bytes(bundle)
+PYFACES
+MICROPIXEL_EXPECT_PACKAGE_TYPE=component MICROPIXEL_EXPECT_FONT_FACES=latin,fallback,symbols \
+    bash "$workspace_root/tools/tests/test_bundle_reader.sh" "$component_output_dir/faces.bundle.bin"
 
 # Blocks timing and difficulty are pure Guest model logic.
 build_and_run blocks_model \

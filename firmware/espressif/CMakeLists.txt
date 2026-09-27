@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/components/bundlefs/CMakeLists.txt")
+    message(FATAL_ERROR "Missing shared BundleFS. Check out the bundlefs repository beside pocket-sage/micropixel.")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 set(MICROPIXEL_SUPPORTED_TARGETS esp32p4 esp32s31 esp32s3)
 if(NOT IDF_TARGET IN_LIST MICROPIXEL_SUPPORTED_TARGETS)

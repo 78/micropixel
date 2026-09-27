@@ -7,6 +7,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 workspace_root="$(cd "$(dirname "$0")/../.." && pwd)"
+bundlefs_src="$workspace_root/firmware/espressif/components/bundlefs/src"
 test_output_dir="$workspace_root/build/host-tests"
 test_binary="$test_output_dir/bundle_reader_test"
 cjson_dir="$workspace_root/firmware/espressif/managed_components/espressif__cjson/cJSON"
@@ -35,9 +36,9 @@ python3 "$workspace_root/tools/tests/build_host_test.py" "$cc" \
     -I "$cjson_dir" \
     -I "$workspace_root/tools/tests/font_cbin_stubs" \
     -I "$workspace_root/tools/tests/firmware_stubs" \
-    -I "$workspace_root/firmware/espressif/main" \
+    -I "$bundlefs_src" \
     "$workspace_root/tools/tests/test_bundle_reader.c" \
-    "$workspace_root/firmware/espressif/main/runtime/bundle/bundle_reader.c" \
+    "$bundlefs_src/runtime/bundle/bundle_reader.c" \
     "$cjson_dir/cJSON.c" \
     -o "$test_binary"
 

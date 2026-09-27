@@ -107,6 +107,8 @@ bash tools/s31.sh build-null
 bash tools/s31.sh fullclean-mosaico  # 仅在需要重建 S31 配置时使用
 ```
 
+S31 的 Host 构建使用 QIO 80 MHz Flash 和 ERROR 级别的 bootloader 日志；构建脚本也会更新已有的增量配置。
+
 只有一台匹配的 S31 时可以省略端口，也可用 `S31_PORT` 指定；默认 `S31_BAUD=460800`。`s31-null` 是依赖
 方向编译门禁，没有 flash 或 monitor 能力。
 

@@ -19,8 +19,6 @@ enum class FontCbinError : uint8_t {
     kTruncated,
     kHeaderMismatch,
     kAbiMismatch,
-    kHashUnavailable,
-    kHashMismatch,
     kLimitExceeded,
     kInvalidFont,
     kInvalidGlyphs,

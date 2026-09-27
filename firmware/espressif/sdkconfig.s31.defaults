@@ -1,4 +1,8 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# Match the official ESP-Mosaico flash interface and quiet bootloader baseline.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_BOOTLOADER_LOG_LEVEL_ERROR=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.s31.csv"
 
 # ESP-Mosaico's onboard Type-C connector is wired to USB 2.0 HS OTG, not the
