@@ -451,6 +451,9 @@ void VirtualizedHallPolicy::LaunchCard(uint32_t index) {
 }
 
 bool VirtualizedHallPolicy::RotateSelectionLocked(int32_t steps) {
+    if (!state_.profile.hall_scene.snap_carousel_to_cards) {
+        return false;
+    }
     lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
     // While the pull-down sheet is up it is the target of the wheel, so the
     // carousel behind it must stay where it is.
@@ -476,6 +479,9 @@ bool VirtualizedHallPolicy::RotateSelectionLocked(int32_t steps) {
 }
 
 bool VirtualizedHallPolicy::ConfirmSelectionLocked() {
+    if (!state_.profile.hall_scene.snap_carousel_to_cards) {
+        return false;
+    }
     lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
     if (viewport == nullptr || state_.hall_action_sink == nullptr || state_.status_layer_ui.VisibleLocked()) {
         return false;
@@ -660,9 +666,11 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
     }
     lv_obj_clean(state_.root);
     ResetLocked();
-    // The list is kept where it was left, so the selection starts on the card at
-    // its left edge.
-    state_.hall_selected_index = NearestIndexForOffset(state_.hall_scroll_offset);
+    // Only selector profiles highlight a card; touch-only profiles keep the
+    // unselected state from ResetLocked(), including when returning to the Hall.
+    if (state_.profile.hall_scene.snap_carousel_to_cards) {
+        state_.hall_selected_index = NearestIndexForOffset(state_.hall_scroll_offset);
+    }
     lv_obj_set_pos(state_.root, 0, 0);
     lv_obj_set_style_opa(state_.root, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state_.root, lv_color_hex(theme::kHallBackground), 0);
