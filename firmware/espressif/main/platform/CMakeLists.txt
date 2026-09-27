@@ -58,6 +58,17 @@ elseif(CONFIG_MICROPIXEL_BOARD_M5STACK_CORES3)
     include("${CMAKE_CURRENT_LIST_DIR}/lvgl/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/boards/esp32-s3-common/CMakeLists.txt")
     include("${CMAKE_CURRENT_LIST_DIR}/boards/m5stack-cores3/CMakeLists.txt")
+elseif(CONFIG_MICROPIXEL_BOARD_SENSECAP_WATCHER)
+    # The Host composition root always links the shared LVGL font plumbing, so
+    # the LVGL layer and the adapter/bus helpers it relies on are required here
+    # even before this board owns a display. Display, input and audio sources
+    # are added as each one is brought up, so this board never compiles another
+    # board's hardware set.
+    include("${CMAKE_CURRENT_LIST_DIR}/adapters/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/buses/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/gpio/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/lvgl/CMakeLists.txt")
+    include("${CMAKE_CURRENT_LIST_DIR}/boards/sensecap-watcher/CMakeLists.txt")
 elseif(CONFIG_MICROPIXEL_BOARD_NULL)
     include("${CMAKE_CURRENT_LIST_DIR}/boards/null/CMakeLists.txt")
 else()

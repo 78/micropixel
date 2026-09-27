@@ -186,6 +186,17 @@ menu "MicroPixel board backends"
             microphone, RTC, proximity sensor and SD card remain outside this
             board profile.
 
+    config MICROPIXEL_BOARD_SENSECAP_WATCHER
+        bool "SenseCAP Watcher"
+        depends on IDF_TARGET_ESP32S3
+        help
+            Bring up the Seeed Studio SenseCAP Watcher's 412x412 SPD2010 QSPI
+            panel and its SPD2010 companion touch controller, ES8311 audio
+            output, the PCA95xx IO expander that switches the board's power
+            rails, and the rotary knob. The AI camera, microphone, SD card and
+            the vendor SenseCraft factory partition stay outside this board
+            profile.
+
     config MICROPIXEL_BOARD_NULL
         bool "Null board"
         help

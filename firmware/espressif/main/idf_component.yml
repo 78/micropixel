@@ -24,6 +24,22 @@ dependencies:
     version: "^2.0.1"
     rules:
       - if: "target == esp32s3"
+  # SenseCAP Watcher's panel driver. It is vendored in the esp-iot-solution
+  # submodule rather than fetched from the registry, the way esp_lvgl_adapter
+  # above is, so the build stays offline and pinned to the checked-out source.
+  espressif/esp_lcd_spd2010:
+    version: "2.0.0~1"
+    override_path: "../components/esp-iot-solution/components/display/lcd/esp_lcd_spd2010"
+    rules:
+      - if: "target == esp32s3"
+  espressif/esp_lcd_touch_spd2010:
+    version: "2.0.1"
+    # Patched copy, not the submodule: the vendored component cannot read
+    # registers on ESP-IDF 6.1. The copy differs by one line, documented in
+    # firmware/espressif/patched_components/esp_lcd_touch_spd2010/README.md.
+    override_path: "../patched_components/esp_lcd_touch_spd2010"
+    rules:
+      - if: "target == esp32s3"
   espressif/icm42670:
     version: "^2.0.2"
     rules:
