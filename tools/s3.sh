@@ -9,9 +9,12 @@ szpi_port_override="${SZPI_S3_PORT:-}"
 szpi_baud_override="${SZPI_S3_BAUD:-}"
 cores3_port_override="${CORES3_S3_PORT:-}"
 cores3_baud_override="${CORES3_S3_BAUD:-}"
+watcher_port_override="${WATCHER_S3_PORT:-}"
+watcher_baud_override="${WATCHER_S3_BAUD:-}"
 s3_host_build_dir_override="${S3_HOST_BUILD_DIR:-}"
 szpi_host_build_dir_override="${SZPI_S3_HOST_BUILD_DIR:-}"
 cores3_host_build_dir_override="${CORES3_S3_HOST_BUILD_DIR:-}"
+watcher_host_build_dir_override="${WATCHER_S3_HOST_BUILD_DIR:-}"
 s3_apps_output_dir_override="${S3_APPS_OUTPUT_DIR:-}"
 xtensa_wamrc_override="${XTENSA_WAMRC:-}"
 remote_control_host_override="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
@@ -45,6 +48,12 @@ fi
 if [[ -n "$cores3_baud_override" ]]; then
     CORES3_S3_BAUD="$cores3_baud_override"
 fi
+if [[ -n "$watcher_port_override" ]]; then
+    WATCHER_S3_PORT="$watcher_port_override"
+fi
+if [[ -n "$watcher_baud_override" ]]; then
+    WATCHER_S3_BAUD="$watcher_baud_override"
+fi
 if [[ -n "$s3_host_build_dir_override" ]]; then
     S3_HOST_BUILD_DIR="$s3_host_build_dir_override"
 fi
@@ -53,6 +62,9 @@ if [[ -n "$szpi_host_build_dir_override" ]]; then
 fi
 if [[ -n "$cores3_host_build_dir_override" ]]; then
     CORES3_S3_HOST_BUILD_DIR="$cores3_host_build_dir_override"
+fi
+if [[ -n "$watcher_host_build_dir_override" ]]; then
+    WATCHER_S3_HOST_BUILD_DIR="$watcher_host_build_dir_override"
 fi
 if [[ -n "$s3_apps_output_dir_override" ]]; then
     S3_APPS_OUTPUT_DIR="$s3_apps_output_dir_override"
@@ -81,13 +93,19 @@ apps_store="$apps_output_dir/app-store.bin"
 host_build_dir="${S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-box-3}"
 szpi_host_build_dir="${SZPI_S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-szpi}"
 cores3_host_build_dir="${CORES3_S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-cores3}"
+watcher_host_build_dir="${WATCHER_S3_HOST_BUILD_DIR:-$workspace_root/build/host-esp32s3-watcher}"
+# The SenseCAP Watcher's app_store partition is 24 MiB, so its BundleFS geometry
+# differs from the shared 8 MiB image. It gets its own staging directory to keep
+# the two geometries from overwriting each other.
+watcher_apps_output_dir="$workspace_root/build/esp32s3-apps-watcher"
+watcher_apps_store="$watcher_apps_output_dir/app-store.bin"
 xtensa_wamrc="${XTENSA_WAMRC:-$workspace_root/build/tools/wamrc-xtensa/wamrc}"
 
 usage() {
     cat <<'EOF'
 Usage: bash tools/s3.sh COMMAND [BOARD] [PORT] [--reset]
 
-Boards: box3 (default), szpi, cores3
+Boards: box3 (default), szpi, cores3, watcher
 
 Common ESP32-S3 commands:
   build-null          Compile the ESP32-S3 hardware-independent Null gate.
@@ -100,9 +118,9 @@ Common ESP32-S3 commands:
   flash-host [BOARD] [PORT]
                       Flash the already-built Host, preserving app_store.
   flash-apps [BOARD] [PORT]
-                      Flash only the shared ESP32-S3 app_store image.
+                      Flash only one board's app_store image.
   flash-all [BOARD] [PORT]
-                      Build and flash one Host plus the shared App Store.
+                      Build and flash one Host plus its App Store.
   monitor [BOARD] [PORT] [--reset]
                       Monitor one Host; optionally reset to capture boot.
   port [BOARD] [PORT] Resolve and verify one board serial port.
@@ -116,9 +134,14 @@ Compatibility aliases:
   flash-cores3 [PORT] Alias for flash-host cores3 [PORT].
   monitor-cores3 [PORT] [--reset]
   port-cores3 [PORT]
+  build-watcher       Alias for build-host watcher.
+  flash-watcher [PORT] Alias for flash-host watcher [PORT].
+  monitor-watcher [PORT] [--reset]
+  port-watcher [PORT]
 
-S3_PORT/S3_BAUD, SZPI_S3_PORT/SZPI_S3_BAUD, CORES3_S3_PORT/CORES3_S3_BAUD
-and MICROPIXEL_REMOTE_CONTROL_* may be set in the repository-root .env.
+S3_PORT/S3_BAUD, SZPI_S3_PORT/SZPI_S3_BAUD, CORES3_S3_PORT/CORES3_S3_BAUD,
+WATCHER_S3_PORT/WATCHER_S3_BAUD and MICROPIXEL_REMOTE_CONTROL_* may be set in
+the repository-root .env.
 Explicit environment variables and a command-line PORT take precedence.
 Each board profile selects its own panel, touch, codec, power and sensor
 wiring while reusing the ESP32-S3 Runtime and Xtensa Guest baseline.
@@ -334,6 +357,7 @@ resolve_profile_port() {
 is_board_name() {
     case "${1:-}" in
         box3 | esp-box-3 | szpi | szpi-esp32s3 | cores3 | m5stack-cores3) return 0 ;;
+        watcher | sensecap-watcher) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -347,6 +371,9 @@ select_board() {
             board_build_dir="$host_build_dir"
             board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-box-3.defaults)
             board_baud="${S3_BAUD:-921600}"
+            board_apps_output_dir="$apps_output_dir"
+            board_apps_store="$apps_store"
+            board_app_store_size="0x0800000"
             ;;
         szpi | szpi-esp32s3)
             board_name="szpi"
@@ -355,6 +382,9 @@ select_board() {
             board_build_dir="$szpi_host_build_dir"
             board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-szpi.defaults)
             board_baud="${SZPI_S3_BAUD:-921600}"
+            board_apps_output_dir="$apps_output_dir"
+            board_apps_store="$apps_store"
+            board_app_store_size="0x0800000"
             ;;
         cores3 | m5stack-cores3)
             board_name="cores3"
@@ -363,9 +393,23 @@ select_board() {
             board_build_dir="$cores3_host_build_dir"
             board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-cores3.defaults)
             board_baud="${CORES3_S3_BAUD:-921600}"
+            board_apps_output_dir="$apps_output_dir"
+            board_apps_store="$apps_store"
+            board_app_store_size="0x0800000"
+            ;;
+        watcher | sensecap-watcher)
+            board_name="watcher"
+            board_title="SenseCAP Watcher"
+            board_profile="sensecap-watcher"
+            board_build_dir="$watcher_host_build_dir"
+            board_defaults=(sdkconfig.s3.defaults sdkconfig.s3-watcher.defaults)
+            board_baud="${WATCHER_S3_BAUD:-921600}"
+            board_apps_output_dir="$watcher_apps_output_dir"
+            board_apps_store="$watcher_apps_store"
+            board_app_store_size="0x1800000"
             ;;
         *)
-            echo "Unknown ESP32-S3 board: $1 (expected box3, szpi, or cores3)" >&2
+            echo "Unknown ESP32-S3 board: $1 (expected box3, szpi, cores3, or watcher)" >&2
             exit 2
             ;;
     esac
@@ -401,26 +445,36 @@ resolve_board_port() {
     resolve_profile_port "$board_profile" "$requested"
 }
 
+# build_apps [OUTPUT_DIR] [APP_STORE_SIZE]
+#
+# The staging directory and the BundleFS geometry are parameters because the
+# geometry has to match the board's app_store partition: the SenseCAP Watcher
+# carries 24 MiB where the other ESP32-S3 boards carry 8 MiB. Called without
+# arguments it stages the shared ESP32-S3 image, so the geometry of one board
+# can never be flashed over another.
 build_apps() {
+    local output_dir="${1:-$apps_output_dir}"
+    local store_size="${2:-0x0800000}"
+    local store_path="$output_dir/app-store.bin"
     if [[ ! -x "$xtensa_wamrc" ]]; then
         bash "$workspace_root/tools/build_wamrc_xtensa.sh"
     fi
     local app
     local bundles=()
-    mkdir -p "$apps_output_dir"
+    mkdir -p "$output_dir"
     for app in sdk-demo snake maze-evil blocks tilt jump-jump gravity-balls; do
-        mkdir -p "$apps_output_dir/$app"
+        mkdir -p "$output_dir/$app"
         WAMRC="$xtensa_wamrc" python "$workspace_root/tools/micropixel" package \
             "$workspace_root/guest/apps/$app" \
             --profile release \
             --aot-target xtensa \
-            --output-dir "$apps_output_dir/$app" \
-            --output "$apps_output_dir/$app.bundle.bin"
-        bundles+=("$apps_output_dir/$app.bundle.bin")
+            --output-dir "$output_dir/$app" \
+            --output "$output_dir/$app.bundle.bin"
+        bundles+=("$output_dir/$app.bundle.bin")
     done
     python "$workspace_root/tools/build_app_store_image.py" \
-        --app-store-size 0x0800000 \
-        --output "$apps_store" \
+        --app-store-size "$store_size" \
+        --output "$store_path" \
         "${bundles[@]}"
 }
 
@@ -433,12 +487,12 @@ build_release() {
     fi
     select_board "$1"
     echo "==> Building shared ESP32-S3 Apps: SDK Demo, Snake, Maze Evil, Blocks, Tilt, Jump Jump, and Gravity Balls"
-    build_apps
+    build_apps "$board_apps_output_dir" "$board_app_store_size"
     build_profile "$board_profile" "$board_build_dir" "${board_defaults[@]}"
     echo "==> Creating $board_title browser image with SDK Demo, Snake, Maze Evil, Blocks, Tilt, Jump Jump, and Gravity Balls"
     python "$workspace_root/tools/build_full_firmware_image.py" \
         --build-dir "$board_build_dir" \
-        --app-store-image "$apps_store" \
+        --app-store-image "$board_apps_store" \
         --output "$board_build_dir/micropixel-full.bin"
 }
 
@@ -447,10 +501,10 @@ flash_apps() {
     local requested="${2:-}"
     local port
     select_board "$selected"
-    [[ -f "$apps_store" ]] || build_apps
+    [[ -f "$board_apps_store" ]] || build_apps "$board_apps_output_dir" "$board_app_store_size"
     port="$(resolve_board_port "$board_name" "$requested")"
     python -m esptool --chip esp32s3 --port "$port" --baud "$board_baud" \
-        write-flash 0x800000 "$apps_store"
+        write-flash 0x800000 "$board_apps_store"
 }
 
 monitor_profile() {
@@ -507,6 +561,11 @@ case "$command_name" in
         require_idf
         build_board cores3
         ;;
+    build-watcher)
+        [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+        require_idf
+        build_board watcher
+        ;;
     build-wamrc)
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         bash "$workspace_root/tools/build_wamrc_xtensa.sh"
@@ -536,6 +595,11 @@ case "$command_name" in
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
         flash_board cores3 "${1:-}"
+        ;;
+    flash-watcher)
+        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        require_idf
+        flash_board watcher "${1:-}"
         ;;
     flash-apps)
         split_optional_board "$@"
@@ -568,6 +632,11 @@ case "$command_name" in
         require_idf
         monitor_profile m5stack-cores3 "$@"
         ;;
+    monitor-watcher)
+        [[ $# -le 2 ]] || { usage >&2; exit 2; }
+        require_idf
+        monitor_profile sensecap-watcher "$@"
+        ;;
     port)
         split_optional_board "$@"
         [[ ${#remaining_arguments[@]} -le 1 ]] || { usage >&2; exit 2; }
@@ -583,6 +652,11 @@ case "$command_name" in
         [[ $# -le 1 ]] || { usage >&2; exit 2; }
         require_idf
         resolve_profile_port m5stack-cores3 "${1:-${CORES3_S3_PORT:-}}"
+        ;;
+    port-watcher)
+        [[ $# -le 1 ]] || { usage >&2; exit 2; }
+        require_idf
+        resolve_profile_port sensecap-watcher "${1:-${WATCHER_S3_PORT:-}}"
         ;;
     *)
         usage >&2

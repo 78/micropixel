@@ -14,6 +14,7 @@
       "firmware/espressif/sdkconfig.p4.defaults"
     ],
     "sdkconfig_defaults_env": "P4_SDKCONFIG_DEFAULTS",
+    "app_store_size": "0x1800000",
     "port_env": "P4_PORT",
     "baud_env": "P4_BAUD",
     "default_baud": 2000000,
@@ -51,6 +52,7 @@
       "firmware/espressif/sdkconfig.s31.defaults"
     ],
     "sdkconfig_defaults_env": "S31_SDKCONFIG_DEFAULTS",
+    "app_store_size": "0x0800000",
     "port_env": "S31_PORT",
     "baud_env": "S31_BAUD",
     "default_baud": 460800,
@@ -109,6 +111,7 @@
       "firmware/espressif/sdkconfig.s3.defaults",
       "firmware/espressif/sdkconfig.s3-box-3.defaults"
     ],
+    "app_store_size": "0x0800000",
     "port_env": "S3_PORT",
     "baud_env": "S3_BAUD",
     "default_baud": 921600,
@@ -130,6 +133,7 @@
       "firmware/espressif/sdkconfig.s3.defaults",
       "firmware/espressif/sdkconfig.s3-szpi.defaults"
     ],
+    "app_store_size": "0x0800000",
     "port_env": "SZPI_S3_PORT",
     "baud_env": "SZPI_S3_BAUD",
     "default_baud": 921600,
@@ -151,8 +155,31 @@
       "firmware/espressif/sdkconfig.s3.defaults",
       "firmware/espressif/sdkconfig.s3-cores3.defaults"
     ],
+    "app_store_size": "0x0800000",
     "port_env": "CORES3_S3_PORT",
     "baud_env": "CORES3_S3_BAUD",
+    "default_baud": 921600,
+    "preview": true,
+    "flash": true,
+    "monitor": true
+  },
+  "sensecap-watcher": {
+    "description": "SenseCAP Watcher ESP32-S3 Host",
+    "target": "esp32s3",
+    "chip_markers": [
+      "ESP32-S3"
+    ],
+    "build_dir": "build/host-esp32s3-watcher",
+    "build_dir_env": "WATCHER_S3_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.s3.defaults",
+      "firmware/espressif/sdkconfig.s3-watcher.defaults"
+    ],
+    "app_store_size": "0x1800000",
+    "port_env": "WATCHER_S3_PORT",
+    "baud_env": "WATCHER_S3_BAUD",
     "default_baud": 921600,
     "preview": true,
     "flash": true,
