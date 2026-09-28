@@ -15,6 +15,7 @@
 | ESP32-S3 | [ESP32-S3-BOX-3](https://github.com/espressif/esp-box) |
 | ESP32-S3 | [立创 SZPI](https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html) |
 | ESP32-S3 | [M5Stack CoreS3](https://docs.m5stack.com/en/core/CoreS3) |
+| ESP32-S3 | [SenseCAP Watcher](https://wiki.seeedstudio.com/cn/getting_started_with_watcher/) |
 
 Host 使用 ESP-IDF 6.1 和固定版本的 [WAMR fork](https://github.com/78/wasm-micro-runtime)。
 应用按目标架构编译为 AOT v6 Bundle，ABI 仍在演进。
@@ -44,7 +45,7 @@ python3 -m pip install -r requirements-dev.txt
 bash tools/p4.sh build-host
 ```
 
-其他板型：`bash tools/s31.sh build-host`、`bash tools/s3.sh build-host <box3|szpi|cores3>`。
+其他板型：`bash tools/s31.sh build-host`、`bash tools/s3.sh build-host <box3|szpi|cores3|watcher>`。
 
 ## 项目文档
 
