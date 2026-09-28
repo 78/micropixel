@@ -180,6 +180,20 @@ void SetHallCardPressed(const HallCardObjects& objects, bool pressed) {
     }
 }
 
+void SetHallSelectionRing(lv_obj_t* object, bool selected) {
+    if (object == nullptr) {
+        return;
+    }
+    // An outline is drawn outside the object's own box, so raising it does not
+    // move the cover or the label the way a thicker border would.
+    constexpr int32_t kOutlineWidth = 3;
+    constexpr int32_t kOutlinePad = 1;
+    lv_obj_set_style_outline_width(object, selected ? kOutlineWidth : 0, 0);
+    lv_obj_set_style_outline_pad(object, selected ? kOutlinePad : 0, 0);
+    lv_obj_set_style_outline_color(object, lv_color_hex(theme::kAccentStrong), 0);
+    lv_obj_set_style_outline_opa(object, LV_OPA_COVER, 0);
+}
+
 void SetHallCardInstallProgress(const HallCardObjects& objects, uint8_t progress_percent) {
     const uint8_t clamped = std::min<uint8_t>(progress_percent, 100U);
     if (objects.install_progress_arc != nullptr) {

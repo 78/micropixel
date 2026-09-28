@@ -398,8 +398,12 @@ void WifiSettingsUi::DrawPasswordLocked() {
     lv_obj_set_flex_grow(connect, 1);
     lv_obj_add_event_cb(connect, PasswordConnectEvent, LV_EVENT_SHORT_CLICKED, this);
     keyboard_ = CreateDefaultKeyboard(overlay, password_textarea_, platform::lvgl::SystemFontRole::kSmall);
-    lv_obj_set_size(keyboard_, LV_PCT(100), layout_->height * 2 / 5);
-    lv_obj_align(keyboard_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    // Inset the keyboard the same way the bottom sheets are inset. A full-width
+    // keyboard anchored to the very bottom puts its first and last columns of
+    // keys outside the visible glass on a round cover, so the outer keys - shift,
+    // backspace and the row ends - are partly or fully hidden under the bezel.
+    lv_obj_set_size(keyboard_, layout_->width - (layout_->safe_horizontal * 2), layout_->height * 2 / 5);
+    lv_obj_align(keyboard_, LV_ALIGN_BOTTOM_MID, 0, -layout_->safe_horizontal);
     lv_obj_add_event_cb(keyboard_, PasswordKeyboardCancelEvent, LV_EVENT_CANCEL, this);
     lv_obj_add_event_cb(keyboard_, PasswordKeyboardReadyEvent, LV_EVENT_READY, this);
     if (password_connection_state_ == host_ui::WifiConnectionState::kConnecting) {

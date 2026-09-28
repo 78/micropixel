@@ -1,0 +1,35 @@
+# SenseCAP Watcher ESP32-S3 board profile.
+#
+# This board carries 32 MiB of flash, so it cannot reuse partitions.s3.csv,
+# which describes a 16 MiB layout. See partitions.s3-watcher.csv.
+CONFIG_MICROPIXEL_BOARD_SENSECAP_WATCHER=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.s3-watcher.csv"
+
+# This board needs all three of the following, exactly as the vendor firmware
+# sets them. The first build without them was a reset loop that never reached the
+# application:
+#
+#   IDF_EXPERIMENTAL_FEATURES gates BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH. With
+#   the gate off that option is not a visible symbol, so writing it from a
+#   defaults file is silently dropped and the bootloader keeps 24-bit cache
+#   addressing on a 32 MiB part.
+#   FLASH_MODE_AUTO_DETECT is switched off by the vendor, so the flash mode comes
+#   from the image header instead of a runtime probe.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
+CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT=n
+
+# PSRAM is octal, and that is checked rather than assumed: every example in
+# Seeed-Studio/SenseCAP-Watcher-Firmware sets CONFIG_SPIRAM_MODE_OCT together with
+# CONFIG_SPIRAM_SPEED_80M, xiaozhi-esp32 reaches the same pair through
+# sdkconfig.defaults.esp32s3, and sdkconfig.s3.defaults already matches, so this
+# profile needs no override.
+
+# Every S3 profile here logs to USB Serial/JTAG only. This board also exposes
+# UART0 on its header, so bring the same logs out on both channels: UART0 primary
+# at 115200, USB Serial/JTAG secondary. Flashing over USB is unaffected.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y

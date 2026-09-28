@@ -36,6 +36,16 @@ class SquareSystemUi final : public host_ui::SystemUi {
                                                                              void* action_context) override;
     void UpdateSystemMenu(const host_ui::SystemMenuModel& model) override;
     void LeaveSystemMenu() override;
+    // Runs the active page's own back button, so a non-pointer back gesture
+    // means what the visible button means. Must be called while the caller owns
+    // the LVGL lock: the encoder router calls it from its read callback.
+    void Back();
+    // The wheel on the Hall: rotation moves its card selection and a press
+    // launches the selected card. They return false on every other screen, which
+    // is what makes the caller fall back to focus navigation. Call them from the
+    // LVGL context.
+    [[nodiscard]] bool Rotate(int32_t steps);
+    [[nodiscard]] bool Confirm();
     void ApplyTheme(host_ui::SystemThemeMode mode) override;
     [[nodiscard]] std::expected<void, host_ui::SystemUiError> ShowSystemInformation(
         const host_ui::SystemInformationModel& model, host_ui::SystemUiActionSink action_sink,

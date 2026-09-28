@@ -21,6 +21,11 @@ struct SystemMenuLayout final {
     int32_t header_height{};
     int32_t header_padding_horizontal{};
     int32_t header_padding_top{};
+    // See SystemPageLayout: a bar radius makes the header the top strip of the
+    // inscribed square, with a height that follows its content.
+    int32_t header_bar_radius{};
+    int32_t header_bar_padding_horizontal{};
+    int32_t header_bar_padding_vertical{};
     int32_t header_gap{};
     int32_t back_button_size{};
     int32_t back_button_radius{};

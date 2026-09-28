@@ -83,3 +83,32 @@ python tools/fonts/build_language_fonts.py \
 
 语言确认前仅查询元数据。确认后 Host 先停止并回收当前 AppSession，再准备字体、下载和安装；
 停止失败时拒绝继续。取消确认不退出 App。字体成功激活后，各系统页面和 Hall 共享新的显示 locale。
+
+## 离线字体组件（本地子集）
+
+没有 Control 服务、也不希望依赖网络的板子，可把组件随固件一起刷入：
+`LanguagePacks` 扫描的就是系统 BundleFS（`app_store` 分区），因此刷入的组件与下载安装的组件对
+设备没有区别；组件在商店目录中与 App 分开计数，不会出现在 Hall 的卡片列表里。
+
+与发布用的 `build_language_fonts.py` 分开：那个生成器固定 DeepSeek tokenizer 字表与 Unicode 16
+以保证可复现，本工具只保留 UI 自身需要的字，产物体积小到可以放进镜像。输入同样显式且记入清单，
+不下载、不发现。
+
+```sh
+python tools/fonts/build_ui_font_subset.py \
+  --source build/fonts/NotoSansSC-VF.ttf \
+  --locale zh-CN \
+  --output build/language-fonts
+python tools/micropixel package build/language-fonts/zh-CN --output-dir build/app-store
+python tools/build_app_store_image.py --app-store-size 0x1800000 --output build/app-store/app-store.bin \
+  <其余 App Bundle…> build/app-store/zh-cn.bundle.bin
+```
+
+源字体用 [Google Fonts 的 Noto Sans SC](https://github.com/google/fonts/tree/main/ofl/notosanssc)
+（OFL，17.7 MiB 可变字体）；工具按 `--weight` 实例化成静态 `glyf` 字体再取子集，因为固件侧的字形
+加载器只支持静态 TrueType。取字范围 = GB2312 一级汉字 ∪ 当前 locale 与 `en` 的 UI 文案字符 ∪
+ASCII，与 cmap 求交。zh-CN 实测：3850 个基础字 + 12 个 UI 额外字，产物约 1.15 MiB。
+
+工具在生成前验证 UI 必需字形全部存在，并用打包步骤同一个校验函数检查产物，避免“生成成功、打包
+失败”。增加 UI 文案后必须重新生成：`tools/tests/test_font_tools.py` 会断言 UI 文案字符不超出所选
+字表 + ASCII 的范围。刷入组件只让该语言可选；设备语言仍由设置决定，要默认中文需另行修改默认 locale。

@@ -9,6 +9,7 @@
 #include "host/fonts/language_pack_catalog.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/lvgl/square_common/system_detail_ui_internal.hpp"
+#include "host/ui/lvgl/square_common/system_page_layout.hpp"
 #include "host_strings.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
@@ -519,18 +520,17 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     root_ = root;
     const host_strings::Catalog strings = host_strings::ForTag(model.locale);
 
-    lv_obj_t* header = lv_obj_create(root);
-    StyleMenuContainer(header);
-    lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_size(header, layout.width, layout.header_height);
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_left(header, layout.header_padding_horizontal, 0);
-    lv_obj_set_style_pad_right(header, layout.header_padding_horizontal, 0);
-    lv_obj_set_style_pad_top(header, layout.header_padding_top, 0);
-    lv_obj_set_style_pad_column(header, layout.header_gap, 0);
+    lv_obj_t* header = CreateSystemHeaderBar(root, {.width = layout.width,
+                                                    .header_height = layout.header_height,
+                                                    .inset = layout.header_padding_horizontal,
+                                                    .top = layout.header_padding_top,
+                                                    .gap = layout.header_gap,
+                                                    .radius = layout.header_bar_radius,
+                                                    .padding_horizontal = layout.header_bar_padding_horizontal,
+                                                    .padding_vertical = layout.header_bar_padding_vertical});
 
     lv_obj_t* back = lv_button_create(header);
+    RegisterPageBackButton(back);
     lv_obj_set_size(back, layout.back_button_size, layout.back_button_size);
     lv_obj_set_style_pad_all(back, 0, 0);
     lv_obj_set_style_radius(back, layout.back_button_radius, 0);
@@ -573,8 +573,9 @@ std::expected<void, host_ui::SystemUiError> SystemMenuUi::ShowLocked(lv_obj_t* r
     if (model.language_view) language_status_label_ = subtitle;
 
     scroll_content_ = lv_obj_create(root);
-    lv_obj_set_pos(scroll_content_, 0, layout.header_height);
-    lv_obj_set_size(scroll_content_, layout.width, layout.height - layout.header_height);
+    const int32_t content_top = SystemContentTop(root, layout.header_height);
+    lv_obj_set_pos(scroll_content_, 0, content_top);
+    lv_obj_set_size(scroll_content_, layout.width, layout.height - content_top);
     lv_obj_set_style_pad_left(scroll_content_, layout.content_padding_horizontal, 0);
     lv_obj_set_style_pad_right(scroll_content_, layout.content_padding_horizontal, 0);
     lv_obj_set_style_pad_top(scroll_content_, layout.content_padding_top, 0);

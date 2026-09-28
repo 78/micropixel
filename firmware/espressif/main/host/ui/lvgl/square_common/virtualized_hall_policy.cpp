@@ -126,6 +126,7 @@ void VirtualizedHallPolicy::ResetLocked() {
     state_.hall_scene_ui.ResetLocked();
     state_.hall_card_window_first = host_ui::kMaxHallApps;
     state_.hall_card_window_last = host_ui::kMaxHallApps;
+    state_.hall_selected_index = host_ui::kMaxHallApps;
     for (uint32_t index = 0U; index < host_ui::kMaxHallApps; ++index) {
         state_.hall_cards[index] = nullptr;
         state_.hall_card_press_overlays[index] = nullptr;
@@ -270,6 +271,10 @@ void VirtualizedHallPolicy::DrawCard(lv_obj_t* parent, const HallAppPresentation
         AttachCoverLocked(index, prepared);
     }
     state_.hall_app_running[index] = app.running;
+    // A card created after the selection moved still has to show the ring.
+    if (index == state_.hall_selected_index) {
+        SetHallSelectionRing(objects.card, true);
+    }
 }
 
 void VirtualizedHallPolicy::DestroyCardLocked(uint32_t index) {
@@ -348,6 +353,150 @@ uint32_t VirtualizedHallPolicy::FindCardIndex(const lv_obj_t* card) const {
     return host_ui::kMaxHallApps;
 }
 
+uint32_t VirtualizedHallPolicy::HeaderItemCount() const {
+    // The update button only exists while the Hall has an update to offer.
+    return state_.hall_scene_ui.objects().update_button != nullptr ? 2U : 1U;
+}
+
+uint32_t VirtualizedHallPolicy::ItemCount() const { return state_.hall_app_count + HeaderItemCount(); }
+
+// The selection is one item space: the cards, then the header buttons. Settings
+// always follows the cards; the update button follows it while it is on screen.
+uint32_t VirtualizedHallPolicy::CurrentItem() const {
+    if (state_.hall_selected_index < ItemCount()) {
+        return state_.hall_selected_index;
+    }
+    // Nothing chosen yet. An empty Hall has no card to fall back on, so the
+    // header buttons start the cycle.
+    return state_.hall_app_count > 0U ? NearestIndexForOffset(state_.hall_scroll_offset) : 0U;
+}
+
+lv_obj_t* VirtualizedHallPolicy::HeaderItemObject(uint32_t item) const {
+    const auto& objects = state_.hall_scene_ui.objects();
+    return item == state_.hall_app_count ? objects.settings_button : objects.update_button;
+}
+
+// The list is left-aligned, so the card at the viewport's left edge is the one
+// the selection is on.
+uint32_t VirtualizedHallPolicy::NearestIndexForOffset(int32_t offset) const {
+    if (state_.hall_app_count == 0U) {
+        return host_ui::kMaxHallApps;
+    }
+    const int32_t step = CardStep();
+    const int32_t clamped = std::max<int32_t>(offset, 0);
+    const uint32_t index = step > 0 ? static_cast<uint32_t>((clamped + step / 2) / step) : 0U;
+    return std::min(index, state_.hall_app_count - 1U);
+}
+
+// The offset that puts a card at the viewport's left edge. It saturates at the
+// end of the list, which is what still lets the selection walk the last cards
+// while the list itself has nowhere left to go.
+int32_t VirtualizedHallPolicy::SnapOffset(uint32_t app_count, uint32_t index) const {
+    return ClampOffset(app_count, static_cast<int32_t>(index) * CardStep());
+}
+
+void VirtualizedHallPolicy::SyncSelectionLocked() {
+    const uint32_t selected = CurrentItem();
+    for (uint32_t index = 0U; index < state_.hall_app_count; ++index) {
+        if (state_.hall_cards[index] == nullptr) {
+            continue;
+        }
+        SetHallSelectionRing(state_.hall_cards[index], index == selected);
+    }
+    const auto& objects = state_.hall_scene_ui.objects();
+    if (objects.settings_button != nullptr) {
+        SetHallSelectionRing(objects.settings_button, selected == state_.hall_app_count);
+    }
+    if (objects.update_button != nullptr) {
+        SetHallSelectionRing(objects.update_button, selected == state_.hall_app_count + 1U);
+    }
+}
+
+void VirtualizedHallPolicy::SnapSelectionLocked() {
+    if (state_.hall_app_count == 0U) {
+        return;
+    }
+    lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
+    if (viewport == nullptr) {
+        return;
+    }
+    const int32_t offset = state_.hall_scroll_offset;
+    const uint32_t nearest = NearestIndexForOffset(offset);
+    const int32_t target = SnapOffset(state_.hall_app_count, nearest);
+    if (target == offset) {
+        // The list is already on a card boundary, so only the wheel can have
+        // moved the selection, and its header items stay reachable.
+        return;
+    }
+    // A finger left the list between two cards: land on the nearest one and let
+    // it take over the selection.
+    state_.hall_selected_index = nearest;
+    SyncSelectionLocked();
+    lv_obj_scroll_to_x(viewport, target, LV_ANIM_ON);
+}
+
+void VirtualizedHallPolicy::LaunchCard(uint32_t index) {
+    if (index >= state_.hall_app_count || state_.hall_action_sink == nullptr) {
+        return;
+    }
+    const int32_t reveal = RevealOffset(state_.hall_app_count, state_.hall_scroll_offset, index);
+    lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
+    if (reveal != state_.hall_scroll_offset && viewport != nullptr) {
+        lv_obj_scroll_to_x(viewport, reveal, LV_ANIM_OFF);
+        UpdateCarouselLocked(lv_obj_get_scroll_x(viewport));
+    }
+    state_.hall_action_sink(
+        state_.hall_action_context,
+        host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchApp, .app_index = index});
+}
+
+bool VirtualizedHallPolicy::RotateSelectionLocked(int32_t steps) {
+    lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
+    // While the pull-down sheet is up it is the target of the wheel, so the
+    // carousel behind it must stay where it is.
+    if (viewport == nullptr || state_.hall_action_sink == nullptr || steps == 0 ||
+        state_.status_layer_ui.VisibleLocked()) {
+        return false;
+    }
+    // One cycle: the cards, then the header buttons, then back to the first card.
+    // That is what makes Settings reachable - a detent past the last card lands
+    // on it instead of stopping at the end of the list.
+    const int32_t count = static_cast<int32_t>(ItemCount());
+    const int32_t moved = static_cast<int32_t>(CurrentItem()) + steps;
+    const int32_t next = ((moved % count) + count) % count;
+    state_.hall_selected_index = static_cast<uint32_t>(next);
+    SyncSelectionLocked();
+    if (next < static_cast<int32_t>(state_.hall_app_count)) {
+        const int32_t target = SnapOffset(state_.hall_app_count, static_cast<uint32_t>(next));
+        if (lv_obj_get_scroll_x(viewport) != target) {
+            lv_obj_scroll_to_x(viewport, target, LV_ANIM_ON);
+        }
+    }
+    return true;
+}
+
+bool VirtualizedHallPolicy::ConfirmSelectionLocked() {
+    lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
+    if (viewport == nullptr || state_.hall_action_sink == nullptr || state_.status_layer_ui.VisibleLocked()) {
+        return false;
+    }
+    const uint32_t item = CurrentItem();
+    if (item >= state_.hall_app_count) {
+        if (lv_obj_t* const button = HeaderItemObject(item); button != nullptr) {
+            // The same action the button runs when it is tapped.
+            (void)lv_obj_send_event(button, LV_EVENT_SHORT_CLICKED, nullptr);
+        }
+        return true;
+    }
+    // The Hall owns the press even when the chosen card cannot launch yet (while
+    // it installs, for instance), so the press never falls through to a widget
+    // the user is not looking at.
+    if (state_.hall_launch_enabled) {
+        LaunchCard(item);
+    }
+    return true;
+}
+
 bool VirtualizedHallPolicy::PrepareCleanBackgroundLocked(uint32_t running_index) {
     DisplayTransition* transition = presentation_.Transition();
     if (transition == nullptr) {
@@ -379,6 +528,12 @@ void VirtualizedHallPolicy::CarouselEvent(lv_event_t* event) {
     }
     policy->UpdateCarouselLocked(lv_obj_get_scroll_x(viewport));
     if (lv_event_get_code(event) == LV_EVENT_SCROLL_END) {
+        // A finger drag stops wherever it stops: land it on a card so the ring
+        // and the list agree. This is profile-controlled because the existing
+        // touch-first boards intentionally keep their free-scrolling carousel.
+        if (policy->state_.profile.hall_scene.snap_carousel_to_cards) {
+            policy->SnapSelectionLocked();
+        }
         policy->RequestCoverWindowLocked(true);
         const uint32_t running = policy->RunningAppIndex();
         if (running < policy->state_.hall_app_count) {
@@ -413,16 +568,7 @@ void VirtualizedHallPolicy::CardEvent(lv_event_t* event) {
             host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kOpenAppActions, .app_index = index});
     } else if (code == LV_EVENT_SHORT_CLICKED && policy->state_.hall_launch_enabled &&
                policy->state_.hall_action_sink != nullptr) {
-        const int32_t reveal =
-            policy->RevealOffset(policy->state_.hall_app_count, policy->state_.hall_scroll_offset, index);
-        lv_obj_t* viewport = policy->state_.hall_scene_ui.objects().carousel_viewport;
-        if (reveal != policy->state_.hall_scroll_offset && viewport != nullptr) {
-            lv_obj_scroll_to_x(viewport, reveal, LV_ANIM_OFF);
-            policy->UpdateCarouselLocked(lv_obj_get_scroll_x(viewport));
-        }
-        policy->state_.hall_action_sink(
-            policy->state_.hall_action_context,
-            host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kLaunchApp, .app_index = index});
+        policy->LaunchCard(index);
     }
 }
 
@@ -514,6 +660,9 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
     }
     lv_obj_clean(state_.root);
     ResetLocked();
+    // The list is kept where it was left, so the selection starts on the card at
+    // its left edge.
+    state_.hall_selected_index = NearestIndexForOffset(state_.hall_scroll_offset);
     lv_obj_set_pos(state_.root, 0, 0);
     lv_obj_set_style_opa(state_.root, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(state_.root, lv_color_hex(theme::kHallBackground), 0);

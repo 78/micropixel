@@ -9,6 +9,59 @@
 
 namespace micropixel::host_ui::lvgl::square_common {
 
+// This build does not enable LVGL object names (LV_USE_OBJ_NAME), so a page
+// header records the back button it built instead of looking it up by name.
+// Pages are built and destroyed on the LVGL task, only one of them is on
+// display at a time, and every button removes its own record before it is
+// freed, so the record can never outlive the object it points at.
+inline constexpr uint32_t kMaxPageBackButtons = 8U;
+
+inline lv_obj_t* g_page_back_buttons[kMaxPageBackButtons]{};
+inline uint32_t g_page_back_button_count{};
+
+inline void ForgetPageBackButton(lv_obj_t* button) {
+    for (uint32_t index = 0U; index < g_page_back_button_count; ++index) {
+        if (g_page_back_buttons[index] != button) {
+            continue;
+        }
+        for (uint32_t move = index + 1U; move < g_page_back_button_count; ++move) {
+            g_page_back_buttons[move - 1U] = g_page_back_buttons[move];
+        }
+        --g_page_back_button_count;
+        g_page_back_buttons[g_page_back_button_count] = nullptr;
+        return;
+    }
+}
+
+inline void OnPageBackButtonDeleted(lv_event_t* event) { ForgetPageBackButton(lv_event_get_target_obj(event)); }
+
+// Called by the header that creates the button. Deep pages are created last, so
+// the newest record is the page on display.
+inline void RegisterPageBackButton(lv_obj_t* button) {
+    if (button == nullptr) {
+        return;
+    }
+    lv_obj_add_event_cb(button, OnPageBackButtonDeleted, LV_EVENT_DELETE, nullptr);
+    if (g_page_back_button_count >= kMaxPageBackButtons) {
+        return;
+    }
+    g_page_back_buttons[g_page_back_button_count] = button;
+    ++g_page_back_button_count;
+}
+
+// Runs the back button of the page on display, which is what a Host-level back
+// request means. Call it from the LVGL context, because it clicks a widget.
+inline void InvokePageBack() {
+    for (uint32_t index = g_page_back_button_count; index > 0U; --index) {
+        lv_obj_t* const button = g_page_back_buttons[index - 1U];
+        if (button == nullptr || lv_obj_is_hidden(button)) {
+            continue;
+        }
+        (void)lv_obj_send_event(button, LV_EVENT_SHORT_CLICKED, nullptr);
+        return;
+    }
+}
+
 // Density and safe-area tokens for responsive System UI pages. Page code uses
 // Flex/Grid and content sizing; it never contains resolution-specific object
 // coordinates.
@@ -17,7 +70,21 @@ struct SystemPageLayout final {
     int32_t height{};
     int32_t header_height{};
     int32_t safe_horizontal{};
+    // The header band sits where a round panel is narrowest, so it needs more
+    // inset than the content below it. 0 keeps the content inset, which is what
+    // every rectangular profile wants.
+    int32_t header_padding_horizontal{};
     int32_t header_padding_top{};
+    // Title-bar tokens. A profile with a bar radius turns the header into a
+    // rounded rectangle that fills the top strip of the same inscribed square
+    // the content uses: inset by the content inset and starting at the square's
+    // top edge, so its width matches the rows below it and all four corners stay
+    // inside a round cover. Its height follows its content, so a title block is
+    // never clipped by the band. 0 keeps the plain transparent band that square
+    // panels use.
+    int32_t header_bar_radius{};
+    int32_t header_bar_padding_horizontal{};
+    int32_t header_bar_padding_vertical{};
     int32_t header_gap{};
     int32_t header_text_gap{};
     int32_t back_button_size{};
@@ -67,20 +134,96 @@ inline lv_obj_t* CreateSystemColumn(lv_obj_t* parent, int32_t gap = 0) {
     return column;
 }
 
+// The header's horizontal inset: its own token when a profile sets one, the
+// content inset otherwise.
+[[nodiscard]] inline int32_t HeaderPaddingHorizontal(const SystemPageLayout& layout) {
+    return layout.header_padding_horizontal > 0 ? layout.header_padding_horizontal : layout.safe_horizontal;
+}
+
+struct SystemHeaderBar final {
+    int32_t width{};
+    int32_t header_height{};
+    int32_t inset{};
+    int32_t top{};
+    int32_t gap{};
+    int32_t radius{};
+    int32_t padding_horizontal{};
+    int32_t padding_vertical{};
+};
+
+inline constexpr int32_t kHeaderBarContentGap = 8;
+
+// The title bar the page just built. Pages build their bar before their content
+// and both run on the LVGL task, which is the same reason the back-button
+// registry above can be a plain slot.
+inline lv_obj_t* g_last_header_bar{};
+
+// The y a page's content starts at: right below the bar that belongs to `root`
+// when the profile draws one, so any title block - builtin or CJK TTF metrics -
+// gets the room it needs; the profile's band otherwise.
+[[nodiscard]] inline int32_t SystemContentTop(lv_obj_t* root, int32_t band_height) {
+    lv_obj_t* const bar = g_last_header_bar;
+    if (bar == nullptr || root == nullptr || lv_obj_get_parent(bar) != root) {
+        return band_height;
+    }
+    // The bar's height is its content's, so it has to be laid out before it can
+    // be read.
+    lv_obj_update_layout(bar);
+    return lv_obj_get_y(bar) + lv_obj_get_height(bar) + kHeaderBarContentGap;
+}
+
+// Builds the title bar. Without a radius it is the plain transparent band a
+// square panel uses; with one it is a rounded rectangle in the top strip of the
+// inscribed square, with the height its content needs.
+inline lv_obj_t* CreateSystemHeaderBar(lv_obj_t* root, const SystemHeaderBar& bar) {
+    lv_obj_t* header = lv_obj_create(root);
+    lv_obj_set_scrollable(header, false);
+    lv_obj_set_clickable(header, false);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(header, bar.gap, 0);
+    if (bar.radius > 0) {
+        lv_obj_set_pos(header, bar.inset, bar.top);
+        lv_obj_set_size(header, bar.width - 2 * bar.inset, LV_SIZE_CONTENT);
+        lv_obj_set_style_radius(header, bar.radius, 0);
+        lv_obj_set_style_bg_color(header, lv_color_hex(theme::kPanelBackground), 0);
+        lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(header, 1, 0);
+        lv_obj_set_style_border_color(header, lv_color_hex(theme::kStrongBorder), 0);
+        lv_obj_set_style_shadow_width(header, 0, 0);
+        lv_obj_set_style_pad_left(header, bar.padding_horizontal, 0);
+        lv_obj_set_style_pad_right(header, bar.padding_horizontal, 0);
+        lv_obj_set_style_pad_top(header, bar.padding_vertical, 0);
+        lv_obj_set_style_pad_bottom(header, bar.padding_vertical, 0);
+        lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        g_last_header_bar = header;
+        return header;
+    }
+    lv_obj_set_pos(header, 0, 0);
+    lv_obj_set_size(header, bar.width, bar.header_height);
+    lv_obj_set_style_radius(header, 0, 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header, 0, 0);
+    lv_obj_set_style_pad_left(header, bar.inset, 0);
+    lv_obj_set_style_pad_right(header, bar.inset, 0);
+    lv_obj_set_style_pad_top(header, bar.top, 0);
+    lv_obj_set_style_pad_bottom(header, 0, 0);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    return header;
+}
+
 inline lv_obj_t* CreateSystemHeader(lv_obj_t* root, const SystemPageLayout& layout, const char* title,
                                     const char* subtitle, lv_event_cb_t back_event, void* context) {
-    lv_obj_t* header = lv_obj_create(root);
-    StyleTransparentContainer(header);
-    lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_size(header, layout.width, layout.header_height);
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_left(header, layout.safe_horizontal, 0);
-    lv_obj_set_style_pad_right(header, layout.safe_horizontal, 0);
-    lv_obj_set_style_pad_top(header, layout.header_padding_top, 0);
-    lv_obj_set_style_pad_column(header, layout.header_gap, 0);
+    lv_obj_t* header = CreateSystemHeaderBar(root, {.width = layout.width,
+                                                    .header_height = layout.header_height,
+                                                    .inset = HeaderPaddingHorizontal(layout),
+                                                    .top = layout.header_padding_top,
+                                                    .gap = layout.header_gap,
+                                                    .radius = layout.header_bar_radius,
+                                                    .padding_horizontal = layout.header_bar_padding_horizontal,
+                                                    .padding_vertical = layout.header_bar_padding_vertical});
 
     lv_obj_t* back = lv_button_create(header);
+    RegisterPageBackButton(back);
     lv_obj_set_size(back, layout.back_button_size, layout.back_button_size);
     lv_obj_set_style_pad_all(back, 0, 0);
     lv_obj_set_style_radius(back, layout.back_button_radius, 0);
@@ -114,8 +257,9 @@ inline lv_obj_t* CreateSystemHeader(lv_obj_t* root, const SystemPageLayout& layo
 inline lv_obj_t* CreateSystemScrollColumn(lv_obj_t* root, const SystemPageLayout& layout, lv_event_cb_t scroll_event,
                                           void* context) {
     lv_obj_t* scroll = lv_obj_create(root);
-    lv_obj_set_pos(scroll, 0, layout.header_height);
-    lv_obj_set_size(scroll, layout.width, layout.height - layout.header_height);
+    const int32_t top = SystemContentTop(root, layout.header_height);
+    lv_obj_set_pos(scroll, 0, top);
+    lv_obj_set_size(scroll, layout.width, layout.height - top);
     lv_obj_set_style_pad_left(scroll, layout.safe_horizontal, 0);
     lv_obj_set_style_pad_right(scroll, layout.safe_horizontal, 0);
     lv_obj_set_style_pad_top(scroll, layout.content_padding_top, 0);

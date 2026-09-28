@@ -146,6 +146,18 @@ lv_obj_t* CreateHeaderButton(lv_obj_t* root, const HallSceneRect& bounds, int32_
     return button;
 }
 
+// LVGL puts every group-def widget in the default group, which is what the
+// encoder router walks. The Hall drives its own selection instead, and a second
+// indicator on the same button would only confuse the ring.
+void LeaveFocusGroup(lv_obj_t* button) {
+    if (button == nullptr) {
+        return;
+    }
+    if (lv_group_t* group = lv_obj_get_group(button); group != nullptr) {
+        lv_group_remove_obj(button);
+    }
+}
+
 }  // namespace
 
 bool HallStatusBarMatches(const host_ui::HallStatusBarModel& left, const host_ui::HallStatusBarModel& right) {
@@ -162,8 +174,6 @@ void HallSceneUi::ResetLocked() {
     layout_ = nullptr;
     events_ = {};
     objects_ = {};
-    settings_button_ = nullptr;
-    update_button_ = nullptr;
 }
 
 void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, const host_ui::HallModel& model,
@@ -190,16 +200,18 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     (void)CreateLabel(root, app_count_text, platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium),
                       theme::kSecondaryText, layout.section);
 
-    settings_button_ =
+    objects_.settings_button =
         CreateHeaderButton(root, layout.settings_button, layout.header_button_radius, theme::kStrongBorder,
                            theme::kPanelBackground, theme::kPrimaryText, LV_SYMBOL_SETTINGS,
                            UiText(host_strings::Id::kUiSettings), layout, true, HeaderButtonEvent, this);
+    LeaveFocusGroup(objects_.settings_button);
     if (model.firmware_update_available) {
-        update_button_ =
+        objects_.update_button =
             CreateHeaderButton(root, layout.update_button, layout.header_button_radius, theme::kUpdateBorder,
                                theme::kUpdateBackground, theme::kUpdateText, LV_SYMBOL_REFRESH,
                                UiText(host_strings::Id::kUiUpdate), layout, false, HeaderButtonEvent, this);
-        lv_obj_t* update_dot = lv_obj_create(update_button_);
+        LeaveFocusGroup(objects_.update_button);
+        lv_obj_t* update_dot = lv_obj_create(objects_.update_button);
         StyleContainer(update_dot, {.x = layout.update_button.width - 19, .y = 8, .width = 10, .height = 10},
                        LV_RADIUS_CIRCLE, theme::kNotification);
         lv_obj_set_clickable(update_dot, false);
@@ -270,7 +282,7 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     objects_.status_bar_container = lv_obj_create(root);
     StyleTransparentContainer(objects_.status_bar_container);
     lv_obj_set_size(objects_.status_bar_container, layout.width, status.height);
-    lv_obj_align(objects_.status_bar_container, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align(objects_.status_bar_container, LV_ALIGN_TOP_MID, 0, status.top_offset);
     lv_obj_set_style_pad_left(objects_.status_bar_container, status.padding_left, 0);
     lv_obj_set_style_pad_right(objects_.status_bar_container, status.padding_right, 0);
     lv_obj_set_flex_flow(objects_.status_bar_container, LV_FLEX_FLOW_ROW);
@@ -282,7 +294,13 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     lv_obj_set_style_text_font(objects_.time_label,
                                platform::lvgl::BuiltinLatinFont(platform::lvgl::SystemFontRole::kMedium), 0);
     lv_obj_set_style_text_color(objects_.time_label, lv_color_hex(theme::kPrimaryText), 0);
-    lv_obj_set_width(objects_.time_label, status.time_width);
+    // A clock is written on one line. This font is proportional, so "11:11" is
+    // narrower than "00:00", and a box of exactly time_width made the wide times
+    // wrap onto a second line. The label follows its text now, with time_width as
+    // the floor, which keeps the digits and the status icons where they belong.
+    lv_label_set_long_mode(objects_.time_label, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(objects_.time_label, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_width(objects_.time_label, status.time_width, 0);
 
     objects_.status_bar_items = lv_obj_create(objects_.status_bar_container);
     StyleTransparentContainer(objects_.status_bar_items);
@@ -453,8 +471,8 @@ void HallSceneUi::HeaderButtonEvent(lv_event_t* event) {
 
 void HallSceneUi::HandleHeaderButtonEvent(lv_event_t* event) {
     lv_obj_t* button = lv_event_get_current_target_obj(event);
-    const bool update = button == update_button_;
-    if (button == nullptr || (button != settings_button_ && button != update_button_)) {
+    const bool update = button != nullptr && button == objects_.update_button;
+    if (button == nullptr || (button != objects_.settings_button && button != objects_.update_button)) {
         return;
     }
     if (lv_event_get_code(event) == LV_EVENT_SHORT_CLICKED && events_.action_sink != nullptr) {

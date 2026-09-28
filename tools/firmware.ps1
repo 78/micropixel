@@ -14,10 +14,11 @@
       * writes the generated Remote Control / LVGL sdkconfig defaults for the board,
       * delegates build, flash, monitor, and fullclean to tools/firmware.py.
 
-    Guest application images (build-release) are not produced here, because
-    build-release is a POSIX shell entry point that builds the Host, the release
-    Apps, the app_store image, and the combined image in one pass. The same image
-    can be built on Windows from the official toolchain; see
+    Guest application images are produced by build-release, which builds one
+    product the way tools/p4.sh, tools/s3.sh and tools/s31.sh do: the Host, the
+    seven release Apps, the App Store image at the geometry of that board's
+    app_store partition, and the combined browser image in one pass. It needs the
+    Guest toolchain published by tools/guest-toolchain.ps1; see
     docs/development/flashing.zh-CN.md section 10.4.
 
     Unlike the POSIX wrappers this script does not rewrite an existing generated
@@ -32,10 +33,11 @@
     fullclean-host  Delete the Host build cache.
     port            Print the serial port resolved for the board.
     list            List every firmware profile.
-    build-release   Not available on Windows; prints the WSL instructions.
+    build-release   Build the Host, the seven release Apps, the App Store image
+                    and the combined browser image for the selected board.
 
 .PARAMETER Board
-    p4 (default), box3, szpi, cores3, or s31.
+    p4 (default), box3, szpi, cores3, watch, or s31.
 
 .PARAMETER Port
     Serial port such as COM7. Probed when omitted.
@@ -77,7 +79,7 @@ param(
     [string] $Command,
 
     [Parameter(Position = 1)]
-    [ValidateSet('p4', 'box3', 'szpi', 'cores3', 's31')]
+    [ValidateSet('p4', 'box3', 'szpi', 'cores3', 'watch', 's31')]
     [string] $Board = 'p4',
 
     [Parameter(Position = 2)]
@@ -108,6 +110,7 @@ $boardProfiles = @{
     'box3'   = @{ Product = 'esp-box-3';      Null = 's3-null';  NullUsesEnvDefaults = $false }
     'szpi'   = @{ Product = 'szpi-esp32s3';   Null = 's3-null';  NullUsesEnvDefaults = $false }
     'cores3' = @{ Product = 'm5stack-cores3'; Null = 's3-null';  NullUsesEnvDefaults = $false }
+    'watch'  = @{ Product = 'sensecap-watcher'; Null = 's3-null'; NullUsesEnvDefaults = $false }
 }
 
 function Write-Step {
@@ -132,6 +135,75 @@ function Resolve-RepoPath {
 function Get-FirmwareProfiles {
     $json = [System.IO.File]::ReadAllText($profilesPath, [System.Text.Encoding]::UTF8)
     return $json | ConvertFrom-Json
+}
+
+# The release Apps every product image carries, matching tools/p4.sh, tools/s3.sh and
+# tools/s31.sh. The App Store image is built at the geometry of the board's own
+# app_store partition, so that value has to match the partition table exactly.
+$releaseApps = @('sdk-demo', 'snake', 'maze-evil', 'blocks', 'tilt', 'jump-jump', 'gravity-balls')
+
+function New-ReleaseImage {
+    <#
+        Builds the seven release Apps, the App Store image and the combined browser
+        image for one product profile, mirroring the POSIX build-release flow of
+        tools/p4.sh, tools/s3.sh and tools/s31.sh. The Host itself is built by the
+        caller, so this runs only after a successful build.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Python,
+        [Parameter(Mandatory = $true)][string] $Profile,
+        [Parameter(Mandatory = $true)][string] $Target,
+        [Parameter(Mandatory = $true)][string] $BuildDirectory,
+        [Parameter(Mandatory = $true)] $Profiles
+    )
+
+    $storeSize = Get-ProfileField -Profiles $Profiles -Name $Profile -Field 'app_store_size'
+    if (-not $storeSize) {
+        $message = "profile '$Profile' does not declare app_store_size; add it to " +
+            'tools/firmware_profiles.json to give this board a release App Store'
+        Fail $message
+    }
+    # The POSIX wrappers cover the ESP32-S3 boards, whose cores are Xtensa; the P4 and
+    # S31 cores are RISC-V.
+    $aotTarget = if ($Target -eq 'esp32s3') { 'xtensa' } else { 'riscv32-ilp32f' }
+
+    $guestToolchain = Join-Path $PSScriptRoot 'guest-toolchain.ps1'
+    if (-not (Test-Path -LiteralPath $guestToolchain)) {
+        Fail 'tools/guest-toolchain.ps1 is missing; the release image needs the Guest toolchain'
+    }
+    . $guestToolchain
+
+    $stagingDirectory = Resolve-RepoPath -Path 'build/app-store'
+    $bundleArgument = @()
+    foreach ($app in $releaseApps) {
+        $appDirectory = Join-Path (Join-Path $stagingDirectory 'bundles') $app
+        New-Item -ItemType Directory -Force -Path $appDirectory | Out-Null
+        $bundle = Join-Path (Join-Path $stagingDirectory 'bundles') "$app.bundle.bin"
+        Write-Step "packaging Guest App $app ($aotTarget)"
+        & $Python (Join-Path $PSScriptRoot 'micropixel') package (Resolve-RepoPath -Path "guest/apps/$app") `
+            --profile release --aot-target $aotTarget --output-dir $appDirectory --output $bundle
+        if ($LASTEXITCODE -ne 0) {
+            Fail "packaging Guest App $app failed"
+        }
+        $bundleArgument += $bundle
+    }
+
+    $storeImage = Join-Path $stagingDirectory 'app-store.bin'
+    Write-Step "building the App Store image ($storeSize) with $($releaseApps.Count) Apps"
+    & $Python (Join-Path $PSScriptRoot 'build_app_store_image.py') `
+        --app-store-size $storeSize --output $storeImage @bundleArgument
+    if ($LASTEXITCODE -ne 0) {
+        Fail 'building the App Store image failed'
+    }
+
+    $imagePath = Join-Path $BuildDirectory 'micropixel-full.bin'
+    Write-Step 'merging the Host, the partition table and the App Store into one browser image'
+    & $Python (Join-Path $PSScriptRoot 'build_full_firmware_image.py') `
+        --build-dir $BuildDirectory --app-store-image $storeImage --output $imagePath
+    if ($LASTEXITCODE -ne 0) {
+        Fail 'merging the release image failed'
+    }
+    Write-Step "release image: $imagePath"
 }
 
 function Get-ProfileField {
@@ -418,31 +490,6 @@ if ($Command -eq 'list') {
     exit $LASTEXITCODE
 }
 
-if ($Command -eq 'build-release') {
-    [Console]::Error.WriteLine(@'
-firmware.ps1: build-release is not available on Windows.
-
-build-release is a POSIX shell entry point (tools/p4.sh, tools/s31.sh, tools/s3.sh)
-that builds the Host, seven release Apps, the app_store image, and the combined
-browser image in one pass. Windows has no equivalent wrapper, but the same image can
-be produced natively from the official Windows toolchain:
-
-    . .\tools\guest-toolchain.ps1
-    python tools/micropixel package guest/apps/<app> --profile release --aot-target xtensa
-    python tools/build_app_store_image.py --app-store-size 0x0800000 --output app-store.bin <bundles...>
-    python tools/build_full_firmware_image.py --build-dir <host build dir> ^
-        --app-store-image app-store.bin --output micropixel-full.bin
-
-See docs/development/flashing.zh-CN.md section 10.4. To use the POSIX entry point
-instead, run it from WSL:
-
-    bash tools/p4.sh   build-release
-    bash tools/s31.sh  build-release
-    bash tools/s3.sh   build-release box3
-'@)
-    exit 2
-}
-
 $mapping = $boardProfiles[$Board]
 $profileName = $mapping.Product
 $action = 'build'
@@ -539,4 +586,8 @@ if ($action -eq 'build' -and -not (Test-Path -LiteralPath (Join-Path $buildDir '
         'output before the first compile line')
 }
 & $python @arguments
+if ($LASTEXITCODE -eq 0 -and $Command -eq 'build-release') {
+    New-ReleaseImage -Python $python -Profile $profileName -Target $target `
+        -BuildDirectory $buildDir -Profiles $profiles
+}
 exit $LASTEXITCODE

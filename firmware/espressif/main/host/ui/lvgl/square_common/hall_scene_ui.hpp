@@ -27,6 +27,11 @@ struct HallSceneSize final {
 
 struct HallStatusBarLayout final {
     int32_t height{};
+    // Distance from the top edge to the bar. Non-zero only where the visible
+    // area is shaped rather than rectangular: the row is laid out full width
+    // with space-between, so its two ends land exactly on the padding edges and
+    // a display with a round cover clips whatever reaches the bezel.
+    int32_t top_offset{};
     int32_t padding_left{};
     int32_t padding_right{};
     int32_t item_gap{};
@@ -62,6 +67,10 @@ struct HallSceneLayout final {
     HallScenePoint simple_app_id{};
     int32_t status_text_width{};
     HallStatusBarLayout status_bar{};
+    // Boards with a physical selector need the ring and the list to agree after
+    // a drag or a knock, so the carousel lands on a card. Touch-first boards
+    // keep their free-scrolling carousel by leaving this false.
+    bool snap_carousel_to_cards{};
 };
 
 struct HallSceneEvents final {
@@ -79,6 +88,10 @@ struct HallSceneObjects final {
     lv_obj_t* carousel_content{};
     lv_obj_t* scroll_track{};
     lv_obj_t* scroll_thumb{};
+    // The Hall's own selection reaches these two, so they are part of the scene's
+    // public surface rather than private state.
+    lv_obj_t* settings_button{};
+    lv_obj_t* update_button{};
     lv_obj_t* status_bar_container{};
     lv_obj_t* status_bar_items{};
     lv_obj_t* time_label{};
@@ -113,8 +126,6 @@ class HallSceneUi final {
     const HallSceneLayout* layout_{};
     HallSceneEvents events_{};
     HallSceneObjects objects_{};
-    lv_obj_t* settings_button_{};
-    lv_obj_t* update_button_{};
 };
 
 }  // namespace micropixel::host_ui::lvgl::square_common

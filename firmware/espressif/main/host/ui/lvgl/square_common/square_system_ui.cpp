@@ -1,6 +1,7 @@
 #include "host/ui/lvgl/square_common/square_system_ui.hpp"
 
 #include "esp_lv_adapter.h"
+#include "host/ui/lvgl/square_common/system_page_layout.hpp"
 #include "platform/lvgl/lvgl_wakeup.hpp"
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -134,6 +135,12 @@ std::expected<void, host_ui::SystemUiError> SquareSystemUi::ShowSystemMenu(const
 void SquareSystemUi::UpdateSystemMenu(const host_ui::SystemMenuModel& model) { state_.UpdateSystemMenu(model); }
 
 void SquareSystemUi::LeaveSystemMenu() { state_.LeaveSystemMenu(); }
+
+void SquareSystemUi::Back() { InvokePageBack(); }
+
+bool SquareSystemUi::Rotate(int32_t steps) { return hall_policy_.RotateSelectionLocked(steps); }
+
+bool SquareSystemUi::Confirm() { return hall_policy_.ConfirmSelectionLocked(); }
 
 void SquareSystemUi::ApplyTheme(host_ui::SystemThemeMode mode) { state_.ApplyTheme(mode); }
 

@@ -25,6 +25,16 @@ class VirtualizedHallPolicy final {
     void PrepareLaunch(uint32_t app_index);
     void Leave();
 
+    // The wheel drives the Hall itself: the selection is one cycle over the cards
+    // and then the header buttons, so a detent past the last card reaches
+    // Settings, and a press launches the selected card or runs the selected
+    // button. The carousel stays the single model for all three inputs - wheel,
+    // tap and swipe - so they cannot drift apart. Both return false when the Hall
+    // is not the current page, and the caller falls back to focus navigation.
+    // Call them from the LVGL context.
+    [[nodiscard]] bool RotateSelectionLocked(int32_t steps);
+    [[nodiscard]] bool ConfirmSelectionLocked();
+
    private:
     static void ResetCallback(void* context);
     static void ShowPlaceholder(void* context, uint32_t app_index);
@@ -43,6 +53,15 @@ class VirtualizedHallPolicy final {
     [[nodiscard]] uint32_t CoverWindowLast(uint32_t app_count, int32_t offset) const;
     [[nodiscard]] uint32_t RunningAppIndex() const;
     [[nodiscard]] uint32_t FindCardIndex(const lv_obj_t* card) const;
+    [[nodiscard]] uint32_t HeaderItemCount() const;
+    [[nodiscard]] uint32_t ItemCount() const;
+    [[nodiscard]] uint32_t CurrentItem() const;
+    [[nodiscard]] lv_obj_t* HeaderItemObject(uint32_t item) const;
+    [[nodiscard]] uint32_t NearestIndexForOffset(int32_t offset) const;
+    [[nodiscard]] int32_t SnapOffset(uint32_t app_count, uint32_t index) const;
+    void SyncSelectionLocked();
+    void SnapSelectionLocked();
+    void LaunchCard(uint32_t index);
     [[nodiscard]] bool PrepareSource(const host_ui::HallCoverModel& source, uint32_t index,
                                      host_ui::HallCoverModel& prepared);
     [[nodiscard]] bool PrepareCleanBackgroundLocked(uint32_t running_index);

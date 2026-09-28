@@ -1,10 +1,13 @@
 import hashlib
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import mock
 
-from tools import build_font_cbin, generate_builtin_fonts
+from tools import build_app_bundle, build_font_cbin, generate_builtin_fonts
+from tools.fonts import build_ui_font_subset
 
 
 class NpxLauncherTest(unittest.TestCase):
@@ -159,6 +162,50 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         generate_builtin_fonts.validate_sdk_symbol_coverage(
             sdk_requirements, generate_builtin_fonts.requested_codepoints(profile)
         )
+
+
+class UiFontSubsetTest(unittest.TestCase):
+    """The offline UI pack: small enough to flash, still covering the catalogs."""
+
+    catalogs = Path("firmware/espressif/main/host/ui/i18n")
+
+    def test_gb2312_level1_repertoire_matches_the_published_table(self):
+        charset = build_ui_font_subset.repertoire_charset("gb2312-level1")
+        self.assertEqual(len(charset), 3850)
+        self.assertEqual(sum(1 for value in charset if 0x4E00 <= value <= 0x9FFF), 3755)
+        self.assertEqual(sorted(value for value in charset if value < 0x80), list(range(32, 127)))
+
+    def test_chinese_catalog_stays_inside_the_measured_coverage(self):
+        """Text outside this scope means the pack has to be regenerated."""
+
+        required = build_ui_font_subset.required_charset(self.catalogs, "zh-CN")
+        basic = build_ui_font_subset.repertoire_charset("gb2312-level1")
+        self.assertEqual(len(required), 446)
+        # The catalogs reach past GB2312 level 1 for a handful of characters.
+        self.assertEqual(len(required - basic), 12)
+
+    def test_component_documents_parse_as_a_ttf_font_component(self):
+        identifier, project, assets = build_ui_font_subset.component_documents("zh-CN", "1.0.0", "gb2312-level1")
+        self.assertEqual(identifier, "micropixel.fonts.ui.zh-cn")
+        self.assertEqual(assets["assets"], [{"name": "regular", "format": "font_ttf", "path": "regular.ttf"}])
+        with TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "app.json"
+            manifest_path.write_text(json.dumps(project), encoding="utf-8")
+            manifest = build_app_bundle.load_package_manifest(manifest_path)
+        self.assertEqual(manifest.package_type, "component")
+        self.assertEqual(manifest.component_type, "font")
+        self.assertEqual(manifest.languages, ("zh-CN",))
+        self.assertEqual(manifest.ttf_asset, "regular")
+        self.assertEqual(manifest.font_bundle, "noto-ui-subset-v1")
+
+    def test_a_static_source_is_used_as_it_is(self):
+        source = {}
+        self.assertIs(build_ui_font_subset.instance_static(source, 400), source)
+
+    def test_a_variable_source_without_a_weight_axis_is_rejected(self):
+        source = {"fvar": SimpleNamespace(axes=[])}
+        with self.assertRaises(ValueError):
+            build_ui_font_subset.instance_static(source, 400)
 
 
 if __name__ == "__main__":
