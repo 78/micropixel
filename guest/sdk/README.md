@@ -34,6 +34,12 @@ Fallible operations return `Result<T>`.
 Use `Scene` for object-based UI and 2D graphics. `HostSurface` submits raster commands for Host rendering;
 `GuestSurface` accepts pixels rendered by the app. Presented buffers cannot be reused until released.
 
+`ui::FlexContainer` and `ui::GridContainer` place items at their intrinsic size inside the bounds they were
+created with. Content that does not fit returns `kResourceExhausted` and leaves existing geometry untouched;
+an app picks a smaller content variant instead of treating it as an unrecoverable error.
+`FlexContainer::intrinsic_size()` reports what the row currently needs, so that choice can be made before
+laying out rather than from the failure.
+
 ## Examples
 
 | App | Demonstrates |
