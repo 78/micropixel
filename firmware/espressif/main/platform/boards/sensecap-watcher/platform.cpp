@@ -21,20 +21,24 @@
 #include "host/ui/lvgl/square_common/square_system_ui.hpp"
 #include "host/ui/lvgl/square_common/square_ui_state.hpp"
 #include "platform/adapters/graphics_adapter.hpp"
+#include "platform/boards/esp32-s3-common/display_shadow.hpp"
 #include "platform/boards/sensecap-watcher/board_config.hpp"
 #include "platform/boards/sensecap-watcher/board_power.hpp"
 #include "platform/boards/sensecap-watcher/display_hardware.hpp"
 #include "platform/boards/sensecap-watcher/i2s_audio_sink.hpp"
 #include "platform/boards/sensecap-watcher/knob_input.hpp"
 #include "platform/boards/sensecap-watcher/touch_hardware.hpp"
+#include "platform/boards/sensecap-watcher/uart_local_control.hpp"
 #include "platform/buses/i2c_executor.hpp"
 #include "platform/input/esp_lcd_touch_input.hpp"
+#include "platform/lvgl/display/screen_capture.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
 #include "platform/lvgl/guest_graphics_engine.hpp"
 #include "platform/lvgl/guest_graphics_operations.hpp"
 #include "platform/lvgl/host_encoder_router.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/memory/internal_ram.hpp"
+#include "platform/transports/development_display_control.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
 #include "work/task_policy.hpp"
@@ -102,6 +106,14 @@ struct SensecapWatcherState final {
     host_ui::lvgl::square_common::StaticStatusLayerTransition status_transition{};
     host_ui::lvgl::square_common::SquareSystemUiState ui{touch_input, guest_graphics, status_transition,
                                                          ui_profile::kSystemUiProfile};
+    // The SPD2010 adapter byte-swaps its partial buffers, so this PSRAM shadow is
+    // the only complete, canonical-RGB565 frame on the board: screenshots and the
+    // transition-free presentation both read it. MPX1 rides the board's UART
+    // because the PC-facing port is an external USB-UART bridge, and the
+    // development bridge owns the screenshot and touch commands on that stream.
+    esp32_s3_common::DisplayShadow display_shadow{kWidth, kHeight};
+    board_detail::UartLocalControl local_control{};
+    transports::DevelopmentDisplayControl development_display{};
 };
 
 }  // namespace detail
@@ -231,19 +243,34 @@ esp_err_t RegisterLvglDisplay(detail::SensecapWatcherState& state, board_detail:
     return esp_lcd_panel_disp_on_off(hardware.Panel(), true);
 }
 
-// The only presentation role this board supplies so far is brightness. The
-// shared UI stays fully usable with every other optional role left null, so
-// transitions, screen capture and volume arrive with the increment that owns
-// them.
+// Brightness and screen capture. Capture reads the pre-transport shadow because
+// the SPD2010 adapter byte-swaps its partial buffers, so the active LVGL draw
+// buffer never holds a complete frame. The remaining optional roles stay null
+// and the shared UI remains fully usable without them.
 class SensecapWatcherPresentation final : public host_ui::lvgl::square_common::SquarePresentation,
+                                          public host_ui::lvgl::square_common::ScreenCapture,
                                           public host_ui::lvgl::square_common::BrightnessControl {
    public:
     using BrightnessSetter = esp_err_t (*)(void* context, int percent);
 
-    SensecapWatcherPresentation(BrightnessSetter brightness_setter, void* brightness_context)
-        : brightness_setter_(brightness_setter), brightness_context_(brightness_context) {}
+    SensecapWatcherPresentation(detail::SensecapWatcherState& state, BrightnessSetter brightness_setter,
+                                void* brightness_context)
+        : state_(state), brightness_setter_(brightness_setter), brightness_context_(brightness_context) {}
 
+    [[nodiscard]] host_ui::lvgl::square_common::ScreenCapture* Capture() override { return this; }
     [[nodiscard]] host_ui::lvgl::square_common::BrightnessControl* Brightness() override { return this; }
+
+    [[nodiscard]] std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg() override {
+        if (state_.display == nullptr || state_.display_shadow.Pixels() == nullptr) {
+            return std::unexpected(host_ui::SystemUiError::kUnavailable);
+        }
+        return lvgl::CaptureScreenJpeg(state_.display, static_cast<uint32_t>(detail::kWidth),
+                                       static_cast<uint32_t>(detail::kHeight),
+                                       {.pixels = state_.display_shadow.Pixels(),
+                                        .stride = state_.display_shadow.Stride(),
+                                        .format = lvgl::DisplayCapturePixelFormat::kRgb565,
+                                        .ready = state_.display_shadow.Ready()});
+    }
 
     void ApplyBrightness(uint8_t percent) override {
         const esp_err_t status = brightness_setter_(brightness_context_, percent);
@@ -253,6 +280,7 @@ class SensecapWatcherPresentation final : public host_ui::lvgl::square_common::S
     }
 
    private:
+    detail::SensecapWatcherState& state_;
     BrightnessSetter brightness_setter_{};
     void* brightness_context_{};
 };
@@ -264,6 +292,7 @@ class SensecapWatcherBoard final : public Board, public device::Power {
           graphics_context_{.engine = &state_.guest_graphics, .hooks = state_.ui.GraphicsHooks()},
           graphics_(lvgl::MakeGuestGraphicsOperations(graphics_context_)),
           presentation_(
+              state_,
               [](void* context, int percent) {
                   return static_cast<board_detail::DisplayHardware*>(context)->SetBrightness(percent);
               },
@@ -282,6 +311,13 @@ class SensecapWatcherBoard final : public Board, public device::Power {
         ESP_RETURN_ON_ERROR(power_.Initialize(), kTag, "initialize PCA95xx power sequencing failed");
         ESP_RETURN_ON_ERROR(hardware_.Initialize(), kTag, "initialize SPD2010 display failed");
         ESP_RETURN_ON_ERROR(RegisterLvglDisplay(state_, hardware_), kTag, "register LVGL display failed");
+        // The shadow wraps the adapter's flush callback, so it has to run after
+        // the display is registered. It is optional: a board that cannot spare
+        // the PSRAM keeps running, only screenshots are unavailable.
+        const esp_err_t shadow_status = state_.display_shadow.Initialize(state_.display);
+        if (shadow_status != ESP_OK) {
+            ESP_LOGW(kTag, "display shadow unavailable, screenshots are off: %s", esp_err_to_name(shadow_status));
+        }
         // Touch and the rotary knob are optional. A controller that does not
         // answer must not take the display down with it, so each one is
         // reported and skipped instead of aborting the board, and the Host UI
@@ -392,6 +428,17 @@ class SensecapWatcherBoard final : public Board, public device::Power {
         registration.SetWifi(wifi_);
         registration.SetPower(*this);
         registration.SetSystemUi(system_ui_);
+        // Starting the development bridge also starts the transport it is given,
+        // so the byte stream is owned in one place: MPX1 and the screenshot and
+        // touch commands share it exactly as the USB boards share theirs.
+        const esp_err_t local_control_status = state_.development_display.Start(
+            state_.ui.Input(), state_.local_control, static_cast<uint32_t>(detail::kWidth),
+            static_cast<uint32_t>(detail::kHeight), transports::DevelopmentCaptureHook::For(presentation_));
+        if (local_control_status == ESP_OK) {
+            registration.SetLocalControl(state_.local_control);
+        } else {
+            ESP_LOGW(kTag, "local control unavailable on this boot: %s", esp_err_to_name(local_control_status));
+        }
         ESP_LOGI(kTag,
                  "ready: SPD2010 panel + touch, rotary knob, native Wi-Fi, audio=%s, power rails up, Host UI in place",
                  audio_status == ESP_OK ? "ES8311" : "off");
