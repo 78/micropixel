@@ -6,10 +6,28 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from tools.ci.firmware_artifacts import ROOT, SOURCES, check_image, check_files, inventory
+from tools.ci.firmware_artifacts import (
+    ROOT, SOURCES, app_store_mib, check_full_image, check_image, check_files, guest_store_sizes, inventory,
+)
 
 
 class FirmwareArtifacts(unittest.TestCase):
+    def test_store_capacity_comes_from_board_profile_not_chip(self):
+        self.assertEqual(app_store_mib('sensecap-watcher'), 24)
+        self.assertEqual(app_store_mib('szpi-esp32s3'), 8)
+        self.assertEqual(guest_store_sizes('xtensa'), [8, 24])
+        self.assertEqual(guest_store_sizes('riscv32-ilp32f'), [8, 24])
+
+    def test_full_image_uses_declared_flash_capacity_and_preserves_ota(self):
+        ota = b'verified OTA'
+        full = bytearray(32 * 1024 * 1024)
+        full[0x30000:0x30000 + len(ota)] = ota
+        check_full_image(full, ota, {'flash_settings': {'flash_size': '32MB'}})
+        with self.assertRaises(ValueError):
+            check_full_image(full, ota, {'flash_settings': {'flash_size': '16MB'}})
+        with self.assertRaises(ValueError):
+            check_full_image(full, b'wrong OTA', {'flash_settings': {'flash_size': '32MB'}})
+
     def test_host_plan_covers_release_profiles_and_selects_watcher_rebuild(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'output'
