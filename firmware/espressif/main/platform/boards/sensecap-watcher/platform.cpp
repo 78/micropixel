@@ -21,6 +21,7 @@
 #include "host/ui/lvgl/square_common/square_system_ui.hpp"
 #include "host/ui/lvgl/square_common/square_ui_state.hpp"
 #include "platform/adapters/graphics_adapter.hpp"
+#include "platform/audio/audio_engine.hpp"
 #include "platform/boards/esp32-s3-common/display_shadow.hpp"
 #include "platform/boards/sensecap-watcher/board_config.hpp"
 #include "platform/boards/sensecap-watcher/board_power.hpp"
@@ -243,13 +244,16 @@ esp_err_t RegisterLvglDisplay(detail::SensecapWatcherState& state, board_detail:
     return esp_lcd_panel_disp_on_off(hardware.Panel(), true);
 }
 
-// Brightness and screen capture. Capture reads the pre-transport shadow because
-// the SPD2010 adapter byte-swaps its partial buffers, so the active LVGL draw
-// buffer never holds a complete frame. The remaining optional roles stay null
-// and the shared UI remains fully usable without them.
+// Brightness, volume and screen capture. Capture reads the pre-transport shadow
+// because the SPD2010 adapter byte-swaps its partial buffers, so the active LVGL
+// draw buffer never holds a complete frame. Volume drives the shared engine's
+// master gain, which is what makes the Host's volume control the single place
+// attenuation happens. The remaining optional roles stay null and the shared UI
+// remains fully usable without them.
 class SensecapWatcherPresentation final : public host_ui::lvgl::square_common::SquarePresentation,
                                           public host_ui::lvgl::square_common::ScreenCapture,
-                                          public host_ui::lvgl::square_common::BrightnessControl {
+                                          public host_ui::lvgl::square_common::BrightnessControl,
+                                          public host_ui::lvgl::square_common::VolumeControl {
    public:
     using BrightnessSetter = esp_err_t (*)(void* context, int percent);
 
@@ -257,8 +261,12 @@ class SensecapWatcherPresentation final : public host_ui::lvgl::square_common::S
                                 void* brightness_context)
         : state_(state), brightness_setter_(brightness_setter), brightness_context_(brightness_context) {}
 
+    // Bound by Initialize() before any audio can play.
+    void BindAudioEngine(audio::AudioEngine& audio) { audio_ = &audio; }
+
     [[nodiscard]] host_ui::lvgl::square_common::ScreenCapture* Capture() override { return this; }
     [[nodiscard]] host_ui::lvgl::square_common::BrightnessControl* Brightness() override { return this; }
+    [[nodiscard]] host_ui::lvgl::square_common::VolumeControl* Volume() override { return this; }
 
     [[nodiscard]] std::expected<host_ui::ScreenCapture, host_ui::SystemUiError> CaptureScreenJpeg() override {
         if (state_.display == nullptr || state_.display_shadow.Pixels() == nullptr) {
@@ -279,10 +287,19 @@ class SensecapWatcherPresentation final : public host_ui::lvgl::square_common::S
         }
     }
 
+    // Host master volume. Guests never apply app-wide attenuation themselves, so
+    // this engine gain is the one place the saved volume setting takes effect.
+    void ApplyVolume(uint8_t percent) override {
+        if (audio_ != nullptr) {
+            audio_->SetMasterVolumePercent(percent);
+        }
+    }
+
    private:
     detail::SensecapWatcherState& state_;
     BrightnessSetter brightness_setter_{};
     void* brightness_context_{};
+    audio::AudioEngine* audio_{};
 };
 
 class SensecapWatcherBoard final : public Board, public device::Power {
@@ -304,6 +321,9 @@ class SensecapWatcherBoard final : public Board, public device::Power {
     [[nodiscard]] esp_err_t Initialize(BoardContext& context) override {
         ESP_RETURN_ON_FALSE(memory::IsInternalObject(*this), ESP_ERR_INVALID_STATE, kTag,
                             "Board control objects must reside in internal RAM");
+        // The Host's master volume reaches the mix through the presentation, so
+        // the engine is bound before anything can play.
+        presentation_.BindAudioEngine(context.AudioEngine());
         ESP_LOGI(kTag, "initializing SenseCAP Watcher ESP32-S3 (412x412 SPD2010)");
         // Every peripheral rail is switched by this expander, so the sequence
         // runs before the panel is powered. Input and audio follow as each one
