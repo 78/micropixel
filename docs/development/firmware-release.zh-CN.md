@@ -20,8 +20,8 @@ GitHub Release 标题、正文和附件显示名称统一使用英文。
 1. 更新固件与 SDK 版本、相关 API 文档；提交与发布相关的源码。
 2. 对待发布源码运行一次相关自动回归与格式检查，保留结果；源码变化后只重跑受影响检查。`bash tools/p4.sh test` 是本地完整检查入口。普通 PR、SDK 标签发布和各板 Host 构建不重复执行这些回归。
 3. 创建 `sdk-v<版本>` tag。SDK workflow 验证安装与双架构构建一次，发布后核对同一批文件的公开摘要。
-4. 从对应提交运行 **Build release firmware in parallel**。Windows job 按架构各编译一次预装应用；五个 Ubuntu job 只构建各板 Host、核对发布配置并上传产物，不再运行共享 Host 回归。
-5. 汇总 job 核对源提交、版本、芯片、OTA 容量、远控配置摘要和文件摘要，生成五板 OTA 与完整镜像。
+4. 从对应提交运行 **Build release firmware in parallel**。Windows job 按架构各编译一次预装应用；各 Ubuntu job 只构建对应板的 Host、核对发布配置并上传产物，不再运行共享 Host 回归。
+5. 汇总 job 核对源提交、版本、芯片、OTA 容量、远控配置摘要和文件摘要，生成所有发布板型的 OTA 与完整镜像。
 6. 下载验证后的产物，再发布 GitHub / 网站，不在部署机器重新编译：
 
 ```sh
@@ -67,6 +67,8 @@ gh workflow run firmware-build.yml --ref main -f reuse_hosts_run=<原runID> -f r
 ## 固定输入与缓存
 
 ESP-IDF commit 与板型列表位于 `tools/ci/firmware-sources.json`；WAMR 和 IOT solution 仍使用 Git submodule 固定版本。
+发布矩阵包含 Metalio-Claw4、ESP-Mosaico、ESP32-S3-BOX-3、SZPI、CoreS3 和 SenseCAP Watcher；
+新增板型须同时加入 Host 构建计划、固件清单和下载入口，Watcher 使用 preview 通道。
 IDF 自带工具下载清单验证编译器摘要，工具与 ccache 按板型/IDF 缓存。每块板使用独立 runner，不共享 managed_components 或 sdkconfig。
 SDK 复用检查比较 SDK、Runtime、ABI 和打包工具的实际构建输入，忽略 Markdown 文档；
 预装 App 从本次固件提交构建，不使用 SDK 内的示例副本。仅修复 CI 或 Host 时可复用已发布 SDK，

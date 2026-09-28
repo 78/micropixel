@@ -15,6 +15,7 @@
     "esp-mosaico",
     "esp-box-3",
     "szpi-esp32s3",
-    "m5stack-cores3"
+    "m5stack-cores3",
+    "sensecap-watcher"
   ]
 }

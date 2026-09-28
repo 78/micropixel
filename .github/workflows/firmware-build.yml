@@ -178,7 +178,7 @@ jobs:
         with:
           pattern: host-*
           path: build/host-artifacts
-      - name: Assemble all five full images
+      - name: Assemble all release board images
         run: |
           mkdir -p build/ci-host
           for directory in build/host-artifacts/host-*; do
