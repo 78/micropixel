@@ -338,6 +338,7 @@ menu "MicroPixel board backends"
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT
         int "LVGL partial draw buffer height"
+        range 30 40 if MICROPIXEL_BOARD_SZPI_ESP32S3
         range 40 40 if IDF_TARGET_ESP32S3
         range 20 720
         default 40 if IDF_TARGET_ESP32S3
@@ -346,6 +347,8 @@ menu "MicroPixel board backends"
             Number of panel-wide rows in each LVGL scratch draw buffer.
             Larger values reduce repeated object traversal but require memory
             proportional to the selected board's display width and pixel format.
+            SZPI supports 30 to 40 rows to balance display throughput against
+            internal SRAM headroom for networking and Guest tasks.
 
     config MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM
         bool "Place the LVGL partial draw buffer in PSRAM"
@@ -355,7 +358,7 @@ menu "MicroPixel board backends"
             Allocate partial scratch buffers from PSRAM instead of internal
             SRAM. This permits taller or multiple buffers at the cost of slower
             CPU access. PPA and DMA2D remain available where supported.
-            ESP32-S3 boards keep 40-row SPI LCD DMA sources in internal SRAM
+            ESP32-S3 boards keep SPI LCD DMA sources in internal SRAM
             to avoid PSRAM DMA underflow during network and Flash access.
 
     config MICROPIXEL_LVGL_DIRTY_COALESCE_EXTRA_PIXELS

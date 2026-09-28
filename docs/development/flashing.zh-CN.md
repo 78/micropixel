@@ -163,8 +163,9 @@ bash tools/s3.sh monitor box3 /dev/cu.usbmodemXXXX --reset
 四个 Xtensa AOT App。`flash-all` 烧录 Host 和对应的 8 MiB `app_store` 内容。烧录入口会先确认端口连接的是
 ESP32-S3，默认使用原生 USB Serial/JTAG。
 
-立创 SZPI ESP32-S3 使用同一套 40 行内部 SRAM 双缓冲和 Xtensa Guest 基线，板级显示、触控与传感器接线
-由独立 profile 提供：
+立创 SZPI ESP32-S3 使用 35 行内部 SRAM 双绘制缓冲及内部 SRAM RGB565 传输缓冲，为网络与加密保留更多
+内部内存。SZPI 支持在 30–40 行之间调整，其他 S3 板仍保持各自配置；Xtensa Guest 基线不变，板级显示、
+触控与传感器接线由独立 profile 提供：
 
 ```sh
 bash tools/s3.sh build-host szpi
