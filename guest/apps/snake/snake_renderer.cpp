@@ -464,7 +464,15 @@ void SnakeGame::RenderOverlay(const Theme& theme) {
         level.AppendUint(model_.level());
         micropixel::Assert(game_over_panel_.grid(0U).SetText(1U, 2U, level.c_str()).has_value(),
                            "snake: game over level invalid");
-        micropixel::Assert(game_over_panel_.Layout().has_value(), "snake: game over layout failed");
+        // The panel keeps the geometry of the last frame that could hold its
+        // content instead of ending the App along with the run.
+        const auto panel_layout = game_over_panel_.Layout();
+        if (!panel_layout.has_value()) {
+            Line diagnostic;
+            diagnostic.Append("snake: game over layout failed: ");
+            diagnostic.Append(panel_layout.error().name());
+            app_.log().Error(diagnostic.c_str());
+        }
         game_over_panel_.text_button(0U).Sync();
     }
 
@@ -507,6 +515,8 @@ void SnakeGame::RenderOverlay(const Theme& theme) {
 
 void SnakeGame::RenderHud(const Theme& theme) {
     const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
+    const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
+    const int32_t hud_width = kScreenWidth - safe_left - safe_right;
     hud_.label(0U).SetColor(AsColor(theme.text));
     Line level;
     level.Append(strings_.Get(snake_strings::Id::kLabelLevelShort));
@@ -520,31 +530,57 @@ void SnakeGame::RenderHud(const Theme& theme) {
     micropixel::Assert(hud_.grid(0U).SetColor(1U, 1U, AsColor(theme.text)).has_value(),
                        "snake: HUD best color invalid");
     Line status;
+    Line compact;
     if (screen_ == Screen::kPlaying && model_.invincible()) {
+        const uint32_t seconds = static_cast<uint32_t>((model_.invincible_remaining_us() + 999999U) / 1000000U);
         status.Append(strings_.Get(snake_strings::Id::kStatusShieldPrefix));
-        status.AppendUint(static_cast<uint32_t>((model_.invincible_remaining_us() + 999999U) / 1000000U));
+        status.AppendUint(seconds);
         status.Append(strings_.Get(snake_strings::Id::kStatusSecondsSuffix));
+        compact.AppendUint(seconds);
+        compact.Append(strings_.Get(snake_strings::Id::kStatusSecondsSuffix));
         if (model_.combo() > 1U) {
             status.Append("  x");
             status.AppendUint(model_.combo());
+            compact.Append(" x");
+            compact.AppendUint(model_.combo());
         }
     } else if (screen_ == Screen::kPlaying && model_.combo() > 1U) {
         status.Append(strings_.Get(snake_strings::Id::kStatusComboPrefix));
         status.AppendUint(model_.combo());
-    } else {
-        status.Append(" ");
+        compact.Append("x");
+        compact.AppendUint(model_.combo());
     }
     const bool status_active = screen_ == Screen::kPlaying && (model_.invincible() || model_.combo() > 1U);
-    micropixel::Assert(hud_.label(1U).SetText(status_active ? status.c_str() : level.c_str()).has_value(),
-                       "snake: HUD level/status invalid");
-    hud_.label(1U).SetColor(model_.invincible()   ? micropixel::Color::Rgb(34U, 211U, 238U)
-                            : model_.combo() > 1U ? micropixel::Color::Rgb(251U, 191U, 36U)
-                                                  : AsColor(theme.text));
+    // The row places its items at their text widths inside a fixed band, so a
+    // longer status string overflows it wherever the usable width is small: the
+    // 412 px round panel leaves less of it than the wider boards do. The status
+    // is the transient part of the row, so it yields first -- the full wording,
+    // then the same numbers without their word, then the level text the row was
+    // measured against. The title and the score/best grid outrank it because
+    // they are on screen for the whole run, and no combination aborts the game.
+    const auto set_center = [&](const char* text) {
+        return hud_.label(1U).SetText(text).has_value() &&
+               hud_.intrinsic_size().width <= static_cast<uint32_t>(hud_width);
+    };
+    bool show_status = status_active && set_center(status.c_str());
+    if (status_active && !show_status) {
+        show_status = set_center(compact.c_str());
+    }
+    if (!show_status) {
+        (void)hud_.label(1U).SetText(level.c_str());
+    }
+    hud_.label(1U).SetColor(!show_status          ? AsColor(theme.text)
+                            : model_.invincible() ? micropixel::Color::Rgb(34U, 211U, 238U)
+                                                  : micropixel::Color::Rgb(251U, 191U, 36U));
     auto hud_layout = hud_.Layout();
     if (!hud_layout.has_value()) {
         Line diagnostic;
         diagnostic.Append("snake: HUD layout failed: ");
         diagnostic.Append(hud_layout.error().name());
+        diagnostic.Append(" need=");
+        diagnostic.AppendUint(hud_.intrinsic_size().width);
+        diagnostic.Append(" usable=");
+        diagnostic.AppendUint(static_cast<uint32_t>(hud_width));
         diagnostic.Append(" title=");
         diagnostic.AppendUint(hud_.label(0U).intrinsic_size().width);
         diagnostic.Append(" center=");
@@ -552,10 +588,14 @@ void SnakeGame::RenderHud(const Theme& theme) {
         diagnostic.Append(" stats=");
         diagnostic.AppendUint(hud_.grid(0U).intrinsic_size().width);
         app_.log().Error(diagnostic.c_str());
+        // A row with no room keeps the geometry of the last frame that had some,
+        // so the run continues without the status bar instead of ending here.
+        combo_batch_.SetInstanceVisible(0U, false);
+        combo_batch_.SetInstanceVisible(1U, false);
+        return;
     }
-    micropixel::Assert(hud_layout.has_value(), "snake: HUD layout failed");
 
-    if (!status_active) {
+    if (!show_status) {
         combo_batch_.SetInstanceVisible(0U, false);
         combo_batch_.SetInstanceVisible(1U, false);
         return;
