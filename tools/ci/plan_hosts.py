@@ -10,6 +10,7 @@ MATRIX = [
     dict(profile='esp-box-3', chip='esp32s3', wrapper='s3.sh build-host'),
     dict(profile='szpi-esp32s3', chip='esp32s3', wrapper='s3.sh build-szpi'),
     dict(profile='m5stack-cores3', chip='esp32s3', wrapper='s3.sh build-cores3'),
+    dict(profile='sensecap-watcher', chip='esp32s3', wrapper='s3.sh build-host watcher'),
 ]
 selected = set(filter(None, os.environ.get('REBUILD_PROFILES', '').split(',')))
 if not selected.issubset(SOURCES['profiles']):

@@ -1,12 +1,31 @@
 import json
+import os
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from tools.ci.firmware_artifacts import check_image, check_files, inventory
+from tools.ci.firmware_artifacts import ROOT, SOURCES, check_image, check_files, inventory
 
 
 class FirmwareArtifacts(unittest.TestCase):
+    def test_host_plan_covers_release_profiles_and_selects_watcher_rebuild(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'output'
+            environment = dict(os.environ, GITHUB_OUTPUT=str(output), REUSE_RUN='', REBUILD_PROFILES='')
+            subprocess.run([sys.executable, str(ROOT / 'tools/ci/plan_hosts.py')], env=environment, check=True)
+            matrix = json.loads(output.read_text().split('=', 1)[1])
+            self.assertEqual({entry['profile'] for entry in matrix}, set(SOURCES['profiles']))
+            self.assertEqual(len(matrix), len(SOURCES['profiles']))
+            output.unlink()
+            environment.update(REUSE_RUN='123', REBUILD_PROFILES='sensecap-watcher')
+            subprocess.run([sys.executable, str(ROOT / 'tools/ci/plan_hosts.py')], env=environment, check=True)
+            matrix = json.loads(output.read_text().split('=', 1)[1])
+            self.assertEqual([entry['profile'] for entry in matrix], ['sensecap-watcher'])
+            self.assertEqual(matrix[0]['chip'], 'esp32s3')
+            self.assertEqual(matrix[0]['wrapper'], 's3.sh build-host watcher')
+
     def test_wrong_chip_version_and_slot_overflow_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             p = Path(temporary) / 'app.bin'
