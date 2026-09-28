@@ -12,6 +12,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools'))
+from build_full_firmware_image import flash_size_bytes
+
 SOURCES = json.loads((ROOT / 'tools/ci/firmware-sources.json').read_text())
 PROFILES = json.loads((ROOT / 'tools/firmware_profiles.json').read_text())
 CHIP_IDS = {'esp32p4': 18, 'esp32s31': 32, 'esp32s3': 9}
@@ -62,6 +65,24 @@ def check_image(path, target, version):
         raise ValueError('Firmware app descriptor version mismatch')
 
 
+def app_store_mib(profile):
+    size = int(PROFILES[profile]['app_store_size'], 0)
+    if size <= 0 or size % (1024 * 1024):
+        raise ValueError('App Store capacity must be a positive whole MiB')
+    return size // (1024 * 1024)
+
+
+def guest_store_sizes(target):
+    return sorted({app_store_mib(profile) for profile in SOURCES['profiles']
+                   if ('xtensa' if PROFILES[profile]['target'] == 'esp32s3' else 'riscv32-ilp32f') == target})
+
+
+def check_full_image(full, ota, flash_configuration):
+    capacity = flash_size_bytes(flash_configuration)
+    if not 0x30000 + len(ota) <= len(full) <= capacity or full[0x30000:0x30000 + len(ota)] != ota:
+        raise ValueError('Full firmware size or embedded OTA mismatch')
+
+
 def guest(output, launcher):
     version, sdk_version = versions()
     prepared = json.loads(subprocess.check_output(
@@ -86,7 +107,7 @@ def guest(output, launcher):
             run(sys.executable, ROOT / 'tools/micropixel', 'package', project, '--aot-target', target,
                 '--output', bundle, '--json', env=environment)
             bundles.append(bundle)
-        for size in ((8, 24) if target == 'riscv32-ilp32f' else (8,)):
+        for size in guest_store_sizes(target):
             run(sys.executable, ROOT / 'tools/build_app_store_image.py', '--app-store-size', size * 1024 * 1024,
                 '--output', output / target / f'app-store-{size}m.bin', *bundles)
     write(output / 'manifest.json', {'source_commit': os.environ['GITHUB_SHA'], 'firmware_version': version,
@@ -154,7 +175,7 @@ def assemble(inputs, guests, output):
         configs.add(metadata['remote_configuration_sha256'])
         target = PROFILES[profile]['target']
         aot = 'xtensa' if target == 'esp32s3' else 'riscv32-ilp32f'
-        size = 24 if target == 'esp32p4' else 8
+        size = app_store_mib(profile)
         run(sys.executable, ROOT / 'tools/build_full_firmware_image.py', '--build-dir', source,
             '--app-store-image', guests / aot / f'app-store-{size}m.bin', '--output', source / 'micropixel-full.bin')
         destination = output / profile
@@ -165,8 +186,7 @@ def assemble(inputs, guests, output):
         full = (destination / 'micropixel-full.bin').read_bytes()
         ota = (destination / 'micropixel.bin').read_bytes()
         # The flasher intentionally omits unused flash tail bytes.
-        if not 0x30000 + len(ota) <= len(full) <= (32 if target == 'esp32p4' else 16) * 1024 * 1024 or full[0x30000:0x30000 + len(ota)] != ota:
-            raise ValueError('Full firmware size or embedded OTA mismatch')
+        check_full_image(full, ota, json.loads((source / 'flasher_args.json').read_text()))
         metadata['files'] = inventory(destination)
         write(destination / 'manifest.json', metadata)
     if len(configs) != 1:
