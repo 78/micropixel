@@ -92,34 +92,16 @@ class FlexContainer final {
         return *text_buttons_[index];
     }
 
-    // Intrinsic size of the whole row: the children's intrinsic main sizes plus
-    // the layout's gaps and padding, and the largest child cross size plus the
-    // cross padding. `Layout` only succeeds while the main size fits the bounds
-    // it was created with, so a caller compares this against those bounds to
-    // pick between content variants instead of learning about the overflow from
-    // the error. Every child contributes, including hidden ones: a hidden node
-    // still occupies its slot.
+    // Intrinsic size of the whole row or column, in physical width/height order.
+    // `Layout` only succeeds while the children fit the bounds the container was
+    // created with, so a caller compares this against those bounds to pick between
+    // content variants instead of learning about the overflow from the error.
     [[nodiscard]] Size intrinsic_size() const {
-        const bool horizontal = properties_.layout.direction == FlexDirection::kHorizontal;
-        const uint32_t gap = static_cast<uint32_t>(properties_.layout.gap_pixels);
-        const uint32_t main_padding =
-            horizontal ? static_cast<uint32_t>(properties_.layout.padding.left + properties_.layout.padding.right)
-                       : static_cast<uint32_t>(properties_.layout.padding.top + properties_.layout.padding.bottom);
-        const uint32_t cross_padding =
-            horizontal ? static_cast<uint32_t>(properties_.layout.padding.top + properties_.layout.padding.bottom)
-                       : static_cast<uint32_t>(properties_.layout.padding.left + properties_.layout.padding.right);
-        uint32_t main = main_padding;
-        uint32_t cross = cross_padding;
-        for (size_t index = 0U; index < children_.size(); ++index) {
-            const Size size = IntrinsicSize(children_[index]);
-            main += horizontal ? size.width : size.height;
-            const uint32_t item_cross = horizontal ? size.height : size.width;
-            cross = item_cross > cross ? item_cross : cross;
-            if (index + 1U < children_.size()) {
-                main += gap;
-            }
+        std::vector<Size> children(children_.size());
+        for (size_t index = 0U; index < children.size(); ++index) {
+            children[index] = IntrinsicSize(children_[index]);
         }
-        return {main, cross};
+        return ComputeFlexIntrinsicSize(properties_.layout, children);
     }
 
     [[nodiscard]] Result<void> Layout() {

@@ -89,6 +89,44 @@ struct GridLayout final {
 
 inline constexpr size_t kMaxGridTracks = 8U;
 
+// Size a flex row or column needs to hold its children at the sizes they report.
+// The main axis adds the children's main sizes, the gaps and the main padding; the
+// cross axis takes the largest child cross size plus the cross padding. This mirrors
+// what ComputeFlexLayout() measures against, so a caller can compare the result with
+// the bounds the container was created with and pick between content variants before
+// laying out, instead of learning about an overflow from the error. Every child
+// contributes, including hidden ones: a hidden node still occupies its slot.
+//
+// The result is always in physical width/height order, so on a column the axis the
+// children were summed along is reported as the height. Negative padding and gaps
+// count as zero here: ComputeFlexLayout() rejects them, and this pre-check stays a
+// total function.
+[[nodiscard]] constexpr Size ComputeFlexIntrinsicSize(const FlexLayout& layout, std::span<const Size> children) {
+    const bool horizontal = layout.direction == FlexDirection::kHorizontal;
+    const auto span_of = [](int32_t first, int32_t second) {
+        const int64_t total = static_cast<int64_t>(first) + static_cast<int64_t>(second);
+        return total > 0 ? static_cast<uint32_t>(total) : 0U;
+    };
+    const uint32_t main_padding = horizontal ? span_of(layout.padding.left, layout.padding.right)
+                                             : span_of(layout.padding.top, layout.padding.bottom);
+    const uint32_t cross_padding = horizontal ? span_of(layout.padding.top, layout.padding.bottom)
+                                              : span_of(layout.padding.left, layout.padding.right);
+    const uint32_t gap = layout.gap_pixels > 0 ? static_cast<uint32_t>(layout.gap_pixels) : 0U;
+    uint32_t main = main_padding;
+    uint32_t cross = 0U;
+    for (size_t index = 0U; index < children.size(); ++index) {
+        const Size size = children[index];
+        main += horizontal ? size.width : size.height;
+        const uint32_t item_cross = horizontal ? size.height : size.width;
+        cross = item_cross > cross ? item_cross : cross;
+        if (index + 1U < children.size()) {
+            main += gap;
+        }
+    }
+    cross += cross_padding;
+    return horizontal ? Size{main, cross} : Size{cross, main};
+}
+
 // Computes physical rectangles into caller-owned storage. This is a pure Guest-side
 // geometry operation: it performs no allocation and never calls a Host service.
 [[nodiscard]] inline Result<void> ComputeFlexLayout(Rect bounds, const FlexLayout& layout,
