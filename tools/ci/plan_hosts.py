@@ -12,13 +12,18 @@ MATRIX = [
     dict(profile='m5stack-cores3', chip='esp32s3', wrapper='s3.sh build-cores3'),
     dict(profile='sensecap-watcher', chip='esp32s3', wrapper='s3.sh build-host watcher'),
 ]
-selected = set(filter(None, os.environ.get('REBUILD_PROFILES', '').split(',')))
-if not selected.issubset(SOURCES['profiles']):
-    raise SystemExit('Unknown rebuild profile')
-reuse = os.environ.get('REUSE_RUN', '')
-if reuse and not reuse.isdigit():
-    raise SystemExit('Expected numeric run ID')
-matrix = [entry for entry in MATRIX if not reuse or entry['profile'] in selected]
-# A skipped matrix job still needs a nonempty expression during workflow expansion.
-with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-    output.write('matrix=' + json.dumps(matrix or MATRIX[:1]) + '\n')
+def main():
+    selected = set(filter(None, os.environ.get('REBUILD_PROFILES', '').split(',')))
+    if not selected.issubset(SOURCES['profiles']):
+        raise SystemExit('Unknown rebuild profile')
+    reuse = os.environ.get('REUSE_RUN', '')
+    if reuse and not reuse.isdigit():
+        raise SystemExit('Expected numeric run ID')
+    matrix = [entry for entry in MATRIX if not reuse or entry['profile'] in selected]
+    # A skipped matrix job still needs a nonempty expression during workflow expansion.
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+        output.write('matrix=' + json.dumps(matrix or MATRIX[:1]) + '\n')
+
+
+if __name__ == '__main__':
+    main()

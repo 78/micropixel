@@ -1,0 +1,107 @@
+name: PR firmware build
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  plan:
+    name: Select affected boards
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      hosts: ${{ steps.select.outputs.hosts || steps.select.outputs.matrix }}
+      has_hosts: ${{ steps.select.outputs.has_hosts }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            python3 tools/ci/plan_pr_builds.py --base "$BASE_SHA"
+          else
+            # An explicit manual run checks every release board.
+            python3 tools/ci/plan_hosts.py
+            echo 'has_hosts=true' >> "$GITHUB_OUTPUT"
+            echo 'Manual run: all release boards.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  hosts:
+    name: Host ${{ matrix.profile }}
+    needs: plan
+    if: needs.plan.outputs.has_hosts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.hosts) }}
+    env:
+      IDF_PATH: ${{ github.workspace }}/.ci/esp-idf
+      IDF_CCACHE_ENABLE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Read fixed ESP-IDF revision
+        run: echo "IDF_REVISION=$(python3 -c 'import json; print(json.load(open("tools/ci/firmware-sources.json"))["esp_idf_commit"])')" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: espressif/esp-idf
+          ref: ${{ env.IDF_REVISION }}
+          path: .ci/esp-idf
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.espressif
+          key: pr-idf-linux-${{ matrix.chip }}-${{ env.IDF_REVISION }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ccache
+          key: pr-ccache-${{ matrix.profile }}-${{ env.IDF_REVISION }}-${{ github.sha }}
+          restore-keys: pr-ccache-${{ matrix.profile }}-${{ env.IDF_REVISION }}-
+      - name: Install fixed IDF tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ninja-build ccache libusb-1.0-0 python3-venv
+          "$IDF_PATH/install.sh" ${{ matrix.chip }}
+      - name: Compile Host
+        run: bash tools/${{ matrix.wrapper }}
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr-build-diagnostics-${{ matrix.profile }}
+          path: |
+            build/host-*/log/
+            build/host-*/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
+          retention-days: 7
+  result:
+    name: PR build result
+    needs: [plan, hosts]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all selected builds to pass
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          HAS_HOSTS: ${{ needs.plan.outputs.has_hosts }}
+          HOST_RESULT: ${{ needs.hosts.result }}
+        run: |
+          test "$PLAN_RESULT" = success
+          if [ "$HAS_HOSTS" = true ]; then
+            test "$HOST_RESULT" = success
+          else
+            echo "No Host build inputs changed; compilation skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
