@@ -23,11 +23,13 @@ class BoardPower final {
     [[nodiscard]] i2c_master_bus_handle_t ControlBus() const { return control_bus_; }
     [[nodiscard]] i2c_master_dev_handle_t Expander() const { return expander_; }
 
-    // VBUS_IN_DET is active low: a low level means external power is present.
-    [[nodiscard]] bool IsCharging();
+    // VBUS_IN_DET is active low: a low level means external power is present. Both
+    // lines are expander inputs on a shared bus, so the caller gets the transport
+    // status as well: a failed read must not be mistaken for an unasserted line.
+    [[nodiscard]] esp_err_t ReadExternalPower(bool& connected);
 
     // Battery detect is also active low.
-    [[nodiscard]] bool IsBatteryPresent();
+    [[nodiscard]] esp_err_t ReadBatteryPresent(bool& present);
 
     // Cuts the system rail, which is the vendor's power-off path. Everything
     // else stays latched, so this is only correct as the final action.

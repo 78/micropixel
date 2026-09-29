@@ -113,7 +113,10 @@ device::BatterySnapshot BatteryPeripheral::Snapshot() {
     struct Request final {
         BatteryPeripheral* peripheral;
         device::BatterySnapshot snapshot;
-    } request{this, last_snapshot_};
+    } request{this, {}};
+    // The worker that samples owns the snapshot, so a caller only ever receives a copy
+    // the worker produced: neither this call nor the fallback inside Sample() reads
+    // the cache from another task.
     const esp_err_t status = executor_->Invoke(
         buses::I2cExecutor::Priority::kLow,
         [](void* context) {
@@ -122,7 +125,12 @@ device::BatterySnapshot BatteryPeripheral::Snapshot() {
             return ESP_OK;
         },
         &request);
-    return status == ESP_OK ? request.snapshot : last_snapshot_;
+    if (status == ESP_OK) {
+        return request.snapshot;
+    }
+    // The bus is unreachable, so this poll's level is genuinely unknown: it is reported
+    // as unavailable instead of as a stale reading.
+    return {};
 }
 
 device::BatterySnapshot BatteryPeripheral::Sample() {
@@ -130,24 +138,34 @@ device::BatterySnapshot BatteryPeripheral::Sample() {
     if (power_ == nullptr) {
         return last_snapshot_;
     }
-    // VBUS_IN_DET is active low, so external power is present when the line
-    // reads low. This is the line the vendor UI and xiaozhi both use for the
-    // charge state; the vendor's separate charge-detect pin feeds
-    // bsp_system_is_charging(), whose polarity contradicts its own UI.
-    const bool external_power = power_->IsCharging();
-    // BAT_DET is active low as well, but neither the vendor UI nor xiaozhi gates
-    // the reported level on it: one posts bsp_battery_get_percent() on a timer,
-    // the other returns the curve unconditionally. It is sampled for the log
-    // only, so a unit whose detect line never asserts still reports a level.
-    const bool battery_present = power_->IsBatteryPresent();
-    // The charge state does not depend on the pack reading, so it is refreshed on
-    // every pass: a device running from the charger keeps reporting external
-    // power even while the divider reads nothing.
-    last_snapshot_.charging = external_power;
-    last_snapshot_.discharging = !external_power;
-    last_snapshot_.charging_available = true;
-    last_snapshot_.external_power_connected = external_power;
-    last_snapshot_.external_power_available = true;
+    // VBUS_IN_DET is active low, so external power is present when the line reads low.
+    // This is the line the vendor UI and xiaozhi both use for the charge state; the
+    // vendor's separate charge-detect pin feeds bsp_system_is_charging(), whose
+    // polarity contradicts its own UI.
+    bool external_power = false;
+    const bool external_read = power_->ReadExternalPower(external_power) == ESP_OK;
+    // BAT_DET is active low as well, but neither the vendor UI nor xiaozhi gates the
+    // reported level on it: one posts bsp_battery_get_percent() on a timer, the other
+    // returns the curve unconditionally. It is sampled for the log only, so a unit
+    // whose detect line never asserts still reports a level.
+    bool battery_present = false;
+    const bool present_read = power_->ReadBatteryPresent(battery_present) == ESP_OK;
+    // The charge state does not depend on the pack reading, so it is refreshed on every
+    // pass: a device running from the charger keeps reporting external power even while
+    // the divider reads nothing. A failed read is not an unplug, though -- the expander
+    // is on a shared bus, so the last state is kept and only its availability is
+    // withdrawn. That is what stops a transient bus failure from reaching the UI and the
+    // Guest power state as a real external-power change.
+    if (external_read) {
+        last_snapshot_.charging = external_power;
+        last_snapshot_.discharging = !external_power;
+        last_snapshot_.external_power_connected = external_power;
+        last_snapshot_.charging_available = true;
+        last_snapshot_.external_power_available = true;
+    } else {
+        last_snapshot_.charging_available = false;
+        last_snapshot_.external_power_available = false;
+    }
     uint32_t millivolts = 0U;
     const bool level_read = ReadPackMillivolts(millivolts) == ESP_OK;
     if (level_read) {
@@ -161,10 +179,13 @@ device::BatterySnapshot BatteryPeripheral::Sample() {
     if (!sample_logged_ || previous.percent != last_snapshot_.percent ||
         previous.available != last_snapshot_.available || previous.charging != last_snapshot_.charging ||
         previous.discharging != last_snapshot_.discharging ||
-        previous.external_power_connected != last_snapshot_.external_power_connected) {
+        previous.external_power_connected != last_snapshot_.external_power_connected ||
+        previous.charging_available != last_snapshot_.charging_available) {
+        const char* present = present_read ? (battery_present ? "yes" : "no") : "unknown";
+        const char* external = external_read ? (external_power ? "yes" : "no") : "unknown";
         ESP_LOGI(kTag, "sample: pack=%umV level=%u%% available=%s present=%s external=%s charging=%s%s", millivolts,
-                 static_cast<unsigned>(last_snapshot_.percent), last_snapshot_.available ? "yes" : "no",
-                 battery_present ? "yes" : "no", external_power ? "yes" : "no", last_snapshot_.charging ? "yes" : "no",
+                 static_cast<unsigned>(last_snapshot_.percent), last_snapshot_.available ? "yes" : "no", present,
+                 external, last_snapshot_.charging ? "yes" : "no",
                  level_read ? "" : " (pack rejected, previous level kept)");
         sample_logged_ = true;
     }
@@ -232,7 +253,9 @@ void BatteryPeripheral::NotifyIfChanged(const device::BatterySnapshot& previous,
                                         const device::BatterySnapshot& current) {
     if (previous.percent == current.percent && previous.available == current.available &&
         previous.charging == current.charging && previous.discharging == current.discharging &&
-        previous.external_power_connected == current.external_power_connected) {
+        previous.external_power_connected == current.external_power_connected &&
+        previous.charging_available == current.charging_available &&
+        previous.external_power_available == current.external_power_available) {
         return;
     }
     device::BatteryStateChangeSink sink = state_change_sink_.load(std::memory_order_acquire);
