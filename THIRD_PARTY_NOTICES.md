@@ -76,6 +76,30 @@ The same sequence is implemented independently by the xiaozhi-esp32 board
 `main/boards/sensecap-watcher/sensecap_watcher.cc`, which was used to confirm
 that the vendor's direction masks are correct and its trailing comments are not.
 
+## SenseCAP Watcher battery monitoring
+
+The ADC channel and attenuation, the pack divider ratio, the averaging depth and
+the state-of-charge curve in
+`firmware/espressif/main/platform/boards/sensecap-watcher/battery_peripheral.cpp`
+come from the board support package published for the SenseCAP Watcher, which is
+also the authority for the expander line the board treats as charge state.
+MicroPixel samples the divider through its own ADC oneshot unit, reads the line
+through its own board power service, and reports the level to the Host UI.
+
+- upstream: <https://github.com/Seeed-Studio/SenseCAP-Watcher-Firmware>;
+- files: `components/sensecap-watcher/include/sensecap-watcher.h` (`BSP_BAT_ADC_CHAN`,
+  `BSP_BAT_ADC_ATTEN`, `BSP_BAT_VOL_RATIO`, `BSP_PWR_VBUS_IN_DET`, `BSP_PWR_BAT_DET`);
+  `components/sensecap-watcher/sensecap-watcher.c` (`bsp_battery_get_voltage()`,
+  `bsp_battery_get_percent()`, `bsp_battery_is_present()`); and
+  `examples/factory_firmware/main/view/view.c` for the `VBUS_IN_DET` charge convention its own UI uses;
+- referenced revision: `a02671cd866f91a34f3e4f63a1d8109cda4c03d0`;
+- license: Apache-2.0.
+
+The curve is used as published, `percent = (-v² + 9016v - 19189000) / 10000` for a pack voltage `v`
+in millivolts. The same division of labour appears in the xiaozhi-esp32 board
+`main/boards/sensecap-watcher/sensecap_watcher.cc`, which derives a level from the divider and never
+gates it on the battery-detect line.
+
 ## MetalioClaw4 board initialization and display driver
 
 The TCA9555 startup pin directions and peripheral rail levels in

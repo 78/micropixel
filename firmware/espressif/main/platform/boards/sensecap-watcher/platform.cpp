@@ -23,6 +23,7 @@
 #include "platform/adapters/graphics_adapter.hpp"
 #include "platform/audio/audio_engine.hpp"
 #include "platform/boards/esp32-s3-common/display_shadow.hpp"
+#include "platform/boards/sensecap-watcher/battery_peripheral.hpp"
 #include "platform/boards/sensecap-watcher/board_config.hpp"
 #include "platform/boards/sensecap-watcher/board_power.hpp"
 #include "platform/boards/sensecap-watcher/display_hardware.hpp"
@@ -113,6 +114,7 @@ struct SensecapWatcherState final {
     // because the PC-facing port is an external USB-UART bridge, and the
     // development bridge owns the screenshot and touch commands on that stream.
     esp32_s3_common::DisplayShadow display_shadow{kWidth, kHeight};
+    board_detail::BatteryPeripheral battery{};
     board_detail::UartLocalControl local_control{};
     transports::DevelopmentDisplayControl development_display{};
 };
@@ -371,6 +373,17 @@ class SensecapWatcherBoard final : public Board, public device::Power {
                 ESP_LOGW(kTag, "ES8311 codec unavailable for this boot: %s", esp_err_to_name(audio_status));
             }
         }
+        // The battery monitor is optional in the same way. Its sense line is an
+        // ADC channel, but charging and presence are expander inputs, so it
+        // samples on the shared executor; without either the Host keeps its
+        // unavailable default instead of showing an invented level.
+        esp_err_t battery_status = ESP_ERR_INVALID_STATE;
+        if (executor_status == ESP_OK) {
+            battery_status = state_.battery.Initialize(power_, state_.i2c_executor);
+            if (battery_status != ESP_OK) {
+                ESP_LOGW(kTag, "battery monitor unavailable for this boot: %s", esp_err_to_name(battery_status));
+            }
+        }
         ESP_RETURN_ON_ERROR(state_.guest_graphics.Initialize(state_.display, nullptr), kTag,
                             "initialize RGB565 Guest graphics failed");
 
@@ -447,6 +460,12 @@ class SensecapWatcherBoard final : public Board, public device::Power {
         // Wi-Fi surface reports "unavailable".
         registration.SetWifi(wifi_);
         registration.SetPower(*this);
+        // The board has no fuel gauge, so the level is a curve over the pack
+        // voltage; publishing it is what puts the battery on the status bar and
+        // in the Hall instead of the Host's unavailable default.
+        if (battery_status == ESP_OK) {
+            registration.SetBattery(state_.battery);
+        }
         registration.SetSystemUi(system_ui_);
         // Starting the development bridge also starts the transport it is given,
         // so the byte stream is owned in one place: MPX1 and the screenshot and
@@ -460,8 +479,9 @@ class SensecapWatcherBoard final : public Board, public device::Power {
             ESP_LOGW(kTag, "local control unavailable on this boot: %s", esp_err_to_name(local_control_status));
         }
         ESP_LOGI(kTag,
-                 "ready: SPD2010 panel + touch, rotary knob, native Wi-Fi, audio=%s, power rails up, Host UI in place",
-                 audio_status == ESP_OK ? "ES8311" : "off");
+                 "ready: SPD2010 panel + touch, rotary knob, native Wi-Fi, audio=%s, battery=%s, power rails up, "
+                 "Host UI in place",
+                 audio_status == ESP_OK ? "ES8311" : "off", battery_status == ESP_OK ? "ADC" : "off");
         return context.Publish(registration) ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
 

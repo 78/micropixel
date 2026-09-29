@@ -5,6 +5,7 @@ list(APPEND micropixel_sources
     # complete frame that partial-buffer capture cannot.
     "platform/boards/esp32-s3-common/display_shadow.cpp"
     "platform/boards/sensecap-watcher/board_power.cpp"
+    "platform/boards/sensecap-watcher/battery_peripheral.cpp"
     "platform/boards/sensecap-watcher/display_hardware.cpp"
     "platform/boards/sensecap-watcher/i2s_audio_sink.cpp"
     "platform/boards/sensecap-watcher/knob_input.cpp"
