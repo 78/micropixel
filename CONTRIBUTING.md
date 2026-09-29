@@ -21,6 +21,23 @@ platform branch or an explicit multi-board request. Before release or push, vali
 Host tests run through the wrapper above and reuse unchanged binaries. Use `HOST_TEST_REBUILD=1` to rebuild them.
 Add tests to an existing suite unless a separate target needs different compilation, fixtures, or fault injection.
 
+## Automatic PR builds
+
+[PR firmware build](.github/workflows/pr-build.yml) runs when a pull request is opened,
+updated, reopened, or marked ready for review. It builds GitHub's proposed merge commit
+with the pinned ESP-IDF and submodules. A newer commit cancels the previous run for that PR.
+
+Board-specific changes select that board; shared S3 code selects all S3 profiles; shared
+firmware, ABI, or build configuration selects all release boards. Documentation and Guest-only
+changes skip Host compilation, except SDK symbols used to generate Host fonts. Guest builds
+and runtime regressions remain manual. The workflow does not require a published SDK, release
+secrets, or attached hardware, and does not publish firmware. Manual dispatch builds all boards.
+
+`PR build result` is the stable aggregate check for branch protection: every selected board
+must compile successfully; PRs with no Host build inputs pass with a skip explanation.
+Fork runs may first need maintainer approval under the repository's GitHub Actions settings.
+Compilation does not replace the relevant local tests and hardware checks above.
+
 ## Documentation
 
 Use English for default filenames and `.zh-CN.md` for Simplified Chinese.

@@ -7,6 +7,17 @@
 
 ## 基本检查
 
+PR 新建、追加提交、重新打开或转为待审查时，会自动运行
+[PR firmware build](.github/workflows/pr-build.yml)，编译 GitHub 生成的候选合并提交。
+同一 PR 有新提交时会取消旧构建。单板代码只编译对应板，S3 公共代码编译所有 S3 板型；
+共享固件、ABI 和构建配置改动编译全部发布板型。纯文档和 Guest 应用改动跳过 Host 编译；
+用于生成 Host 字体的 SDK symbols 例外。
+
+`PR build result` 汇总所有选中板型的结果，可作为分支保护的固定检查项。
+没有 Host 构建输入变更时会通过并注明跳过原因。外部 fork 的运行可能需要维护者按 GitHub 设置批准。
+手动触发会编译所有板型。此流程不依赖已发布 SDK 或发布密钥，不发布固件；Guest 构建、
+回归测试和硬件验证仍按下面的本地流程执行，编译通过不能替代它们。
+
 ```sh
 git submodule update --init --recursive
 # Guest 改动：使用当前目标对应的 Guest 构建入口。
