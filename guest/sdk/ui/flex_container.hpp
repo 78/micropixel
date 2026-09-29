@@ -92,6 +92,18 @@ class FlexContainer final {
         return *text_buttons_[index];
     }
 
+    // Intrinsic size of the whole row or column, in physical width/height order.
+    // `Layout` only succeeds while the children fit the bounds the container was
+    // created with, so a caller compares this against those bounds to pick between
+    // content variants instead of learning about the overflow from the error.
+    [[nodiscard]] Size intrinsic_size() const {
+        std::vector<Size> children(children_.size());
+        for (size_t index = 0U; index < children.size(); ++index) {
+            children[index] = IntrinsicSize(children_[index]);
+        }
+        return ComputeFlexIntrinsicSize(properties_.layout, children);
+    }
+
     [[nodiscard]] Result<void> Layout() {
         std::vector<FlexItem> items(children_.size());
         std::vector<Rect> rects(children_.size());

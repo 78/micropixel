@@ -60,6 +60,10 @@ Game Container，再在震动期间冻结其子节点，只更新 Container tran
 flash/particle 迫使全量重放。
 顶部 HUD 从 `RendererInfo::safe_area_insets()` 读取圆角屏的逻辑边缘内缩：标题保留额外视觉 padding，
 Level、Score、Best、状态文字和 Combo 条按右侧 inset 整组左移，不按 Mosaico 板名硬编码布局分支。轻点左上标题所在的顶部 HUD 可暂停；热区覆盖完整标题但不侵入棋盘。
+这一行按子项的文字固有宽度排布，而 Combo/Shield 状态文字比 Level 文字宽，在可用宽度最小的 412 圆屏上
+会超出这一行，因此每帧先比较 `FlexContainer::intrinsic_size()` 与左右 inset 之间的可用宽度，再按
+完整文案 → 去掉词的数字形式（`x2`、`12s x2`）→ Level 文案的顺序降级；标题与 Score/Best 优先级最高。
+定位失败只记一行 error、保留上一帧几何并隐藏 Combo 条，不中断这一局，也不再 Panic。
 
 ## 性能基准模式
 

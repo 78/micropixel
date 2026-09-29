@@ -15,6 +15,7 @@ The firmware manages hardware, app isolation, and the system UI.
 | ESP32-S3 | [ESP32-S3-BOX-3](https://github.com/espressif/esp-box) |
 | ESP32-S3 | [LCKFB SZPI](https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html) |
 | ESP32-S3 | [M5Stack CoreS3](https://docs.m5stack.com/en/core/CoreS3) |
+| ESP32-S3 | [SenseCAP Watcher](https://wiki.seeedstudio.com/cn/getting_started_with_watcher/) |
 
 The Host uses ESP-IDF 6.1 and a pinned [WAMR fork](https://github.com/78/wasm-micro-runtime).
 Apps are compiled to architecture-specific AOT v6 bundles. The ABI is still evolving.
@@ -44,7 +45,7 @@ python3 -m pip install -r requirements-dev.txt
 bash tools/p4.sh build-host
 ```
 
-Other profiles: `bash tools/s31.sh build-host` and `bash tools/s3.sh build-host <box3|szpi|cores3>`.
+Other profiles: `bash tools/s31.sh build-host` and `bash tools/s3.sh build-host <box3|szpi|cores3|watcher>`.
 
 ## Project
 

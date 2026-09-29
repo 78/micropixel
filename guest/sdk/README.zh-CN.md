@@ -389,6 +389,9 @@ Guest 不自行修改 Texture 字节序。
 ### 组合控件
 
 普通页面优先用 Flex/Grid 容器描述布局，使用 TextButton 或 ImageButton 组合显示与点击行为。
+Flex/Grid 按子项的固有尺寸在创建时的 bounds 内排布：内容（子项固有尺寸 + 间隔 + padding）装不下时返回
+`kResourceExhausted`，且不改变已有几何，应用应改用更短的内容，而不是把它当作不可恢复的错误。
+`FlexContainer::intrinsic_size()` 给出这一行当前需要的尺寸，供排版前在多个内容变体之间选择。
 完全定制的按钮可用无堆分配的 `ui::Button`，它捕获 touch id，移出取消按下视觉，移回恢复，内部松开才
 触发 click；hit padding 扩大触控区但不改变画面，相邻目标不应重叠。
 

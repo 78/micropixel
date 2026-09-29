@@ -67,6 +67,8 @@ python3 tools/micropixel package guest/apps/blocks --aot-target riscv32-ilp32f
 
 顶部 HUD 与 Juicy Snake 使用同一套圆角屏布局规则：标题和右侧 Level/Score/Best、Combo 分别消费
 `RendererInfo::safe_area_insets()` 的左右内缩，标题另保留 12 个逻辑像素的视觉 padding。
+与 Snake 相同，这一行先按 `FlexContainer::intrinsic_size()` 测量再决定内容：Combo 文案装不下时先退到
+去词形式（`x2`），再退到 Level 文案；定位失败只记一行 error 并保留上一帧几何，不中断这一局。
 
 音效参数只维护在 `audio/sfx.json`。`tools/analyze_sfx.py` 逐采样复现 Host 合成器，结合可替换的设备
 频响计算 A-weighted 事件能量、重复暴露、尖锐度代理、瞬态和层级评分；构建会生成报告及 Guest 头文件，

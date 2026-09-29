@@ -119,20 +119,24 @@ esp_err_t BoardPower::SequenceStartup() {
     return ESP_OK;
 }
 
-bool BoardPower::IsCharging() {
+esp_err_t BoardPower::ReadExternalPower(bool& connected) {
     bool level = false;
-    if (ReadPinLevel(board::kExpanderPinVbusInDetect, level) != ESP_OK) {
-        return false;
+    const esp_err_t status = ReadPinLevel(board::kExpanderPinVbusInDetect, level);
+    if (status != ESP_OK) {
+        return status;
     }
-    return !level;
+    connected = !level;
+    return ESP_OK;
 }
 
-bool BoardPower::IsBatteryPresent() {
+esp_err_t BoardPower::ReadBatteryPresent(bool& present) {
     bool level = false;
-    if (ReadPinLevel(board::kExpanderPinBatteryDetect, level) != ESP_OK) {
-        return false;
+    const esp_err_t status = ReadPinLevel(board::kExpanderPinBatteryDetect, level);
+    if (status != ESP_OK) {
+        return status;
     }
-    return !level;
+    present = !level;
+    return ESP_OK;
 }
 
 esp_err_t BoardPower::PowerOff() {

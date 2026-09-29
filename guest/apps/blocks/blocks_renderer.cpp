@@ -247,18 +247,42 @@ void BlocksGame::RenderMiniPiece(uint16_t first_instance, Tetromino type, int32_
 }
 
 void BlocksGame::RenderHeader(const Theme& theme) {
+    const int32_t safe_left = static_cast<int32_t>(renderer_info_.safe_area_insets().left);
+    const int32_t safe_right = static_cast<int32_t>(renderer_info_.safe_area_insets().right);
+    const int32_t hud_width = static_cast<int32_t>(kScreenWidth) - safe_left - safe_right;
     hud_.label(0U).SetColor(AsColor(theme.text));
-    Line center;
+    Line level;
+    level.Append(strings_.Get(blocks_strings::Id::kLabelLevelShort));
+    level.AppendUint(model_.level());
+    Line combo;
+    Line combo_compact;
     const bool combo_active = screen_ == Screen::kPlaying && model_.combo() > 1U;
     if (combo_active) {
-        center.Append(strings_.Get(blocks_strings::Id::kEffectComboPrefix));
-        center.AppendUint(model_.combo());
-    } else {
-        center.Append(strings_.Get(blocks_strings::Id::kLabelLevelShort));
-        center.AppendUint(model_.level());
+        combo.Append(strings_.Get(blocks_strings::Id::kEffectComboPrefix));
+        combo.AppendUint(model_.combo());
+        combo_compact.Append("x");
+        combo_compact.AppendUint(model_.combo());
     }
-    micropixel::Assert(hud_.label(1U).SetText(center.c_str()).has_value(), "blocks: HUD center invalid");
-    hud_.label(1U).SetColor(combo_active ? micropixel::Color::Rgb(251U, 191U, 36U) : AsColor(theme.text));
+    // The row places its items at their text widths inside a fixed band, so a
+    // longer combo string overflows it wherever the usable width is small: the
+    // 412 px round panel leaves less of it than the wider boards do. The combo
+    // text is the transient part of the row, so it yields first -- the full
+    // wording, then the same number without its word, then the level text the
+    // row was measured against. The title and the score/best grid outrank it
+    // because they are on screen for the whole run, and no combination aborts
+    // the game.
+    const auto set_center = [&](const char* text) {
+        return hud_.label(1U).SetText(text).has_value() &&
+               hud_.intrinsic_size().width <= static_cast<uint32_t>(hud_width);
+    };
+    bool show_combo = combo_active && set_center(combo.c_str());
+    if (combo_active && !show_combo) {
+        show_combo = set_center(combo_compact.c_str());
+    }
+    if (!show_combo) {
+        (void)hud_.label(1U).SetText(level.c_str());
+    }
+    hud_.label(1U).SetColor(show_combo ? micropixel::Color::Rgb(251U, 191U, 36U) : AsColor(theme.text));
     Line score;
     score.AppendPadded4(model_.score());
     micropixel::Assert(hud_.grid(0U).SetText(1U, 0U, score.c_str()).has_value(), "blocks: HUD score invalid");
@@ -270,6 +294,10 @@ void BlocksGame::RenderHeader(const Theme& theme) {
         Line diagnostic;
         diagnostic.Append("blocks: HUD layout failed: ");
         diagnostic.Append(hud_layout.error().name());
+        diagnostic.Append(" need=");
+        diagnostic.AppendUint(hud_.intrinsic_size().width);
+        diagnostic.Append(" usable=");
+        diagnostic.AppendUint(static_cast<uint32_t>(hud_width));
         diagnostic.Append(" title=");
         diagnostic.AppendUint(hud_.label(0U).intrinsic_size().width);
         diagnostic.Append(" center=");
@@ -277,8 +305,10 @@ void BlocksGame::RenderHeader(const Theme& theme) {
         diagnostic.Append(" stats=");
         diagnostic.AppendUint(hud_.grid(0U).intrinsic_size().width);
         app_.log().Error(diagnostic.c_str());
+        // A row with no room keeps the geometry of the last frame that had some,
+        // so the game continues without the header instead of ending here.
+        return;
     }
-    micropixel::Assert(hud_layout.has_value(), "blocks: HUD layout failed");
 }
 
 void BlocksGame::RenderSidebar(const Theme& theme) {
@@ -363,7 +393,15 @@ void BlocksGame::RenderOverlay() {
         level.AppendUint(model_.level());
         micropixel::Assert(game_over_panel_.grid(0U).SetText(1U, 1U, level.c_str()).has_value(),
                            "blocks: game over level invalid");
-        micropixel::Assert(game_over_panel_.Layout().has_value(), "blocks: game over layout failed");
+        // The panel keeps the geometry of the last frame that could hold its
+        // content instead of ending the App along with the run.
+        const auto panel_layout = game_over_panel_.Layout();
+        if (!panel_layout.has_value()) {
+            Line diagnostic;
+            diagnostic.Append("blocks: game over layout failed: ");
+            diagnostic.Append(panel_layout.error().name());
+            app_.log().Error(diagnostic.c_str());
+        }
         game_over_panel_.text_button(0U).Sync();
         return;
     }

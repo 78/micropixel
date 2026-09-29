@@ -116,6 +116,8 @@ void RejectsInvalidAndOverflowingBounds() {
 void TestGuestLayout() {
     using micropixel::ErrorCode;
     using micropixel::Rect;
+    using micropixel::Size;
+    using micropixel::ui::ComputeFlexIntrinsicSize;
     using micropixel::ui::ComputeFlexLayout;
     using micropixel::ui::ComputeGridLayout;
     using micropixel::ui::FlexAlignment;
@@ -125,6 +127,42 @@ void TestGuestLayout() {
     using micropixel::ui::FlexLayout;
     using micropixel::ui::GridLayout;
     using micropixel::ui::LayoutLength;
+
+    {
+        // Two labels in a padded, gapped row. The cross axis has to add its padding to
+        // the tallest child instead of folding it into the maximum, and a column has to
+        // report the axis the children were summed along as the height.
+        constexpr std::array children{Size{40U, 12U}, Size{11U, 9U}};
+        // Insets are {top, right, bottom, left}, so the horizontal row spans
+        // left + right = 16 along its main axis and top + bottom = 10 across it.
+        constexpr FlexLayout horizontal{
+            .direction = FlexDirection::kHorizontal, .padding = {3, 5, 7, 11}, .gap_pixels = 4};
+        const Size row = ComputeFlexIntrinsicSize(horizontal, children);
+        Check(row.width == 71U && row.height == 22U,
+              "a row must add its gaps and padding to the intrinsic child sizes");
+        constexpr FlexLayout vertical{.direction = FlexDirection::kVertical, .padding = {3, 5, 7, 11}, .gap_pixels = 4};
+        const Size column = ComputeFlexIntrinsicSize(vertical, children);
+        Check(column.width == 56U && column.height == 35U,
+              "a column must report its main axis as the height and its cross axis as the width");
+        const Size empty = ComputeFlexIntrinsicSize(horizontal, std::span<const Size>{});
+        Check(empty.width == 16U && empty.height == 10U, "a row without children must report its padding alone");
+    }
+
+    {
+        // The minimal case measured on SZPI during review: two labels 36x16 and 18x16,
+        // padding {3, 5, 7, 11} and a gap of 4. The row is 16 + 54 + 4 wide and 10 + 16
+        // high, and the same children as a column are 16 + 36 wide and 10 + 32 + 4 high.
+        // Before the fix the row reported 74x16 and the column 46x36, which is what the
+        // review measured on hardware.
+        constexpr std::array children{Size{36U, 16U}, Size{18U, 16U}};
+        constexpr FlexLayout horizontal{
+            .direction = FlexDirection::kHorizontal, .padding = {3, 5, 7, 11}, .gap_pixels = 4};
+        const Size row = ComputeFlexIntrinsicSize(horizontal, children);
+        Check(row.width == 74U && row.height == 26U, "the measured SZPI row must report 74x26");
+        constexpr FlexLayout vertical{.direction = FlexDirection::kVertical, .padding = {3, 5, 7, 11}, .gap_pixels = 4};
+        const Size column = ComputeFlexIntrinsicSize(vertical, children);
+        Check(column.width == 52U && column.height == 46U, "the measured SZPI column must report 52x46");
+    }
 
     {
         constexpr std::array items{FlexItem::Fixed(40U), FlexItem::Grow(), FlexItem::Grow(2U)};

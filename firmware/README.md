@@ -6,7 +6,7 @@ with the [toolchain configured](../docs/development/flashing.zh-CN.md) (Chinese)
 ```sh
 bash tools/p4.sh build-host
 bash tools/s31.sh build-host
-bash tools/s3.sh build-host <box3|szpi|cores3>
+bash tools/s3.sh build-host <box3|szpi|cores3|watcher>
 ```
 
 Build and flash are separate operations. For example, `bash tools/p4.sh flash-host <port>` writes the built Host

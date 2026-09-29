@@ -24,11 +24,16 @@ class DisplayShadow final {
     static void Flush(lv_display_t* display, const lv_area_t* area, uint8_t* pixels);
     [[nodiscard]] bool CopyArea(lv_display_t* display, const lv_area_t* area, const uint8_t* pixels);
 
+    // Row-completion map. It covers the tallest panel this shadow serves, the
+    // Watcher's 412 rows. Shorter 240-row S3 panels only ever consult the
+    // first `height_` entries, so the extra bytes change no behaviour.
+    static constexpr size_t kMaxShadowRows = 480U;
+
     static inline DisplayShadow* owner_{};
     lv_display_t* display_{};
     lv_display_flush_cb_t adapter_flush_{};
     uint8_t* pixels_{};
-    std::array<bool, 240U> complete_rows_{};
+    std::array<bool, kMaxShadowRows> complete_rows_{};
     uint32_t width_{};
     uint32_t height_{};
     bool ready_{};
