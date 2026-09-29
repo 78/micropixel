@@ -6,10 +6,10 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_private/log_lock.h"
 #ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
 #include "freertos/idf_additions.h"
 #endif
+#include "platform/transports/log_output_lock.hpp"
 #include "work/task_policy.hpp"
 
 namespace micropixel::platform::transports {
@@ -91,7 +91,7 @@ void UsbSerialJtagLocalControl::NotifyResponseReady() {
 }
 
 void UsbSerialJtagLocalControl::LockOutput() {
-    esp_log_impl_lock();
+    LockLogOutput();
     FlushOutput(1000U);
 }
 
@@ -113,7 +113,7 @@ void UsbSerialJtagLocalControl::FlushOutput(uint32_t timeout_ms) {
     (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(timeout_ms));
 }
 
-void UsbSerialJtagLocalControl::UnlockOutput() { esp_log_impl_unlock(); }
+void UsbSerialJtagLocalControl::UnlockOutput() { UnlockLogOutput(); }
 
 void UsbSerialJtagLocalControl::TaskEntry(void* context) { static_cast<UsbSerialJtagLocalControl*>(context)->Run(); }
 

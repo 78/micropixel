@@ -10,10 +10,10 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_private/log_lock.h"
 #ifdef CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
 #include "freertos/idf_additions.h"
 #endif
+#include "platform/transports/log_output_lock.hpp"
 #include "work/task_policy.hpp"
 
 namespace micropixel::platform::sensecap_watcher {
@@ -134,7 +134,7 @@ void UartLocalControl::NotifyResponseReady() {
 }
 
 void UartLocalControl::LockOutput() {
-    esp_log_impl_lock();
+    transports::LockLogOutput();
     FlushOutput(1000U);
 }
 
@@ -154,7 +154,7 @@ bool UartLocalControl::WriteAll(const void* data, size_t size) {
 
 void UartLocalControl::FlushOutput(uint32_t timeout_ms) { (void)uart_wait_tx_done(kPort, pdMS_TO_TICKS(timeout_ms)); }
 
-void UartLocalControl::UnlockOutput() { esp_log_impl_unlock(); }
+void UartLocalControl::UnlockOutput() { transports::UnlockLogOutput(); }
 
 void UartLocalControl::TaskEntry(void* context) { static_cast<UartLocalControl*>(context)->Run(); }
 

@@ -4,7 +4,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_private/log_lock.h"
+#include "platform/transports/log_output_lock.hpp"
 #include "work/task_policy.hpp"
 
 namespace micropixel::platform::transports {
@@ -89,7 +89,7 @@ void TinyUsbCdcLocalControl::NotifyResponseReady() {
 }
 
 void TinyUsbCdcLocalControl::LockOutput() {
-    esp_log_impl_lock();
+    LockLogOutput();
     FlushOutput(1000U);
 }
 
@@ -112,7 +112,7 @@ void TinyUsbCdcLocalControl::FlushOutput(uint32_t timeout_ms) {
     (void)tinyusb_cdcacm_write_flush(interface_, pdMS_TO_TICKS(timeout_ms));
 }
 
-void TinyUsbCdcLocalControl::UnlockOutput() { esp_log_impl_unlock(); }
+void TinyUsbCdcLocalControl::UnlockOutput() { UnlockLogOutput(); }
 
 void TinyUsbCdcLocalControl::TaskEntry(void* context) { static_cast<TinyUsbCdcLocalControl*>(context)->Run(); }
 
