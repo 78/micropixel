@@ -9,7 +9,16 @@ A restricted C++23 SDK for WebAssembly apps. No ESP-IDF, LVGL, board-specific ty
 - [Windows automation](AI.md) — managed installation and JSON commands.
 - [API reference (中文)](README.zh-CN.md) — resources, events, graphics, audio, input, and devices.
 
-## Upgrading to 0.20.1
+## Upgrading to 0.20.2
+
+`ui::FlexContainer::intrinsic_size()` and `ui::ComputeFlexIntrinsicSize()` report the physical
+width and height needed by a row or column, including padding and gaps. Use this to choose
+shorter HUD text before layout. Snake and Blocks now adapt their HUDs to narrow safe areas.
+This is a Guest-side change with no new ABI or Host requirement; rebuild apps to use it.
+Firmware 0.9.6 adds Watcher local control, screenshots, master volume and battery reporting,
+and prevents Host logs from interleaving with local-control frames.
+
+### Changes in 0.20.1
 
 This patch adds configurable gamepad buttons, fixes default gamepad bounds to use the logical canvas,
 and refines overlay visibility. Firmware 0.9.4 adds private KV usage reporting and uninstall cleanup,

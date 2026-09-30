@@ -8,7 +8,14 @@ SDK 让应用通过强类型对象使用图形、输入、音频和设备能力�
 驱动更新；Host 管理硬件、资源和系统 UI。本文介绍编程模型与易错边界，完整可运行用法见
 [Demo](../apps/sdk-demo/)，底层协议见 [ABI](../abi/README.zh-CN.md)。
 
-## 升级到 0.20.1
+## 升级到 0.20.2
+
+新增 `ui::FlexContainer::intrinsic_size()` 和 `ui::ComputeFlexIntrinsicSize()`，返回横排或竖排
+所需的实际宽高，包含 padding 和 gap，便于布局前选择更短的 HUD 文案。Snake 和 Blocks 的 HUD
+已适配较窄安全区域。这是 Guest 侧改动，不增加 ABI 或 Host 版本要求；重新构建应用即可使用。
+固件 0.9.6 增加 Watcher 本地控制、截图、主音量和电池状态，并避免 Host 日志混入本地控制帧。
+
+### 0.20.1 的改动
 
 此补丁增加虚拟手柄按钮定制，修复默认手柄区域使用逻辑画布，并调整叠加控件可见度。
 固件 0.9.4 增加私有 KV 用量显示和卸载清理，默认每个 AppId 配额为 16 KiB、单值为 4 KiB。

@@ -94,6 +94,7 @@ def main():
         'performance': [], 'migration': ['Existing unmanaged projects must explicitly select an SDK before managed builds.',
         'Source migration and real-device acceptance remain separate from SDK switching.',
         'Recompiled 720-based apps must configure a 720x720 canvas with kExpand; native art must explicitly select kNative.',
+        'Flex intrinsic sizing includes padding and gaps for rows and columns. Snake and Blocks adapt HUD text to narrow safe areas; rebuild apps to use these Guest-side changes. No new Host ABI is required.',
         'Unconfigured apps now use native pixels. Texture loading follows the configured scale; DirectSurface buffers remain physical pixels.',
         'Firmware 0.9.1 streams App installation to BundleFS. PNG still decodes at full resolution before scaling.',
         'System font components and language switching require firmware 0.9.0; existing Guest APIs retain their prior firmware requirements.',
