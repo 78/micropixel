@@ -7,6 +7,7 @@
 bash tools/p4.sh build-host
 bash tools/s31.sh build-host
 bash tools/s3.sh build-host <box3|szpi|cores3|watcher>
+python3 tools/firmware.py <ksdiy-p4c5|ksdiy-p4c5-landscape> build
 ```
 
 构建与烧录分开执行。例如 `bash tools/p4.sh flash-host <port>` 烧录已构建的 Host，保留 App Store。

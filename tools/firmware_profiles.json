@@ -22,6 +22,51 @@
     "flash": true,
     "monitor": true
   },
+  "ksdiy-p4c5": {
+    "description": "ESP32-P4 + KSDIY P4C5 4.3-inch portrait firmware",
+    "target": "esp32p4",
+    "chip_markers": [
+      "ESP32-P4"
+    ],
+    "build_dir": "build/host-esp32p4-ksdiy",
+    "build_dir_env": "KSDIY_P4_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.p4.defaults",
+      "firmware/espressif/sdkconfig.p4-ksdiy.defaults"
+    ],
+    "app_store_size": "0x0800000",
+    "port_env": "KSDIY_P4_PORT",
+    "baud_env": "KSDIY_P4_BAUD",
+    "default_baud": 921600,
+    "preview": false,
+    "flash": true,
+    "monitor": true
+  },
+  "ksdiy-p4c5-landscape": {
+    "description": "ESP32-P4 + KSDIY P4C5 4.3-inch landscape firmware",
+    "target": "esp32p4",
+    "chip_markers": [
+      "ESP32-P4"
+    ],
+    "build_dir": "build/host-esp32p4-ksdiy-landscape",
+    "build_dir_env": "KSDIY_P4_LANDSCAPE_HOST_BUILD_DIR",
+    "sdkconfig_name": "sdkconfig.release",
+    "sdkconfig_defaults": [
+      "firmware/espressif/sdkconfig.defaults",
+      "firmware/espressif/sdkconfig.p4.defaults",
+      "firmware/espressif/sdkconfig.p4-ksdiy.defaults",
+      "firmware/espressif/sdkconfig.p4-ksdiy-landscape.defaults"
+    ],
+    "app_store_size": "0x0800000",
+    "port_env": "KSDIY_P4_PORT",
+    "baud_env": "KSDIY_P4_BAUD",
+    "default_baud": 921600,
+    "preview": false,
+    "flash": true,
+    "monitor": true
+  },
   "p4-null": {
     "description": "ESP32-P4 hardware-independent compile gate",
     "target": "esp32p4",

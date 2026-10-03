@@ -1,0 +1,3 @@
+# KSDIY ESP32-P4C5 landscape image, layered after sdkconfig.p4-ksdiy.defaults.
+# CONFIG_MICROPIXEL_KSDIY_P4C5_PORTRAIT is not set
+CONFIG_MICROPIXEL_KSDIY_P4C5_LANDSCAPE=y

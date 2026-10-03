@@ -27,6 +27,9 @@ class I2cExecutor final {
         jobs.push_back({priority, operation, context});
         return true;
     }
+    bool PostFromIsr(Priority priority, Operation operation, void* context, BaseType_t*) {
+        return Post(priority, operation, context);
+    }
     void Drain(Priority priority = Priority::kLow) {
         for (;;) {
             auto selected = jobs.end();

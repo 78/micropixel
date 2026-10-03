@@ -22,7 +22,9 @@ class EspLcdTouchInput final : public device::Input {
     EspLcdTouchInput(int32_t width, int32_t height, uint8_t max_touch_points);
     ~EspLcdTouchInput() override;
 
-    [[nodiscard]] esp_err_t Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor);
+    // Enable level checks only for controllers whose INT holds pending reports.
+    [[nodiscard]] esp_err_t Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor,
+                                       bool check_interrupt_level = false);
     [[nodiscard]] esp_err_t Start(lv_display_t* display);
     [[nodiscard]] bool Available() const { return touch_ != nullptr; }
 
@@ -53,6 +55,7 @@ class EspLcdTouchInput final : public device::Input {
     lv_display_t* display_{};
     buses::I2cExecutor* executor_{};
     esp_timer_handle_t poll_timer_{};
+    bool check_interrupt_level_{};
     std::atomic<uint32_t> interrupts_{};
     std::atomic<bool> work_pending_{};
     // When the last controller frame was decoded, owned by the executor task.

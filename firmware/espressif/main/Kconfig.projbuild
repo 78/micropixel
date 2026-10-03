@@ -151,6 +151,16 @@ menu "MicroPixel board backends"
             touch controller before WAMR starts. LVGL remains a Host-only
             backend and is not exposed through the Guest ABI.
 
+    config MICROPIXEL_BOARD_KSDIY_P4C5
+        bool "KSDIY ESP32-P4C5 4.3-inch board"
+        depends on IDF_TARGET_ESP32P4
+        help
+            Bring up the 480x800 ST7102 MIPI-DSI panel and ST7123 multi-touch
+            through kevincoooool/ksdiy_p4c5_bsp, ES8311 audio output, the
+            LSM6DS3TR-C IMU, AXP2101 battery state and ESP32-C5 hosted Wi-Fi.
+            Camera, microphones, keys, SD card and the PMIC power key remain
+            outside this board profile.
+
     config MICROPIXEL_BOARD_ESP_MOSAICO
         bool "ESP-Mosaico"
         depends on IDF_TARGET_ESP32S31
@@ -204,6 +214,28 @@ menu "MicroPixel board backends"
             device backends. Hardware profiles do not select this board; it is used only for
             hardware-independent compile checks.
 
+    endchoice
+
+    choice MICROPIXEL_KSDIY_P4C5_ORIENTATION
+        prompt "KSDIY P4C5 screen orientation"
+        depends on MICROPIXEL_BOARD_KSDIY_P4C5
+        default MICROPIXEL_KSDIY_P4C5_PORTRAIT
+        help
+            The orientation is fixed per firmware image. Each orientation has
+            its own System UI layout and OTA firmware target.
+
+        config MICROPIXEL_KSDIY_P4C5_PORTRAIT
+            bool "Portrait 480x800"
+            help
+                Native panel orientation. Guest frames can be scanned out
+                directly from the DPI framebuffers.
+
+        config MICROPIXEL_KSDIY_P4C5_LANDSCAPE
+            bool "Landscape 800x480"
+            help
+                LVGL renders 800x480 and the PPA rotates every flush by 90
+                degrees into three portrait framebuffers. Guest frames use the
+                composited path and screenshots are unavailable.
     endchoice
 
     config MICROPIXEL_SMOKE_AUTORUN_FIRST_APP
