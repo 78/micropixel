@@ -11,6 +11,7 @@ The firmware manages hardware, app isolation, and the system UI.
 | Chip | Board |
 |---|---|
 | ESP32-P4 | [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4) |
+| ESP32-P4 | [KSDIY ESP32-P4C5 4.3"](https://github.com/kevincoooool/ESP32P4_KSDIY) |
 | ESP32-S31 | [ESP-Mosaico](https://github.com/esp-mosaico/esp-mosaico-bsp) |
 | ESP32-S3 | [ESP32-S3-BOX-3](https://github.com/espressif/esp-box) |
 | ESP32-S3 | [LCKFB SZPI](https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html) |
@@ -45,7 +46,8 @@ python3 -m pip install -r requirements-dev.txt
 bash tools/p4.sh build-host
 ```
 
-Other profiles: `bash tools/s31.sh build-host` and `bash tools/s3.sh build-host <box3|szpi|cores3|watcher>`.
+Other profiles: `bash tools/s31.sh build-host`, `bash tools/s3.sh build-host <box3|szpi|cores3|watcher>` and
+`python3 tools/firmware.py <ksdiy-p4c5|ksdiy-p4c5-landscape> build`.
 
 ## Project
 

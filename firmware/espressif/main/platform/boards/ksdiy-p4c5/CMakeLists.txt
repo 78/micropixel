@@ -1,0 +1,18 @@
+list(APPEND micropixel_sources
+    "platform/audio/es8311_i2s_audio_sink.cpp"
+    "platform/audio/i2s_codec_audio_sink.cpp"
+    "platform/boards/ksdiy-p4c5/battery_peripheral.cpp"
+    "platform/boards/ksdiy-p4c5/board_io.cpp"
+    "platform/boards/ksdiy-p4c5/display_pipeline.cpp"
+    "platform/boards/ksdiy-p4c5/platform.cpp"
+    "platform/boards/ksdiy-p4c5/sensor_peripheral.cpp"
+    "platform/drivers/sensors/lsm6ds3.cpp"
+    "platform/sensors/polled_inertial_sensor_peripheral.cpp"
+    "platform/sensors/polled_vector_sensor_peripheral.cpp"
+    "platform/boards/ksdiy-p4c5/presentation.cpp"
+    "platform/drivers/power/axp2101.cpp"
+    "platform/input/esp_lcd_touch_input.cpp"
+    "platform/transports/development_display_control.cpp"
+    "platform/transports/usb_serial_jtag_local_control.cpp"
+    "platform/wifi/esp_hosted_radio.cpp"
+)

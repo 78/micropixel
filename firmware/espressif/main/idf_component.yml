@@ -16,6 +16,22 @@ dependencies:
     version: "^1.2.0"
     rules:
       - if: "target in [esp32p4, esp32s3]"
+  # KSDIY P4C5 touch controller, required by ksdiy_p4c5_bsp below. Patched copy
+  # of the submodule component that reports per-finger track IDs; see
+  # patched_components/esp_lcd_touch_st7123.
+  espressif/esp_lcd_touch_st7123:
+    version: "1.0.2"
+    override_path: "../patched_components/esp_lcd_touch_st7123"
+    rules:
+      - if: "target == esp32p4"
+      - if: "$CONFIG{MICROPIXEL_BOARD_KSDIY_P4C5} == True"
+  # KSDIY P4C5 board support: ST7102 MIPI-DSI panel, ST7123 touch and AXP2101
+  # rails. Only the KSDIY profile links it.
+  kevincoooool/ksdiy_p4c5_bsp:
+    version: "^1.3.2"
+    rules:
+      - if: "target == esp32p4"
+      - if: "$CONFIG{MICROPIXEL_BOARD_KSDIY_P4C5} == True"
   espressif/esp_lcd_touch_tt21100:
     version: "^1.0.0"
     rules:
@@ -69,7 +85,7 @@ dependencies:
   espressif/esp_codec_dev:
     version: "^1.6.2"
     rules:
-      - if: "target in [esp32s31, esp32s3]"
+      - if: "target in [esp32p4, esp32s31, esp32s3]"
   78/esp_lcd_touch_cst92xx:
     version: "^0.1.0"
     rules:

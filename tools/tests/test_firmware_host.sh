@@ -92,6 +92,24 @@ build_and_run ft6336_report \
     "$workspace_root/tools/tests/test_ft6336_report.cpp" \
     "$workspace_root/firmware/espressif/main/platform/input/ft6336_report.cpp"
 
+build_and_run lsm6ds3 \
+    -iquote "$workspace_root/tools/tests/sensor_stubs" \
+    -DESP_ERR_INVALID_RESPONSE=0x108 \
+    "$workspace_root/tools/tests/test_lsm6ds3.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/drivers/sensors/lsm6ds3.cpp"
+
+build_and_run esp_lcd_touch_input \
+    -iquote "$workspace_root/tools/tests/sensor_stubs" \
+    -I "$workspace_root/tools/tests/touch_stubs" \
+    -DIRAM_ATTR= -DESP_ERR_NOT_SUPPORTED=0x106 \
+    "$workspace_root/tools/tests/test_esp_lcd_touch_input.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/input/esp_lcd_touch_input.cpp"
+
+build_and_run_c st7123_report \
+    -I "$workspace_root/tools/tests/st7123_stubs" \
+    -I "$workspace_root/tools/tests/firmware_stubs" \
+    "$workspace_root/tools/tests/test_st7123_report.c"
+
 build_and_run gravity_balls "$workspace_root/guest/apps/gravity-balls/src/physics_test.cpp"
 
 build_and_run jump_jump \
