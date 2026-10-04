@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, IO, Mapping, Sequence
 
 
@@ -368,6 +368,150 @@ def with_overrides(profile: Profile, args: argparse.Namespace) -> Profile:
         application_usb_products=profile.application_usb_products,
         rom_usb_products=profile.rom_usb_products,
     )
+
+
+# Remote Control endpoint injection. The board shell entries (tools/p4.sh,
+# tools/s31.sh, tools/s3.sh) fold .env into their own build directory; profiles
+# driven straight through this tool need the same handling, so one .env decides
+# which service a build targets.
+REMOTE_CONTROL_ENV_DEFAULTS_NAME = "sdkconfig.env.defaults"
+REMOTE_CONTROL_HOST_ENV = "MICROPIXEL_REMOTE_CONTROL_HOST"
+REMOTE_CONTROL_PORT_ENV = "MICROPIXEL_REMOTE_CONTROL_PORT"
+REMOTE_CONTROL_TLS_ENV = "MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS"
+REMOTE_CONTROL_CA_ENV = "MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64"
+
+
+def _kconfig_symbol(line: str) -> str | None:
+    stripped = line.strip()
+    if stripped.startswith("# CONFIG_") and stripped.endswith(" is not set"):
+        return stripped.split()[1]
+    if stripped.startswith("CONFIG_"):
+        return stripped.split("=", 1)[0]
+    return None
+
+
+def _upsert_kconfig_lines(text: str, updates: Sequence[str]) -> str:
+    """Replace managed symbols in a Kconfig text block and append missing ones."""
+
+    pending: dict[str, str] = {}
+    for entry in updates:
+        symbol = _kconfig_symbol(entry)
+        if symbol is None:
+            raise FirmwareToolError(f"invalid sdkconfig line: {entry}")
+        pending[symbol] = entry
+
+    written: set[str] = set()
+    output: list[str] = []
+    for line in text.splitlines():
+        symbol = _kconfig_symbol(line)
+        if symbol in pending:
+            if symbol not in written:
+                output.append(pending[symbol])
+                written.add(symbol)
+            continue
+        output.append(line)
+    for symbol, entry in pending.items():
+        if symbol not in written:
+            output.append(entry)
+    return "\n".join(output) + "\n"
+
+
+def remote_control_env_defaults(
+    environ: Mapping[str, str],
+) -> tuple[tuple[str, ...], str] | None:
+    """Build the Remote Control Kconfig lines from the environment.
+
+    Returns the lines plus a ``host:port`` summary, or ``None`` when no Control
+    endpoint is configured.
+    """
+
+    host = environ.get(REMOTE_CONTROL_HOST_ENV, "").strip()
+    if not host:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
+        raise FirmwareToolError(
+            f"{REMOTE_CONTROL_HOST_ENV} contains unsupported characters: {host}"
+        )
+    port = environ.get(REMOTE_CONTROL_PORT_ENV, "").strip() or "8443"
+    if not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
+        raise FirmwareToolError(
+            f"{REMOTE_CONTROL_PORT_ENV} must be between 1 and 65535: {port}"
+        )
+    allow_unverified = environ.get(REMOTE_CONTROL_TLS_ENV, "").strip().casefold() or "y"
+    if allow_unverified in {"y", "yes", "true", "1"}:
+        unverified_lines = ("CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y",)
+    elif allow_unverified in {"n", "no", "false", "0"}:
+        unverified_lines = (
+            "# CONFIG_MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS is not set",
+        )
+    else:
+        raise FirmwareToolError(
+            f"{REMOTE_CONTROL_TLS_ENV} must be y or n: {allow_unverified}"
+        )
+    trusted_ca = environ.get(REMOTE_CONTROL_CA_ENV, "").strip()
+    if trusted_ca and not re.fullmatch(r"[A-Za-z0-9+/=]+", trusted_ca):
+        raise FirmwareToolError(f"{REMOTE_CONTROL_CA_ENV} is not valid base64 text")
+    if unverified_lines[0].startswith("#") and not trusted_ca:
+        raise FirmwareToolError(
+            f"strict Remote Control TLS requires {REMOTE_CONTROL_CA_ENV}"
+        )
+    return (
+        (
+            f'CONFIG_MICROPIXEL_REMOTE_CONTROL_HOST="{host}"',
+            f"CONFIG_MICROPIXEL_REMOTE_CONTROL_PORT={port}",
+            *unverified_lines,
+            f'CONFIG_MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64="{trusted_ca}"',
+        ),
+        f"{host}:{port}",
+    )
+
+
+def _replace_text(path: Path, text: str) -> None:
+    """Write text through a temporary sibling so a crash cannot truncate it."""
+
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def apply_remote_control_env(
+    profile: Profile, *, environ: Mapping[str, str] | None = None
+) -> Profile:
+    """Fold the Remote Control environment into a profile before building.
+
+    ``sdkconfig`` defaults never override a value the generated file already
+    materialized, so the reused build directory is refreshed in place as well:
+    editing ``.env`` must not require a full clean.
+    """
+
+    environ = os.environ if environ is None else environ
+    configured = remote_control_env_defaults(environ)
+    if configured is None:
+        return profile
+    updates, summary = configured
+
+    env_defaults = profile.build_dir / REMOTE_CONTROL_ENV_DEFAULTS_NAME
+    previous_defaults = (
+        env_defaults.read_text(encoding="utf-8") if env_defaults.is_file() else ""
+    )
+    merged_defaults = _upsert_kconfig_lines(previous_defaults, updates)
+    if merged_defaults != previous_defaults:
+        env_defaults.parent.mkdir(parents=True, exist_ok=True)
+        _replace_text(env_defaults, merged_defaults)
+    if profile.sdkconfig.is_file():
+        previous_sdkconfig = profile.sdkconfig.read_text(encoding="utf-8")
+        merged_sdkconfig = _upsert_kconfig_lines(previous_sdkconfig, updates)
+        if merged_sdkconfig != previous_sdkconfig:
+            _replace_text(profile.sdkconfig, merged_sdkconfig)
+    print(f"==> Remote Control endpoint from environment: {summary}", flush=True)
+
+    resolved = {path.resolve() for path in profile.sdkconfig_defaults}
+    if env_defaults.resolve() not in resolved:
+        profile = replace(
+            profile,
+            sdkconfig_defaults=(*profile.sdkconfig_defaults, env_defaults.resolve()),
+        )
+    return profile
 
 
 def _is_windows_idf_launcher(executable: Path) -> bool:
@@ -932,6 +1076,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "port":
             print(resolve_port(profile, args.port))
             return 0
+
+        if args.action in ("build", "flash"):
+            profile = apply_remote_control_env(profile)
 
         validate_profile_files(profile)
         idf_py = locate_idf_py()
