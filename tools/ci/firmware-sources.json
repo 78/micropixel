@@ -12,6 +12,7 @@
   ],
   "profiles": [
     "metalio-claw4",
+    "m5stack-tab5",
     "esp-mosaico",
     "esp-box-3",
     "szpi-esp32s3",

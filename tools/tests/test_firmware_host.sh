@@ -378,6 +378,13 @@ build_and_run font_registry_mosaico \
 build_and_run power_policy \
     "$workspace_root/tools/tests/test_power_policy.cpp"
 
+build_and_run rx8130_codec \
+    "$workspace_root/tools/tests/test_rx8130_codec.cpp"
+
+build_and_run sector_block_storage \
+    "$workspace_root/tools/tests/test_sector_block_storage.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/storage/sector_block_storage.cpp"
+
 build_and_run device_services \
     -I "$workspace_root/guest" \
     "$workspace_root/tools/tests/test_device_services.cpp" \
