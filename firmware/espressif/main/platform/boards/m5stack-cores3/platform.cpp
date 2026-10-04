@@ -33,6 +33,7 @@ namespace {
 namespace common = esp32_s3_common;
 namespace board_detail = m5stack_cores3;
 constexpr char kTag[] = "m5stack_cores3";
+constexpr uint8_t kInertialAddress = 0x69U;
 
 class M5StackCoreS3Board final : public Board, public device::Power {
    public:
@@ -195,7 +196,7 @@ class M5StackCoreS3Board final : public Board, public device::Power {
     board_detail::BoardHardware hardware_{};
     board_detail::I2sAudioSink audio_output_{};
     board_detail::BatteryPeripheral battery_{};
-    drivers::Bmi270 inertial_{};
+    drivers::Bmi270 inertial_{kInertialAddress};
     drivers::Bmi270Vector acceleration_;
     drivers::Bmi270Vector angular_velocity_;
     sensors::PolledInertialSensorPeripheral inertial_sensors_;

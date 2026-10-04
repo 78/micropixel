@@ -10,7 +10,6 @@ namespace micropixel::platform::drivers {
 namespace {
 
 constexpr char kTag[] = "bmi270";
-constexpr uint8_t kAddress = 0x69U;
 constexpr uint32_t kI2cSpeedHz = 400000U;
 constexpr int kTimeoutMs = 100;
 constexpr uint16_t kMaximumTransferBytes = 32U;
@@ -28,12 +27,12 @@ Bmi270::~Bmi270() {
 }
 
 esp_err_t Bmi270::Initialize(i2c_master_bus_handle_t bus) {
-    if (bus == nullptr || i2c_master_probe(bus, kAddress, kTimeoutMs) != ESP_OK) {
+    if (bus == nullptr || i2c_master_probe(bus, address_, kTimeoutMs) != ESP_OK) {
         return ESP_ERR_NOT_FOUND;
     }
     i2c_device_config_t config{};
     config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = kAddress;
+    config.device_address = address_;
     config.scl_speed_hz = kI2cSpeedHz;
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &config, &device_handle_), kTag, "add I2C device failed");
 

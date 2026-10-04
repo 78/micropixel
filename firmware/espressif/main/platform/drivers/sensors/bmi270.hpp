@@ -16,7 +16,7 @@ class Bmi270 final {
         kAngularVelocity,
     };
 
-    Bmi270() = default;
+    explicit Bmi270(uint8_t address) : address_(address) {}
     Bmi270(const Bmi270&) = delete;
     Bmi270& operator=(const Bmi270&) = delete;
     ~Bmi270();
@@ -34,6 +34,7 @@ class Bmi270 final {
     [[nodiscard]] static uint8_t AccelerationOdr(uint32_t interval_us);
     [[nodiscard]] static uint8_t GyroscopeOdr(uint32_t interval_us);
 
+    uint8_t address_{};
     i2c_master_dev_handle_t device_handle_{};
     bmi2_dev device_{};
 };
