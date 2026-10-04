@@ -32,10 +32,18 @@ struct SystemTransitionProfile final {
 //   kComposited      copy into the App Surface and let LVGL present it;
 //   kBlitRgb565      dummy-draw blit of the RGB565 frame straight to the
 //                    controller (QSPI/SPI panels);
-//   kFramebufferRgb888 PPA-convert into a free DPI framebuffer and flip it.
+//   kFramebufferRgb888 PPA-convert into a free DPI framebuffer and flip it;
+//   kFramebufferRgb565 copy or PPA-convert into a free RGB565 DPI framebuffer
+//                    and flip it (panels whose DSI bridge input is 16 bpp).
 struct DirectScanoutProfile final {
-    enum class Mode : uint8_t { kComposited, kBlitRgb565, kFramebufferRgb888 };
+    enum class Mode : uint8_t { kComposited, kBlitRgb565, kFramebufferRgb888, kFramebufferRgb565 };
     Mode mode{Mode::kComposited};
+    // True for the modes that flip a DPI framebuffer lent by the board.
+    [[nodiscard]] bool FramebufferMode() const {
+        return mode == Mode::kFramebufferRgb888 || mode == Mode::kFramebufferRgb565;
+    }
+    // Pixel size of the flip target; only meaningful for FramebufferMode().
+    [[nodiscard]] uint32_t FramebufferBytesPerPixel() const { return mode == Mode::kFramebufferRgb565 ? 2U : 3U; }
     // The controller consumes RGB565 with the bytes of every pixel swapped.
     bool rgb565_byte_swapped{};
     // Panel transfer bound for one full frame; reported to the Guest.
