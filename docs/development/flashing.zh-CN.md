@@ -190,6 +190,11 @@ SenseCAP Watcher 是 412×412 圆形屏（SPD2010、QSPI），圆形几何由 `s
 `firmware/espressif/patched_components/` 下的本地副本，两处补丁及移除条件见该目录 README。旋钮接
 GPIO41/42：单击确认、双击返回、长按关机。
 
+后置 Grove IIC 口（J2）在电路上就是控制总线本身，不是第二条总线：扩展芯片、编解码器和该口共用
+GPIO47/48。口上接 BMI270 模块即得到加速度计与陀螺仪，启动时探测一次、识别到才注册对应通道，空口只多
+一次探测且不影响其它服务（倾斜操控类的 App 会自行判断有无该设备）。模块地址须为 0x69（驱动常量）；
+把 SDO/SA0 拉低变成 0x68 的模块探测不到，也不会报错。
+
 ```sh
 bash tools/s3.sh build-host watcher
 bash tools/s3.sh build-release watcher   # Host + 七个集成 App + 完整浏览器镜像
