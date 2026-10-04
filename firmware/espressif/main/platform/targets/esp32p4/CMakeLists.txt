@@ -2,6 +2,9 @@
 # before board Kconfig values exist. Keep this target union separate from
 # ESP32-S31 so a new SoC does not inherit ESP-Hosted or P4-only transports.
 list(APPEND micropixel_requires
+    bosch_sensorapi
+    esp_driver_sdmmc
+    sdmmc
     esp_hw_support
     esp_driver_dma esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_jpeg esp_driver_ledc
     esp_driver_ppa esp_driver_uart esp_driver_usb_serial_jtag

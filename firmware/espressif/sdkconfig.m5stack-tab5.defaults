@@ -1,0 +1,53 @@
+# M5Stack Tab5 (ESP32-P4 rev v1.x pre-v3 silicon, 16 MiB flash) overrides.
+#
+# sdkconfig.p4.defaults already selects pre-v3 silicon at 360 MHz; this file is
+# appended last and restores the Tab5 board selection and flash layout. The
+# board in hand is rev v1.0: IDF treats pre-v3 and v3.x P4 as mutually
+# incompatible targets, so one image cannot boot on both. A rev v3.x Tab5
+# needs the v3-only configuration instead.
+# CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4 is not set
+CONFIG_MICROPIXEL_BOARD_M5STACK_TAB5=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4-tab5.csv"
+
+# The Tab5 panel speaks RGB565 over MIPI-DSI (matching the vendor demo), so
+# override the RGB888 selection inherited from sdkconfig.p4.defaults.
+CONFIG_LV_COLOR_FORMAT_RGB565=y
+
+# Partial draw buffers: 60 native-panel rows in PSRAM keep internal SRAM free
+# for DMA pools and Host tasks.
+CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=60
+CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM=y
+
+# Wi-Fi goes through the ESP32-C6-MINI-1U coprocessor over ESP-Hosted SDIO.
+# The inherited Metalio-Claw4 block targets an ESP32-C5 and drives this board's
+# system I2C: its slot-1 data lines include GPIO31, which is the Tab5's I2C SDA,
+# so every coprocessor symbol is restated here. SDIO slot 1, 4-bit at 40 MHz and
+# the PSRAM transport pool carry over from the shared P4 defaults, and the card's
+# SDMMC slot 0 pins (39-44) stay untouched: only the reset polarity, the reset
+# GPIO and the six SDIO pins differ from the C5 board.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="esp32c6"
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+# esp_hosted's boot-time reset routine ends by holding the reset line at the
+# "active" level. With the active-low choice that leaves GPIO15 driven LOW and
+# the C6 never leaves reset (sdmmc init times out with 0x107). The Tab5's C6 EN
+# is pulled up, so the polarity must idle HIGH: the sequence becomes
+# HIGH -> LOW (10 ms reset pulse) -> HIGH and the C6 stays released.
+# CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW is not set
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
+# esp_hosted derives ESP_HOSTED_SDIO_PIN_* from these user-configurable Slot 1
+# symbols; setting the derived symbols is ignored by current Kconfig versions.
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=13
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=12
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
+# Hosted transport pool blocks need 64 B cache lines for DMA alignment in PSRAM.
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y

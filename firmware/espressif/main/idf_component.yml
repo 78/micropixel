@@ -69,7 +69,7 @@ dependencies:
   espressif/esp_codec_dev:
     version: "^1.6.2"
     rules:
-      - if: "target in [esp32s31, esp32s3]"
+      - if: "target in [esp32p4, esp32s31, esp32s3]"
   78/esp_lcd_touch_cst92xx:
     version: "^0.1.0"
     rules:
@@ -98,5 +98,9 @@ dependencies:
       - if: "target == esp32p4"
   espressif/iot_eth:
     version: "1.1.0"
+    rules:
+      - if: "target == esp32p4"
+  espressif/esp_lcd_ili9881c:
+    version: "^1.0.1"
     rules:
       - if: "target == esp32p4"

@@ -210,6 +210,18 @@ The M5Stack CoreS3 backend derives its pin assignments, controller selection and
 - scope: board-specific I2C, display, touch, AW88298 audio and AXP2101/AW9523 power-control facts are maintained
   locally; the upstream BSP component is not linked.
 
+### M5Stack Tab5 board definitions
+
+The M5Stack Tab5 backend derives its pin assignments, IO-expander reset/power sequencing, display timings and the
+ILI9881C initialization sequence from M5Stack's `M5Tab5-UserDemo` BSP component:
+
+- upstream: <https://github.com/m5stack/M5Tab5-UserDemo> (`platforms/tab5/components/m5stack_tab5`), Apache-2.0;
+- referenced revision: `b4e356bc491ca070d54004718dad789c07d5fc93`;
+- copied file: `firmware/espressif/main/platform/boards/m5stack-tab5/ili9881c_init_data.c` (vendor panel
+  initialization commands only; the upstream BSP component itself is not linked);
+- scope: pin maps, PI4IOE5V6416 sequences, backlight and DSI/DPI configuration are re-implemented against
+  MicroPixel's Platform contracts.
+
 ### micro-opus and libopus
 
 Ogg Opus playback uses `esphome/micro-opus` 0.4.1 from the ESP Component Registry:
