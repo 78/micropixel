@@ -106,12 +106,6 @@ else()
     target_compile_definitions(${micropixel_lvgl_lib} PRIVATE
         "LV_ATTRIBUTE_LARGE_RAM_ARRAY=__attribute__((section(\".ext_ram.bss\")))")
 endif()
-if(CONFIG_MICROPIXEL_BOARD_KSDIY_P4C5)
-    # The BSP's unused LVGL port names a font MicroPixel compiles out; see the shim.
-    idf_component_get_property(micropixel_ksdiy_bsp_lib kevincoooool__ksdiy_p4c5_bsp COMPONENT_LIB)
-    target_compile_options(${micropixel_ksdiy_bsp_lib} PRIVATE
-        "-include${CMAKE_CURRENT_LIST_DIR}/platform/boards/ksdiy-p4c5/bsp_font_shim.h")
-endif()
 
 idf_build_get_property(micropixel_python PYTHON)
 set(micropixel_host_i18n_dir "${CMAKE_CURRENT_LIST_DIR}/host/ui/i18n")

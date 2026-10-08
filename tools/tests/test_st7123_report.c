@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <assert.h>
 
-// Exercise the actual component callbacks in esp_lcd_touch_get_data order.
-#include "../../firmware/espressif/patched_components/esp_lcd_touch_st7123/esp_lcd_touch_st7123.c"
+// Exercise the actual kevincoooool/esp_lcd_touch_st7123 callbacks in
+// esp_lcd_touch_get_data order. test_firmware_host.sh passes the fetched
+// component source as ST7123_SOURCE.
+#ifndef ST7123_SOURCE
+#error "Define ST7123_SOURCE as the path of esp_lcd_touch_st7123.c"
+#endif
+#include ST7123_SOURCE
 
 static uint8_t advanced_info;
 static uint8_t reports[70];

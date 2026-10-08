@@ -148,9 +148,10 @@ controller through the `kevincoooool/ksdiy_p4c5_bsp` component (with `kevincoooo
 - copyright: Kevincoooool;
 - license: Apache-2.0.
 
-The ST7123 driver is a copy of the esp-iot-solution submodule's `esp_lcd_touch_st7123` 1.0.2 in
-`firmware/espressif/patched_components/esp_lcd_touch_st7123/`, changed so each finger reports a track ID, the
-report count is bounded and the open-drain INT line is pulled up; its `README.md` records the changes. The copy is Apache-2.0 like the original.
+The ST7123 touch driver is `kevincoooool/esp_lcd_touch_st7123` from the ESP Component Registry, a fork of
+Espressif's `esp_lcd_touch_st7123` 1.0.2 (esp-iot-solution) that reports a track ID per finger, bounds the
+report count and pulls up the open-drain INT line. The fork keeps the upstream Apache-2.0 license, copyright
+Espressif Systems (Shanghai) CO LTD, and its `README.md` records each change.
 
 ## ESP-IDF managed components
 

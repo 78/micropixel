@@ -178,7 +178,8 @@ INT 表示报告就绪，并非手指按下状态；已排队的中断报告不�
 
 `app_store` 与 16 MiB S3 板相同，为 `0x800000` 起始的 8 MiB（`partitions.p4-16mb.csv`）。屏幕、背光、
 AXP2101 电源轨和 ST7123 触摸由 `kevincoooool/ksdiy_p4c5_bsp` 初始化（`CONFIG_KSDIY_P4C5_LCD_RGB888`）；
-ST7123 使用 `patched_components/esp_lcd_touch_st7123` 的补丁副本以支持多点触摸。竖屏直接扫描 LVGL 的两块
+ST7123 驱动为 `kevincoooool/esp_lcd_touch_st7123 ~1.0.2`（上游 1.0.2 的修复分支：多点 track ID、报告数边界、
+INT 上拉），由 BSP 1.3.3 引入。竖屏直接扫描 LVGL 的两块
 RGB888 帧缓冲；横屏由 LVGL 适配器每次刷新用 PPA 旋转 90 度，Guest 走合成路径，截图不可用。App Hall 使用
 Cover Flow 卡片（`HallSceneLayout::cover_flow`），没有 PPA 过渡动画。
 
