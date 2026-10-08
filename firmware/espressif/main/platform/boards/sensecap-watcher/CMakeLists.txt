@@ -1,4 +1,5 @@
 list(APPEND micropixel_sources
+    "platform/sensors/polled_vector_sensor_peripheral.cpp"
     # The PC-facing port on this board is an external USB-UART bridge, so the
     # protocol rides the shared MPX1 line framer over UART0 instead of the SoC's
     # USB peripheral the other boards use, and the display shadow supplies the
@@ -12,8 +13,12 @@ list(APPEND micropixel_sources
     "platform/boards/sensecap-watcher/platform.cpp"
     "platform/boards/sensecap-watcher/touch_hardware.cpp"
     "platform/boards/sensecap-watcher/uart_local_control.cpp"
+    # The Grove port offers the BMI270 on the control bus, so the driver is
+    # linked with the board that can carry the module.
+    "platform/drivers/sensors/bmi270.cpp"
     # The Host UI binds a device::Input, so the touch adapter is linked with the
     # board that drives it.
     "platform/input/esp_lcd_touch_input.cpp"
+    "platform/sensors/polled_inertial_sensor_peripheral.cpp"
     "platform/transports/development_display_control.cpp"
 )
