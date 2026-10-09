@@ -4,8 +4,15 @@ set -euo pipefail
 workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 idf_path_override="${IDF_PATH:-}"
+tab5_build_dir_override="${TAB5_HOST_BUILD_DIR:-}"
+tab5_sdkconfig_override="${TAB5_SDKCONFIG:-}"
+tab5_sdkconfig_defaults_override="${TAB5_SDKCONFIG_DEFAULTS:-}"
 tab5_port_override="${TAB5_PORT:-}"
 tab5_baud_override="${TAB5_BAUD:-}"
+remote_control_host_override="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
+remote_control_port_override="${MICROPIXEL_REMOTE_CONTROL_PORT:-}"
+remote_control_tls_override="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-}"
+remote_control_ca_override="${MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64:-}"
 if [[ -f "$workspace_root/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
@@ -15,11 +22,32 @@ fi
 if [[ -n "$idf_path_override" ]]; then
     IDF_PATH="$idf_path_override"
 fi
+if [[ -n "$tab5_build_dir_override" ]]; then
+    TAB5_HOST_BUILD_DIR="$tab5_build_dir_override"
+fi
+if [[ -n "$tab5_sdkconfig_override" ]]; then
+    TAB5_SDKCONFIG="$tab5_sdkconfig_override"
+fi
+if [[ -n "$tab5_sdkconfig_defaults_override" ]]; then
+    TAB5_SDKCONFIG_DEFAULTS="$tab5_sdkconfig_defaults_override"
+fi
 if [[ -n "$tab5_port_override" ]]; then
     TAB5_PORT="$tab5_port_override"
 fi
 if [[ -n "$tab5_baud_override" ]]; then
     TAB5_BAUD="$tab5_baud_override"
+fi
+if [[ -n "$remote_control_host_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_HOST="$remote_control_host_override"
+fi
+if [[ -n "$remote_control_port_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_PORT="$remote_control_port_override"
+fi
+if [[ -n "$remote_control_tls_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS="$remote_control_tls_override"
+fi
+if [[ -n "$remote_control_ca_override" ]]; then
+    MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64="$remote_control_ca_override"
 fi
 
 usage() {
