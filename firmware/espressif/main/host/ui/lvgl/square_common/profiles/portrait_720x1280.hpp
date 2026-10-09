@@ -165,6 +165,7 @@ inline constexpr SquareSystemUiProfile kSystemUiProfile{
     .hall_scene = kHallSceneLayout,
     .system_menu = kSystemMenuLayout,
     .system_page = kSystemPageLayout,
+    .status_layer_layout = StatusLayerLayoutProfile::kPortrait720x1280,
     .launch_label_bottom_offset = kLaunchLabelBottomOffset,
     .scale_oversized_launch_bitmap = kScaleOversizedLaunchBitmap,
     .derive_launch_background = kDeriveLaunchBackground,

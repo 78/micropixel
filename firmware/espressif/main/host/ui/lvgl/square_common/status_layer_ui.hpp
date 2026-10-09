@@ -14,6 +14,7 @@ namespace micropixel::host_ui::lvgl::square_common {
 enum class StatusLayerLayoutProfile : uint8_t {
     kAutomatic,
     kRound412,
+    kPortrait720x1280,
 };
 
 // Owns the persistent quick-settings layer, its native LVGL controls, and the
