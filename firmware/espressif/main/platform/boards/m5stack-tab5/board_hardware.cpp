@@ -79,6 +79,11 @@ esp_err_t BoardHardware::ResetPanelAndTouch() {
     ESP_RETURN_ON_ERROR(gpio_set_level(board::kTouchInterrupt, 0), kTag, "drive touch interrupt low failed");
     vTaskDelay(pdMS_TO_TICKS(100));
 
+    // Release the pin before handing it back as an input: gpio_config() reserves
+    // a driven pin, and the touch driver configures this one as an interrupt
+    // input later on, which the GPIO layer reports as a conflict.
+    gpio_reset_pin(board::kTouchInterrupt);
+
     gpio_config_t interrupt_config{};
     interrupt_config.pin_bit_mask = 1ULL << board::kTouchInterrupt;
     interrupt_config.mode = GPIO_MODE_INPUT;
