@@ -231,8 +231,10 @@ bash tools/s3.sh build-release szpi
 bash tools/s3.sh build-release cores3
 ```
 
-`tools/firmware.py` 直接驱动的 profile（例如 `m5stack-tab5`）同样读取这些变量：端点写入构建目录的
-`sdkconfig.env.defaults`，并就地刷新已生成的 `sdkconfig.release`，改 `.env` 后无需 `fullclean`。
+`tools/firmware.py` 直接驱动的 profile（例如 `m5stack-tab5`）也在构建目录生成 `sdkconfig.env.defaults`，
+并就地刷新已生成的 `sdkconfig.release`，改配置后无需 `fullclean`。它只读取当前环境变量；仓库根的 `.env`
+由 `tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh`、`tools/tab5.sh` 这些 shell 入口加载，Windows 上由
+`tools/firmware.ps1` 加载。两边的规则一致：同名环境变量优先。
 
 发布目录由 Control 服务仓库的 `firmware-release.jsonc` 统一声明（Control API 与官网不在本仓库）。四款 S3
 虽共享芯片和 Xtensa Guest 基线（Watcher 的 `app_store` 为 24 MiB 几何），但 Host 镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户
@@ -249,15 +251,18 @@ python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
 
 ## M5Stack Tab5（ESP32-P4）
 
-Tab5 使用通用 profile 入口（不是 `tools/p4.sh`）：
+Tab5 使用通用 profile，包装入口是 `tools/tab5.sh`：
 
 ```sh
-python3 tools/firmware.py m5stack-tab5 build
-python3 tools/firmware.py m5stack-tab5 flash-built --port "$P4_PORT"
-python3 tools/firmware.py m5stack-tab5 monitor --port "$P4_PORT" --reset
+bash tools/tab5.sh build-host
+bash tools/tab5.sh flash-host "$TAB5_PORT"   # 只有一台 Tab5 时可省略端口
+bash tools/tab5.sh monitor "$TAB5_PORT"      # 默认带 --reset
+bash tools/tab5.sh fullclean-host
 ```
 
-Remote Control 端点等由 `.env` 注入（见上一节），改 `.env` 后不需要 `fullclean`。
+与其他 shell 入口一致，`tools/tab5.sh` 加载仓库根的 `.env` 且同名环境变量优先，Remote Control 端点等
+因此照常注入，改 `.env` 后不需要 `fullclean`。直接运行 `python3 tools/firmware.py m5stack-tab5 build`
+不会读取 `.env`，需要先把这些变量导出到当前环境。
 
 扩展排针按既有 GPIO Service 暴露：M5-Bus 的 18 根自由 GPIO
 （PIN2/4/7/8/9/10/11/13/14/15/16/19/20/21/22/23/24/26）和 ExtPort1 的 G49/G50，设备名为
