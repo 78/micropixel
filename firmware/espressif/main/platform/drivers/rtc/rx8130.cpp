@@ -143,6 +143,25 @@ bool Rx8130::VoltageLossDetected() {
     return (flags & kFlagVoltageLoss) != 0U;
 }
 
+esp_err_t Rx8130::ClearVoltageLoss() {
+    uint8_t flags = 0U;
+    const esp_err_t status = ReadRegisters(kRegisterFlag, &flags, 1U);
+    if (status != ESP_OK) {
+        Drop("flag read", status);
+        return status;
+    }
+    if ((flags & kFlagVoltageLoss) == 0U) {
+        return ESP_OK;
+    }
+    const esp_err_t cleared = UpdateRegister(kRegisterFlag, kFlagVoltageLoss, 0U);
+    if (cleared != ESP_OK) {
+        Drop("flag write", cleared);
+        return cleared;
+    }
+    ESP_LOGI(kTag, "voltage-loss flag cleared: the calendar is trustworthy again");
+    return ESP_OK;
+}
+
 esp_err_t Rx8130::ReadCalendar(rx8130::Fields& fields) {
     // One burst keeps the seven registers consistent: the chip holds the carry
     // from the first access to the last.

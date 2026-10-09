@@ -66,7 +66,8 @@ void RtcClock::SyncOnWorker() {
         }
         configured_ = true;
         if (rtc_.VoltageLossDetected()) {
-            ESP_LOGW(kTag, "the RTC lost its time during a power-down; waiting for a trustworthy clock");
+            ESP_LOGW(kTag,
+                     "the RTC calendar is untrusted after a power-down; it is rewritten once the clock is trustworthy");
         } else {
             RestoreSystemClock();
         }
@@ -121,6 +122,11 @@ void RtcClock::PersistSystemClock() {
         const int64_t difference =
             drivers::rx8130::ToEpochSeconds(system_time) - drivers::rx8130::ToEpochSeconds(rtc_time);
         if (difference <= kWriteBackThresholdSeconds && difference >= -kWriteBackThresholdSeconds) {
+            char text[kClockTextSize] = {};
+            FormatClock(rtc_time, text, sizeof(text));
+            ESP_LOGD(kTag, "RTC calendar matches the system clock (%+lld s): %s", static_cast<long long>(difference),
+                     text);
+            (void)rtc_.ClearVoltageLoss();
             return;
         }
     }
@@ -132,6 +138,7 @@ void RtcClock::PersistSystemClock() {
     char text[kClockTextSize] = {};
     FormatClock(system_time, text, sizeof(text));
     ESP_LOGI(kTag, "RTC updated from the system clock: %s", text);
+    (void)rtc_.ClearVoltageLoss();
 }
 
 void RtcClock::RefreshTimer(void* context) {

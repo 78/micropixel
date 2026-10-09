@@ -35,8 +35,11 @@ class Rx8130 final {
     // board's supercap needs).
     [[nodiscard]] esp_err_t Configure();
     // True when the chip reported a supply drop (VLF), which invalidates the
-    // stored calendar until it is written again.
+    // stored calendar until a trustworthy clock rewrites it or confirms it.
     [[nodiscard]] bool VoltageLossDetected();
+    // Clears VLF once the calendar is trustworthy again: written from a
+    // trustworthy clock, or found to match one. The flag latches until then.
+    [[nodiscard]] esp_err_t ClearVoltageLoss();
     [[nodiscard]] esp_err_t ReadCalendar(rx8130::Fields& fields);
     // Stops the counter while the seven calendar registers are written and
     // restarts it afterwards (the datasheet's STOP-bit protocol).
