@@ -155,7 +155,7 @@ device::BatterySnapshot BatteryPeripheral::RefreshOnWorker() {
         previous.available != last_snapshot_.available || previous.charging != last_snapshot_.charging ||
         previous.discharging != last_snapshot_.discharging ||
         previous.external_power_connected != last_snapshot_.external_power_connected) {
-        ESP_LOGI(kTag,
+        ESP_LOGD(kTag,
                  "sample: bus=%.2f V current=%.3f A power=%.2f W chg_stat=0x%02x(%s) -> soc=%u%% present=%s "
                  "charging=%s discharging=%s ext=%s",
                  static_cast<double>(sample.bus_voltage_volts), static_cast<double>(sample.shunt_current_amps),

@@ -20,9 +20,16 @@ constexpr uint8_t kRegisterBusVoltage = 0x02U;
 constexpr uint8_t kRegisterPower = 0x03U;
 constexpr uint8_t kRegisterCurrent = 0x04U;
 constexpr uint8_t kRegisterCalibration = 0x05U;
+constexpr uint8_t kRegisterManufacturerId = 0xFEU;
+constexpr uint8_t kRegisterDieId = 0xFFU;
 
-// Averaging 16, 1.1 ms bus and shunt conversion, continuous shunt+bus mode.
-constexpr uint16_t kConfigurationValue = 0x2938U;
+// Configuration register 00h: reserved bit 14, AVG[11:9] = 16 averages,
+// VBUSCT[8:6] = VSHCT[5:3] = 1.1 ms, MODE[2:0] = shunt and bus continuous.
+constexpr uint16_t kConfigurationValue = 0x4527U;
+// Identification registers; the die ID ends in a revision bit.
+constexpr uint16_t kManufacturerId = 0x5449U;
+constexpr uint16_t kDieId = 0x2260U;
+constexpr uint16_t kDieIdMask = 0xFFFEU;
 // Content of the calibration register is 0.00512 / (current_lsb * shunt).
 constexpr float kCalibrationNumerator = 0.00512F;
 
@@ -98,9 +105,27 @@ bool Ina226::Prepare(int64_t now_us) {
         next_probe_us_ = now_us + kProbeRetryUs;
         return false;
     }
+    uint16_t manufacturer = 0U;
+    uint16_t die = 0U;
+    const bool identified = ReadRegister(kRegisterManufacturerId, manufacturer) && ReadRegister(kRegisterDieId, die);
+    if (!identified) {
+        ESP_LOGW(kTag, "identification registers unavailable at 0x%02x", config_.address);
+    } else if (manufacturer != kManufacturerId || (die & kDieIdMask) != kDieId) {
+        ESP_LOGW(kTag, "unexpected identification: manufacturer=0x%04x die=0x%04x", static_cast<unsigned>(manufacturer),
+                 static_cast<unsigned>(die));
+    }
     if (!WriteRegister(kRegisterConfiguration, kConfigurationValue)) {
         DropDevice("configuration write", ESP_FAIL, now_us);
         return false;
+    }
+    uint16_t configuration = 0U;
+    if (!ReadRegister(kRegisterConfiguration, configuration)) {
+        DropDevice("configuration read-back", ESP_FAIL, now_us);
+        return false;
+    }
+    if (configuration != kConfigurationValue) {
+        ESP_LOGW(kTag, "configuration read-back mismatch: wrote 0x%04x read 0x%04x",
+                 static_cast<unsigned>(kConfigurationValue), static_cast<unsigned>(configuration));
     }
     const auto calibration =
         static_cast<uint16_t>(std::lround(kCalibrationNumerator / (current_lsb_amps_ * config_.shunt_ohms)));
@@ -108,9 +133,12 @@ bool Ina226::Prepare(int64_t now_us) {
         DropDevice("calibration write", ESP_FAIL, now_us);
         return false;
     }
-    ESP_LOGI(kTag, "ready: address=0x%02x shunt=%.4f ohm current-lsb=%.6f A calibration=%u", config_.address,
-             static_cast<double>(config_.shunt_ohms), static_cast<double>(current_lsb_amps_),
-             static_cast<unsigned>(calibration));
+    ESP_LOGI(kTag,
+             "ready: address=0x%02x die=0x%04x shunt=%.4f ohm current-lsb=%.6f A calibration=%u "
+             "configuration=0x%04x",
+             config_.address, static_cast<unsigned>(die), static_cast<double>(config_.shunt_ohms),
+             static_cast<double>(current_lsb_amps_), static_cast<unsigned>(calibration),
+             static_cast<unsigned>(configuration));
     return true;
 }
 
