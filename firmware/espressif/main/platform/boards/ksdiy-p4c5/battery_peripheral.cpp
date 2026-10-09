@@ -47,7 +47,10 @@ device::BatterySnapshot BatteryPeripheral::Snapshot() {
     struct Request final {
         BatteryPeripheral* peripheral;
         device::BatterySnapshot snapshot;
-    } request{this, last_snapshot_};
+    } request{this, {}};
+    // last_snapshot_ belongs to the I2C worker that refreshes it, so the caller
+    // only ever receives a copy the worker produced and never reads the cache
+    // from its own task.
     const esp_err_t status = executor_->Invoke(
         buses::I2cExecutor::Priority::kLow,
         [](void* context) {
@@ -56,7 +59,9 @@ device::BatterySnapshot BatteryPeripheral::Snapshot() {
             return ESP_OK;
         },
         &request);
-    return status == ESP_OK ? request.snapshot : last_snapshot_;
+    // With the bus unreachable this poll's level is unknown: report it as
+    // unavailable rather than as a stale reading.
+    return status == ESP_OK ? request.snapshot : device::BatterySnapshot{};
 }
 
 device::BatterySnapshot BatteryPeripheral::RefreshOnWorker() {
