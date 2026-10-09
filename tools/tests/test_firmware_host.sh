@@ -381,6 +381,29 @@ build_and_run power_policy \
 build_and_run rx8130_codec \
     "$workspace_root/tools/tests/test_rx8130_codec.cpp"
 
+# Reviewed Tab5 hardware fixes: the INA226 must leave power-down, the RX8130
+# voltage-loss flag must only be cleared deliberately, and the RTC policy must
+# never write from an untrustworthy clock.
+build_and_run ina226_driver \
+    -iquote "$workspace_root/tools/tests/device_stubs" \
+    "$workspace_root/tools/tests/test_ina226_driver.cpp" \
+    "$workspace_root/tools/tests/device_stubs/fake_i2c_bus.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/drivers/power/ina226.cpp"
+
+build_and_run rx8130_driver \
+    -iquote "$workspace_root/tools/tests/device_stubs" \
+    "$workspace_root/tools/tests/test_rx8130_driver.cpp" \
+    "$workspace_root/tools/tests/device_stubs/fake_i2c_bus.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/drivers/rtc/rx8130.cpp"
+
+build_and_run rtc_clock_policy \
+    -iquote "$workspace_root/tools/tests/device_stubs" \
+    -include "$workspace_root/tools/tests/device_stubs/time_shim.hpp" \
+    "$workspace_root/tools/tests/test_rtc_clock_policy.cpp" \
+    "$workspace_root/tools/tests/device_stubs/fake_i2c_bus.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/drivers/rtc/rx8130.cpp" \
+    "$workspace_root/firmware/espressif/main/platform/boards/m5stack-tab5/rtc_clock.cpp"
+
 build_and_run sector_block_storage \
     "$workspace_root/tools/tests/test_sector_block_storage.cpp" \
     "$workspace_root/firmware/espressif/main/platform/storage/sector_block_storage.cpp"
@@ -688,7 +711,7 @@ build_and_run blocks_model \
 # Exercise real LVGL flex layout and scrolling, including the compact 320x240 Hall.
 cmake -S "$workspace_root/tools/tests/lvgl_ui" -B "$test_output_dir/lvgl-ui" \
     -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_menu_test cellular_ui_test wifi_ui_test --parallel 4
+cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_menu_test cellular_ui_test wifi_ui_test status_layer_scrim_test --parallel 4
 (cd "$test_output_dir/lvgl-ui" && ./hall_error_dialog_test)
 
 (cd "$test_output_dir/lvgl-ui" && ./system_menu_test)
@@ -696,6 +719,8 @@ cmake --build "$test_output_dir/lvgl-ui" --target hall_error_dialog_test system_
 (cd "$test_output_dir/lvgl-ui" && ./cellular_ui_test)
 
 (cd "$test_output_dir/lvgl-ui" && ./wifi_ui_test)
+
+(cd "$test_output_dir/lvgl-ui" && ./status_layer_scrim_test)
 
 cmake -S "$workspace_root/tools/tests/network_json" -B "$test_output_dir/network-json"
 cmake --build "$test_output_dir/network-json" --parallel 2

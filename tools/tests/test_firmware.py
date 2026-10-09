@@ -556,5 +556,101 @@ lv_mem_size_bytes=1572864
                         firmware.locate_idf_py({"IDF_PATH": directory})
 
 
+class Tab5WrapperPrecedenceTest(unittest.TestCase):
+    """tools/tab5.sh loads the repository .env, and explicit caller values win.
+
+    The reviewed revision sourced .env after saving only IDF path, port and baud,
+    so an explicitly supplied Control host, ALLOW_UNVERIFIED_TLS or SDKCONFIG
+    default was silently replaced by the .env value. This drives the real wrapper
+    in a sandbox and reads back what the firmware entry point received.
+    """
+
+    _KEYS = (
+        "IDF_PATH",
+        "TAB5_HOST_BUILD_DIR",
+        "TAB5_SDKCONFIG",
+        "TAB5_SDKCONFIG_DEFAULTS",
+        "TAB5_PORT",
+        "TAB5_BAUD",
+        "MICROPIXEL_REMOTE_CONTROL_HOST",
+        "MICROPIXEL_REMOTE_CONTROL_PORT",
+        "MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS",
+        "MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64",
+    )
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "tools").mkdir()
+        (self.root / "tools/tab5.sh").write_text((firmware.WORKSPACE_ROOT / "tools/tab5.sh").read_text())
+        for name in ("idf-env", "idf-explicit"):
+            (self.root / name / "tools").mkdir(parents=True)
+            (self.root / name / "export.sh").write_text("export MICROPIXEL_TEST_IDF_ACTIVATED=1\n")
+            (self.root / name / "tools/idf.py").write_text("")
+        self.env_values = {
+            "IDF_PATH": str(self.root / "idf-env"),
+            "TAB5_HOST_BUILD_DIR": str(self.root / "build-env"),
+            "TAB5_SDKCONFIG": str(self.root / "sdkconfig-env"),
+            "TAB5_SDKCONFIG_DEFAULTS": str(self.root / "defaults-env"),
+            "TAB5_PORT": "/dev/ttyENV",
+            "TAB5_BAUD": "111111",
+            "MICROPIXEL_REMOTE_CONTROL_HOST": "env.example",
+            "MICROPIXEL_REMOTE_CONTROL_PORT": "4443",
+            "MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS": "y",
+            "MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64": "ZW52",
+        }
+        (self.root / ".env").write_text("".join(f"{key}={value}\n" for key, value in self.env_values.items()))
+        recorder = "\n".join(
+            (
+                "import json, os, sys",
+                f"keys = {list(self._KEYS)!r}",
+                "record = os.environ['MICROPIXEL_TEST_RECORD']",
+                "with open(record, 'w') as handle:",
+                "    json.dump({'argv': sys.argv[1:],"
+                " 'env': {key: os.environ.get(key, '') for key in keys}}, handle)",
+            )
+        )
+        (self.root / "tools/firmware.py").write_text(recorder + "\n")
+
+    def _run(self, explicit: dict[str, str]) -> dict:
+        record = self.root / "record.json"
+        environment = {"PATH": "/usr/bin:/bin", "MICROPIXEL_TEST_RECORD": str(record)}
+        environment.update(explicit)
+        subprocess.run(
+            ["bash", str(self.root / "tools/tab5.sh"), "build-host"],
+            check=True,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(record.read_text())
+
+    def test_env_file_supplies_values_when_the_caller_sets_nothing(self) -> None:
+        recorded = self._run({})
+        self.assertEqual(recorded["argv"], ["m5stack-tab5", "build"])
+        for key, value in self.env_values.items():
+            self.assertEqual(recorded["env"][key], value, key)
+
+    def test_explicit_variables_beat_the_env_file(self) -> None:
+        explicit = {
+            "IDF_PATH": str(self.root / "idf-explicit"),
+            "TAB5_HOST_BUILD_DIR": "/tmp/explicit-build",
+            "TAB5_SDKCONFIG": "/tmp/explicit-sdkconfig",
+            "TAB5_SDKCONFIG_DEFAULTS": "/tmp/explicit-defaults",
+            "TAB5_PORT": "/dev/ttyEXPLICIT",
+            "TAB5_BAUD": "222222",
+            "MICROPIXEL_REMOTE_CONTROL_HOST": "explicit.example",
+            "MICROPIXEL_REMOTE_CONTROL_PORT": "8443",
+            "MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS": "n",
+            "MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64": "ZXhwbGljaXQ=",
+        }
+        recorded = self._run(explicit)
+        self.assertEqual(recorded["argv"], ["m5stack-tab5", "build"])
+        for key, value in explicit.items():
+            self.assertEqual(recorded["env"][key], value, key)
+        self.assertNotEqual(recorded["env"]["MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS"], "y")
+
+
 if __name__ == "__main__":
     unittest.main()

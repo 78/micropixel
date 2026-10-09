@@ -44,6 +44,15 @@ target_compile_features(cellular_ui_test PRIVATE cxx_std_23)
 target_compile_options(cellular_ui_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(cellular_ui_test PRIVATE lvgl)
 
+add_executable(status_layer_scrim_test ../test_status_layer_scrim.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/host_strings.hpp"
+    "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/status_layer_ui.cpp")
+target_include_directories(status_layer_scrim_test PRIVATE stubs ../firmware_stubs
+    "${CMAKE_CURRENT_BINARY_DIR}/generated" "${workspace_root}/firmware/espressif/main" "${workspace_root}/guest")
+target_compile_features(status_layer_scrim_test PRIVATE cxx_std_23)
+target_compile_options(status_layer_scrim_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(status_layer_scrim_test PRIVATE lvgl)
+
 add_executable(wifi_ui_test ../test_wifi_ui.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/generated/host_strings.hpp"
     "${workspace_root}/firmware/espressif/main/host/ui/lvgl/square_common/wifi_settings_ui.cpp"
