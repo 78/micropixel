@@ -8,9 +8,12 @@
 #include "host/ui/lvgl/square_common/hall_carousel.hpp"
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_cache_policy.hpp"
+#include "host/ui/lvgl/square_common/hall_cover_flow.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_mask.hpp"
 #include "host/ui/lvgl/square_common/hall_transition_policy.hpp"
 #include "host/ui/lvgl/square_common/profiles/landscape_320_layout.hpp"
+#include "host/ui/lvgl/square_common/profiles/landscape_800x480_layout.hpp"
+#include "host/ui/lvgl/square_common/profiles/portrait_480x800_layout.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_480_layout.hpp"
 #include "host/ui/lvgl/square_common/profiles/square_720_layout.hpp"
 #include "platform/lvgl/display/dialog_snapshot_layout.hpp"
@@ -133,6 +136,35 @@ void Landscape320Geometry() {
     Check(Landscape320Carousel::MaxOffset(7U) == 384 &&
               Landscape320Carousel::CardX(6U, Landscape320Carousel::MaxOffset(7U)) == 204,
           "the final 320 landscape view must align its last three cards inside the viewport");
+}
+
+void CoverFlowGeometry() {
+    using host_ui::lvgl::square_common::CoverFlowEdgeWidth;
+    using host_ui::lvgl::square_common::CoverFlowStyleFor;
+    namespace portrait = host_ui::lvgl::square_common::profiles::portrait_480x800;
+    namespace landscape = host_ui::lvgl::square_common::profiles::landscape_800x480;
+    constexpr int32_t kPortraitStep = portrait::Layout::kHallCardWidth + portrait::Layout::kHallCardGap;
+    constexpr int32_t kLandscapeStep = landscape::Layout::kHallCardWidth + landscape::Layout::kHallCardGap;
+    Check(kPortraitStep == portrait::Layout::kHallCardWidth * 158 / 256 &&
+              kLandscapeStep == landscape::Layout::kHallCardWidth * 158 / 256,
+          "Cover Flow tracks must step by the neighbour offset so a drag moves one cover per card");
+    Check(CoverFlowEdgeWidth(480, 240) == 120 && CoverFlowEdgeWidth(800, 200) == 300,
+          "Cover Flow padding must let the first and last cards reach the viewport centre");
+
+    const auto centre = CoverFlowStyleFor(0, 240, kPortraitStep);
+    Check(centre.visible && centre.scale == 256 && centre.translate_x == 0 && centre.dim == 0 && centre.opacity == 255,
+          "the centred cover must be full size, in place and undimmed");
+    const auto right = CoverFlowStyleFor(256, 240, kPortraitStep);
+    Check(right.scale == 186 && right.translate_x == 0 && right.dim == 120 && right.opacity == 255,
+          "a neighbour must shrink and dim while sitting one track step away");
+    const auto left = CoverFlowStyleFor(-512, 240, kPortraitStep);
+    Check(left.scale == 146 && left.translate_x == 56 && left.dim == 175 && left.opacity == 255,
+          "a second neighbour must be pulled toward the centre, mirrored on the left");
+    const auto fading = CoverFlowStyleFor(704, 240, kPortraitStep);
+    Check(fading.visible && fading.opacity < CoverFlowStyleFor(640, 240, kPortraitStep).opacity,
+          "covers past two and a half steps must fade out");
+    Check(!CoverFlowStyleFor(768, 240, kPortraitStep).visible && !CoverFlowStyleFor(-900, 240, kPortraitStep).visible,
+          "covers three steps away must be hidden");
 }
 
 void DragClampingAndDirection() {
@@ -462,6 +494,7 @@ int main() {
     CapacityAndGeometry();
     Square480Geometry();
     Landscape320Geometry();
+    CoverFlowGeometry();
     DragClampingAndDirection();
     VelocityAndFreeInertia();
     ContinuousIndicator();

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "device/contracts/input.hpp"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
@@ -39,11 +40,16 @@ EspLcdTouchInput::~EspLcdTouchInput() {
     }
 }
 
-esp_err_t EspLcdTouchInput::Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor) {
+esp_err_t EspLcdTouchInput::Initialize(esp_lcd_touch_handle_t touch, buses::I2cExecutor& executor,
+                                       bool check_interrupt_level) {
     if (touch == nullptr || width_ <= 0 || height_ <= 0 || max_touch_points_ == 0U ||
         max_touch_points_ > micropixel::device::kMaxTouchPoints) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (check_interrupt_level && touch->config.int_gpio_num == GPIO_NUM_NC) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    check_interrupt_level_ = check_interrupt_level;
     touch_ = touch;
     executor_ = &executor;
     return ESP_OK;
@@ -54,9 +60,8 @@ esp_err_t EspLcdTouchInput::Start(lv_display_t* display) {
         return ESP_ERR_INVALID_STATE;
     }
     display_ = display;
-    // Clear a report that may already be pending before the callback is
-    // registered. After this one-shot synchronization all reads are driven by
-    // the controller interrupt.
+    // Synchronize pending startup data. Boards using INT level checks also
+    // recover reports left pending while an interrupt or queue post was missed.
     const esp_err_t prime_status = executor_->Invoke(buses::I2cExecutor::Priority::kHigh, PrimeEntry, this);
     if (prime_status != ESP_OK) {
         display_ = nullptr;
@@ -64,7 +69,8 @@ esp_err_t EspLcdTouchInput::Start(lv_display_t* display) {
     }
     active_instance_ = this;
     esp_err_t status = esp_lcd_touch_register_interrupt_callback(touch_, InterruptEntry);
-    if (status == ESP_ERR_INVALID_ARG || status == ESP_ERR_NOT_SUPPORTED) {
+    if (status == ESP_ERR_INVALID_ARG || status == ESP_ERR_NOT_SUPPORTED ||
+        (status == ESP_OK && check_interrupt_level_)) {
         esp_timer_create_args_t timer_config{};
         timer_config.callback = PollTimerExpired;
         timer_config.arg = this;
@@ -76,7 +82,8 @@ esp_err_t EspLcdTouchInput::Start(lv_display_t* display) {
             status = esp_timer_start_periodic(poll_timer_, kPollingIntervalUs);
         }
         if (status == ESP_OK) {
-            ESP_LOGI(kTag, "touch controller has no interrupt line; polling every %llu us", kPollingIntervalUs);
+            ESP_LOGI(kTag, "touch %s every %llu us", check_interrupt_level_ ? "INT level check" : "poll",
+                     kPollingIntervalUs);
         }
     }
     if (status != ESP_OK) {
@@ -202,6 +209,10 @@ void EspLcdTouchInput::PollTimerExpired(void* context) {
     if (instance == nullptr) {
         return;
     }
+    if (instance->check_interrupt_level_ && gpio_get_level(instance->touch_->config.int_gpio_num) !=
+                                                static_cast<int>(instance->touch_->config.levels.interrupt)) {
+        return;
+    }
     instance->interrupts_.fetch_add(1U, std::memory_order_relaxed);
     if (instance->executor_ == nullptr || instance->work_pending_.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -238,13 +249,17 @@ void EspLcdTouchInput::ProcessInterrupt() {
         for (const auto& active : active_touches_) {
             touches_active = touches_active || active.active;
         }
-        if (!touches_active || silence_us < kStaleFrameReleaseUs) {
+        // ST7123 may stay quiet while a finger is held. INT reports data
+        // readiness, so inactivity is not evidence that the finger lifted.
+        if (check_interrupt_level_ || !touches_active || silence_us < kStaleFrameReleaseUs) {
             sample_decoded = true;
         } else {
             ESP_LOGW(kTag, "no touch frame for %llu ms while pressed; releasing",
                      static_cast<unsigned long long>(silence_us / 1000U));
         }
     } else if (read_status != ESP_OK) {
+        sample_decoded = check_interrupt_level_ &&
+                         static_cast<uint64_t>(esp_timer_get_time()) - last_frame_us_ < kStaleFrameReleaseUs;
         ESP_LOGW(kTag, "touch sample read failed: %s", esp_err_to_name(read_status));
     } else {
         esp_lcd_touch_point_data_t points[micropixel::device::kMaxTouchPoints]{};

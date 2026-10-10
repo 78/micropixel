@@ -67,6 +67,7 @@ class VirtualizedHallPolicy final {
     [[nodiscard]] bool PrepareCleanBackgroundLocked(uint32_t running_index);
     void ResetLocked();
     void UpdateCarouselLocked(int32_t offset);
+    void ApplyCoverFlowLocked();
     void RequestCoverWindowLocked(bool force = false);
     void DrawCard(lv_obj_t* parent, const HallAppPresentation& app, uint32_t index);
     void DestroyCardLocked(uint32_t index);
