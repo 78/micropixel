@@ -47,6 +47,8 @@ class FirmwareProfileTest(unittest.TestCase):
             {
                 "metalio-claw4",
                 "m5stack-tab5",
+                "ksdiy-p4c5",
+                "ksdiy-p4c5-landscape",
                 "p4-null",
                 "esp-mosaico",
                 "s31-null",
@@ -64,6 +66,12 @@ class FirmwareProfileTest(unittest.TestCase):
             str(path) for path in self.profiles["m5stack-tab5"].sdkconfig_defaults
         )
         self.assertIn("sdkconfig.m5stack-tab5.defaults", tab5_defaults)
+        self.assertTrue(self.profiles["ksdiy-p4c5"].flash)
+        self.assertTrue(self.profiles["ksdiy-p4c5-landscape"].flash)
+        self.assertEqual(
+            self.profiles["ksdiy-p4c5-landscape"].sdkconfig_defaults[:-1],
+            self.profiles["ksdiy-p4c5"].sdkconfig_defaults,
+        )
         self.assertTrue(self.profiles["esp-mosaico"].flash)
         self.assertTrue(self.profiles["esp-mosaico"].monitor)
         self.assertEqual(self.profiles["esp-mosaico"].flash_before, "no-reset")

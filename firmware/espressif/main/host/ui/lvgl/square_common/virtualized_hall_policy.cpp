@@ -1,8 +1,10 @@
 #include "host/ui/lvgl/square_common/virtualized_hall_policy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <utility>
 
 #include "esp_log.h"
@@ -10,6 +12,7 @@
 #include "esp_memory_utils.h"
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
+#include "host/ui/lvgl/square_common/hall_cover_flow.hpp"
 #include "host/ui/lvgl/square_common/hall_transition_policy.hpp"
 #include "lvgl.h"
 #include "platform/lvgl/lvgl_wakeup.hpp"
@@ -24,8 +27,9 @@ constexpr uint32_t kCoverPrefetchCards = 1U;
 
 HallPresentationRect HallCardPresentationRect(const SquareSystemUiProfile& profile, uint32_t index,
                                               int32_t scroll_offset) {
-    return {.x = profile.hall_scene.carousel.x +
-                 static_cast<int32_t>(index) * (profile.hall_scene.card_width + profile.hall_scene.card_gap) -
+    const HallSceneLayout& scene = profile.hall_scene;
+    const int32_t edge = scene.cover_flow ? CoverFlowEdgeWidth(scene.carousel.width, scene.card_width) : 0;
+    return {.x = scene.carousel.x + edge + static_cast<int32_t>(index) * (scene.card_width + scene.card_gap) -
                  scroll_offset,
             .y = profile.hall_scene.carousel.y,
             .width = profile.hall_scene.card_width,
@@ -92,6 +96,10 @@ int32_t VirtualizedHallPolicy::RevealOffset(uint32_t app_count, int32_t offset, 
     if (index >= app_count) {
         return clamped;
     }
+    if (state_.profile.hall_scene.cover_flow) {
+        // Cover Flow only launches the centred card.
+        return SnapOffset(app_count, index);
+    }
     const HallPresentationRect card = HallCardPresentationRect(state_.profile, index, clamped);
     const int32_t viewport_left = state_.profile.hall_scene.carousel.x;
     const int32_t viewport_right = viewport_left + state_.profile.hall_scene.carousel.width;
@@ -108,6 +116,12 @@ uint32_t VirtualizedHallPolicy::CoverWindowFirst(uint32_t app_count, int32_t off
     if (app_count == 0U) {
         return 0U;
     }
+    if (state_.profile.hall_scene.cover_flow) {
+        // Cards within the hidden distance of the centre, on the left side.
+        const int32_t reach =
+            ClampOffset(app_count, offset) - cover_flow::kHiddenDistance * CardStep() / cover_flow::kUnit;
+        return reach > 0 ? static_cast<uint32_t>((reach + CardStep() - 1) / CardStep()) : 0U;
+    }
     const uint32_t first_visible = static_cast<uint32_t>(ClampOffset(app_count, offset) / CardStep());
     return first_visible > kCoverPrefetchCards ? first_visible - kCoverPrefetchCards : 0U;
 }
@@ -115,6 +129,11 @@ uint32_t VirtualizedHallPolicy::CoverWindowFirst(uint32_t app_count, int32_t off
 uint32_t VirtualizedHallPolicy::CoverWindowLast(uint32_t app_count, int32_t offset) const {
     if (app_count == 0U) {
         return 0U;
+    }
+    if (state_.profile.hall_scene.cover_flow) {
+        const int32_t reach =
+            ClampOffset(app_count, offset) + cover_flow::kHiddenDistance * CardStep() / cover_flow::kUnit;
+        return std::min(app_count, static_cast<uint32_t>(reach / CardStep()) + 1U);
     }
     const int32_t clamped = ClampOffset(app_count, offset);
     const uint32_t last_intersecting =
@@ -332,7 +351,96 @@ void VirtualizedHallPolicy::UpdateCarouselLocked(int32_t offset) {
     state_.hall_scroll_offset = ClampOffset(state_.hall_app_count, offset);
     state_.hall_scene_ui.UpdateScrollLocked(state_.hall_app_count, state_.hall_scroll_offset);
     SyncCardWindowLocked();
+    ApplyCoverFlowLocked();
     RequestCoverWindowLocked();
+}
+
+void VirtualizedHallPolicy::ApplyCoverFlowLocked() {
+    const HallSceneLayout& scene = state_.profile.hall_scene;
+    if (!scene.cover_flow) {
+        return;
+    }
+    const int32_t step = CardStep();
+    const int32_t card_width = scene.card_width;
+    const int32_t card_height = state_.profile.hall_card.height;
+    const int32_t border = state_.profile.hall_card.border_width;
+    const int32_t edge = CoverFlowEdgeWidth(scene.carousel.width, card_width);
+    if (step <= 0) {
+        return;
+    }
+    // Cards are resized and their covers drawn at that size instead of using
+    // LVGL transforms or whole-object opacity: both render each card through a
+    // full-size ARGB layer, which made every scrolled frame stall. Only the
+    // materialized window (at most three cards either side of the centre) is
+    // styled.
+    struct Entry final {
+        lv_obj_t* card;
+        int32_t magnitude;
+    };
+    std::array<Entry, 8U> order{};
+    uint32_t count = 0U;
+    const uint32_t first = std::min(state_.hall_card_window_first, state_.hall_app_count);
+    const uint32_t last = std::min(state_.hall_card_window_last, state_.hall_app_count);
+    for (uint32_t index = first; index < last && count < order.size(); ++index) {
+        lv_obj_t* const card = state_.hall_cards[index];
+        if (card == nullptr) {
+            continue;
+        }
+        const int32_t distance =
+            (static_cast<int32_t>(index) * step - state_.hall_scroll_offset) * cover_flow::kUnit / step;
+        const CoverFlowCardStyle style = CoverFlowStyleFor(distance, card_width, step);
+        lv_obj_set_hidden(card, !style.visible);
+        if (!style.visible) {
+            continue;
+        }
+        const int32_t width = card_width * style.scale / cover_flow::kUnit;
+        const int32_t height = card_height * style.scale / cover_flow::kUnit;
+        // Scaled about the bottom centre, so every cover stands on one floor.
+        lv_obj_set_pos(card, edge + static_cast<int32_t>(index) * step + style.translate_x + (card_width - width) / 2,
+                       card_height - height);
+        lv_obj_set_size(card, width, height);
+        lv_obj_set_style_bg_opa(card, style.opacity, 0);
+        lv_obj_set_style_border_opa(card, style.opacity, 0);
+        if (lv_obj_t* const cover = lv_obj_get_child(card, 0); cover != nullptr) {
+            lv_obj_set_size(cover, width, width);
+            lv_obj_set_pos(cover, -border, -border);
+        }
+        if (lv_obj_t* const placeholder = state_.hall_cover_placeholders[index]; placeholder != nullptr) {
+            lv_obj_set_size(placeholder, width, width);
+        }
+        if (lv_obj_t* const image = state_.hall_cover_images[index]; image != nullptr) {
+            lv_obj_set_size(image, width, width);
+            lv_image_set_inner_align(image, LV_IMAGE_ALIGN_STRETCH);
+            // Nearest-neighbour scaling keeps a moving frame cheap; the centred
+            // cover is drawn at its native size and needs no filtering.
+            lv_image_set_antialias(image, false);
+            lv_obj_set_style_image_recolor(image, lv_color_black(), 0);
+            lv_obj_set_style_image_recolor_opa(image, style.dim, 0);
+            lv_obj_set_style_image_opa(image, style.opacity, 0);
+        }
+        // Title, badges and the stop button belong to the settled centre card.
+        const bool centred = distance == 0;
+        for (uint32_t child = 1U; child < lv_obj_get_child_count(card); ++child) {
+            lv_obj_t* const object = lv_obj_get_child(card, static_cast<int32_t>(child));
+            if (object != state_.hall_card_press_overlays[index]) {
+                lv_obj_set_hidden(object, !centred);
+            }
+        }
+        order[count++] = {.card = card, .magnitude = distance < 0 ? -distance : distance};
+    }
+    // Farthest cards go first, so the centred card ends on top. Restack only
+    // when the order changed: raising a card invalidates its whole area.
+    std::sort(order.begin(), order.begin() + count,
+              [](const Entry& left, const Entry& right) { return left.magnitude > right.magnitude; });
+    bool ordered = true;
+    for (uint32_t position = 1U; position < count && ordered; ++position) {
+        ordered = lv_obj_get_index(order[position - 1U].card) < lv_obj_get_index(order[position].card);
+    }
+    if (!ordered) {
+        for (uint32_t position = 0U; position < count; ++position) {
+            lv_obj_move_foreground(order[position].card);
+        }
+    }
 }
 
 uint32_t VirtualizedHallPolicy::RunningAppIndex() const {
@@ -572,6 +680,15 @@ void VirtualizedHallPolicy::CardEvent(lv_event_t* event) {
         policy->state_.hall_action_sink(
             policy->state_.hall_action_context,
             host_ui::SystemUiAction{.type = host_ui::SystemUiActionType::kOpenAppActions, .app_index = index});
+    } else if (code == LV_EVENT_SHORT_CLICKED && policy->state_.profile.hall_scene.cover_flow &&
+               index != policy->NearestIndexForOffset(policy->state_.hall_scroll_offset)) {
+        // A side cover is brought to the centre; only the centred one launches.
+        lv_obj_t* const viewport = policy->state_.hall_scene_ui.objects().carousel_viewport;
+        if (viewport != nullptr) {
+            policy->state_.hall_selected_index = index;
+            policy->SyncSelectionLocked();
+            lv_obj_scroll_to_x(viewport, policy->SnapOffset(policy->state_.hall_app_count, index), LV_ANIM_ON);
+        }
     } else if (code == LV_EVENT_SHORT_CLICKED && policy->state_.hall_launch_enabled &&
                policy->state_.hall_action_sink != nullptr) {
         policy->LaunchCard(index);

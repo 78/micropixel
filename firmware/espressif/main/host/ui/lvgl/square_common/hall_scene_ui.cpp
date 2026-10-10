@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "host/ui/lvgl/square_common/hall_cover_flow.hpp"
 #include "host/ui/lvgl/square_common/hall_error_dialog.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/lvgl/square_common/icons/cellular_status_icons.hpp"
@@ -233,10 +234,12 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     }
 
     objects_.carousel_content = lv_obj_create(objects_.carousel_viewport);
+    const int32_t cover_flow_edge =
+        layout.cover_flow ? CoverFlowEdgeWidth(layout.carousel.width, layout.card_width) : 0;
     const int32_t cards_width = visible_count == 0U
                                     ? layout.carousel.width
                                     : static_cast<int32_t>(visible_count) * (layout.card_width + layout.card_gap) -
-                                          layout.card_gap + layout.content_trailing_width;
+                                          layout.card_gap + layout.content_trailing_width + 2 * cover_flow_edge;
     StyleContainer(objects_.carousel_content, {.x = 0, .y = 0, .width = cards_width, .height = layout.carousel.height},
                    0, theme::kHallBackground);
     lv_obj_set_style_bg_opa(objects_.carousel_content, LV_OPA_TRANSP, 0);

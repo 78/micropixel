@@ -71,6 +71,11 @@ struct HallSceneLayout final {
     // a drag or a knock, so the carousel lands on a card. Touch-first boards
     // keep their free-scrolling carousel by leaving this false.
     bool snap_carousel_to_cards{};
+    // Cover Flow: cards are centred rather than left-aligned, and the card
+    // nearest the centre is full size while its neighbours shrink, dim and
+    // overlap toward it. card_gap may be negative so the track overlaps.
+    // Requires fully_visible_cards == 1 and snap_carousel_to_cards.
+    bool cover_flow{};
 };
 
 struct HallSceneEvents final {

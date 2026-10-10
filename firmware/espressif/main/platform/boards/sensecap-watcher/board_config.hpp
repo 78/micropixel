@@ -61,6 +61,15 @@ inline constexpr gpio_num_t kControlScl = GPIO_NUM_48;
 // separately at 400 kHz.
 inline constexpr uint32_t kControlI2cClockHz = 100000U;
 
+// --- Grove IIC port (J2), the rear expansion connector ---
+// The schematic wires the port's SDA/SCL to ESP_GPIO47/I2C0_SDA and
+// ESP_GPIO48/I2C0_SCL, so the Grove port is the control bus rather than a bus
+// of its own: the expander, the codec and the port share it. The port carries
+// ESD diodes only, with no level shifter and no second master while the Himax
+// AI chip is held in reset, and its rail is GROVE_3.3V behind expander P1.6,
+// which the startup latch already raises.
+inline constexpr uint8_t kGroveInertialAddress = 0x69U;
+
 // --- Audio: ES8311 (output) and ES7243E (input) on one I2S bus ---
 // 16 kHz, the rate the shared Opus clip path decodes at, so playback reaches the
 // codec without any resampling. The rate has to be 16 kHz or an integer multiple

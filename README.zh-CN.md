@@ -11,6 +11,7 @@
 | 芯片 | 开发板 |
 |---|---|
 | ESP32-P4 | [Metalio-Claw4](https://github.com/CloudZao/MetalioClaw4) |
+| ESP32-P4 | [酷世DIY ESP32-P4C5 4.3 寸](https://github.com/kevincoooool/ESP32P4_KSDIY) |
 | ESP32-S31 | [ESP-Mosaico](https://github.com/esp-mosaico/esp-mosaico-bsp) |
 | ESP32-S3 | [ESP32-S3-BOX-3](https://github.com/espressif/esp-box) |
 | ESP32-S3 | [立创 SZPI](https://wiki.lckfb.com/zh-hans/szpi-esp32s3/beginner/introduction.html) |
@@ -45,7 +46,8 @@ python3 -m pip install -r requirements-dev.txt
 bash tools/p4.sh build-host
 ```
 
-其他板型：`bash tools/s31.sh build-host`、`bash tools/s3.sh build-host <box3|szpi|cores3|watcher>`。
+其他板型：`bash tools/s31.sh build-host`、`bash tools/s3.sh build-host <box3|szpi|cores3|watcher>`、
+`python3 tools/firmware.py <ksdiy-p4c5|ksdiy-p4c5-landscape> build`。
 
 ## 项目文档
 

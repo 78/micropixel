@@ -137,6 +137,22 @@ The upstream MIT notice follows:
 > TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+## KSDIY P4C5 board support
+
+The KSDIY P4C5 profile brings up its ST7102 MIPI-DSI panel, backlight, AXP2101 codec rails and ST7123 touch
+controller through the `kevincoooool/ksdiy_p4c5_bsp` component (with `kevincoooool/esp_lcd_st7102` and
+`kevincoooool/pmic_axp2101`) from the ESP Component Registry. The audio pin and codec-rail values in
+`firmware/espressif/main/platform/boards/ksdiy-p4c5/` follow `kevincoooool/ksdiy_p4c5_audio`:
+
+- upstream: <https://github.com/kevincoooool/ESP32P4_KSDIY> (`P4_C5_4.3_Firmware/components/`);
+- copyright: Kevincoooool;
+- license: Apache-2.0.
+
+The ST7123 touch driver is `kevincoooool/esp_lcd_touch_st7123` from the ESP Component Registry, a fork of
+Espressif's `esp_lcd_touch_st7123` 1.0.2 (esp-iot-solution) that reports a track ID per finger, bounds the
+report count and pulls up the open-drain INT line. The fork keeps the upstream Apache-2.0 license, copyright
+Espressif Systems (Shanghai) CO LTD, and its `README.md` records each change.
+
 ## ESP-IDF managed components
 
 ESP-IDF, LVGL, and components resolved from the Espressif Component Registry are build dependencies and are not
@@ -172,7 +188,7 @@ ESP-IDF transport callbacks and board-level scheduling wrappers.
 
 ### esp_codec_dev
 
-ESP-Mosaico and ESP32-S3 ES8311/AW88298 initialization use `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
+ESP-Mosaico, KSDIY P4C5 and ESP32-S3 ES8311/AW88298 initialization use `espressif/esp_codec_dev` 1.6.2 from the ESP Component Registry:
 
 - upstream: <https://components.espressif.com/components/espressif/esp_codec_dev>, Apache-2.0;
 - scope: ES8311 codec configuration and the ESP-IDF I2S data interface; MicroPixel supplies the shared-I2C-executor

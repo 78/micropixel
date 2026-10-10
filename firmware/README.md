@@ -7,6 +7,7 @@ with the [toolchain configured](../docs/development/flashing.zh-CN.md) (Chinese)
 bash tools/p4.sh build-host
 bash tools/s31.sh build-host
 bash tools/s3.sh build-host <box3|szpi|cores3|watcher>
+python3 tools/firmware.py <ksdiy-p4c5|ksdiy-p4c5-landscape> build
 ```
 
 Build and flash are separate operations. For example, `bash tools/p4.sh flash-host <port>` writes the built Host

@@ -148,6 +148,45 @@ down/up 且 pressed/released 状态同步；v1.0 的 Demo Devices 页选择 `Ora
 触摸、音频、电源和调试脚冲突。
 如果 ESP-IDF preview 自身出现源码/header 不同步，应更新或重装对应 SDK，不在项目仓库中修补本机 IDF。
 
+## ESP32-P4 / 酷世DIY ESP32-P4C5 4.3 寸
+
+板载 ESP32-P4 v3.x（400 MHz）、16 MiB Flash、480x800 ST7102 MIPI-DSI 屏、ST7123 触摸、ES8311 音频输出、
+AXP2101 电源管理和 ESP32-C5 Wi-Fi 协处理器（SDIO Slot 1：CMD19/CLK18/D0-D3 14-17，复位 GPIO54）。
+屏幕方向在编译期选择，竖屏与横屏是两个独立 profile 和 OTA target：
+
+```sh
+python3 tools/firmware.py ksdiy-p4c5 build                 # 竖屏 480x800
+python3 tools/firmware.py ksdiy-p4c5-landscape build       # 横屏 800x480
+python3 tools/firmware.py ksdiy-p4c5 flash-built --port /dev/cu.usbmodemXXXX
+python3 tools/firmware.py ksdiy-p4c5 monitor --port /dev/cu.usbmodemXXXX
+```
+
+Windows 使用 `pwsh tools/firmware.ps1 build-host -Board ksdiy`（横屏为 `-Board ksdiy-landscape`）。
+
+LSM6DS3/LSM6DS3TR-C 复用 SDA=7、SCL=8 的 I²C0 总线，自动探测 0x6A/0x6B；
+启动时检测成功后注册内置加速度计和陀螺仪，供现有 Sensor Service 使用。
+采样由共享 I²C executor 串行执行；应用停止采样时分别关闭两个传感器通道。
+输出单位为 m/s² 和 rad/s。加速度计和陀螺仪统一按板载安装方向映射 X=-原Y、Y=-原X、Z=-原Z。
+竖屏使用上述方向修正后的轴，横屏在此基础上映射 X=-Y、Y=X；
+实际安装方向应在板上使用 SDK Demo 和 Tilt 验证。
+寄存器采样率和灵敏度遵循 [ST 数据手册](https://www.st.com/resource/en/datasheet/lsm6ds3tr-c.pdf)。
+
+ST7123 使用 GPIO23 低有效 INT：边沿触发读取，每 10 ms 检查 INT 电平以恢复漏边沿或队列满后的报告。
+INT 表示报告就绪，并非手指按下状态；已排队的中断报告不能因 INT 已恢复高电平而丢弃。
+无坐标报告遵循 ST7123 原驱动的松手语义；手指 ID 从同一报告的槽位读取，不能依赖已消费的触点数量。
+真机需验证长按、连续拖动、多指交替，以及同时采样 IMU 时的触摸稳定性。
+
+`app_store` 与 16 MiB S3 板相同，为 `0x800000` 起始的 8 MiB（`partitions.p4-16mb.csv`）。屏幕、背光、
+AXP2101 电源轨和 ST7123 触摸由 `kevincoooool/ksdiy_p4c5_bsp` 初始化（`CONFIG_KSDIY_P4C5_LCD_RGB888`）；
+ST7123 驱动为 `kevincoooool/esp_lcd_touch_st7123 ~1.0.2`（上游 1.0.2 的修复分支：多点 track ID、报告数边界、
+INT 上拉），由 BSP 1.3.3 引入。竖屏直接扫描 LVGL 的两块
+RGB888 帧缓冲；横屏由 LVGL 适配器每次刷新用 PPA 旋转 90 度，Guest 走合成路径，截图不可用。App Hall 使用
+Cover Flow 卡片（`HallSceneLayout::cover_flow`），没有 PPA 过渡动画。
+
+语言字体包由 Control 服务下发，需在根目录 `.env` 配置 `MICROPIXEL_REMOTE_CONTROL_HOST=quic.micropixel.ai`、
+`MICROPIXEL_REMOTE_CONTROL_PORT=443` 与对应 CA；未配置时选择语言会在 30 秒后静默失败。字体安装在
+`app_store`（zh-CN 约 2 MiB）。摄像头、麦克风、按键、TF 卡和 PMIC 电源键尚未接入。
+
 ## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI、M5Stack CoreS3 与 SenseCAP Watcher
 
 BOX-3 配置固定使用 40 MHz SPI、40 行内部 SRAM partial buffer 和双缓冲：
@@ -189,6 +228,11 @@ SenseCAP Watcher 是 412×412 圆形屏（SPD2010、QSPI），圆形几何由 `s
 扩展芯片 P0.5 上，Host 只能在任务中 10 ms 轮询，因此 `esp_lcd_touch_spd2010` 使用
 `firmware/espressif/patched_components/` 下的本地副本，两处补丁及移除条件见该目录 README。旋钮接
 GPIO41/42：单击确认、双击返回、长按关机。
+
+后置 Grove IIC 口（J2）在电路上就是控制总线本身，不是第二条总线：扩展芯片、编解码器和该口共用
+GPIO47/48。口上接 BMI270 模块即得到加速度计与陀螺仪，启动时探测一次、识别到才注册对应通道，空口只多
+一次探测且不影响其它服务（倾斜操控类的 App 会自行判断有无该设备）。模块地址须为 0x69（驱动常量）；
+把 SDO/SA0 拉低变成 0x68 的模块探测不到，也不会报错。
 
 ```sh
 bash tools/s3.sh build-host watcher

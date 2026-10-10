@@ -23,6 +23,10 @@ struct esp_lcd_touch_t {
     struct {
         uint16_t x_max{};
         uint16_t y_max{};
+        int int_gpio_num{-1};
+        struct {
+            unsigned interrupt{};
+        } levels;
     } config;
     struct {
         uint8_t points{};
@@ -33,3 +37,7 @@ struct esp_lcd_touch_t {
 using esp_lcd_touch_handle_t = esp_lcd_touch_t*;
 
 esp_err_t esp_lcd_panel_io_rx_param(esp_lcd_panel_io_handle_t io, int command, void* data, size_t length);
+
+esp_err_t esp_lcd_touch_read_data(esp_lcd_touch_handle_t);
+esp_err_t esp_lcd_touch_get_data(esp_lcd_touch_handle_t, esp_lcd_touch_point_data_t*, uint8_t*, uint8_t);
+esp_err_t esp_lcd_touch_register_interrupt_callback(esp_lcd_touch_handle_t, void (*)(esp_lcd_touch_handle_t));

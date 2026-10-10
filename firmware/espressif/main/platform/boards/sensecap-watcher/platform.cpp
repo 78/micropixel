@@ -32,6 +32,7 @@
 #include "platform/boards/sensecap-watcher/touch_hardware.hpp"
 #include "platform/boards/sensecap-watcher/uart_local_control.hpp"
 #include "platform/buses/i2c_executor.hpp"
+#include "platform/drivers/sensors/bmi270.hpp"
 #include "platform/input/esp_lcd_touch_input.hpp"
 #include "platform/lvgl/display/screen_capture.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -40,6 +41,7 @@
 #include "platform/lvgl/host_encoder_router.hpp"
 #include "platform/memory/ext_ram_bss.hpp"
 #include "platform/memory/internal_ram.hpp"
+#include "platform/sensors/polled_inertial_sensor_peripheral.hpp"
 #include "platform/transports/development_display_control.hpp"
 #include "platform/wifi/native_wifi_radio.hpp"
 #include "platform/wifi/wifi_manager.hpp"
@@ -115,6 +117,20 @@ struct SensecapWatcherState final {
     // development bridge owns the screenshot and touch commands on that stream.
     esp32_s3_common::DisplayShadow display_shadow{kWidth, kHeight};
     board_detail::BatteryPeripheral battery{};
+    // The board carries no inertial sensor of its own: a BMI270 on the Grove IIC
+    // port is the owner's option. That port is an extension of the control bus
+    // (see board_config.hpp), so the driver probes and samples on the shared
+    // executor and reports `available()` only after its chip-ID check. An empty
+    // port therefore costs one probe at boot, and neither channel is published.
+    drivers::Bmi270 grove_inertial{board_detail::board::kGroveInertialAddress};
+    drivers::Bmi270Vector grove_acceleration{grove_inertial, drivers::Bmi270::Kind::kAcceleration};
+    drivers::Bmi270Vector grove_angular_velocity{grove_inertial, drivers::Bmi270::Kind::kAngularVelocity};
+    sensors::PolledInertialSensorPeripheral grove_sensors{grove_acceleration,
+                                                          grove_angular_velocity,
+                                                          {.log_tag = "watcher_grove",
+                                                           .model = "BMI270",
+                                                           .acceleration_timer_name = "watcher_accel",
+                                                           .angular_velocity_timer_name = "watcher_gyro"}};
     board_detail::UartLocalControl local_control{};
     transports::DevelopmentDisplayControl development_display{};
 };
@@ -384,6 +400,13 @@ class SensecapWatcherBoard final : public Board, public device::Power {
                 ESP_LOGW(kTag, "battery monitor unavailable for this boot: %s", esp_err_to_name(battery_status));
             }
         }
+        // The Grove port is an I2C extension of the control bus, so a module
+        // fitted there only answers once the executor exists. Discovery is
+        // optional: an empty port publishes nothing and leaves every other
+        // service alone.
+        if (executor_status == ESP_OK) {
+            state_.grove_sensors.Initialize(power_.ControlBus(), state_.i2c_executor);
+        }
         ESP_RETURN_ON_ERROR(state_.guest_graphics.Initialize(state_.display, nullptr), kTag,
                             "initialize RGB565 Guest graphics failed");
 
@@ -478,11 +501,28 @@ class SensecapWatcherBoard final : public Board, public device::Power {
         } else {
             ESP_LOGW(kTag, "local control unavailable on this boot: %s", esp_err_to_name(local_control_status));
         }
+        // Registration is per channel and only when the module replied, so an
+        // empty Grove port leaves the device catalog without an IMU instead of
+        // publishing one that never samples.
+        bool sensors_registered = true;
+        if (state_.grove_sensors.acceleration_available()) {
+            sensors_registered =
+                registration.AddSensor(state_.grove_sensors, sensors::PolledInertialSensorPeripheral::kAcceleration,
+                                       "Grove BMI270 accelerometer") &&
+                sensors_registered;
+        }
+        if (state_.grove_sensors.angular_velocity_available()) {
+            sensors_registered =
+                registration.AddSensor(state_.grove_sensors, sensors::PolledInertialSensorPeripheral::kAngularVelocity,
+                                       "Grove BMI270 gyroscope") &&
+                sensors_registered;
+        }
         ESP_LOGI(kTag,
-                 "ready: SPD2010 panel + touch, rotary knob, native Wi-Fi, audio=%s, battery=%s, power rails up, "
-                 "Host UI in place",
-                 audio_status == ESP_OK ? "ES8311" : "off", battery_status == ESP_OK ? "ADC" : "off");
-        return context.Publish(registration) ? ESP_OK : ESP_ERR_INVALID_STATE;
+                 "ready: SPD2010 panel + touch, rotary knob, native Wi-Fi, audio=%s, battery=%s, grove=%s, power rails "
+                 "up, Host UI in place",
+                 audio_status == ESP_OK ? "ES8311" : "off", battery_status == ESP_OK ? "ADC" : "off",
+                 state_.grove_sensors.acceleration_available() ? "BMI270" : "off");
+        return sensors_registered && context.Publish(registration) ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
 
     void BindBackgroundExecutor(work::BackgroundExecutor& executor) override {
