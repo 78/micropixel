@@ -5,6 +5,7 @@
 
 #include "device/contracts/sensors.hpp"
 #include "driver/i2c_master.h"
+#include "platform/boards/esp-mosaico/board_config.hpp"
 #include "platform/buses/i2c_executor.hpp"
 #include "platform/drivers/sensors/bmi270.hpp"
 #include "platform/drivers/sensors/bmm150.hpp"
@@ -38,7 +39,7 @@ class SensorPeripheral final : public device::SensorPeripheral {
     void InitializeOnWorker();
 
     i2c_master_bus_handle_t bus_{};
-    drivers::Bmi270 inertial_{};
+    drivers::Bmi270 inertial_{board::kInertialAddress};
     drivers::Bmi270Vector acceleration_{inertial_, drivers::Bmi270::Kind::kAcceleration};
     drivers::Bmi270Vector angular_velocity_{inertial_, drivers::Bmi270::Kind::kAngularVelocity};
     drivers::Bmm150 magnetic_field2_{0x11U};

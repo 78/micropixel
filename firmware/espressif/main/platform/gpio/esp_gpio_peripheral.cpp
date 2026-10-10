@@ -81,10 +81,6 @@ esp_err_t EspGpioPeripheral::Initialize() {
     if (!valid_configuration_) {
         return ESP_ERR_INVALID_ARG;
     }
-    const esp_err_t isr_status = EnsureIsrServiceInstalled();
-    if (isr_status != ESP_OK) {
-        return isr_status;
-    }
     ESP_LOGI(kTag, "%u application GPIO lines ready; edge resources are lazy", static_cast<unsigned>(line_count_));
     return ESP_OK;
 }
@@ -117,6 +113,12 @@ int32_t EspGpioPeripheral::Open(device::PeripheralChannelId channel, uint16_t mo
     const bool needs_edge_worker = mode == MICROPIXEL_GPIO_MODE_INPUT && edge != MICROPIXEL_GPIO_EDGE_NONE;
     if (needs_edge_worker && events_suspended_) {
         return MICROPIXEL_STATUS_CLOSED;
+    }
+    if (needs_edge_worker) {
+        const esp_err_t isr_status = EnsureIsrServiceInstalled();
+        if (isr_status != ESP_OK) {
+            return MICROPIXEL_STATUS_INTERNAL;
+        }
     }
     const bool started_worker = needs_edge_worker && edge_line_count_ == 0U;
     if (started_worker && !StartEdgeWorker()) {
@@ -196,7 +198,7 @@ int32_t EspGpioPeripheral::ConfigureInput(Line& line, uint16_t pull, uint16_t ed
 int32_t EspGpioPeripheral::ConfigureOutput(Line& line, bool initial_value) {
     gpio_config_t config{};
     config.pin_bit_mask = 1ULL << static_cast<uint32_t>(line.pin);
-    config.mode = GPIO_MODE_OUTPUT;
+    config.mode = GPIO_MODE_INPUT_OUTPUT;
     config.intr_type = GPIO_INTR_DISABLE;
     if (gpio_config(&config) != ESP_OK || gpio_set_level(line.pin, initial_value ? 1U : 0U) != ESP_OK) {
         return MICROPIXEL_STATUS_INTERNAL;

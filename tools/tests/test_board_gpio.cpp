@@ -24,7 +24,9 @@ void TestWhitelistAndPwm() {
     // Claw4's power-key initialization already installed the shared ISR service.
     gpio_isr_installed = true;
     assert(gpio.Initialize() == ESP_OK);
-    assert(gpio.Initialize() == ESP_OK && gpio_install_count == 1);
+    // Initialize only validates the table; the first edge line installs (or
+    // adopts) the shared ISR service inside Open().
+    assert(gpio.Initialize() == ESP_OK && gpio_install_count == 0);
     micropixel_gpio_info_t info{};
     for (uint32_t pin : board::kApplicationGpioLines) {
         assert(gpio.GetInfo(pin, info) == MICROPIXEL_STATUS_OK);
@@ -36,6 +38,7 @@ void TestWhitelistAndPwm() {
         assert(Open(gpio, pin, MICROPIXEL_GPIO_MODE_OUTPUT) == MICROPIXEL_STATUS_NOT_FOUND);
     }
     assert(Open(gpio, 5, MICROPIXEL_GPIO_MODE_OUTPUT, 1) == MICROPIXEL_STATUS_OK);
+    assert(gpio_pins[5].mode == GPIO_MODE_INPUT_OUTPUT);
     bool level{};
     assert(gpio.Read(5, level) == MICROPIXEL_STATUS_OK && level);
     assert(gpio.Write(5, false) == MICROPIXEL_STATUS_OK);
@@ -77,6 +80,7 @@ void TestSuspendResumeAndRollback() {
     assert(gpio.Initialize() == ESP_OK);
     assert(gpio.Open(5, MICROPIXEL_GPIO_MODE_INPUT, MICROPIXEL_GPIO_PULL_UP, MICROPIXEL_GPIO_EDGE_RISING, 0, 0, Edge,
                      &count) == MICROPIXEL_STATUS_OK);
+    assert(gpio_install_count == 1);
     FireEdgeAndWait(count, 1);
     gpio.SuspendEvents();
     assert(!gpio_pins[5].interrupt_enabled && gpio_pins[5].handler == nullptr);

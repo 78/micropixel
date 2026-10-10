@@ -189,7 +189,7 @@ class DirectSurfacePresenter final {
     // ---- App Surface frames (App Surface direct scanout) ---------------------------
     //
     // Enables the path; effective on kBlitRgb565 profiles (window blits of
-    // the damage) and on kFramebufferRgb888 profiles with direct framebuffer
+    // the damage) and on the framebuffer modes with direct framebuffer
     // access (damage copied into the free DPI framebuffer, then flipped).
     // Call once before the LVGL task starts.
     void SetAppSurfaceFrameSource(const AppSurfaceFrameSource& source);
@@ -198,11 +198,9 @@ class DirectSurfacePresenter final {
             return false;
         }
         return profile_.mode == DirectScanoutProfile::Mode::kBlitRgb565 ||
-               (profile_.mode == DirectScanoutProfile::Mode::kFramebufferRgb888 && framebuffers_ != nullptr);
+               (profile_.FramebufferMode() && framebuffers_ != nullptr);
     }
-    [[nodiscard]] bool AppSurfaceFrameFramebufferMode() const {
-        return profile_.mode == DirectScanoutProfile::Mode::kFramebufferRgb888;
-    }
+    [[nodiscard]] bool AppSurfaceFrameFramebufferMode() const { return profile_.FramebufferMode(); }
     // Guest task, after publishing: whether the next App Surface frame should go to
     // the presenter rather than LVGL. A frame posted while the answer flips
     // to false is handed to LVGL by the presenter task itself.

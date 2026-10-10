@@ -74,6 +74,7 @@ inline constexpr gpio_num_t kAudioWordSelect = GPIO_NUM_49;
 inline constexpr gpio_num_t kAudioDataIn = GPIO_NUM_40;
 inline constexpr gpio_num_t kAudioMasterClock = GPIO_NUM_54;
 inline constexpr uint8_t kAudioCodecI2cAddress = 0x19U;
+inline constexpr uint8_t kInertialAddress = 0x69U;
 // Mix/output rate. 32 kHz keeps the ES8311 MCLK at 256*fs = 8.192 MHz and
 // halves the aliasing headroom problem of 16 kHz for Guest PCM; Opus clips
 // still decode at 16 kHz and are upsampled 2x by the playback service.

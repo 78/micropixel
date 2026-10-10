@@ -238,6 +238,14 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() const {
         .scrim_rgb = kLayout480.scrim_rgb,
         .scrim_opacity = kLayout480.scrim_opacity,
     };
+    static constexpr Layout kLayout720X1280 = [] {
+        Layout portrait = kLayout720;
+        portrait.screen_height = 1280;
+        return portrait;
+    }();
+    if (layout_profile_ == StatusLayerLayoutProfile::kPortrait720x1280) {
+        return kLayout720X1280;
+    }
     if (layout_profile_ == StatusLayerLayoutProfile::kRound412) {
         return kLayout412;
     }

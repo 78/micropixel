@@ -95,6 +95,27 @@ persistence, Wi-Fi loss/recovery with 4G connected, both-off behavior, actual SI
 over 4G, no-SIM recovery, and shutdown/sleep during traffic. Neither build success
 nor the controller tests prove modem or power timing on hardware.
 
+## M5Stack Tab5 expansion GPIO
+
+`boards/m5stack-tab5/board_config.hpp` owns the line list and its display
+names; `platform.cpp` registers them through `BoardRegistration::AddGpio` only
+when `EspGpioPeripheral::Initialize()` succeeds, so a rejected table costs the
+Guest GPIO service and never the boot.
+
+M5-Bus exposes its 18 free GPIOs (PIN17/PIN18 are the Host system I2C pair, the
+rest of the header is power, ground or RST) and ExtPort1 adds G49/G50. PORT.A
+(G53/G54) and ExtPort1's G0/G1 stay reserved for an I2C accessory bus; ExtPort2's
+G31/G32 belong to the Host I2C bus and its G20/G21/G34 belong to the RS485
+transceiver, which has no Service yet. None of those are published as Guest GPIO
+lines, matching the Mosaico expansion-port policy: without an I2C or serial
+contract the pins stay with the Host.
+
+GPIO35, GPIO37 and GPIO38 are ESP32-P4 strapping pins (boot mode, ROM printing
+and JTAG source) and G37/G38 double as the M5-Bus RXD0/TXD0 pair. They are still
+published because the header carries them; their names carry a `strap` marker so
+the constraint is visible in the device list. Do not leave external circuitry
+pulling those lines while the chip resets.
+
 ## Required files and registration
 
 1. Add `boards/<board>/CMakeLists.txt` and the implementation that provides the

@@ -275,6 +275,11 @@ bash tools/s3.sh build-release szpi
 bash tools/s3.sh build-release cores3
 ```
 
+`tools/firmware.py` 直接驱动的 profile（例如 `m5stack-tab5`）也在构建目录生成 `sdkconfig.env.defaults`，
+并就地刷新已生成的 `sdkconfig.release`，改配置后无需 `fullclean`。它只读取当前环境变量；仓库根的 `.env`
+由 `tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh`、`tools/tab5.sh` 这些 shell 入口加载，Windows 上由
+`tools/firmware.ps1` 加载。两边的规则一致：同名环境变量优先。
+
 发布目录由 Control 服务仓库的 `firmware-release.jsonc` 统一声明（Control API 与官网不在本仓库）。四款 S3
 虽共享芯片和 Xtensa Guest 基线（Watcher 的 `app_store` 为 24 MiB 几何），但 Host 镜像不可互换；设备 OTA 使用 Board profile 的 target，在线烧录页由用户
 选择具体板型并只用芯片识别做系列校验。固件镜像属于生成物，不提交到 Git；部署网站/API 时必须让配置中的五组
@@ -287,6 +292,30 @@ Host 与 Guest App 是两个独立更新通道。只修改固件时执行上面�
 python3 tools/micropixel --transport usb --port /dev/cu.usbmodemXXXX \
     app install guest/apps/sdk-demo
 ```
+
+## M5Stack Tab5（ESP32-P4）
+
+Tab5 使用通用 profile，包装入口是 `tools/tab5.sh`：
+
+```sh
+bash tools/tab5.sh build-host
+bash tools/tab5.sh flash-host "$TAB5_PORT"   # 只有一台 Tab5 时可省略端口
+bash tools/tab5.sh monitor "$TAB5_PORT"      # 默认带 --reset
+bash tools/tab5.sh fullclean-host
+```
+
+与其他 shell 入口一致，`tools/tab5.sh` 加载仓库根的 `.env` 且同名环境变量优先，Remote Control 端点等
+因此照常注入，改 `.env` 后不需要 `fullclean`。直接运行 `python3 tools/firmware.py m5stack-tab5 build`
+不会读取 `.env`，需要先把这些变量导出到当前环境。
+
+扩展排针按既有 GPIO Service 暴露：M5-Bus 的 18 根自由 GPIO
+（PIN2/4/7/8/9/10/11/13/14/15/16/19/20/21/22/23/24/26）和 ExtPort1 的 G49/G50，设备名为
+`M5-Bus PINn (GPIOxx)`、`ExtPort1 Gxx (GPIOxx)`。M5-Bus 的 PIN17/PIN18（G31/G32）是 Host 系统 I²C，
+PIN13/PIN14/PIN24（G38/G37/G35）是 SoC strapping 脚（G37/G38 同时是 RXD0/TXD0），名称里带 `strap` 标记；
+外接电路不要长期拉偏这三根，否则下次复位可能改变启动模式。PORT.A 的 G53/G54、ExtPort1 的 G0/G1、
+ExtPort2 的 G31/G32 与 G20/G21/G34 保持保留：当前没有 I²C 或串口 Service，不把它们公开为 Guest GPIO。
+PWM 只有两个槽（LEDC timer2/ch2、timer3/ch3），同一时刻最多两根线用 PWM；Guest 侧最多同时打开
+16 个 GPIO handle。
 
 ## 4. 完整烧录 Host 和五个示例 App
 
@@ -489,8 +518,9 @@ managed components，编译开始前有数分钟无输出属正常。
 
 - 生成的默认值文件写入构建目录：P4/S31 为 `sdkconfig.env.defaults`，S3 为 `sdkconfig.remote.defaults`。
   内容与 `tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh` 一致，`.env` 的加载规则也一致（同名环境变量优先）。
-- 不就地改写已生成的 `sdkconfig.release`。当 Remote Control 配置变化且构建目录已有该文件时脚本会告警，
-  此时执行 `fullclean-host` 让新值生效。shell 入口还会就地删除 LVGL 9.6 已废弃的符号
+- Windows 入口不就地改写已生成的 `sdkconfig.release`。当 Remote Control 配置变化且构建目录已有该文件时
+  它只告警，此时执行 `fullclean-host` 让新值生效（`tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh` 与
+  `tools/firmware.py` 会直接刷新生成文件，无需 fullclean）。shell 入口还会就地删除 LVGL 9.6 已废弃的符号
   （`CONFIG_LV_MEM_SIZE_KILOBYTES`、`CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES`、
   `CONFIG_LV_ASSERT_HANDLER_INCLUDE`），因为它们的非默认值会触发 `#warning` 并被 `-Werror=cpp`
   变成构建失败；Windows 入口不做删除，因此复用旧的构建目录时请先 `fullclean-host`。

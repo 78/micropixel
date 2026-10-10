@@ -122,7 +122,7 @@ struct SensecapWatcherState final {
     // (see board_config.hpp), so the driver probes and samples on the shared
     // executor and reports `available()` only after its chip-ID check. An empty
     // port therefore costs one probe at boot, and neither channel is published.
-    drivers::Bmi270 grove_inertial{};
+    drivers::Bmi270 grove_inertial{board_detail::board::kGroveInertialAddress};
     drivers::Bmi270Vector grove_acceleration{grove_inertial, drivers::Bmi270::Kind::kAcceleration};
     drivers::Bmi270Vector grove_angular_velocity{grove_inertial, drivers::Bmi270::Kind::kAngularVelocity};
     sensors::PolledInertialSensorPeripheral grove_sensors{grove_acceleration,

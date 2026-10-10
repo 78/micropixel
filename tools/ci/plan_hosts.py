@@ -6,6 +6,7 @@ from firmware_artifacts import SOURCES
 
 MATRIX = [
     dict(profile='metalio-claw4', chip='esp32p4', wrapper='p4.sh build-host'),
+    dict(profile='m5stack-tab5', chip='esp32p4', wrapper='tab5.sh build-host'),
     dict(profile='esp-mosaico', chip='esp32s31', wrapper='s31.sh build-host'),
     dict(profile='esp-box-3', chip='esp32s3', wrapper='s3.sh build-host'),
     dict(profile='szpi-esp32s3', chip='esp32s3', wrapper='s3.sh build-szpi'),

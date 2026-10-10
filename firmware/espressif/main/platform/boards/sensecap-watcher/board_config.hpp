@@ -68,6 +68,7 @@ inline constexpr uint32_t kControlI2cClockHz = 100000U;
 // ESD diodes only, with no level shifter and no second master while the Himax
 // AI chip is held in reset, and its rail is GROVE_3.3V behind expander P1.6,
 // which the startup latch already raises.
+inline constexpr uint8_t kGroveInertialAddress = 0x69U;
 
 // --- Audio: ES8311 (output) and ES7243E (input) on one I2S bus ---
 // 16 kHz, the rate the shared Opus clip path decodes at, so playback reaches the

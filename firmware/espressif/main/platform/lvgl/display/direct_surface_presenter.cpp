@@ -25,6 +25,7 @@ namespace {
 constexpr const char* kTag = "direct_surface";
 constexpr uint32_t kStageAlignment = 64U;
 constexpr uint32_t kBytesPerRgb565 = 2U;
+constexpr uint32_t kBytesPerRgb888 = 3U;
 
 [[nodiscard]] bool ScaleRequested(const device::DirectSurfacePresentation& frame) {
     return (frame.flags & MICROPIXEL_SURFACE_PRESENT_SCALE_NEAREST) != 0U;
@@ -90,6 +91,18 @@ bool WriteBackForDma(const void* pixels, uint32_t length) {
     }
     return esp_cache_msync(base, length, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED) == ESP_OK;
 }
+
+// One line per App Surface/framebuffer format pair the presenter cannot scan
+// out; those frames stay on the LVGL composited route.
+void LogSurfaceFormatMismatch(uint32_t surface_bytes_per_pixel, uint32_t framebuffer_bytes_per_pixel) {
+    static uint32_t logged = 0U;
+    if (logged >= 2U) {
+        return;
+    }
+    ++logged;
+    ESP_LOGW(kTag, "App Surface %u bpp cannot be scanned into a %u bpp DPI framebuffer; frame stays composited",
+             static_cast<unsigned>(surface_bytes_per_pixel), static_cast<unsigned>(framebuffer_bytes_per_pixel));
+}
 #endif
 
 }  // namespace
@@ -111,7 +124,7 @@ esp_err_t DirectSurfacePresenter::Initialize(lv_display_t* display, uint32_t wid
     profile_ = profile;
     framebuffers_ = framebuffers;
     composite_ = sink;
-    if (profile_.mode == DirectScanoutProfile::Mode::kFramebufferRgb888 && framebuffers_ == nullptr) {
+    if (profile_.FramebufferMode() && framebuffers_ == nullptr) {
         profile_.mode = DirectScanoutProfile::Mode::kComposited;
     }
 #if defined(CONFIG_SOC_PPA_SUPPORTED) && CONFIG_SOC_PPA_SUPPORTED
@@ -754,10 +767,16 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
     if (target == nullptr) {
         return false;
     }
-    // DPI framebuffers are packed BGR888 (see the system transition compositor).
-    constexpr uint32_t kBytesPerRgb888 = 3U;
-    const uint32_t stride = width_ * kBytesPerRgb888;
+    // DPI framebuffers are packed BGR888 on panels whose DSI bridge input is
+    // 24 bpp and packed RGB565 on the 16 bpp ones (see the system transition
+    // compositor and the board's DirectScanoutProfile).
+    const uint32_t framebuffer_bytes_per_pixel = profile_.FramebufferBytesPerPixel();
+    const uint32_t stride = width_ * framebuffer_bytes_per_pixel;
     const uint32_t frame_bytes = stride * height_;
+    if (frame.bytes_per_pixel == kBytesPerRgb888 && framebuffer_bytes_per_pixel != kBytesPerRgb888) {
+        LogSurfaceFormatMismatch(frame.bytes_per_pixel, framebuffer_bytes_per_pixel);
+        return false;
+    }
 
     // What the free framebuffer misses: this frame's damage, the damage the
     // previous flip carried (it went into the other buffer) and the overlay
@@ -798,15 +817,18 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
     }
 
     bool copied = false;
-    if (frame.bytes_per_pixel == kBytesPerRgb888) {
+    if (frame.bytes_per_pixel == framebuffer_bytes_per_pixel) {
+        const graphics::SurfacePixelFormat framebuffer_format = framebuffer_bytes_per_pixel == kBytesPerRgb888
+                                                                    ? graphics::SurfacePixelFormat::kBgr888
+                                                                    : graphics::SurfacePixelFormat::kRgb565;
         if (framebuffer_copy_.Ready() && rect_count > 0U) {
             const graphics::ConstPixelSurface source{
                 .pixels = frame.pixels,
                 .size = frame.length,
-                .width = frame.stride / kBytesPerRgb888,
+                .width = frame.stride / framebuffer_bytes_per_pixel,
                 .height = height_,
                 .stride = frame.stride,
-                .format = graphics::SurfacePixelFormat::kBgr888,
+                .format = framebuffer_format,
             };
             const graphics::PixelSurface destination{
                 .pixels = target,
@@ -814,7 +836,7 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
                 .width = width_,
                 .height = height_,
                 .stride = stride,
-                .format = graphics::SurfacePixelFormat::kBgr888,
+                .format = framebuffer_format,
             };
             auto& blocks = framebuffer_copy_blocks_;
             for (uint32_t index = 0U; index < rect_count; ++index) {
@@ -830,9 +852,9 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
         if (!copied) {
             for (uint32_t index = 0U; index < rect_count; ++index) {
                 const AppSurfaceFrameRect& rect = rects[index];
-                const uint32_t row_bytes = rect.width * kBytesPerRgb888;
-                const uint8_t* source_row = frame.pixels + rect.y * frame.stride + rect.x * kBytesPerRgb888;
-                uint8_t* target_row = target + rect.y * stride + rect.x * kBytesPerRgb888;
+                const uint32_t row_bytes = rect.width * framebuffer_bytes_per_pixel;
+                const uint8_t* source_row = frame.pixels + rect.y * frame.stride + rect.x * framebuffer_bytes_per_pixel;
+                uint8_t* target_row = target + rect.y * stride + rect.x * framebuffer_bytes_per_pixel;
                 for (uint32_t row = 0U; row < rect.height; ++row, source_row += frame.stride, target_row += stride) {
                     std::memcpy(target_row, source_row, row_bytes);
                 }
@@ -841,7 +863,7 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
                 }
             }
         }
-    } else {
+    } else if (framebuffer_bytes_per_pixel == kBytesPerRgb888) {
         // RGB565 App Surface: PPA expands each rectangle into the framebuffer.
         for (uint32_t index = 0U; index < rect_count; ++index) {
             const AppSurfaceFrameRect& rect = rects[index];
@@ -894,7 +916,7 @@ bool DirectSurfacePresenter::ScanoutAppSurfaceFrameToFramebuffer(const AppSurfac
                                                            .width = overlay.width,
                                                            .height = overlay.height});
             if (covered.width != 0U && covered.height != 0U) {
-                BlendOverlay(overlay, target, stride, true, panel);
+                BlendOverlay(overlay, target, stride, framebuffer_bytes_per_pixel == kBytesPerRgb888, panel);
                 footprints[layer_index] = {.rect = covered, .valid = true};
             }
             ReleaseOverlayAfterBlend(layer);
@@ -1581,9 +1603,11 @@ bool DirectSurfacePresenter::ScanoutFramebuffer(const device::DirectSurfacePrese
     if (target == nullptr) {
         return false;
     }
-    // DPI framebuffers are packed RGB888 (see the system transition compositor).
-    constexpr uint32_t kBytesPerRgb888 = 3U;
-    const uint32_t stride = width_ * kBytesPerRgb888;
+    // DPI framebuffers hold whatever the board's DSI bridge input expects:
+    // packed BGR888 or packed RGB565.
+    const uint32_t framebuffer_bytes_per_pixel = profile_.FramebufferBytesPerPixel();
+    const bool framebuffer_bgr888 = framebuffer_bytes_per_pixel == kBytesPerRgb888;
+    const uint32_t stride = width_ * framebuffer_bytes_per_pixel;
     const uint32_t frame_bytes = stride * height_;
     bool converted = false;
     if (blitter_.Ready() && WriteBackForDma(frame.pixels, frame.length)) {
@@ -1599,7 +1623,7 @@ bool DirectSurfacePresenter::ScanoutFramebuffer(const device::DirectSurfacePrese
             .destination_allocation_bytes = frame_bytes,
             .destination_x = 0U,
             .destination_y = 0U,
-            .destination_mode = PPA_SRM_COLOR_MODE_RGB888,
+            .destination_mode = framebuffer_bgr888 ? PPA_SRM_COLOR_MODE_RGB888 : PPA_SRM_COLOR_MODE_RGB565,
             .scale_x = static_cast<float>(width_) / static_cast<float>(frame.source_width),
             .scale_y = static_cast<float>(height_) / static_cast<float>(frame.source_height),
             .input_byte_swap = source_byte_swapped,
@@ -1608,13 +1632,13 @@ bool DirectSurfacePresenter::ScanoutFramebuffer(const device::DirectSurfacePrese
     }
     if (!converted) {
         ConvertRgb565(frame.pixels, frame.pitch, frame.source_width, frame.source_height, source_byte_swapped, target,
-                      stride, width_, height_, true, false);
+                      stride, width_, height_, framebuffer_bgr888, false);
         if (!WriteBackForDma(target, frame_bytes)) {
             return false;
         }
     }
     if (OverlayActive()) {
-        (void)BlendOverlayInto(target, stride, true);
+        (void)BlendOverlayInto(target, stride, framebuffer_bgr888);
     }
     const esp_err_t status = framebuffers_->Submit(target);
     if (status != ESP_OK) {

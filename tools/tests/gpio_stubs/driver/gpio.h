@@ -23,7 +23,7 @@ inline constexpr gpio_num_t GPIO_NUM_28 = 28;
 inline constexpr gpio_num_t GPIO_NUM_29 = 29;
 inline constexpr gpio_num_t GPIO_NUM_33 = 33;
 inline constexpr gpio_num_t GPIO_NUM_52 = 52;
-enum gpio_mode_t { GPIO_MODE_DISABLE, GPIO_MODE_INPUT, GPIO_MODE_OUTPUT };
+enum gpio_mode_t { GPIO_MODE_DISABLE, GPIO_MODE_INPUT, GPIO_MODE_OUTPUT, GPIO_MODE_INPUT_OUTPUT };
 enum gpio_pullup_t { GPIO_PULLUP_DISABLE, GPIO_PULLUP_ENABLE };
 enum gpio_pulldown_t { GPIO_PULLDOWN_DISABLE, GPIO_PULLDOWN_ENABLE };
 enum gpio_int_type_t { GPIO_INTR_DISABLE, GPIO_INTR_POSEDGE, GPIO_INTR_NEGEDGE, GPIO_INTR_ANYEDGE };

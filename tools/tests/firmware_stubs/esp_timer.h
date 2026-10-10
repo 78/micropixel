@@ -63,6 +63,24 @@ inline esp_err_t esp_timer_start_once(esp_timer_handle_t timer, uint64_t timeout
     return ESP_OK;
 }
 
+inline esp_err_t esp_timer_start_periodic(esp_timer_handle_t timer, uint64_t period_us) {
+    if (timer == nullptr || period_us == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const uint64_t generation = timer->generation.fetch_add(1U) + 1U;
+    timer->active.store(true);
+    std::thread([timer, period_us, generation] {
+        while (timer->active.load() && timer->generation.load() == generation) {
+            std::this_thread::sleep_for(std::chrono::microseconds(period_us));
+            if (!timer->active.load() || timer->generation.load() != generation) {
+                break;
+            }
+            timer->callback(timer->argument);
+        }
+    }).detach();
+    return ESP_OK;
+}
+
 inline esp_err_t esp_timer_stop(esp_timer_handle_t timer) {
     if (timer == nullptr) {
         return ESP_ERR_INVALID_ARG;
