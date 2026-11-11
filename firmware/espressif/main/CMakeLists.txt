@@ -2,45 +2,39 @@ set(micropixel_sources
     "app_main.cpp"
     "firmware_app.cpp"
 )
-set(micropixel_builtin_font_output_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/fonts")
-set(micropixel_builtin_font_generated_sources
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_10.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_12.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_14.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_16.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_18.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_20.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_24.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_26.c"
-    "${micropixel_builtin_font_output_dir}/font_builtin_latin_32.c"
+set(micropixel_builtin_font_source_dir "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/fonts/builtin")
+set(micropixel_builtin_font_all_sources
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_10.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_12.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_14.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_16.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_18.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_20.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_24.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_26.c"
+    "${micropixel_builtin_font_source_dir}/font_builtin_latin_32.c"
 )
 if(CONFIG_MICROPIXEL_BOARD_ESP32_S3_BOX_3 OR CONFIG_MICROPIXEL_BOARD_SZPI_ESP32S3 OR
    CONFIG_MICROPIXEL_BOARD_M5STACK_CORES3)
     set(micropixel_builtin_font_sources
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_10.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_12.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_14.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_18.c")
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_10.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_12.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_14.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_18.c")
 elseif(CONFIG_MICROPIXEL_BOARD_ESP_MOSAICO)
     set(micropixel_builtin_font_sources
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_14.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_16.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_20.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_26.c")
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_14.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_16.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_20.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_26.c")
 else()
     set(micropixel_builtin_font_sources
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_14.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_18.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_24.c"
-        "${micropixel_builtin_font_output_dir}/font_builtin_latin_32.c")
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_14.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_18.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_24.c"
+        "${micropixel_builtin_font_source_dir}/font_builtin_latin_32.c")
 endif()
 list(APPEND micropixel_sources ${micropixel_builtin_font_sources})
-# ESP-IDF includes component CMake files once in script mode while discovering
-# requirements. Source properties are only available during the real configure
-# pass; the custom-command outputs are registered as generated there.
-if(NOT CMAKE_BUILD_EARLY_EXPANSION)
-    set_source_files_properties(${micropixel_builtin_font_generated_sources} PROPERTIES GENERATED TRUE)
-endif()
 set(micropixel_requires 78__esp-http3 app_update cjson esp_app_format esp_netif esp_wifi mbedtls nvs_flash pthread)
 
 include("${CMAKE_CURRENT_LIST_DIR}/host/CMakeLists.txt")
@@ -153,23 +147,27 @@ file(GLOB_RECURSE micropixel_lvgl_symbol_sources CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/*.h"
     "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl/*.hpp")
 set(micropixel_builtin_font_report
-    "${micropixel_builtin_font_output_dir}/builtin-latin-v1-report.json")
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/fonts/builtin-latin-v1-report.json")
+set(micropixel_builtin_font_command
+    "${micropixel_python}" "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_builtin_fonts.py"
+    --profile "${micropixel_builtin_font_profile}"
+    --host-catalog-report "${micropixel_host_i18n_report}"
+    --montserrat "${micropixel_lvgl_font_source_dir}/Montserrat-Medium.ttf"
+    --replacement-font "${micropixel_lvgl_font_source_dir}/DejaVuSans.ttf"
+    --symbol-font "${micropixel_lvgl_font_source_dir}/FontAwesome5-Solid+Brands+Regular.woff"
+    --lvgl-symbol-def "${micropixel_lvgl_symbol_def}"
+    --lvgl-symbol-source "${CMAKE_CURRENT_LIST_DIR}/host/ui"
+    --lvgl-symbol-source "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl"
+    --lvgl-symbol-source "${micropixel_lvgl_keyboard_source}"
+    --lvgl-symbol-source "${micropixel_lvgl_dropdown_source}"
+    --sdk-symbol-source "${micropixel_guest_sdk_symbol_source}"
+    --output-dir "${micropixel_builtin_font_source_dir}"
+    --report "${micropixel_builtin_font_report}"
+)
+# Ordinary builds validate the checked-in sources without Node.js or npm.
 add_custom_command(
-    OUTPUT ${micropixel_builtin_font_generated_sources} "${micropixel_builtin_font_report}"
-    COMMAND "${micropixel_python}" "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_builtin_fonts.py"
-            --profile "${micropixel_builtin_font_profile}"
-            --host-catalog-report "${micropixel_host_i18n_report}"
-            --montserrat "${micropixel_lvgl_font_source_dir}/Montserrat-Medium.ttf"
-            --replacement-font "${micropixel_lvgl_font_source_dir}/DejaVuSans.ttf"
-            --symbol-font "${micropixel_lvgl_font_source_dir}/FontAwesome5-Solid+Brands+Regular.woff"
-            --lvgl-symbol-def "${micropixel_lvgl_symbol_def}"
-            --lvgl-symbol-source "${CMAKE_CURRENT_LIST_DIR}/host/ui"
-            --lvgl-symbol-source "${CMAKE_CURRENT_LIST_DIR}/platform/lvgl"
-            --lvgl-symbol-source "${micropixel_lvgl_keyboard_source}"
-            --lvgl-symbol-source "${micropixel_lvgl_dropdown_source}"
-            --sdk-symbol-source "${micropixel_guest_sdk_symbol_source}"
-            --output-dir "${micropixel_builtin_font_output_dir}"
-            --report "${micropixel_builtin_font_report}"
+    OUTPUT "${micropixel_builtin_font_report}"
+    COMMAND ${micropixel_builtin_font_command} --check
     DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../../../tools/generate_builtin_fonts.py"
             "${micropixel_builtin_font_profile}"
             "${micropixel_host_i18n_report}"
@@ -181,11 +179,17 @@ add_custom_command(
             "${micropixel_lvgl_dropdown_source}"
             "${micropixel_guest_sdk_symbol_source}"
             ${micropixel_lvgl_symbol_sources}
+            ${micropixel_builtin_font_all_sources}
     VERBATIM
 )
-add_custom_target(micropixel_builtin_fonts DEPENDS ${micropixel_builtin_font_generated_sources}
-                                                        "${micropixel_builtin_font_report}")
+add_custom_target(micropixel_builtin_fonts DEPENDS "${micropixel_builtin_font_report}")
 add_dependencies(${COMPONENT_LIB} micropixel_builtin_fonts)
+# Maintainers explicitly regenerate these source assets when font inputs change.
+add_custom_target(micropixel_regenerate_builtin_fonts
+    COMMAND ${micropixel_builtin_font_command}
+    DEPENDS "${micropixel_host_i18n_report}"
+    VERBATIM
+)
 
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_23)
 # ESP-IDF 6.1 defaults globally to the newest compiler mode (currently

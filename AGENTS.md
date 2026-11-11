@@ -101,6 +101,8 @@ Only one serial tool may own a device at a time.
 
 - Edit source JSON, assets, or generators. Do not edit or commit build outputs, artifacts, managed_components,
   generated sdkconfig, dependencies.lock.*, resource packs, AOT/Wasm/Bundle/Flash images, or generated reports.
+  Built-in font C sources under `platform/lvgl/fonts/builtin/` are checked-in source assets; regenerate them
+  with the `micropixel_regenerate_builtin_fonts` CMake target rather than editing them by hand.
 - Update the pinned WAMR submodule only when requested. Do not copy its source into this repository or reformat
   third-party code. Check new dependency licenses and update [third-party notices](THIRD_PARTY_NOTICES.md).
 - Never commit secrets, personal absolute paths, device identifiers, MAC addresses, raw serial logs, or one-off measurements.

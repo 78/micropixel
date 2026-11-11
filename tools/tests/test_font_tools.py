@@ -1,5 +1,8 @@
+import contextlib
 import hashlib
+import io
 import json
+import shutil
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -162,6 +165,69 @@ class GenerateBuiltinFontsTest(unittest.TestCase):
         generate_builtin_fonts.validate_sdk_symbol_coverage(
             sdk_requirements, generate_builtin_fonts.requested_codepoints(profile)
         )
+
+
+class PrebuiltFontsTest(unittest.TestCase):
+    root = Path(__file__).resolve().parents[2]
+    fonts = root / "firmware/espressif/main/platform/lvgl/fonts"
+
+    def check(self, temporary: Path, output: Path, profile: Path | None = None):
+        lvgl = self.root / "firmware/espressif/managed_components/lvgl__lvgl"
+        catalog = temporary / "catalog.json"
+        catalog.write_text(json.dumps({"requested_codepoints": [32, 65]}), encoding="utf-8")
+        arguments = [
+            "--check", "--profile", str(profile or self.fonts / "builtin-latin-v1.json"),
+            "--host-catalog-report", str(catalog),
+            "--montserrat", str(self.fonts / "vendor/Montserrat-Medium.ttf"),
+            "--replacement-font", str(self.fonts / "vendor/DejaVuSans.ttf"),
+            "--symbol-font", str(self.fonts / "vendor/FontAwesome5-Solid+Brands+Regular.woff"),
+            "--lvgl-symbol-def", str(lvgl / "include/lvgl/font/lv_symbol_def.h"),
+            "--lvgl-symbol-source", str(self.root / "firmware/espressif/main/host/ui"),
+            "--lvgl-symbol-source", str(self.root / "firmware/espressif/main/platform/lvgl"),
+            "--lvgl-symbol-source", str(lvgl / "src/widgets/keyboard/lv_keyboard.c"),
+            "--lvgl-symbol-source", str(lvgl / "src/widgets/dropdown/lv_dropdown.c"),
+            "--sdk-symbol-source", str(self.root / "guest/sdk/symbols.hpp"),
+            "--output-dir", str(output), "--report", str(temporary / "report.json"),
+        ]
+        with mock.patch.object(generate_builtin_fonts, "npx_launcher", side_effect=AssertionError("npx invoked")):
+            return generate_builtin_fonts.main(arguments)
+
+    def test_checkout_fonts_validate_without_node(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(self.check(root, self.fonts / "builtin"), 0)
+            report = json.loads((root / "report.json").read_text())
+            self.assertEqual(len(report["profiles"]), 9)
+            self.assertEqual(report["missing_count"], 0)
+
+    def test_profile_change_requires_regeneration(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = json.loads((self.fonts / "builtin-latin-v1.json").read_text())
+            profile["bpp"] = 2
+            changed = root / "changed.json"
+            changed.write_text(json.dumps(profile), encoding="utf-8")
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                self.check(root, self.fonts / "builtin", changed)
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("stale; run target micropixel_regenerate_builtin_fonts", error.getvalue())
+
+    def test_missing_font_and_missing_glyph_are_rejected(self):
+        for failure in ("file", "glyph"):
+            with self.subTest(failure=failure), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                output = root / "fonts"
+                output.mkdir()
+                font = output / "font_builtin_latin_14.c"
+                if failure == "glyph":
+                    shutil.copyfile(self.fonts / "builtin" / font.name, font)
+                    font.write_text(font.read_text().replace("/* U+0041 ", "/* removed "), encoding="utf-8")
+                error = io.StringIO()
+                with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+                    self.check(root, output)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("missing" if failure == "file" else "U+0041", error.getvalue())
 
 
 class UiFontSubsetTest(unittest.TestCase):

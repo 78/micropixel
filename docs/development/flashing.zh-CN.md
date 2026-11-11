@@ -14,6 +14,10 @@ ESP32-S3-BOX-3、立创开发板 SZPI ESP32-S3 和 M5Stack CoreS3 固件。以�
 
 初始化子模块：`git submodule update --init --recursive`。上游 WAMRC 的版本字符串不足以证明 AOT 兼容性。
 
+内置字体的 `font_builtin_latin_*.c`、TTF/WOFF 源文件和许可证已随仓库提供。
+Host 直接编译预生成的 C 文件，字体检查只用 Python，不需要 Node.js/npm，也不联网下载字体转换器。
+只有更新字体输入时才需重新生成，见[内置字体构建](language-fonts.zh-CN.md#内置字体构建)。
+
 每个新终端都必须先激活 ESP-IDF；`export.sh` 会设置 `IDF_PATH` 并切换到匹配的 Python 环境：
 
 ```sh

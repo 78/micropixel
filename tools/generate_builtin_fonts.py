@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate MicroPixel's reproducible builtin-latin-v1 LVGL fonts."""
+"""Generate or check MicroPixel's checked-in builtin-latin-v1 LVGL fonts."""
 
 from __future__ import annotations
 
@@ -38,6 +38,16 @@ def file_sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def font_inputs_fingerprint(paths: list[Path]) -> str:
+    """Bind prebuilt fonts to the profile and the three ordered font inputs."""
+
+    return hashlib.sha256("\n".join(file_sha256(path) for path in paths).encode("ascii")).hexdigest()
+
+
+def prebuilt_header(fingerprint: str, size: int) -> str:
+    return f"/* MicroPixel font inputs SHA-256: {fingerprint}; size={size} */\n"
 
 
 def requested_codepoints(profile: dict) -> set[int]:
@@ -172,7 +182,7 @@ def sanitize_generated_source(source: str, profile_name: str, size: int) -> str:
     source, count = OPTS_COMMENT.subn(replacement, source, count=1)
     if count != 1:
         raise ValueError("generated LVGL font has no converter options comment")
-    return source
+    return source.rstrip() + "\n"
 
 
 def npx_launcher() -> str:
@@ -243,7 +253,7 @@ def run_converter(
     return covered
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--host-catalog-report", type=Path, required=True)
@@ -255,7 +265,8 @@ def main() -> int:
     parser.add_argument("--sdk-symbol-source", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    args = parser.parse_args()
+    parser.add_argument("--check", action="store_true", help="check prebuilt fonts without running npx")
+    args = parser.parse_args(argv)
 
     try:
         profile = load_json(args.profile)
@@ -267,8 +278,11 @@ def main() -> int:
         validate_lvgl_symbol_coverage(lvgl_symbols, requested)
         sdk_symbols = sdk_symbol_requirements(args.sdk_symbol_source)
         validate_sdk_symbol_coverage(sdk_symbols, requested)
-        if not args.montserrat.is_file() or not args.replacement_font.is_file() or not args.symbol_font.is_file():
-            raise ValueError("LVGL managed-component font sources are unavailable")
+        font_sources = [args.montserrat, args.replacement_font, args.symbol_font]
+        missing_sources = [str(path) for path in font_sources if not path.is_file()]
+        if missing_sources:
+            raise ValueError(f"builtin font source files are unavailable: {', '.join(missing_sources)}")
+        fingerprint = font_inputs_fingerprint([args.profile, *font_sources])
 
         variants = [
             *profiles,
@@ -282,16 +296,26 @@ def main() -> int:
         for value in variants:
             size = value["size"]
             output = args.output_dir / f"font_builtin_latin_{size}.c"
-            covered = run_converter(
-                args.montserrat,
-                args.replacement_font,
-                args.symbol_font,
-                output,
-                size,
-                profile["bpp"],
-                requested,
-                symbols,
-            )
+            header = prebuilt_header(fingerprint, size)
+            if args.check:
+                if not output.is_file():
+                    raise ValueError(f"prebuilt font {output} is missing; run target micropixel_regenerate_builtin_fonts")
+                generated = output.read_text(encoding="utf-8")
+                if not generated.startswith(header):
+                    raise ValueError(f"prebuilt font {output} is stale; run target micropixel_regenerate_builtin_fonts")
+                covered = {int(match.group(1), 16) for match in GLYPH_COMMENT.finditer(generated)}
+            else:
+                covered = run_converter(
+                    args.montserrat,
+                    args.replacement_font,
+                    args.symbol_font,
+                    output,
+                    size,
+                    profile["bpp"],
+                    requested,
+                    symbols,
+                )
+                output.write_text(header + output.read_text(encoding="utf-8"), encoding="utf-8")
             missing = requested - covered
             if missing:
                 values = ", ".join(f"U+{codepoint:04X}" for codepoint in sorted(missing))
@@ -337,7 +361,7 @@ def main() -> int:
         parser.error(str(error))
 
     print(
-        f"Generated {len(variants)} {profile['profile']} fonts: "
+        f"{'Checked' if args.check else 'Generated'} {len(variants)} {profile['profile']} fonts: "
         f"requested={len(requested)} covered={len(covered_intersection)} missing={len(missing)}"
     )
     return 0

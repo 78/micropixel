@@ -61,10 +61,12 @@ if $configure; then
         -D IDF_TARGET=esp32p4 reconfigure
 fi
 
+# Prebuilt LVGL fonts preserve the converter's generated formatting.
 source_files=()
 while IFS= read -r source_file; do
     source_files+=("$source_file")
-done < <(find "$source_dir" -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) | sort)
+done < <(find "$source_dir" -path "$source_dir/platform/lvgl/fonts/builtin" -prune -o \
+    -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) -print | sort)
 
 if $run_format; then
     clang-format --dry-run --Werror "${source_files[@]}"

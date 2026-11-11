@@ -4,6 +4,33 @@
 四个系统字号共享同一份只读字体数据，Guest 系统字体句柄与 Host 使用同一字体服务。
 首批 locale 为 `en`、`zh-CN`、`zh-TW`、`ja-JP`、`ko-KR`。
 
+## 内置字体构建
+
+生成内置字体所需的三份源文件及许可证都已纳入 Git，位于
+[`platform/lvgl/fonts/vendor/`](../../firmware/espressif/main/platform/lvgl/fonts/vendor/README.md)：
+`Montserrat-Medium.ttf` 提供拉丁正文，`DejaVuSans.ttf` 提供 U+FFFD 替代字形，
+`FontAwesome5-Solid+Brands+Regular.woff` 提供图标。无需安装系统字体或单独下载这些输入。
+
+仓库同时提供 [`fonts/builtin/`](../../firmware/espressif/main/platform/lvgl/fonts/builtin/)
+下的 `font_builtin_latin_*.c`，覆盖 10、12、14、16、18、20、24、26、32 像素。
+按目标板的 `build-host` 入口构建即可，只编译目标板需要的字号，不依赖 Node.js/npm。
+CMake 用 [`generate_builtin_fonts.py --check`](../../tools/generate_builtin_fonts.py)
+检查源文件指纹、英文 UI、LVGL 和 SDK 符号覆盖；字体或
+[`builtin-latin-v1.json`](../../firmware/espressif/main/platform/lvgl/fonts/builtin-latin-v1.json)
+变化后，旧 C 文件会被拒绝。覆盖报告仍留在 Host 构建目录的 `esp-idf/main/generated/fonts/`。
+
+维护者更新输入时，安装 Node.js 和 npm（含 `npx`），在已配置的目标板构建目录运行显式目标。
+以 ESP-Mosaico 为例：
+
+```sh
+cmake --build build/host-esp32s31-mosaico --target micropixel_regenerate_builtin_fonts
+bash tools/s31.sh build-host
+```
+
+该目标使用固定的 `lv_font_conv@1.5.3` 重写仓库中的全部 9 个 C 文件，首次运行需要联网或已有 npm 缓存。
+把更新后的 C 文件与字体源文件、配置一同提交，保留许可证；不要手工编辑 C 字模数组。
+这套内置字体与下述按需安装的 Noto 语言字体组件分别构建；普通 Host 构建无需 Noto 或 tokenizer。
+
 ## 字体组件契约
 
 字体采用 Bundle v1 的 `package_type=component`、`component_type=font`，没有 AOT，也不作为可启动 App。
