@@ -370,10 +370,9 @@ def with_overrides(profile: Profile, args: argparse.Namespace) -> Profile:
     )
 
 
-# Remote Control endpoint injection. The board shell entries (tools/p4.sh,
-# tools/s31.sh, tools/s3.sh) fold .env into their own build directory; profiles
-# driven straight through this tool need the same handling, so one .env decides
-# which service a build targets.
+# Match the public endpoint in Kconfig and the board wrappers, including when
+# refreshing an existing build directory. Environment variables override it;
+# an explicitly empty hostname keeps a development build offline.
 REMOTE_CONTROL_ENV_DEFAULTS_NAME = "sdkconfig.env.defaults"
 REMOTE_CONTROL_HOST_ENV = "MICROPIXEL_REMOTE_CONTROL_HOST"
 REMOTE_CONTROL_PORT_ENV = "MICROPIXEL_REMOTE_CONTROL_PORT"
@@ -418,21 +417,19 @@ def _upsert_kconfig_lines(text: str, updates: Sequence[str]) -> str:
 
 def remote_control_env_defaults(
     environ: Mapping[str, str],
-) -> tuple[tuple[str, ...], str] | None:
+) -> tuple[tuple[str, ...], str]:
     """Build the Remote Control Kconfig lines from the environment.
 
-    Returns the lines plus a ``host:port`` summary, or ``None`` when no Control
-    endpoint is configured.
+    Returns the lines plus a ``host:port`` summary, using the public endpoint
+    when no override is supplied.
     """
 
-    host = environ.get(REMOTE_CONTROL_HOST_ENV, "").strip()
-    if not host:
-        return None
-    if not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
+    host = environ.get(REMOTE_CONTROL_HOST_ENV, "quic.micropixel.ai").strip()
+    if host and not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
         raise FirmwareToolError(
             f"{REMOTE_CONTROL_HOST_ENV} contains unsupported characters: {host}"
         )
-    port = environ.get(REMOTE_CONTROL_PORT_ENV, "").strip() or "8443"
+    port = environ.get(REMOTE_CONTROL_PORT_ENV, "").strip() or "443"
     if not re.fullmatch(r"[0-9]{1,5}", port) or not 1 <= int(port) <= 65535:
         raise FirmwareToolError(
             f"{REMOTE_CONTROL_PORT_ENV} must be between 1 and 65535: {port}"
@@ -485,10 +482,7 @@ def apply_remote_control_env(
     """
 
     environ = os.environ if environ is None else environ
-    configured = remote_control_env_defaults(environ)
-    if configured is None:
-        return profile
-    updates, summary = configured
+    updates, summary = remote_control_env_defaults(environ)
 
     env_defaults = profile.build_dir / REMOTE_CONTROL_ENV_DEFAULTS_NAME
     previous_defaults = (
@@ -503,7 +497,7 @@ def apply_remote_control_env(
         merged_sdkconfig = _upsert_kconfig_lines(previous_sdkconfig, updates)
         if merged_sdkconfig != previous_sdkconfig:
             _replace_text(profile.sdkconfig, merged_sdkconfig)
-    print(f"==> Remote Control endpoint from environment: {summary}", flush=True)
+    print(f"==> Remote Control endpoint: {summary}", flush=True)
 
     resolved = {path.resolve() for path in profile.sdkconfig_defaults}
     if env_defaults.resolve() not in resolved:

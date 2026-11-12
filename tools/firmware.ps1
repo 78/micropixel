@@ -21,9 +21,9 @@
     Guest toolchain published by tools/guest-toolchain.ps1; see
     docs/development/flashing.zh-CN.md section 10.4.
 
-    Unlike the POSIX wrappers this script does not rewrite an existing generated
-    sdkconfig in place. When the Remote Control configuration changes it warns
-    instead, and fullclean-host re-applies the new values.
+    tools/firmware.py refreshes Remote Control values in an existing sdkconfig
+    before building. Other generated settings still need fullclean-host when
+    their defaults change.
 
 .PARAMETER Command
     build-host      Compile the selected board's Host.
@@ -396,8 +396,11 @@ function Write-SdkconfigEnvDefaults {
         [Parameter(Mandatory = $true)][string] $Target
     )
 
-    $remoteHost = [string] $env:MICROPIXEL_REMOTE_CONTROL_HOST
-    $remotePort = '8443'
+    $remoteHost = 'quic.micropixel.ai'
+    if (Test-Path Env:MICROPIXEL_REMOTE_CONTROL_HOST) {
+        $remoteHost = [string] $env:MICROPIXEL_REMOTE_CONTROL_HOST
+    }
+    $remotePort = '443'
     if ($env:MICROPIXEL_REMOTE_CONTROL_PORT) {
         $remotePort = [string] $env:MICROPIXEL_REMOTE_CONTROL_PORT
     }
@@ -466,10 +469,6 @@ function Write-SdkconfigEnvDefaults {
     if ($previous -ne $content) {
         New-Item -ItemType Directory -Force -Path $BuildDirectory | Out-Null
         [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
-        if ($previous -and (Test-Path -LiteralPath (Join-Path $BuildDirectory 'sdkconfig.release'))) {
-            Write-Warning ('the Remote Control configuration changed; run fullclean-host ' +
-                '(or delete the build directory) so the generated sdkconfig picks it up')
-        }
     }
     return $path
 }

@@ -90,8 +90,8 @@ install-apps-examples requires these environment variables:
   MICROPIXEL_CONTROL_URL             Optional; defaults to https://localhost:8443.
 
 Host build configuration:
-  MICROPIXEL_REMOTE_CONTROL_HOST                 Control HTTP/3 hostname.
-  MICROPIXEL_REMOTE_CONTROL_PORT                 Control HTTP/3 port; defaults to 8443.
+  MICROPIXEL_REMOTE_CONTROL_HOST                 Control HTTP/3 hostname; defaults to quic.micropixel.ai.
+  MICROPIXEL_REMOTE_CONTROL_PORT                 Control HTTP/3 port; defaults to 443.
   MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS y/n; defaults to y for local development.
   MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64
                                                   Required when unverified TLS is disabled.
@@ -187,8 +187,8 @@ prepare_host_config() {
     if $host_config_prepared; then
         return
     fi
-    local remote_host="${MICROPIXEL_REMOTE_CONTROL_HOST:-}"
-    local remote_port="${MICROPIXEL_REMOTE_CONTROL_PORT:-8443}"
+    local remote_host="${MICROPIXEL_REMOTE_CONTROL_HOST-quic.micropixel.ai}"
+    local remote_port="${MICROPIXEL_REMOTE_CONTROL_PORT:-443}"
     local allow_unverified="${MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS:-y}"
     local trusted_ca="${MICROPIXEL_REMOTE_CONTROL_TRUSTED_CA_DER_BASE64:-}"
     local lv_mem_size_bytes
@@ -445,10 +445,9 @@ build_app_package() {
 }
 
 build_release() {
-    # Public images must carry the product Control endpoint; a snapshot without the
-    # root .env would otherwise ship devices that can never reach the server.
-    if [[ -z "${MICROPIXEL_REMOTE_CONTROL_HOST:-}" && "${MICROPIXEL_RELEASE_ALLOW_OFFLINE:-}" != "1" ]]; then
-        echo "build-release refused: MICROPIXEL_REMOTE_CONTROL_HOST is empty (load the root .env, or set MICROPIXEL_RELEASE_ALLOW_OFFLINE=1 for an intentionally offline image)." >&2
+    # An explicit offline override must not silently produce a public image.
+    if [[ -z "${MICROPIXEL_REMOTE_CONTROL_HOST-quic.micropixel.ai}" && "${MICROPIXEL_RELEASE_ALLOW_OFFLINE:-}" != "1" ]]; then
+        echo "build-release refused: MICROPIXEL_REMOTE_CONTROL_HOST is explicitly empty (unset it to use the public service, or set MICROPIXEL_RELEASE_ALLOW_OFFLINE=1 for an intentionally offline image)." >&2
         exit 2
     fi
     echo "==> Building release Apps: SDK Demo, Snake, Maze Evil, Blocks, Tilt, Jump Jump, and Gravity Balls"

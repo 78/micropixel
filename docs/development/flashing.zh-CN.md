@@ -187,8 +187,8 @@ INT 上拉），由 BSP 1.3.3 引入。竖屏直接扫描 LVGL 的两块
 RGB888 帧缓冲；横屏由 LVGL 适配器每次刷新用 PPA 旋转 90 度，Guest 走合成路径，截图不可用。App Hall 使用
 Cover Flow 卡片（`HallSceneLayout::cover_flow`），没有 PPA 过渡动画。
 
-语言字体包由 Control 服务下发，需在根目录 `.env` 配置 `MICROPIXEL_REMOTE_CONTROL_HOST=quic.micropixel.ai`、
-`MICROPIXEL_REMOTE_CONTROL_PORT=443` 与对应 CA；未配置时选择语言会在 30 秒后静默失败。字体安装在
+语言字体包由 Control 服务下发，默认连接 `quic.micropixel.ai:443`，无需额外配置 endpoint；
+Control 服务不可达时选择语言会在 30 秒后静默失败。字体安装在
 `app_store`（zh-CN 约 2 MiB）。摄像头、麦克风、按键、TF 卡和 PMIC 电源键尚未接入。
 
 ## ESP32-S3 / ESP32-S3-BOX-3、立创 SZPI、M5Stack CoreS3 与 SenseCAP Watcher
@@ -267,9 +267,12 @@ Watcher 使用 24 MiB 几何，必须用 `build/esp32s3-apps-watcher/app-store.b
 各板固件发布使用同一 `PROJECT_VER`，逐个生成 OTA `micropixel.bin` 与浏览器完整镜像
 `micropixel-full.bin`。
 
-正式发布的 Remote Control endpoint 为 `quic.micropixel.ai`，发布 CI 显式注入该地址。本地发布构建需在
-根目录 `.env` 或环境变量中设置 `MICROPIXEL_REMOTE_CONTROL_HOST=quic.micropixel.ai`；端口和 TLS 配置仍
-通过原有环境变量提供。构建命令：
+Remote Control 默认连接 `quic.micropixel.ai:443`，开发者编译和正式发布均无需额外配置 endpoint。
+Kconfig、POSIX/Windows 入口与 `tools/firmware.py` 使用相同默认值，复用构建目录时也会更新旧的空地址。
+自建服务可通过 `MICROPIXEL_REMOTE_CONTROL_HOST` 和 `MICROPIXEL_REMOTE_CONTROL_PORT` 覆盖；本地服务
+使用 8443 时需显式设置端口。显式将 HOST 设为空可构建离线固件，`build-release` 还需设置
+`MICROPIXEL_RELEASE_ALLOW_OFFLINE=1`。TLS 策略保持原样：默认 `MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS=y`，
+跳过证书链和主机名校验，CA 默认为空；显式关闭该选项时仍需提供对应 CA。构建命令：
 
 ```sh
 bash tools/p4.sh build-release
@@ -522,9 +525,8 @@ managed components，编译开始前有数分钟无输出属正常。
 
 - 生成的默认值文件写入构建目录：P4/S31 为 `sdkconfig.env.defaults`，S3 为 `sdkconfig.remote.defaults`。
   内容与 `tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh` 一致，`.env` 的加载规则也一致（同名环境变量优先）。
-- Windows 入口不就地改写已生成的 `sdkconfig.release`。当 Remote Control 配置变化且构建目录已有该文件时
-  它只告警，此时执行 `fullclean-host` 让新值生效（`tools/p4.sh`、`tools/s31.sh`、`tools/s3.sh` 与
-  `tools/firmware.py` 会直接刷新生成文件，无需 fullclean）。shell 入口还会就地删除 LVGL 9.6 已废弃的符号
+- Remote Control 配置在构建前由各入口刷新到已生成的 `sdkconfig.release`，Windows 也通过
+  `tools/firmware.py` 完成此步骤，无需 fullclean。shell 入口还会就地删除 LVGL 9.6 已废弃的符号
   （`CONFIG_LV_MEM_SIZE_KILOBYTES`、`CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES`、
   `CONFIG_LV_ASSERT_HANDLER_INCLUDE`），因为它们的非默认值会触发 `#warning` 并被 `-Werror=cpp`
   变成构建失败；Windows 入口不做删除，因此复用旧的构建目录时请先 `fullclean-host`。

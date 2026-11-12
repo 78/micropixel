@@ -474,17 +474,17 @@ menu "MicroPixel Remote Control"
     config MICROPIXEL_REMOTE_CONTROL_HOST
         string "Control service hostname"
         depends on MICROPIXEL_REMOTE_CONTROL_AGENT
-        default ""
+        default "quic.micropixel.ai"
         help
-            DNS name or IP address used by the HTTP/3 client. Leave empty to
-            keep the agent offline until a development or product profile
-            supplies a service endpoint.
+            DNS name or IP address used by the HTTP/3 client. Defaults to the
+            public MicroPixel Control service. Override for a local service,
+            or leave empty to keep the agent offline.
 
     config MICROPIXEL_REMOTE_CONTROL_PORT
         int "Control service HTTPS port"
         depends on MICROPIXEL_REMOTE_CONTROL_AGENT
         range 1 65535
-        default 8443
+        default 443
 
     config MICROPIXEL_REMOTE_CONTROL_ALLOW_UNVERIFIED_TLS
         bool "Allow an untrusted HTTP/3 certificate chain (development only)"
