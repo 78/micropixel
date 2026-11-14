@@ -350,3 +350,6 @@ The Bouffalo graphics adapter uses [libpng](https://github.com/pnggroup/libpng)
 (libpng-2.0), [zlib](https://github.com/madler/zlib) (Zlib), and
 [stb_image_write](https://github.com/nothings/stb) (MIT or Unlicense), pinned in
 the same manifest. JPEG decoding uses the public SDK's stb_image header.
+
+The Bouffalo audio adapter uses the public SDK's wave player and codec APIs.
+Their source and notices remain with the SDK.
