@@ -60,3 +60,6 @@ untracked files, damaged patches, competing CMake SDK paths, CI board selection,
 failed dependency checksum rejection, and byte-stack conversion at the native
 16/32-bit depth boundaries. The platform selector leaves the existing Espressif
 checks as the default.
+
+See [SD application storage](docs/sd-storage.md) for the card image format
+and how to open, publish and close an image.

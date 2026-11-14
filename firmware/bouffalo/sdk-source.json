@@ -1,7 +1,18 @@
 {
   "repository": "https://github.com/bouffalolab/bouffalo_sdk.git",
   "commit": "eba87edced5a03ce8bcad8cf6002494982f83a5f",
-  "patches": [],
+  "patches": [
+    {
+      "path": "sdk/patches/0001-sdh-transfer-timeouts.patch",
+      "sha256": "99cf1bdf92dc0006c1efdc7f1d453bcbe102459c43a5749ce7bb64fb007f6ab9",
+      "files": [
+        "bsp/Kconfig",
+        "bsp/common/sdh/host/sdh_host.c",
+        "bsp/common/sdh/sd/sdh_sd.c",
+        "drivers/lhal/include/bflb_sdh.h"
+      ]
+    }
+  ],
   "toolchains": {
     "linux-x86_64": {
       "version": "Zephyr SDK 1.0.0-rc1, GCC 14.3.0",
