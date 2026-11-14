@@ -8,6 +8,7 @@
 #include "platform/graphics/scene_storage.hpp"
 #include "platform/lvgl/fonts/bitmap_font_rasterizer.hpp"
 namespace mpx_port {
+struct DesktopItem;
 namespace d = micropixel::device;
 namespace g = micropixel::platform::graphics;
 class Graphics final : public d::Graphics {
@@ -35,6 +36,8 @@ class Graphics final : public d::Graphics {
     static void ReleaseWorker(void*);
 
    public:
+    bool ShowDesktop(const DesktopItem*, uint32_t count, uint32_t page, uint32_t total, uint64_t used,
+                     uint64_t capacity, const char* notice);
     bool Initialize(void (*overlay)(g::PixelSurface) = nullptr);
     uint32_t Width() const;
     uint32_t Height() const;
