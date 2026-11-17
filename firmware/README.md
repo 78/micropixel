@@ -17,3 +17,7 @@ and preserves the App Store. Stop other serial tools before connecting.
 - [Source guide](espressif/main/README.zh-CN.md)
 - [Contributing](../CONTRIBUTING.md)
 - [简体中文](README.zh-CN.md)
+
+The [Bouffalo build foundation](bouffalo/README.md) provides initial BL616CL and
+BL618DG B0 AP SDK compile/link targets. Full device adapters are being integrated
+separately.

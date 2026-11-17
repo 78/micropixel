@@ -334,3 +334,14 @@ The subset generator reads the pinned [DeepSeek-V4-Flash tokenizer](https://hugg
 
 The bounded CJK rasterizer includes the existing LVGL dependency's `stb_truetype_htcw.h` implementation
 under its upstream MIT/public-domain license; no copy of the third-party implementation is maintained here.
+
+## Bouffalo build inputs
+
+`firmware/bouffalo/sdk-source.json` pins the external public
+[Bouffalo SDK](https://github.com/bouffalolab/bouffalo_sdk) revision and toolchain
+archive checksums. SDK components and prebuilt libraries retain their individual
+licenses; consult the pinned SDK's LICENSE files before redistributing firmware.
+The build tools download these inputs outside the tracked source tree.
+
+`firmware/bouffalo/dependencies.json` pins the existing WAMR fork revision for a
+separate source checkout; the WAMR license and notices above also apply there.

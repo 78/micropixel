@@ -1,0 +1,17 @@
+{
+  "description": "Critical fingerprints for the unmodified public SDK revision in sdk-source.json.",
+  "sha256": {
+    "cmake/bouffalo_sdk-config.cmake": "f3cc77c605a8f49ace487bac7fc4aa9fad461fd0fed3ac156378d3f7dca5f8b0",
+    "cmake/compiler_flags.cmake": "20e92450834bbfe004bed5b1f6e0d2c22d4ba048ca4c186d485beb8140c62534",
+    "cmake/toolchain.cmake": "fec828c208884cc201e1de1e5588f8c384baa2fb17c6627a56e1f26ec571ccd1",
+    "bsp/board/bl616cldk/board.c": "436cdff80e6803609394096b9fa5e7f1ec080f7ecde14a22664e44cace2ffbf4",
+    "bsp/board/bl616cldk/board_gpio.c": "9cd83c7462863ff1272a8c258ac8c877ac63d174b834985c3521235fb1ec884a",
+    "bsp/board/bl616cldk/bl616cl_common.ld.in": "beb035ac25b6065bd4980a99dbe15debbaae672295b776ab3918f40b0e5c7ed3",
+    "bsp/board/bl618dgdk/board.c": "0285727a5f20c9e5e590cf953f3c7fb157e444ba126035a5985b040d4626ba90",
+    "bsp/board/bl618dgdk/bl618dg_common.ld.in": "0fd47a64bc51f483e16d4d9af28e30ae09a71270a790007ebd92fec71c848115",
+    "components/os/freertos/tasks.c": "bf168a177fdb5f56218d41aaca09d594013c7a523b92b7321c7f4fbb4b3f7fbf",
+    "components/libc/picolibc/port_tls.c": "bf5d72b83146d55a2af8010ffec860db5c516a3d102fd81623f71ad5f42cecae",
+    "tools/byai/toolchain.py": "23e57ae2c3f0f5a8aa5479431ee85d8b225cfac7b2af9833cf838492ab354f4b",
+    "bsp/Kconfig": "a515d8a387eb3afd4e8b56db13d4fdb9cffda5785590cb5eb67bd1fdee7e7a18"
+  }
+}

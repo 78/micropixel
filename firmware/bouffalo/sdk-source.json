@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/bouffalolab/bouffalo_sdk.git",
+  "commit": "eba87edced5a03ce8bcad8cf6002494982f83a5f",
+  "patches": [],
+  "toolchains": {
+    "linux-x86_64": {
+      "version": "Zephyr SDK 1.0.0-rc1, GCC 14.3.0",
+      "url": "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.0-rc1/toolchain_gnu_linux-x86_64_riscv64-zephyr-elf.tar.xz",
+      "sha256": "9ed3eb07a7c47a49b5a6b87c8fa34c2fc81f71a112c3eca78ca7e88502d18677",
+      "sdk_auxiliary_tools": {
+        "version": "Bouffalo GCC 14.3.0 (nm/objdump used by SDK DWARF processing)",
+        "url": "https://github.com/bouffalolab/toolchain/releases/download/default/gcc-riscv-14.3.0-linux-x86_64.tar.xz",
+        "sha256": "93128c0da22cbbcf8473fae8c38b63232ebcd8d51969a14dc8491e77721b63a5"
+      }
+    }
+  }
+}

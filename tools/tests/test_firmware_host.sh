@@ -2,6 +2,9 @@
 set -euo pipefail
 
 workspace_root="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ "${MICROPIXEL_HOST_TEST_PLATFORM:-espressif}" == "bouffalo" ]]; then
+    exec python3 -m unittest discover -s "$workspace_root/firmware/bouffalo/tools/tests" -v
+fi
 test_output_dir="$workspace_root/build/host-tests"
 cxx="${CXX:-/usr/bin/clang++}"
 cc="${CC:-/usr/bin/clang}"

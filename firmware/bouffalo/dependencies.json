@@ -1,0 +1,13 @@
+{
+  "wamr": {
+    "repository": "https://github.com/78/wasm-micro-runtime",
+    "commit": "0982ec5e5ecb4ad17061d6538875417727c8b1ea",
+    "aot_format": 6,
+    "archive_sha256": "f9c846a941f463796a7d506221b1f8c5c26172df838d2bf98cf736621fc126b9",
+    "url": "https://codeload.github.com/78/wasm-micro-runtime/tar.gz/0982ec5e5ecb4ad17061d6538875417727c8b1ea",
+    "verify_files": {
+      "LICENSE": "0a274df3755e61b169266fba62d842489378bc9a6e9a63fe24f02ee6f5de419f",
+      "core/iwasm/aot/aot_runtime.c": "03d43e7912d88c2bb6aa721f96540cdd373425107029dbcdcf4854c881075a94"
+    }
+  }
+}

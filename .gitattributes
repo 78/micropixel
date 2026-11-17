@@ -7,3 +7,5 @@
 *.ttf -text
 *.woff2 -text
 *.bin -text
+
+firmware/bouffalo/** text eol=lf
