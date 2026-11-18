@@ -24,5 +24,6 @@
 
 Windows：[安装](development/windows-sdk.zh-CN.md)、[常见问题](development/windows-sdk-faq.zh-CN.md)、
 [真机检查](development/windows-acceptance.zh-CN.md)。音效素材：[清单模板](development/game-sfx.template.json)。
+板级 bring-up：[Seeed reTerminal D1001](development/reterminal-d1001-bring-up.md)（English）。
 
 文档规范见[参与贡献](../CONTRIBUTING.zh-CN.md)。

@@ -324,6 +324,38 @@ ExtPort2 的 G31/G32 与 G20/G21/G34 保持保留：当前没有 I²C 或串口 
 PWM 只有两个槽（LEDC timer2/ch2、timer3/ch3），同一时刻最多两根线用 PWM；Guest 侧最多同时打开
 16 个 GPIO handle。
 
+## Seeed reTerminal D1001（ESP32-P4）
+
+D1001 使用 profile `reterminal-d1001`，包装入口是 `tools/d1001.sh`：
+
+```sh
+bash tools/d1001.sh build-host
+bash tools/d1001.sh flash-host "$D1001_PORT"   # 保留 app_store
+bash tools/d1001.sh monitor "$D1001_PORT"      # 默认带 --reset
+bash tools/d1001.sh build-apps
+bash tools/d1001.sh flash-apps "$D1001_PORT"
+bash tools/d1001.sh flash-all "$D1001_PORT"    # 新设备首次烧录
+```
+
+环境变量：`D1001_HOST_BUILD_DIR`、`D1001_SDKCONFIG`、`D1001_SDKCONFIG_DEFAULTS`、`D1001_PORT`、
+`D1001_BAUD`、`D1001_GUESTS_OUTPUT_DIR`。脚本同样加载仓库根 `.env`，显式环境变量优先。
+
+落板前先确认两个硬件事实，它们决定 `sdkconfig.p4-d1001.defaults` 是否需要改：
+
+```sh
+python -m esptool --chip esp32p4 --port <PORT> chip_id    # P4 v3.x 还是 pre-v3
+python -m esptool --chip esp32p4 --port <PORT> flash_id   # 32 MiB 还是 16 MiB
+```
+
+默认按 32 MiB flash、P4 v3.x（400 MHz / PSRAM 250 MHz）和 `partitions.p4.csv` 配置；16 MiB 或
+pre-v3 的机器按文件里的注释切换。C6 通过 ESP-Hosted SDIO 提供 Wi-Fi，C6 从机固件必须与
+MicroPixel 的 `espressif/esp_hosted ~2` 主版本匹配；C6 串口是 UART TXD0 48 / RXD0 47、BOOT 12。
+
+MVP 板级范围：JD9365 800×1280 竖屏、GSL3670 触控、PCA9535 电源/复位时序、绿色电源键、
+App Hall/Guest 图形、USB 本地控制与 C6 Wi-Fi。音频、SD 卡、电池、RTC、IMU 仍按后续里程碑接入。
+GSL3670 走 MicroPixel 自己的 Apache-2.0 原始报文驱动，不包含 Silead 的 GPL 算法/固件；若实测控制器
+必须加载厂商固件，需要另行取得可再分发的固件镜像。
+
 ## 4. 完整烧录 Host 和五个示例 App
 
 新设备或需要同时更新 Host 与 BundleFS 元数据时，使用：

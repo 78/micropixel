@@ -47,6 +47,7 @@ class FirmwareProfileTest(unittest.TestCase):
             {
                 "metalio-claw4",
                 "m5stack-tab5",
+                "reterminal-d1001",
                 "ksdiy-p4c5",
                 "ksdiy-p4c5-landscape",
                 "p4-null",
@@ -66,6 +67,12 @@ class FirmwareProfileTest(unittest.TestCase):
             str(path) for path in self.profiles["m5stack-tab5"].sdkconfig_defaults
         )
         self.assertIn("sdkconfig.m5stack-tab5.defaults", tab5_defaults)
+        self.assertTrue(self.profiles["reterminal-d1001"].flash)
+        self.assertTrue(self.profiles["reterminal-d1001"].monitor)
+        d1001_defaults = ";".join(
+            str(path) for path in self.profiles["reterminal-d1001"].sdkconfig_defaults
+        )
+        self.assertIn("sdkconfig.p4-d1001.defaults", d1001_defaults)
         self.assertTrue(self.profiles["ksdiy-p4c5"].flash)
         self.assertTrue(self.profiles["ksdiy-p4c5-landscape"].flash)
         self.assertEqual(

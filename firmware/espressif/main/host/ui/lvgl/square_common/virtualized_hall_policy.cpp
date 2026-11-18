@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
 #include "esp_memory_utils.h"
+#include "host/ui/lvgl/square_common/hall_card_ui.hpp"
 #include "host/ui/lvgl/square_common/hall_catalog.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_codec.hpp"
 #include "host/ui/lvgl/square_common/hall_cover_flow.hpp"
@@ -28,6 +29,17 @@ constexpr uint32_t kCoverPrefetchCards = 1U;
 HallPresentationRect HallCardPresentationRect(const SquareSystemUiProfile& profile, uint32_t index,
                                               int32_t scroll_offset) {
     const HallSceneLayout& scene = profile.hall_scene;
+    if (scene.card_columns > 1) {
+        const uint32_t within = index;
+        return {.x = scene.carousel.x +
+                     static_cast<int32_t>(within % scene.card_columns) * (scene.card_width + scene.card_gap),
+                .y = scene.carousel.y +
+                     static_cast<int32_t>(within / scene.card_columns) *
+                         (profile.hall_card.height + scene.card_gap) -
+                     scroll_offset,
+                .width = scene.card_width,
+                .height = profile.hall_card.height};
+    }
     const int32_t edge = scene.cover_flow ? CoverFlowEdgeWidth(scene.carousel.width, scene.card_width) : 0;
     return {.x = scene.carousel.x + edge + static_cast<int32_t>(index) * (scene.card_width + scene.card_gap) -
                  scroll_offset,
@@ -43,7 +55,7 @@ HallTransitionPresentation HallTransitionPresentationFor(const SquareSystemUiPro
     const int32_t viewport_right = viewport_left + profile.hall_scene.carousel.width;
     card.x = std::clamp(card.x, viewport_left, viewport_right - card.width);
     card.height = profile.hall_scene.card_width;
-    const uint32_t cover_size = static_cast<uint32_t>(profile.hall_card.width);
+    const uint32_t cover_size = static_cast<uint32_t>(HallCardCoverSize(profile.hall_card));
     const uint32_t cover_stride = cover_size * 3U;
     return {
         .card = card,
@@ -79,11 +91,25 @@ void VirtualizedHallPolicy::ResetCallback(void* context) {
 }
 
 int32_t VirtualizedHallPolicy::CardStep() const {
-    return state_.profile.hall_scene.card_width + state_.profile.hall_scene.card_gap;
+    const auto& scene = state_.profile.hall_scene;
+    if (scene.card_columns > 1) {
+        // Vertical grid: one step is one card row.
+        const int32_t card_height = scene.card_height > 0 ? scene.card_height : state_.profile.hall_card.height;
+        return card_height + scene.card_gap;
+    }
+    return scene.card_width + scene.card_gap;
 }
 
 int32_t VirtualizedHallPolicy::MaximumOffset(uint32_t app_count) const {
-    const uint32_t visible = state_.profile.hall_scene.fully_visible_cards;
+    const auto& scene = state_.profile.hall_scene;
+    if (scene.card_columns > 1) {
+        const uint32_t columns = scene.card_columns;
+        const uint32_t rows = (app_count + columns - 1U) / columns;
+        const int32_t card_height = scene.card_height > 0 ? scene.card_height : state_.profile.hall_card.height;
+        const int32_t content_height = static_cast<int32_t>(rows) * (card_height + scene.card_gap) - scene.card_gap;
+        return std::max<int32_t>(0, content_height - scene.carousel.height);
+    }
+    const uint32_t visible = scene.fully_visible_cards;
     return static_cast<int32_t>(app_count > visible ? app_count - visible : 0U) * CardStep();
 }
 
@@ -91,12 +117,44 @@ int32_t VirtualizedHallPolicy::ClampOffset(uint32_t app_count, int32_t offset) c
     return std::clamp<int32_t>(offset, 0, MaximumOffset(app_count));
 }
 
+int32_t VirtualizedHallPolicy::ScrollOffset(lv_obj_t* viewport) const {
+    if (viewport == nullptr) {
+        return 0;
+    }
+    return state_.profile.hall_scene.card_columns > 1 ? lv_obj_get_scroll_y(viewport) : lv_obj_get_scroll_x(viewport);
+}
+
+void VirtualizedHallPolicy::ScrollToOffset(lv_obj_t* viewport, int32_t offset, lv_anim_enable_t anim) const {
+    if (viewport == nullptr) {
+        return;
+    }
+    if (state_.profile.hall_scene.card_columns > 1) {
+        lv_obj_scroll_to_y(viewport, offset, anim);
+    } else {
+        lv_obj_scroll_to_x(viewport, offset, anim);
+    }
+}
+
 int32_t VirtualizedHallPolicy::RevealOffset(uint32_t app_count, int32_t offset, uint32_t index) const {
     const int32_t clamped = ClampOffset(app_count, offset);
     if (index >= app_count) {
         return clamped;
     }
-    if (state_.profile.hall_scene.cover_flow) {
+    const auto& scene = state_.profile.hall_scene;
+    if (scene.card_columns > 1) {
+        const uint32_t columns = scene.card_columns;
+        const int32_t card_height = scene.card_height > 0 ? scene.card_height : state_.profile.hall_card.height;
+        const int32_t row = static_cast<int32_t>(index / columns) * (card_height + scene.card_gap);
+        const int32_t viewport_bottom = clamped + scene.carousel.height;
+        if (row < clamped) {
+            return ClampOffset(app_count, row);
+        }
+        if (row + card_height > viewport_bottom) {
+            return ClampOffset(app_count, row + card_height - scene.carousel.height);
+        }
+        return clamped;
+    }
+    if (scene.cover_flow) {
         // Cover Flow only launches the centred card.
         return SnapOffset(app_count, index);
     }
@@ -116,7 +174,13 @@ uint32_t VirtualizedHallPolicy::CoverWindowFirst(uint32_t app_count, int32_t off
     if (app_count == 0U) {
         return 0U;
     }
-    if (state_.profile.hall_scene.cover_flow) {
+    const auto& scene = state_.profile.hall_scene;
+    if (scene.card_columns > 1) {
+        const uint32_t columns = scene.card_columns;
+        const uint32_t first_row = static_cast<uint32_t>(ClampOffset(app_count, offset) / CardStep());
+        return first_row > 0U ? (first_row - 1U) * columns : 0U;
+    }
+    if (scene.cover_flow) {
         // Cards within the hidden distance of the centre, on the left side.
         const int32_t reach =
             ClampOffset(app_count, offset) - cover_flow::kHiddenDistance * CardStep() / cover_flow::kUnit;
@@ -130,7 +194,16 @@ uint32_t VirtualizedHallPolicy::CoverWindowLast(uint32_t app_count, int32_t offs
     if (app_count == 0U) {
         return 0U;
     }
-    if (state_.profile.hall_scene.cover_flow) {
+    const auto& scene = state_.profile.hall_scene;
+    if (scene.card_columns > 1) {
+        const uint32_t columns = scene.card_columns;
+        const int32_t step = CardStep();
+        const uint32_t first_row = static_cast<uint32_t>(ClampOffset(app_count, offset) / step);
+        const uint32_t visible_rows =
+            static_cast<uint32_t>((scene.carousel.height + step - 1) / step);
+        return std::min<uint32_t>(app_count, (first_row + visible_rows + 1U) * columns);
+    }
+    if (scene.cover_flow) {
         const int32_t reach =
             ClampOffset(app_count, offset) + cover_flow::kHiddenDistance * CardStep() / cover_flow::kUnit;
         return std::min(app_count, static_cast<uint32_t>(reach / CardStep()) + 1U);
@@ -197,8 +270,9 @@ void VirtualizedHallPolicy::AttachCoverLocked(uint32_t index, const host_ui::Hal
     descriptor = {};
     descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
     descriptor.header.cf = LV_COLOR_FORMAT_RGB888;
-    descriptor.header.w = static_cast<uint32_t>(state_.profile.hall_card.width);
-    descriptor.header.h = static_cast<uint32_t>(state_.profile.hall_card.width);
+    const uint32_t cover_size = static_cast<uint32_t>(HallCardCoverSize(state_.profile.hall_card));
+    descriptor.header.w = cover_size;
+    descriptor.header.h = cover_size;
     descriptor.header.stride = cover.stride;
     descriptor.data_size = cover.size;
     descriptor.data = cover.data;
@@ -284,7 +358,8 @@ void VirtualizedHallPolicy::DrawCard(lv_obj_t* parent, const HallAppPresentation
     state_.hall_install_progress_arcs[index] = objects.install_progress_arc;
     state_.hall_install_progress_labels[index] = objects.install_progress_label;
     state_.hall_card_press_overlays[index] = objects.press_overlay;
-    lv_obj_set_pos(objects.card, bounds.x - state_.profile.hall_scene.carousel.x, 0);
+    lv_obj_set_pos(objects.card, bounds.x - state_.profile.hall_scene.carousel.x,
+                   bounds.y - state_.profile.hall_scene.carousel.y);
     host_ui::HallCoverModel prepared{};
     if (PrepareSource(state_.hall_cover_sources[index], index, prepared)) {
         AttachCoverLocked(index, prepared);
@@ -490,9 +565,14 @@ uint32_t VirtualizedHallPolicy::NearestIndexForOffset(int32_t offset) const {
     if (state_.hall_app_count == 0U) {
         return host_ui::kMaxHallApps;
     }
+    const auto& scene = state_.profile.hall_scene;
     const int32_t step = CardStep();
     const int32_t clamped = std::max<int32_t>(offset, 0);
-    const uint32_t index = step > 0 ? static_cast<uint32_t>((clamped + step / 2) / step) : 0U;
+    uint32_t index = step > 0 ? static_cast<uint32_t>((clamped + step / 2) / step) : 0U;
+    if (scene.card_columns > 1) {
+        index = std::min(index, (state_.hall_app_count + scene.card_columns - 1U) / scene.card_columns - 1U);
+        index *= scene.card_columns;
+    }
     return std::min(index, state_.hall_app_count - 1U);
 }
 
@@ -500,6 +580,11 @@ uint32_t VirtualizedHallPolicy::NearestIndexForOffset(int32_t offset) const {
 // end of the list, which is what still lets the selection walk the last cards
 // while the list itself has nowhere left to go.
 int32_t VirtualizedHallPolicy::SnapOffset(uint32_t app_count, uint32_t index) const {
+    const auto& scene = state_.profile.hall_scene;
+    if (scene.card_columns > 1) {
+        const uint32_t row = index / scene.card_columns;
+        return ClampOffset(app_count, static_cast<int32_t>(row) * CardStep());
+    }
     return ClampOffset(app_count, static_cast<int32_t>(index) * CardStep());
 }
 
@@ -540,7 +625,7 @@ void VirtualizedHallPolicy::SnapSelectionLocked() {
     // it take over the selection.
     state_.hall_selected_index = nearest;
     SyncSelectionLocked();
-    lv_obj_scroll_to_x(viewport, target, LV_ANIM_ON);
+    ScrollToOffset(viewport, target, LV_ANIM_ON);
 }
 
 void VirtualizedHallPolicy::LaunchCard(uint32_t index) {
@@ -550,8 +635,8 @@ void VirtualizedHallPolicy::LaunchCard(uint32_t index) {
     const int32_t reveal = RevealOffset(state_.hall_app_count, state_.hall_scroll_offset, index);
     lv_obj_t* const viewport = state_.hall_scene_ui.objects().carousel_viewport;
     if (reveal != state_.hall_scroll_offset && viewport != nullptr) {
-        lv_obj_scroll_to_x(viewport, reveal, LV_ANIM_OFF);
-        UpdateCarouselLocked(lv_obj_get_scroll_x(viewport));
+        ScrollToOffset(viewport, reveal, LV_ANIM_OFF);
+        UpdateCarouselLocked(ScrollOffset(viewport));
     }
     state_.hall_action_sink(
         state_.hall_action_context,
@@ -579,8 +664,8 @@ bool VirtualizedHallPolicy::RotateSelectionLocked(int32_t steps) {
     SyncSelectionLocked();
     if (next < static_cast<int32_t>(state_.hall_app_count)) {
         const int32_t target = SnapOffset(state_.hall_app_count, static_cast<uint32_t>(next));
-        if (lv_obj_get_scroll_x(viewport) != target) {
-            lv_obj_scroll_to_x(viewport, target, LV_ANIM_ON);
+        if (ScrollOffset(viewport) != target) {
+            ScrollToOffset(viewport, target, LV_ANIM_ON);
         }
     }
     return true;
@@ -640,7 +725,7 @@ void VirtualizedHallPolicy::CarouselEvent(lv_event_t* event) {
         viewport != policy->state_.hall_scene_ui.objects().carousel_viewport) {
         return;
     }
-    policy->UpdateCarouselLocked(lv_obj_get_scroll_x(viewport));
+    policy->UpdateCarouselLocked(policy->ScrollOffset(viewport));
     if (lv_event_get_code(event) == LV_EVENT_SCROLL_END) {
         // A finger drag stops wherever it stops: land it on a card so the ring
         // and the list agree. This is profile-controlled because the existing
@@ -687,7 +772,7 @@ void VirtualizedHallPolicy::CardEvent(lv_event_t* event) {
         if (viewport != nullptr) {
             policy->state_.hall_selected_index = index;
             policy->SyncSelectionLocked();
-            lv_obj_scroll_to_x(viewport, policy->SnapOffset(policy->state_.hall_app_count, index), LV_ANIM_ON);
+            policy->ScrollToOffset(viewport, policy->SnapOffset(policy->state_.hall_app_count, index), LV_ANIM_ON);
         }
     } else if (code == LV_EVENT_SHORT_CLICKED && policy->state_.hall_launch_enabled &&
                policy->state_.hall_action_sink != nullptr) {
@@ -799,8 +884,8 @@ std::expected<void, host_ui::SystemUiError> VirtualizedHallPolicy::Show(const ho
                                      .action_context = action_context});
     const auto& scene = state_.hall_scene_ui.objects();
     lv_obj_update_layout(scene.carousel_viewport);
-    lv_obj_scroll_to_x(scene.carousel_viewport, state_.hall_scroll_offset, LV_ANIM_OFF);
-    UpdateCarouselLocked(lv_obj_get_scroll_x(scene.carousel_viewport));
+    ScrollToOffset(scene.carousel_viewport, state_.hall_scroll_offset, LV_ANIM_OFF);
+    UpdateCarouselLocked(ScrollOffset(scene.carousel_viewport));
     const uint32_t running = RunningAppIndex();
     DisplayTransition* transition = presentation_.Transition();
     lv_obj_t* guest = state_.GuestFrameLocked();

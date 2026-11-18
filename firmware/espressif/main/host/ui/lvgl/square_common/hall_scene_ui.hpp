@@ -57,9 +57,16 @@ struct HallSceneLayout final {
     int32_t header_button_pad_horizontal{};
     HallSceneRect carousel{};
     int32_t card_width{};
+    // Grid mode uses this as the card height; the one-row carousel keeps using
+    // carousel.height.
+    int32_t card_height{};
     int32_t card_gap{};
     int32_t content_trailing_width{};
     uint32_t fully_visible_cards{3U};
+    // Grid mode: 0 keeps the horizontal one-row carousel. A value > 1 lays the
+    // cards out in `card_columns` columns and fills the carousel height with
+    // rows; one horizontal page holds `fully_visible_cards` apps.
+    uint8_t card_columns{};
     HallSceneRect scroll_track{};
     int32_t scroll_min_thumb_width{};
     HallScenePoint empty_message{};

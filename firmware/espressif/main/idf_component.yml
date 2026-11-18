@@ -119,3 +119,24 @@ dependencies:
     version: "^1.0.1"
     rules:
       - if: "target == esp32p4"
+  # Seeed reTerminal D1001 panel driver. The vendor 8-inch init table lives in
+  # the board directory; the driver itself is the upstream component.
+  espressif/esp_lcd_jd9365:
+    version: "~2.0.2"
+    rules:
+      - if: "target == esp32p4"
+      - if: "$CONFIG{MICROPIXEL_BOARD_RETERMINAL_D1001} == True"
+  # GSL3670 touch and the PCA9535 rail expander. Both are vendored copies of
+  # the Seeed BSP components (Apache-2.0), ported to the ESP-IDF 6.1 APIs.
+  micropixel/esp_lcd_touch_gsl3670:
+    version: "0.1.0"
+    override_path: "../patched_components/esp_lcd_touch_gsl3670"
+    rules:
+      - if: "target == esp32p4"
+      - if: "$CONFIG{MICROPIXEL_BOARD_RETERMINAL_D1001} == True"
+  micropixel/esp_io_expander_pca9535:
+    version: "1.0.1"
+    override_path: "../patched_components/esp_io_expander_pca9535"
+    rules:
+      - if: "target == esp32p4"
+      - if: "$CONFIG{MICROPIXEL_BOARD_RETERMINAL_D1001} == True"

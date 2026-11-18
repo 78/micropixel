@@ -8,6 +8,7 @@
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "host/ui/gesture_thresholds.hpp"
+#include "host/ui/lvgl/square_common/hall_card_ui.hpp"
 #include "host/ui/lvgl/square_common/host_ui_theme.hpp"
 #include "host/ui/lvgl/square_common/launch_screen_ui.hpp"
 #include "platform/lvgl/fonts/font_registry.hpp"
@@ -87,7 +88,7 @@ SquareSystemUiState::SquareSystemUiState(device::Input& physical_input,
       wifi_settings_ui(action_sheets),
       input_router(physical_input, static_cast<uint16_t>(profile.square.width),
                    static_cast<uint16_t>(profile.square.height)),
-      hall_cover_cache({.target_size = profile.square.hall_card_width,
+      hall_cover_cache({.target_size = static_cast<uint32_t>(HallCardCoverSize(profile.hall_card)),
                         .corner_radius = static_cast<uint32_t>(profile.hall_card.radius),
                         .top_background_rgb = theme::kHallBackground}),
       hall_cover_descriptors(g_hall_storage.cover_descriptors),
