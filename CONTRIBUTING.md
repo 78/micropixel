@@ -30,7 +30,9 @@ with the pinned ESP-IDF and submodules. A newer commit cancels the previous run 
 Board-specific changes select that board; shared S3 code selects all S3 profiles; shared
 firmware, ABI, or build configuration selects all release boards. Documentation and Guest-only
 changes skip Host compilation, except SDK symbols used to generate Host fonts. Guest builds
-and runtime regressions remain manual. The workflow does not require a published SDK, release
+and runtime regressions remain manual. Bouffalo-only sources do not select Espressif
+profiles; record the CL/DG compile/link checks described in
+[the Bouffalo guide](firmware/bouffalo/README.md) manually. The workflow does not require a published SDK, release
 secrets, or attached hardware, and does not publish firmware. Manual dispatch builds all boards.
 
 `PR build result` is the stable aggregate check for branch protection: every selected board

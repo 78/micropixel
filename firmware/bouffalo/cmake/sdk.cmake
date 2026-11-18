@@ -2,7 +2,9 @@
 get_filename_component(MPX_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 execute_process(COMMAND python3 "${MPX_ROOT}/tools/check_sdk.py" --exact
     COMMAND_ERROR_IS_FATAL ANY)
-find_package(bouffalo_sdk REQUIRED HINTS $ENV{BL_SDK_BASE})
+# Load the exact configuration whose provenance was checked above. HINTS would
+# allow CMAKE_PREFIX_PATH, package registries or a cached *_DIR to override it.
+include("$ENV{BL_SDK_BASE}/cmake/bouffalo_sdk-config.cmake")
 
 # Public MicroPixel RV32 AOT bundles use the single-float ABI on both chips.
 sdk_add_compile_options(-mabi=ilp32f)

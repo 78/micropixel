@@ -2,6 +2,7 @@
 """Exercise SDK provenance checks and non-destructive preparation with local Git."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -76,6 +77,44 @@ class SdkPreparation(unittest.TestCase):
         result = self.tool('prepare_sdk.py', '--directory', str(self.sdk))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((self.sdk/'critical.c').read_text(), 'original\n')
+
+    def test_cmake_loads_verified_sdk_despite_competing_search_paths(self):
+        cmake = shutil.which('cmake')
+        if not cmake:
+            self.skipTest('CMake is required for the SDK selection regression')
+        (self.platform/'cmake').mkdir()
+        shutil.copy2(ROOT/'cmake/sdk.cmake', self.platform/'cmake/sdk.cmake')
+        config = self.sdk/'cmake/bouffalo_sdk-config.cmake'
+        config.parent.mkdir()
+        config.write_text('set_property(GLOBAL PROPERTY SDK_LIBS "")\n'
+                          'function(sdk_add_compile_options)\nendfunction()\n'
+                          'function(sdk_add_link_options)\nendfunction()\n'
+                          'file(WRITE "${CMAKE_BINARY_DIR}/selected-sdk" "${CMAKE_CURRENT_LIST_DIR}")\n')
+        baseline = json.loads((self.platform/'sdk-baseline.json').read_text())
+        baseline['sha256']['cmake/bouffalo_sdk-config.cmake'] = hashlib.sha256(config.read_bytes()).hexdigest()
+        (self.platform/'sdk-baseline.json').write_text(json.dumps(baseline))
+        self.git('add', '.')
+        self.git('-c', 'user.name=SDK Test', '-c', 'user.email=test@example.invalid',
+                 'commit', '-m', 'SDK configuration')
+        self.source['commit'] = self.git('rev-parse', 'HEAD').stdout.strip()
+        (self.platform/'sdk-source.json').write_text(json.dumps(self.source))
+        self.prepare()
+        other = self.root/'competing-sdk'
+        other.mkdir()
+        (other/'bouffalo_sdk-config.cmake').write_text(
+            'message(FATAL_ERROR "Loaded SDK that was not verified")\n')
+        project = self.root/'project'
+        project.mkdir()
+        (project/'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.20)\nproject(selection NONE)\n'
+            f'include("{self.platform}/cmake/sdk.cmake")\n')
+        output = self.root/'build'
+        env = dict(os.environ, BL_SDK_BASE=str(self.target), CMAKE_PREFIX_PATH=str(other))
+        result = subprocess.run([cmake, '-S', str(project), '-B', str(output),
+                                 '-Dbouffalo_sdk_DIR='+str(other)],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((output/'selected-sdk').read_text(), str(self.target/'cmake'))
 
     def test_rejects_wrong_revision_and_undeclared_changes(self):
         self.prepare()

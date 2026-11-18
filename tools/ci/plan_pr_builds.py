@@ -22,6 +22,9 @@ def select(paths):
     for path in paths:
         if path.endswith('.md') or path.startswith(('docs/', 'tools/tests/')):
             continue
+        if path.startswith('firmware/bouffalo/'):
+            # Bouffalo compile/link validation is recorded manually in its PR.
+            continue
         if path.startswith(BOARD_ROOT):
             board = path.removeprefix(BOARD_ROOT).split('/')[0]
             hosts.update({BOARDS[board]} if board in BOARDS else S3 if board == 'esp32-s3-common' else all_hosts)
