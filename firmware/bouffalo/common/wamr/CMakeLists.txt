@@ -33,4 +33,9 @@ sdk_add_compile_definitions(-DBUILD_TARGET_RISCV32_ILP32F=1 -DWASM_ENABLE_AOT=1 
     -DWASM_ENABLE_LIBC_WASI=0 -DWASM_ENABLE_THREAD_MGR=0 -DWASM_ENABLE_SHARED_MEMORY=0
     -DWASM_ENABLE_SIMD=0 -DWASM_DISABLE_HW_BOUND_CHECK=1 -DWASM_LINEAR_MEMORY_RESERVE_MAX=1
     -DWASM_ENABLE_MODULE_INST_CONTEXT=0 -DWASM_ENABLE_MEMORY_PROFILING=1 -DWASM_ENABLE_DUMP_CALL_STACK=1 -DWASM_ENABLE_CUSTOM_NAME_SECTION=1)
+# Match RV32F Guests on both chips. DG's SDK-wide RV32D flags otherwise
+# suppress the soft-double relocation symbols needed by ILP32F AOT modules.
+# Source options follow the SDK interface options in the compiler command.
+# A target-private option would precede (and be overridden by) those flags.
+set_property(SOURCE ${WAMR_RUNTIME_LIB_SOURCE} APPEND PROPERTY COMPILE_OPTIONS -march=rv32imafc_zicsr_zifencei)
 sdk_add_private_compile_options(-Wno-error -Wno-format)

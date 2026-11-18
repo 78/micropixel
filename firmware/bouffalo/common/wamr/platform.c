@@ -8,6 +8,10 @@
 #include "platform_api_extension.h"
 #include "platform_api_vmcore.h"
 
+#if !defined(__riscv_flen) || __riscv_flen != 32
+#error "The Bouffalo WAMR target must match RV32F Guest code"
+#endif
+
 int bh_platform_init(void) { return 0; }
 void bh_platform_destroy(void) {}
 void *os_malloc(unsigned size) { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM); }
@@ -82,8 +86,9 @@ int os_mprotect(void *memory, size_t size, int prot) {
     return 0;
 }
 void *os_mremap(void *memory, size_t old_size, size_t new_size) {
-    /* WAMR reserves max linear memory for PINNED_MEMORY Guests. Keep
-     * in-flight Guest surface pointers valid while exposing more pages. */
+    /* The embedder must enable maximum reservation before instantiation for
+     * Guests that retain surface pointers. Reuse a sufficient allocation and
+     * clear newly visible bytes; ordinary mappings may still relocate. */
     if (memory && new_size <= kmalloc_size(memory)) {
         if (new_size > old_size) memset((uint8_t *)memory + old_size, 0, new_size - old_size);
         return memory;
