@@ -45,3 +45,7 @@ CMakeUserPresets.json
 # Jump Jump ships compressed runtime assets; keep original art and store screenshots local.
 /guest/apps/jump-jump/assets/source/cover-v1.png
 /guest/apps/jump-jump/store/*.jpg
+
+# External Bouffalo SDK dependencies and per-profile build outputs
+firmware/bouffalo/third_party/
+firmware/bouffalo/boards/*/build*/

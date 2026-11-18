@@ -2,6 +2,17 @@
 set -euo pipefail
 
 workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ "${MICROPIXEL_HOST_TEST_PLATFORM:-espressif}" == "bouffalo" ]]; then
+    if [[ "${1:-}" != "--format-only" || $# != 1 ]]; then
+        echo "Bouffalo supports --format-only; use the board build for compiler diagnostics." >&2
+        exit 2
+    fi
+    find "$workspace_root/firmware/bouffalo" \
+        -type d \( -name 'build*' -o -name third_party \) -prune -o -type f \
+        \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) -print0 \
+        | xargs -0 -r "${CLANG_FORMAT:-clang-format-18}" --dry-run --Werror
+    exit 0
+fi
 firmware_dir="$workspace_root/firmware/espressif"
 source_dir="$firmware_dir/main"
 if [[ -z "${IDF_PATH:-}" ]]; then
