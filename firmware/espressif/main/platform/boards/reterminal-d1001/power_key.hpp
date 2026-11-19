@@ -10,7 +10,7 @@ namespace micropixel::platform::reterminal_d1001 {
 
 class D1001PowerController;
 
-// Green power button on GPIO3 (active-low). A short release is a click and a
+// Green power button on GPIO3 (active-high). A short release is a click and a
 // one-second hold is the power-off request. Polling from a periodic esp_timer
 // keeps the path free of a detached task and never touches I2C from a timer.
 class D1001PowerKey final {

@@ -33,7 +33,9 @@ esp_err_t D1001PowerKey::Initialize() {
     gpio_config_t config{};
     config.pin_bit_mask = 1ULL << board::kPowerKey;
     config.mode = GPIO_MODE_INPUT;
-    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    // The D1001 button circuit drives GPIO3 high when pressed; the BSP
+    // disables the internal pulls and relies on the external network.
+    config.pull_up_en = GPIO_PULLUP_DISABLE;
     config.pull_down_en = GPIO_PULLDOWN_DISABLE;
     config.intr_type = GPIO_INTR_DISABLE;
     ESP_RETURN_ON_ERROR(gpio_config(&config), kTag, "configure power key failed");
@@ -51,7 +53,7 @@ esp_err_t D1001PowerKey::Initialize() {
 void D1001PowerKey::Timer(void* context) { static_cast<D1001PowerKey*>(context)->Poll(); }
 
 void D1001PowerKey::Poll() {
-    const bool down = gpio_get_level(board::kPowerKey) == 0;
+    const bool down = gpio_get_level(board::kPowerKey) == 1;
     const uint64_t now = esp_timer_get_time();
     if (down && !pressed_) {
         pressed_ = true;

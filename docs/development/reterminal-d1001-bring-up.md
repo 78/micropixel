@@ -22,7 +22,7 @@ header.
 | Audio | ES8311 I2S0 MCLK 33 / BCLK 32 / LRCLK 31 / SDOUT 30; PA PCA9535 P1.3 |
 | Wi-Fi C6 | SDIO CMD 6, CLK 11, D0 7, D1 8, D2 9, D3 10, CHIP_PU 13; UART TX 48 / RX 47, BOOT 12 |
 | SD card | SDMMC slot 0, CLK 43 / CMD 44 / D0 39 / D1 40 / D2 41 / D3 42; detect 45, power 46, LDO 4 |
-| Power key | GPIO3 active-low; long press 1 s |
+| Power key | GPIO3 active-high; short press toggles the screen, long press 1 s powers off |
 | Battery | ADC GPIO18; charger status GPIO15 |
 
 ## Power and reset order
@@ -35,11 +35,12 @@ header.
 6. Bring up the DSI LDO and bus, run the JD9365 init table, then start LVGL.
    The backlight duty stays 0 until the first UI frame.
 
-The PCA9535 power-up default is `0xFFFF` in the vendored driver, so P1.0 keeps
-the 3V3 rail latched from the first register write. The green key is disabled in
-the MVP until its polarity is validated: if it idles low, the polling driver
-would see a one-second hold and power the board off immediately. Idle power-off
-is likewise `kDisabled` during bring-up; the System menu still powers off.
+The PCA9535 driver latches only P1.0 before switching directions; the other
+rails stay low until `ConfigureRails()` raises them in sequence. The green key
+is enabled: a short press fades the backlight out and the next press wakes it,
+while a one-second hold requests power off. CPU, Wi-Fi and touch stay active
+while the screen is dark. Idle power-off remains `kDisabled`; the System menu
+can still power off.
 
 ## Display
 
@@ -127,6 +128,8 @@ roughly 100 ms before it is cleared.
   lift; no X/Y swap; distinct track IDs for two fingers.
 - Hall -> Guest -> back; `sdk-demo` and `tilt` use direct scanout (check logs).
 - USB local control and screenshots match the panel.
+- Green key: a short press fades the screen off, the next press wakes it; a
+  one-second hold powers the board off.
 - Wi-Fi: ESP-Hosted initializes and the C6 slave firmware matches the host's
   `espressif/esp_hosted ~2`; a missing C6 only disables the network.
 - 10 minutes of interaction without watchdog resets or declining free PSRAM.

@@ -15,6 +15,20 @@ constexpr uint32_t kBacklightSettleMs = 120U;
 
 }  // namespace
 
+std::expected<void, device::PowerError> D1001PowerController::EnterLowPower() {
+    // The Host has already faded the backlight out. Latch the screen-off state
+    // so the next key click is consumed as a wake request instead of being
+    // forwarded to the Host, then wait for that request.
+    screen_off_.store(true, std::memory_order_release);
+    wake_requested_.store(false, std::memory_order_release);
+    (void)hardware_.SetBrightness(0);
+    while (!wake_requested_.load(std::memory_order_acquire)) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    screen_off_.store(false, std::memory_order_release);
+    return {};
+}
+
 [[noreturn]] void D1001PowerController::PowerOff() {
     ESP_LOGI(kTag, "power off: backlight off, releasing the 3V3 rail latch");
     (void)hardware_.SetBrightness(0);

@@ -111,15 +111,12 @@ class ReTerminalD1001Board final : public Board {
             ESP_LOGW(kTag, "audio unavailable for this boot: %s", esp_err_to_name(audio_status));
         }
 
-        // The green button is a power request only; a failure to configure it
-        // costs the key, never the boot.
-        // Bring-up: GPIO3 polarity is not validated yet. Arming the key can power the
-        // board off immediately if the line idles low, so it stays disabled until the
-        // hardware check in docs/development/reterminal-d1001-bring-up.md is done.
-        // const esp_err_t key_status = power_key_.Initialize();
-        const esp_err_t key_status = ESP_ERR_NOT_SUPPORTED;
+        // The green key is optional: failure to configure it costs the key,
+        // never the boot. A short press toggles the screen; a one-second hold
+        // requests power off.
+        const esp_err_t key_status = power_key_.Initialize();
         if (key_status != ESP_OK) {
-            ESP_LOGW(kTag, "power key disabled during bring-up: %s", esp_err_to_name(key_status));
+            ESP_LOGW(kTag, "power key unavailable: %s", esp_err_to_name(key_status));
         }
 
         // USB development screenshots take the same path as Remote Control.
