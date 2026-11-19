@@ -1,8 +1,0 @@
-dependencies:
-  esp_lcd_touch:
-    public: true
-    version: ^1.1.0
-  idf:
-    version: '>=6.0.0'
-description: Minimal GSL3670 raw-report touch driver for the reTerminal D1001
-version: 0.1.0

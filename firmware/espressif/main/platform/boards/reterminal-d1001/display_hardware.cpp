@@ -59,14 +59,10 @@ esp_err_t InitializeDisplayHardware(D1001State& state) {
     esp_lcd_dsi_bus_config_t bus_config{};
     bus_config.bus_id = 0;
     bus_config.num_data_lanes = static_cast<uint8_t>(board::kDsiLaneCount);
-    // P4 v3.x uses XTAL as the DSI PHY PLL reference and rejects the legacy
-// PLL_F20M source; pre-v3 silicon is the opposite (only PLL_F20M/RC_FAST are
-// valid there). Select the source for the silicon the image is built for.
-#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
-    bus_config.phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_PLL_F20M;
-#else
+    // D1001 production units are P4 v3.x, which require XTAL as the DSI PHY PLL
+    // reference. The legacy default resolves to PLL_F20M and the v3 HAL aborts
+    // inside esp_lcd_new_dsi_bus().
     bus_config.phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT;
-#endif
     bus_config.lane_bit_rate_mbps = static_cast<uint16_t>(board::kDsiLaneBitRateMbps);
     ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_config, &state.dsi_bus), kTag, "create MIPI-DSI bus failed");
 

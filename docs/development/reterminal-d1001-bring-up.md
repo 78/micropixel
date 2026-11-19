@@ -56,32 +56,36 @@ so LVGL's stride matches the DPI framebuffers.
 On P4 v3.x the DSI PHY reference clock must be
 `MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT` (XTAL). The legacy
 `MIPI_DSI_PHY_CLK_SRC_DEFAULT` still resolves to PLL_F20M and the v3 HAL aborts
-inside `esp_lcd_new_dsi_bus()`.
+inside `esp_lcd_new_dsi_bus()`. Production D1001 units are P4 v3.x, so the board
+uses that source directly.
 
-Pre-v3 silicon is the opposite: `MIPI_DSI_PHY_PLLREF_CLK_SRC_PLL_F20M` is the
-only supported source (XTAL is rejected). `display_hardware.cpp` selects the
-source from `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`, so the same source tree builds
-for both revisions. A pre-v3 image also needs the 360 MHz / PSRAM 200 MHz
-settings, for example an extra defaults fragment with
-`CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`, `CONFIG_ESP32P4_REV_MIN_100=y`,
-`CONFIG_ESP32P4_DEFAULT_CPU_FREQ_360=y`, and `CONFIG_SPIRAM_SPEED_200M=y`.
+## Touch
 
-## Touch licensing and raw-report mode
+The D1001 profile depends on the external `wvirgil123/esp_lcd_touch_gsl3670`
+component. It contains Silead's coordinate correction and point-tracking
+algorithm (GPL-2.0-or-later) plus the controller firmware image Seeed supplies
+under Apache-2.0. The component stays outside this Apache-2.0 repository; the
+manifest selects it only for the D1001 profile.
 
-Seeed's touch component depends on Silead's `gsl_point_id.c` (GPL-2.0) and a
-large firmware blob. MicroPixel cannot redistribute either. The vendored
-`esp_lcd_touch_gsl3670` is an Apache-2.0 raw-report driver: reset, vendor bring-up
-writes (`0x88`, `0xE4`, `0xE0`), and the `0x80` report parser. It does not load
-firmware or run Silead's coordinate algorithm.
+The component wraps the algorithm in `esp_lcd_touch`: reset through the board's
+PCA9535 callback, a correct 44-byte report buffer, a contact-count clamp, and
+`get_track_id` so multi-touch contacts keep stable IDs. It verifies the `0xB0`
+firmware signature during initialization.
 
-Hardware check on a P4 v3.2 unit: I2C and firmware loading work (`0xB0` reads
-`5A 5A 5A 5A`), but `0x80` stays all-zero even while touching. The full Seeed
-driver with the GPL algorithm initialized but produced no `vendor report` lines
-in the captured test window; a verified physical tap on that build is still
-needed. Touch is therefore **not enabled** in the Apache-2.0 MVP
-until a redistribution-compatible GSL3670 firmware/driver is obtained from
-Seeed or Silead. Do not copy `gsl_point_id.c` or the firmware blob into this
-repository.
+The board enables it by default:
+`CONFIG_MICROPIXEL_D1001_ENABLE_GSL3670=y`. Enabling it makes the resulting
+D1001 firmware a combined GPL work; the MicroPixel repository itself remains
+Apache-2.0. Set the option to `n` to build a touch-free image without the GPL
+dependency.
+
+During local development the manifest uses an `override_path` pointing at a
+sibling component checkout. Remove that override once the component is
+published in the ESP Component Registry.
+
+Initialization is best-effort: a firmware or first-probe failure logs a warning,
+drops the touch backend and keeps the display, backlight and USB development
+transport running. USB capture and App installation never depend on touch being
+present.
 
 ## Build and flash
 
@@ -99,15 +103,28 @@ python -m esptool --chip esp32p4 --port <PORT> chip_id
 python -m esptool --chip esp32p4 --port <PORT> flash_id
 ```
 
-The defaults assume 32 MiB flash, `partitions.p4.csv` (24 MiB app_store) and P4
-v3.x. A 16 MiB or pre-v3 unit needs the commented switches in
-`sdkconfig.p4-d1001.defaults`.
+Production D1001 units are P4 v3.x with 32 MiB flash using `partitions.p4.csv`
+(24 MiB app_store). `CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH` and
+`CONFIG_IDF_EXPERIMENTAL_FEATURES` must stay enabled: without 32-bit cache
+mapping, BundleFS cannot map app_store blocks above the 16 MiB physical flash
+boundary.
+
+## Power-up order
+
+The PCA9535 driver writes a safe output latch (only P1.0, the 3V3 hold) while
+the rail pins are still inputs, then switches directions. `ConfigureRails()`
+raises LCD power, backlight enable and the resets in order, and leaves the
+speaker amplifier off until ES8311 is configured. Do not restore the vendor
+`0xffff` / `0xfbff` latch: both assert every output at the first direction
+write, which makes the rail delays ineffective and enables the amplifier for
+roughly 100 ms before it is cleared.
 
 ## Acceptance
 
 - Cold boot: correct colors, no shift or tearing, backlight dark before the
   first UI frame.
-- Touch: four corners, edges, drag, lift; no X/Y swap.
+- Touch (with `MICROPIXEL_D1001_ENABLE_GSL3670`): four corners, edges, drag,
+  lift; no X/Y swap; distinct track IDs for two fingers.
 - Hall -> Guest -> back; `sdk-demo` and `tilt` use direct scanout (check logs).
 - USB local control and screenshots match the panel.
 - Wi-Fi: ESP-Hosted initializes and the C6 slave firmware matches the host's

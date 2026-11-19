@@ -170,11 +170,12 @@ components was written or adapted for the 6.1 APIs.
 - `firmware/espressif/patched_components/esp_io_expander_pca9535/` is a copy of
   `wngfra/esp_io_expander_pca9535` 1.0.1 (copyright wngfra, Apache-2.0); its `README.md`
   records the MicroPixel changes.
-- `firmware/espressif/patched_components/esp_lcd_touch_gsl3670/` is a MicroPixel Apache-2.0
-  driver for the raw GSL3670 report interface. It deliberately does not include the Silead
-  `gsl_point_id.c` algorithm or its firmware blob, which are **GPL-2.0**; that code is not
-  distributed in this repository. If the controller turns out to require the vendor firmware,
-  a redistribution-compatible image must be obtained separately.
+- The D1001 profile depends on the external `wvirgil123/esp_lcd_touch_gsl3670` component. That
+  component is **GPL-2.0-or-later**: it contains Silead's `gsl_point_id.c` and configuration
+  tables, plus the controller firmware image Seeed Studio supplies under Apache-2.0. The
+  component is not vendored in this repository. Enabling
+  `CONFIG_MICROPIXEL_D1001_ENABLE_GSL3670` links it into the D1001 firmware, which then becomes
+  a combined GPL work; the MicroPixel source tree itself remains Apache-2.0.
 
 ## ESP-IDF managed components
 

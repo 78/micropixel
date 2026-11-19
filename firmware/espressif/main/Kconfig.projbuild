@@ -237,6 +237,19 @@ menu "MicroPixel board backends"
 
     endchoice
 
+    config MICROPIXEL_D1001_ENABLE_GSL3670
+        bool "Enable GSL3670 touch"
+        depends on MICROPIXEL_BOARD_RETERMINAL_D1001
+        default y
+        help
+            Enable the GSL3670 touch controller through the external
+            wvirgil123/esp_lcd_touch_gsl3670 component. That component is
+            GPL-2.0-or-later (Silead algorithm) and loads the controller
+            firmware Seeed supplies under Apache-2.0. Enabling this option
+            makes the resulting D1001 firmware a combined GPL work; the
+            MicroPixel repository itself stays Apache-2.0. Disable to build a
+            firmware without touch and without the GPL dependency.
+
     choice MICROPIXEL_KSDIY_P4C5_ORIENTATION
         prompt "KSDIY P4C5 screen orientation"
         depends on MICROPIXEL_BOARD_KSDIY_P4C5

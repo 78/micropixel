@@ -125,8 +125,11 @@ create_app_store_image() {
             return 2
         fi
     done
+    local offset size
+    read -r offset size < <(app_store_partition_info)
     mkdir -p "$guests_output_dir"
     python3 "$workspace_root/tools/build_app_store_image.py" \
+        --app-store-size "$size" \
         --output "$app_store_image" "${bundles[@]}"
 }
 

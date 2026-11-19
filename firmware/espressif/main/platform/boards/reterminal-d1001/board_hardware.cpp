@@ -30,8 +30,9 @@ esp_err_t BoardHardware::ConfigureRails() {
     ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(expander_, board::kExpanderOutputMask, IO_EXPANDER_OUTPUT), kTag,
                         "configure PCA9535 outputs failed");
 
-    // Vendor power-up order: latch the 3V3 rail first, then the display rail and
-    // backlight enable, then release both resets.
+    // The expander latches only the 3V3 power hold at reset; these writes raise
+    // the remaining rails in the vendor's order. The amplifier stays off until
+    // the audio sink configures ES8311 and enables it through its setter.
     ESP_RETURN_ON_ERROR(SetExpanderLevel(board::kExpanderPowerHold, true), kTag, "latch 3V3 rail failed");
     vTaskDelay(pdMS_TO_TICKS(50));
     ESP_RETURN_ON_ERROR(SetExpanderLevel(board::kExpanderBacklightEnable, true), kTag, "enable backlight rail failed");

@@ -1,11 +1,6 @@
 # Seeed reTerminal D1001 (ESP32-P4) overrides, layered after sdkconfig.p4.defaults.
-#
-# The product page lists 32 MiB QSPI flash and ESP-IDF 6.1 treats P4 v3.x as the
-# default target. Verify both with esptool on the unit in hand:
-#   python -m esptool --chip esp32p4 --port <PORT> chip_id
-#   python -m esptool --chip esp32p4 --port <PORT> flash_id
-# A 16 MiB board switches to sdkconfig.p4-16mb.defaults values below (see the
-# commented block) and a pre-v3 unit switches back to the base revision.
+# Production D1001 units use P4 v3.x and 32 MiB QSPI flash; this profile is
+# fixed to that hardware (400 MHz CPU, 250 MHz PSRAM, partitions.p4.csv).
 # CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4 is not set
 CONFIG_MICROPIXEL_BOARD_RETERMINAL_D1001=y
 
@@ -14,19 +9,13 @@ CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4.csv"
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
-# 16 MiB variant:
-# CONFIG_ESPTOOLPY_FLASHSIZE_32MB is not set
-# CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4-16mb.csv"
-# CONFIG_IDF_EXPERIMENTAL_FEATURES is not set
-# CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH is not set
 
 # 32 MiB hex PSRAM at 250 MHz; the vendor demo uses the same mode.
 CONFIG_SPIRAM_MODE_HEX=y
 
-# Pre-v3 P4 silicon runs at 360 MHz with 200 MHz PSRAM. The shipping D1001 is
-# expected to be v3.x; if chip_id reports a pre-v3 part, restore the inherited
-# pre-v3 block from sdkconfig.p4.defaults instead.
+# The base P4 defaults target pre-v3 silicon. D1001 production is v3.x, so the
+# revision, CPU clock and PSRAM speed are restated here; the negative
+# assignments are intentional overrides of sdkconfig.p4.defaults.
 # CONFIG_ESP32P4_SELECTS_REV_LESS_V3 is not set
 # CONFIG_ESP32P4_REV_MIN_100 is not set
 CONFIG_ESP32P4_REV_MIN_300=y
