@@ -1,9 +1,9 @@
 # Bouffalo build foundation
 
 This directory introduces external SDK build profiles for BL616CL and BL618DG B0 AP.
-Each profile currently builds a minimal SDK smoke executable that initializes the
-vendor board and prints a UART banner. Full MicroPixel firmware composition and
-board display, input, audio and storage adapters are separate follow-ups.
+Each profile builds a minimal FreeRTOS/WAMR validation executable. Full MicroPixel
+firmware composition and board display, input, audio and storage adapters are
+separate follow-ups. See [runtime contracts](docs/runtime.md).
 
 ## Build
 
@@ -14,6 +14,8 @@ Follow [SDK setup](docs/sdk.md) for pinned source and verified toolchains, then:
 python3 firmware/bouffalo/tools/prepare_sdk.py --directory ../micropixel-bouffalo-sdk
 export BL_SDK_BASE="$(cd ../micropixel-bouffalo-sdk && pwd)"
 # Add the verified Zephyr and Bouffalo toolchain bin directories to PATH first.
+python3 firmware/bouffalo/tools/prepare_deps.py
+# Build the pinned wamrc and add it to PATH as described in docs/runtime.md.
 make -C firmware/bouffalo/boards/bl616cl
 make -C firmware/bouffalo/boards/bl618dg
 ```
@@ -23,7 +25,7 @@ use RV32 ILP32F, C++23, disabled exceptions and RTTI. Unused prebuilt multimedia
 and PKA libraries are excluded because the SDK's DG variants use ILP32D. The
 linker continues to enforce ABI compatibility. Outputs stay inside each board's
 ignored `build/`; `CONFIG_SKIP_COMBINE` produces raw images without installation
-partition layouts. These foundation targets are compile/link checks, not desktop
+partition layouts. These foundation targets are runtime smoke checks, not desktop
 release images. Use `BUILD_DIR=build-other` for a fresh output directory.
 
 ## Source dependencies
@@ -53,5 +55,7 @@ git diff --check
 
 The tests use temporary local Git repositories and source archives without
 network access. They cover repeat preparation, wrong revision, source changes,
-untracked files, damaged patches and failed dependency checksum rejection. The platform selector leaves the existing Espressif
+untracked files, damaged patches, competing CMake SDK paths, CI board selection,
+failed dependency checksum rejection, and byte-stack conversion at the native
+16/32-bit depth boundaries. The platform selector leaves the existing Espressif
 checks as the default.
