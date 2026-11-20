@@ -3,7 +3,8 @@
 This directory introduces external SDK build profiles for BL616CL and BL618DG B0 AP.
 Each profile builds a minimal FreeRTOS/WAMR validation executable. Full MicroPixel
 firmware composition and board display, input, audio and storage adapters are
-separate follow-ups. See [runtime contracts](docs/runtime.md).
+separate follow-ups. See [runtime contracts](docs/runtime.md) and the
+[Flash storage adapter](docs/flash-storage.md).
 
 ## Build
 
