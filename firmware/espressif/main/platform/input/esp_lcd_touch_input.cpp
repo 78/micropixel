@@ -158,7 +158,11 @@ void EspLcdTouchInput::UnbindTouchSink(void* context) {
 }
 
 bool EspLcdTouchInput::InjectTouch(const device::TouchSample& sample) {
-    if (!Available() || sample.x < 0 || sample.y < 0 || sample.x >= width_ || sample.y >= height_ ||
+    // Synthetic injection is also the development transport's pointer source
+    // on boards whose touch backend is disabled, so it must not require a
+    // physical controller handle. The UI router is bound to this object during
+    // construction regardless of whether a real touch device was initialized.
+    if (sample.x < 0 || sample.y < 0 || sample.x >= width_ || sample.y >= height_ ||
         sample.pressure_per_mille > 1000U) {
         return false;
     }
@@ -270,6 +274,9 @@ void EspLcdTouchInput::ProcessInterrupt() {
             ESP_LOGW(kTag, "touch sample decode failed: %s", esp_err_to_name(data_status));
         } else {
             sample_decoded = true;
+            // A controller may report more contacts than this board advertises;
+            // never forward points above the configured capacity.
+            point_count = std::min<uint8_t>(point_count, max_touch_points_);
             const uint64_t timestamp_us = static_cast<uint64_t>(esp_timer_get_time());
             last_frame_us_ = timestamp_us;
             bool previous_seen[micropixel::device::kMaxTouchPoints]{};

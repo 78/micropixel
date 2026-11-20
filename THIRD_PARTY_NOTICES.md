@@ -153,6 +153,30 @@ Espressif's `esp_lcd_touch_st7123` 1.0.2 (esp-iot-solution) that reports a track
 report count and pulls up the open-drain INT line. The fork keeps the upstream Apache-2.0 license, copyright
 Espressif Systems (Shanghai) CO LTD, and its `README.md` records each change.
 
+## Seeed reTerminal D1001 board support
+
+The D1001 profile uses Seeed's BSP repository as a hardware reference only; it is
+not a build dependency or a submodule. Seeed's repository targets ESP-IDF
+v5.4.x/5.5, while MicroPixel targets ESP-IDF 6.1, so all code in
+`firmware/espressif/main/platform/boards/reterminal-d1001/` and the patched
+components was written or adapted for the 6.1 APIs.
+
+- reference: <https://github.com/Seeed-Studio/reTerminal-D1001>; copyright Seeed Technology Co., Ltd;
+  license Apache-2.0.
+- `display/jd9365_init_data.c` copies the vendor 8-inch panel initialization table from
+  `components/esp_lcd_jd9365_8` (copyright Seeed Technology Co., Ltd and Espressif Systems
+  (Shanghai) CO LTD, Apache-2.0). The driver code is Espressif's
+  `espressif/esp_lcd_jd9365` component from the ESP Component Registry.
+- `firmware/espressif/patched_components/esp_io_expander_pca9535/` is a copy of
+  `wngfra/esp_io_expander_pca9535` 1.0.1 (copyright wngfra, Apache-2.0); its `README.md`
+  records the MicroPixel changes.
+- The D1001 profile depends on the external `wvirgil123/esp_lcd_touch_gsl3670` component. That
+  component is **GPL-2.0-or-later**: it contains Silead's `gsl_point_id.c` and configuration
+  tables, plus the controller firmware image Seeed Studio supplies under Apache-2.0. The
+  component is not vendored in this repository. Enabling
+  `CONFIG_MICROPIXEL_D1001_ENABLE_GSL3670` links it into the D1001 firmware, which then becomes
+  a combined GPL work; the MicroPixel source tree itself remains Apache-2.0.
+
 ## ESP-IDF managed components
 
 ESP-IDF, LVGL, and components resolved from the Espressif Component Registry are build dependencies and are not

@@ -26,5 +26,6 @@ The following detailed guides are in Simplified Chinese.
 
 Windows: [installation](development/windows-sdk.zh-CN.md), [FAQ](development/windows-sdk-faq.zh-CN.md),
 [hardware checks](development/windows-acceptance.zh-CN.md). Sound assets: [manifest template](development/game-sfx.template.json).
+Board bring-up: [Seeed reTerminal D1001](development/reterminal-d1001-bring-up.md).
 
 Documentation conventions are in [Contributing](../CONTRIBUTING.md).

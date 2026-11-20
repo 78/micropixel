@@ -95,6 +95,21 @@ persistence, Wi-Fi loss/recovery with 4G connected, both-off behavior, actual SI
 over 4G, no-SIM recovery, and shutdown/sleep during traffic. Neither build success
 nor the controller tests prove modem or power timing on hardware.
 
+## Seeed reTerminal D1001
+
+`boards/reterminal-d1001/` is the MVP profile for the 800×1280 portrait D1001:
+JD9365 MIPI-DSI panel (RGB565, two DPI framebuffers, direct scanout), GSL3670
+touch on a separate I2C0 bus, PCA9535 rail/reset sequencing on I2C1, the green
+power key and ESP32-C6 hosted Wi-Fi. It follows the Tab5 display/presentation
+shape and the KSDIY P4 dependency layout.
+
+The Seeed BSP repository is a reference only (ESP-IDF 5.4.x/5.5); the board code
+targets IDF 6.1. `patched_components/esp_lcd_touch_gsl3670` is a MicroPixel
+Apache-2.0 raw-report driver and intentionally excludes Silead's GPL
+`gsl_point_id.c` and firmware blob. ES8311 audio output is implemented on
+I2S0 with the amplifier on PCA9535 P1.3; SD, battery, RTC and IMU are not in
+this profile yet.
+
 ## M5Stack Tab5 expansion GPIO
 
 `boards/m5stack-tab5/board_config.hpp` owns the line list and its display

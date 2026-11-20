@@ -11,6 +11,9 @@ namespace micropixel::host_ui::lvgl::square_common {
 struct HallCardLayout final {
     int32_t width{};
     int32_t height{};
+    // Square cover edge. 0 keeps the historical width x width cover; a smaller
+    // value lets a grid use short cards while keeping the cover centred.
+    int32_t cover_size{};
     int32_t radius{};
     int32_t border_width{};
     int32_t label_y{};
@@ -29,6 +32,9 @@ struct HallCardLayout final {
     platform::lvgl::SystemFontRole label_font{platform::lvgl::SystemFontRole::kSmall};
     platform::lvgl::SystemFontRole badge_font{platform::lvgl::SystemFontRole::kSmall};
 };
+
+// Square cover edge for a card: cover_size when set, otherwise the card width.
+[[nodiscard]] int32_t HallCardCoverSize(const HallCardLayout& layout);
 
 struct HallCardPresentation final {
     const char* app_id{};

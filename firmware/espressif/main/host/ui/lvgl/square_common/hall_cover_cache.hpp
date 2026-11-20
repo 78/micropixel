@@ -32,7 +32,10 @@ struct HallCoverCacheUi final {
 class HallCoverCache final {
    public:
     static constexpr size_t kCapacity = HallCoverCachePolicy::kCapacity;
-    static constexpr uint32_t kJobQueueCapacity = 8U;
+    // Must hold every index the largest Hall window can request. The 800x1280
+    // grid prefetches up to six rows (18 cards), and kMaxHallApps is the only
+    // bound that remains correct for any profile without silently dropping jobs.
+    static constexpr uint32_t kJobQueueCapacity = host_ui::kMaxHallApps;
 
     explicit HallCoverCache(HallCoverCacheConfig config) : config_(config) {}
     HallCoverCache(const HallCoverCache&) = delete;

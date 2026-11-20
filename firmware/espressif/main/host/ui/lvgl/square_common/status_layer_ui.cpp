@@ -25,6 +25,7 @@ constexpr uint16_t kTransitionComplete = 1000U;
 constexpr lv_opa_t kPerformanceOverlayBackingOpa = 176;
 
 constexpr int32_t Scale480To720(int32_t value) { return value * 3 / 2; }
+constexpr int32_t Scale480To800(int32_t value) { return value * 5 / 3; }
 
 void StyleFullscreenContainer(lv_obj_t* container, uint32_t background, int32_t width, int32_t height) {
     lv_obj_set_pos(container, 0, 0);
@@ -238,11 +239,84 @@ const StatusLayerUi::Layout& StatusLayerUi::ActiveLayout() const {
         .scrim_rgb = kLayout480.scrim_rgb,
         .scrim_opacity = kLayout480.scrim_opacity,
     };
+    // reTerminal D1001: 800x1280 portrait. Structurally the 480 layout scaled
+    // by 5/3; the sheet stays top-anchored, so the extra height only extends
+    // the empty area below it.
+    static constexpr Layout kLayout800X1280{
+        .screen_width = Scale480To800(kLayout480.screen_width),
+        .screen_height = 1280,
+        .dialog = {.x = Scale480To800(kLayout480.dialog.x),
+                   .y = Scale480To800(kLayout480.dialog.y),
+                   .width = Scale480To800(kLayout480.dialog.width),
+                   .height = Scale480To800(kLayout480.dialog.height)},
+        .dialog_hidden_y = Scale480To800(kLayout480.dialog_hidden_y),
+        .quick = {{.x = Scale480To800(kLayout480.quick[0].x),
+                   .y = Scale480To800(kLayout480.quick[0].y),
+                   .width = Scale480To800(kLayout480.quick[0].width),
+                   .height = Scale480To800(kLayout480.quick[0].height)},
+                  {.x = Scale480To800(kLayout480.quick[1].x),
+                   .y = Scale480To800(kLayout480.quick[1].y),
+                   .width = Scale480To800(kLayout480.quick[1].width),
+                   .height = Scale480To800(kLayout480.quick[1].height)},
+                  {.x = Scale480To800(kLayout480.quick[2].x),
+                   .y = Scale480To800(kLayout480.quick[2].y),
+                   .width = Scale480To800(kLayout480.quick[2].width),
+                   .height = Scale480To800(kLayout480.quick[2].height)}},
+        .sliders = {{.x = Scale480To800(kLayout480.sliders[0].x),
+                     .y = Scale480To800(kLayout480.sliders[0].y),
+                     .width = Scale480To800(kLayout480.sliders[0].width),
+                     .height = Scale480To800(kLayout480.sliders[0].height)},
+                    {.x = Scale480To800(kLayout480.sliders[1].x),
+                     .y = Scale480To800(kLayout480.sliders[1].y),
+                     .width = Scale480To800(kLayout480.sliders[1].width),
+                     .height = Scale480To800(kLayout480.sliders[1].height)}},
+        .metrics = {{.x = Scale480To800(kLayout480.metrics[0].x),
+                     .y = Scale480To800(kLayout480.metrics[0].y),
+                     .width = Scale480To800(kLayout480.metrics[0].width),
+                     .height = Scale480To800(kLayout480.metrics[0].height)},
+                    {.x = Scale480To800(kLayout480.metrics[1].x),
+                     .y = Scale480To800(kLayout480.metrics[1].y),
+                     .width = Scale480To800(kLayout480.metrics[1].width),
+                     .height = Scale480To800(kLayout480.metrics[1].height)},
+                    {.x = Scale480To800(kLayout480.metrics[2].x),
+                     .y = Scale480To800(kLayout480.metrics[2].y),
+                     .width = Scale480To800(kLayout480.metrics[2].width),
+                     .height = Scale480To800(kLayout480.metrics[2].height)}},
+        .performance_overlay_y = Scale480To800(kLayout480.performance_overlay_y),
+        .panel_radius = Scale480To800(kLayout480.panel_radius),
+        .dialog_radius = Scale480To800(kLayout480.dialog_radius),
+        .dialog_border_width = Scale480To800(kLayout480.dialog_border_width),
+        .quick_label_x = Scale480To800(kLayout480.quick_label_x),
+        .quick_name_y = Scale480To800(kLayout480.quick_name_y),
+        .quick_detail_y = Scale480To800(kLayout480.quick_detail_y),
+        .slider_label_x = Scale480To800(kLayout480.slider_label_x),
+        .slider_label_y = Scale480To800(kLayout480.slider_label_y),
+        .slider_value_width = Scale480To800(kLayout480.slider_value_width),
+        .slider_track_x = Scale480To800(kLayout480.slider_track_x),
+        .slider_track_y = Scale480To800(kLayout480.slider_track_y),
+        .slider_track_height = Scale480To800(kLayout480.slider_track_height),
+        .slider_knob_size = Scale480To800(kLayout480.slider_knob_size),
+        .metric_label_x = Scale480To800(kLayout480.metric_label_x),
+        .metric_name_y = Scale480To800(kLayout480.metric_name_y),
+        .metric_value_y = Scale480To800(kLayout480.metric_value_y),
+        .metric_track_x = Scale480To800(kLayout480.metric_track_x),
+        .metric_track_y = Scale480To800(kLayout480.metric_track_y),
+        .metric_track_height = Scale480To800(kLayout480.metric_track_height),
+        .quick_name_font = platform::lvgl::SystemFontRole::kLarge,
+        .quick_detail_font = platform::lvgl::SystemFontRole::kMedium,
+        .control_font = platform::lvgl::SystemFontRole::kMedium,
+        .metric_font = platform::lvgl::SystemFontRole::kMedium,
+        .scrim_rgb = kLayout480.scrim_rgb,
+        .scrim_opacity = kLayout480.scrim_opacity,
+    };
     static constexpr Layout kLayout720X1280 = [] {
         Layout portrait = kLayout720;
         portrait.screen_height = 1280;
         return portrait;
     }();
+    if (layout_profile_ == StatusLayerLayoutProfile::kPortrait800x1280) {
+        return kLayout800X1280;
+    }
     if (layout_profile_ == StatusLayerLayoutProfile::kPortrait720x1280) {
         return kLayout720X1280;
     }

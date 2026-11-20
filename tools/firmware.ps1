@@ -79,7 +79,7 @@ param(
     [string] $Command,
 
     [Parameter(Position = 1)]
-    [ValidateSet('p4', 'ksdiy', 'ksdiy-landscape', 'box3', 'szpi', 'cores3', 'watch', 's31')]
+    [ValidateSet('p4', 'd1001', 'ksdiy', 'ksdiy-landscape', 'box3', 'szpi', 'cores3', 'watch', 's31')]
     [string] $Board = 'p4',
 
     [Parameter(Position = 2)]
@@ -106,6 +106,7 @@ $firmwareScript = Join-Path $PSScriptRoot 'firmware.py'
 # their Null gate while tools/s3.sh does not; mirror that per board.
 $boardProfiles = @{
     'p4'     = @{ Product = 'metalio-claw4';  Null = 'p4-null';  NullUsesEnvDefaults = $true }
+    'd1001'  = @{ Product = 'reterminal-d1001'; Null = 'p4-null'; NullUsesEnvDefaults = $true }
     'ksdiy'  = @{ Product = 'ksdiy-p4c5';     Null = 'p4-null';  NullUsesEnvDefaults = $true }
     'ksdiy-landscape' = @{ Product = 'ksdiy-p4c5-landscape'; Null = 'p4-null'; NullUsesEnvDefaults = $true }
     's31'    = @{ Product = 'esp-mosaico';    Null = 's31-null'; NullUsesEnvDefaults = $true }

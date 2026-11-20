@@ -185,6 +185,31 @@ void PauseDrainsActiveRead() {
           "failed decode buffer allocation must not read or retain compressed cover bytes");
     test_cover_fail_allocation = false;
 }
+void FullGridWindow() {
+    micropixel::work::BackgroundExecutor executor;
+    View view;
+    cache_ui::HallCoverCache cache({.target_size = 2U});
+    cache.BindBackgroundExecutor(executor);
+    cache.BindUi(
+        {.context = &view, .show_placeholder = View::Placeholder, .attach = View::Attach, .detach = View::Placeholder});
+    std::array<Source, 12U> sources{};
+    ui::HallModel model{};
+    model.app_count = sources.size();
+    for (size_t i = 0U; i < sources.size(); ++i) {
+        model.apps[i].cover = {.cache_key = i + 1U, .reader_context = &sources[i], .read_source = Source::Read};
+    }
+    cache.BeginCatalog(model, model.app_count, 1U);
+    cache.RequestWindow(0U, 12U);
+    executor.RunAll();
+    for (size_t i = 0U; i < sources.size(); ++i) {
+        Check(sources[i].reads == 1U, "a full 3x4 window must read every cover exactly once");
+        Check(view.images[i] != nullptr, "a full 3x4 window must attach every decoded cover");
+    }
+    cache.Pause();
+    cache.Release();
+    executor.RunAll();
+    Check(test_cover_allocations == 0U, "full-grid shutdown must release every decoded allocation");
+}
 }  // namespace
 
 namespace micropixel::host_ui::lvgl::square_common {
@@ -198,5 +223,6 @@ bool DecodeHallCoverRgb888(const HallCoverModel& source, uint32_t size, uint32_t
 int main() {
     LazyWindowAndReturn();
     PauseDrainsActiveRead();
+    FullGridWindow();
     std::puts("Hall cover cache: lazy reads, launch retention, return reuse, cancellation and invalidation passed");
 }
