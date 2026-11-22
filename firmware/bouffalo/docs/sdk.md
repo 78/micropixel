@@ -22,9 +22,8 @@ python3 firmware/bouffalo/tools/check_sdk.py --exact
 Preparation uses a temporary sibling directory and installs it only after verification.
 Repeating the command verifies an existing checkout without modifying it. `--exact`
 rejects a different HEAD, undeclared tracked changes, untracked files, damaged
-patches, or modified critical inputs. This initial foundation declares no SDK
-patches. The preparation and verification tools also support explicitly declared,
-checksum-pinned patches for future adapters.
+patches, or modified critical inputs. The SD adapter pins a patch that bounds SDH polling and card programming waits.
+Use a fresh preparation directory when switching from the unpatched SDK checkout.
 
 ## Toolchains
 
