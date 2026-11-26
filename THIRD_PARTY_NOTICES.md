@@ -345,3 +345,8 @@ The build tools download these inputs outside the tracked source tree.
 
 `firmware/bouffalo/dependencies.json` pins the existing WAMR fork revision for a
 separate source checkout; the WAMR license and notices above also apply there.
+
+The Bouffalo graphics adapter uses [libpng](https://github.com/pnggroup/libpng)
+(libpng-2.0), [zlib](https://github.com/madler/zlib) (Zlib), and
+[stb_image_write](https://github.com/nothings/stb) (MIT or Unlicense), pinned in
+the same manifest. JPEG decoding uses the public SDK's stb_image header.

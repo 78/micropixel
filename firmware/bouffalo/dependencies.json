@@ -9,5 +9,86 @@
       "LICENSE": "0a274df3755e61b169266fba62d842489378bc9a6e9a63fe24f02ee6f5de419f",
       "core/iwasm/aot/aot_runtime.c": "03d43e7912d88c2bb6aa721f96540cdd373425107029dbcdcf4854c881075a94"
     }
+  },
+  "libpng": {
+    "repository": "https://github.com/pnggroup/libpng",
+    "commit": "cd952f49f95bb27154ae77dbb103032d95f6e580",
+    "tag": "v1.6.59",
+    "archive_sha256": "ef1bccad2b2a58eb3c09e06ffe3b72b8604abda8b5011e4c4bb5391989040f26",
+    "license": "libpng-2.0 (see LICENSE)",
+    "url": "https://codeload.github.com/pnggroup/libpng/tar.gz/cd952f49f95bb27154ae77dbb103032d95f6e580",
+    "verify_files": {
+      "LICENSE": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526",
+      "pngread.c": "8ff4bfc0218fb9f712ab5940baeb546b3bbf64abce4038572944716d5520fec8",
+      "pnglibconf.h": "4172045bef3f4032089a697f18758e24e02a3873851108409f00dadf6deb2530",
+      "example.c": "e9908d7dc35c43f729f562603894b70dc23dc31518f745aa08677ccf8fb6bd5d",
+      "png.c": "741727b68e19a187bea802c64aea509fa64c78b09fecf4f19822a6a31c324159",
+      "png.h": "5758258cb691e429bafbf16057210e2d9bfa2c33b6c4636a6db562480f39b273",
+      "pngconf.h": "3f1d9e8b05ec5165b65744f99af0ef3d0d10d77d6866551715b80ac884a0bf47",
+      "pngdebug.h": "923e849bded3f15a74fa943ed87b423d88ba5699feeed214872fea09997c44fc",
+      "pngerror.c": "6e8f475172d8c1e34982f4fa4130042110d5591dccdf95723345c2a7e5c7f761",
+      "pngget.c": "3098a692f096c58b9c0f039fbfd38c29b0a86c464a498a9c775c22698a2bec95",
+      "pnginfo.h": "95fd19c965b86c6f279e426b9ee42c62e83af41a372b51fe8feb52a3427cb44d",
+      "pngmem.c": "2dcf91e5f7d4aaa11c53cdac246223f405e5cc3e1c7ccccb7a40650c41465b56",
+      "pngpread.c": "230e4e01a9748922a33a936d1c4a2f599d61fc6425b49270197949fd3f38443e",
+      "pngpriv.h": "44f9ecf9664767ec55632f900bb6d59f81b63d24f0039258813695ef428f7c48",
+      "pngrio.c": "3c710643f274fd2b4aa2bc154c9dc53a512edae773dda1434f205fb005f2e93e",
+      "pngrtran.c": "0e3737046eb1523480e74ac1235ac8f2df541ca9e7f43c92431b1f0c8c8379d9",
+      "pngrutil.c": "a1d62bc61c118b225c60549ea8de3065ae84642af56dd3776bf4692fb0f6aa5e",
+      "pngset.c": "36153f08f34be63ca572d51dda7e0dcc534d4eca264f45041ceae6e83138fc9b",
+      "pngstruct.h": "46b48213ed1691ddb989cfa7844a272e13fe7a7eb67a97037ca96d76b242bac4",
+      "pngtest.c": "41e7256bf2b609a8c7662b5b19153abc30bc8a71f828d12c68090c542460c265",
+      "pngtrans.c": "38aa34b51567a06428b15be16c5819e6f2ae0d3bfce4e1f777ae6242f74eb6d4",
+      "pngwio.c": "a25def3351807ed3f2e12a02a7801d4208f0033516185f4ad524d804d2f00ce3",
+      "pngwrite.c": "85533196464e11d7ee4602fc19c887bd3923636cff7c44c8c0dab97624a17797",
+      "pngwtran.c": "6355098f20b9058ab607cebd01f3130c61ac858dceb339c3a7d83407c1067b94",
+      "pngwutil.c": "a6e725ce8439edadea1e1f5092c4bcbf101d0a63cff0906271af6aceef89dfd3"
+    }
+  },
+  "zlib": {
+    "repository": "https://github.com/madler/zlib",
+    "tag": "v1.3.2",
+    "archive_sha256": "b99a0b86c0ba9360ec7e78c4f1e43b1cbdf1e6936c8fa0f6835c0cd694a495a1",
+    "license": "Zlib (see LICENSE)",
+    "url": "https://codeload.github.com/madler/zlib/tar.gz/v1.3.2",
+    "verify_files": {
+      "LICENSE": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "inflate.c": "90221ea7d762e7044057f6ad5013e969086c6ba3d3051716b7aa786d7a6362ec",
+      "zconf.h": "cb7c2c84211473b4699223edd363d3207b43b9578e739b5bf638f42204ea6e0f",
+      "adler32.c": "9cd1443a24ff2a3053961695bd432035c58347386a420d3388232376ebabe211",
+      "compress.c": "41f1c7ad886012571cd481a2b1b6a83812e5125e90d995e298fde34d6c015614",
+      "crc32.c": "da37f3483e77c20f64c28cf55d62d7bed9d62af33eb401be906835d84539b9c9",
+      "crc32.h": "9a2223575183ac2ee8a247f20bf3ac066e8bd0140369556bdbdffc777435749e",
+      "deflate.c": "ea9ca4eb51b1a71aaf214b99f4a9fab177253d6268cae8e4c26d44d1812e52c2",
+      "deflate.h": "21f4ea0973dab272fb26e93305ccf8628c8dc07e6c5df09a9861825b1920ba5d",
+      "gzclose.c": "35ea6e991a63095f797d8c4cc25817fac7a7155c2ba7dcdbbf648f7871c7ea40",
+      "gzguts.h": "db7690315cda93c0742701365d5218932ff0e2e6b8713c95019553502ada7d2b",
+      "gzlib.c": "c899344d02b22fd0bcb78392cdd2d175a801b3ceb5d3fbfde5ec420591537269",
+      "gzread.c": "ee2b1141f7b78065147e787c8b4adb983c09c409aa5fe5782479e2664676d17c",
+      "gzwrite.c": "2ce783294c688330c716bfe106f43167d3dae5be84994176bc304d205d4f5b04",
+      "infback.c": "bf9788af31e08a4242fc9d36bc0ce1a7a667bbfd9edc51ff26146195ee2e528a",
+      "inffast.c": "f96787a11bb7131ffd2221fb40db27f6a5a1dfb12f59c0bc388807010749c34a",
+      "inffast.h": "05cc5dc9ff1da7b8b52a4bd8bda0d8a5c236a2f39efe84b941516ea13857e6c5",
+      "inffixed.h": "fd7c4b1dbdacb283421d0675744aaecda44e840e183b5131448bac94564f6adb",
+      "inflate.h": "e6a43bd0e24ab2cf5fa1dca630859e9a2f6a721f033f75faf179f5c0299e4fe2",
+      "inftrees.c": "f7ee9ce5925fc9d1579c76e574feed85f5ca4ccddc446a7795578854bbc65743",
+      "inftrees.h": "d3a7ea301d8ec514823d052a2e42af4636bc81a0cf07052f526030f208068fb8",
+      "trees.c": "a16217d5ea6d8342ff08afe5207b1dab620f05610e121dda55b4f9aae9de4f68",
+      "trees.h": "bb0a9d3ca88ee00c81adb7c636e73b97085f6ef1b52d6d58edbe2b6dc3adeb4d",
+      "uncompr.c": "953f5381650838d507b01499790bd64524433ea6ea29ea9325bf542af10cfe7d",
+      "zlib.h": "818667d6ab6a37fe7469cb06a7f0cb2c2cb2f2c948a03e5accf1a4a74bf3020a",
+      "zutil.c": "1279908a15580224a2c1f377555ffdd150327fed71801aa77fc35978dcb741c8",
+      "zutil.h": "a12243cc6d338ffad0c8e3500fbc05bc7fdcdc25a469393b1c2f7e5df307fff3"
+    }
+  },
+  "stb": {
+    "repository": "https://github.com/nothings/stb",
+    "url": "https://api.github.com/repos/nothings/stb/git/blobs/e4b32ed1bc32ef9c962acbf47a9d10af01939e08",
+    "file": "stb_image_write.h",
+    "archive_sha256": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05",
+    "license": "MIT or Unlicense",
+    "verify_files": {
+      "stb_image_write.h": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05"
+    }
   }
 }

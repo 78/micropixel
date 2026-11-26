@@ -1,0 +1,203 @@
+Subject: [PATCH] sdh: bound polling waits and stop DMA before returning errors
+
+Make removable-media failures return to the caller, with an opt-in timeout.
+Preserve the legacy default for other SDK applications.
+
+diff --git a/bsp/Kconfig b/bsp/Kconfig
+--- a/bsp/Kconfig
++++ b/bsp/Kconfig
+@@ -493,6 +493,15 @@
+     default n
+     help
+       Run the SD host controller in polling mode instead of using interrupts.
++
++config BSP_SDH_TIMEOUT_MS
++    int "SDH software transfer timeout (ms)"
++    range 0 60000
++    default 0
++    help
++      Limit polling command/data and SD card programming waits. Zero preserves
++      the legacy unlimited wait. Enable this for removable media so a
++      missing completion cannot block a task indefinitely.
+ 
+ config BSP_SDH_SD
+     bool "SD card support"
+diff --git a/bsp/common/sdh/host/sdh_host.c b/bsp/common/sdh/host/sdh_host.c
+--- a/bsp/common/sdh/host/sdh_host.c
++++ b/bsp/common/sdh/host/sdh_host.c
+@@ -5,6 +5,9 @@
+ #include "bflb_sdh.h"
+ #include "bflb_clock.h"
+ #include "bflb_gpio.h"
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++#include "bflb_mtimer.h"
++#endif
+ 
+ #include CHIP_GLB_HEADER
+ 
+@@ -219,17 +222,56 @@
+     return ret;
+ }
+ 
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++static void sdh_host_abort_transfer(struct sdh_host_s *host)
++{
++    uint32_t reset_reg = host->sdh_dev->reg_base + SDH_TIMEOUT_CTRL_SW_RESET_OFFSET;
++    uint16_t reset_mask = SDH_SW_RST_CMD_MSK | SDH_SW_RST_DAT_MSK;
++    uint64_t started = bflb_mtimer_get_time_ms();
++
++    /* Stop ADMA before returning ownership of its buffer to the caller.
++     * Reset only CMD/DAT so the configured clock and bus width survive. */
++    putreg16(getreg16(reset_reg) | reset_mask, reset_reg);
++    while (getreg16(reset_reg) & reset_mask) {
++        if (bflb_mtimer_get_time_ms() - started >= 100U) {
++            LOG_W("CMD/DAT reset timeout, resetting SDH controller\r\n");
++#if defined(BL616CL)
++            GLB_AHB_MCU_Software_Reset(GLB_AHB_MCU_SW_SDH);
++#else
++            GLB_AHB_MCU_Software_Reset(GLB_AHB_MCU_SW_EXT_SDH);
++#endif
++            break;
++        }
++    }
++    bflb_sdh_sta_clr(host->sdh_dev,
++                     SDH_NORMAL_STA_CMD_COMP | SDH_NORMAL_STA_TRAN_COMP | SDH_ERROR_ALL_MASK);
++}
++#endif
++
+ int sdh_host_wait_done(struct sdh_host_s *host, struct sdh_host_transfer_s *transfer)
+ {
+     int ret = 0;
+     uint32_t sta;
++#if CONFIG_BSP_SDH_OSAL_POLLING_MODE && defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++    uint64_t wait_started = bflb_mtimer_get_time_ms();
++#endif
+ 
+     /* wait CMD done */
+ #if (CONFIG_BSP_SDH_OSAL_POLLING_MODE)
+     /* Polling mode */
+     do {
+         sta = bflb_sdh_sta_get(host->sdh_dev);
+-    } while ((sta & (SDH_NORMAL_STA_CMD_COMP | SDH_NORMAL_STA_ERROR)) == 0);
++        if (sta & (SDH_NORMAL_STA_CMD_COMP | SDH_NORMAL_STA_ERROR | SDH_ERROR_ALL_MASK)) {
++            break;
++        }
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++        if (bflb_mtimer_get_time_ms() - wait_started >= CONFIG_BSP_SDH_TIMEOUT_MS) {
++            LOG_W("CMD%d command completion timeout\r\n", transfer->cmd->index);
++            ret = -1;
++            goto wait_exit;
++        }
++#endif
++    } while (1);
+ #else
+     /* Interrupt mode */
+     SDH_WAIT_STATUS(SDH_NORMAL_STA_CMD_COMP | SDH_NORMAL_STA_ERROR | SDH_ERROR_ALL_MASK,
+@@ -238,7 +280,7 @@
+ #endif
+ 
+     /* get resp */
+-    if (sta & SDH_ERROR_STA_CMD_TIMEOUT) {
++    if (sta & (SDH_NORMAL_STA_ERROR | SDH_ERROR_ALL_MASK)) {
+         ret = -1;
+         goto wait_exit;
+     } else if (sta & SDH_NORMAL_STA_CMD_COMP) {
+@@ -260,9 +302,22 @@
+     /* wait DATA/busy done */
+ #if (CONFIG_BSP_SDH_OSAL_POLLING_MODE)
+     /* Polling mode */
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++    wait_started = bflb_mtimer_get_time_ms();
++#endif
+     do {
+         sta = bflb_sdh_sta_get(host->sdh_dev);
+-    } while ((sta & (SDH_NORMAL_STA_TRAN_COMP | SDH_NORMAL_STA_ERROR)) == 0);
++        if (sta & (SDH_NORMAL_STA_TRAN_COMP | SDH_NORMAL_STA_ERROR | SDH_ERROR_ALL_MASK)) {
++            break;
++        }
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++        if (bflb_mtimer_get_time_ms() - wait_started >= CONFIG_BSP_SDH_TIMEOUT_MS) {
++            LOG_W("CMD%d data/busy completion timeout\r\n", transfer->cmd->index);
++            ret = -2;
++            goto wait_exit;
++        }
++#endif
++    } while (1);
+ #else
+     /* Interrupt mode */
+     SDH_WAIT_STATUS(SDH_NORMAL_STA_TRAN_COMP | SDH_NORMAL_STA_ERROR | SDH_ERROR_ALL_MASK,
+@@ -270,7 +325,10 @@
+                     "CMD%d wait TRAN_COMP irq timeout");
+ #endif
+ 
+-    if (sta & SDH_NORMAL_STA_TRAN_COMP) {
++    if (sta & (SDH_NORMAL_STA_ERROR | SDH_ERROR_ALL_MASK)) {
++        ret = -2;
++        goto wait_exit;
++    } else if (sta & SDH_NORMAL_STA_TRAN_COMP) {
+         bflb_sdh_sta_clr(host->sdh_dev, SDH_NORMAL_STA_TRAN_COMP);
+         ret = 0;
+         goto wait_exit;
+@@ -283,6 +341,9 @@
+     if (ret < 0) {
+         LOG_W("CMD%d wait failed, agr: 0x%08X, sta: 0x%08X sta_en:%08x sta_int_en:%08x\r\n", transfer->cmd->index, transfer->cmd->argument, sta,
+               bflb_sdh_sta_en_get(host->sdh_dev), bflb_sdh_sta_int_en_get(host->sdh_dev));
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++        sdh_host_abort_transfer(host);
++#endif
+     } else {
+         LOG_D("transfer CMD%d done, \r\n", transfer->cmd->index);
+     }
+diff --git a/bsp/common/sdh/sd/sdh_sd.c b/bsp/common/sdh/sd/sdh_sd.c
+--- a/bsp/common/sdh/sd/sdh_sd.c
++++ b/bsp/common/sdh/sd/sdh_sd.c
+@@ -1,6 +1,9 @@
+ #include "sdh_spec.h"
+ #include "sdh_host.h"
+ #include "sdh_sd.h"
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++#include "bflb_mtimer.h"
++#endif
+ 
+ /* log */
+ #define DBG_TAG "SDH_SD"
+@@ -1139,11 +1142,27 @@
+ 
+     /* send cmd13 to check done */
+     uint32_t r1_status = 0;
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++    uint64_t program_started = bflb_mtimer_get_time_ms();
++#endif
+     do {
+         ret = sdh_sd_send_status(sd_card, &r1_status);
+         if (ret < 0) {
+             goto write_exit;
+         }
++        if (R1_ERR_STATUS(r1_status)) {
++            LOG_E("write status error: R1=0x%08X\r\n", r1_status);
++            ret = -1;
++            goto write_exit;
++        }
++#if defined(CONFIG_BSP_SDH_TIMEOUT_MS) && CONFIG_BSP_SDH_TIMEOUT_MS > 0
++        if (R1_CURRENT_STATE(r1_status) == R1_STATE_RECE_PROGRAM &&
++            bflb_mtimer_get_time_ms() - program_started >= CONFIG_BSP_SDH_TIMEOUT_MS) {
++            LOG_E("write programming timeout: R1=0x%08X\r\n", r1_status);
++            ret = -1;
++            goto write_exit;
++        }
++#endif
+     } while (R1_CURRENT_STATE(r1_status) == R1_STATE_RECE_PROGRAM);
+ 
+ write_exit:
+diff --git a/drivers/lhal/include/bflb_sdh.h b/drivers/lhal/include/bflb_sdh.h
+--- a/drivers/lhal/include/bflb_sdh.h
++++ b/drivers/lhal/include/bflb_sdh.h
+@@ -199,7 +199,7 @@
+ /** @defgroup SDH_ERROR_STA Normal interrupt status.
+   * @{
+   */
+-#define SDH_ERROR_ALL_MASK            (0xFFFF << 16)
++#define SDH_ERROR_ALL_MASK            (0xFFFFU << 16)
+ #define SDH_ERROR_STA_CMD_TIMEOUT     (1 << (16 + 0))   /*!< No response received within 64 clock cycles after sending the CMD.. */
+ #define SDH_ERROR_STA_CMD_CRC_ERR     (1 << (16 + 1))   /*!< Response CRC error or CMD line conflict. */
+ #define SDH_ERROR_STA_CMD_END_BIT     (1 << (16 + 2))   /*!< The end bit of response is 0  */

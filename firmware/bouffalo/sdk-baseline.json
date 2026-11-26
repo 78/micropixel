@@ -1,5 +1,5 @@
 {
-  "description": "Critical fingerprints for the unmodified public SDK revision in sdk-source.json.",
+  "description": "Critical fingerprints for sdk-source.json public revision with its declared patches applied.",
   "sha256": {
     "cmake/bouffalo_sdk-config.cmake": "f3cc77c605a8f49ace487bac7fc4aa9fad461fd0fed3ac156378d3f7dca5f8b0",
     "cmake/compiler_flags.cmake": "20e92450834bbfe004bed5b1f6e0d2c22d4ba048ca4c186d485beb8140c62534",
@@ -12,6 +12,9 @@
     "components/os/freertos/tasks.c": "bf168a177fdb5f56218d41aaca09d594013c7a523b92b7321c7f4fbb4b3f7fbf",
     "components/libc/picolibc/port_tls.c": "bf5d72b83146d55a2af8010ffec860db5c516a3d102fd81623f71ad5f42cecae",
     "tools/byai/toolchain.py": "23e57ae2c3f0f5a8aa5479431ee85d8b225cfac7b2af9833cf838492ab354f4b",
-    "bsp/Kconfig": "a515d8a387eb3afd4e8b56db13d4fdb9cffda5785590cb5eb67bd1fdee7e7a18"
+    "bsp/Kconfig": "a108f0fee2ead6fef5b1ba207d9bb03521e2963856b56df6cecafc811cd957aa",
+    "bsp/common/sdh/host/sdh_host.c": "f45d68d9076ac26d4fc412b07e94a5c8552269ca7bd34b968f05a5f0d35e64e3",
+    "bsp/common/sdh/sd/sdh_sd.c": "8c89fd1b5d5f0bbacc34a511316001ab82cee5ffa7490d6674988b18b2d0261e",
+    "drivers/lhal/include/bflb_sdh.h": "2e3d3e1a5e17841c78152ed5b3de90d929be420f15f7483a432bbe97db1dc04a"
   }
 }
