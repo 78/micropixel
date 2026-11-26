@@ -3,7 +3,8 @@
 This directory introduces external SDK build profiles for BL616CL and BL618DG B0 AP.
 Each profile builds a minimal FreeRTOS/WAMR validation executable. Full MicroPixel
 firmware composition and board display, input, audio and storage adapters are
-separate follow-ups. See [runtime contracts](docs/runtime.md).
+separate follow-ups. See [runtime contracts](docs/runtime.md) and the
+[Flash storage adapter](docs/flash-storage.md).
 
 ## Build
 
@@ -59,3 +60,6 @@ untracked files, damaged patches, competing CMake SDK paths, CI board selection,
 failed dependency checksum rejection, and byte-stack conversion at the native
 16/32-bit depth boundaries. The platform selector leaves the existing Espressif
 checks as the default.
+
+See [SD application storage](docs/sd-storage.md) for the card image format
+and how to open, publish and close an image.
