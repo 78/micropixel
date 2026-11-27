@@ -129,7 +129,7 @@ dependencies:
   # GSL3670 touch: GPL-2.0-or-later component, kept out of this Apache-2.0
   # repository. Enabling the D1001 profile links GPL code into the firmware.
   wvirgil123/esp_lcd_touch_gsl3670:
-    version: "^1.0.0"
+    version: "^1.0.1"
     rules:
       - if: "target == esp32p4"
       - if: "$CONFIG{MICROPIXEL_BOARD_RETERMINAL_D1001} == True"
