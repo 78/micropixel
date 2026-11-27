@@ -1,0 +1,59 @@
+# Seeed reTerminal D1001 (ESP32-P4) overrides, layered after sdkconfig.p4.defaults.
+# Production D1001 units use P4 v3.x and 32 MiB QSPI flash; this profile is
+# fixed to that hardware (400 MHz CPU, 250 MHz PSRAM, partitions.p4.csv).
+# CONFIG_MICROPIXEL_BOARD_METALIO_CLAW4 is not set
+CONFIG_MICROPIXEL_BOARD_RETERMINAL_D1001=y
+
+# 32 MiB flash: the bootloader needs 32-bit addressing on P4.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.p4.csv"
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_QUAD_FLASH=y
+
+# 32 MiB hex PSRAM at 250 MHz; the vendor demo uses the same mode.
+CONFIG_SPIRAM_MODE_HEX=y
+
+# The base P4 defaults target pre-v3 silicon. D1001 production is v3.x, so the
+# revision, CPU clock and PSRAM speed are restated here; the negative
+# assignments are intentional overrides of sdkconfig.p4.defaults.
+# CONFIG_ESP32P4_SELECTS_REV_LESS_V3 is not set
+# CONFIG_ESP32P4_REV_MIN_100 is not set
+CONFIG_ESP32P4_REV_MIN_300=y
+# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360 is not set
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_400=y
+# CONFIG_SPIRAM_SPEED_200M is not set
+CONFIG_SPIRAM_SPEED_250M=y
+
+# The panel consumes RGB565 over MIPI-DSI. The inherited RGB888 selection and
+# its 48-byte stride alignment do not fit an 800 px RGB565 row (1600 bytes is
+# 32-byte aligned but not 48-byte aligned), so LVGL and the DPI framebuffers
+# must agree on a 1600-byte stride.
+CONFIG_LV_COLOR_FORMAT_RGB565=y
+# CONFIG_LV_COLOR_FORMAT_RGB888 is not set
+CONFIG_LV_DRAW_BUF_STRIDE_ALIGN=32
+CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_HEIGHT=60
+CONFIG_MICROPIXEL_LVGL_PARTIAL_BUFFER_PSRAM=y
+
+# Wi-Fi runs on the on-board ESP32-C6 through ESP-Hosted SDIO. The inherited
+# Metalio-Claw4 block targets an ESP32-C5 with different SDIO pins, so every
+# coprocessor symbol is restated here.
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="esp32c6"
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_NONE=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+# C6 CHIP_PU is active-high and pulled up; the reset routine must idle HIGH so
+# the module is not held in reset after the pulse.
+# CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW is not set
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_HIGH=y
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=13
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=6
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=11
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=7
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=8
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=10
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y

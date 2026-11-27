@@ -37,16 +37,21 @@ void StyleContainer(lv_obj_t* object, int32_t x, int32_t y, int32_t width, int32
 
 }  // namespace
 
+int32_t HallCardCoverSize(const HallCardLayout& layout) {
+    return layout.cover_size > 0 ? layout.cover_size : layout.width;
+}
+
 lv_obj_t* CreateHallCoverPlaceholder(lv_obj_t* parent, const HallCardLayout& layout, const HallCardPresentation& app,
                                      uint32_t index) {
+    const int32_t cover_size = HallCardCoverSize(layout);
     lv_obj_t* placeholder = lv_obj_create(parent);
-    StyleContainer(placeholder, 0, 0, layout.width, layout.width, layout.radius,
+    StyleContainer(placeholder, 0, 0, cover_size, cover_size, layout.radius,
                    theme::kHallCoverColors[index % theme::kHallCoverColors.size()]);
     lv_obj_set_clickable(placeholder, false);
     lv_obj_t* cover_label = lv_label_create(placeholder);
     lv_label_set_text(cover_label, AppDisplayName(app));
-    const int32_t cover_label_padding = std::max<int32_t>(8, layout.width / 16);
-    lv_obj_set_width(cover_label, layout.width - cover_label_padding * 2);
+    const int32_t cover_label_padding = std::max<int32_t>(8, cover_size / 16);
+    lv_obj_set_width(cover_label, cover_size - cover_label_padding * 2);
     lv_obj_set_height(cover_label, LV_SIZE_CONTENT);
     lv_label_set_long_mode(cover_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(cover_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -81,21 +86,25 @@ void DrawHallCard(lv_obj_t* parent, const HallCardLayout& layout, const HallCard
         lv_obj_add_event_cb(card, card_event, LV_EVENT_ALL, event_context);
     }
 
+    const int32_t cover_size = HallCardCoverSize(layout);
+    const int32_t cover_x = (layout.width - cover_size) / 2;
     lv_obj_t* cover = lv_obj_create(card);
-    StyleContainer(cover, -layout.border_width, -layout.border_width, layout.width, layout.width, layout.radius,
-                   theme::kHallCoverBackground);
+    StyleContainer(cover, cover_x - layout.border_width, -layout.border_width, cover_size, cover_size,
+                   std::min<int32_t>(layout.radius, cover_size / 2), theme::kHallCoverBackground);
     lv_obj_set_clickable(cover, false);
 
     objects.cover_placeholder = CreateHallCoverPlaceholder(cover, layout, app, index);
 
     objects.cover_image = lv_image_create(cover);
+    lv_obj_set_size(objects.cover_image, cover_size, cover_size);
+    lv_image_set_inner_align(objects.cover_image, LV_IMAGE_ALIGN_STRETCH);
     lv_obj_center(objects.cover_image);
     lv_obj_set_hidden(objects.cover_image, true);
 
     if (app.installing) {
         lv_obj_set_hidden(objects.cover_placeholder, true);
-        const int32_t progress_size = std::max<int32_t>(64, layout.width / 3);
-        const int32_t progress_width = std::max<int32_t>(6, layout.width / 40);
+        const int32_t progress_size = std::max<int32_t>(64, cover_size / 3);
+        const int32_t progress_width = std::max<int32_t>(6, cover_size / 40);
         objects.install_progress_arc = lv_arc_create(cover);
         lv_obj_set_size(objects.install_progress_arc, progress_size, progress_size);
         lv_arc_set_range(objects.install_progress_arc, 0, 100);
@@ -237,8 +246,10 @@ void AttachHallCover(const HallCardLayout& layout, const HallCardObjects& object
         ShowHallCoverPlaceholder(objects);
         return;
     }
-    if (objects.cover_image == nullptr || cover.data == nullptr || cover.width != static_cast<uint32_t>(layout.width) ||
-        cover.height != static_cast<uint32_t>(layout.width) || cover.stride == 0U || cover.size == 0U) {
+    const int32_t cover_size = HallCardCoverSize(layout);
+    if (objects.cover_image == nullptr || cover.data == nullptr ||
+        cover.width != static_cast<uint32_t>(cover_size) ||
+        cover.height != static_cast<uint32_t>(cover_size) || cover.stride == 0U || cover.size == 0U) {
         ShowHallCoverPlaceholder(objects);
         return;
     }
@@ -249,8 +260,8 @@ void AttachHallCover(const HallCardLayout& layout, const HallCardObjects& object
     descriptor = {};
     descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
     descriptor.header.cf = LV_COLOR_FORMAT_RGB888;
-    descriptor.header.w = layout.width;
-    descriptor.header.h = layout.width;
+    descriptor.header.w = cover_size;
+    descriptor.header.h = cover_size;
     descriptor.header.stride = cover.stride;
     descriptor.data_size = cover.size;
     descriptor.data = cover.data;

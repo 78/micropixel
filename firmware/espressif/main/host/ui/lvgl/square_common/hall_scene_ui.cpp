@@ -220,7 +220,7 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
 
     objects_.carousel_viewport = lv_obj_create(root);
     StyleContainer(objects_.carousel_viewport, layout.carousel, 0, theme::kHallBackground);
-    lv_obj_set_scroll_dir(objects_.carousel_viewport, LV_DIR_HOR);
+    lv_obj_set_scroll_dir(objects_.carousel_viewport, layout.card_columns > 1 ? LV_DIR_VER : LV_DIR_HOR);
     lv_obj_set_scrollbar_mode(objects_.carousel_viewport, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_scrollable(objects_.carousel_viewport, true);
     lv_obj_set_scroll_momentum(objects_.carousel_viewport, true);
@@ -234,29 +234,62 @@ void HallSceneUi::DrawLocked(lv_obj_t* root, const HallSceneLayout& layout, cons
     }
 
     objects_.carousel_content = lv_obj_create(objects_.carousel_viewport);
+    const bool grid = layout.card_columns > 1;
+    const int32_t card_height = layout.card_height > 0 ? layout.card_height : layout.carousel.height;
+    const int32_t row_step = card_height + layout.card_gap;
+    const uint32_t columns = grid ? layout.card_columns : 1U;
+    const uint32_t total_rows = grid ? (visible_count + columns - 1U) / columns : 1U;
+    const uint32_t visible_rows = grid ? layout.fully_visible_cards / columns : 1U;
+    const int32_t content_height =
+        grid ? std::max<int32_t>(layout.carousel.height, static_cast<int32_t>(total_rows) * row_step - layout.card_gap)
+             : layout.carousel.height;
     const int32_t cover_flow_edge =
         layout.cover_flow ? CoverFlowEdgeWidth(layout.carousel.width, layout.card_width) : 0;
-    const int32_t cards_width = visible_count == 0U
-                                    ? layout.carousel.width
-                                    : static_cast<int32_t>(visible_count) * (layout.card_width + layout.card_gap) -
-                                          layout.card_gap + layout.content_trailing_width + 2 * cover_flow_edge;
-    StyleContainer(objects_.carousel_content, {.x = 0, .y = 0, .width = cards_width, .height = layout.carousel.height},
-                   0, theme::kHallBackground);
+    const int32_t cards_width =
+        grid ? layout.carousel.width
+             : (visible_count == 0U
+                    ? layout.carousel.width
+                    : static_cast<int32_t>(visible_count) * (layout.card_width + layout.card_gap) -
+                          layout.card_gap + layout.content_trailing_width + 2 * cover_flow_edge);
+    StyleContainer(objects_.carousel_content, {.x = 0, .y = 0, .width = cards_width, .height = content_height}, 0,
+                   theme::kHallBackground);
     lv_obj_set_style_bg_opa(objects_.carousel_content, LV_OPA_TRANSP, 0);
     lv_obj_set_clickable(objects_.carousel_content, false);
 
+    if (grid) {
+        // With no overflow a vertical drag would only trigger elastic bounce,
+        // which repaints the whole grid without moving anything.
+        const bool can_scroll = content_height > layout.carousel.height;
+        lv_obj_set_scrollable(objects_.carousel_viewport, can_scroll);
+        lv_obj_set_scroll_elastic(objects_.carousel_viewport, can_scroll);
+        if (!can_scroll) {
+            lv_obj_set_scroll_dir(objects_.carousel_viewport, LV_DIR_NONE);
+        }
+    }
+
     if (visible_count > layout.fully_visible_cards) {
         objects_.scroll_track = lv_obj_create(root);
-        StyleContainer(objects_.scroll_track, layout.scroll_track, layout.scroll_track.height / 2, theme::kDivider);
+        const int32_t track_radius =
+            grid ? layout.scroll_track.width / 2 : layout.scroll_track.height / 2;
+        StyleContainer(objects_.scroll_track, layout.scroll_track, track_radius, theme::kDivider);
         lv_obj_set_clickable(objects_.scroll_track, false);
         objects_.scroll_thumb = lv_obj_create(objects_.scroll_track);
-        const int32_t thumb_width =
-            std::max<int32_t>(layout.scroll_min_thumb_width, layout.scroll_track.width *
-                                                                 static_cast<int32_t>(layout.fully_visible_cards) /
-                                                                 static_cast<int32_t>(visible_count));
-        StyleContainer(objects_.scroll_thumb,
-                       {.x = 0, .y = 0, .width = thumb_width, .height = layout.scroll_track.height},
-                       layout.scroll_track.height / 2, theme::kControlAccent);
+        if (grid) {
+            const int32_t thumb_height =
+                std::max<int32_t>(layout.scroll_min_thumb_width,
+                                  layout.scroll_track.height * static_cast<int32_t>(visible_rows) /
+                                      static_cast<int32_t>(std::max<uint32_t>(total_rows, 1U)));
+            StyleContainer(objects_.scroll_thumb,
+                           {.x = 0, .y = 0, .width = layout.scroll_track.width, .height = thumb_height},
+                           layout.scroll_track.width / 2, theme::kControlAccent);
+        } else {
+            const int32_t thumb_width = std::max<int32_t>(
+                layout.scroll_min_thumb_width, layout.scroll_track.width * static_cast<int32_t>(layout.fully_visible_cards) /
+                                                   static_cast<int32_t>(visible_count));
+            StyleContainer(objects_.scroll_thumb,
+                           {.x = 0, .y = 0, .width = thumb_width, .height = layout.scroll_track.height},
+                           layout.scroll_track.height / 2, theme::kControlAccent);
+        }
         lv_obj_set_clickable(objects_.scroll_thumb, false);
     }
 
@@ -457,8 +490,24 @@ void HallSceneUi::UpdateScrollLocked(uint32_t app_count, int32_t offset) {
     if (layout_ == nullptr || objects_.scroll_thumb == nullptr || app_count <= layout_->fully_visible_cards) {
         return;
     }
-    const int32_t step = layout_->card_width + layout_->card_gap;
-    const int32_t maximum = static_cast<int32_t>(app_count - layout_->fully_visible_cards) * step;
+    int32_t maximum = 0;
+    if (layout_->card_columns > 1) {
+        const int32_t card_height = layout_->card_height > 0 ? layout_->card_height : layout_->carousel.height;
+        const int32_t row_step = card_height + layout_->card_gap;
+        const uint32_t columns = layout_->card_columns;
+        const uint32_t total_rows = (app_count + columns - 1U) / columns;
+        maximum = std::max<int32_t>(0, static_cast<int32_t>(total_rows) * row_step - layout_->card_gap -
+                                           layout_->carousel.height);
+        const int32_t thumb_height = lv_obj_get_height(objects_.scroll_thumb);
+        const int32_t clamped = std::clamp<int32_t>(offset, 0, maximum);
+        lv_obj_set_y(objects_.scroll_thumb,
+                     maximum == 0 ? 0 : (layout_->scroll_track.height - thumb_height) * clamped / maximum);
+        return;
+    }
+    {
+        const int32_t step = layout_->card_width + layout_->card_gap;
+        maximum = static_cast<int32_t>(app_count - layout_->fully_visible_cards) * step;
+    }
     const int32_t thumb_width = lv_obj_get_width(objects_.scroll_thumb);
     const int32_t clamped = std::clamp<int32_t>(offset, 0, maximum);
     lv_obj_set_x(objects_.scroll_thumb,

@@ -47,6 +47,8 @@ class VirtualizedHallPolicy final {
 
     [[nodiscard]] int32_t CardStep() const;
     [[nodiscard]] int32_t MaximumOffset(uint32_t app_count) const;
+    [[nodiscard]] int32_t ScrollOffset(lv_obj_t* viewport) const;
+    void ScrollToOffset(lv_obj_t* viewport, int32_t offset, lv_anim_enable_t anim) const;
     [[nodiscard]] int32_t ClampOffset(uint32_t app_count, int32_t offset) const;
     [[nodiscard]] int32_t RevealOffset(uint32_t app_count, int32_t offset, uint32_t index) const;
     [[nodiscard]] uint32_t CoverWindowFirst(uint32_t app_count, int32_t offset) const;
